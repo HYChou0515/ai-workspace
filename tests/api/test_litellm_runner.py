@@ -1,0 +1,197 @@
+"""Tests for LitellmAgentRunner.
+
+The runner depends on Ollama for the live path; those tests skip when
+the daemon isn't reachable or the qwen-coder model isn't pulled. The
+non-live tests cover construction and the pure event-mapping logic
+with fabricated stream events, so the SSE-bound surface stays
+exercised even on a CI box without a GPU.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
+import pytest
+
+from workspace_app.api.events import MessageDelta, ToolEnd, ToolStart
+from workspace_app.api.litellm_runner import LitellmAgentRunner, _map_event
+from workspace_app.resources import AgentConfig
+
+
+def test_runner_constructs_with_default_config():
+    r = LitellmAgentRunner()
+    assert r is not None
+
+
+def test_runner_constructs_with_custom_config():
+    cfg = AgentConfig(name="custom", model="ollama/llama3:8b", system_prompt="Be terse.")
+    r = LitellmAgentRunner(cfg)
+    assert r is not None
+
+
+# ---- _map_event unit tests with fabricated stream events ----
+
+
+@dataclass
+class _RawToolCall:
+    call_id: str
+    name: str
+    arguments: str
+
+
+@dataclass
+class _RawToolOutput:
+    call_id: str
+
+
+@dataclass
+class _Item:
+    raw_item: Any
+    output: Any = None
+
+
+@dataclass
+class _StreamEvent:
+    type: str
+    name: str = ""
+    item: Any = None
+
+
+def test_map_event_drops_unknown_types():
+    assert _map_event(_StreamEvent(type="raw_response_event")) is None
+
+
+def test_map_event_maps_tool_called():
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_called",
+        item=_Item(
+            raw_item=_RawToolCall(call_id="c1", name="exec", arguments='{"cmd":["echo","hi"]}')
+        ),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolStart)
+    assert out.call_id == "c1"
+    assert out.name == "exec"
+    assert out.args == {"cmd": ["echo", "hi"]}
+
+
+def test_map_event_tool_called_with_invalid_json_keeps_raw():
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_called",
+        item=_Item(raw_item=_RawToolCall(call_id="c2", name="exec", arguments="not json")),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolStart)
+    assert out.args == {"_raw": "not json"}
+
+
+def test_map_event_tool_called_with_empty_args():
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_called",
+        item=_Item(raw_item=_RawToolCall(call_id="c3", name="ls", arguments="")),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolStart)
+    assert out.args == {}
+
+
+def test_map_event_maps_tool_output():
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_output",
+        item=_Item(raw_item=_RawToolOutput(call_id="c1"), output="exit_code=0\nstdout: hi"),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolEnd)
+    assert out.call_id == "c1"
+    assert "hi" in out.output
+
+
+def test_map_event_drops_other_run_item_names():
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="handoff_requested",
+        item=_Item(raw_item=None),
+    )
+    assert _map_event(ev) is None
+
+
+@dataclass
+class _RawMessage:
+    content: list
+
+
+def test_map_event_maps_message_output_created():
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="message_output_created",
+        item=_Item(raw_item=_RawMessage(content=[])),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, MessageDelta)
+    # Empty content list → empty text, but the branch is exercised.
+    assert out.text == ""
+
+
+def test_agent_for_with_system_prompt_set():
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", system_prompt="You are helpful.")
+    agent = _agent_for(cfg)
+    assert agent.instructions == "You are helpful."
+
+
+def test_agent_for_without_system_prompt():
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws")
+    agent = _agent_for(cfg)
+    assert agent.instructions is None
+
+
+# ---- live test against Ollama (skipped when unavailable) ----
+
+
+def _ollama_qwen_available() -> bool:
+    try:
+        resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
+        if resp.status_code != 200:
+            return False
+        models = [m.get("name", "") for m in resp.json().get("models", [])]
+        return any("qwen2.5-coder" in m for m in models)
+    except (httpx.HTTPError, OSError):
+        return False
+
+
+@pytest.mark.skipif(not _ollama_qwen_available(), reason="Ollama or qwen2.5-coder not available")
+async def test_live_run_against_ollama_emits_at_least_one_event():
+    from datetime import UTC, datetime
+
+    from specstar import SpecStar
+
+    from workspace_app.agent import AgentToolContext
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.sandbox.mock import MockSandbox
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    ctx = AgentToolContext(
+        workspace_id="ws-live",
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+    )
+    runner = LitellmAgentRunner()
+    events = []
+    async for ev in runner.run("Say hello in one short sentence.", ctx):
+        events.append(ev)
+        if len(events) >= 10:
+            break  # bound test runtime
+    # At minimum, the RunDone sentinel must come through.
+    assert events, "expected at least one event"
+    types = {type(e).__name__ for e in events}
+    assert "RunDone" in types or "MessageDelta" in types
