@@ -1,0 +1,43 @@
+# Ollama as a sidecar dependency for workspace-app.
+#
+# Brings up Ollama on http://localhost:11434 with a persistent volume so
+# pulled models survive container restarts. The workspace-app itself
+# still runs via `uv run python -m workspace_app` on the host — only the
+# LLM lives in a container.
+#
+# Usage:
+#   docker compose up -d
+#   docker compose exec ollama ollama pull qwen2.5-coder:7b-instruct
+#   docker compose logs -f ollama
+#   docker compose down            # stop (volume kept)
+#   docker compose down -v         # stop + drop pulled models
+
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: workspace-app-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    # For NVIDIA GPU acceleration, uncomment the block below.
+    # Requires nvidia-container-toolkit on the host:
+    #   sudo apt install -y nvidia-container-toolkit
+    #   sudo systemctl restart docker
+    #
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+volumes:
+  ollama:
