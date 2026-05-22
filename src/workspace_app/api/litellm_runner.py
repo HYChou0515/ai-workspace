@@ -13,12 +13,22 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from agents import Agent, ItemHelpers, Runner
+from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 
 from ..agent.context import AgentToolContext
 from ..agent.tools import build_tools
 from ..resources import AgentConfig
-from .events import AgentEvent, MessageDelta, RunDone, RunError, ToolEnd, ToolStart
+from .events import (
+    AgentEvent,
+    MaxTurnsExceeded,
+    MessageDelta,
+    RunDone,
+    RunError,
+    ToolCallParseError,
+    ToolEnd,
+    ToolStart,
+)
 
 
 def _agent_for(
@@ -60,6 +70,20 @@ def diagnose_error(exc: BaseException) -> str:
     if "timeout" in low or "timed out" in low:
         return "The previous step timed out. Take a smaller step and try again."
     return f"The previous attempt failed: {msg[:200]}. Try again."
+
+
+def classify_retry_event(exc: BaseException, hint: str) -> AgentEvent:
+    """Decide which AgentEvent best represents this retry-able failure.
+
+    ToolCallParseError is a first-class signal — the FE can render it
+    distinctly so users know a model-format glitch is being handled,
+    not a real error. Everything else stays as the generic RunError
+    catch-all.
+    """
+    low = str(exc).lower()
+    if "extra data" in low or ("json" in low and "tool" in low):
+        return ToolCallParseError(hint=hint)
+    return RunError(message=f"retry: {hint}")
 
 
 def _map_event(event: Any) -> AgentEvent | None:
@@ -116,7 +140,14 @@ class LitellmAgentRunner:
                     yield ev
                 yield RunDone()
                 return
-            except Exception as exc:  # noqa: BLE001 — every failure becomes a hint or final error
+            except _AgentsMaxTurnsExceeded as exc:
+                # The agent burned through its turn budget — terminal,
+                # no retry would help.
+                turns = getattr(exc, "turns_run", getattr(exc, "max_turns", 0))
+                yield MaxTurnsExceeded(turns=int(turns) if turns else 0)
+                yield RunDone()
+                return
+            except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
                 attempt += 1
                 if attempt > self._max_retries:
                     yield RunError(
@@ -125,7 +156,7 @@ class LitellmAgentRunner:
                     yield RunDone()
                     return
                 feedback = diagnose_error(exc)
-                yield RunError(message=f"retry {attempt}/{self._max_retries}: {feedback}")
+                yield classify_retry_event(exc, feedback)
 
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None

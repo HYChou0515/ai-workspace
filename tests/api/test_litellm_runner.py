@@ -246,28 +246,66 @@ async def test_runner_succeeds_first_try_emits_done():
 
 
 async def test_runner_retries_after_extra_data_error_and_feeds_back_hint():
+    """Extra-data classifies as ToolCallParseError (not generic RunError)
+    so the FE can render it distinctly."""
+    from workspace_app.api.events import ToolCallParseError
+
     err = RuntimeError("Extra data: line 1 column 54 (char 53)")
     runner = _RecordingRunner(scripts=[err, [MessageDelta(text="ok")]])
     events = [ev async for ev in runner.run("p", _ctx())]
     types = [type(e).__name__ for e in events]
-    assert types == ["RunError", "MessageDelta", "RunDone"]
-    err_ev = next(e for e in events if isinstance(e, RunError))
-    assert "one tool call" in err_ev.message.lower()
+    assert types == ["ToolCallParseError", "MessageDelta", "RunDone"]
+    tcpe = next(e for e in events if isinstance(e, ToolCallParseError))
+    assert "one tool call" in tcpe.hint.lower()
     # Second attempt should have received the hint as feedback.
     assert runner.feedbacks[0] is None
     assert "one tool call" in (runner.feedbacks[1] or "").lower()
 
 
 async def test_runner_gives_up_after_max_retries():
+    """N retries of Extra-data → N ToolCallParseError + 1 final RunError
+    (giving up) + RunDone."""
+    from workspace_app.api.events import ToolCallParseError
+
     err = RuntimeError("Extra data: blah")
     runner = _RecordingRunner(scripts=[err, err, err], max_retries=2)
     events = [ev async for ev in runner.run("p", _ctx())]
-    # 2 retry errors + 1 give-up error + 1 done
+    tcpes = [e for e in events if isinstance(e, ToolCallParseError)]
     err_events = [e for e in events if isinstance(e, RunError)]
-    assert len(err_events) == 3
+    assert len(tcpes) == 2  # two retries
+    assert len(err_events) == 1  # final give-up
     assert "giving up" in err_events[-1].message
     done = [e for e in events if isinstance(e, RunDone)]
     assert len(done) == 1
+
+
+async def test_runner_emits_max_turns_exceeded_terminal():
+    """When the underlying agents-SDK raises MaxTurnsExceeded, it's a
+    hard ceiling — no retry, terminal event."""
+    # Construct a fake agents-SDK MaxTurnsExceeded with a turns_run attr.
+    from agents import MaxTurnsExceeded as _AgentsMTE
+
+    from workspace_app.api.events import MaxTurnsExceeded as MTEEvent
+
+    exc = _AgentsMTE("Max turns (10) reached")
+    exc.turns_run = 10  # ty: ignore[unresolved-attribute]
+    runner = _RecordingRunner(scripts=[exc])
+    events = [ev async for ev in runner.run("p", _ctx())]
+    types = [type(e).__name__ for e in events]
+    assert types == ["MaxTurnsExceeded", "RunDone"]
+    mte = next(e for e in events if isinstance(e, MTEEvent))
+    assert mte.turns == 10
+
+
+async def test_runner_classifies_non_parse_retry_as_run_error():
+    """Generic errors still get the RunError catch-all on retry."""
+    err = RuntimeError("upstream 500: something else")
+    runner = _RecordingRunner(scripts=[err, [MessageDelta(text="ok")]])
+    events = [ev async for ev in runner.run("p", _ctx())]
+    types = [type(e).__name__ for e in events]
+    assert types == ["RunError", "MessageDelta", "RunDone"]
+    err_ev = next(e for e in events if isinstance(e, RunError))
+    assert "retry:" in err_ev.message
 
 
 # ---- live test against Ollama (skipped when unavailable) ----

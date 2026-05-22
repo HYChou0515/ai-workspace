@@ -45,7 +45,38 @@ class RunCancelled:
     type: Literal["run_cancelled"] = "run_cancelled"
 
 
-AgentEvent = MessageDelta | ToolStart | ToolEnd | RunDone | RunError | RunCancelled
+@dataclass(frozen=True)
+class ToolCallParseError:
+    """The model emitted a tool call we couldn't parse — typically the
+    LiteLLM Ollama chunk_parser bug where multi-tool-call streaming
+    concatenates arguments into invalid JSON. Non-terminal: a retry
+    with feedback to the model follows."""
+
+    hint: str
+    call_id: str = ""
+    raw: str = ""
+    type: Literal["tool_call_parse_error"] = "tool_call_parse_error"
+
+
+@dataclass(frozen=True)
+class MaxTurnsExceeded:
+    """The agent burned through its turn budget without converging.
+    Terminal."""
+
+    turns: int
+    type: Literal["max_turns_exceeded"] = "max_turns_exceeded"
+
+
+AgentEvent = (
+    MessageDelta
+    | ToolStart
+    | ToolEnd
+    | RunDone
+    | RunError
+    | RunCancelled
+    | ToolCallParseError
+    | MaxTurnsExceeded
+)
 
 
 def to_sse(event: AgentEvent) -> str:

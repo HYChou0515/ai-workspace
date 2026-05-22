@@ -293,9 +293,9 @@ Anytime BE changes one of these, the FE agent must update
 | `RunDone` | ✅ shipped | terminal |
 | `RunError { message }` | ✅ shipped | becomes catch-all once §3.6 lands |
 | `RunCancelled` | ✅ shipped | terminal — emitted on DELETE or second POST |
-| `SandboxKilledIdle` | ⏳ §3.3 | non-terminal; UI shows hint |
-| `ToolCallParseError { call_id, raw, hint }` | ⏳ §3.6 | non-terminal; retry follows |
-| `MaxTurnsExceeded { turns }` | ⏳ §3.6 | terminal |
+| `ToolCallParseError { hint, call_id?, raw? }` | ✅ shipped | non-terminal; retry follows with the hint as feedback to the model |
+| `MaxTurnsExceeded { turns }` | ✅ shipped | terminal — agent burned its turn budget |
+| `SandboxKilledIdle` | ⏸ deferred | needs registry refactor (keep session entry after kill) — defer until UX requests it |
 
 ### HTTP routes consumed by SPA
 
