@@ -15,8 +15,9 @@ from typing import Any
 import httpx
 import pytest
 
-from workspace_app.api.events import MessageDelta, ToolEnd, ToolStart
-from workspace_app.api.litellm_runner import LitellmAgentRunner, _map_event
+from workspace_app.agent import AgentToolContext
+from workspace_app.api.events import MessageDelta, RunDone, RunError, ToolEnd, ToolStart
+from workspace_app.api.litellm_runner import LitellmAgentRunner, _map_event, diagnose_error
 from workspace_app.resources import AgentConfig
 
 
@@ -152,6 +153,117 @@ def test_agent_for_without_system_prompt():
     cfg = AgentConfig(name="ws")
     agent = _agent_for(cfg)
     assert agent.instructions is None
+
+
+def test_agent_for_appends_extra_instructions_to_system_prompt():
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", system_prompt="Be terse.")
+    agent = _agent_for(cfg, extra_instructions="Retry hint: emit one tool at a time.")
+    assert isinstance(agent.instructions, str)
+    assert "Be terse." in agent.instructions
+    assert "Retry hint" in agent.instructions
+
+
+def test_agent_for_extra_instructions_with_no_base_prompt():
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws")
+    agent = _agent_for(cfg, extra_instructions="Hint only.")
+    assert agent.instructions == "Hint only."
+
+
+# ---- diagnose_error ----
+
+
+def test_diagnose_extra_data_returns_one_tool_per_turn_hint():
+    hint = diagnose_error(RuntimeError("Extra data: line 1 column 54 (char 53)"))
+    assert "one tool call" in hint.lower()
+
+
+def test_diagnose_json_tool_error_returns_same_hint():
+    hint = diagnose_error(RuntimeError("failed to parse tool args as json"))
+    assert "one tool call" in hint.lower()
+
+
+def test_diagnose_timeout_returns_smaller_step_hint():
+    hint = diagnose_error(RuntimeError("request timed out"))
+    assert "smaller step" in hint.lower()
+
+
+def test_diagnose_unknown_falls_back_to_generic_hint():
+    hint = diagnose_error(RuntimeError("some weird upstream 500"))
+    assert "try again" in hint.lower()
+
+
+# ---- retry loop ----
+
+
+class _RecordingRunner(LitellmAgentRunner):
+    """Test double: lets us script the exceptions/events for _run_once."""
+
+    def __init__(self, scripts, **kw):
+        super().__init__(**kw)
+        self._scripts = list(scripts)
+        self.feedbacks: list[str | None] = []
+
+    async def _run_once(self, prompt, ctx, feedback):
+        self.feedbacks.append(feedback)
+        script = self._scripts.pop(0)
+        if isinstance(script, Exception):
+            raise script
+        for ev in script:
+            yield ev
+
+
+def _ctx() -> AgentToolContext:
+    from specstar import SpecStar
+
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.sandbox.mock import MockSandbox
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    return AgentToolContext(
+        workspace_id="ws-x",
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+    )
+
+
+from datetime import UTC, datetime  # noqa: E402 — used by _ctx above
+
+
+async def test_runner_succeeds_first_try_emits_done():
+    runner = _RecordingRunner(scripts=[[MessageDelta(text="hi")]])
+    events = [ev async for ev in runner.run("p", _ctx())]
+    assert [type(e).__name__ for e in events] == ["MessageDelta", "RunDone"]
+    assert runner.feedbacks == [None]
+
+
+async def test_runner_retries_after_extra_data_error_and_feeds_back_hint():
+    err = RuntimeError("Extra data: line 1 column 54 (char 53)")
+    runner = _RecordingRunner(scripts=[err, [MessageDelta(text="ok")]])
+    events = [ev async for ev in runner.run("p", _ctx())]
+    types = [type(e).__name__ for e in events]
+    assert types == ["RunError", "MessageDelta", "RunDone"]
+    err_ev = next(e for e in events if isinstance(e, RunError))
+    assert "one tool call" in err_ev.message.lower()
+    # Second attempt should have received the hint as feedback.
+    assert runner.feedbacks[0] is None
+    assert "one tool call" in (runner.feedbacks[1] or "").lower()
+
+
+async def test_runner_gives_up_after_max_retries():
+    err = RuntimeError("Extra data: blah")
+    runner = _RecordingRunner(scripts=[err, err, err], max_retries=2)
+    events = [ev async for ev in runner.run("p", _ctx())]
+    # 2 retry errors + 1 give-up error + 1 done
+    err_events = [e for e in events if isinstance(e, RunError)]
+    assert len(err_events) == 3
+    assert "giving up" in err_events[-1].message
+    done = [e for e in events if isinstance(e, RunDone)]
+    assert len(done) == 1
 
 
 # ---- live test against Ollama (skipped when unavailable) ----

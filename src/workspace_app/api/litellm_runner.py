@@ -18,16 +18,48 @@ from agents.extensions.models.litellm_model import LitellmModel
 from ..agent.context import AgentToolContext
 from ..agent.tools import build_tools
 from ..resources import AgentConfig
-from .events import AgentEvent, MessageDelta, RunDone, ToolEnd, ToolStart
+from .events import AgentEvent, MessageDelta, RunDone, RunError, ToolEnd, ToolStart
 
 
-def _agent_for(config: AgentConfig) -> Agent[AgentToolContext]:
+def _agent_for(
+    config: AgentConfig, extra_instructions: str | None = None
+) -> Agent[AgentToolContext]:
+    base = config.system_prompt or ""
+    if extra_instructions:
+        base = f"{base}\n\n{extra_instructions}".strip()
     return Agent[AgentToolContext](
         name=config.name,
-        instructions=config.system_prompt or None,
+        instructions=base or None,
         model=LitellmModel(model=config.model),
         tools=list(build_tools(config.allowed_tools or None)),
     )
+
+
+def diagnose_error(exc: BaseException) -> str:
+    """Translate a LiteLLM/agents-SDK exception into a hint we can hand back
+    to the model on retry. Pattern-match on substrings rather than exception
+    types because LiteLLM wraps everything in APIConnectionError.
+
+    The hints address the known small-model failure modes from grill-me Q11:
+    malformed JSON in tool args, multiple-tool-calls-per-turn confusion,
+    timeout. Falls back to a generic "try again" hint.
+    """
+    msg = str(exc)
+    low = msg.lower()
+    if "extra data" in low or "json" in low and "tool" in low:
+        # LiteLLM Ollama chunk_parser concatenates multiple tool_calls'
+        # arguments when the model emits more than one in a single
+        # streaming response. Coaching the model to serialize fixes the
+        # symptom without depending on an upstream LiteLLM patch.
+        return (
+            "Tool-call format error: your previous response combined multiple "
+            "tool calls in one turn, which the framework cannot parse. "
+            "Emit exactly ONE tool call per response and wait for its result "
+            "before issuing the next one."
+        )
+    if "timeout" in low or "timed out" in low:
+        return "The previous step timed out. Take a smaller step and try again."
+    return f"The previous attempt failed: {msg[:200]}. Try again."
 
 
 def _map_event(event: Any) -> AgentEvent | None:
@@ -66,16 +98,41 @@ def _map_event(event: Any) -> AgentEvent | None:
 
 
 class LitellmAgentRunner:
-    def __init__(self, config: AgentConfig | None = None) -> None:
-        self._config = config or AgentConfig(name="workspace-agent")
+    """Runs one user turn through agents-SDK + LiteLLM, retrying once on
+    recognised small-model failures and surfacing the diagnosis to the
+    model on each retry. Caps retries so a wedged turn can't loop forever.
+    """
 
-    async def run(  # pragma: no cover — exercised only by the live Ollama test
-        self, prompt: str, ctx: AgentToolContext
+    def __init__(self, config: AgentConfig | None = None, max_retries: int = 2) -> None:
+        self._config = config or AgentConfig(name="workspace-agent")
+        self._max_retries = max_retries
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        feedback: str | None = None
+        attempt = 0
+        while True:
+            try:
+                async for ev in self._run_once(prompt, ctx, feedback):
+                    yield ev
+                yield RunDone()
+                return
+            except Exception as exc:  # noqa: BLE001 — every failure becomes a hint or final error
+                attempt += 1
+                if attempt > self._max_retries:
+                    yield RunError(
+                        message=f"giving up after {attempt} attempts: {type(exc).__name__}: {exc}"
+                    )
+                    yield RunDone()
+                    return
+                feedback = diagnose_error(exc)
+                yield RunError(message=f"retry {attempt}/{self._max_retries}: {feedback}")
+
+    async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
+        self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
-        agent = _agent_for(self._config)
+        agent = _agent_for(self._config, extra_instructions=feedback)
         streamed = Runner.run_streamed(agent, input=prompt, context=ctx)
         async for event in streamed.stream_events():
             mapped = _map_event(event)
             if mapped is not None:
                 yield mapped
-        yield RunDone()

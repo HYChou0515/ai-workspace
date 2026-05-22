@@ -3,7 +3,7 @@ from msgspec import Struct, field
 
 class AgentConfig(Struct):
     name: str
-    model: str = "ollama/qwen2.5-coder:7b-instruct"
+    model: str = "ollama_chat/qwen3:14b"
     system_prompt: str = ""
     allowed_tools: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)

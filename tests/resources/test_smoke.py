@@ -39,7 +39,7 @@ def test_agent_config_defaults_match_grill_me_decisions(spec_instance: SpecStar)
     rm = spec_instance.get_resource_manager(AgentConfig)
     rev = rm.create(AgentConfig(name="default"))
     got = rm.get(rev.resource_id).data
-    assert got.model == "ollama/qwen2.5-coder:7b-instruct"
+    assert got.model == "ollama_chat/qwen3:14b"
     assert got.sandbox_image == "python:3.12-slim"
     assert got.idle_timeout_seconds == 900
 
