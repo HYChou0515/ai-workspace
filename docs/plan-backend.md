@@ -36,13 +36,9 @@ branch). All `ruff check`/`ruff format`/`ty check` clean.
 Architectural commitments from §Q6/Q10/Q11. The MVP is not honest until
 they're in.
 
-- **Q10 / c3 — Interrupt on new user message.** Second POST while a
-  turn is in flight races against the first; no cancellation.
-- **Q10 / b1 — Idle kill after 15 min.** Sandboxes lazy-created on
-  first `exec` live until process exits.
-- **Q11 — FS ↔ Sandbox bidirectional sync.** `write_file` lands in
-  specstar but never reaches the sandbox; `exec`'s shell writes never
-  reach specstar.
+- ~~**Q10 / c3 — Interrupt on new user message.**~~ Landed in `48a0fa8`.
+- ~~**Q10 / b1 — Idle kill after 15 min.**~~ Landed (this commit).
+- ~~**Q11 — FS ↔ Sandbox bidirectional sync.**~~ Landed in `796fa86`.
 - **Q6 / Q11 — AdapterVolumeFileStore (mode 1).** Only mode 2 ships.
 
 ## 2a. Deferred sub-questions

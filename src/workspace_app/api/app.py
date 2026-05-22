@@ -3,7 +3,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Response, status
@@ -33,18 +34,43 @@ def create_app(
     filestore: FileStore,
     runner: AgentRunner,
     spa_dist: Path | None = None,
+    idle_timeout: timedelta = timedelta(minutes=15),
+    idle_check_interval: timedelta = timedelta(seconds=60),
 ) -> FastAPI:
     if spec is None:
         spec = SpecStar()
         spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
     register_all(spec)
 
-    app = FastAPI(title="workspace-app")
+    sync = SandboxSync(filestore=filestore, sandbox=sandbox)
+    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+
+    async def _idle_killer() -> None:
+        """Periodically reap sandboxes whose last_active is past the
+        threshold. The reaper sleeps the check_interval between sweeps
+        — short for tests, ~60 s in production."""
+        try:
+            while True:
+                await asyncio.sleep(idle_check_interval.total_seconds())
+                await registry.kill_idle(idle_timeout)
+        except asyncio.CancelledError:
+            return
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        killer = asyncio.create_task(_idle_killer())
+        try:
+            yield
+        finally:
+            killer.cancel()
+            with contextlib.suppress(BaseException):
+                await killer
+            await registry.close_all()
+
+    app = FastAPI(title="workspace-app", lifespan=lifespan)
     spec.apply(app)
 
     conv_rm = spec.get_resource_manager(Conversation)
-    sync = SandboxSync(filestore=filestore, sandbox=sandbox)
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
 
     def _conversation_for(workspace_id: str) -> tuple[str, Conversation]:
         # Linear scan over all Conversation resources for this workspace.
@@ -113,6 +139,10 @@ def create_app(
                 sync=sync,
                 sandbox_spec=SandboxSpec(),
                 handle=session.handle,
+                # Route lazy-create through the registry so session.handle
+                # is set (so idle-kill/close_all can find it) and the
+                # restore-after-create hook fires.
+                ensure_sandbox_via=lambda: registry.ensure_handle(session),
             )
             session.current_turn = asyncio.create_task(_drive_run(body.content, ctx, queue))
 
