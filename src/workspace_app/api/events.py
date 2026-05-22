@@ -37,7 +37,15 @@ class RunError:
     type: Literal["error"] = "error"
 
 
-AgentEvent = MessageDelta | ToolStart | ToolEnd | RunDone | RunError
+@dataclass(frozen=True)
+class RunCancelled:
+    """User interrupted this turn — either by sending a new message or by
+    hitting Stop. Terminal: the SSE stream closes after this event."""
+
+    type: Literal["run_cancelled"] = "run_cancelled"
+
+
+AgentEvent = MessageDelta | ToolStart | ToolEnd | RunDone | RunError | RunCancelled
 
 
 def to_sse(event: AgentEvent) -> str:

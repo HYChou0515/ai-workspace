@@ -296,7 +296,7 @@ Anytime BE changes one of these, the FE agent must update
 | `ToolEnd { call_id, output }` | ✅ shipped | |
 | `RunDone` | ✅ shipped | terminal |
 | `RunError { message }` | ✅ shipped | becomes catch-all once §3.6 lands |
-| `RunCancelled` | ⏳ §3.2 | terminal |
+| `RunCancelled` | ✅ shipped | terminal — emitted on DELETE or second POST |
 | `SandboxKilledIdle` | ⏳ §3.3 | non-terminal; UI shows hint |
 | `ToolCallParseError { call_id, raw, hint }` | ⏳ §3.6 | non-terminal; retry follows |
 | `MaxTurnsExceeded { turns }` | ⏳ §3.6 | terminal |
@@ -310,8 +310,9 @@ Anytime BE changes one of these, the FE agent must update
 | `POST /workspace` (specstar auto) | create workspace | ✅ |
 | `GET /conversation` (specstar auto) | list conversations | ✅ |
 | `GET /conversation/{id}` (specstar auto) | get one conversation | ✅ |
-| `GET /workspaces/{id}/files` | list files in workspace | ⏳ §3.8 |
-| `GET /workspaces/{id}/files/{path:path}` | read file | ⏳ §3.8 |
+| `GET /workspaces/{id}/files` | list files in workspace | ✅ shipped |
+| `GET /workspaces/{id}/files/{path:path}` | read file | ✅ shipped |
+| `DELETE /workspaces/{id}/messages/current` | cancel in-flight turn | ✅ shipped |
 | `GET /workspaces/{id}/events?since=<id>` | reconnect / catch up | ⏳ §3.7 |
 
 ---

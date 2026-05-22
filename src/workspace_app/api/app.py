@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response, StreamingResponse
+from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from specstar import SpecStar
@@ -15,7 +17,8 @@ from ..filestore.protocol import FileNotFound, FileStore
 from ..resources import Conversation, Message, register_all
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
-from .events import RunError, to_sse
+from .events import AgentEvent, RunCancelled, RunError, to_sse
+from .registry import WorkspaceRegistry, WorkspaceSession
 from .runner import AgentRunner
 
 
@@ -41,6 +44,7 @@ def create_app(
 
     conv_rm = spec.get_resource_manager(Conversation)
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
+    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
 
     def _conversation_for(workspace_id: str) -> tuple[str, Conversation]:
         # Linear scan over all Conversation resources for this workspace.
@@ -57,28 +61,79 @@ def create_app(
         assert isinstance(got, Conversation)
         return rev.resource_id, got
 
+    async def _cancel_prior_turn(session: WorkspaceSession) -> None:
+        """Cancel the session's in-flight turn and wait for it to wind down.
+
+        Called inside session.lock so the cancel→replace transition is
+        serialized. The cancelled task drains its own event queue and
+        emits RunCancelled to its subscriber (the old StreamingResponse)
+        before exiting.
+        """
+        prev = session.current_turn
+        if prev is None or prev.done():
+            return
+        prev.cancel()
+        with contextlib.suppress(BaseException):
+            await prev
+
+    async def _drive_run(
+        content: str,
+        ctx: AgentToolContext,
+        queue: asyncio.Queue[AgentEvent | None],
+    ) -> None:
+        """Pump events from runner.run into the per-turn queue. Translate
+        cancellation and any other failure into a terminal event so the
+        subscriber stream always closes cleanly."""
+        try:
+            async for ev in runner.run(content, ctx):
+                await queue.put(ev)
+        except asyncio.CancelledError:
+            await queue.put(RunCancelled())
+            raise
+        except Exception as exc:  # noqa: BLE001
+            await queue.put(RunError(message=f"{type(exc).__name__}: {exc}"))
+        finally:
+            await queue.put(None)  # sentinel: stream closed
+
     @app.post("/workspaces/{workspace_id}/messages")
     async def send_message(workspace_id: str, body: _MessageBody) -> StreamingResponse:
         rid, conv = _conversation_for(workspace_id)
         conv.messages.append(Message(role="user", content=body.content))
         conv_rm.update(rid, conv)
 
-        ctx = AgentToolContext(
-            workspace_id=workspace_id,
-            sandbox=sandbox,
-            filestore=filestore,
-            sync=sync,
-            sandbox_spec=SandboxSpec(),
-        )
+        session = await registry.session(workspace_id)
+        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+
+        async with session.lock:
+            await _cancel_prior_turn(session)
+            ctx = AgentToolContext(
+                workspace_id=workspace_id,
+                sandbox=sandbox,
+                filestore=filestore,
+                sync=sync,
+                sandbox_spec=SandboxSpec(),
+                handle=session.handle,
+            )
+            session.current_turn = asyncio.create_task(_drive_run(body.content, ctx, queue))
 
         async def gen() -> AsyncIterator[str]:
-            try:
-                async for event in runner.run(body.content, ctx):
-                    yield to_sse(event)
-            except Exception as exc:  # noqa: BLE001 — emit any failure as an event
-                yield to_sse(RunError(message=f"{type(exc).__name__}: {exc}"))
+            while True:
+                item = await queue.get()
+                if item is None:
+                    return
+                yield to_sse(item)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.delete(
+        "/workspaces/{workspace_id}/messages/current",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def cancel_message(workspace_id: str) -> Response:
+        session = await registry.session(workspace_id)
+        async with session.lock:
+            await _cancel_prior_turn(session)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- Files API (plan-backend §3.8) ----
 
