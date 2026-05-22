@@ -44,32 +44,25 @@ The default `LitellmAgentRunner` config targets
 and serves CRUD/UI, but the agent will fail when you actually send a
 message.
 
-**Install Ollama** (Linux one-liner; installs a systemd service):
+The repo ships a `docker-compose.yml` that brings Ollama up as a sidecar
+(easier than the systemd install — no `sudo`, isolates state in a named
+volume, `docker compose down` cleans up):
+
+```bash
+docker compose up -d
+docker compose exec ollama ollama pull qwen2.5-coder:7b-instruct   # ≈ 4.7 GB
+docker compose exec ollama ollama list                              # confirms
+curl http://localhost:11434/api/tags                                # sanity check
+```
+
+For NVIDIA GPU acceleration, uncomment the `deploy:` block in
+`docker-compose.yml` (requires `nvidia-container-toolkit` on the host).
+
+If you prefer a host install instead, use the official one-liner:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
-```
-
-Verify:
-
-```bash
-systemctl status ollama
-curl http://localhost:11434/api/tags     # → {"models":[]}
-```
-
-If you're inside a container/WSL/sandbox without systemd, run it
-foreground or background instead:
-
-```bash
-ollama serve &
-```
-
-**Pull the model** (≈ 4.7 GB):
-
-```bash
 ollama pull qwen2.5-coder:7b-instruct
-ollama list                              # confirms the entry
-ollama run qwen2.5-coder:7b-instruct "say hello in one line"
 ```
 
 Once the model is pulled, the previously-skipped live smoke test should
