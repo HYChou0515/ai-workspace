@@ -1,0 +1,127 @@
+"""DockerSandbox — runs each sandbox as its own Docker container.
+
+Default adapter for production-ish deployments per grill-me Q12. Requires
+a Docker daemon reachable via `docker.from_env()`. Container lifecycle:
+`create` starts a long-lived container running `sleep infinity`; `exec`
+uses `container.exec_run`; `kill` removes the container.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import io
+import tarfile
+import uuid
+from pathlib import PurePosixPath
+from typing import TYPE_CHECKING, Any
+
+from .protocol import ExecResult, SandboxHandle, SandboxNotFound, SandboxSpec
+
+if TYPE_CHECKING:
+    from docker import DockerClient
+    from docker.models.containers import Container
+
+
+_WORKDIR = "/workspace"
+
+
+class DockerSandbox:
+    def __init__(self, *, client: DockerClient | None = None) -> None:
+        if client is None:
+            import docker
+
+            client = docker.from_env()
+        self._client = client
+        self._containers: dict[str, Container] = {}
+
+    def _require(self, handle: SandboxHandle) -> Container:
+        c = self._containers.get(handle.id)
+        if c is None:
+            raise SandboxNotFound(handle.id)
+        return c
+
+    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+        handle = SandboxHandle(id=str(uuid.uuid4()))
+        container = await asyncio.to_thread(self._start_container, spec)
+        self._containers[handle.id] = container
+        return handle
+
+    def _start_container(self, spec: SandboxSpec) -> Container:
+        return self._client.containers.run(
+            spec.image,
+            command=["sleep", "infinity"],
+            detach=True,
+            environment=spec.env or None,
+            working_dir=_WORKDIR,
+            tty=False,
+            auto_remove=False,
+            labels={"workspace-app": "1"},
+            entrypoint=[],
+        )
+
+    async def kill(self, handle: SandboxHandle) -> None:
+        container = self._require(handle)
+        await asyncio.to_thread(self._stop_and_remove, container)
+        del self._containers[handle.id]
+
+    @staticmethod
+    def _stop_and_remove(container: Container) -> None:
+        with contextlib.suppress(Exception):
+            container.kill()
+        container.remove(force=True)
+
+    async def exec(self, handle: SandboxHandle, cmd: list[str]) -> ExecResult:
+        container = self._require(handle)
+        result: Any = await asyncio.to_thread(container.exec_run, cmd, demux=True, workdir=_WORKDIR)
+        exit_code = result.exit_code if result.exit_code is not None else -1
+        stdout_b, stderr_b = result.output
+        return ExecResult(
+            exit_code=exit_code,
+            stdout=stdout_b or b"",
+            stderr=stderr_b or b"",
+        )
+
+    async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
+        container = self._require(handle)
+        target = PurePosixPath(_WORKDIR) / remote_path.lstrip("/")
+        parent = target.parent
+        name = target.name
+        await asyncio.to_thread(self._mkdir_p, container, str(parent))
+        tar_bytes = _make_single_file_tar(name, data)
+        ok = await asyncio.to_thread(container.put_archive, str(parent), tar_bytes)
+        if not ok:  # pragma: no cover — docker SDK edge case, no reliable trigger
+            raise RuntimeError(f"docker put_archive failed for {remote_path}")
+
+    @staticmethod
+    def _mkdir_p(container: Container, path: str) -> None:
+        container.exec_run(["mkdir", "-p", path])
+
+    async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
+        container = self._require(handle)
+        target = PurePosixPath(_WORKDIR) / remote_path.lstrip("/")
+        try:
+            stream, _stat = await asyncio.to_thread(container.get_archive, str(target))
+        except Exception as exc:  # noqa: BLE001
+            raise FileNotFoundError(remote_path) from exc
+        data = b"".join(stream)
+        return _extract_single_file_from_tar(data, target.name)
+
+
+def _make_single_file_tar(name: str, data: bytes) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        info = tarfile.TarInfo(name=name)
+        info.size = len(data)
+        info.mode = 0o644
+        tar.addfile(info, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def _extract_single_file_from_tar(tar_bytes: bytes, name: str) -> bytes:
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r") as tar:
+        member = tar.getmember(name)
+        f = tar.extractfile(member)
+        if f is None:  # pragma: no cover — only triggered for non-regular members
+            raise FileNotFoundError(name)
+        return f.read()

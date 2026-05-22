@@ -59,9 +59,6 @@ def test_create_app_works_without_explicit_spec():
     from workspace_app.api import RunDone, ScriptedAgentRunner, create_app
     from workspace_app.sandbox.mock import MockSandbox
 
-    # Need a separate spec for the filestore since create_app makes its own
-    fs_spec_holder: list = []
-
     class _FS:
         async def write(self, *a, **k): ...
         async def read(self, *a, **k):
