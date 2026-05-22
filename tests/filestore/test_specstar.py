@@ -81,3 +81,35 @@ async def test_two_workspaces_are_isolated(store: SpecstarFileStore):
     await store.write("ws2", "/x", b"two")
     assert await store.read("ws1", "/x") == b"one"
     assert await store.read("ws2", "/x") == b"two"
+
+
+async def test_write_marks_path_dirty(store: SpecstarFileStore):
+    await store.write("ws1", "/a", b"x")
+    await store.write("ws1", "/b/c", b"y")
+    assert store.dirty_paths("ws1") == {"/a", "/b/c"}
+
+
+async def test_clear_dirty_empties_set(store: SpecstarFileStore):
+    await store.write("ws1", "/a", b"x")
+    store.clear_dirty("ws1")
+    assert store.dirty_paths("ws1") == set()
+
+
+async def test_dirty_paths_is_per_workspace(store: SpecstarFileStore):
+    await store.write("ws1", "/a", b"x")
+    await store.write("ws2", "/b", b"y")
+    assert store.dirty_paths("ws1") == {"/a"}
+    assert store.dirty_paths("ws2") == {"/b"}
+
+
+async def test_read_does_not_dirty(store: SpecstarFileStore):
+    await store.write("ws1", "/a", b"x")
+    store.clear_dirty("ws1")
+    await store.read("ws1", "/a")
+    await store.ls("ws1")
+    await store.exists("ws1", "/a")
+    assert store.dirty_paths("ws1") == set()
+
+
+async def test_dirty_paths_for_unknown_workspace_is_empty(store: SpecstarFileStore):
+    assert store.dirty_paths("never") == set()

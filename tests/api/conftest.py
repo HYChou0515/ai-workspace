@@ -22,6 +22,7 @@ from workspace_app.sandbox.mock import MockSandbox
 class Harness:
     client: TestClient
     spec: SpecStar
+    filestore: SpecstarFileStore
 
 
 @pytest.fixture
@@ -43,4 +44,4 @@ def harness(scripted_events: list[AgentEvent]) -> Harness:
     filestore = SpecstarFileStore(spec)
     runner = ScriptedAgentRunner(scripted_events)
     app = create_app(spec=spec, sandbox=sandbox, filestore=filestore, runner=runner)
-    return Harness(client=TestClient(app), spec=spec)
+    return Harness(client=TestClient(app), spec=spec, filestore=filestore)

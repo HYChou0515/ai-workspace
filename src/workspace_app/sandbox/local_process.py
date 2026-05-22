@@ -14,7 +14,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from .protocol import ExecResult, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, SandboxSpec
 
 
 class LocalProcessSandbox:
@@ -66,6 +66,22 @@ class LocalProcessSandbox:
         cwd = self._require(handle)
         target = self._resolve(cwd, remote_path)
         return await asyncio.to_thread(target.read_bytes)
+
+    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
+        cwd = self._require(handle)
+        base = self._resolve(cwd, root) if root.strip("/") else cwd
+        return await asyncio.to_thread(self._walk_sync, cwd, base)
+
+    @staticmethod
+    def _walk_sync(cwd: Path, base: Path) -> list[FileEntry]:
+        entries: list[FileEntry] = []
+        for p in base.rglob("*"):
+            if not p.is_file():
+                continue
+            rel = p.relative_to(cwd).as_posix()
+            stat = p.stat()
+            entries.append(FileEntry(path=f"/{rel}", size=stat.st_size, mtime=stat.st_mtime))
+        return entries
 
     @staticmethod
     def _resolve(cwd: Path, remote_path: str) -> Path:

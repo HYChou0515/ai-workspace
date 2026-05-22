@@ -129,12 +129,56 @@ def test_create_app_works_without_explicit_spec():
 
         async def delete(self, *a, **k): ...
 
+        def dirty_paths(self, *a, **k):
+            return set()
+
+        def clear_dirty(self, *a, **k): ...
+
     app = create_app(
         sandbox=MockSandbox(),
         filestore=_FS(),
         runner=ScriptedAgentRunner([RunDone()]),
     )
     assert TestClient(app).post("/workspaces/x/messages", json={"content": "y"}).status_code == 200
+
+
+async def test_list_files_returns_path_size_pairs(harness: Harness):
+    await harness.filestore.write("ws-files", "/a.txt", b"hello")
+    await harness.filestore.write("ws-files", "/sub/b.txt", b"world!")
+
+    resp = harness.client.get("/workspaces/ws-files/files")
+    assert resp.status_code == 200
+    by_path = {it["path"]: it["size"] for it in resp.json()}
+    assert by_path == {"/a.txt": 5, "/sub/b.txt": 6}
+
+
+async def test_list_files_prefix_filter(harness: Harness):
+    await harness.filestore.write("ws-files", "/src/a.py", b"a")
+    await harness.filestore.write("ws-files", "/src/b.py", b"b")
+    await harness.filestore.write("ws-files", "/README", b"r")
+    resp = harness.client.get("/workspaces/ws-files/files?prefix=/src/")
+    paths = [it["path"] for it in resp.json()]
+    assert sorted(paths) == ["/src/a.py", "/src/b.py"]
+
+
+async def test_read_file_returns_text_for_utf8(harness: Harness):
+    await harness.filestore.write("ws-files", "/a.txt", b"hello")
+    resp = harness.client.get("/workspaces/ws-files/files/a.txt")
+    assert resp.status_code == 200
+    assert resp.content == b"hello"
+    assert resp.headers["content-type"].startswith("text/plain")
+
+
+async def test_read_file_returns_octet_stream_for_binary(harness: Harness):
+    await harness.filestore.write("ws-files", "/bin", b"\xff\xfe\x00\x01")
+    resp = harness.client.get("/workspaces/ws-files/files/bin")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/octet-stream")
+
+
+def test_read_file_missing_returns_404(harness: Harness):
+    resp = harness.client.get("/workspaces/ws-files/files/nope")
+    assert resp.status_code == 404
 
 
 def test_runner_exception_is_emitted_as_error_event():

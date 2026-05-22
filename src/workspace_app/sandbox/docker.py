@@ -16,7 +16,7 @@ import uuid
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from .protocol import ExecResult, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, SandboxSpec
 
 if TYPE_CHECKING:
     from docker import DockerClient
@@ -107,6 +107,23 @@ class DockerSandbox:
         data = b"".join(stream)
         return _extract_single_file_from_tar(data, target.name)
 
+    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
+        container = self._require(handle)
+        target = PurePosixPath(_WORKDIR) / root.lstrip("/")
+        # `find -printf` is a GNU extension but debian:12-slim has it; the
+        # format yields `<size>\t<mtime>\t<path>` so we can parse without
+        # invoking stat per file.
+        result = await asyncio.to_thread(
+            container.exec_run,
+            ["find", str(target), "-type", "f", "-printf", "%s\\t%T@\\t%P\\n"],
+        )
+        if result.exit_code != 0:  # pragma: no cover — only when find binary missing
+            return []
+        out = result.output or b""
+        if isinstance(out, tuple):  # pragma: no cover — demux=False edge case
+            out = out[0] or b""
+        return list(_parse_find_output(out, base=str(target)))
+
 
 def _make_single_file_tar(name: str, data: bytes) -> bytes:
     buf = io.BytesIO()
@@ -125,3 +142,27 @@ def _extract_single_file_from_tar(tar_bytes: bytes, name: str) -> bytes:
         if f is None:  # pragma: no cover — only triggered for non-regular members
             raise FileNotFoundError(name)
         return f.read()
+
+
+def _parse_find_output(output: bytes, base: str):
+    """Yield FileEntry from `find -printf "%s\\t%T@\\t%P\\n"` output.
+
+    %P is the path relative to the find root. We re-prepend "/" so the
+    result mirrors FileStore-style canonical paths (the same shape
+    Mock/LocalProcess.walk returns).
+    """
+    for raw_line in output.splitlines():
+        if not raw_line:
+            continue
+        try:
+            size_b, mtime_b, rel_b = raw_line.split(b"\t", 2)
+        except ValueError:  # pragma: no cover — malformed line
+            continue
+        rel = rel_b.decode("utf-8", errors="replace")
+        if not rel:  # pragma: no cover — the find root itself, dropped silently
+            continue
+        yield FileEntry(
+            path="/" + rel,
+            size=int(size_b),
+            mtime=float(mtime_b),
+        )

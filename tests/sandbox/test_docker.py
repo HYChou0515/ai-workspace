@@ -107,3 +107,22 @@ async def test_accepts_externally_provided_client():
         assert r.stdout == b"external\n"
     finally:
         await s.kill(h)
+
+
+async def test_walk_lists_uploaded_files(sandbox: DockerSandbox):
+    h = await sandbox.create(SandboxSpec(image=_IMAGE))
+    await sandbox.upload(h, b"hello", "/a.txt")
+    await sandbox.upload(h, b"world!!", "/sub/b.txt")
+    entries = await sandbox.walk(h, "/")
+    by_path = {e.path: e.size for e in entries}
+    assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
+
+
+def test_parse_find_output_skips_blank_lines():
+    """find's output may include a trailing newline; _parse_find_output
+    has to skip the resulting empty record without throwing."""
+    from workspace_app.sandbox.docker import _parse_find_output
+
+    raw = b"5\t1.0\ta.txt\n\n7\t2.0\tb.txt\n"
+    entries = list(_parse_find_output(raw, base="/workspace"))
+    assert [e.path for e in entries] == ["/a.txt", "/b.txt"]

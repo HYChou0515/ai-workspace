@@ -1,6 +1,6 @@
 import uuid
 
-from .protocol import ExecResult, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, SandboxSpec
 
 
 class MockSandbox:
@@ -51,3 +51,10 @@ class MockSandbox:
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         fs = self._require(handle)
         return fs[remote_path]
+
+    async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
+        fs = self._require(handle)
+        prefix = root if root.endswith("/") else root + "/"
+        if root == "/" or root == "":
+            return [FileEntry(path=p, size=len(d)) for p, d in fs.items()]
+        return [FileEntry(path=p, size=len(d)) for p, d in fs.items() if p.startswith(prefix)]

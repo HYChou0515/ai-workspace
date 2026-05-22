@@ -13,8 +13,17 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
+
+
+class _SyncHook(Protocol):
+    """Subset of SandboxSync the registry calls. Lets tests inject a
+    recorder without coupling the registry to the concrete SandboxSync."""
+
+    async def restore(self, workspace_id: str, handle: SandboxHandle) -> int: ...
+    async def reverse(self, workspace_id: str, handle: SandboxHandle) -> int: ...
 
 
 def _utcnow() -> datetime:
@@ -33,6 +42,7 @@ class WorkspaceSession:
 class WorkspaceRegistry:
     sandbox: Sandbox
     default_spec: SandboxSpec
+    sync: _SyncHook | None = None
     _sessions: dict[str, WorkspaceSession] = field(default_factory=dict)
 
     async def session(self, workspace_id: str) -> WorkspaceSession:
@@ -47,6 +57,10 @@ class WorkspaceRegistry:
         async with session.lock:
             if session.handle is None:
                 session.handle = await self.sandbox.create(self.default_spec)
+                # Restore-after-create so the agent's shell starts with
+                # the files it left behind last time the workspace was up.
+                if self.sync is not None:
+                    await self.sync.restore(session.workspace_id, session.handle)
             session.last_active = _utcnow()
         return session.handle
 
@@ -58,6 +72,8 @@ class WorkspaceRegistry:
             if s.last_active >= cutoff:
                 continue
             if s.handle is not None:
+                if self.sync is not None:
+                    await self.sync.reverse(ws_id, s.handle)
                 await self.sandbox.kill(s.handle)
             del self._sessions[ws_id]
             killed.append(ws_id)
@@ -67,4 +83,6 @@ class WorkspaceRegistry:
         for ws_id in list(self._sessions):
             s = self._sessions.pop(ws_id)
             if s.handle is not None:
+                if self.sync is not None:
+                    await self.sync.reverse(ws_id, s.handle)
                 await self.sandbox.kill(s.handle)

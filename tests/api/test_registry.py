@@ -145,3 +145,120 @@ async def test_close_all_kills_every_alive_handle():
     # All sessions cleared.
     new = await registry.session("ws-1")
     assert new is not s1
+
+
+# ---- sync hooks ----
+
+
+class _RecordingSync:
+    """Stand-in for SandboxSync that records calls so we can assert order."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []  # (op, workspace_id)
+
+    async def restore(self, workspace_id, handle):
+        self.calls.append(("restore", workspace_id))
+        return 0
+
+    async def flush(self, workspace_id, handle):
+        self.calls.append(("flush", workspace_id))
+        return 0
+
+    async def reverse(self, workspace_id, handle):
+        self.calls.append(("reverse", workspace_id))
+        return 0
+
+
+async def test_ensure_handle_calls_sync_restore_after_create():
+    sandbox = _CountingSandbox()
+    sync = _RecordingSync()
+    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    assert sync.calls == [("restore", "ws-1")]
+    assert sandbox.create_calls == 1
+
+
+async def test_ensure_handle_skips_restore_when_handle_already_alive():
+    sandbox = _CountingSandbox()
+    sync = _RecordingSync()
+    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    await registry.ensure_handle(s)  # already alive
+    # restore only the first time
+    assert [c for c in sync.calls if c[0] == "restore"] == [("restore", "ws-1")]
+
+
+async def test_kill_idle_calls_reverse_before_sandbox_kill():
+    from datetime import UTC, datetime, timedelta
+
+    events: list[str] = []
+
+    class _RecordingSandbox(_CountingSandbox):
+        async def kill(self, handle):
+            events.append("sandbox.kill")
+            await super().kill(handle)
+
+    class _RecordingSyncWithLog(_RecordingSync):
+        async def reverse(self, workspace_id, handle):
+            events.append("sync.reverse")
+            return await super().reverse(workspace_id, handle)
+
+    sandbox = _RecordingSandbox()
+    sync = _RecordingSyncWithLog()
+    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+
+    await registry.kill_idle(threshold=timedelta(minutes=15))
+    assert events == ["sync.reverse", "sandbox.kill"]
+
+
+async def test_kill_idle_does_not_reverse_for_handleless_sessions():
+    from datetime import UTC, datetime, timedelta
+
+    sandbox = _CountingSandbox()
+    sync = _RecordingSync()
+    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    s = await registry.session("ws-1")
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+
+    await registry.kill_idle(threshold=timedelta(minutes=15))
+    assert sync.calls == []  # no handle, nothing to reverse
+
+
+async def test_close_all_reverses_before_killing_each():
+    events: list[str] = []
+
+    class _RecordingSandbox(_CountingSandbox):
+        async def kill(self, handle):
+            events.append(f"kill:{handle.id}")
+            await super().kill(handle)
+
+    class _RecordingSyncWithLog(_RecordingSync):
+        async def reverse(self, workspace_id, handle):
+            events.append(f"reverse:{workspace_id}")
+            return await super().reverse(workspace_id, handle)
+
+    sandbox = _RecordingSandbox()
+    sync = _RecordingSyncWithLog()
+    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    s1 = await registry.session("ws-1")
+    s2 = await registry.session("ws-2")
+    await registry.ensure_handle(s1)
+    await registry.ensure_handle(s2)
+
+    await registry.close_all()
+    # Each workspace's reverse precedes that workspace's kill.
+    reverse_idx_1 = events.index("reverse:ws-1")
+    kill_idx_1 = next(
+        i for i, e in enumerate(events) if e.startswith("kill:") and s1.handle and s1.handle.id in e
+    )
+    reverse_idx_2 = events.index("reverse:ws-2")
+    kill_idx_2 = next(
+        i for i, e in enumerate(events) if e.startswith("kill:") and s2.handle and s2.handle.id in e
+    )
+    assert reverse_idx_1 < kill_idx_1
+    assert reverse_idx_2 < kill_idx_2

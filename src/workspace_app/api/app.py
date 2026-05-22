@@ -4,16 +4,17 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from specstar import SpecStar
 
 from ..agent.context import AgentToolContext
-from ..filestore.protocol import FileStore
+from ..filestore.protocol import FileNotFound, FileStore
 from ..resources import Conversation, Message, register_all
 from ..sandbox.protocol import Sandbox, SandboxSpec
+from ..sync import SandboxSync
 from .events import RunError, to_sse
 from .runner import AgentRunner
 
@@ -39,6 +40,7 @@ def create_app(
     spec.apply(app)
 
     conv_rm = spec.get_resource_manager(Conversation)
+    sync = SandboxSync(filestore=filestore, sandbox=sandbox)
 
     def _conversation_for(workspace_id: str) -> tuple[str, Conversation]:
         # Linear scan over all Conversation resources for this workspace.
@@ -65,6 +67,7 @@ def create_app(
             workspace_id=workspace_id,
             sandbox=sandbox,
             filestore=filestore,
+            sync=sync,
             sandbox_spec=SandboxSpec(),
         )
 
@@ -76,6 +79,31 @@ def create_app(
                 yield to_sse(RunError(message=f"{type(exc).__name__}: {exc}"))
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    # ---- Files API (plan-backend §3.8) ----
+
+    @app.get("/workspaces/{workspace_id}/files")
+    async def list_files(workspace_id: str, prefix: str = "") -> list[dict]:
+        paths = await filestore.ls(workspace_id, prefix)
+        out: list[dict] = []
+        for p in sorted(paths):
+            data = await filestore.read(workspace_id, p)
+            out.append({"path": p, "size": len(data)})
+        return out
+
+    @app.get("/workspaces/{workspace_id}/files/{path:path}")
+    async def read_file(workspace_id: str, path: str) -> Response:
+        try:
+            data = await filestore.read(workspace_id, "/" + path.lstrip("/"))
+        except FileNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        # Best-effort text/plain when valid UTF-8; otherwise octet-stream.
+        try:
+            data.decode("utf-8")
+            media_type = "text/plain; charset=utf-8"
+        except UnicodeDecodeError:
+            media_type = "application/octet-stream"
+        return Response(content=data, media_type=media_type)
 
     # Mount the built SPA last so API routes registered above take precedence
     # over the catch-all static handler. If no build exists, skip silently —

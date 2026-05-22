@@ -81,6 +81,17 @@ async def test_delete_missing_returns_error_string(
     assert "error" in out.lower()
 
 
+async def test_exec_after_write_file_sees_the_content(
+    ctx: RunContextWrapper[AgentToolContext],
+):
+    """The user-facing promise: agent writes via write_file (which lands
+    in FileStore), then runs a shell command that needs to read the file.
+    The flush hook is what makes this work."""
+    await write_file_impl(ctx, "/notes.txt", "hello from agent")
+    out = await exec_impl(ctx, ["cat", "/notes.txt"])
+    assert "hello from agent" in out
+
+
 def test_build_tools_returns_all_six_by_default():
     tools = build_tools()
     names = {t.name for t in tools}

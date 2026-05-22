@@ -96,3 +96,28 @@ async def test_two_handles_have_isolated_fs():
     await sandbox.upload(h2, b"two", "/x")
     assert await sandbox.download(h1, "/x") == b"one"
     assert await sandbox.download(h2, "/x") == b"two"
+
+
+async def test_walk_returns_uploaded_files_with_size():
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"hello", "/a.txt")
+    await sandbox.upload(h, b"world!!", "/sub/b.txt")
+    entries = await sandbox.walk(h, "/")
+    by_path = {e.path: e.size for e in entries}
+    assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
+
+
+async def test_walk_on_unknown_handle_raises():
+    sandbox = MockSandbox()
+    with pytest.raises(SandboxNotFound):
+        await sandbox.walk(SandboxHandle(id="never"), "/")
+
+
+async def test_walk_with_non_root_prefix_filters_results():
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"a", "/inside/a.txt")
+    await sandbox.upload(h, b"b", "/elsewhere/b.txt")
+    entries = await sandbox.walk(h, "/inside")
+    assert [e.path for e in entries] == ["/inside/a.txt"]

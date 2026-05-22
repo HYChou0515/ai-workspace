@@ -221,13 +221,17 @@ def _ctx() -> AgentToolContext:
 
     from workspace_app.filestore.specstar_impl import SpecstarFileStore
     from workspace_app.sandbox.mock import MockSandbox
+    from workspace_app.sync import SandboxSync
 
     spec = SpecStar()
     spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    sandbox = MockSandbox()
+    filestore = SpecstarFileStore(spec)
     return AgentToolContext(
         workspace_id="ws-x",
-        sandbox=MockSandbox(),
-        filestore=SpecstarFileStore(spec),
+        sandbox=sandbox,
+        filestore=filestore,
+        sync=SandboxSync(filestore=filestore, sandbox=sandbox),
     )
 
 
@@ -269,18 +273,26 @@ async def test_runner_gives_up_after_max_retries():
 # ---- live test against Ollama (skipped when unavailable) ----
 
 
-def _ollama_qwen_available() -> bool:
+def _ollama_default_model_available() -> bool:
+    from workspace_app.resources import AgentConfig
+
+    default = AgentConfig(name="probe").model
+    # Strip the "ollama_chat/" or "ollama/" prefix LiteLLM uses.
+    model_tag = default.split("/", 1)[1] if "/" in default else default
     try:
         resp = httpx.get("http://localhost:11434/api/tags", timeout=2.0)
         if resp.status_code != 200:
             return False
         models = [m.get("name", "") for m in resp.json().get("models", [])]
-        return any("qwen2.5-coder" in m for m in models)
+        return any(model_tag in m for m in models)
     except (httpx.HTTPError, OSError):
         return False
 
 
-@pytest.mark.skipif(not _ollama_qwen_available(), reason="Ollama or qwen2.5-coder not available")
+@pytest.mark.skipif(
+    not _ollama_default_model_available(),
+    reason="Ollama or the default AgentConfig.model not available",
+)
 async def test_live_run_against_ollama_emits_at_least_one_event():
     from datetime import UTC, datetime
 
@@ -289,13 +301,17 @@ async def test_live_run_against_ollama_emits_at_least_one_event():
     from workspace_app.agent import AgentToolContext
     from workspace_app.filestore.specstar_impl import SpecstarFileStore
     from workspace_app.sandbox.mock import MockSandbox
+    from workspace_app.sync import SandboxSync
 
     spec = SpecStar()
     spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    sandbox = MockSandbox()
+    filestore = SpecstarFileStore(spec)
     ctx = AgentToolContext(
         workspace_id="ws-live",
-        sandbox=MockSandbox(),
-        filestore=SpecstarFileStore(spec),
+        sandbox=sandbox,
+        filestore=filestore,
+        sync=SandboxSync(filestore=filestore, sandbox=sandbox),
     )
     runner = LitellmAgentRunner()
     events = []

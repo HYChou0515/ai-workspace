@@ -76,3 +76,21 @@ async def test_two_handles_have_isolated_fs(sandbox: LocalProcessSandbox):
     await sandbox.upload(h2, b"two", "/x")
     assert await sandbox.download(h1, "/x") == b"one"
     assert await sandbox.download(h2, "/x") == b"two"
+
+
+async def test_walk_returns_files_relative_to_root(sandbox: LocalProcessSandbox):
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"hello", "/a.txt")
+    await sandbox.upload(h, b"world!!", "/sub/b.txt")
+    entries = await sandbox.walk(h, "/")
+    by_path = {e.path: e.size for e in entries}
+    assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
+    # mtime is populated for real-FS impls.
+    assert all(e.mtime > 0 for e in entries)
+
+
+async def test_walk_excludes_directories(sandbox: LocalProcessSandbox):
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x", "/a/b/c.txt")
+    entries = await sandbox.walk(h, "/")
+    assert [e.path for e in entries] == ["/a/b/c.txt"]

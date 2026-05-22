@@ -16,6 +16,9 @@ def _format_exec(r: ExecResult) -> str:
 async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) -> str:
     """Run a shell command inside the workspace sandbox."""
     handle = await ctx.context.ensure_sandbox()
+    # Flush any FileStore writes the agent made via write_file/delete_file
+    # so the shell command sees the same view of the workspace.
+    await ctx.context.sync.flush(ctx.context.workspace_id, handle)
     result = await ctx.context.sandbox.exec(handle, cmd)
     return _format_exec(result)
 
