@@ -53,6 +53,63 @@ def test_workspace_crud_via_specstar_routes(harness: Harness):
     assert rm.count_resources(QB.all()) == 1  # ty: ignore[invalid-argument-type]
 
 
+def test_spa_index_served_at_root_when_dist_exists():
+    """If web/dist has been built, GET / returns the React app's index.html."""
+    from pathlib import Path
+
+    spa_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+    if not (spa_dist / "index.html").is_file():
+        import pytest
+
+        pytest.skip("web/dist not built")
+
+    from datetime import UTC, datetime
+
+    from fastapi.testclient import TestClient
+    from specstar import SpecStar
+
+    from workspace_app.api import RunDone, ScriptedAgentRunner, create_app
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.sandbox.mock import MockSandbox
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([RunDone()]),
+    )
+    resp = TestClient(app).get("/")
+    assert resp.status_code == 200
+    assert b'<div id="root">' in resp.content
+
+
+def test_spa_mount_skipped_when_dist_missing(tmp_path):
+    """create_app must not crash when the SPA build directory is absent."""
+    from datetime import UTC, datetime
+
+    from fastapi.testclient import TestClient
+    from specstar import SpecStar
+
+    from workspace_app.api import RunDone, ScriptedAgentRunner, create_app
+    from workspace_app.filestore.specstar_impl import SpecstarFileStore
+    from workspace_app.sandbox.mock import MockSandbox
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([RunDone()]),
+        spa_dist=tmp_path / "does-not-exist",
+    )
+    # POST messages still works.
+    resp = TestClient(app).post("/workspaces/x/messages", json={"content": "y"})
+    assert resp.status_code == 200
+
+
 def test_create_app_works_without_explicit_spec():
     from fastapi.testclient import TestClient
 

@@ -1,0 +1,84 @@
+:root {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: #1f2937;
+  background: #f8fafc;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; }
+
+.app {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 24px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100vh;
+}
+
+.app h1 { font-size: 18px; margin: 0; }
+
+.workspace-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.workspace-bar input {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.transcript {
+  flex: 1;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 12px;
+  overflow-y: auto;
+  font-size: 14px;
+}
+
+.event {
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+}
+
+.event.user        { background: #eff6ff; border-left: 3px solid #3b82f6; }
+.event.message     { background: #ecfdf5; border-left: 3px solid #10b981; white-space: pre-wrap; }
+.event.tool-start  { background: #fef3c7; border-left: 3px solid #d97706; font-family: ui-monospace, monospace; font-size: 12px; }
+.event.tool-end    { background: #fef9c3; border-left: 3px solid #ca8a04; font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; }
+.event.error       { background: #fee2e2; border-left: 3px solid #dc2626; font-family: ui-monospace, monospace; font-size: 12px; }
+.event.done        { color: #64748b; font-style: italic; font-size: 12px; }
+
+.composer {
+  display: flex;
+  gap: 8px;
+}
+
+.composer textarea {
+  flex: 1;
+  min-height: 60px;
+  padding: 8px 10px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font: inherit;
+  resize: vertical;
+}
+
+.composer button {
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: none;
+  background: #3b82f6;
+  color: white;
+  font: inherit;
+  cursor: pointer;
+}
+
+.composer button:disabled { background: #94a3b8; cursor: default; }

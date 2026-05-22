@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from specstar import SpecStar
 
@@ -26,6 +28,7 @@ def create_app(
     sandbox: Sandbox,
     filestore: FileStore,
     runner: AgentRunner,
+    spa_dist: Path | None = None,
 ) -> FastAPI:
     if spec is None:
         spec = SpecStar()
@@ -73,5 +76,13 @@ def create_app(
                 yield to_sse(RunError(message=f"{type(exc).__name__}: {exc}"))
 
         return StreamingResponse(gen(), media_type="text/event-stream")
+
+    # Mount the built SPA last so API routes registered above take precedence
+    # over the catch-all static handler. If no build exists, skip silently —
+    # the API alone is still usable (e.g. via curl or the specstar admin UI).
+    if spa_dist is None:
+        spa_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
+    if spa_dist.is_dir() and (spa_dist / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=spa_dist, html=True), name="spa")
 
     return app

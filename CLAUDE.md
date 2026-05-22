@@ -11,23 +11,54 @@ Respond to the user in **Traditional Taiwanese Chinese (繁體中文 / 台灣用
 - **New feature requests and bug reports**: start with **`/grill-me`** to stress-test the plan and resolve open questions before any code is written.
 - **Implementation**: once the plan is clear, use **`/tdd`** to drive the work through the red-green-refactor loop rather than writing implementation first.
 
-## Repository status
-
-This directory is currently **empty** — no source code, build config, package manifest, or version control has been initialized yet. The sections below are placeholders to be filled in once the project takes shape.
-
-When real content lands, replace each `TODO` with concrete guidance. Delete sections that turn out not to apply rather than leaving them blank.
-
 ## Commands
 
-TODO — fill in once a build system exists. Typical entries:
+Backend (Python 3.12, uv-managed):
 
-- Install dependencies: `TODO`
-- Build: `TODO`
-- Run the app: `TODO`
-- Run all tests: `TODO`
-- Run a single test: `TODO`
-- Lint / format / typecheck: `TODO`
+- Install: `uv sync`
+- Run all tests + coverage: `uv run coverage run -m pytest && uv run coverage report`
+  - Use `coverage.py` directly — **do not** add `pytest-cov`.
+- Run a single test: `uv run pytest tests/path/to/test_file.py::test_name`
+- Lint + format: `uv run ruff check && uv run ruff format --check`
+- Type check: `uv run ty check`
+- Run the app: `uv run python -m workspace_app` (serves API + SPA on 127.0.0.1:8000)
+
+Frontend (React + Vite, lives in `web/`):
+
+- Install: `cd web && pnpm install`
+- Dev server with backend proxy: `cd web && pnpm run dev` (5173)
+- Build production bundle: `cd web && pnpm run build` (produces `web/dist`, which the backend auto-mounts)
+- Type check only: `cd web && pnpm run typecheck`
 
 ## Architecture
 
-TODO — fill in once there is code. Capture only the "big picture" that requires reading multiple files to understand (module boundaries, data flow, key abstractions, non-obvious conventions). Skip anything a new reader can discover by listing the directory.
+Pluggable layers connected through Protocols — swap any single piece by writing a new implementation and injecting it into `create_app`.
+
+```
+React SPA (web/) ─► FastAPI app (api/) ─► OpenAI Agents SDK (api/litellm_runner.py)
+                          │                       │
+                          │                       └─► LiteLLM ─► Ollama / hosted LLM
+                          │
+                          ├─► AgentRunner Protocol (api/runner.py)
+                          │     - LitellmAgentRunner: real LLM, see above
+                          │     - ScriptedAgentRunner: scripted events, used by tests
+                          │
+                          ├─► Sandbox Protocol (sandbox/protocol.py)
+                          │     - MockSandbox: in-memory, for tests
+                          │     - LocalProcessSandbox: subprocess + temp dir, default for VM deploys
+                          │     - DockerSandbox: one container per sandbox
+                          │
+                          ├─► FileStore Protocol (filestore/protocol.py)
+                          │     - SpecstarFileStore: per-workspace blob inside specstar
+                          │
+                          └─► specstar (resources/): auto-CRUD for Workspace, AgentConfig, Conversation
+```
+
+Key conventions:
+
+- **Sandbox is created lazily** by the agent's `exec` tool on first use (grill-me Q10 "a2+" policy). Pure file operations go through FileStore and never spin one up.
+- **AgentRunner Protocol** is the swap point between scripted tests and live LLM. Tests use `ScriptedAgentRunner`; production uses `LitellmAgentRunner`.
+- **SSE event schema** (`api/events.py`) is mirrored in `web/src/events.ts`. Keep them in sync when adding event types.
+- **specstar singleton vs instance**: always construct a fresh `SpecStar()` instance — never use the module-level `specstar.spec` singleton. This keeps tests isolated.
+
+See the rationale and rejected alternatives in the conversation history under `/grill-me` (Q1-Q12).

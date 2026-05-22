@@ -33,6 +33,7 @@ testpaths = ["tests"]
 [tool.coverage.run]
 branch = true
 source = ["src/workspace_app"]
+omit = ["src/workspace_app/__main__.py"]
 
 [tool.coverage.report]
 show_missing = true
