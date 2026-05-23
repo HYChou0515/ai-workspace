@@ -17,17 +17,22 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileNotFound, FileStore
+from ..kernels import KernelService
 from ..rca.templates import seed_investigation
 from ..resources import Conversation, Investigation, Message, Severity, Status, register_all
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
-from .events import AgentEvent, RunCancelled, RunError, to_sse
+from .events import AgentEvent, CellEvent, RunCancelled, RunError, to_sse
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
 
 
 class _MessageBody(BaseModel):
     content: str
+
+
+class _CellExecuteBody(BaseModel):
+    code: str
 
 
 class _CloseInvestigationBody(BaseModel):
@@ -63,6 +68,7 @@ def create_app(
 
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    kernels = KernelService()
 
     async def _idle_killer() -> None:
         """Periodically reap sandboxes whose last_active is past the
@@ -84,6 +90,7 @@ def create_app(
             killer.cancel()
             with contextlib.suppress(BaseException):
                 await killer
+            await kernels.shutdown_all()
             await registry.close_all()
 
     app = FastAPI(title="RCA 3.0", lifespan=lifespan)
@@ -266,6 +273,46 @@ def create_app(
         except UnicodeDecodeError:
             media_type = "application/octet-stream"
         return Response(content=data, media_type=media_type)
+
+    # ---- Notebook cell execution (plan-backend §7.3) ----
+
+    @app.post(
+        "/investigations/{investigation_id}/notebooks/{notebook_path:path}/cells/{idx}/execute"
+    )
+    async def execute_cell(
+        investigation_id: str,
+        notebook_path: str,
+        idx: int,
+        body: _CellExecuteBody,
+    ) -> StreamingResponse:
+        handle = await kernels.get_or_start(investigation_id, notebook_path)
+
+        async def gen() -> AsyncIterator[str]:
+            ev: CellEvent
+            async for ev in kernels.execute_cell(handle, body.code):
+                yield to_sse(ev)
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
+
+    @app.delete(
+        "/investigations/{investigation_id}/notebooks/{notebook_path:path}/cells/{idx}/execute",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def interrupt_cell(investigation_id: str, notebook_path: str, idx: int) -> Response:
+        handle = kernels.peek(investigation_id, notebook_path)
+        if handle is not None:
+            await kernels.interrupt(handle)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/investigations/{investigation_id}/notebooks/{notebook_path:path}/kernel/restart",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def restart_kernel(investigation_id: str, notebook_path: str) -> Response:
+        handle = kernels.peek(investigation_id, notebook_path)
+        if handle is not None:
+            await kernels.restart(handle)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # Mount the built SPA last so API routes registered above take precedence
     # over the catch-all static handler. If no build exists, skip silently —

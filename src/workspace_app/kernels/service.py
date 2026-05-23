@@ -59,6 +59,11 @@ class KernelService:
             self._kernels[key] = handle
             return handle
 
+    def peek(self, investigation_id: str, notebook_path: str) -> KernelHandle | None:
+        """Lookup without spawning — interrupt/restart endpoints use this so
+        a no-op on a missing kernel is cheap and doesn't spin one up."""
+        return self._kernels.get((investigation_id, notebook_path))
+
     @staticmethod
     async def _spawn(investigation_id: str, notebook_path: str) -> KernelHandle:
         from jupyter_client import AsyncKernelManager
