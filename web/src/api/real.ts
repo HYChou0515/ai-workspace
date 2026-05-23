@@ -257,6 +257,21 @@ export const realApi: ApiClient = {
     }
   },
 
+  async copyFile(investigationId: string, from: string, to: string) {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(investigationId)}/files/copy`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ from, to }),
+      },
+    );
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new HttpError(resp.status, `copy failed: ${resp.status} ${detail.slice(0, 120)}`);
+    }
+  },
+
   async cancelMessage(investigationId: string) {
     // Idempotent on the BE; swallow network/404 noise so a double-click
     // on Stop doesn't surface a scary toast.

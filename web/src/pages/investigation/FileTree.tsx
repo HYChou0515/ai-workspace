@@ -5,7 +5,7 @@
  * then refresh the listing.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { api } from "../../api";
 import type { FileInfo } from "../../api/types";
@@ -17,6 +17,16 @@ import { basename } from "./renderer";
 type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
 type Menu = { node: TreeNode | null; x: number; y: number };
+
+const uploadMenuItem: React.CSSProperties = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  padding: "5px 14px",
+  fontSize: 12,
+  color: "var(--text-paper)",
+  background: "transparent",
+};
 
 export function FileTree({
   investigationId,
@@ -40,8 +50,56 @@ export function FileTree({
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
   // Inline rename: the path being renamed.
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [rootDrop, setRootDrop] = useState(false);
+  const [uploadMenu, setUploadMenu] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => onChanged?.();
+
+  const upload = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    const existing = new Set(files.map((f) => f.path));
+    let firstPath: string | null = null;
+    for (const f of Array.from(fileList)) {
+      if (f.size > 8 * 1024 * 1024) {
+        alert(`${f.name} is over the 8 MB cap — skipped.`);
+        continue;
+      }
+      // Preserve folder structure when a directory was picked.
+      const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+      const path = `/${rel}`.replace(/\/+/g, "/");
+      if (existing.has(path) && !confirm(`${path} exists. Overwrite?`)) continue;
+      await api.writeFile(investigationId, path, f);
+      firstPath ??= path;
+    }
+    refresh();
+    if (firstPath) onOpen(firstPath, { preview: false });
+  };
+
+  // Move (or Ctrl/⌘-copy) a dragged file into `destDir` ("" = root).
+  const dropFileInto = async (srcPath: string, destDir: string, copy: boolean) => {
+    const dest = `${destDir}/${basename(srcPath)}`.replace(/\/+/g, "/");
+    if (dest === srcPath) return;
+    try {
+      if (copy) await api.copyFile(investigationId, srcPath, dest);
+      else await api.moveFile(investigationId, srcPath, dest);
+      refresh();
+      if (!copy) onOpen(dest, { preview: false });
+    } catch (e) {
+      alert(`${copy ? "Copy" : "Move"} failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const readDragFile = (e: React.DragEvent): { path: string } | null => {
+    const raw = e.dataTransfer.getData("application/x-rca-file");
+    if (!raw) return null;
+    try {
+      return JSON.parse(raw) as { path: string };
+    } catch {
+      return null;
+    }
+  };
 
   const commitCreate = async (name: string) => {
     const c = creating;
@@ -93,58 +151,170 @@ export function FileTree({
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 2, padding: "0 10px 4px" }}>
+      {/* "Files" header with the three actions: new file, new folder, upload. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          padding: "0 10px 4px 14px",
+        }}
+      >
+        <span className="caps" style={{ flex: 1 }}>
+          Files
+        </span>
         <button
           type="button"
-          title="New file at root"
+          title="New file"
           onClick={() => setCreating({ kind: "file", dir: "" })}
-          style={{ color: "var(--text-paper-d)" }}
+          style={{ color: "var(--text-paper-d)", padding: 2 }}
         >
           <Icon name="plus" size={13} />
         </button>
         <button
           type="button"
-          title="New folder at root"
+          title="New folder"
           onClick={() => setCreating({ kind: "folder", dir: "" })}
-          style={{ color: "var(--text-paper-d)" }}
+          style={{ color: "var(--text-paper-d)", padding: 2 }}
         >
           <Icon name="folder" size={13} />
         </button>
-      </div>
-      {tree.length === 0 && !creating && (
-        <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
-          No files yet.
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            title="Upload files or a folder"
+            onClick={() => setUploadMenu((v) => !v)}
+            style={{ color: "var(--text-paper-d)", padding: 2 }}
+          >
+            <Icon name="upload" size={13} />
+          </button>
+          {uploadMenu && (
+            <>
+              <div
+                onClick={() => setUploadMenu(false)}
+                style={{ position: "fixed", inset: 0, zIndex: 60 }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  right: 0,
+                  zIndex: 61,
+                  minWidth: 140,
+                  background: "var(--white)",
+                  border: "1px solid var(--paper-3)",
+                  borderRadius: "var(--radius-card)",
+                  boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
+                  padding: "4px 0",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUploadMenu(false);
+                    fileInputRef.current?.click();
+                  }}
+                  style={uploadMenuItem}
+                >
+                  Upload files…
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUploadMenu(false);
+                    folderInputRef.current?.click();
+                  }}
+                  style={uploadMenuItem}
+                >
+                  Upload folder…
+                </button>
+              </div>
+            </>
+          )}
         </div>
-      )}
-      {/* Root-level inline creator */}
-      {creating && creating.dir === "" && (
-        <InlineEdit
-          kind={creating.kind}
-          depth={0}
-          onCommit={(name) => void commitCreate(name)}
-          onCancel={() => setCreating(null)}
-        />
-      )}
-      {tree.map((node) => (
-        <TreeRow
-          key={node.path}
-          node={node}
-          depth={0}
-          activePath={activePath}
-          collapsed={collapsed}
-          creating={creating}
-          renaming={renaming}
-          onOpen={onOpen}
-          onCommitCreate={(name) => void commitCreate(name)}
-          onCancelCreate={() => setCreating(null)}
-          onCommitRename={(n, name) => void commitRename(n, name)}
-          onCancelRename={() => setRenaming(null)}
-          onContext={(n, e) => {
-            e.preventDefault();
-            setMenu({ node: n, x: e.clientX, y: e.clientY });
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={(e) => {
+            void upload(e.target.files);
+            e.target.value = "";
           }}
+          style={{ display: "none" }}
         />
-      ))}
+        <input
+          ref={folderInputRef}
+          type="file"
+          // @ts-expect-error — non-standard but widely supported folder picker
+          webkitdirectory=""
+          onChange={(e) => {
+            void upload(e.target.files);
+            e.target.value = "";
+          }}
+          style={{ display: "none" }}
+        />
+      </div>
+
+      {/* Tree body — also the root drop zone (move/copy to root). */}
+      <div
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes("application/x-rca-file")) {
+            e.preventDefault();
+            setRootDrop(true);
+          }
+        }}
+        onDragLeave={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node)) setRootDrop(false);
+        }}
+        onDrop={(e) => {
+          setRootDrop(false);
+          const d = readDragFile(e);
+          if (d) {
+            e.preventDefault();
+            void dropFileInto(d.path, "", e.ctrlKey || e.metaKey);
+          }
+        }}
+        style={{
+          minHeight: 40,
+          background: rootDrop ? "var(--accent-soft)" : "transparent",
+          borderRadius: 4,
+        }}
+      >
+        {tree.length === 0 && !creating && (
+          <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
+            No files yet.
+          </div>
+        )}
+        {creating && creating.dir === "" && (
+          <InlineEdit
+            kind={creating.kind}
+            depth={0}
+            onCommit={(name) => void commitCreate(name)}
+            onCancel={() => setCreating(null)}
+          />
+        )}
+        {tree.map((node) => (
+          <TreeRow
+            key={node.path}
+            node={node}
+            depth={0}
+            activePath={activePath}
+            collapsed={collapsed}
+            creating={creating}
+            renaming={renaming}
+            onOpen={onOpen}
+            onCommitCreate={(name) => void commitCreate(name)}
+            onCancelCreate={() => setCreating(null)}
+            onCommitRename={(n, name) => void commitRename(n, name)}
+            onCancelRename={() => setRenaming(null)}
+            onDropFile={(srcPath, destDir, copy) => void dropFileInto(srcPath, destDir, copy)}
+            readDragFile={readDragFile}
+            onContext={(n, e) => {
+              e.preventDefault();
+              setMenu({ node: n, x: e.clientX, y: e.clientY });
+            }}
+          />
+        ))}
+      </div>
 
       {menu?.node && (
         <TreeContextMenu
@@ -231,6 +401,8 @@ function TreeRow({
   onCancelCreate,
   onCommitRename,
   onCancelRename,
+  onDropFile,
+  readDragFile,
 }: {
   node: TreeNode;
   depth: number;
@@ -244,9 +416,12 @@ function TreeRow({
   onCancelCreate: () => void;
   onCommitRename: (node: TreeNode, name: string) => void;
   onCancelRename: () => void;
+  onDropFile: (srcPath: string, destDir: string, copy: boolean) => void;
+  readDragFile: (e: React.DragEvent) => { path: string } | null;
 }) {
   const indent = 8 + depth * 12;
   const isCollapsed = collapsed.has(node.path);
+  const [dropOver, setDropOver] = useState(false);
 
   if (renaming === node.path) {
     return (
@@ -267,6 +442,24 @@ function TreeRow({
           type="button"
           onClick={() => collapsed.toggle(node.path)}
           onContextMenu={(e) => onContext(node, e)}
+          // Drop target: move/copy a dragged file into this folder.
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes("application/x-rca-file")) {
+              e.preventDefault();
+              e.stopPropagation();
+              setDropOver(true);
+            }
+          }}
+          onDragLeave={() => setDropOver(false)}
+          onDrop={(e) => {
+            setDropOver(false);
+            const d = readDragFile(e);
+            if (d) {
+              e.preventDefault();
+              e.stopPropagation();
+              onDropFile(d.path, node.path, e.ctrlKey || e.metaKey);
+            }
+          }}
           style={{
             display: "flex",
             alignItems: "center",
@@ -276,6 +469,7 @@ function TreeRow({
             textAlign: "left",
             color: "var(--text-paper-d)",
             fontSize: 12,
+            background: dropOver ? "var(--accent-soft)" : "transparent",
           }}
         >
           <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={12} />
@@ -307,6 +501,8 @@ function TreeRow({
                 onCancelCreate={onCancelCreate}
                 onCommitRename={onCommitRename}
                 onCancelRename={onCancelRename}
+                onDropFile={onDropFile}
+                readDragFile={readDragFile}
               />
             ))}
           </>
@@ -319,9 +515,18 @@ function TreeRow({
   return (
     <button
       type="button"
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(
+          "application/x-rca-file",
+          JSON.stringify({ path: node.path }),
+        );
+        e.dataTransfer.effectAllowed = "copyMove";
+      }}
       onClick={() => onOpen(node.path, { preview: true })}
       onDoubleClick={() => onOpen(node.path, { preview: false })}
       onContextMenu={(e) => onContext(node, e)}
+      title="Drag onto a folder to move · Ctrl/⌘-drag to copy · drag into a pane to open there"
       style={{
         display: "flex",
         alignItems: "center",

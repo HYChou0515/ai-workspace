@@ -332,6 +332,27 @@ def create_app(
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.post(
+        "/investigations/{investigation_id}/files/copy",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def copy_file(investigation_id: str, body: _MoveBody) -> Response:
+        src = "/" + body.from_.lstrip("/")
+        dst = "/" + body.to.lstrip("/")
+        try:
+            data = await filestore.read(investigation_id, src)
+        except FileNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if await filestore.exists(investigation_id, dst):
+            raise HTTPException(status_code=409, detail=f"target exists: {dst}")
+        await filestore.write(investigation_id, dst, data)
+        activity.record(
+            "file_copied",
+            f"Copied {src} → {dst}",
+            {"investigation_id": investigation_id, "path": dst},
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
     @app.delete(
         "/investigations/{investigation_id}/files/{path:path}",
         status_code=status.HTTP_204_NO_CONTENT,

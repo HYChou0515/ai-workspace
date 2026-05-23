@@ -18,7 +18,6 @@ import { SeverityChip, StatusChip } from "../../components/StatusChip";
 import { FileBufferProvider } from "../../hooks/fileBuffer";
 import { useThemeMode } from "../../hooks/theme";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
-import { useFileContent } from "../../hooks/useFileContent";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { emitRunAll } from "../../lib/editorEvents";
@@ -26,7 +25,18 @@ import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
-import { basename, breadcrumbSegments, hasOutline, pickRenderer } from "./renderer";
+import {
+  type Edge,
+  type PaneNode,
+  edgeForPoint,
+  findLeaf,
+  leaf,
+  leaves,
+  removeLeaf,
+  setLeafPath,
+  splitLeaf,
+} from "./paneTree";
+import { basename, breadcrumbSegments, pickRenderer } from "./renderer";
 import { TerminalPane } from "./TerminalPane";
 
 type OpenTab = {
@@ -38,7 +48,6 @@ type OpenTab = {
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
-type Pane = { id: string; path: string | null };
 type SplitDir = "left" | "right" | "up" | "down";
 
 export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
@@ -211,13 +220,6 @@ export function InvestigationShell({
     return () => document.removeEventListener("keydown", onKey);
   }, []);
 
-  const focusAgentComposer = () => {
-    const composer = document.querySelector<HTMLTextAreaElement>(
-      "[data-testid='agent-panel'] textarea",
-    );
-    composer?.focus();
-  };
-
   return (
     <AgentProvider investigationId={investigation.resource_id}>
      <FileBufferProvider investigationId={investigation.resource_id}>
@@ -241,7 +243,6 @@ export function InvestigationShell({
           <ActivityBar
             mode={activityMode}
             onMode={setActivityMode}
-            onFocusAgent={focusAgentComposer}
             onSettings={() => setSettingsOpen(true)}
           />
           {sidebarOpen && (
@@ -928,12 +929,10 @@ const iconBtn: React.CSSProperties = {
 function ActivityBar({
   mode,
   onMode,
-  onFocusAgent,
   onSettings,
 }: {
   mode: ActivityMode;
   onMode: (m: ActivityMode) => void;
-  onFocusAgent: () => void;
   onSettings: () => void;
 }) {
   const items: {
@@ -942,9 +941,8 @@ function ActivityBar({
     onClick: () => void;
     active: boolean;
   }[] = [
-    { name: "folder", label: "Evidence", onClick: () => onMode("evidence"), active: mode === "evidence" },
+    { name: "folder", label: "Files", onClick: () => onMode("evidence"), active: mode === "evidence" },
     { name: "search", label: "Search files", onClick: () => onMode("search"), active: mode === "search" },
-    { name: "sparkle", label: "Focus agent", onClick: onFocusAgent, active: false },
     { name: "clock", label: "History", onClick: () => onMode("history"), active: mode === "history" },
     { name: "users", label: "Reviewers", onClick: () => onMode("reviewers"), active: mode === "reviewers" },
   ];
@@ -1024,195 +1022,29 @@ function EvidenceSidebar({
   investigation,
   files,
   activePath,
-  openTabs,
   onOpenFile,
   onFilesChanged,
 }: {
   investigation: Investigation;
   files: FileInfo[];
   activePath: string | null;
-  openTabs: OpenTab[];
   onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
 }) {
   return (
-    <SidebarFrame
-      investigation={investigation}
-      header={
-        <>
-          <span className="caps">Evidence</span>
-          <SidebarUploadButton
-            investigationId={investigation.resource_id}
-            existingPaths={files.map((f) => f.path)}
-            onUploaded={(path) => {
-              onFilesChanged?.();
-              onOpenFile(path);
-            }}
-          />
-        </>
-      }
-    >
-      {openTabs.length > 0 && (
-        <Section title="Open">
-          {openTabs.map((t) => (
-            <TreeRow
-              key={t.path}
-              label={basename(t.path)}
-              path={t.path}
-              active={t.path === activePath}
-              onOpen={onOpenFile}
-            />
-          ))}
-        </Section>
-      )}
-
-      <Section title="Investigation files">
-        <FileTree
-          investigationId={investigation.resource_id}
-          files={files}
-          activePath={activePath}
-          onOpen={onOpenFile}
-          onChanged={onFilesChanged}
-        />
-      </Section>
-
-      <OutlineSection activePath={activePath} investigationId={investigation.resource_id} />
+    <SidebarFrame investigation={investigation}>
+      <FileTree
+        investigationId={investigation.resource_id}
+        files={files}
+        activePath={activePath}
+        onOpen={onOpenFile}
+        onChanged={onFilesChanged}
+      />
     </SidebarFrame>
   );
 }
 
-function SidebarUploadButton({
-  investigationId,
-  existingPaths,
-  onUploaded,
-}: {
-  investigationId: string;
-  existingPaths: string[];
-  onUploaded: (path: string) => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-
-  const upload = async (file: File) => {
-    // 8 MB cap on the sidebar uploader — larger than the agent attach
-    // (256 KB) since this lane handles evidence files, including CSV
-    // exports and ipynb backups.
-    if (file.size > 8 * 1024 * 1024) {
-      alert(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). v1 cap is 8 MB.`);
-      return;
-    }
-    const target = `/uploads/${file.name}`;
-    if (existingPaths.includes(target)) {
-      if (!confirm(`${target} already exists. Overwrite?`)) return;
-    }
-    setBusy(true);
-    try {
-      await api.writeFile(investigationId, target, file);
-      onUploaded(target);
-    } catch (err) {
-      console.error("upload failed", err);
-      alert(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        onChange={(e) => {
-          const f = e.target.files?.[0];
-          e.target.value = "";
-          if (f) void upload(f);
-        }}
-        style={{ display: "none" }}
-      />
-      <button
-        type="button"
-        title={busy ? "Uploading…" : "Upload evidence file"}
-        disabled={busy}
-        onClick={() => inputRef.current?.click()}
-        style={{
-          color: busy ? "var(--text-paper-d2)" : "var(--text-paper-d)",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-        }}
-      >
-        <Icon name={busy ? "upload" : "plus"} size={14} />
-      </button>
-    </>
-  );
-}
-
-function OutlineSection({
-  activePath,
-  investigationId,
-}: {
-  activePath: string | null;
-  investigationId: string;
-}) {
-  // Outline is meaningful for any markdown-bodied file — that's the
-  // markdown renderer AND the report renderer (/report.v*.md).
-  const renderable = activePath != null && hasOutline(activePath);
-  const content = useFileContent(
-    investigationId,
-    renderable ? activePath : null,
-  );
-
-  if (!renderable) {
-    return (
-      <Section title="Outline">
-        <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
-          (open a markdown or report file to see headings)
-        </div>
-      </Section>
-    );
-  }
-  if (content.kind !== "ready" || content.content.kind !== "text") {
-    return (
-      <Section title="Outline">
-        <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
-          …
-        </div>
-      </Section>
-    );
-  }
-  const headings = extractHeadings(content.content.text);
-  return (
-    <Section title="Outline">
-      {headings.length === 0 && (
-        <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
-          No headings in this file.
-        </div>
-      )}
-      {headings.map((h, i) => (
-        <a
-          key={i}
-          href={`#${slugify(h.text)}`}
-          style={{
-            display: "block",
-            padding: `4px 14px 4px ${14 + (h.level - 1) * 10}px`,
-            fontSize: 12,
-            color: "var(--text-paper)",
-            textDecoration: "none",
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLAnchorElement).style.background = "var(--paper-2)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLAnchorElement).style.background = "transparent";
-          }}
-        >
-          {h.text}
-        </a>
-      ))}
-    </Section>
-  );
-}
-
+/** Extract atx headings — exported for the outline unit test + reuse. */
 export function extractHeadings(md: string): { level: number; text: string }[] {
   const out: { level: number; text: string }[] = [];
   for (const line of md.split("\n")) {
@@ -1222,13 +1054,6 @@ export function extractHeadings(md: string): { level: number; text: string }[] {
     }
   }
   return out;
-}
-
-function slugify(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
 }
 
 /* ----------------------------- Search sidebar ----------------------------- */
@@ -1378,12 +1203,12 @@ function SidebarFrame({
   children,
 }: {
   investigation: Investigation;
-  header: React.ReactNode;
+  header?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <aside className="scrollable" style={{ ...sidebarStyle, overflowY: "auto" }}>
-      <div style={sidebarHeader}>{header}</div>
+      {header && <div style={sidebarHeader}>{header}</div>}
       {children}
       <div style={{ flex: 1 }} />
       <footer
@@ -1407,15 +1232,6 @@ function SidebarFrame({
         </FootMeta>
       </footer>
     </aside>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ padding: "8px 0", borderBottom: "1px solid var(--paper-3)" }}>
-      <div className="caps" style={{ padding: "0 14px 4px" }}>{title}</div>
-      {children}
-    </div>
   );
 }
 
@@ -1506,57 +1322,71 @@ function EditorArea({
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
 
-  // Multi-pane editor (VSCode editor groups). `panes` is a flat ordered
-  // list laid out along one `orientation`; the focused pane tracks the
-  // global active tab so the tab strip drives whichever pane has focus.
-  const [panes, setPanes] = useState<Pane[]>([{ id: "p0", path: activeTab }]);
-  const [orientation, setOrientation] = useState<"row" | "col">("row");
+  // Multi-pane editor as a recursive split tree (VSCode editor groups).
+  // The focused leaf mirrors the global active tab so the tab strip drives
+  // whichever group has focus. Edge drops split a leaf in place (nesting).
+  const [tree, setTree] = useState<PaneNode>(() => leaf("p0", activeTab));
   const [focusedId, setFocusedId] = useState("p0");
   const paneSeq = useRef(1);
 
-  // activeTab → focused pane (tab strip drives the focused group).
+  // activeTab → focused leaf.
   useEffect(() => {
-    setPanes((prev) => prev.map((p) => (p.id === focusedId ? { ...p, path: activeTab } : p)));
+    setTree((t) => setLeafPath(t, focusedId, activeTab));
   }, [activeTab, focusedId]);
 
-  // Drop panes whose file was closed; collapse to a single pane if needed.
+  // Close non-focused leaves whose file tab was closed.
   useEffect(() => {
-    setPanes((prev) => {
-      const live = prev.filter(
-        (p, i) => i === 0 || p.path == null || openTabs.some((t) => t.path === p.path),
-      );
-      return live.length === prev.length ? prev : live.length ? live : [{ id: "p0", path: activeTab }];
+    setTree((prev) => {
+      let t = prev;
+      for (const l of leaves(prev)) {
+        if (l.id !== focusedId && l.path && !openTabs.some((tb) => tb.path === l.path)) {
+          t = removeLeaf(t, l.id);
+        }
+      }
+      return t;
     });
-  }, [openTabs, activeTab]);
+  }, [openTabs, focusedId]);
 
-  const focusPane = (id: string) => {
+  const focusLeaf = (id: string) => {
     setFocusedId(id);
-    const p = panes.find((x) => x.id === id);
-    if (p?.path && p.path !== activeTab) onSelectTab(p.path);
+    const l = findLeaf(tree, id);
+    if (l?.path && l.path !== activeTab) onSelectTab(l.path);
   };
 
-  const splitInto = (dir: "left" | "right" | "up" | "down", path: string | null) => {
-    const id = `p${paneSeq.current++}`;
-    setOrientation(dir === "left" || dir === "right" ? "row" : "col");
-    setPanes((prev) => {
-      const idx = Math.max(0, prev.findIndex((p) => p.id === focusedId));
-      const at = dir === "left" || dir === "up" ? idx : idx + 1;
-      const next = [...prev];
-      next.splice(at, 0, { id, path: path ?? activeTab });
-      return next;
-    });
-    setFocusedId(id);
+  const dropOn = (id: string, edge: Edge, path: string | null) => {
+    if (!path) return;
+    if (edge === "center") {
+      setTree((t) => setLeafPath(t, id, path));
+      setFocusedId(id);
+      if (path !== activeTab) onSelectTab(path);
+      return;
+    }
+    const newId = `p${paneSeq.current++}`;
+    setTree((t) => splitLeaf(t, id, edge, newId, path));
+    setFocusedId(newId);
+    if (path !== activeTab) onSelectTab(path);
   };
 
-  const closePane = (id: string) =>
-    setPanes((prev) => {
-      if (prev.length <= 1) return prev;
-      const next = prev.filter((p) => p.id !== id);
-      if (id === focusedId && next[0]) setFocusedId(next[0].id);
+  const closeLeaf = (id: string) => {
+    setTree((t) => {
+      const next = removeLeaf(t, id);
+      if (id === focusedId) {
+        const first = leaves(next)[0];
+        if (first) setFocusedId(first.id);
+      }
       return next;
     });
+  };
 
-  const split = panes.length > 1;
+  // Map the tab-strip split actions to edge splits from the focused leaf.
+  const splitFromFocused = (dir: SplitDir, path: string | null) =>
+    dropOn(
+      focusedId,
+      dir === "up" ? "top" : dir === "down" ? "bottom" : dir,
+      path ?? activeTab,
+    );
+
+  const isSplit = leaves(tree).length > 1;
 
   return (
     <section style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -1570,34 +1400,21 @@ function EditorArea({
         onCloseOthers={onCloseOthers}
         onCloseToRight={onCloseToRight}
         onCloseAll={onCloseAll}
-        onSplit={(dir, path) => splitInto(dir, path)}
-        split={split}
-        onUnsplit={() => setPanes((prev) => prev.slice(0, 1))}
+        onSplit={splitFromFocused}
+        split={isSplit}
+        onUnsplit={() => setTree(leaf("p0", activeTab))}
       />
       <Breadcrumb activeTab={activeTab} />
-      <div
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: orientation === "row" ? "row" : "column",
-          minHeight: 0,
-          background: "var(--white)",
-        }}
-      >
-        {panes.map((pane, i) => (
-          <PaneView
-            key={pane.id}
-            investigationId={investigationId}
-            pane={pane}
-            orientation={orientation}
-            first={i === 0}
-            focused={split && pane.id === focusedId}
-            showClose={split}
-            onFocus={() => focusPane(pane.id)}
-            onClose={() => closePane(pane.id)}
-            onDropTab={(path) => splitInto(orientation === "row" ? "right" : "down", path)}
-          />
-        ))}
+      <div style={{ flex: 1, display: "flex", minHeight: 0, background: "var(--white)" }}>
+        <PaneTreeView
+          node={tree}
+          investigationId={investigationId}
+          focusedId={focusedId}
+          multi={isSplit}
+          onFocus={focusLeaf}
+          onClose={closeLeaf}
+          onDrop={dropOn}
+        />
       </div>
 
       {bottomOpen && (
@@ -1620,125 +1437,182 @@ function EditorArea({
   );
 }
 
-function PaneView({
+type PaneTreeProps = {
+  node: PaneNode;
+  investigationId: string;
+  focusedId: string;
+  multi: boolean;
+  onFocus: (id: string) => void;
+  onClose: (id: string) => void;
+  onDrop: (id: string, edge: Edge, path: string | null) => void;
+};
+
+function PaneTreeView(props: PaneTreeProps) {
+  const { node } = props;
+  if (node.type === "leaf") {
+    return <PaneLeafView {...props} leaf={node} />;
+  }
+  const row = node.dir === "row";
+  return (
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: row ? "row" : "column",
+      }}
+    >
+      <PaneTreeView {...props} node={node.a} />
+      <div
+        aria-hidden
+        style={
+          row
+            ? { width: 1, background: "var(--paper-3)", flexShrink: 0 }
+            : { height: 1, background: "var(--paper-3)", flexShrink: 0 }
+        }
+      />
+      <PaneTreeView {...props} node={node.b} />
+    </div>
+  );
+}
+
+function PaneLeafView({
+  leaf: pane,
   investigationId,
-  pane,
-  orientation,
-  first,
-  focused,
-  showClose,
+  focusedId,
+  multi,
   onFocus,
   onClose,
-  onDropTab,
-}: {
-  investigationId: string;
-  pane: Pane;
-  orientation: "row" | "col";
-  first: boolean;
-  focused: boolean;
-  showClose: boolean;
-  onFocus: () => void;
-  onClose: () => void;
-  onDropTab: (path: string) => void;
-}) {
-  const [dropActive, setDropActive] = useState(false);
+  onDrop,
+}: PaneTreeProps & { leaf: { id: string; path: string | null } }) {
+  const [edge, setEdge] = useState<Edge | null>(null);
+
+  const readPath = (e: React.DragEvent): string | null => {
+    for (const type of ["application/x-rca-tab", "application/x-rca-file"]) {
+      const raw = e.dataTransfer.getData(type);
+      if (raw) {
+        try {
+          return (JSON.parse(raw) as { path: string }).path;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    return null;
+  };
+
+  const hasDragPayload = (e: React.DragEvent) =>
+    e.dataTransfer.types.includes("application/x-rca-tab") ||
+    e.dataTransfer.types.includes("application/x-rca-file");
+
+  const focused = multi && pane.id === focusedId;
+
   return (
-    <>
-      {!first && (
+    <div
+      onMouseDown={() => onFocus(pane.id)}
+      onDragOver={(e) => {
+        if (!hasDragPayload(e)) return;
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        setEdge(edgeForPoint(e.clientX, e.clientY, r));
+      }}
+      onDragLeave={(e) => {
+        // only clear when leaving the pane itself, not entering a child
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setEdge(null);
+      }}
+      onDrop={(e) => {
+        const where = edge ?? "center";
+        setEdge(null);
+        const path = readPath(e);
+        if (path) {
+          e.preventDefault();
+          onDrop(pane.id, where, path);
+        }
+      }}
+      style={{
+        position: "relative",
+        flex: 1,
+        minWidth: 0,
+        minHeight: 0,
+        display: "flex",
+        flexDirection: "column",
+        outline: focused ? "2px solid var(--accent)" : "none",
+        outlineOffset: -2,
+      }}
+    >
+      {multi && (
         <div
-          aria-hidden
-          style={
-            orientation === "row"
-              ? { width: 1, background: "var(--paper-3)", flexShrink: 0 }
-              : { height: 1, background: "var(--paper-3)", flexShrink: 0 }
-          }
-        />
+          style={{
+            padding: "2px 8px",
+            borderBottom: "1px solid var(--paper-3)",
+            background: "var(--paper)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11,
+            color: "var(--text-paper-d)",
+            minHeight: 24,
+          }}
+        >
+          <Icon name="file" size={11} />
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+            {pane.path ? basename(pane.path) : "(empty)"}
+          </span>
+          <button
+            type="button"
+            onClick={() => onClose(pane.id)}
+            title="Close pane"
+            aria-label="close pane"
+            style={{ color: "var(--text-paper-d2)" }}
+          >
+            <Icon name="x" size={11} />
+          </button>
+        </div>
       )}
-      <div
-        onMouseDown={onFocus}
-        onDragOver={(e) => {
-          // Accept a Ctrl/Cmd tab-drag → opens that file in a new pane.
-          if (e.dataTransfer.types.includes("application/x-rca-tab")) {
-            e.preventDefault();
-            setDropActive(true);
-          }
-        }}
-        onDragLeave={() => setDropActive(false)}
-        onDrop={(e) => {
-          setDropActive(false);
-          const payload = e.dataTransfer.getData("application/x-rca-tab");
-          if (payload) {
-            try {
-              const { path, ctrl } = JSON.parse(payload) as { path: string; ctrl: boolean };
-              if (ctrl && path) {
-                e.preventDefault();
-                onDropTab(path);
-              }
-            } catch {
-              /* ignore malformed payload */
-            }
-          }
-        }}
-        style={{
-          flex: 1,
-          minWidth: 0,
-          minHeight: 0,
-          display: "flex",
-          flexDirection: "column",
-          outline: focused ? "2px solid var(--accent)" : "none",
-          outlineOffset: -2,
-          background: dropActive ? "var(--accent-soft)" : "transparent",
-        }}
-      >
-        {showClose && (
+      <div className="scrollable" style={{ flex: 1, overflow: "auto", padding: 20 }}>
+        {pane.path ? (
+          <FileView investigationId={investigationId} path={pane.path} />
+        ) : (
           <div
             style={{
-              padding: "2px 8px",
-              borderBottom: "1px solid var(--paper-3)",
-              background: "var(--paper)",
               display: "flex",
               alignItems: "center",
-              gap: 6,
-              fontSize: 11,
+              justifyContent: "center",
+              height: "100%",
               color: "var(--text-paper-d)",
-              minHeight: 24,
             }}
           >
-            <Icon name="file" size={11} />
-            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
-              {pane.path ? basename(pane.path) : "(empty)"}
-            </span>
-            <button
-              type="button"
-              onClick={onClose}
-              title="Close pane"
-              aria-label="close pane"
-              style={{ color: "var(--text-paper-d2)" }}
-            >
-              <Icon name="x" size={11} />
-            </button>
+            Open a file from the sidebar to view it here.
           </div>
         )}
-        <div className="scrollable" style={{ flex: 1, overflow: "auto", padding: 20 }}>
-          {pane.path ? (
-            <FileView investigationId={investigationId} path={pane.path} />
-          ) : (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: "var(--text-paper-d)",
-              }}
-            >
-              Open a file from the sidebar to view it here.
-            </div>
-          )}
-        </div>
       </div>
-    </>
+      {edge && <DropZoneOverlay edge={edge} />}
+    </div>
   );
+}
+
+/** Translucent highlight showing where a dropped tab/file will land. */
+function DropZoneOverlay({ edge }: { edge: Edge }) {
+  const base: React.CSSProperties = {
+    position: "absolute",
+    background: "var(--accent-soft)",
+    border: "2px solid var(--accent)",
+    pointerEvents: "none",
+    zIndex: 5,
+    opacity: 0.7,
+  };
+  const region: React.CSSProperties =
+    edge === "center"
+      ? { inset: 8 }
+      : edge === "left"
+        ? { top: 0, bottom: 0, left: 0, width: "50%" }
+        : edge === "right"
+          ? { top: 0, bottom: 0, right: 0, width: "50%" }
+          : edge === "top"
+            ? { left: 0, right: 0, top: 0, height: "50%" }
+            : { left: 0, right: 0, bottom: 0, height: "50%" };
+  return <div style={{ ...base, ...region }} />;
 }
 
 function TabContextMenu({

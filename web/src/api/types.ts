@@ -139,6 +139,8 @@ export interface ApiClient {
   deleteFile(investigationId: string, path: string): Promise<void>;
   /** POST /investigations/{id}/files/move — rename/move (409 if target exists). */
   moveFile(investigationId: string, from: string, to: string): Promise<void>;
+  /** POST /investigations/{id}/files/copy — duplicate (409 if target exists). */
+  copyFile(investigationId: string, from: string, to: string): Promise<void>;
 
   streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent>;
   /** DELETE /investigations/{id}/messages/current — tears the in-flight

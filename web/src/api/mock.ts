@@ -529,6 +529,15 @@ export const mockApi: ApiClient = {
     fs.delete(from);
   },
 
+  async copyFile(investigationId: string, from: string, to: string) {
+    await delay(15);
+    const fs = ensureFiles(investigationId);
+    const f = fs.get(from);
+    if (!f) throw new Error(`not found: ${from}`);
+    if (fs.has(to)) throw new Error(`target exists: ${to}`);
+    fs.set(to, { ...f });
+  },
+
   async cancelMessage(_investigationId: string) {
     await delay(10);
   },
