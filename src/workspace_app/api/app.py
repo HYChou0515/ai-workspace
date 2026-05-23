@@ -35,6 +35,10 @@ class _CellExecuteBody(BaseModel):
     code: str
 
 
+class _ExecBody(BaseModel):
+    cmd: list[str]
+
+
 class _CloseInvestigationBody(BaseModel):
     status: Literal["resolved", "abandoned"]
 
@@ -313,6 +317,26 @@ def create_app(
         if handle is not None:
             await kernels.restart(handle)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # ---- Direct sandbox shell — backs the FE Terminal pane ----
+
+    @app.post("/investigations/{investigation_id}/exec")
+    async def exec_in_sandbox(investigation_id: str, body: _ExecBody) -> dict[str, object]:
+        if not body.cmd:
+            raise HTTPException(status_code=422, detail="cmd must be non-empty")
+        session = await registry.session(investigation_id)
+        handle = await registry.ensure_handle(session)
+        result = await sandbox.exec(handle, body.cmd)
+        # Best-effort sync any new files back so the sidebar can pick
+        # them up on next refresh. Stale handle (kernel killed during
+        # the call) is swallowed — the user can re-run.
+        with contextlib.suppress(Exception):
+            await sync.reverse(investigation_id, handle)
+        return {
+            "exit_code": result.exit_code,
+            "stdout": result.stdout.decode("utf-8", errors="replace"),
+            "stderr": result.stderr.decode("utf-8", errors="replace"),
+        }
 
     # Re-customize the OpenAPI schema now that *all* custom routes are
     # registered. specstar.apply(app) ran earlier and cached a schema that

@@ -18,7 +18,7 @@ from specstar import SpecStar
 
 from workspace_app.api import create_app
 from workspace_app.api.litellm_runner import LitellmAgentRunner
-from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.rca.agent import default_rca_agent_config
 from workspace_app.sandbox.local_process import LocalProcessSandbox
 
@@ -29,7 +29,11 @@ def main() -> None:
     app = create_app(
         spec=spec,
         sandbox=LocalProcessSandbox(),
-        filestore=SpecstarFileStore(spec),
+        # MemoryFileStore: in-process, no persistence on restart.
+        # Swap to SpecstarFileStore(spec) for spec-backed persistence
+        # at the cost of ~19 internal /-workspacefiles CRUD routes
+        # appearing in /openapi.json.
+        filestore=MemoryFileStore(),
         runner=LitellmAgentRunner(default_rca_agent_config()),
     )
     uvicorn.run(app, host="127.0.0.1", port=8000)
