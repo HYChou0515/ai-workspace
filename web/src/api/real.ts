@@ -1,110 +1,182 @@
-import type { AgentEvent } from "../events";
+/**
+ * HTTP client against the live backend. Routes per docs/contract.md §2.
+ *
+ * Wire format (specstar current):
+ *  - `GET /investigation`         → SpecstarEntry<InvestigationStruct>[]
+ *  - `GET /investigation/{id}`    → SpecstarEntry<InvestigationStruct>
+ *  - `POST /investigation`        → CreateResponse (metadata only — we refetch
+ *                                   to obtain the full record).
+ *
+ * Routes marked ⏳ in contract.md (files, messages, notebooks) are not yet
+ * shipped. For list-style endpoints we soften 404 → empty so the FE shell
+ * still renders; for streams we surface the error.
+ */
+
+import type { AgentEvent, CellEvent } from "../events";
+import { parseSseStream } from "./sse";
 import type {
   ApiClient,
   Conversation,
-  FileContent,
+  ExecuteCellArgs,
   FileInfo,
-  Message,
-  StreamArgs,
-  Workspace,
-  WorkspaceInput,
+  Investigation,
+  InvestigationInput,
+  SendMessageArgs,
 } from "./types";
-import { parseSseStream } from "./sse";
 
-// specstar auto-CRUD envelopes. Defensive: some endpoints may return a
-// bare resource instead of {data: ...}. Plan note in plan-frontend.md
-// §F1: verify exact shape against /docs.
-type SpecstarResource<T> = { resource_id: string; data: T };
-type SpecstarListEnvelope<T> = { data: SpecstarResource<T>[] };
+type SpecstarRevisionInfo = {
+  uid: string;
+  resource_id: string;
+  revision_id: string;
+  created_time: string;
+  updated_time: string;
+  created_by?: string;
+  updated_by?: string;
+};
 
-type WorkspaceStruct = {
-  name: string;
+type SpecstarEntry<T> = {
+  data: T;
+  revision_info: SpecstarRevisionInfo;
+  meta?: unknown;
+};
+
+type CreateResponse = {
+  resource_id: string;
+  created_time?: string;
+  updated_time?: string;
+};
+
+type InvestigationStruct = {
+  title: string;
+  owner: string;
   description?: string;
+  severity?: Investigation["severity"];
+  status?: Investigation["status"];
+  product?: string;
+  members?: string[];
+  topics?: string[];
   attached_agent_config_id?: string | null;
 };
 
 type ConversationStruct = {
-  workspace_id: string;
-  messages: Message[];
+  investigation_id: string;
+  messages: Conversation["messages"];
 };
-
-function unwrapResource<T>(
-  raw: SpecstarResource<T> | { data: SpecstarResource<T> },
-): SpecstarResource<T> {
-  if ("resource_id" in raw) return raw;
-  return raw.data;
-}
-
-function toWorkspace(r: SpecstarResource<WorkspaceStruct>): Workspace {
-  return {
-    resource_id: r.resource_id,
-    name: r.data.name,
-    description: r.data.description ?? "",
-    attached_agent_config_id: r.data.attached_agent_config_id ?? null,
-  };
-}
 
 async function json<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
-    throw new Error(`${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`);
+    throw new HttpError(resp.status, `${resp.status} ${resp.statusText}: ${body.slice(0, 200)}`);
   }
   return resp.json() as Promise<T>;
 }
 
+class HttpError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "HttpError";
+  }
+}
+
+function toInvestigation(e: SpecstarEntry<InvestigationStruct>): Investigation {
+  const d = e.data;
+  return {
+    resource_id: e.revision_info.resource_id,
+    created_time: e.revision_info.created_time,
+    updated_time: e.revision_info.updated_time,
+    title: d.title,
+    owner: d.owner,
+    description: d.description ?? "",
+    severity: d.severity ?? "P2",
+    status: d.status ?? "triaging",
+    product: d.product ?? "",
+    members: d.members ?? [],
+    topics: d.topics ?? [],
+    attached_agent_config_id: d.attached_agent_config_id ?? null,
+  };
+}
+
+function encodePath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
 export const realApi: ApiClient = {
-  async listWorkspaces(): Promise<Workspace[]> {
-    const envelope = await json<SpecstarListEnvelope<WorkspaceStruct>>(
-      await fetch("/workspace"),
+  async listInvestigations() {
+    const arr = await json<SpecstarEntry<InvestigationStruct>[]>(
+      await fetch("/investigation"),
     );
-    return envelope.data.map(toWorkspace);
+    return arr.map(toInvestigation);
   },
 
-  async createWorkspace(input: WorkspaceInput): Promise<Workspace> {
-    const resp = await fetch("/workspace", {
+  async getInvestigation(id: string) {
+    const entry = await json<SpecstarEntry<InvestigationStruct>>(
+      await fetch(`/investigation/${encodeURIComponent(id)}`),
+    );
+    return toInvestigation(entry);
+  },
+
+  async createInvestigation(input: InvestigationInput) {
+    const resp = await fetch("/investigation", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        name: input.name,
+        title: input.title,
+        owner: "default-user",
         description: input.description ?? "",
+        severity: input.severity ?? "P2",
+        status: "triaging",
+        product: input.product ?? "",
+        members: [],
+        topics: input.topics ?? [],
+        attached_agent_config_id: null,
       }),
     });
-    const raw = await json<
-      | SpecstarResource<WorkspaceStruct>
-      | { data: SpecstarResource<WorkspaceStruct> }
-    >(resp);
-    return toWorkspace(unwrapResource(raw));
+    const created = await json<CreateResponse>(resp);
+    // Create only returns metadata — refetch to get the full record.
+    return this.getInvestigation(created.resource_id);
   },
 
-  async getConversationByWorkspace(workspaceId: string): Promise<Conversation | null> {
-    const envelope = await json<SpecstarListEnvelope<ConversationStruct>>(
-      await fetch("/conversation"),
-    );
-    const hit = envelope.data.find((r) => r.data.workspace_id === workspaceId);
-    if (!hit) return null;
-    return {
-      resource_id: hit.resource_id,
-      workspace_id: hit.data.workspace_id,
-      messages: hit.data.messages ?? [],
-    };
-  },
-
-  async listFiles(workspaceId: string): Promise<FileInfo[]> {
-    return json<FileInfo[]>(
-      await fetch(`/workspaces/${encodeURIComponent(workspaceId)}/files`),
-    );
-  },
-
-  async readFile(workspaceId: string, path: string): Promise<FileContent> {
-    const resp = await fetch(
-      `/workspaces/${encodeURIComponent(workspaceId)}/files/${path
-        .split("/")
-        .map(encodeURIComponent)
-        .join("/")}`,
-    );
-    if (!resp.ok) {
-      throw new Error(`read ${path} failed: ${resp.status}`);
+  async getConversation(investigationId: string) {
+    try {
+      const arr = await json<SpecstarEntry<ConversationStruct>[]>(
+        await fetch("/conversation"),
+      );
+      const hit = arr.find((e) => e.data.investigation_id === investigationId);
+      if (!hit) return null;
+      return {
+        resource_id: hit.revision_info.resource_id,
+        investigation_id: hit.data.investigation_id,
+        messages: hit.data.messages ?? [],
+      };
+    } catch (err) {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
     }
+  },
+
+  async listFiles(investigationId, prefix) {
+    const qs = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
+    try {
+      return await json<FileInfo[]>(
+        await fetch(
+          `/investigations/${encodeURIComponent(investigationId)}/files${qs}`,
+        ),
+      );
+    } catch (err) {
+      // The custom files route is not yet shipped (contract.md §2.3 ⏳).
+      // Return empty so the workspace shell still renders.
+      if (err instanceof HttpError && (err.status === 404 || err.status === 405)) {
+        return [];
+      }
+      throw err;
+    }
+  },
+
+  async readFile(investigationId, path) {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
+    );
+    if (!resp.ok) throw new HttpError(resp.status, `read ${path} failed: ${resp.status}`);
     const ctype = resp.headers.get("content-type") ?? "";
     const sizeHeader = resp.headers.get("content-length");
     const size = sizeHeader ? Number.parseInt(sizeHeader, 10) : 0;
@@ -116,9 +188,19 @@ export const realApi: ApiClient = {
     return { kind: "binary", path, size: blob.size };
   },
 
-  async *streamAgentEvents(args: StreamArgs): AsyncGenerator<AgentEvent> {
+  async writeFile(investigationId, path, body) {
     const resp = await fetch(
-      `/workspaces/${encodeURIComponent(args.workspaceId)}/messages`,
+      `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
+      { method: "PUT", body },
+    );
+    if (!resp.ok) {
+      throw new HttpError(resp.status, `write ${path} failed: ${resp.status}`);
+    }
+  },
+
+  async *streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent> {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(args.investigationId)}/messages`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -127,8 +209,24 @@ export const realApi: ApiClient = {
       },
     );
     if (!resp.ok || !resp.body) {
-      throw new Error(`POST messages failed: ${resp.status}`);
+      throw new HttpError(resp.status, `messages failed: ${resp.status}`);
     }
-    yield* parseSseStream(resp.body);
+    yield* parseSseStream(resp.body) as AsyncGenerator<AgentEvent>;
+  },
+
+  async *streamCellEvents(args: ExecuteCellArgs): AsyncGenerator<CellEvent> {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(args.investigationId)}/notebooks/${encodePath(args.notebookPath)}/cells/${args.cellIndex}/execute`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: args.code }),
+        signal: args.signal,
+      },
+    );
+    if (!resp.ok || !resp.body) {
+      throw new HttpError(resp.status, `execute failed: ${resp.status}`);
+    }
+    yield* parseSseStream(resp.body) as unknown as AsyncGenerator<CellEvent>;
   },
 };

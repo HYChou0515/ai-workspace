@@ -6,8 +6,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/workspaces": "http://localhost:8000",
-      "/workspace": "http://localhost:8000",
+      "/investigation": "http://localhost:8000",
+      "/investigations": "http://localhost:8000",
       "/conversation": "http://localhost:8000",
       "/agent-config": "http://localhost:8000",
     },

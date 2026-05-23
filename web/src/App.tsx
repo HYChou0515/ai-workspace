@@ -1,30 +1,29 @@
-import { useCallback, useReducer, useState } from "react";
-import { Chat } from "./Chat";
-import { FileBrowser } from "./FileBrowser";
-import { WorkspaceList } from "./WorkspaceList";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+
+import { Home } from "./pages/Home";
+import { Investigation } from "./pages/Investigation";
+
+/**
+ * AppRoutes is router-agnostic — the host (production: <BrowserRouter>,
+ * tests: <MemoryRouter>) provides the router. Two routes per plan §4:
+ *   /                          → Home (investigation list)
+ *   /investigations/:id        → Investigation (workspace)
+ * Unknown paths bounce back to Home.
+ */
+export function AppRoutes() {
+  return (
+    <Routes>
+      <Route path="/" element={<Home />} />
+      <Route path="/investigations/:id" element={<Investigation />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
 
 export function App() {
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [filesRefreshTick, bumpFilesRefresh] = useReducer((n: number) => n + 1, 0);
-
-  const onFileMutation = useCallback(() => {
-    bumpFilesRefresh();
-  }, []);
-
   return (
-    <div className="app">
-      <h1>workspace-app</h1>
-      <div className="app-grid">
-        <WorkspaceList activeId={workspaceId} onSelect={setWorkspaceId} />
-        {workspaceId ? (
-          <>
-            <FileBrowser workspaceId={workspaceId} refreshTick={filesRefreshTick} />
-            <Chat workspaceId={workspaceId} onFileMutation={onFileMutation} />
-          </>
-        ) : (
-          <div className="empty-main">Select or create a workspace to begin.</div>
-        )}
-      </div>
-    </div>
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
   );
 }
