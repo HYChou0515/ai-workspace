@@ -563,7 +563,7 @@ function TreeRow({
     return (
       <InlineEdit
         kind={node.isDir ? "folder" : "file"}
-        depth={depth + (node.isDir ? 0 : 1)}
+        depth={depth}
         initial={node.name}
         onCommit={(name) => onCommitRename(node, name)}
         onCancel={onCancelRename}
@@ -610,7 +610,7 @@ function TreeRow({
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 4,
+            gap: 6,
             width: "100%",
             padding: `4px 14px 4px ${indent}px`,
             textAlign: "left",
@@ -627,8 +627,9 @@ function TreeRow({
             opacity: dragging ? 0.4 : 1,
           }}
         >
-          <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={12} />
-          <Icon name="folder" size={13} />
+          {/* A folder is just a chevron twistie, sized like a file icon, so
+              folders and files at the same depth line up (VSCode). */}
+          <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={13} />
           <span>{node.name}</span>
         </button>
         {!isCollapsed && (
@@ -699,7 +700,7 @@ function TreeRow({
         alignItems: "center",
         gap: 6,
         width: "100%",
-        padding: `4px 14px 4px ${indent + 16}px`,
+        padding: `4px 14px 4px ${indent}px`,
         textAlign: "left",
         background: active ? "var(--accent-soft)" : selected ? "var(--paper-2)" : "transparent",
         borderLeft:
