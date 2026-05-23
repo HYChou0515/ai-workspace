@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, Response, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -243,6 +243,15 @@ def create_app(
             data = await filestore.read(investigation_id, p)
             out.append({"path": p, "size": len(data)})
         return out
+
+    @app.put(
+        "/investigations/{investigation_id}/files/{path:path}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def write_file(investigation_id: str, path: str, request: Request) -> Response:
+        body = await request.body()
+        await filestore.write(investigation_id, "/" + path.lstrip("/"), body)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/investigations/{investigation_id}/files/{path:path}")
     async def read_file(investigation_id: str, path: str) -> Response:

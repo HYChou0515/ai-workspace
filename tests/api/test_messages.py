@@ -230,6 +230,32 @@ def test_read_file_missing_returns_404(harness: Harness):
     assert resp.status_code == 404
 
 
+async def test_put_file_writes_raw_bytes(harness: Harness):
+    """PUT /investigations/{id}/files/{path} stores raw bytes; the FE
+    auto-saves notebooks via this endpoint."""
+    resp = harness.client.put("/investigations/ws-put/files/notes.txt", content=b"hello world")
+    assert resp.status_code == 204
+    # Round-trip through the public read endpoint.
+    got = harness.client.get("/investigations/ws-put/files/notes.txt")
+    assert got.status_code == 200
+    assert got.content == b"hello world"
+
+
+async def test_put_file_overwrites(harness: Harness):
+    harness.client.put("/investigations/ws-put/files/x", content=b"first")
+    harness.client.put("/investigations/ws-put/files/x", content=b"second")
+    got = harness.client.get("/investigations/ws-put/files/x")
+    assert got.content == b"second"
+
+
+async def test_put_file_into_nested_path(harness: Harness):
+    """Path segments are preserved verbatim — FE uses this to save
+    notebook files at /report.v3.md, /data/foo.csv, etc."""
+    harness.client.put("/investigations/ws-put/files/report.v3.md", content=b"# v3")
+    got = harness.client.get("/investigations/ws-put/files/report.v3.md")
+    assert got.content == b"# v3"
+
+
 def test_runner_exception_is_emitted_as_error_event():
     from fastapi.testclient import TestClient
 
