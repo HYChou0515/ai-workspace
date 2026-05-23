@@ -1,0 +1,72 @@
+"""SPA history fallback — refreshing a client-side route like
+/investigations/{id} must serve index.html, not a 404.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+from specstar import SpecStar
+
+from workspace_app.agent.context import AgentToolContext
+from workspace_app.api import create_app
+from workspace_app.api.events import AgentEvent
+from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.sandbox.mock import MockSandbox
+
+
+class _Runner:
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        if False:
+            yield  # pragma: no cover
+
+
+def _client(tmp_path: Path) -> TestClient:
+    (tmp_path / "index.html").write_text("<!doctype html><div id=root>RCA SPA</div>")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "app.js").write_text("console.log('app')")
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        spa_dist=tmp_path,
+    )
+    return TestClient(app)
+
+
+def test_root_serves_index(tmp_path: Path):
+    resp = _client(tmp_path).get("/")
+    assert resp.status_code == 200
+    assert "RCA SPA" in resp.text
+
+
+def test_deep_client_route_falls_back_to_index(tmp_path: Path):
+    """Refreshing a client route boots the SPA (index.html), not a 404."""
+    resp = _client(tmp_path).get("/investigations/investigation:abc-123")
+    assert resp.status_code == 200
+    assert "RCA SPA" in resp.text
+
+
+def test_real_asset_is_served_directly(tmp_path: Path):
+    resp = _client(tmp_path).get("/assets/app.js")
+    assert resp.status_code == 200
+    assert "console.log" in resp.text
+
+
+def test_unknown_api_route_still_404s_json(tmp_path: Path):
+    """API misses keep their JSON 404 — only non-API paths fall back."""
+    resp = _client(tmp_path).get("/investigation/does-not-exist")
+    assert resp.status_code == 404
+
+
+def test_non_get_to_spa_path_is_not_rewritten(tmp_path: Path):
+    """Only 404s fall back to index.html — other static errors (e.g. a
+    405 for a non-GET method) propagate unchanged."""
+    resp = _client(tmp_path).post("/investigations/abc")
+    assert resp.status_code == 405

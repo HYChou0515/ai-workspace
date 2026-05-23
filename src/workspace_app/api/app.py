@@ -32,10 +32,27 @@ from ..resources import (
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .activity import ActivityLog
-from .events import AgentEvent, CellEvent, RunCancelled, RunError, to_sse
+from .events import AgentEvent, CellEvent, MessageDelta, RunCancelled, RunError, ToolEnd, to_sse
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
 from .search import InvalidQuery, compile_query, path_selected, search_text
+
+
+class _SpaStaticFiles(StaticFiles):
+    """Serve the built SPA with an HTML5 history fallback: any path that
+    isn't a real file resolves to index.html, so refreshing a client-side
+    route (e.g. /investigations/{id}) boots the app instead of 404-ing.
+    API routes are registered before this mount, so they take precedence."""
+
+    async def get_response(self, path: str, scope):  # type: ignore[no-untyped-def]
+        from starlette.exceptions import HTTPException as StarletteHTTPException
+
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code == 404:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 class _MessageBody(BaseModel):
@@ -322,15 +339,37 @@ def create_app(
             session.current_turn = asyncio.create_task(_drive_run(body.content, ctx, queue))
 
         async def gen() -> AsyncIterator[str]:
+            # Accumulate the agent's reply + tool outputs as they stream, so
+            # the conversation persists them — otherwise re-entering the
+            # workspace would show only the user's own messages.
+            produced: list[Message] = []
+
+            def add_assistant(text: str) -> None:
+                last = produced[-1] if produced else None
+                if last is not None and last.role == "assistant" and last.tool_call_id is None:
+                    last.content += text  # extend the in-progress reply
+                else:
+                    produced.append(Message(role="assistant", content=text, author="RCA Agent"))
+
             while True:
                 item = await queue.get()
                 if item is None:
+                    if produced:
+                        rid2, conv2 = _conversation_for(investigation_id)
+                        conv2.messages.extend(produced)
+                        conv_rm.update(rid2, conv2)
                     activity.record(
                         "agent_turn_complete",
                         "Agent finished a turn",
                         {"investigation_id": investigation_id},
                     )
                     return
+                if isinstance(item, MessageDelta):
+                    add_assistant(item.text)
+                elif isinstance(item, ToolEnd):
+                    produced.append(
+                        Message(role="tool", content=item.output, tool_call_id=item.call_id)
+                    )
                 yield to_sse(item)
 
         return StreamingResponse(gen(), media_type="text/event-stream")
@@ -665,6 +704,6 @@ def create_app(
     if spa_dist is None:
         spa_dist = Path(__file__).resolve().parents[3] / "web" / "dist"
     if spa_dist.is_dir() and (spa_dist / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=spa_dist, html=True), name="spa")
+        app.mount("/", _SpaStaticFiles(directory=spa_dist, html=True), name="spa")
 
     return app

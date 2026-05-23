@@ -34,7 +34,6 @@ def test_post_message_appends_to_conversation(harness: Harness):
     # skip a non-matching entry — exercises the false branch of the inner if.
     harness.client.post("/investigations/ws-other/messages", json={"content": "ignored"})
     harness.client.post("/investigations/ws-1/messages", json={"content": "first"})
-    harness.client.post("/investigations/ws-1/messages", json={"content": "second"})
     rm = harness.spec.get_resource_manager(Conversation)
     convs: list[Conversation] = []
     for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
@@ -43,7 +42,27 @@ def test_post_message_appends_to_conversation(harness: Harness):
         if data.investigation_id == "ws-1":
             convs.append(data)
     assert len(convs) == 1
-    assert [m.content for m in convs[0].messages] == ["first", "second"]
+    roles = [(m.role, m.content) for m in convs[0].messages]
+    assert roles[0] == ("user", "first")
+    # the scripted reply + tool output persist too, so re-entering the
+    # workspace restores the full turn, not just the user's message.
+    assert ("tool", "exit_code=0\n--- stdout ---\nhi") in roles
+    assert ("assistant", "Done. The file printed 'hi'.") in roles
+
+
+def test_assistant_reply_persists_for_reload(harness: Harness):
+    """The streamed assistant text is concatenated into one persisted
+    assistant message (so a re-entry shows the agent's reply)."""
+    harness.client.post("/investigations/ws-r/messages", json={"content": "hi"})
+    rm = harness.spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.investigation_id == "ws-r"
+    )
+    assistant = [m for m in conv.messages if m.role == "assistant"]
+    assert len(assistant) == 1
+    assert assistant[0].content == "Done. The file printed 'hi'."
 
 
 def test_investigation_crud_via_specstar_routes(harness: Harness):
