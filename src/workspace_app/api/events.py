@@ -79,7 +79,46 @@ AgentEvent = (
 )
 
 
-def to_sse(event: AgentEvent) -> str:
+# ----- Cell execution events (notebook-side, separate stream from agent) -----
+
+
+@dataclass(frozen=True)
+class CellStream:
+    """stdout/stderr chunk from a running cell."""
+
+    stream: Literal["stdout", "stderr"]
+    text: str
+    type: Literal["cell_stream"] = "cell_stream"
+
+
+@dataclass(frozen=True)
+class CellDisplayData:
+    """Rich output: text/plain, image/png (base64), text/html, etc."""
+
+    data: dict[str, str]
+    type: Literal["cell_display_data"] = "cell_display_data"
+
+
+@dataclass(frozen=True)
+class CellError:
+    ename: str
+    evalue: str
+    traceback: list[str]
+    type: Literal["cell_error"] = "cell_error"
+
+
+@dataclass(frozen=True)
+class CellDone:
+    """Cell finished — terminal for the cell stream."""
+
+    execution_count: int
+    type: Literal["cell_done"] = "cell_done"
+
+
+CellEvent = CellStream | CellDisplayData | CellError | CellDone
+
+
+def to_sse(event: AgentEvent | CellEvent) -> str:
     """Serialize one event as an SSE 'data:' line (with trailing blank line)."""
     payload = json.dumps(asdict(event))
     return f"data: {payload}\n\n"
