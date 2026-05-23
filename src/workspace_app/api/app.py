@@ -18,14 +18,24 @@ from specstar.types import ResourceIDNotFoundError
 from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileNotFound, FileStore
 from ..kernels import KernelService
+from ..rca.prompts import load_system_prompt
 from ..rca.templates import list_profiles, seed_investigation
-from ..resources import Conversation, Investigation, Message, Severity, Status, register_all
+from ..resources import (
+    AgentConfig,
+    Conversation,
+    Investigation,
+    Message,
+    Severity,
+    Status,
+    register_all,
+)
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .activity import ActivityLog
 from .events import AgentEvent, CellEvent, RunCancelled, RunError, to_sse
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
+from .search import InvalidQuery, compile_query, path_selected, search_text
 
 
 class _MessageBody(BaseModel):
@@ -46,8 +56,22 @@ class _MoveBody(BaseModel):
     to: str
 
 
+class _SearchBody(BaseModel):
+    query: str
+    regex: bool = False
+    caseSensitive: bool = False
+    wholeWord: bool = False
+    include: str = ""
+    exclude: str = ""
+
+
+class _ReplaceBody(_SearchBody):
+    replacement: str = ""
+
+
 class _CloseInvestigationBody(BaseModel):
-    status: Literal["resolved", "abandoned"]
+    # null → pure close (tear the session down, leave status untouched).
+    status: Literal["resolved", "abandoned"] | None = None
 
 
 class _InvestigationCreateBody(BaseModel):
@@ -61,6 +85,21 @@ class _InvestigationCreateBody(BaseModel):
     topics: list[str] = []
     attached_agent_config_id: str | None = None
     template_profile: str = "default"
+
+
+def _seed_agent_configs(spec: SpecStar) -> None:
+    """Create the default RCA agent configs once, if none exist yet, so the
+    agent picker always has options. Models route through LiteLLM."""
+    from specstar import QB
+
+    rm = spec.get_resource_manager(AgentConfig)
+    if rm.count_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+        return
+    prompt = load_system_prompt()
+    rm.create(
+        AgentConfig(name="RCA · Qwen3 (local)", model="ollama_chat/qwen3:14b", system_prompt=prompt)
+    )
+    rm.create(AgentConfig(name="RCA · Claude Opus", model="claude-opus-4-7", system_prompt=prompt))
 
 
 def create_app(
@@ -158,7 +197,28 @@ def create_app(
 
     spec.apply(app)
 
+    # Seed a couple of default AgentConfigs so the agent picker is never
+    # empty. The investigation's attached config (model + prompt) drives
+    # the live agent — see _resolve_agent_config below.
+    _seed_agent_configs(spec)
+
     conv_rm = spec.get_resource_manager(Conversation)
+
+    def _resolve_agent_config(investigation_id: str) -> AgentConfig | None:
+        """The AgentConfig attached to this investigation, if any."""
+        inv_rm = spec.get_resource_manager(Investigation)
+        try:
+            inv = inv_rm.get(investigation_id).data
+        except ResourceIDNotFoundError:
+            return None
+        if not isinstance(inv, Investigation) or not inv.attached_agent_config_id:
+            return None
+        cfg_rm = spec.get_resource_manager(AgentConfig)
+        try:
+            cfg = cfg_rm.get(inv.attached_agent_config_id).data
+        except ResourceIDNotFoundError:
+            return None
+        return cfg if isinstance(cfg, AgentConfig) else None
 
     def _conversation_for(investigation_id: str) -> tuple[str, Conversation]:
         # Linear scan over all Conversation resources for this
@@ -232,6 +292,8 @@ def create_app(
                 # is set (so idle-kill/close_all can find it) and the
                 # restore-after-create hook fires.
                 ensure_sandbox_via=lambda: registry.ensure_handle(session),
+                # Drive the turn with the investigation's attached agent.
+                agent_config=_resolve_agent_config(investigation_id),
             )
             session.current_turn = asyncio.create_task(_drive_run(body.content, ctx, queue))
 
@@ -270,15 +332,24 @@ def create_app(
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         assert isinstance(current, Investigation)
-        # Pydantic Literal already restricts to resolved/abandoned.
-        current.status = Status.RESOLVED if body.status == "resolved" else Status.ABANDONED
-        inv_rm.update(investigation_id, current)
+        if body.status is not None:
+            # Resolve / Abandon — change status, then tear the session down.
+            current.status = Status.RESOLVED if body.status == "resolved" else Status.ABANDONED
+            inv_rm.update(investigation_id, current)
+            activity.record(
+                "investigation_closed",
+                f"Closed “{current.title}” as {body.status}",
+                {"investigation_id": investigation_id},
+            )
+        else:
+            # Pure close — leave the investigation status untouched, just
+            # release its sandbox/kernels (the workspace shuts down).
+            activity.record(
+                "session_closed",
+                f"Closed the workspace for “{current.title}”",
+                {"investigation_id": investigation_id},
+            )
         await registry.close_session(investigation_id)
-        activity.record(
-            "investigation_closed",
-            f"Closed “{current.title}” as {body.status}",
-            {"investigation_id": investigation_id},
-        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- Files API (plan-backend §3.8) ----
@@ -352,6 +423,67 @@ def create_app(
             {"investigation_id": investigation_id, "path": dst},
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # ---- Global text search / replace (VSCode search panel) ----
+
+    async def _search_files(investigation_id: str, body: _SearchBody):
+        try:
+            pattern = compile_query(
+                body.query,
+                regex=body.regex,
+                case_sensitive=body.caseSensitive,
+                whole_word=body.wholeWord,
+            )
+        except InvalidQuery as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        paths = sorted(await filestore.ls(investigation_id))
+        results: list[tuple[str, bytes, list]] = []
+        for p in paths:
+            if not path_selected(p, body.include, body.exclude):
+                continue
+            data = await filestore.read(investigation_id, p)
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                continue  # skip binary
+            matches = search_text(text, pattern)
+            if matches:
+                results.append((p, data, matches))
+        return pattern, results
+
+    @app.post("/investigations/{investigation_id}/search")
+    async def search(investigation_id: str, body: _SearchBody) -> list[dict]:
+        if not body.query:
+            return []
+        _pattern, results = await _search_files(investigation_id, body)
+        return [
+            {
+                "path": p,
+                "matches": [{"line": m.line, "col": m.col, "text": m.text} for m in matches],
+            }
+            for p, _data, matches in results
+        ]
+
+    @app.post("/investigations/{investigation_id}/replace")
+    async def replace(investigation_id: str, body: _ReplaceBody) -> dict:
+        if not body.query:
+            return {"replaced": 0}
+        pattern, results = await _search_files(investigation_id, body)
+        replaced = 0
+        # Every path in `results` matched per-line via search_text, so the
+        # same pattern's subn over the full text always replaces ≥1 — no
+        # need to guard on n.
+        for p, data, _matches in results:
+            text = data.decode("utf-8")
+            new_text, n = pattern.subn(body.replacement, text)
+            await filestore.write(investigation_id, p, new_text.encode("utf-8"))
+            replaced += n
+            activity.record(
+                "file_written",
+                f"Replaced {n} in {p}",
+                {"investigation_id": investigation_id, "path": p},
+            )
+        return {"replaced": replaced}
 
     @app.delete(
         "/investigations/{investigation_id}/files/{path:path}",

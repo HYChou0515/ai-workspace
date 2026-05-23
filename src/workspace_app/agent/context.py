@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from ..filestore.protocol import FileStore
 from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
+
+if TYPE_CHECKING:
+    from ..resources import AgentConfig
 
 
 @dataclass
@@ -34,6 +38,9 @@ class AgentToolContext:
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
     handle: SandboxHandle | None = None
     ensure_sandbox_via: Callable[[], Awaitable[SandboxHandle]] | None = None
+    # The investigation's attached AgentConfig (model + prompt) for this
+    # turn; when set, LitellmAgentRunner uses it instead of its default.
+    agent_config: AgentConfig | None = None
 
     async def ensure_sandbox(self) -> SandboxHandle:
         if self.handle is None:

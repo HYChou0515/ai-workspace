@@ -47,3 +47,19 @@ def test_close_endpoint_rejects_invalid_target_status(harness: Harness):
 def test_close_endpoint_for_unknown_investigation_returns_404(harness: Harness):
     resp = harness.client.post("/investigations/no-such-id/close", json={"status": "resolved"})
     assert resp.status_code == 404
+
+
+def test_pure_close_leaves_status_unchanged(harness: Harness):
+    """Closing with no status (or null) just tears the session down —
+    the investigation stays open (triaging)."""
+    inv_id = _create_investigation(harness, title="still open")
+    resp = harness.client.post(f"/investigations/{inv_id}/close", json={})
+    assert resp.status_code == 204
+    rm = harness.spec.get_resource_manager(Investigation)
+    got = rm.get(inv_id).data
+    assert isinstance(got, Investigation)
+    assert got.status is Status.TRIAGING
+
+    resp_null = harness.client.post(f"/investigations/{inv_id}/close", json={"status": None})
+    assert resp_null.status_code == 204
+    assert rm.get(inv_id).data.status is Status.TRIAGING

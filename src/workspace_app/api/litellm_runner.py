@@ -161,7 +161,7 @@ class LitellmAgentRunner:
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
-        agent = _agent_for(self._config, extra_instructions=feedback)
+        agent = _agent_for(ctx.agent_config or self._config, extra_instructions=feedback)
         streamed = Runner.run_streamed(agent, input=prompt, context=ctx)
         async for event in streamed.stream_events():
             mapped = _map_event(event)
