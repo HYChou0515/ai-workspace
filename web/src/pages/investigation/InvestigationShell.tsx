@@ -27,7 +27,14 @@ import { CommandPalette } from "./CommandPalette";
 import { basename, breadcrumbSegments, hasOutline, pickRenderer } from "./renderer";
 import { TerminalPane } from "./TerminalPane";
 
-type OpenTab = { path: string; modified: boolean };
+type OpenTab = {
+  path: string;
+  modified: boolean;
+  preview?: boolean; // single-click "peek" tab (italic); promoted on double-click
+  pinned?: boolean; // survives Close-others / Close-all; sorts first
+};
+
+type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
 export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
 
@@ -86,15 +93,67 @@ export function InvestigationShell({
   );
 
   const openFile = useCallback(
-    (path: string) => {
-      setOpenTabs((prev) =>
-        prev.some((t) => t.path === path) ? prev : [...prev, { path, modified: false }],
-      );
+    (path: string, opts: { preview?: boolean } = {}) => {
+      const preview = opts.preview ?? false;
+      setOpenTabs((prev) => {
+        const existing = prev.find((t) => t.path === path);
+        if (existing) {
+          // re-opening non-preview promotes a preview tab to permanent
+          if (!preview && existing.preview) {
+            return prev.map((t) => (t.path === path ? { ...t, preview: false } : t));
+          }
+          return prev;
+        }
+        const tab: OpenTab = { path, modified: false, preview };
+        // A preview open replaces the prior (unpinned) preview tab so
+        // single-clicking through files doesn't pile up tabs.
+        if (preview) {
+          return [...prev.filter((t) => !t.preview || t.pinned), tab];
+        }
+        return [...prev, tab];
+      });
       setActiveTab(path);
       recentFiles.push(path);
     },
     [recentFiles],
   );
+
+  // Tab operations driven by the tab strip's drag + context menu.
+  const reorderTabs = useCallback((from: number, to: number) => {
+    setOpenTabs((prev) => {
+      if (from === to || from < 0 || to < 0 || from >= prev.length || to >= prev.length) {
+        return prev;
+      }
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      if (moved) next.splice(to, 0, moved);
+      return next;
+    });
+  }, []);
+
+  const togglePin = useCallback((path: string) => {
+    setOpenTabs((prev) =>
+      prev.map((t) => (t.path === path ? { ...t, pinned: !t.pinned, preview: false } : t)),
+    );
+  }, []);
+
+  const closeOthers = useCallback((keep: string) => {
+    setOpenTabs((prev) => prev.filter((t) => t.path === keep || t.pinned));
+    setActiveTab(keep);
+  }, []);
+
+  const closeToRight = useCallback((from: string) => {
+    setOpenTabs((prev) => {
+      const idx = prev.findIndex((t) => t.path === from);
+      if (idx < 0) return prev;
+      return prev.filter((t, i) => i <= idx || t.pinned);
+    });
+  }, []);
+
+  const closeAll = useCallback(() => {
+    setOpenTabs((prev) => prev.filter((t) => t.pinned));
+    setActiveTab((cur) => cur);
+  }, []);
 
   const closeTab = (path: string) => {
     setOpenTabs((prev) => {
@@ -207,6 +266,11 @@ export function InvestigationShell({
             activeTab={activeTab}
             onSelectTab={setActiveTab}
             onCloseTab={closeTab}
+            onReorderTabs={reorderTabs}
+            onTogglePin={togglePin}
+            onCloseOthers={closeOthers}
+            onCloseToRight={closeToRight}
+            onCloseAll={closeAll}
             bottomHeight={bottomH}
             bottomOpen={bottomOpen}
             onResizeBottom={(d) => setBottomH(bottomH - d)}
@@ -854,7 +918,7 @@ function ActivitySidebar(props: {
   activePath: string | null;
   openTabs: OpenTab[];
   recentFiles: string[];
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
 }) {
   switch (props.mode) {
@@ -883,7 +947,7 @@ function EvidenceSidebar({
   files: FileInfo[];
   activePath: string | null;
   openTabs: OpenTab[];
-  onOpenFile: (path: string) => void;
+  onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
 }) {
   // Group by top-level directory; root-level files go under "(root)"
@@ -1121,7 +1185,7 @@ function SearchSidebar({
   onOpenFile,
 }: {
   files: FileInfo[];
-  onOpenFile: (p: string) => void;
+  onOpenFile: OpenFileFn;
 }) {
   const [q, setQ] = useState("");
   const matches = useMemo(() => {
@@ -1180,7 +1244,7 @@ function HistorySidebar({
 }: {
   files: FileInfo[];
   recentFiles: string[];
-  onOpenFile: (p: string) => void;
+  onOpenFile: OpenFileFn;
 }) {
   // Filter recentFiles to those still present in the file listing.
   const items = recentFiles.filter((p) => files.some((f) => f.path === p));
@@ -1313,12 +1377,15 @@ function TreeRow({
   path: string;
   active: boolean;
   indent?: number;
-  onOpen: (p: string) => void;
+  onOpen: OpenFileFn;
 }) {
   return (
     <button
       type="button"
-      onClick={() => onOpen(path)}
+      // Single click peeks (preview tab); double click opens for keeps.
+      onClick={() => onOpen(path, { preview: true })}
+      onDoubleClick={() => onOpen(path, { preview: false })}
+      title="Click to preview · double-click to keep open"
       style={{
         display: "flex",
         alignItems: "center",
@@ -1359,6 +1426,11 @@ function EditorArea({
   activeTab,
   onSelectTab,
   onCloseTab,
+  onReorderTabs,
+  onTogglePin,
+  onCloseOthers,
+  onCloseToRight,
+  onCloseAll,
   bottomHeight,
   bottomOpen,
   onResizeBottom,
@@ -1369,6 +1441,11 @@ function EditorArea({
   activeTab: string | null;
   onSelectTab: (p: string) => void;
   onCloseTab: (p: string) => void;
+  onReorderTabs: (from: number, to: number) => void;
+  onTogglePin: (p: string) => void;
+  onCloseOthers: (keep: string) => void;
+  onCloseToRight: (from: string) => void;
+  onCloseAll: () => void;
   bottomHeight: number;
   bottomOpen: boolean;
   onResizeBottom: (deltaPx: number) => void;
@@ -1408,6 +1485,11 @@ function EditorArea({
         active={activeTab}
         onSelect={onSelectTab}
         onClose={onCloseTab}
+        onReorder={onReorderTabs}
+        onTogglePin={onTogglePin}
+        onCloseOthers={onCloseOthers}
+        onCloseToRight={onCloseToRight}
+        onCloseAll={onCloseAll}
         layoutMode={layoutMode}
         onLayoutMode={(m) => {
           setLayoutMode(m);
@@ -1587,6 +1669,80 @@ function RightPaneTabPicker({
   );
 }
 
+function TabContextMenu({
+  path,
+  x,
+  y,
+  pinned,
+  onClose,
+  onCloseTab,
+  onTogglePin,
+  onCloseOthers,
+  onCloseToRight,
+  onCloseAll,
+}: {
+  path: string;
+  x: number;
+  y: number;
+  pinned: boolean;
+  onClose: () => void;
+  onCloseTab: (p: string) => void;
+  onTogglePin: (p: string) => void;
+  onCloseOthers: (keep: string) => void;
+  onCloseToRight: (from: string) => void;
+  onCloseAll: () => void;
+}) {
+  const item = (label: string, fn: () => void) => (
+    <button
+      type="button"
+      onClick={() => {
+        fn();
+        onClose();
+      }}
+      style={{
+        display: "block",
+        width: "100%",
+        textAlign: "left",
+        padding: "5px 14px",
+        fontSize: 12,
+        color: "var(--text-paper)",
+        background: "transparent",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--paper-2)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 80 }} />
+      <div
+        style={{
+          position: "fixed",
+          top: y,
+          left: x,
+          zIndex: 81,
+          minWidth: 180,
+          background: "var(--white)",
+          border: "1px solid var(--paper-3)",
+          borderRadius: "var(--radius-card)",
+          boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
+          padding: "4px 0",
+        }}
+      >
+        {item(pinned ? "Unpin" : "Pin", () => onTogglePin(path))}
+        {item("Copy path", () => void navigator.clipboard?.writeText(path))}
+        <div style={{ height: 1, background: "var(--paper-3)", margin: "4px 0" }} />
+        {item("Close", () => onCloseTab(path))}
+        {item("Close others", () => onCloseOthers(path))}
+        {item("Close to the right", () => onCloseToRight(path))}
+        {item("Close all", () => onCloseAll())}
+      </div>
+    </>
+  );
+}
+
 function Breadcrumb({ activeTab }: { activeTab: string | null }) {
   const segments = activeTab ? breadcrumbSegments(activeTab) : [];
   return (
@@ -1622,6 +1778,11 @@ function TabStrip({
   active,
   onSelect,
   onClose,
+  onReorder,
+  onTogglePin,
+  onCloseOthers,
+  onCloseToRight,
+  onCloseAll,
   layoutMode,
   onLayoutMode,
 }: {
@@ -1629,10 +1790,17 @@ function TabStrip({
   active: string | null;
   onSelect: (p: string) => void;
   onClose: (p: string) => void;
+  onReorder: (from: number, to: number) => void;
+  onTogglePin: (p: string) => void;
+  onCloseOthers: (keep: string) => void;
+  onCloseToRight: (from: string) => void;
+  onCloseAll: () => void;
   layoutMode: "single" | "split";
   onLayoutMode: (m: "single" | "split") => void;
 }) {
   const activeIsNotebook = active != null && pickRenderer(active) === "notebook";
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
+  const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
 
   return (
     <div
@@ -1646,14 +1814,27 @@ function TabStrip({
       }}
     >
       <div className="scrollable" style={{ display: "flex", flex: 1, overflowX: "auto" }}>
-        {tabs.map((t) => {
+        {tabs.map((t, i) => {
           const isActive = t.path === active;
           return (
             <div
               key={t.path}
               role="tab"
               aria-selected={isActive}
+              draggable
               onClick={() => onSelect(t.path)}
+              onDoubleClick={() => onTogglePin(t.path)}
+              onContextMenu={(e) => {
+                e.preventDefault();
+                setMenu({ path: t.path, x: e.clientX, y: e.clientY });
+              }}
+              onDragStart={() => setDragFrom(i)}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={() => {
+                if (dragFrom != null) onReorder(dragFrom, i);
+                setDragFrom(null);
+              }}
+              title={t.pinned ? "Pinned · double-click to unpin" : undefined}
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -1665,9 +1846,11 @@ function TabStrip({
                 color: isActive ? "var(--text-paper)" : "var(--text-paper-d)",
                 cursor: "pointer",
                 whiteSpace: "nowrap",
+                opacity: dragFrom === i ? 0.4 : 1,
+                fontStyle: t.preview ? "italic" : "normal",
               }}
             >
-              <Icon name="file" size={12} />
+              <Icon name={t.pinned ? "pin" : "file"} size={12} />
               <span style={{ fontSize: 12 }}>{basename(t.path)}</span>
               <button
                 type="button"
@@ -1696,6 +1879,20 @@ function TabStrip({
           );
         })}
       </div>
+      {menu && (
+        <TabContextMenu
+          path={menu.path}
+          x={menu.x}
+          y={menu.y}
+          pinned={tabs.find((t) => t.path === menu.path)?.pinned ?? false}
+          onClose={() => setMenu(null)}
+          onCloseTab={onClose}
+          onTogglePin={onTogglePin}
+          onCloseOthers={onCloseOthers}
+          onCloseToRight={onCloseToRight}
+          onCloseAll={onCloseAll}
+        />
+      )}
       <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 8px" }}>
         <button
           type="button"
