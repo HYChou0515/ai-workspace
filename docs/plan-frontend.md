@@ -164,8 +164,17 @@ Per design README "2. Investigation workspace" — VSCode-shaped:
 
 The "views" in the design (brief / SPC / Pareto / fishbone / 5-why /
 report) are **just file-type renderers** picked by extension. The
-editor area renders whichever file is the active tab; v1 needs the
-ones below.
+editor area renders whichever file is the active tab.
+
+**Architectural posture**: the BE is RCA-agnostic — it stores and
+serves files but doesn't model 5-Why structure, fishbone schema,
+hypotheses, corrective actions, or report versions. **All RCA
+structure is conventions the agent follows when writing files, and
+the FE renders by recognising those conventions.** A new investigation
+type would not require any BE change — just new template files, an
+updated agent prompt, and new FE renderers.
+
+v1 needs the renderers below.
 
 ### F8. Notebook viewer `.ipynb` *(biggest item; depends on BE §7)*
 
@@ -226,50 +235,69 @@ Skip for v1: `application/vnd.jupyter.widget-view+json` (ipywidgets),
   **8-section 8D report** with `D1 · Define team` etc. is just
   markdown headings — render as-is.
 
-### F11. Report view (`report.md` special case)
+### F11. Report view (`report.v*.md` file-naming convention)
 
-The 8D report is markdown stored at a versioned path (e.g.,
-`/report.v3.md`). The view above the body is the **version selector
-strip** + **version history** below.
+The backend has no `ReportVersion` resource — versioning is a file
+naming convention. Reports live at `/report.v1.md`, `/report.v2.md`,
+`/report.v3.md`, …; the highest N is current.
 
+- On entering the report view: `GET
+  /investigations/{id}/files?prefix=/report.v` → list of versions
+  → derive { v: N, isCurrent: N === maxN } per file.
 - Version pills (inline): `v1 · superseded`, `v2 · superseded`,
   `v3 · current`. Active = orange filled; inactive = ink-4 border.
-  Click switches `selectedV` state which fetches `GET
-  /investigations/{id}/reports/{v}` (metadata) + the markdown body
-  via `body_path` against `/files/{path}`.
-- Superseded notice (cream-2 callout + clock icon) when current
-  version ≠ selected.
-- "Generate new version" button → opens a small modal asking for
-  summary (one-liner); POST `/investigations/{id}/reports/generate`
-  with `{summary, body}` where body is either:
-  - the current version's body, pre-loaded for user to edit, OR
-  - empty 8D skeleton if first version (D1-D8 headings).
+  Click switches `selectedV` state → `GET /investigations/{id}/files/report.v{N}.md`.
+- Superseded notice (cream-2 callout + clock icon) when selected
+  version ≠ current.
+- "Generate new version" button → ask the agent in chat: "Generate
+  a new report version summarising current findings." The agent
+  writes `/report.v{maxN+1}.md` via `write_file`. FE refreshes the
+  file list after the agent's turn completes; new pill appears.
+  *No dedicated POST /reports/generate endpoint.*
 - Diagonal SUPERSEDED stamp (CSS `transform: rotate(-6deg)` + border)
   overlaid on body when viewing non-current.
 
+If the agent wants to include version metadata ("what changed in
+vN", author), it writes a sibling `/report.v{N}.meta.json` or uses
+markdown frontmatter — the renderer's call.
+
 ### F12. Fishbone canvas `.canvas` *(read-only for v1)*
 
-`.canvas` is a custom JSON schema:
+`.canvas` is a JSON file the agent writes; the FE renders it as the
+6M fishbone SVG. The agent's system prompt teaches it the schema —
+the BE has zero awareness of this format. Recommended schema for
+the agent to use (the FE renderer follows the same convention):
+
 ```ts
 {
   effect: string,
-  categories: Array<{
-    name: "Machine" | "Method" | "Material" | "Man" | "Measurement" | "Environment",
-    branches: Array<{ label: string, strong?: boolean }>,
+  branches: Array<{
+    label: "Machine"|"Method"|"Material"|"Man"|"Measurement"|"Environment",
+    side: "top"|"bot",
+    items: Array<{ t: string, strong?: boolean }>,
   }>
 }
 ```
 
 v1: render via SVG (spine + 6 categories + branches; `strong: true`
-in accent orange + bold). No editing — display only. Editor is a
-v1.5 deliverable.
+in accent orange + bold). No editing — display only. If the JSON
+doesn't match this shape, fall back to the raw `.json` renderer.
 
 ### F13. 5-Why structured view (`5-why.md` for v1)
 
-v1: render as plain markdown (the `.md` renderer F10 handles it). The
-design's structured 5-step chain with confidence bars is a v1.5
-deliverable — at that point we either parse a structured `.json` or
-extend the markdown to use a structured ID convention.
+The agent writes `5-why.md` with conventional structure under
+`## Why #N` headings (or a structured sibling `.json` — see below).
+The FE markdown renderer (F10) handles `.md` directly. The design's
+confidence bars + corrective-actions chain are v1.5 — at that point
+either:
+- the agent learns to write `5-why.json` with `{ steps: [{q, a,
+  confidence, root?}], actions: [{kind, title, owner, due}] }` and
+  the FE adds a structured renderer for that, or
+- we agree on a markdown extension (HTML-in-md, `<!-- meta: ... -->`
+  comments) that the renderer parses.
+
+Either way, **the BE doesn't model 5-Why structure** — it's a file
+the agent writes and the FE renders.
 
 ---
 
@@ -393,7 +421,8 @@ Land in this rough order:
    showing.
 8. **Notebook viewer** (§F8, F9) — depends on BE §7 (kernel + cell
    SSE). Biggest single FE chunk.
-9. **Report view + version selector** (§F11) — depends on BE §4.
+9. **Report view + version selector** (§F11) — pure FE; iterates
+   `/report.v*.md` files from existing files API.
 10. **Fishbone read-only renderer** (§F12) — minor.
 11. **5-Why structured editor** (§F13) — v1.5.
 

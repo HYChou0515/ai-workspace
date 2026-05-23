@@ -43,33 +43,49 @@ needs to be re-done; references in the new sections cite them.
 
 ## 2. Pivot scope at a glance
 
-What needs to change at the BE level to deliver `design_handoff_rca_3.0`:
+**Core insight**: the backend is a **generic file store + agent +
+sandbox**. Everything RCA-specific (5-why structure, fishbone JSON
+schema, 8D report shape, hypothesis cells…) is **data the agent
+generates and writes to FileStore as files**. The system doesn't model
+any of it. It only stores and serves `.md` / `.ipynb` / `.csv` /
+`.json` / `.canvas` files; the frontend renders by extension and the
+agent produces by following its system prompt.
+
+What changes at the BE level to deliver `design_handoff_rca_3.0`:
 
 - **Schema rename**: `Workspace` → `Investigation`, with new RCA fields
-  (severity, line, product, topics, status, owner, description).
-- **New domain resource**: `ReportVersion` for versioned 8D reports
-  (`v1 · superseded`, `v2 · superseded`, `v3 · current` semantics).
+  (severity, line, product, status, owner, description, topics — see §3).
 - **Template seeding**: creating an investigation copies a starter set
-  of files (just `brief.md` for v1 — design's 6-tab snapshot is the
-  *mid-investigation* state, not the initial one).
+  of files (sample fixture CSV + skeleton notebooks + `brief.md`). The
+  agent fills the views in as the investigation progresses; the
+  design's "6-tab snapshot" is the mid-investigation state, not the
+  initial one.
 - **Notebook execution stack**: VSCode-style ipynb viewer drives a
   whole new sub-stack — `Sandbox.expose_port` Protocol extension,
   `KernelService`, per-cell SSE, cell event types, `PUT /files/{path}`,
   new default sandbox image with `ipykernel + numpy/pandas/matplotlib/scipy`.
-- **Domain agent tools** (mock-only for v1): `spc_read`, `defects_aoi`,
-  `correlate_find`, `pareto_build`, `fishbone_draft`, `fivewhy_draft`,
-  `report_generate` — alongside the existing generic tools.
+- **RCA-tuned `AgentConfig`**: system prompt + tool allow-list encode
+  the 8D / 6M / SPC / Pareto workflow knowledge. Tools stay generic
+  (`exec`, `read_file`, `write_file`, `ls`, `exists`, `delete_file`).
 - **Idle threshold bump**: investigations stay warm 8 hours by default
   (was 15 min for workspace-app).
 
 What we **don't** do in v1:
-- Real data integrations (MES / SPC / AOI APIs) — all mock.
+- Real data integrations (MES / SPC / AOI APIs) — sample CSV fixtures
+  ship inside the template.
+- **No** `ReportVersion` / `FiveWhyChain` / `Fishbone` / `Hypothesis` /
+  `CorrectiveAction` backend resources. Reports become a file-naming
+  convention (`/report.v1.md`, `/report.v2.md`, …); the FE picks the
+  highest N as current. 5-Why / Fishbone / etc. are agent-written
+  `.json` / `.canvas` files with conventions the FE renderer
+  understands.
+- **No** RCA-specific agent tools (`spc_read`, `defects_aoi`, etc.).
+  Agent reads CSV fixtures via `read_file` and writes artifacts via
+  `write_file`; the system prompt frames the workflow.
 - Multi-tenant or per-org auth — `default-user` continues.
-- Fishbone `.canvas` editor — read-only display only.
-- 5-Why structured editor — `.md` for v1, structured later.
 - `run_cell` agent tool — deferred to v1.5.
 - `SandboxKilledIdle` event surface — same defer as before.
-- §3.7 Reconnect endpoint — same defer.
+- Reconnect endpoint (`GET /events?since=`) — same defer.
 
 ---
 
@@ -134,64 +150,50 @@ new `Severity`/`Status` enums and topic-list semantics.
 
 ---
 
-## 4. New domain resource: `ReportVersion`
+## 4. Report versions are a file-naming convention, not a resource
 
-The design's 8D report has versioned semantics (exactly one `current`
-per investigation, prior versions become `superseded`, optional
-`Generate new version` action). specstar's auto version-history is
-*per-resource-update*, not the "promote-to-current" UX we want, so
-ReportVersion is a separate resource that tracks the supersession
-manually.
+The design has `v1 superseded / v2 superseded / v3 current` semantics
+for the 8D report. We **don't** model this as a backend resource — the
+agent writes `/report.v1.md`, `/report.v2.md`, …; the FE iterates
+`/report.v*.md`, picks the highest N as **current**, renders earlier
+versions as **superseded**.
 
-```python
-class ReportVersion(Struct):
-    investigation_id: str
-    version_number: int            # 1, 2, 3...
-    is_current: bool               # exactly one True per investigation_id
-    summary: str                   # "What changed in v3"
-    body_path: str                 # e.g. "/report.v3.md" — actual content in FileStore
-    generated_by: str              # "agent + Alice"
-    generated_at: datetime
-```
+Why not a `ReportVersion` resource:
+- Versioning logic is trivially expressible in file names; modeling it
+  server-side adds endpoints, schemas, and tests for no real win.
+- Keeps the BE blind to "what is a report" — same posture as 5-Why /
+  fishbone / hypotheses (all just files).
+- Generating a new version = agent calls `write_file("/report.v{N+1}.md", …)`
+  using its existing tool. No new BE plumbing.
 
-**Why path-to-FileStore instead of inline content:**
-keeping report markdown in FileStore lets the editor render it with
-the same `.md` viewer as `brief.md`, and the agent's `write_file`
-tool keeps working unchanged. The `ReportVersion` resource is just
-the version metadata + pointer.
-
-**Endpoints:**
-- `GET /investigations/{id}/reports` → list versions (sorted desc)
-- `POST /investigations/{id}/reports/generate` → create new v(N+1)
-  - body: `{ summary: str, body: str }` (body is the markdown that
-    becomes `/report.v{N+1}.md` in FileStore)
-  - server flips the previous `is_current` to False, creates the new
-    one with `is_current=True`
-- `GET /investigations/{id}/reports/{v}` → metadata + body bytes via
-  the body_path
-- (No DELETE for v1 — supersession is the deletion model.)
-
-**Files:**
-- `src/workspace_app/resources/report_version.py`
-- `src/workspace_app/api/reports.py` (new sub-router) — or fold into app.py
-- Tests under `tests/api/test_reports.py`
+Whatever metadata the design shows ("summary of what changed in vN",
+author, timestamp) the agent can encode in the file's frontmatter or
+in a sibling `/report.v3.meta.json` — FE renderer's call.
 
 ---
 
 ## 5. Template seeding on investigation create
 
-Per Q11-final: design's 6-tab snapshot is mid-investigation. Initial
-template is **minimal** — just enough to give the user something to
-edit.
+Per Q11-final: design's 6-tab snapshot is the mid-investigation state.
+Initial template is the **half-developed scaffold** the agent fills in
+over the investigation lifetime.
 
 **v1 template** (`src/workspace_app/rca/templates/default/`):
-- `brief.md` — Investigation Brief skeleton with `{title}` /
-  `{severity}` / `{line}` / `{product}` / `{description}` substituted
-  in at create time.
 
-That's it for the absolute minimum. Add `report.md` (empty D1–D8
-skeleton) once `ReportVersion.generate` is wired so the first version
-has somewhere to go.
+| Path | Content |
+|---|---|
+| `brief.md` | Investigation Brief skeleton with `{title}` / `{severity}` / `{line}` / `{product}` / `{description}` substituted at create time |
+| `drift.ipynb` | One markdown cell ("# SPC drift analysis"), one empty code cell |
+| `pareto.ipynb` | One markdown cell ("# Pareto"), one empty code cell |
+| `fishbone.canvas` | Empty 6M JSON skeleton (`{effect: "", branches: [...]}`) |
+| `5-why.md` | "## Why #1 …" through "## Why #5 …" placeholder text |
+| `report.md` | Initial D1–D8 skeleton headings (this is `report.v0.md`-equivalent — empty draft) |
+| `data/.gitkeep` | Empty marker; the `data/` folder is where fixtures land |
+
+Plus a small **fixture CSV** at `data/reflow.zone3.sample.csv` (the
+zone-3 timeseries the design's SPC chart is based on). This is the
+"sample data" that replaces real MES — the agent can read it via
+`read_file` and plot from it inside the notebook.
 
 **Loader:**
 ```python
@@ -207,10 +209,13 @@ this; we add a custom route that wraps it (or use specstar's
 `create_action` hook if it has one).
 
 **Files:**
-- `src/workspace_app/rca/templates/default/brief.md`
+- `src/workspace_app/rca/templates/default/{brief.md, drift.ipynb,
+  pareto.ipynb, fishbone.canvas, 5-why.md, report.md,
+  data/reflow.zone3.sample.csv}`
 - `src/workspace_app/rca/templates/__init__.py` — `seed_investigation()`
 - `src/workspace_app/api/app.py` — wire seed call into create path
-- Tests cover field substitution + that brief.md lands in FileStore
+- Tests cover field substitution + that all template files land in
+  FileStore at the right paths
 
 ---
 
@@ -383,33 +388,41 @@ testing doesn't need a separate setup.
 
 ---
 
-## 8. Agent surface — generic + RCA-domain tools
+## 8. Agent surface — generic tools + RCA system prompt
 
-Existing generic tools stay (`exec`, `read_file`, `write_file`, `ls`,
-`exists`, `delete_file`). New domain tools are added but **all mock**:
+**No new tools.** Existing generic tools cover everything:
+`exec`, `read_file`, `write_file`, `ls`, `exists`, `delete_file`.
 
-| Tool | Returns |
-|---|---|
-| `spc_read(probe: str, window: str)` | A canned DataFrame-like dict for the probe (e.g., "reflow.zone3" returns the zone-3 drift fixture from the design) |
-| `defects_aoi(machine: str, lot: str)` | Defect-list fixture |
-| `correlate_find(target, window, candidates, min_r)` | Hard-coded correlation results pointing at the design's narrative (zone-3 → void rate) |
-| `pareto_build(window, group_by)` | Pareto bins fixture |
-| `fishbone_draft(effect)` | 6M skeleton as JSON |
-| `fivewhy_draft(observation)` | 5-Why chain skeleton |
-| `report_generate(investigation_id)` | Full 8D markdown — also kicks off `ReportVersion.generate` server-side |
+The RCA-specific behaviour is all in **AgentConfig.system_prompt**.
+The prompt teaches the agent:
+- The 8D / 6M / SPC / Pareto workflow vocabulary.
+- The conventional file paths and shapes the FE renders
+  (`/data/*.csv` is fixture data, `5-why.md` is structured under
+  `## Why #N` headings, `fishbone.canvas` is the 6M JSON schema,
+  reports are written as `report.vN.md` with the highest N being
+  current, etc.).
+- How to use the fixture CSVs in `/data/` as if they were real SPC /
+  AOI data — the seeded template ships these.
 
-All implemented in `src/workspace_app/rca/tools/` as `@function_tool`
-async functions; data comes from `src/workspace_app/rca/fixtures/*.json`.
-
-Per Q9 clarification: there is **no** `rca` Python package inside
-notebook cells. Cells use stdlib + numpy/pandas/matplotlib directly,
-with inline mock data or fixture loading from FileStore. The agent
-tools above run *in the backend process*, not inside notebooks.
+The system prompt + sample fixture data + template skeletons together
+produce the RCA UX *without* any system-side domain modeling.
 
 **Files:**
-- `src/workspace_app/rca/tools/{spc,defects,correlate,pareto,fishbone,fivewhy,report}.py`
-- `src/workspace_app/rca/fixtures/*.json`
-- Tests for each tool's contract (input/output shape) + that fixtures load
+- `src/workspace_app/rca/prompts/system.md` — RCA agent system prompt
+  (multi-page document; ships as a string constant or text file the
+  default `AgentConfig` loads at startup)
+- `src/workspace_app/rca/templates/default/data/*.csv` — fixture data
+  (lives in the template, copied per-investigation)
+- Tests cover that the prompt loads and an investigation's default
+  `AgentConfig` references it
+
+**Why not even keep the 3 confirmed "real" tools** (`spc.read`,
+`defects.aoi`, `correlate.find`) shown in the design's agent log?
+Because they'd be thin shims over `read_file` + Python execution
+inside the notebook. Skipping them keeps the tool surface tight; the
+agent's chat narration can still say "I'm calling spc.read on
+reflow.zone3" — the FE doesn't care whether that's a literal tool
+invocation or freeform narration.
 
 ---
 
@@ -430,9 +443,10 @@ tools above run *in the backend process*, not inside notebooks.
 | `POST /investigations/{id}/notebooks/{path}/cells/{idx}/execute` | run cell → SSE | ⏳ §7.3 |
 | `DELETE /investigations/{id}/notebooks/{path}/cells/{idx}/execute` | interrupt cell | ⏳ §7.3 |
 | `POST /investigations/{id}/notebooks/{path}/kernel/restart` | restart kernel | ⏳ §7.3 |
-| `GET /investigations/{id}/reports` | list report versions | ⏳ §4 |
-| `POST /investigations/{id}/reports/generate` | new version | ⏳ §4 |
-| `GET /investigations/{id}/reports/{v}` | one version | ⏳ §4 |
+
+Reports use the file-naming convention `/report.v{N}.md` (§4); FE
+iterates these via `GET /investigations/{id}/files?prefix=/report.v`
+and picks the highest N as current. No dedicated `/reports` endpoints.
 
 ---
 
@@ -474,8 +488,10 @@ Probably cleanest: copy to `web/public/` at FE build time.
   and writing tests for each.
 - **Bias to in-process state for v1.** Registry, dirty-path trackers,
   kernel handles — all in-memory.
-- **Mock data lives in `rca/fixtures/`, not inlined in tool code.**
-  Easier to swap to real adapters later.
+- **The system is RCA-agnostic.** All RCA structure (8D, 6M, 5-Why,
+  hypothesis cells, correctional actions) lives in the agent's
+  system prompt + the files it writes, never in BE resources.
+  Fixture data ships inside `rca/templates/default/data/`.
 - **Tests first via `/tdd`.** Red→green vertical-slice.
 - **Honesty over scope creep.** Split + update this doc rather than
   letting items sprawl.
@@ -486,17 +502,19 @@ Probably cleanest: copy to `web/public/` at FE build time.
 
 1. **Schema rename** (§3) — Workspace → Investigation, fields,
    registry/route renames. Cleanup before any new work goes in.
-2. **Template seeding** (§5) — `brief.md` skeleton + create-flow wiring.
-3. **Idle-bump + manual close** (§6) — small, lands before kernel work
+2. **Template seeding** (§5) — 6-file skeleton + sample CSV fixtures
+   + create-flow wiring.
+3. **RCA system prompt** (§8) — load + plug into default `AgentConfig`.
+4. **Idle-bump + manual close** (§6) — small, lands before kernel work
    adds to the lifecycle complexity.
-4. **`PUT /files/{path}`** (§7.4) — small, unblocks FE notebook save.
-5. **Notebook execution stack** (§7.1 → §7.5) — biggest chunk:
+5. **`PUT /files/{path}`** (§7.4) — small, unblocks FE notebook save.
+6. **Notebook execution stack** (§7.1 → §7.5) — biggest chunk:
    - 7.5 sandbox image first (Dockerfile + build target)
    - 7.1 Sandbox.expose_port (Mock + Local; Docker can come right after)
    - 7.2 KernelService (start/shutdown/execute_cell + tests)
    - 7.3 Cell SSE endpoint + CellEvent types
-6. **Domain agent tools** (§8) — mock data + tool wrappers + tests.
-7. **ReportVersion** (§4) — generate / list / supersede semantics.
+
+No ReportVersion or domain-tool steps — those collapsed per §4 / §8.
 
 Lower priority / deferred to v1.5:
 - `run_cell` agent tool (Q6).
