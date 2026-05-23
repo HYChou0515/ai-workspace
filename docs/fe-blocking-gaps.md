@@ -28,9 +28,15 @@ the moving pieces without re-deriving them from commits.
 
 ## Known polish items (not blocking)
 
-- **`/-workspacefiles` leaks 19 routes into `/openapi.json`**. Source: `SpecstarFileStore.__init__` registers an internal `_WorkspaceFiles` storage model with specstar, which auto-emits CRUD routes. The FE doesn't call any of them. Cleanup options: rename the internal struct or have specstar grow a "register-for-storage-only, no routes" flag.
-- **Restart kernel button** in the notebook status bar. `api.restartKernel({investigationId, notebookPath})` is wired; just needs a button.
-- **Upload file UI** — composer attachment uploads to `/uploads/<filename>` were stubbed out at `InvestigationShell.tsx:565`. `api.writeFile` is the underlying call.
+All P0–P3 items shipped. Remaining v1 polish:
+
+- **`/-workspacefiles` openapi leak** — resolved by swapping `__main__.py` to `MemoryFileStore` (no specstar storage model = no auto-routes). SpecstarFileStore is still around if you want spec-backed persistence (and accept the route noise).
+- **Restart kernel button** — shipped. Status bar pill calls `api.restartKernel` for the currently-open notebook.
+- **Upload file UI** — shipped. Sidebar `+` opens a file picker, uploads via `api.writeFile` to `/uploads/{filename}` (8 MB cap, supports Blob/binary).
+- **Settings panel** — shipped. Replaces the prior alert with a modal (model picker / theme stub / about).
+- **Sign-out** — replaced with a "single-user · no auth in v1" popover note; full sign-in lands when multi-tenant ships.
+- **Split view** — shipped. Two independent panes; right pane has its own tab picker.
+- **Terminal pane** — shipped. POST `/investigations/{id}/exec` returns `ExecResult`; the bottom panel terminal has ↑/↓ history, ⌘L clear, exit-code indicators.
 
 ---
 
