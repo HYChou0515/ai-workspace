@@ -117,10 +117,25 @@ export function FileTree({
     // Moving a folder already relocates its subtree; drop any selected
     // descendants so we don't then act on a path that no longer exists.
     const tops = topLevel(srcPaths);
+    const existing = new Set<string>([...files.map((f) => f.path), ...dirs]);
     try {
       for (const srcPath of tops) {
         const destBase = `${destDir}/${basename(srcPath)}`.replace(/\/+/g, "/");
         if (destBase === srcPath || destBase.startsWith(srcPath + "/")) continue; // into-self
+        if (existing.has(destBase)) {
+          // VSCode-style replace prompt — the BE won't clobber, so confirm
+          // then delete the target before moving/copying onto it.
+          const choice = await dialog.confirm({
+            title: "Replace existing item",
+            body: `“${basename(destBase)}” already exists in ${destDir || "/"}. Replace it?`,
+            actions: [
+              { id: "replace", label: "Replace", variant: "danger" },
+              { id: "cancel", label: "Cancel" },
+            ],
+          });
+          if (choice !== "replace") continue;
+          await api.deleteFile(investigationId, destBase);
+        }
         if (copy) await api.copyFile(investigationId, srcPath, destBase);
         else await api.moveFile(investigationId, srcPath, destBase);
       }

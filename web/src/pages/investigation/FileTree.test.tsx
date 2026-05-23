@@ -16,13 +16,28 @@ const files: FileInfo[] = [
   { path: "/c.md", size: 1 },
 ];
 
-function renderTree(onOpen = vi.fn()) {
+function renderTree(onOpen = vi.fn(), opts: { files?: FileInfo[]; dirs?: string[] } = {}) {
   render(
     <DialogProvider>
-      <FileTree investigationId="inv" files={files} dirs={[]} activePath={null} onOpen={onOpen} />
+      <FileTree
+        investigationId="inv"
+        files={opts.files ?? files}
+        dirs={opts.dirs ?? []}
+        activePath={null}
+        onOpen={onOpen}
+      />
     </DialogProvider>,
   );
   return { onOpen };
+}
+
+function dropPayload(paths: string[]) {
+  return {
+    dataTransfer: {
+      getData: (t: string) => (t === "application/x-rca-file" ? JSON.stringify({ paths }) : ""),
+      types: ["application/x-rca-file"],
+    },
+  };
 }
 
 describe("<FileTree /> multi-select", () => {
@@ -46,5 +61,18 @@ describe("<FileTree /> multi-select", () => {
     fireEvent.contextMenu(screen.getByText("b.md"));
     await user.click(await screen.findByRole("button", { name: /^delete$/i }));
     expect(await screen.findByText(/delete 2 items/i)).toBeInTheDocument();
+  });
+
+  it("prompts to replace when a move collides with an existing name", async () => {
+    renderTree(vi.fn(), {
+      files: [
+        { path: "/5-why.md", size: 1 },
+        { path: "/dst/5-why.md", size: 1 },
+      ],
+    });
+    // drop the root 5-why.md onto the /dst folder, which already has one
+    fireEvent.drop(screen.getByText("dst"), dropPayload(["/5-why.md"]));
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /replace/i })).toBeInTheDocument();
   });
 });
