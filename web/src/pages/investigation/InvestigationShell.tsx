@@ -13,11 +13,13 @@ import { formatInvestigationId, isOpen } from "../../api/types";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
+import { ResizeDivider } from "../../components/ResizeDivider";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
 import { FileBufferProvider } from "../../hooks/fileBuffer";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { useFileContent } from "../../hooks/useFileContent";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
+import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
@@ -70,6 +72,14 @@ export function InvestigationShell({
   const [model, setModel] = useState(MODEL_OPTIONS[0]!);
   const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
 
+  // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
+  // toggle the sidebar / bottom panel.
+  const [sidebarW, setSidebarW] = usePersistentNumber("rca:layout:sidebar", 260, 180, 560);
+  const [agentW, setAgentW] = usePersistentNumber("rca:layout:agent", 380, 280, 680);
+  const [bottomH, setBottomH] = usePersistentNumber("rca:layout:bottom", 200, 80, 600);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [bottomOpen, setBottomOpen] = useState(true);
+
   const recentFiles = usePersistentDeque(
     `rca:recent-files:${investigation.resource_id}`,
     10,
@@ -97,13 +107,20 @@ export function InvestigationShell({
     });
   };
 
-  // ⌘P opens the command palette; ⌘B toggles between Evidence and the
-  // last mode (cheap convenience). Escape closes everything modal-ish.
+  // Global keyboard: ⌘P palette · ⌘B sidebar · ⌘J bottom panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "p") {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "p") {
         e.preventDefault();
         setPaletteOpen(true);
+      } else if (k === "b") {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+      } else if (k === "j") {
+        e.preventDefault();
+        setBottomOpen((v) => !v);
       }
     };
     document.addEventListener("keydown", onKey);
@@ -143,24 +160,44 @@ export function InvestigationShell({
             onFocusAgent={focusAgentComposer}
             onSettings={() => setSettingsOpen(true)}
           />
-          <ActivitySidebar
-            mode={activityMode}
-            investigation={investigation}
-            files={files}
-            activePath={activeTab}
-            openTabs={openTabs}
-            recentFiles={recentFiles.values}
-            onOpenFile={openFile}
-            onFilesChanged={onFilesChanged}
-          />
+          {sidebarOpen && (
+            <>
+              <div style={{ width: sidebarW, flexShrink: 0, display: "flex", minWidth: 0 }}>
+                <ActivitySidebar
+                  mode={activityMode}
+                  investigation={investigation}
+                  files={files}
+                  activePath={activeTab}
+                  openTabs={openTabs}
+                  recentFiles={recentFiles.values}
+                  onOpenFile={openFile}
+                  onFilesChanged={onFilesChanged}
+                />
+              </div>
+              <ResizeDivider
+                orientation="vertical"
+                ariaLabel="resize sidebar"
+                onResize={(d) => setSidebarW(sidebarW + d)}
+              />
+            </>
+          )}
           <EditorArea
             investigationId={investigation.resource_id}
             openTabs={openTabs}
             activeTab={activeTab}
             onSelectTab={setActiveTab}
             onCloseTab={closeTab}
+            bottomHeight={bottomH}
+            bottomOpen={bottomOpen}
+            onResizeBottom={(d) => setBottomH(bottomH - d)}
+            onToggleBottom={() => setBottomOpen((v) => !v)}
           />
-          <AgentPanel investigationId={investigation.resource_id} />
+          <ResizeDivider
+            orientation="vertical"
+            ariaLabel="resize agent panel"
+            onResize={(d) => setAgentW(agentW - d)}
+          />
+          <AgentPanel investigationId={investigation.resource_id} width={agentW} />
         </div>
 
         <CommandPalette
@@ -1179,8 +1216,10 @@ function ReviewersSidebar({ investigation }: { investigation: Investigation }) {
 /* ----------------------------- Shared sidebar frame ----------------------------- */
 
 const sidebarStyle: React.CSSProperties = {
-  width: 260,
-  flexShrink: 0,
+  // Fills the resizable wrapper in InvestigationShell (width lives there).
+  width: "100%",
+  flex: 1,
+  minWidth: 0,
   background: "var(--paper)",
   borderRight: "1px solid var(--paper-3)",
   display: "flex",
@@ -1300,12 +1339,20 @@ function EditorArea({
   activeTab,
   onSelectTab,
   onCloseTab,
+  bottomHeight,
+  bottomOpen,
+  onResizeBottom,
+  onToggleBottom,
 }: {
   investigationId: string;
   openTabs: OpenTab[];
   activeTab: string | null;
   onSelectTab: (p: string) => void;
   onCloseTab: (p: string) => void;
+  bottomHeight: number;
+  bottomOpen: boolean;
+  onResizeBottom: (deltaPx: number) => void;
+  onToggleBottom: () => void;
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
   const [layoutMode, setLayoutMode] = useState<"single" | "split">("single");
@@ -1395,10 +1442,20 @@ function EditorArea({
         </div>
       )}
 
+      {bottomOpen && (
+        <ResizeDivider
+          orientation="horizontal"
+          ariaLabel="resize bottom panel"
+          onResize={onResizeBottom}
+        />
+      )}
       <BottomPanel
         tab={bottomTab}
         onTab={setBottomTab}
         investigationId={investigationId}
+        height={bottomHeight}
+        open={bottomOpen}
+        onToggle={onToggleBottom}
       />
       <StatusBar activeTab={activeTab} investigationId={investigationId} />
     </section>
@@ -1666,10 +1723,16 @@ function BottomPanel({
   tab,
   onTab,
   investigationId,
+  height,
+  open,
+  onToggle,
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
   onTab: (t: "problems" | "output" | "terminal" | "agent_log" | "run_history") => void;
   investigationId: string;
+  height: number;
+  open: boolean;
+  onToggle: () => void;
 }) {
   const tabs = [
     { key: "problems" as const, label: "Problems" },
@@ -1682,7 +1745,7 @@ function BottomPanel({
   return (
     <div
       style={{
-        height: 200,
+        height: open ? height : 32,
         flexShrink: 0,
         borderTop: "1px solid var(--paper-3)",
         background: "var(--white)",
@@ -1721,34 +1784,45 @@ function BottomPanel({
             </button>
           );
         })}
+        <span style={{ flex: 1 }} />
+        <button
+          type="button"
+          onClick={onToggle}
+          title={open ? "Collapse panel (⌘J)" : "Expand panel (⌘J)"}
+          aria-label="toggle bottom panel"
+          style={{ color: "var(--text-paper-d)", padding: 4 }}
+        >
+          <Icon name={open ? "chev_d" : "chev_r"} size={14} />
+        </button>
       </div>
-      {tab === "terminal" ? (
-        <div
-          style={{
-            flex: 1,
-            minHeight: 0,
-            padding: "8px 14px",
-            display: "flex",
-            flexDirection: "column",
-          }}
-        >
-          <TerminalPane investigationId={investigationId} />
-        </div>
-      ) : (
-        <div
-          className="scrollable"
-          style={{
-            flex: 1,
-            overflow: "auto",
-            padding: "8px 14px",
-            fontFamily: "var(--font-mono)",
-            fontSize: 12,
-            color: "var(--text-paper)",
-          }}
-        >
-          <PanelBody tab={tab} />
-        </div>
-      )}
+      {open &&
+        (tab === "terminal" ? (
+          <div
+            style={{
+              flex: 1,
+              minHeight: 0,
+              padding: "8px 14px",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <TerminalPane investigationId={investigationId} />
+          </div>
+        ) : (
+          <div
+            className="scrollable"
+            style={{
+              flex: 1,
+              overflow: "auto",
+              padding: "8px 14px",
+              fontFamily: "var(--font-mono)",
+              fontSize: 12,
+              color: "var(--text-paper)",
+            }}
+          >
+            <PanelBody tab={tab} />
+          </div>
+        ))}
     </div>
   );
 }

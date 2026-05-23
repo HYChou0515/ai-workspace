@@ -36,7 +36,13 @@ function isTextFile(name: string): boolean {
   return TEXT_EXTENSIONS.has(name.slice(idx).toLowerCase());
 }
 
-export function AgentPanel({ investigationId }: { investigationId: string }) {
+export function AgentPanel({
+  investigationId,
+  width = 380,
+}: {
+  investigationId: string;
+  width?: number;
+}) {
   const { log, send, cancel } = useAgent();
   const [draft, setDraft] = useState("");
   const [attaching, setAttaching] = useState(false);
@@ -93,7 +99,7 @@ export function AgentPanel({ investigationId }: { investigationId: string }) {
     <aside
       data-testid="agent-panel"
       style={{
-        width: 380,
+        width,
         flexShrink: 0,
         background: "var(--paper)",
         borderLeft: "1px solid var(--paper-3)",
