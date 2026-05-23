@@ -16,6 +16,7 @@ import { RcaMark } from "../../components/RcaMark";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
 import { FileBufferProvider } from "../../hooks/fileBuffer";
+import { useThemeMode } from "../../hooks/theme";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { useFileContent } from "../../hooks/useFileContent";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
@@ -78,7 +79,7 @@ export function InvestigationShell({
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [model, setModel] = useState(MODEL_OPTIONS[0]!);
-  const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
+  const [theme, setTheme] = useThemeMode();
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
   // toggle the sidebar / bottom panel.
@@ -438,7 +439,7 @@ function SettingsModal({
             ))}
           </div>
           <p style={{ marginTop: 6, fontSize: 11, color: "var(--text-paper-d)" }}>
-            Dark mode lands in v2 — v1 is fixed light.
+            “System” follows your OS appearance.
           </p>
         </SettingsSection>
 

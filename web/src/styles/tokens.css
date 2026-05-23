@@ -92,3 +92,22 @@
   --radius-modal:  12px;
   --radius-avatar: 50%;
 }
+
+/*
+ * Dark theme — applied via <html data-theme="dark"> (see hooks/theme.ts).
+ * Only the surface + text tokens flip; brand accent, ink, and semantic
+ * colours read fine on dark already. Keep the variable NAMES identical so
+ * every component restyles for free.
+ */
+[data-theme="dark"] {
+  --paper:       #16181D;
+  --paper-2:     #1F222A;
+  --paper-3:     #2E323B;
+  --white:       #1A1C22;
+
+  --text-paper:    #ECEAE3;
+  --text-paper-d:  #A9ADB5;
+  --text-paper-d2: #71757D;
+
+  --accent-soft: #3A241D;
+}

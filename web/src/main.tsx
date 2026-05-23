@@ -1,8 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
+import { initTheme } from "./hooks/theme";
 import "./styles/tokens.css";
 import "./styles/base.css";
+
+initTheme();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");

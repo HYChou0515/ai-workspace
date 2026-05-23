@@ -35,6 +35,8 @@ export default function MonacoEditorImpl({
   minHeight = 120,
 }: MonacoEditorProps) {
   const [height, setHeight] = useState(minHeight);
+  const dark =
+    typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
 
   return (
     <div
@@ -49,7 +51,7 @@ export default function MonacoEditorImpl({
       <Editor
         value={value}
         language={language}
-        theme="vs"
+        theme={dark ? "vs-dark" : "vs"}
         onChange={(v) => onChange?.(v ?? "")}
         onMount={(editor) => {
           if (!autoHeight) return;
