@@ -43,6 +43,8 @@ export type InvestigationInput = {
   severity?: Severity;
   product?: string;
   topics?: string[];
+  /** Template profile to seed from (default "default"). */
+  templateProfile?: string;
 };
 
 export type MessageRole = "user" | "assistant" | "tool" | "system";
@@ -110,6 +112,8 @@ export interface ApiClient {
   getInvestigation(id: string): Promise<Investigation>;
   createInvestigation(input: InvestigationInput): Promise<Investigation>;
   closeInvestigation(id: string, status: CloseStatus): Promise<void>;
+  /** GET /templates — template profile names for the New Investigation picker. */
+  listTemplates(): Promise<string[]>;
 
   getConversation(investigationId: string): Promise<Conversation | null>;
 

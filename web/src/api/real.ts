@@ -133,11 +133,20 @@ export const realApi: ApiClient = {
         members: [],
         topics: input.topics ?? [],
         attached_agent_config_id: null,
+        template_profile: input.templateProfile ?? "default",
       }),
     });
     const created = await json<CreateResponse>(resp);
     // Create only returns metadata — refetch to get the full record.
     return this.getInvestigation(created.resource_id);
+  },
+
+  async listTemplates() {
+    try {
+      return await json<string[]>(await fetch("/templates"));
+    } catch {
+      return ["default"]; // BE older than the templates endpoint
+    }
   },
 
   async closeInvestigation(id: string, status: CloseStatus) {

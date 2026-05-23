@@ -39,6 +39,7 @@ describe("<NewInvestigationModal />", () => {
       severity: "P2",
       product: "MX-7 board",
       topics: [],
+      templateProfile: "default",
     });
   });
 

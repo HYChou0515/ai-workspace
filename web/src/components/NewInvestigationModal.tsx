@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { api } from "../api";
 import type { InvestigationInput, Severity } from "../api/types";
 
 /**
@@ -23,6 +24,8 @@ export function NewInvestigationModal({
   const [product, setProduct] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
   const [topicDraft, setTopicDraft] = useState("");
+  const [templates, setTemplates] = useState<string[]>(["default"]);
+  const [template, setTemplate] = useState("default");
 
   useEffect(() => {
     if (!open) return;
@@ -32,6 +35,18 @@ export function NewInvestigationModal({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    api
+      .listTemplates()
+      .then((t) => alive && t.length > 0 && setTemplates(t))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [open]);
 
   if (!open) return null;
 
@@ -53,6 +68,7 @@ export function NewInvestigationModal({
       severity,
       product: product.trim(),
       topics,
+      templateProfile: template,
     });
   };
 
@@ -207,6 +223,20 @@ export function NewInvestigationModal({
               placeholder="e.g. MX-7 board"
               style={inputStyle()}
             />
+          </Field>
+
+          <Field label="Template">
+            <select
+              value={template}
+              onChange={(e) => setTemplate(e.target.value)}
+              style={inputStyle()}
+            >
+              {templates.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
           </Field>
         </div>
 

@@ -409,6 +409,11 @@ export const mockApi: ApiClient = {
     return { ...inv };
   },
 
+  async listTemplates() {
+    await delay(10);
+    return ["default", "smt-reflow-example"];
+  },
+
   async getConversation(investigationId) {
     await delay(30);
     const conv = conversations.get(investigationId);
