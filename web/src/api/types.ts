@@ -99,6 +99,12 @@ export type NotebookRef = {
   notebookPath: string;
 };
 
+export type ExecResult = {
+  exit_code: number;
+  stdout: string;
+  stderr: string;
+};
+
 export interface ApiClient {
   listInvestigations(): Promise<Investigation[]>;
   getInvestigation(id: string): Promise<Investigation>;
@@ -109,10 +115,12 @@ export interface ApiClient {
 
   listFiles(investigationId: string, prefix?: string): Promise<FileInfo[]>;
   readFile(investigationId: string, path: string): Promise<FileContent>;
+  /** Raw write. `body` may be a string (UTF-8) or a binary Blob/ArrayBuffer
+   * — the FE uploads notebook JSON as string, attachments as Blob. */
   writeFile(
     investigationId: string,
     path: string,
-    body: string,
+    body: string | Blob | ArrayBuffer,
   ): Promise<void>;
 
   streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent>;
@@ -128,6 +136,10 @@ export interface ApiClient {
   /** POST /investigations/{id}/notebooks/{path}/kernel/restart — wipes
    * the kernel's namespace; next execute spawns a fresh kernel. */
   restartKernel(ref: NotebookRef): Promise<void>;
+
+  /** POST /investigations/{id}/exec — run a shell command in the
+   * sandbox and return its ExecResult. Backs the Terminal pane. */
+  execShell(investigationId: string, cmd: string[]): Promise<ExecResult>;
 }
 
 /* --------------------------- Helpers ---------------------------- */

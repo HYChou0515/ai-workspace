@@ -4,7 +4,7 @@
  * owns the file/tab state shared between them.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../../api";
@@ -22,6 +22,7 @@ import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { basename, breadcrumbSegments, pickRenderer } from "./renderer";
+import { TerminalPane } from "./TerminalPane";
 
 type OpenTab = { path: string; modified: boolean };
 
@@ -37,9 +38,11 @@ const MODEL_OPTIONS = [
 export function InvestigationShell({
   investigation,
   files,
+  onFilesChanged,
 }: {
   investigation: Investigation;
   files: FileInfo[];
+  onFilesChanged?: () => void;
 }) {
   // The initial open tabs mirror the design's six view-files (those that
   // exist).
@@ -62,7 +65,9 @@ export function InvestigationShell({
   const [activeTab, setActiveTab] = useState<string | null>(() => openTabs[0]?.path ?? null);
   const [activityMode, setActivityMode] = useState<ActivityMode>("evidence");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [model, setModel] = useState(MODEL_OPTIONS[0]!);
+  const [theme, setTheme] = useState<"system" | "light" | "dark">("system");
 
   const recentFiles = usePersistentDeque(
     `rca:recent-files:${investigation.resource_id}`,
@@ -134,7 +139,7 @@ export function InvestigationShell({
             mode={activityMode}
             onMode={setActivityMode}
             onFocusAgent={focusAgentComposer}
-            onSettings={() => alert("Settings panel not implemented.")}
+            onSettings={() => setSettingsOpen(true)}
           />
           <ActivitySidebar
             mode={activityMode}
@@ -144,6 +149,7 @@ export function InvestigationShell({
             openTabs={openTabs}
             recentFiles={recentFiles.values}
             onOpenFile={openFile}
+            onFilesChanged={onFilesChanged}
           />
           <EditorArea
             investigationId={investigation.resource_id}
@@ -161,8 +167,207 @@ export function InvestigationShell({
           onClose={() => setPaletteOpen(false)}
           onPick={openFile}
         />
+        <SettingsModal
+          open={settingsOpen}
+          onClose={() => setSettingsOpen(false)}
+          model={model}
+          onModel={setModel}
+          modelOptions={MODEL_OPTIONS}
+          theme={theme}
+          onTheme={setTheme}
+        />
       </div>
     </AgentProvider>
+  );
+}
+
+function SettingsModal({
+  open,
+  onClose,
+  model,
+  onModel,
+  modelOptions,
+  theme,
+  onTheme,
+}: {
+  open: boolean;
+  onClose: () => void;
+  model: string;
+  onModel: (m: string) => void;
+  modelOptions: readonly string[];
+  theme: "system" | "light" | "dark";
+  onTheme: (t: "system" | "light" | "dark") => void;
+}) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 100,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 480,
+          maxHeight: "80vh",
+          overflow: "auto",
+          background: "var(--white)",
+          borderRadius: "var(--radius-card)",
+          border: "1px solid var(--paper-3)",
+          boxShadow: "0 12px 32px rgba(0,0,0,0.18)",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        <div
+          style={{
+            padding: "12px 16px",
+            borderBottom: "1px solid var(--paper-3)",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+          }}
+        >
+          <Icon name="settings" size={14} />
+          <strong style={{ fontSize: 13, flex: 1 }}>Settings</strong>
+          <button
+            type="button"
+            aria-label="close settings"
+            onClick={onClose}
+            style={{ color: "var(--text-paper-d)" }}
+          >
+            <Icon name="x" size={14} />
+          </button>
+        </div>
+
+        <SettingsSection label="Agent model">
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {modelOptions.map((m) => (
+              <label
+                key={m}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "6px 10px",
+                  border: "1px solid var(--paper-3)",
+                  borderRadius: "var(--radius-btn)",
+                  cursor: "pointer",
+                  background: m === model ? "var(--accent-soft)" : "var(--white)",
+                  fontSize: 12,
+                }}
+              >
+                <input
+                  type="radio"
+                  name="model"
+                  checked={m === model}
+                  onChange={() => onModel(m)}
+                />
+                <span style={{ fontFamily: "var(--font-mono)" }}>{m}</span>
+              </label>
+            ))}
+            <p style={{ margin: 0, fontSize: 11, color: "var(--text-paper-d)" }}>
+              v1 default is the local Qwen via LiteLLM/Ollama; pick another
+              model to route through your hosted credentials.
+            </p>
+          </div>
+        </SettingsSection>
+
+        <SettingsSection label="Theme">
+          <div style={{ display: "flex", gap: 6 }}>
+            {(["system", "light", "dark"] as const).map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => onTheme(t)}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid var(--paper-3)",
+                  borderRadius: "var(--radius-btn)",
+                  fontSize: 12,
+                  background: t === theme ? "var(--accent-soft)" : "var(--white)",
+                  color: t === theme ? "var(--accent-h)" : "var(--text-paper)",
+                  textTransform: "capitalize",
+                }}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+          <p style={{ marginTop: 6, fontSize: 11, color: "var(--text-paper-d)" }}>
+            Dark mode lands in v2 — v1 is fixed light.
+          </p>
+        </SettingsSection>
+
+        <SettingsSection label="About">
+          <dl
+            style={{
+              margin: 0,
+              display: "grid",
+              gridTemplateColumns: "max-content 1fr",
+              rowGap: 4,
+              columnGap: 12,
+              fontSize: 12,
+            }}
+          >
+            <dt style={{ color: "var(--text-paper-d)" }}>Product</dt>
+            <dd style={{ margin: 0 }}>RCA 3.0</dd>
+            <dt style={{ color: "var(--text-paper-d)" }}>Auth</dt>
+            <dd style={{ margin: 0 }}>single-user demo (no sign-in)</dd>
+            <dt style={{ color: "var(--text-paper-d)" }}>API</dt>
+            <dd style={{ margin: 0 }}>
+              <a href="/docs" target="_blank" rel="noreferrer">
+                Swagger /docs
+              </a>{" "}
+              · <code style={{ fontSize: 11 }}>contract.md</code>
+            </dd>
+          </dl>
+        </SettingsSection>
+      </div>
+    </div>
+  );
+}
+
+function SettingsSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      style={{
+        padding: "12px 16px",
+        borderBottom: "1px solid var(--paper-3)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 8,
+      }}
+    >
+      <div className="caps" style={{ fontSize: 11 }}>
+        {label}
+      </div>
+      {children}
+    </section>
   );
 }
 
@@ -380,13 +585,33 @@ function TopBar({
           </button>
         )}
       >
-        {(close) => (
-          <div style={{ minWidth: 180 }}>
-            <PopoverItem onClick={close}>{investigation.owner}</PopoverItem>
+        {() => (
+          <div style={{ minWidth: 200 }}>
+            <div style={{ padding: "8px 10px" }}>
+              <div style={{ fontWeight: 600, fontSize: 12 }}>
+                {investigation.owner}
+              </div>
+              <div
+                style={{
+                  marginTop: 2,
+                  fontSize: 11,
+                  color: "var(--text-paper-d)",
+                  fontFamily: "var(--font-mono)",
+                }}
+              >
+                single-user · no auth in v1
+              </div>
+            </div>
             <PopoverDivider />
-            <PopoverItem onClick={() => { close(); alert("Sign-out not implemented."); }}>
-              Sign out
-            </PopoverItem>
+            <div
+              style={{
+                padding: "6px 10px",
+                fontSize: 11,
+                color: "var(--text-paper-d)",
+              }}
+            >
+              Sign-in lands when multi-tenant ships.
+            </div>
           </div>
         )}
       </Popover>
@@ -592,6 +817,7 @@ function ActivitySidebar(props: {
   openTabs: OpenTab[];
   recentFiles: string[];
   onOpenFile: (path: string) => void;
+  onFilesChanged?: () => void;
 }) {
   switch (props.mode) {
     case "evidence":
@@ -613,12 +839,14 @@ function EvidenceSidebar({
   activePath,
   openTabs,
   onOpenFile,
+  onFilesChanged,
 }: {
   investigation: Investigation;
   files: FileInfo[];
   activePath: string | null;
   openTabs: OpenTab[];
   onOpenFile: (path: string) => void;
+  onFilesChanged?: () => void;
 }) {
   // Group by top-level directory; root-level files go under "(root)"
   const byDir = new Map<string, FileInfo[]>();
@@ -635,16 +863,14 @@ function EvidenceSidebar({
       header={
         <>
           <span className="caps">Evidence</span>
-          <button
-            type="button"
-            title="Upload file"
-            onClick={() =>
-              alert("Upload UI not implemented yet — ask the agent to write a file instead.")
-            }
-            style={{ color: "var(--text-paper-d)" }}
-          >
-            <Icon name="plus" size={14} />
-          </button>
+          <SidebarUploadButton
+            investigationId={investigation.resource_id}
+            existingPaths={files.map((f) => f.path)}
+            onUploaded={(path) => {
+              onFilesChanged?.();
+              onOpenFile(path);
+            }}
+          />
         </>
       }
     >
@@ -697,6 +923,72 @@ function EvidenceSidebar({
 
       <OutlineSection activePath={activePath} investigationId={investigation.resource_id} />
     </SidebarFrame>
+  );
+}
+
+function SidebarUploadButton({
+  investigationId,
+  existingPaths,
+  onUploaded,
+}: {
+  investigationId: string;
+  existingPaths: string[];
+  onUploaded: (path: string) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+
+  const upload = async (file: File) => {
+    // 8 MB cap on the sidebar uploader — larger than the agent attach
+    // (256 KB) since this lane handles evidence files, including CSV
+    // exports and ipynb backups.
+    if (file.size > 8 * 1024 * 1024) {
+      alert(`File too large (${(file.size / 1024 / 1024).toFixed(1)} MB). v1 cap is 8 MB.`);
+      return;
+    }
+    const target = `/uploads/${file.name}`;
+    if (existingPaths.includes(target)) {
+      if (!confirm(`${target} already exists. Overwrite?`)) return;
+    }
+    setBusy(true);
+    try {
+      await api.writeFile(investigationId, target, file);
+      onUploaded(target);
+    } catch (err) {
+      console.error("upload failed", err);
+      alert(`Upload failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          e.target.value = "";
+          if (f) void upload(f);
+        }}
+        style={{ display: "none" }}
+      />
+      <button
+        type="button"
+        title={busy ? "Uploading…" : "Upload evidence file"}
+        disabled={busy}
+        onClick={() => inputRef.current?.click()}
+        style={{
+          color: busy ? "var(--text-paper-d2)" : "var(--text-paper-d)",
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+        }}
+      >
+        <Icon name={busy ? "upload" : "plus"} size={14} />
+      </button>
+    </>
   );
 }
 
@@ -1035,6 +1327,30 @@ function EditorArea({
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
   const [layoutMode, setLayoutMode] = useState<"single" | "split">("single");
+  // Right column's active tab. When null we mirror activeTab; once the
+  // user explicitly picks a different tab on the right side, this holds
+  // their pick so the two columns can show different files.
+  const [rightTab, setRightTab] = useState<string | null>(null);
+
+  // Pick a sensible default for the right column the first time the
+  // user enters split mode: prefer the next open tab so the user
+  // immediately sees two different files side by side.
+  useEffect(() => {
+    if (layoutMode !== "split" || rightTab) return;
+    const idx = openTabs.findIndex((t) => t.path === activeTab);
+    const next = openTabs[idx + 1] ?? openTabs.find((t) => t.path !== activeTab);
+    if (next) setRightTab(next.path);
+  }, [layoutMode, rightTab, openTabs, activeTab]);
+
+  // If the right column's tab was closed, drop the pin so it falls back
+  // to mirroring the left.
+  useEffect(() => {
+    if (rightTab && !openTabs.some((t) => t.path === rightTab)) {
+      setRightTab(null);
+    }
+  }, [openTabs, rightTab]);
+
+  const effectiveRight = rightTab ?? activeTab;
 
   return (
     <section style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -1044,15 +1360,116 @@ function EditorArea({
         onSelect={onSelectTab}
         onClose={onCloseTab}
         layoutMode={layoutMode}
-        onLayoutMode={setLayoutMode}
+        onLayoutMode={(m) => {
+          setLayoutMode(m);
+          if (m === "single") setRightTab(null);
+        }}
       />
       <Breadcrumb activeTab={activeTab} />
+      {layoutMode === "split" ? (
+        <div style={{ flex: 1, display: "flex", minHeight: 0, background: "var(--white)" }}>
+          <SplitPane
+            investigationId={investigationId}
+            path={activeTab}
+            placeholder="Pick a tab → it opens here."
+          />
+          <div
+            style={{ width: 1, background: "var(--paper-3)", flexShrink: 0 }}
+            aria-hidden
+          />
+          <SplitPane
+            investigationId={investigationId}
+            path={effectiveRight}
+            placeholder="Pick from the dropdown above."
+            header={
+              <RightPaneTabPicker
+                openTabs={openTabs}
+                current={effectiveRight}
+                onPick={setRightTab}
+              />
+            }
+          />
+        </div>
+      ) : (
+        <div
+          className="scrollable"
+          style={{ flex: 1, overflow: "auto", padding: 20, background: "var(--white)" }}
+        >
+          {activeTab ? (
+            <FileView investigationId={investigationId} path={activeTab} />
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--text-paper-d)",
+              }}
+            >
+              Open a file from the sidebar to view it here.
+            </div>
+          )}
+        </div>
+      )}
+
+      <BottomPanel
+        tab={bottomTab}
+        onTab={setBottomTab}
+        investigationId={investigationId}
+      />
+      <StatusBar activeTab={activeTab} investigationId={investigationId} />
+    </section>
+  );
+}
+
+function SplitPane({
+  investigationId,
+  path,
+  placeholder,
+  header,
+}: {
+  investigationId: string;
+  path: string | null;
+  placeholder: string;
+  header?: React.ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        flex: 1,
+        minWidth: 0,
+        display: "flex",
+        flexDirection: "column",
+      }}
+    >
+      {header && (
+        <div
+          style={{
+            padding: "4px 12px",
+            borderBottom: "1px solid var(--paper-3)",
+            background: "var(--paper)",
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            fontSize: 11,
+            color: "var(--text-paper-d)",
+            minHeight: 28,
+          }}
+        >
+          {header}
+        </div>
+      )}
       <div
         className="scrollable"
-        style={{ flex: 1, overflow: "auto", padding: 20, background: "var(--white)" }}
+        style={{
+          flex: 1,
+          overflow: "auto",
+          padding: 20,
+        }}
       >
-        {activeTab ? (
-          <FileView investigationId={investigationId} path={activeTab} />
+        {path ? (
+          <FileView investigationId={investigationId} path={path} />
         ) : (
           <div
             style={{
@@ -1060,17 +1477,54 @@ function EditorArea({
               alignItems: "center",
               justifyContent: "center",
               height: "100%",
-              color: "var(--text-paper-d)",
+              color: "var(--text-paper-d2)",
+              fontSize: 12,
             }}
           >
-            Open a file from the sidebar to view it here.
+            {placeholder}
           </div>
         )}
       </div>
+    </div>
+  );
+}
 
-      <BottomPanel tab={bottomTab} onTab={setBottomTab} />
-      <StatusBar activeTab={activeTab} />
-    </section>
+function RightPaneTabPicker({
+  openTabs,
+  current,
+  onPick,
+}: {
+  openTabs: OpenTab[];
+  current: string | null;
+  onPick: (p: string) => void;
+}) {
+  return (
+    <>
+      <Icon name="split" size={11} color="var(--accent)" />
+      <span style={{ fontFamily: "var(--font-mono)" }}>right pane:</span>
+      <select
+        value={current ?? ""}
+        onChange={(e) => {
+          if (e.target.value) onPick(e.target.value);
+        }}
+        style={{
+          fontSize: 11,
+          fontFamily: "var(--font-mono)",
+          padding: "2px 4px",
+          border: "1px solid var(--paper-3)",
+          borderRadius: 3,
+          background: "var(--white)",
+          color: "var(--text-paper)",
+        }}
+      >
+        {openTabs.length === 0 && <option value="">(no tabs)</option>}
+        {openTabs.map((t) => (
+          <option key={t.path} value={t.path}>
+            {basename(t.path)}
+          </option>
+        ))}
+      </select>
+    </>
   );
 }
 
@@ -1200,11 +1654,9 @@ function TabStrip({
         </button>
         <button
           type="button"
-          title="Layers"
-          onClick={() =>
-            alert("Layer manager not implemented — single layer per file in v1.")
-          }
-          style={iconBtn}
+          title="Layers (v2) — use Split view to compare files side by side"
+          disabled
+          style={{ ...iconBtn, color: "var(--text-paper-d2)", cursor: "not-allowed" }}
         >
           <Icon name="layers" size={14} />
         </button>
@@ -1239,9 +1691,11 @@ function TabStrip({
 function BottomPanel({
   tab,
   onTab,
+  investigationId,
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
   onTab: (t: "problems" | "output" | "terminal" | "agent_log" | "run_history") => void;
+  investigationId: string;
 }) {
   const tabs = [
     { key: "problems" as const, label: "Problems" },
@@ -1294,12 +1748,33 @@ function BottomPanel({
           );
         })}
       </div>
-      <div
-        className="scrollable"
-        style={{ flex: 1, overflow: "auto", padding: "8px 14px", fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--text-paper)" }}
-      >
-        <PanelBody tab={tab} />
-      </div>
+      {tab === "terminal" ? (
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            padding: "8px 14px",
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
+          <TerminalPane investigationId={investigationId} />
+        </div>
+      ) : (
+        <div
+          className="scrollable"
+          style={{
+            flex: 1,
+            overflow: "auto",
+            padding: "8px 14px",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+            color: "var(--text-paper)",
+          }}
+        >
+          <PanelBody tab={tab} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1372,13 +1847,8 @@ function PanelBody({
     );
   }
 
-  if (tab === "terminal") {
-    return (
-      <div style={{ color: "var(--text-paper-d)" }}>
-        Terminal not wired in v1 — use notebook cells to exec or ask the agent.
-      </div>
-    );
-  }
+  // 'terminal' is handled at the BottomPanel level (it needs to claim
+  // the full panel height) — see TerminalPane.
 
   if (tab === "run_history") {
     const calls = log.entries.filter(
@@ -1463,9 +1933,15 @@ function LogLine({
   );
 }
 
-function StatusBar({ activeTab }: { activeTab: string | null }) {
+function StatusBar({
+  activeTab,
+  investigationId,
+}: {
+  activeTab: string | null;
+  investigationId: string;
+}) {
   const kind = activeTab ? pickRenderer(activeTab) : null;
-  const isNotebook = kind === "notebook";
+  const isNotebook = kind === "notebook" && activeTab != null;
   return (
     <div
       style={{
@@ -1487,9 +1963,69 @@ function StatusBar({ activeTab }: { activeTab: string | null }) {
       <span>↑ 0 ↓ 0</span>
       <span style={{ flex: 1 }} />
       <span>{kind ? `lang: ${kind}` : ""}</span>
-      {isNotebook && <span>kernel py3.11 idle</span>}
+      {isNotebook && (
+        <KernelStatusPill
+          investigationId={investigationId}
+          notebookPath={activeTab}
+        />
+      )}
       <span>UTF-8</span>
       <span>default-user</span>
     </div>
+  );
+}
+
+function KernelStatusPill({
+  investigationId,
+  notebookPath,
+}: {
+  investigationId: string;
+  notebookPath: string;
+}) {
+  const [state, setState] = useState<"idle" | "restarting" | "error">("idle");
+  const restart = async () => {
+    if (state === "restarting") return;
+    setState("restarting");
+    try {
+      await api.restartKernel({ investigationId, notebookPath });
+      setState("idle");
+    } catch (e) {
+      console.error("restartKernel failed", e);
+      setState("error");
+    }
+  };
+  const label =
+    state === "restarting"
+      ? "kernel py3.12 restarting…"
+      : state === "error"
+        ? "kernel py3.12 error"
+        : "kernel py3.12 idle";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+      <span>{label}</span>
+      <button
+        type="button"
+        onClick={() => void restart()}
+        disabled={state === "restarting"}
+        title="Restart kernel"
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 3,
+          padding: "0 6px",
+          height: 18,
+          borderRadius: 3,
+          background: "transparent",
+          border: "1px solid rgba(255,255,255,0.2)",
+          color: "var(--text-dark)",
+          fontFamily: "var(--font-mono)",
+          fontSize: 10,
+          cursor: state === "restarting" ? "wait" : "pointer",
+        }}
+      >
+        <Icon name="refresh" size={10} color="var(--text-dark)" />
+        Restart
+      </button>
+    </span>
   );
 }

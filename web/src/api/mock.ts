@@ -440,7 +440,13 @@ export const mockApi: ApiClient = {
 
   async writeFile(investigationId, path, body) {
     await delay(20);
-    ensureFiles(investigationId).set(path, { text: body, bytes: body.length });
+    if (typeof body === "string") {
+      ensureFiles(investigationId).set(path, { text: body, bytes: body.length });
+    } else if (body instanceof Blob) {
+      ensureFiles(investigationId).set(path, { text: null, bytes: body.size });
+    } else {
+      ensureFiles(investigationId).set(path, { text: null, bytes: body.byteLength });
+    }
   },
 
   async *streamAgentEvents(args: SendMessageArgs) {
@@ -494,6 +500,27 @@ export const mockApi: ApiClient = {
 
   async restartKernel(_ref: NotebookRef) {
     await delay(20);
+  },
+
+  async execShell(_investigationId: string, cmd: string[]) {
+    await delay(40);
+    if (cmd.length === 0) {
+      return { exit_code: 2, stdout: "", stderr: "empty command\n" };
+    }
+    const [bin, ...args] = cmd;
+    if (bin === "echo") {
+      return { exit_code: 0, stdout: `${args.join(" ")}\n`, stderr: "" };
+    }
+    if (bin === "ls") {
+      const inv = _investigationId;
+      const paths = [...(files.get(inv)?.keys() ?? [])].sort();
+      return { exit_code: 0, stdout: paths.join("\n") + "\n", stderr: "" };
+    }
+    return {
+      exit_code: 127,
+      stdout: "",
+      stderr: `mock: ${bin}: command not found\n`,
+    };
   },
 };
 

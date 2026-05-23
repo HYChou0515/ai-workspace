@@ -22,7 +22,13 @@ export function Investigation() {
     return <ShellMessage tone="err">{files.error.message}</ShellMessage>;
   }
 
-  return <InvestigationShell investigation={inv.data} files={files.items} />;
+  return (
+    <InvestigationShell
+      investigation={inv.data}
+      files={files.items}
+      onFilesChanged={files.refresh}
+    />
+  );
 }
 
 function ShellMessage({

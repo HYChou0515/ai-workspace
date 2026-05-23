@@ -40,7 +40,9 @@ export type IconName =
   | "filter"
   | "tag"
   | "bug"
-  | "flame";
+  | "flame"
+  | "refresh"
+  | "paperclip";
 
 export function Icon({
   name,
@@ -206,6 +208,18 @@ export function Icon({
     ),
     flame: (
       <path d="M12 3 Q15 7 14 11 Q17 10 17 14 Q17 19 12 21 Q7 19 7 14 Q7 11 9 9 Q11 11 12 9 Q11 6 12 3 Z" {...sp} />
+    ),
+    refresh: (
+      <>
+        <path d="M20 8 A8 8 0 1 0 19 16" {...sp} />
+        <path d="M20 4 V8 H16" {...sp} />
+      </>
+    ),
+    paperclip: (
+      <path
+        d="M16 7 L9 14 A3 3 0 0 0 13 18 L20 11 A5 5 0 0 0 13 4 L5 12 A7 7 0 0 0 15 22 L18 19"
+        {...sp}
+      />
     ),
   };
 

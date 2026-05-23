@@ -19,6 +19,7 @@ import type {
   CellRef,
   CloseStatus,
   Conversation,
+  ExecResult,
   ExecuteCellArgs,
   FileInfo,
   Investigation,
@@ -255,6 +256,22 @@ export const realApi: ApiClient = {
       throw new HttpError(resp.status, `messages failed: ${resp.status}`);
     }
     yield* parseSseStream(resp.body) as AsyncGenerator<AgentEvent>;
+  },
+
+  async execShell(investigationId: string, cmd: string[]): Promise<ExecResult> {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(investigationId)}/exec`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cmd }),
+      },
+    );
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new HttpError(resp.status, `exec failed: ${resp.status} ${detail.slice(0, 200)}`);
+    }
+    return (await resp.json()) as ExecResult;
   },
 
   async *streamCellEvents(args: ExecuteCellArgs): AsyncGenerator<CellEvent> {
