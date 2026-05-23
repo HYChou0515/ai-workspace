@@ -1,342 +1,507 @@
-# workspace-app — Backend Plan
+# RCA 3.0 — Backend Plan
 
 Living document for backend work. Frontend has its own plan at
 [`plan-frontend.md`](./plan-frontend.md) and a different agent owns it.
 
-When backend changes touch the wire (SSE event schema, new HTTP routes,
-contract changes), update the **Cross-cutting contracts** section below
-so the frontend agent knows what changed.
+**This plan supersedes the generic workspace-app backend plan.** The
+project pivoted (per `design_handoff_rca_3.0/`) to a vertical
+**Root-Cause Analysis** app for SMT / AOI / yield engineers. The
+prior platform work (Sandbox, FileStore, AgentRunner, SSE…) all
+remains; what changes is the domain layer on top.
+
+When BE changes the wire (SSE event schema, HTTP routes, contract),
+update **§5 Cross-cutting contracts** in the same commit so the FE
+agent knows what changed.
 
 ---
 
-## 1. Done
+## 1. Platform foundation — already shipped, RCA reuses 100%
 
-Backend scaffolding from the eight `/grill-me` steps, plus the
-small-model retry path:
+These commits are kept verbatim under the RCA pivot. Nothing here
+needs to be re-done; references in the new sections cite them.
 
-| #  | Commit    | Scope                                                    |
-|----|-----------|----------------------------------------------------------|
-| 1  | `05e2186` | Bootstrap + Sandbox Protocol + MockSandbox                |
-| 2  | `9ae9921` | FileStore Protocol + SpecstarFileStore (mode 2)           |
-| 3  | `74a3960` | Workspace / AgentConfig / Conversation specstar Structs   |
-| 4  | `086e2e1` | Agent tool wrappers (T2: exec + read/write/ls/exists/del) |
-| 5  | `d06e3fb` | FastAPI app factory + SSE message endpoint                |
-| 6  | `64518d9` | LocalProcessSandbox + DockerSandbox adapters              |
-| 7  | `8c8520e` | LitellmAgentRunner (OpenAI Agents SDK + LiteLLM/Ollama)   |
-| 8  | `b4f6db0` | React SPA chat page + entrypoint + CLAUDE.md (FE handed off) |
-| +  | `261ae64` | LitellmAgentRunner retry-with-feedback for small-model errors |
+| # | Commit    | Scope (will-still-ship-as-is for RCA)                    |
+|---|-----------|----------------------------------------------------------|
+| 1 | `05e2186` | Sandbox Protocol + MockSandbox                            |
+| 2 | `9ae9921` | FileStore Protocol + SpecstarFileStore                    |
+| 3 | `74a3960` | Workspace / AgentConfig / Conversation Structs — Workspace is renamed Investigation in §3 |
+| 4 | `086e2e1` | Agent tool wrappers (exec/read/write/ls/exists/delete) — RCA adds domain tools on top |
+| 5 | `d06e3fb` | FastAPI app factory + SSE message endpoint                |
+| 6 | `64518d9` | LocalProcessSandbox + DockerSandbox                       |
+| 7 | `8c8520e` | LitellmAgentRunner — model/prompts will be RCA-tuned     |
+| 8 | `b4f6db0` | React SPA shell — will be **rebuilt** per RCA design     |
+| + | `261ae64` | LitellmAgentRunner retry-with-feedback                    |
+| + | `4737d68` | WorkspaceRegistry — renamed InvestigationRegistry         |
+| + | `796fa86` | FS ↔ Sandbox sync + Files API                            |
+| + | `48a0fa8` | Interrupt + RunCancelled                                 |
+| + | `101afe0` | Idle-kill lifecycle (RCA bumps default to 8h, §3.6)      |
+| + | `b8cab9e` | Refined SSE event variants (ToolCallParseError, MaxTurnsExceeded) |
 
-94 tests / 1 live-skipped on a cold box, 100% coverage (statement +
-branch). All `ruff check`/`ruff format`/`ty check` clean.
-
----
-
-## 2. Not done — locked-in `/grill-me` decisions still unimplemented
-
-Architectural commitments from §Q6/Q10/Q11. The MVP is not honest until
-they're in.
-
-- ~~**Q10 / c3 — Interrupt on new user message.**~~ Landed in `48a0fa8`.
-- ~~**Q10 / b1 — Idle kill after 15 min.**~~ Landed (this commit).
-- ~~**Q11 — FS ↔ Sandbox bidirectional sync.**~~ Landed in `796fa86`.
-- **Q6 / Q11 — AdapterVolumeFileStore (mode 1).** Only mode 2 ships.
-
-## 2a. Deferred sub-questions
-
-- Snapshot trigger policy beyond kill-time.
-- Big-file / binary handling (gitignore exclude list, per-file size
-  cap, blob-store overflow).
-- HTTP/2 for SSE (uvicorn `--http=h2`; matters at ≥7 tabs).
-- Richer SSE event schema — `RunCancelled`, `ToolCallParseError`,
-  `MaxTurnsExceeded`, `SandboxKilledIdle` as distinct event types.
-- `GET /workspaces/{id}/events?since=<msg_id>` reconnection endpoint.
+161 tests / 100% coverage / ruff & ty clean at the time of pivot.
 
 ---
 
-## 3. Open backend work — design + ordering
+## 2. Pivot scope at a glance
 
-### 3.1  WorkspaceRegistry — sticky per-workspace state  *(prerequisite for §3.2 + §3.3 + §3.4)*
+What needs to change at the BE level to deliver `design_handoff_rca_3.0`:
 
-**Why first:** interrupt, idle-kill, and FS sync all need a single
-source of truth per workspace: which sandbox handle is alive, which
-agent turn is in flight, when was last activity. Today that state is
-scattered (handle is per-request inside `AgentToolContext`; no task
-registry).
+- **Schema rename**: `Workspace` → `Investigation`, with new RCA fields
+  (severity, line, product, topics, status, owner, description).
+- **New domain resource**: `ReportVersion` for versioned 8D reports
+  (`v1 · superseded`, `v2 · superseded`, `v3 · current` semantics).
+- **Template seeding**: creating an investigation copies a starter set
+  of files (just `brief.md` for v1 — design's 6-tab snapshot is the
+  *mid-investigation* state, not the initial one).
+- **Notebook execution stack**: VSCode-style ipynb viewer drives a
+  whole new sub-stack — `Sandbox.expose_port` Protocol extension,
+  `KernelService`, per-cell SSE, cell event types, `PUT /files/{path}`,
+  new default sandbox image with `ipykernel + numpy/pandas/matplotlib/scipy`.
+- **Domain agent tools** (mock-only for v1): `spc_read`, `defects_aoi`,
+  `correlate_find`, `pareto_build`, `fishbone_draft`, `fivewhy_draft`,
+  `report_generate` — alongside the existing generic tools.
+- **Idle threshold bump**: investigations stay warm 8 hours by default
+  (was 15 min for workspace-app).
 
-**Shape**
+What we **don't** do in v1:
+- Real data integrations (MES / SPC / AOI APIs) — all mock.
+- Multi-tenant or per-org auth — `default-user` continues.
+- Fishbone `.canvas` editor — read-only display only.
+- 5-Why structured editor — `.md` for v1, structured later.
+- `run_cell` agent tool — deferred to v1.5.
+- `SandboxKilledIdle` event surface — same defer as before.
+- §3.7 Reconnect endpoint — same defer.
+
+---
+
+## 3. Schema migration: Workspace → Investigation
+
+Replace `src/workspace_app/resources/workspace.py` with
+`investigation.py` and update `register_all`. We're not preserving
+backwards compat with any old data because specstar is in-memory
+during dev; field-rename is the migration.
 
 ```python
-# src/workspace_app/api/registry.py
-@dataclass
-class WorkspaceSession:
-    workspace_id: str
-    handle: SandboxHandle | None = None        # lazy
-    current_turn: asyncio.Task | None = None   # in-flight agent run
-    last_active: datetime = field(default_factory=_now)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+from enum import StrEnum
+from msgspec import Struct, field
 
-class WorkspaceRegistry:
-    def __init__(self, sandbox: Sandbox, default_spec: SandboxSpec): ...
-    async def session(self, workspace_id: str) -> WorkspaceSession: ...
-    async def ensure_handle(self, ws: WorkspaceSession) -> SandboxHandle: ...
-    async def kill_idle(self, threshold: timedelta) -> list[str]: ...
-    async def close_all(self) -> None: ...
+class Severity(StrEnum):
+    P0 = "P0"   # critical
+    P1 = "P1"   # high
+    P2 = "P2"
+    P3 = "P3"
+    P4 = "P4"   # informational
+
+class Status(StrEnum):
+    TRIAGING = "triaging"          # default state on create
+    AWAITING_REVIEW = "awaiting_review"
+    RESOLVED = "resolved"
+    ABANDONED = "abandoned"
+    # draft + closed-manual handled by status transitions, not stored separately
+
+class Investigation(Struct):
+    title: str                                    # required
+    description: str = ""                         # multi-line, replaces design's "Initial brief"
+    topics: list[str] = field(default_factory=list)  # tag list — left-sidebar TOPICS section groups by these
+    severity: Severity = Severity.P2
+    line: str = ""                                # production line ("SMT 1")
+    product: str = ""                             # product code
+    owner: str = "default-user"                   # auto-set; future SSO will replace
+    status: Status = Status.TRIAGING
+    members: list[str] = field(default_factory=list)
+    attached_agent_config_id: str | None = None
+    # lot / sparkline / agent-running flag — derived, not stored
 ```
 
-**Tests:** session created on first lookup; same workspace returns same
-session; `ensure_handle` calls `sandbox.create` exactly once across
-concurrent callers (lock); `kill_idle` only kills past-threshold;
-`close_all` kills every alive handle.
+**Removed** (vs design): `lot`, `draft`, separate `pinned` flag (use a
+client-side preference or specstar metadata).
 
----
-
-### 3.2  Interrupt on new message *(Q10 / c3)*
-
-**Approach:** POST handler acquires `session.lock`, cancels any existing
-`session.current_turn`, awaits unwind, ensures a `RunCancelled` event
-is delivered to the cancelled stream's subscriber, starts new turn.
-
-`LitellmAgentRunner.run` becomes cancellation-aware: catch
-`asyncio.CancelledError`, attempt to abort the underlying `Runner`
-streaming context, yield `RunCancelled`, re-raise.
+`AgentConfig` and `Conversation` stay as-is; the RCA-specific
+prompt + tool subset lives in `AgentConfig.system_prompt` +
+`AgentConfig.allowed_tools`.
 
 **Files:**
-- `api/registry.py` — turn registry on §3.1
-- `api/app.py` — POST handler grows cancel→start dance
-- `api/runner.py` — Protocol unchanged; impl handles cancellation
-- `api/events.py` — add `RunCancelled` variant
+- `src/workspace_app/resources/investigation.py` — replaces `workspace.py`
+- `src/workspace_app/resources/__init__.py` — `register_all` updates
+- All references to `Workspace` (`api/app.py`, `tests/`, etc.) — global
+  rename
+- `api/registry.py` — `WorkspaceRegistry` → `InvestigationRegistry`,
+  `WorkspaceSession` → `InvestigationSession`
+- HTTP routes — `/workspaces/{id}/…` → `/investigations/{id}/…`;
+  specstar auto-route `/workspace` → `/investigation`
 
-**Tests:**
-- Two concurrent POSTs same workspace: first stream sees `RunCancelled`
-  then closes; second completes normally.
-- Concurrent POSTs to *different* workspaces don't interfere.
-- POST with no in-flight turn skips the cancel path.
-
-**Frontend dependency:** `RunCancelled` event must appear in
-`api/events.py` and the table in §4 below; FE agent will mirror it in
-`web/src/events.ts` and add a renderer (FE §F4).
+**Tests:** all existing tests work after a rename; add coverage for the
+new `Severity`/`Status` enums and topic-list semantics.
 
 ---
 
-### 3.3  Idle timeout 15 min *(Q10 / b1)*
+## 4. New domain resource: `ReportVersion`
 
-**Approach:** Background asyncio task started in `create_app`'s
-`lifespan`. Wakes every 60s, calls
-`registry.kill_idle(threshold=15min)`. Threshold configurable per
-`AgentConfig.idle_timeout_seconds` (field already exists, default 900).
+The design's 8D report has versioned semantics (exactly one `current`
+per investigation, prior versions become `superseded`, optional
+`Generate new version` action). specstar's auto version-history is
+*per-resource-update*, not the "promote-to-current" UX we want, so
+ReportVersion is a separate resource that tracks the supersession
+manually.
 
-Each completed turn bumps `last_active`; lifespan kills survivors on
-shutdown via `close_all`.
+```python
+class ReportVersion(Struct):
+    investigation_id: str
+    version_number: int            # 1, 2, 3...
+    is_current: bool               # exactly one True per investigation_id
+    summary: str                   # "What changed in v3"
+    body_path: str                 # e.g. "/report.v3.md" — actual content in FileStore
+    generated_by: str              # "agent + Alice"
+    generated_at: datetime
+```
+
+**Why path-to-FileStore instead of inline content:**
+keeping report markdown in FileStore lets the editor render it with
+the same `.md` viewer as `brief.md`, and the agent's `write_file`
+tool keeps working unchanged. The `ReportVersion` resource is just
+the version metadata + pointer.
+
+**Endpoints:**
+- `GET /investigations/{id}/reports` → list versions (sorted desc)
+- `POST /investigations/{id}/reports/generate` → create new v(N+1)
+  - body: `{ summary: str, body: str }` (body is the markdown that
+    becomes `/report.v{N+1}.md` in FileStore)
+  - server flips the previous `is_current` to False, creates the new
+    one with `is_current=True`
+- `GET /investigations/{id}/reports/{v}` → metadata + body bytes via
+  the body_path
+- (No DELETE for v1 — supersession is the deletion model.)
 
 **Files:**
-- `api/registry.py` — `kill_idle`
-- `api/app.py` — lifespan wires background task; `idle_timeout` kwarg
-  on `create_app`
-
-**Tests:** threshold 0.2s → handle gone; active session within window
-stays; `close_all` on shutdown kills survivors.
-
-**Footgun:** background `pip install` left in sandbox dies on
-idle-kill. Document; out of scope for v1.
-
-**Frontend dependency:** emit `SandboxKilledIdle` event into any open
-stream subscribed to that workspace (so the UI can show "sandbox went
-to sleep; next command will cold-start"). FE §F5 mirrors and renders.
+- `src/workspace_app/resources/report_version.py`
+- `src/workspace_app/api/reports.py` (new sub-router) — or fold into app.py
+- Tests under `tests/api/test_reports.py`
 
 ---
 
-### 3.4  FS ↔ Sandbox bidirectional sync *(Q11)*
+## 5. Template seeding on investigation create
 
-The single highest-impact gap. Three operations:
+Per Q11-final: design's 6-tab snapshot is mid-investigation. Initial
+template is **minimal** — just enough to give the user something to
+edit.
 
-1. **On `ensure_handle` (post-create) → full restore.** Iterate every
-   path in `FileStore.ls(ws)`, `sandbox.upload(handle, data, path)`.
-   After restore, take a baseline manifest (path → sha256).
+**v1 template** (`src/workspace_app/rca/templates/default/`):
+- `brief.md` — Investigation Brief skeleton with `{title}` /
+  `{severity}` / `{line}` / `{product}` / `{description}` substituted
+  in at create time.
 
-2. **Before each `exec` tool call → flush dirty.** `FileStore` tracks
-   "paths written since last sync" per workspace. On flush: upload
-   each, clear the dirty set, update baseline.
+That's it for the absolute minimum. Add `report.md` (empty D1–D8
+skeleton) once `ReportVersion.generate` is wired so the first version
+has somewhere to go.
 
-3. **Before `kill` (and idle kill from §3.3) → reverse sync.** Walk
-   sandbox `/workspace`, sha256 each file, diff against baseline. For
-   each changed/new path NOT in ignore list, `sandbox.download` →
-   `FileStore.write`. **Deleted-in-sandbox paths are not propagated
-   for v1** (safer default).
+**Loader:**
+```python
+# src/workspace_app/rca/templates/__init__.py
+def seed_investigation(filestore: FileStore, inv_id: str, inv: Investigation) -> None:
+    """Copy the default template into the FileStore, substituting fields."""
+    ...
+```
 
-**Default ignore list** (configurable per workspace via `AgentConfig`):
-`.venv/`, `node_modules/`, `__pycache__/`, `.git/objects/`, `*.pyc`,
-`*.pyo`, `.pytest_cache/`, `.ruff_cache/`, files >10 MB.
-
-**Walk-the-FS API:** Sandbox Protocol gains `walk(handle, root) ->
-list[(path, size, mtime)]`. Implement for Mock/Local/Docker.
-
-**Where:** new `src/workspace_app/sync/` package. `SandboxSync(filestore,
-sandbox)` with `restore`/`flush`/`reverse`. Driven from
-`WorkspaceRegistry` on create/idle/kill, and from `exec_impl` in
-`agent/tools.py` (flush-before-exec).
+Called from the `POST /investigation` route immediately after specstar
+creates the resource. specstar's auto-POST handler doesn't know about
+this; we add a custom route that wraps it (or use specstar's
+`create_action` hook if it has one).
 
 **Files:**
-- `sandbox/protocol.py` — add `walk` (Mock + Local + Docker impls)
-- `filestore/protocol.py` — `dirty_paths(ws)`, `clear_dirty(ws)`
-- `filestore/specstar_impl.py` — dirty tracking
-- `sync/` (new) — `SandboxSync`, ignore-list, hash helpers
-- `agent/tools.py` — `exec_impl` calls `ctx.sync.flush(...)` first
-- `api/registry.py` — calls `sync.restore` after create, `sync.reverse`
-  before kill
-
-**Tests:**
-- `write_file` tool then `exec(["cat", path])` sees the content.
-- Sandbox `exec(["sh", "-c", "echo z > /workspace/x"])` → kill →
-  FileStore now has `/x` with `z`.
-- Reverse-sync skips ignored paths and >10 MB files.
-- Restore is idempotent.
-- Concurrent flushes serialized by session lock.
-
-The snapshot-trigger sub-question (§2a) falls out: reverse-sync runs
-on idle-kill. Adding `POST /workspaces/{id}/snapshot` later is trivial.
+- `src/workspace_app/rca/templates/default/brief.md`
+- `src/workspace_app/rca/templates/__init__.py` — `seed_investigation()`
+- `src/workspace_app/api/app.py` — wire seed call into create path
+- Tests cover field substitution + that brief.md lands in FileStore
 
 ---
 
-### 3.5  AdapterVolumeFileStore (mode 1) *(Q6 / Q11)*
+## 6. Investigation lifecycle — extended idle + manual close
 
-For workspaces too large to round-trip through specstar.
+Per Q10: default `idle_timeout` becomes **8 hours** (was 15 min).
+Manual close button = new endpoint that sets `Status.RESOLVED` or
+`Status.ABANDONED` and tears down the sandbox.
 
-**Approach:** files live at `root_dir/{workspace_id}/...` on host.
-`SandboxSpec` gains `volume_mounts: dict[str, str]`;
-`AdapterVolumeFileStore.host_path(workspace_id) -> Path` lets the
-registry bind-mount at `/workspace`. In mode 1 the sandbox IS the
-FileStore; `SandboxSync.flush`/`reverse_sync` become no-ops.
+**Changes:**
+- `create_app(idle_timeout=timedelta(hours=8), …)` — flip the default
+- New: `POST /investigations/{id}/close` body `{status:
+  "resolved"|"abandoned"}` — updates status, releases sandbox via
+  `registry.close_session(id)`
+- `InvestigationRegistry` grows a `close_session(id)` method (kill
+  handle + reverse-sync + remove from registry)
 
-Per-mode policy from grill-me Q11:
+**Files:** `api/registry.py`, `api/app.py`, tests for close endpoint.
 
-| Mode                       | Lifecycle | Sync ops                       |
-|----------------------------|-----------|--------------------------------|
-| 2 (SpecstarFileStore)      | a2+       | restore/flush/reverse all real |
-| 1 (AdapterVolumeFileStore) | a3        | all no-op                      |
+---
+
+## 7. Notebook execution stack (from the prior ipynb grill-me)
+
+Notebook execution is the largest single chunk of work. Sub-sections
+below were sealed in Q1–Q8 of the ipynb grill-me; recap with RCA
+context.
+
+### 7.1 `Sandbox.expose_port`
+
+Add a Protocol method:
+
+```python
+class Sandbox(Protocol):
+    ...
+    async def expose_port(
+        self, handle: SandboxHandle, container_port: int
+    ) -> tuple[str, int]:
+        """Make a port inside the sandbox reachable from the backend.
+        Returns (host, host_port) the backend can connect to."""
+```
+
+Implementations:
+- **MockSandbox**: track calls in a dict; return `("127.0.0.1", container_port)`.
+- **LocalProcessSandbox**: noop (sandbox is host); return `("127.0.0.1", container_port)`.
+- **DockerSandbox**: re-create the container with `-p 0:container_port` if
+  not already, return `(host_ip, mapped_port)`. *Tricky*: Docker
+  doesn't let you publish a new port on a running container; we either
+  publish a range up-front at create time, or implement port exposure
+  via `docker start --publish` semantics which means tear-down/restart.
+  v1 candidate: at create time, pre-publish a range (e.g., the 5 ZMQ
+  ports for a single kernel; if the user wants multiple kernels we
+  extend).
+
+**Files:** `sandbox/protocol.py`, `sandbox/mock.py`, `sandbox/local_process.py`, `sandbox/docker.py`; tests for each.
+
+### 7.2 `KernelService` — per-notebook kernel manager
+
+New module `src/workspace_app/kernels/`:
+
+```python
+class KernelHandle:
+    notebook_path: str
+    client: AsyncKernelClient   # from jupyter_client
+    process_handle: ...          # how we spawned ipykernel inside sandbox
+    last_cell_run: datetime
+    connection_info: dict        # ports + key
+
+class KernelService:
+    async def get_or_start(self, session: InvestigationSession,
+                           notebook_path: str) -> KernelHandle: ...
+    async def interrupt(self, h: KernelHandle) -> None: ...
+    async def restart(self, h: KernelHandle) -> KernelHandle: ...
+    async def execute_cell(self, h: KernelHandle, code: str
+                           ) -> AsyncIterator[CellEvent]: ...
+    async def shutdown(self, h: KernelHandle) -> None: ...
+```
+
+`InvestigationSession` gains `kernels: dict[notebook_path, KernelHandle]`.
+Idle-kill walks each session's kernels and reaps individually idle
+ones (per-kernel 30 min after last cell run, while the investigation
+itself follows the 8h timer).
+
+**Spawning a long-lived kernel** in the sandbox is an open
+implementation question — the current `Sandbox.exec` is fire-and-wait.
+v1 candidate: a small `kernel_host.py` shipped in the sandbox image
+that the backend invokes via `sandbox.exec(...)`. It double-forks, the
+parent prints the connection-info path to stdout and exits, the child
+runs `ipykernel_launcher`. Backend `sandbox.download(connection_info)`
+to read the ports.
+
+**Files:** `src/workspace_app/kernels/{service.py,host.py}`, tests.
+
+### 7.3 Cell execute SSE endpoint
+
+```
+POST /investigations/{id}/notebooks/{path}/cells/{idx}/execute
+  body: { code: str }
+  → text/event-stream
+```
+
+Event types (in `api/events.py`, kept **separate** from `AgentEvent`):
+
+```python
+@dataclass(frozen=True)
+class CellStream:
+    stream: Literal["stdout", "stderr"]
+    text: str
+    type: Literal["cell_stream"] = "cell_stream"
+
+@dataclass(frozen=True)
+class CellDisplayData:
+    data: dict[str, str]   # {"text/plain": ..., "image/png": "<base64>", "text/html": ...}
+    type: Literal["cell_display_data"] = "cell_display_data"
+
+@dataclass(frozen=True)
+class CellError:
+    ename: str
+    evalue: str
+    traceback: list[str]
+    type: Literal["cell_error"] = "cell_error"
+
+@dataclass(frozen=True)
+class CellDone:
+    execution_count: int
+    type: Literal["cell_done"] = "cell_done"
+
+CellEvent = CellStream | CellDisplayData | CellError | CellDone
+```
+
+Plus restart endpoint:
+```
+POST /investigations/{id}/notebooks/{path}/kernel/restart  → 204
+DELETE /investigations/{id}/notebooks/{path}/cells/{idx}/execute → 204 (interrupt)
+```
+
+### 7.4 `PUT /workspaces/{id}/files/{path:path}`
+
+Promoted from "optional" in the prior plan to **required**. FE
+auto-saves notebooks after `cell_done` by PUT'ing the updated JSON.
+
+```python
+@app.put("/investigations/{id}/files/{path:path}")
+async def write_file(id: str, path: str, request: Request):
+    body = await request.body()
+    await filestore.write(id, "/" + path.lstrip("/"), body)
+    return Response(status_code=204)
+```
+
+### 7.5 New default sandbox image
+
+Add `docker/Dockerfile.workspace`:
+
+```dockerfile
+FROM python:3.12-slim
+RUN pip install --no-cache-dir \
+    ipykernel jupyter_client \
+    numpy pandas matplotlib scipy
+WORKDIR /workspace
+```
+
+Build target: `workspace-app/sandbox:py312-ds`. Update
+`AgentConfig.sandbox_image` default. Add this build to
+`docker-compose.yml` as a sibling service (one-off build, not a
+running container).
+
+Backend `pyproject.toml` gains `jupyter_client` as a runtime
+dependency (for talking to the kernel from outside the sandbox).
+`ipykernel` also goes in the backend env so LocalProcessSandbox-based
+testing doesn't need a separate setup.
+
+---
+
+## 8. Agent surface — generic + RCA-domain tools
+
+Existing generic tools stay (`exec`, `read_file`, `write_file`, `ls`,
+`exists`, `delete_file`). New domain tools are added but **all mock**:
+
+| Tool | Returns |
+|---|---|
+| `spc_read(probe: str, window: str)` | A canned DataFrame-like dict for the probe (e.g., "reflow.zone3" returns the zone-3 drift fixture from the design) |
+| `defects_aoi(machine: str, lot: str)` | Defect-list fixture |
+| `correlate_find(target, window, candidates, min_r)` | Hard-coded correlation results pointing at the design's narrative (zone-3 → void rate) |
+| `pareto_build(window, group_by)` | Pareto bins fixture |
+| `fishbone_draft(effect)` | 6M skeleton as JSON |
+| `fivewhy_draft(observation)` | 5-Why chain skeleton |
+| `report_generate(investigation_id)` | Full 8D markdown — also kicks off `ReportVersion.generate` server-side |
+
+All implemented in `src/workspace_app/rca/tools/` as `@function_tool`
+async functions; data comes from `src/workspace_app/rca/fixtures/*.json`.
+
+Per Q9 clarification: there is **no** `rca` Python package inside
+notebook cells. Cells use stdlib + numpy/pandas/matplotlib directly,
+with inline mock data or fixture loading from FileStore. The agent
+tools above run *in the backend process*, not inside notebooks.
 
 **Files:**
-- `filestore/adapter_volume.py` (new)
-- `sandbox/protocol.py` — `SandboxSpec.volume_mounts` field
-- `sandbox/docker.py` + `local_process.py` — wire mounts
-- `sync/` — `NoOpSandboxSync` for mode 1
-
-**Tests:** write via FileStore → read via Sandbox `cat`; both see same
-bytes without explicit sync. Killing sandbox preserves volume.
+- `src/workspace_app/rca/tools/{spc,defects,correlate,pareto,fishbone,fivewhy,report}.py`
+- `src/workspace_app/rca/fixtures/*.json`
+- Tests for each tool's contract (input/output shape) + that fixtures load
 
 ---
 
-### 3.6  Refined SSE event schema  *(coordinated with FE §F4 + §F5)*
-
-After §3.2 + §3.3 + §3.4 add new failure modes, generic `RunError` is
-under-informative. Split:
-
-- `RunCancelled` — user interrupted (§3.2)
-- `ToolCallParseError(call_id, raw, hint)` — model produced
-  un-parseable args
-- `MaxTurnsExceeded(turns)` — agent didn't converge
-- `SandboxKilledIdle` — sandbox is gone, next exec cold-starts
-- `RunError` — catch-all (kept)
-
-**Files:** `api/events.py` + emit sites (`api/app.py`,
-`api/litellm_runner.py`). Update §4 below in the same commit.
-
----
-
-### 3.7  Reconnect endpoint *(coordinated with FE §F6)*
-
-`GET /workspaces/{id}/events?since=<msg_id>` — replay tail of the
-conversation when SSE stream drops mid-run. Reads from Conversation in
-specstar (append-only).
-
-**Files:** `api/app.py`. Tests with `TestClient` + simulated disconnect.
-
-(HTTP/2 — out of scope; document in §2a only.)
-
----
-
-### 3.8  Files API for FE file browser *(NEW — driven by FE §F3)*
-
-Frontend needs to list and read workspace files. Add:
-
-- `GET /workspaces/{id}/files?prefix=<p>` → `[{path, size}]`. Reads via
-  `FileStore.ls` + a size lookup (add `FileStore.stat(ws, path) ->
-  FileStat` to the Protocol).
-- `GET /workspaces/{id}/files/{path:path}` → file bytes (or text if
-  small/decodable). Reads via `FileStore.read`. Returns 404 on
-  `FileNotFound`.
-- `PUT /workspaces/{id}/files/{path:path}` (optional, behind a flag) —
-  let the UI edit files. Writes via `FileStore.write`.
-
-**Files:**
-- `filestore/protocol.py` — `stat(ws, path)`
-- `filestore/specstar_impl.py` — impl
-- `api/app.py` — three new routes
-
-**Tests:** list reflects writes; read missing → 404; read returns
-exact bytes; concurrent writes don't corrupt.
-
----
-
-## 4. Cross-cutting contracts (FE/BE sync surface)
-
-Anytime BE changes one of these, the FE agent must update
-`web/src/events.ts` (for events) or its `fetch` paths (for routes).
-**Update this table in the same commit** that changes the wire.
-
-### SSE events (`api/events.py` ↔ `web/src/events.ts`)
-
-| Variant | Status | Notes |
-|---|---|---|
-| `MessageDelta { text }` | ✅ shipped | |
-| `ToolStart { call_id, name, args }` | ✅ shipped | |
-| `ToolEnd { call_id, output }` | ✅ shipped | |
-| `RunDone` | ✅ shipped | terminal |
-| `RunError { message }` | ✅ shipped | becomes catch-all once §3.6 lands |
-| `RunCancelled` | ✅ shipped | terminal — emitted on DELETE or second POST |
-| `ToolCallParseError { hint, call_id?, raw? }` | ✅ shipped | non-terminal; retry follows with the hint as feedback to the model |
-| `MaxTurnsExceeded { turns }` | ✅ shipped | terminal — agent burned its turn budget |
-| `SandboxKilledIdle` | ⏸ deferred | needs registry refactor (keep session entry after kill) — defer until UX requests it |
-
-### HTTP routes consumed by SPA
+## 9. API routes consumed by SPA
 
 | Route | Purpose | Status |
 |---|---|---|
-| `POST /workspaces/{id}/messages` | start an agent turn, returns SSE | ✅ |
-| `GET /workspace` (specstar auto) | list workspaces | ✅ |
-| `POST /workspace` (specstar auto) | create workspace | ✅ |
-| `GET /conversation` (specstar auto) | list conversations | ✅ |
-| `GET /conversation/{id}` (specstar auto) | get one conversation | ✅ |
-| `GET /workspaces/{id}/files` | list files in workspace | ✅ shipped |
-| `GET /workspaces/{id}/files/{path:path}` | read file | ✅ shipped |
-| `DELETE /workspaces/{id}/messages/current` | cancel in-flight turn | ✅ shipped |
-| `GET /workspaces/{id}/events?since=<id>` | reconnect / catch up | ⏳ §3.7 |
+| `GET /investigation` (specstar auto) | list investigations | needs schema rename ⏳ |
+| `POST /investigation` (custom-wrapped) | create + seed template + bump status to triaging | ⏳ §3, §5 |
+| `GET /investigation/{id}` | get one | needs rename ⏳ |
+| `PATCH /investigation/{id}` (specstar auto) | update fields | needs rename ⏳ |
+| `POST /investigations/{id}/messages` | start an agent turn → SSE | needs rename ⏳ |
+| `DELETE /investigations/{id}/messages/current` | interrupt | needs rename ⏳ |
+| `POST /investigations/{id}/close` | manual close, set status, tear sandbox | ⏳ §6 |
+| `GET /investigations/{id}/files[?prefix=]` | list files | needs rename ⏳ |
+| `GET /investigations/{id}/files/{path:path}` | read file | needs rename ⏳ |
+| `PUT /investigations/{id}/files/{path:path}` | write file (FE save notebooks here) | ⏳ §7.4 |
+| `POST /investigations/{id}/notebooks/{path}/cells/{idx}/execute` | run cell → SSE | ⏳ §7.3 |
+| `DELETE /investigations/{id}/notebooks/{path}/cells/{idx}/execute` | interrupt cell | ⏳ §7.3 |
+| `POST /investigations/{id}/notebooks/{path}/kernel/restart` | restart kernel | ⏳ §7.3 |
+| `GET /investigations/{id}/reports` | list report versions | ⏳ §4 |
+| `POST /investigations/{id}/reports/generate` | new version | ⏳ §4 |
+| `GET /investigations/{id}/reports/{v}` | one version | ⏳ §4 |
 
 ---
 
-## 5. Principles
+## 10. Cross-cutting contracts (FE/BE sync surface)
+
+Anytime BE changes one of these, the FE agent must mirror in
+`web/src/events.ts` (events) or update `fetch` paths (routes). Update
+this section in the same commit that changes the wire.
+
+### SSE events
+
+Two **separate** unions — `AgentEvent` (existing) and `CellEvent` (new).
+
+`AgentEvent` from prior pivot:
+- `MessageDelta`, `ToolStart`, `ToolEnd`, `RunDone`, `RunError`
+- `RunCancelled`, `ToolCallParseError`, `MaxTurnsExceeded`
+- `SandboxKilledIdle` — still deferred
+
+`CellEvent` for notebook execution (§7.3):
+- `CellStream { stream, text }`
+- `CellDisplayData { data: mime → string }`
+- `CellError { ename, evalue, traceback }`
+- `CellDone { execution_count }` (terminal)
+
+### Brand assets
+
+FE will import SVGs from `design_handoff_rca_3.0/assets/`. Backend
+serves them as static if FE needs them via the same host:
+- `rca-mark.svg`, `rca-mark-light.svg`, `rca-logo-horizontal.svg`, `favicon.ico`
+
+Probably cleanest: copy to `web/public/` at FE build time.
+
+---
+
+## 11. Principles
 
 - **Protocol-first.** Adding a method to `Sandbox`/`FileStore`/
-  `AgentRunner` means updating *all* impls (Mock + Local + Docker;
-  Specstar + future Volume) and writing tests for each. Don't ship a
-  half-implemented abstraction.
-- **Bias to in-process state for v1.** WorkspaceRegistry, dirty-path
-  trackers, idle timers — all in-memory.
-- **Tests first via `/tdd`.** Red→green vertical-slice discipline.
+  `KernelService` means updating all impls (Mock + Local + Docker)
+  and writing tests for each.
+- **Bias to in-process state for v1.** Registry, dirty-path trackers,
+  kernel handles — all in-memory.
+- **Mock data lives in `rca/fixtures/`, not inlined in tool code.**
+  Easier to swap to real adapters later.
+- **Tests first via `/tdd`.** Red→green vertical-slice.
 - **Honesty over scope creep.** Split + update this doc rather than
   letting items sprawl.
 
 ---
 
-## 6. Order
+## 12. Order of work
 
-1. §3.1 WorkspaceRegistry — opens 3.2 + 3.3 + 3.4.
-2. §3.4 FS↔Sandbox sync — biggest correctness gap; also makes 3.3
-   safe (idle kill won't lose in-flight work).
-3. §3.2 Interrupt — cheap on top of 3.1.
-4. §3.3 Idle kill — cheap on top of 3.1 + 3.4.
-5. §3.6 SSE event refinement — small, motivated by 3.2/3.3/3.4.
-6. §3.8 Files API — unblocks FE §F3 (file browser); can land in
-   parallel with §3.2-§3.6, no dependency on registry.
-7. §3.7 Reconnect endpoint.
-8. §3.5 AdapterVolumeFileStore — only when a real workspace size
-   demands it.
+1. **Schema rename** (§3) — Workspace → Investigation, fields,
+   registry/route renames. Cleanup before any new work goes in.
+2. **Template seeding** (§5) — `brief.md` skeleton + create-flow wiring.
+3. **Idle-bump + manual close** (§6) — small, lands before kernel work
+   adds to the lifecycle complexity.
+4. **`PUT /files/{path}`** (§7.4) — small, unblocks FE notebook save.
+5. **Notebook execution stack** (§7.1 → §7.5) — biggest chunk:
+   - 7.5 sandbox image first (Dockerfile + build target)
+   - 7.1 Sandbox.expose_port (Mock + Local; Docker can come right after)
+   - 7.2 KernelService (start/shutdown/execute_cell + tests)
+   - 7.3 Cell SSE endpoint + CellEvent types
+6. **Domain agent tools** (§8) — mock data + tool wrappers + tests.
+7. **ReportVersion** (§4) — generate / list / supersede semantics.
+
+Lower priority / deferred to v1.5:
+- `run_cell` agent tool (Q6).
+- `SandboxKilledIdle` (still needs registry refactor).
+- Reconnect endpoint (`GET /investigations/{id}/events?since=`).
+- AdapterVolumeFileStore (still nobody asked).
+- 5-Why structured editor backend support.
+- Fishbone `.canvas` schema + editor backend support.
