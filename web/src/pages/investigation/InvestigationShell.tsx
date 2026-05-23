@@ -1356,7 +1356,6 @@ function GroupPane({
   files: FileInfo[];
 }) {
   const [edge, setEdge] = useState<Edge | null>(null);
-  const active = groups.isSplit && group.id === groups.activeGroupId;
   const activePath = group.activePath;
 
   const hasPayload = (e: React.DragEvent) =>
@@ -1411,8 +1410,6 @@ function GroupPane({
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        outline: active ? "2px solid var(--accent)" : "none",
-        outlineOffset: -2,
       }}
     >
       <GroupTabStrip group={group} groups={groups} />
@@ -1727,6 +1724,9 @@ function DirBrowser({
  * carry their group id so a drag onto another group moves/copies. */
 function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }) {
   const active = group.activePath;
+  // In a split, only the focused group's active tab gets full emphasis;
+  // other panes' active tabs read dimmer so the focus is unambiguous.
+  const groupFocused = !groups.isSplit || groups.activeGroupId === group.id;
   const activeKind = active != null ? pickRenderer(active) : null;
   const activeIsNotebook = activeKind === "notebook";
   const activeIsMarkdown = activeKind === "markdown";
@@ -1795,10 +1795,16 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
                 alignItems: "center",
                 gap: 6,
                 padding: "0 12px",
-                borderTop: isActive ? "2px solid var(--accent)" : "2px solid transparent",
-                background: isActive ? "var(--white)" : "transparent",
+                borderTop: isActive
+                  ? `2px solid ${groupFocused ? "var(--accent)" : "var(--paper-3)"}`
+                  : "2px solid transparent",
+                background: isActive
+                  ? groupFocused
+                    ? "var(--white)"
+                    : "var(--paper-2)"
+                  : "transparent",
                 borderRight: "1px solid var(--paper-3)",
-                color: isActive ? "var(--text-paper)" : "var(--text-paper-d)",
+                color: isActive && groupFocused ? "var(--text-paper)" : "var(--text-paper-d)",
                 cursor: "pointer",
                 whiteSpace: "nowrap",
                 opacity: dragFrom === i ? 0.4 : 1,

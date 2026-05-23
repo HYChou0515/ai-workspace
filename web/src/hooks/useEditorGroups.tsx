@@ -6,7 +6,7 @@
  * (preview tabs, pin, collapse-empty-group, cross-group move/copy).
  */
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type Edge,
@@ -97,30 +97,38 @@ export function useEditorGroups(initialPaths: string[]) {
   const focusGroup = useCallback((groupId: string) => setActiveGroupId(groupId), []);
 
   /** Remove a tab; if the group empties, collapse it (unless it's the last). */
+  // Closing a tab only touches the group's own tabs. Pruning an emptied
+  // pane out of the tree is handled by the reconciliation effect below, so
+  // every path that can empty a group (close, cross-pane move, edge-move)
+  // collapses consistently — no stale-tree races.
   const closeTab = useCallback((groupId: string, path: string) => {
     setGroups((prevGroups) => {
       const g = prevGroups[groupId];
       if (!g) return prevGroups;
       const tabs = g.tabs.filter((t) => t.path !== path);
-      if (tabs.length > 0) {
-        const activePath =
-          g.activePath === path ? (tabs[tabs.length - 1]?.path ?? null) : g.activePath;
-        return { ...prevGroups, [groupId]: { ...g, tabs, activePath } };
-      }
-      // group emptied
-      const ids = leafIds(tree);
-      if (ids.length <= 1) {
-        // keep the sole group, now empty
-        return { ...prevGroups, [groupId]: { ...g, tabs: [], activePath: null } };
-      }
-      // collapse the leaf out of the tree + drop its group entry
-      setTree((t) => removeLeaf(t, groupId));
-      const rest = { ...prevGroups };
-      delete rest[groupId];
-      setActiveGroupId((cur) => (cur === groupId ? (leafIds(removeLeaf(tree, groupId))[0] ?? "g0") : cur));
+      const activePath =
+        g.activePath === path ? (tabs[tabs.length - 1]?.path ?? null) : g.activePath;
+      return { ...prevGroups, [groupId]: { ...g, tabs, activePath } };
+    });
+  }, []);
+
+  // Reconcile: a split pane whose group has no tabs is removed from the
+  // tree (and its group entry dropped). The sole remaining pane is kept
+  // even when empty — there must always be one editor area.
+  useEffect(() => {
+    const ids = leafIds(tree);
+    if (ids.length <= 1) return;
+    const emptyId = ids.find((id) => (groups[id]?.tabs.length ?? 0) === 0);
+    if (!emptyId) return;
+    const nextTree = removeLeaf(tree, emptyId);
+    setTree(nextTree);
+    setGroups((prev) => {
+      const rest = { ...prev };
+      delete rest[emptyId];
       return rest;
     });
-  }, [tree]);
+    setActiveGroupId((cur) => (cur === emptyId ? (leafIds(nextTree)[0] ?? "g0") : cur));
+  }, [tree, groups]);
 
   const reorderTab = useCallback(
     (groupId: string, from: number, to: number) =>
