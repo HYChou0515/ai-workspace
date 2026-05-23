@@ -7,8 +7,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import type { FileInfo, Investigation } from "../../api/types";
-import { formatInvestigationId } from "../../api/types";
+import { api } from "../../api";
+import type { CloseStatus, FileInfo, Investigation } from "../../api/types";
+import { formatInvestigationId, isOpen } from "../../api/types";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
@@ -330,6 +331,8 @@ function TopBar({
         )}
       </Popover>
 
+      <CloseInvestigationButton investigation={investigation} />
+
       <Popover
         align="end"
         trigger={({ onClick, open }) => (
@@ -388,6 +391,80 @@ function TopBar({
         )}
       </Popover>
     </div>
+  );
+}
+
+function CloseInvestigationButton({
+  investigation,
+}: {
+  investigation: Investigation;
+}) {
+  const navigate = useNavigate();
+  const [pending, setPending] = useState<CloseStatus | null>(null);
+  const alreadyClosed = !isOpen(investigation.status);
+
+  const close = async (status: CloseStatus, dismiss: () => void) => {
+    if (pending) return;
+    setPending(status);
+    try {
+      await api.closeInvestigation(investigation.resource_id, status);
+      dismiss();
+      navigate("/");
+    } catch (e) {
+      console.error("closeInvestigation failed", e);
+      alert(`Close failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <Popover
+      align="end"
+      trigger={({ onClick, open }) => (
+        <button
+          type="button"
+          onClick={onClick}
+          title={alreadyClosed ? `Already ${investigation.status}` : "Close investigation"}
+          disabled={alreadyClosed}
+          style={{
+            height: 28,
+            padding: "0 10px",
+            border: "1px solid var(--paper-3)",
+            borderRadius: "var(--radius-btn)",
+            fontSize: 12,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            background: open ? "var(--paper-2)" : "transparent",
+            color: alreadyClosed ? "var(--text-paper-d2)" : "var(--text-paper-d)",
+            cursor: alreadyClosed ? "not-allowed" : "pointer",
+          }}
+        >
+          <Icon name="check" size={12} /> Close
+        </button>
+      )}
+    >
+      {(dismiss) => (
+        <div style={{ minWidth: 200 }}>
+          <div className="caps" style={{ padding: "6px 10px" }}>Close as…</div>
+          <PopoverItem
+            onClick={() => {
+              void close("resolved", dismiss);
+            }}
+          >
+            {pending === "resolved" ? "Closing…" : "Resolved"}
+          </PopoverItem>
+          <PopoverItem
+            onClick={() => {
+              void close("abandoned", dismiss);
+            }}
+          >
+            {pending === "abandoned" ? "Closing…" : "Abandoned"}
+          </PopoverItem>
+        </div>
+      )}
+    </Popover>
   );
 }
 

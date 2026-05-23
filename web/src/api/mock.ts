@@ -10,12 +10,15 @@
 import type { AgentEvent, CellEvent } from "../events";
 import type {
   ApiClient,
+  CellRef,
+  CloseStatus,
   Conversation,
   ExecuteCellArgs,
   FileContent,
   Investigation,
   InvestigationInput,
   Message,
+  NotebookRef,
   SendMessageArgs,
 } from "./types";
 
@@ -471,6 +474,26 @@ export const mockApi: ApiClient = {
     };
     await delay(80);
     yield { type: "cell_done", execution_count: args.cellIndex + 1 };
+  },
+
+  async closeInvestigation(id: string, status: CloseStatus) {
+    await delay(20);
+    const hit = investigations.find((i) => i.resource_id === id);
+    if (!hit) throw new Error(`not found: ${id}`);
+    hit.status = status;
+    hit.updated_time = nowIso();
+  },
+
+  async cancelMessage(_investigationId: string) {
+    await delay(10);
+  },
+
+  async interruptCell(_ref: CellRef) {
+    await delay(10);
+  },
+
+  async restartKernel(_ref: NotebookRef) {
+    await delay(20);
   },
 };
 

@@ -160,6 +160,13 @@ function NotebookBody({
 
   const interruptCell = (idx: number) => {
     abortRefs.current.get(idx)?.abort();
+    // BE-side stop signal: the kernel keeps running the cell to
+    // completion otherwise, even after we've stopped listening.
+    void api.interruptCell({
+      investigationId,
+      notebookPath: path,
+      cellIndex: idx,
+    });
   };
 
   const runAllCells = useCallback(async () => {

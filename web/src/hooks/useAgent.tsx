@@ -94,8 +94,12 @@ export function useAgentInternal(investigationId: string): AgentState {
   );
 
   const cancel = useCallback(() => {
+    // Abort the local fetch (closes the SSE early) AND fire the BE-side
+    // DELETE so the agent loop tears down the kernel/sandbox call —
+    // closing the socket alone doesn't always reach the runner in time.
     abortRef.current?.abort();
-  }, []);
+    void api.cancelMessage(investigationId);
+  }, [investigationId]);
 
   return { log, send, cancel };
 }

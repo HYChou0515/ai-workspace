@@ -16,11 +16,14 @@ import type { AgentEvent, CellEvent } from "../events";
 import { parseSseStream } from "./sse";
 import type {
   ApiClient,
+  CellRef,
+  CloseStatus,
   Conversation,
   ExecuteCellArgs,
   FileInfo,
   Investigation,
   InvestigationInput,
+  NotebookRef,
   SendMessageArgs,
 } from "./types";
 
@@ -136,6 +139,20 @@ export const realApi: ApiClient = {
     return this.getInvestigation(created.resource_id);
   },
 
+  async closeInvestigation(id: string, status: CloseStatus) {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(id)}/close`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ status }),
+      },
+    );
+    if (!resp.ok) {
+      throw new HttpError(resp.status, `close failed: ${resp.status}`);
+    }
+  },
+
   async getConversation(investigationId: string) {
     try {
       const arr = await json<SpecstarEntry<ConversationStruct>[]>(
@@ -195,6 +212,32 @@ export const realApi: ApiClient = {
     );
     if (!resp.ok) {
       throw new HttpError(resp.status, `write ${path} failed: ${resp.status}`);
+    }
+  },
+
+  async cancelMessage(investigationId: string) {
+    // Idempotent on the BE; swallow network/404 noise so a double-click
+    // on Stop doesn't surface a scary toast.
+    await fetch(
+      `/investigations/${encodeURIComponent(investigationId)}/messages/current`,
+      { method: "DELETE" },
+    ).catch(() => undefined);
+  },
+
+  async interruptCell(ref: CellRef) {
+    await fetch(
+      `/investigations/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/cells/${ref.cellIndex}/execute`,
+      { method: "DELETE" },
+    ).catch(() => undefined);
+  },
+
+  async restartKernel(ref: NotebookRef) {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/kernel/restart`,
+      { method: "POST" },
+    );
+    if (!resp.ok) {
+      throw new HttpError(resp.status, `restart failed: ${resp.status}`);
     }
   },
 

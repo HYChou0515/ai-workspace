@@ -86,10 +86,24 @@ export type ExecuteCellArgs = {
   signal?: AbortSignal;
 };
 
+export type CloseStatus = "resolved" | "abandoned";
+
+export type CellRef = {
+  investigationId: string;
+  notebookPath: string;
+  cellIndex: number;
+};
+
+export type NotebookRef = {
+  investigationId: string;
+  notebookPath: string;
+};
+
 export interface ApiClient {
   listInvestigations(): Promise<Investigation[]>;
   getInvestigation(id: string): Promise<Investigation>;
   createInvestigation(input: InvestigationInput): Promise<Investigation>;
+  closeInvestigation(id: string, status: CloseStatus): Promise<void>;
 
   getConversation(investigationId: string): Promise<Conversation | null>;
 
@@ -102,7 +116,18 @@ export interface ApiClient {
   ): Promise<void>;
 
   streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent>;
+  /** DELETE /investigations/{id}/messages/current — tears the in-flight
+   * agent turn down on the BE so the kernel/sandbox stop spending tokens.
+   * Idempotent: safe to call when nothing's running. */
+  cancelMessage(investigationId: string): Promise<void>;
+
   streamCellEvents(args: ExecuteCellArgs): AsyncGenerator<CellEvent>;
+  /** DELETE /investigations/{id}/notebooks/{path}/cells/{idx}/execute —
+   * stops the cell on the kernel side. Idempotent. */
+  interruptCell(ref: CellRef): Promise<void>;
+  /** POST /investigations/{id}/notebooks/{path}/kernel/restart — wipes
+   * the kernel's namespace; next execute spawns a fresh kernel. */
+  restartKernel(ref: NotebookRef): Promise<void>;
 }
 
 /* --------------------------- Helpers ---------------------------- */
