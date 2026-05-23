@@ -1,64 +1,63 @@
 /**
- * Recursive editor-pane tree (VSCode editor groups). A node is either a
- * leaf (one file pane) or a split of two children along an axis. Edge
- * drops split the targeted leaf in place, so dropping on B's bottom edge
- * stacks B without disturbing a sibling A — true nesting.
+ * Recursive editor-group tree (VSCode editor groups). Nodes are purely
+ * structural — a leaf carries only a group `id`; the group's tabs/active
+ * file live in a separate `Map<id, Group>` owned by the shell. Edge drops
+ * split the targeted leaf in place, so splitting one group never disturbs
+ * a sibling (true nesting).
  */
 
 export type Edge = "left" | "right" | "top" | "bottom" | "center";
 
-export type PaneLeaf = { type: "leaf"; id: string; path: string | null };
+export type PaneLeaf = { type: "leaf"; id: string };
 export type PaneSplit = { type: "split"; dir: "row" | "col"; a: PaneNode; b: PaneNode };
 export type PaneNode = PaneLeaf | PaneSplit;
 
-export function leaf(id: string, path: string | null): PaneLeaf {
-  return { type: "leaf", id, path };
+export function leaf(id: string): PaneLeaf {
+  return { type: "leaf", id };
 }
 
-/** All leaves left-to-right / top-to-bottom. */
-export function leaves(node: PaneNode): PaneLeaf[] {
-  return node.type === "leaf" ? [node] : [...leaves(node.a), ...leaves(node.b)];
+/** Leaf ids in visual order (left→right / top→bottom). */
+export function leafIds(node: PaneNode): string[] {
+  return node.type === "leaf" ? [node.id] : [...leafIds(node.a), ...leafIds(node.b)];
 }
 
-export function findLeaf(node: PaneNode, id: string): PaneLeaf | null {
-  return leaves(node).find((l) => l.id === id) ?? null;
+export function hasLeaf(node: PaneNode, id: string): boolean {
+  return leafIds(node).includes(id);
 }
 
-/** Split the leaf `id` along `edge`, placing a new leaf (newId/newPath) on
- * the edge side. "center" is a no-op here (callers open-in-place instead). */
+/** Split leaf `id` along `edge`, placing a new leaf (`newId`) on the edge
+ * side. "center" is a no-op (callers open-in-place instead). */
 export function splitLeaf(
   node: PaneNode,
   id: string,
   edge: Exclude<Edge, "center">,
   newId: string,
-  newPath: string | null,
 ): PaneNode {
   if (node.type === "leaf") {
     if (node.id !== id) return node;
     const dir = edge === "left" || edge === "right" ? "row" : "col";
-    const fresh = leaf(newId, newPath);
+    const fresh = leaf(newId);
     const newFirst = edge === "left" || edge === "top";
     return { type: "split", dir, a: newFirst ? fresh : node, b: newFirst ? node : fresh };
   }
-  return { ...node, a: splitLeaf(node.a, id, edge, newId, newPath), b: splitLeaf(node.b, id, edge, newId, newPath) };
+  return {
+    ...node,
+    a: splitLeaf(node.a, id, edge, newId),
+    b: splitLeaf(node.b, id, edge, newId),
+  };
 }
 
-export function setLeafPath(node: PaneNode, id: string, path: string | null): PaneNode {
-  if (node.type === "leaf") return node.id === id ? { ...node, path } : node;
-  return { ...node, a: setLeafPath(node.a, id, path), b: setLeafPath(node.b, id, path) };
-}
-
-/** Remove leaf `id`; its parent split collapses to the sibling. Returns
- * the new tree, or the unchanged root if it's the sole leaf. */
+/** Remove leaf `id`; its parent split collapses to the sibling. Returns the
+ * unchanged root if it's the sole leaf. */
 export function removeLeaf(node: PaneNode, id: string): PaneNode {
-  if (node.type === "leaf") return node; // can't remove the root leaf
+  if (node.type === "leaf") return node;
   if (node.a.type === "leaf" && node.a.id === id) return node.b;
   if (node.b.type === "leaf" && node.b.id === id) return node.a;
   return { ...node, a: removeLeaf(node.a, id), b: removeLeaf(node.b, id) };
 }
 
-/** Map a pointer position within a rect to a drop edge. The center 40%
- * box is "open here"; the outer margins pick a direction. */
+/** Map a pointer position within a rect to a drop edge. The center 40% box
+ * is "open here"; the outer margins pick a direction. */
 export function edgeForPoint(
   x: number,
   y: number,
@@ -67,7 +66,6 @@ export function edgeForPoint(
   const fx = (x - rect.left) / rect.width;
   const fy = (y - rect.top) / rect.height;
   if (fx >= 0.3 && fx <= 0.7 && fy >= 0.3 && fy <= 0.7) return "center";
-  // distance to each edge; smallest wins
   const d = { left: fx, right: 1 - fx, top: fy, bottom: 1 - fy };
   return (Object.entries(d).sort((p, q) => p[1] - q[1])[0]?.[0] as Edge) ?? "center";
 }

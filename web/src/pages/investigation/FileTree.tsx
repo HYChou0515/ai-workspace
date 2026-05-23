@@ -254,19 +254,25 @@ export function FileTree({
         />
       </div>
 
-      {/* Tree body — also the root drop zone (move/copy to root). */}
+      {/* Tree body — also the root drop zone (move/copy to root). Only the
+          genuine empty area highlights, so dragging a file no longer tints
+          the whole tree: we ignore dragover that bubbled up from a row. */}
       <div
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes("application/x-rca-file")) {
+          if (
+            e.target === e.currentTarget &&
+            e.dataTransfer.types.includes("application/x-rca-file")
+          ) {
             e.preventDefault();
             setRootDrop(true);
           }
         }}
         onDragLeave={(e) => {
-          if (!e.currentTarget.contains(e.relatedTarget as Node)) setRootDrop(false);
+          if (e.target === e.currentTarget) setRootDrop(false);
         }}
         onDrop={(e) => {
           setRootDrop(false);
+          if (e.target !== e.currentTarget) return; // a row handled it
           const d = readDragFile(e);
           if (d) {
             e.preventDefault();
@@ -275,8 +281,11 @@ export function FileTree({
         }}
         style={{
           minHeight: 40,
-          background: rootDrop ? "var(--accent-soft)" : "transparent",
+          // dashed outline on the empty area only — never a full-tree fill
+          outline: rootDrop ? "1px dashed var(--accent)" : "none",
+          outlineOffset: -2,
           borderRadius: 4,
+          paddingBottom: 24,
         }}
       >
         {tree.length === 0 && !creating && (
@@ -422,6 +431,7 @@ function TreeRow({
   const indent = 8 + depth * 12;
   const isCollapsed = collapsed.has(node.path);
   const [dropOver, setDropOver] = useState(false);
+  const [dragging, setDragging] = useState(false);
 
   if (renaming === node.path) {
     return (
@@ -522,7 +532,9 @@ function TreeRow({
           JSON.stringify({ path: node.path }),
         );
         e.dataTransfer.effectAllowed = "copyMove";
+        setDragging(true);
       }}
+      onDragEnd={() => setDragging(false)}
       onClick={() => onOpen(node.path, { preview: true })}
       onDoubleClick={() => onOpen(node.path, { preview: false })}
       onContextMenu={(e) => onContext(node, e)}
@@ -538,6 +550,7 @@ function TreeRow({
         borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent",
         color: active ? "var(--accent-h)" : "var(--text-paper)",
         fontSize: 12,
+        opacity: dragging ? 0.4 : 1,
       }}
     >
       <Icon name="file" size={13} color="var(--text-paper-d)" />

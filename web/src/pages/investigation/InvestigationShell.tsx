@@ -16,6 +16,12 @@ import { RcaMark } from "../../components/RcaMark";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
 import { FileBufferProvider } from "../../hooks/fileBuffer";
+import {
+  type EditorGroup,
+  type EditorTab,
+  type SplitDir,
+  useEditorGroups,
+} from "../../hooks/useEditorGroups";
 import { useThemeMode } from "../../hooks/theme";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
@@ -25,30 +31,11 @@ import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
-import {
-  type Edge,
-  type PaneNode,
-  edgeForPoint,
-  findLeaf,
-  leaf,
-  leaves,
-  removeLeaf,
-  setLeafPath,
-  splitLeaf,
-} from "./paneTree";
+import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
 import { basename, breadcrumbSegments, pickRenderer } from "./renderer";
 import { TerminalPane } from "./TerminalPane";
 
-type OpenTab = {
-  path: string;
-  modified: boolean;
-  preview?: boolean; // single-click "peek" tab (italic); promoted on double-click
-  pinned?: boolean; // survives Close-others / Close-all; sorts first
-};
-
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
-
-type SplitDir = "left" | "right" | "up" | "down";
 
 export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
 
@@ -81,12 +68,11 @@ export function InvestigationShell({
     ],
     [],
   );
-  const [openTabs, setOpenTabs] = useState<OpenTab[]>(() =>
-    designViews
-      .filter((p) => files.some((f) => f.path === p))
-      .map((path) => ({ path, modified: false })),
+  const initialPaths = useMemo(
+    () => designViews.filter((p) => files.some((f) => f.path === p)),
+    [designViews, files],
   );
-  const [activeTab, setActiveTab] = useState<string | null>(() => openTabs[0]?.path ?? null);
+  const groups = useEditorGroups(initialPaths);
   const [activityMode, setActivityMode] = useState<ActivityMode>("evidence");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -106,93 +92,26 @@ export function InvestigationShell({
     10,
   );
 
-  const openFile = useCallback(
-    (path: string, opts: { preview?: boolean } = {}) => {
-      const preview = opts.preview ?? false;
-      setOpenTabs((prev) => {
-        const existing = prev.find((t) => t.path === path);
-        if (existing) {
-          // re-opening non-preview promotes a preview tab to permanent
-          if (!preview && existing.preview) {
-            return prev.map((t) => (t.path === path ? { ...t, preview: false } : t));
-          }
-          return prev;
-        }
-        const tab: OpenTab = { path, modified: false, preview };
-        // A preview open replaces the prior (unpinned) preview tab so
-        // single-clicking through files doesn't pile up tabs.
-        if (preview) {
-          return [...prev.filter((t) => !t.preview || t.pinned), tab];
-        }
-        return [...prev, tab];
-      });
-      setActiveTab(path);
+  // Sidebar / palette open into the active editor group.
+  const openFile = useCallback<OpenFileFn>(
+    (path, opts) => {
+      groups.openInActive(path, opts);
       recentFiles.push(path);
     },
-    [recentFiles],
+    [groups, recentFiles],
   );
 
-  // Tab operations driven by the tab strip's drag + context menu.
-  const reorderTabs = useCallback((from: number, to: number) => {
-    setOpenTabs((prev) => {
-      if (from === to || from < 0 || to < 0 || from >= prev.length || to >= prev.length) {
-        return prev;
-      }
-      const next = [...prev];
-      const [moved] = next.splice(from, 1);
-      if (moved) next.splice(to, 0, moved);
-      return next;
-    });
-  }, []);
-
-  const togglePin = useCallback((path: string) => {
-    setOpenTabs((prev) =>
-      prev.map((t) => (t.path === path ? { ...t, pinned: !t.pinned, preview: false } : t)),
-    );
-  }, []);
-
-  const closeOthers = useCallback((keep: string) => {
-    setOpenTabs((prev) => prev.filter((t) => t.path === keep || t.pinned));
-    setActiveTab(keep);
-  }, []);
-
-  const closeToRight = useCallback((from: string) => {
-    setOpenTabs((prev) => {
-      const idx = prev.findIndex((t) => t.path === from);
-      if (idx < 0) return prev;
-      return prev.filter((t, i) => i <= idx || t.pinned);
-    });
-  }, []);
-
-  const closeAll = useCallback(() => {
-    setOpenTabs((prev) => prev.filter((t) => t.pinned));
-    setActiveTab((cur) => cur);
-  }, []);
-
-  const closeTab = (path: string) => {
-    setOpenTabs((prev) => {
-      const remaining = prev.filter((t) => t.path !== path);
-      setActiveTab((current) => {
-        if (current !== path) return current;
-        return remaining[remaining.length - 1]?.path ?? null;
-      });
-      return remaining;
-    });
-  };
-
-  // Latest tab state for the keyboard handler (kept in a ref so the
-  // listener binds once instead of re-subscribing on every tab change).
-  const tabsRef = useRef({ openTabs, activeTab, closeTab, setActiveTab });
-  tabsRef.current = { openTabs, activeTab, closeTab, setActiveTab };
+  // Latest group state for the keyboard handler (bound once via a ref).
+  const gRef = useRef(groups);
+  gRef.current = groups;
 
   // Global keyboard: ⌘P palette · ⌘B sidebar · ⌘J bottom panel ·
-  // ⌘W close active tab · ⌘1-9 jump to the Nth tab.
+  // ⌘W close the active group's active tab · ⌘1-9 jump to its Nth tab.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       const k = e.key.toLowerCase();
-      const { openTabs: tabs, activeTab: active, closeTab: close, setActiveTab: select } =
-        tabsRef.current;
+      const g = gRef.current;
       if (k === "p") {
         e.preventDefault();
         setPaletteOpen(true);
@@ -203,16 +122,17 @@ export function InvestigationShell({
         e.preventDefault();
         setBottomOpen((v) => !v);
       } else if (k === "w") {
+        const active = g.activeGroup?.activePath;
         if (active) {
           e.preventDefault();
-          close(active);
+          g.closeTab(g.activeGroupId, active);
         }
       } else if (k >= "1" && k <= "9") {
         const idx = Number.parseInt(k, 10) - 1;
-        const target = tabs[idx];
+        const target = g.activeGroup?.tabs[idx];
         if (target) {
           e.preventDefault();
-          select(target.path);
+          g.selectTab(g.activeGroupId, target.path);
         }
       }
     };
@@ -252,8 +172,7 @@ export function InvestigationShell({
                   mode={activityMode}
                   investigation={investigation}
                   files={files}
-                  activePath={activeTab}
-                  openTabs={openTabs}
+                  activePath={groups.activeFile}
                   recentFiles={recentFiles.values}
                   onOpenFile={openFile}
                   onFilesChanged={onFilesChanged}
@@ -268,15 +187,7 @@ export function InvestigationShell({
           )}
           <EditorArea
             investigationId={investigation.resource_id}
-            openTabs={openTabs}
-            activeTab={activeTab}
-            onSelectTab={setActiveTab}
-            onCloseTab={closeTab}
-            onReorderTabs={reorderTabs}
-            onTogglePin={togglePin}
-            onCloseOthers={closeOthers}
-            onCloseToRight={closeToRight}
-            onCloseAll={closeAll}
+            groups={groups}
             bottomHeight={bottomH}
             bottomOpen={bottomOpen}
             onResizeBottom={(d) => setBottomH(bottomH - d)}
@@ -999,7 +910,6 @@ function ActivitySidebar(props: {
   investigation: Investigation;
   files: FileInfo[];
   activePath: string | null;
-  openTabs: OpenTab[];
   recentFiles: string[];
   onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
@@ -1289,32 +1199,18 @@ function FootMeta({ label, children }: { label: string; children: React.ReactNod
 
 /* ----------------------------- Editor area ----------------------------- */
 
+type Groups = ReturnType<typeof useEditorGroups>;
+
 function EditorArea({
   investigationId,
-  openTabs,
-  activeTab,
-  onSelectTab,
-  onCloseTab,
-  onReorderTabs,
-  onTogglePin,
-  onCloseOthers,
-  onCloseToRight,
-  onCloseAll,
+  groups,
   bottomHeight,
   bottomOpen,
   onResizeBottom,
   onToggleBottom,
 }: {
   investigationId: string;
-  openTabs: OpenTab[];
-  activeTab: string | null;
-  onSelectTab: (p: string) => void;
-  onCloseTab: (p: string) => void;
-  onReorderTabs: (from: number, to: number) => void;
-  onTogglePin: (p: string) => void;
-  onCloseOthers: (keep: string) => void;
-  onCloseToRight: (from: string) => void;
-  onCloseAll: () => void;
+  groups: Groups;
   bottomHeight: number;
   bottomOpen: boolean;
   onResizeBottom: (deltaPx: number) => void;
@@ -1322,99 +1218,10 @@ function EditorArea({
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
 
-  // Multi-pane editor as a recursive split tree (VSCode editor groups).
-  // The focused leaf mirrors the global active tab so the tab strip drives
-  // whichever group has focus. Edge drops split a leaf in place (nesting).
-  const [tree, setTree] = useState<PaneNode>(() => leaf("p0", activeTab));
-  const [focusedId, setFocusedId] = useState("p0");
-  const paneSeq = useRef(1);
-
-  // activeTab → focused leaf.
-  useEffect(() => {
-    setTree((t) => setLeafPath(t, focusedId, activeTab));
-  }, [activeTab, focusedId]);
-
-  // Close non-focused leaves whose file tab was closed.
-  useEffect(() => {
-    setTree((prev) => {
-      let t = prev;
-      for (const l of leaves(prev)) {
-        if (l.id !== focusedId && l.path && !openTabs.some((tb) => tb.path === l.path)) {
-          t = removeLeaf(t, l.id);
-        }
-      }
-      return t;
-    });
-  }, [openTabs, focusedId]);
-
-  const focusLeaf = (id: string) => {
-    setFocusedId(id);
-    const l = findLeaf(tree, id);
-    if (l?.path && l.path !== activeTab) onSelectTab(l.path);
-  };
-
-  const dropOn = (id: string, edge: Edge, path: string | null) => {
-    if (!path) return;
-    if (edge === "center") {
-      setTree((t) => setLeafPath(t, id, path));
-      setFocusedId(id);
-      if (path !== activeTab) onSelectTab(path);
-      return;
-    }
-    const newId = `p${paneSeq.current++}`;
-    setTree((t) => splitLeaf(t, id, edge, newId, path));
-    setFocusedId(newId);
-    if (path !== activeTab) onSelectTab(path);
-  };
-
-  const closeLeaf = (id: string) => {
-    setTree((t) => {
-      const next = removeLeaf(t, id);
-      if (id === focusedId) {
-        const first = leaves(next)[0];
-        if (first) setFocusedId(first.id);
-      }
-      return next;
-    });
-  };
-
-  // Map the tab-strip split actions to edge splits from the focused leaf.
-  const splitFromFocused = (dir: SplitDir, path: string | null) =>
-    dropOn(
-      focusedId,
-      dir === "up" ? "top" : dir === "down" ? "bottom" : dir,
-      path ?? activeTab,
-    );
-
-  const isSplit = leaves(tree).length > 1;
-
   return (
     <section style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
-      <TabStrip
-        tabs={openTabs}
-        active={activeTab}
-        onSelect={onSelectTab}
-        onClose={onCloseTab}
-        onReorder={onReorderTabs}
-        onTogglePin={onTogglePin}
-        onCloseOthers={onCloseOthers}
-        onCloseToRight={onCloseToRight}
-        onCloseAll={onCloseAll}
-        onSplit={splitFromFocused}
-        split={isSplit}
-        onUnsplit={() => setTree(leaf("p0", activeTab))}
-      />
-      <Breadcrumb activeTab={activeTab} />
       <div style={{ flex: 1, display: "flex", minHeight: 0, background: "var(--white)" }}>
-        <PaneTreeView
-          node={tree}
-          investigationId={investigationId}
-          focusedId={focusedId}
-          multi={isSplit}
-          onFocus={focusLeaf}
-          onClose={closeLeaf}
-          onDrop={dropOn}
-        />
+        <GroupTreeView node={groups.tree} groups={groups} investigationId={investigationId} />
       </div>
 
       {bottomOpen && (
@@ -1432,25 +1239,25 @@ function EditorArea({
         open={bottomOpen}
         onToggle={onToggleBottom}
       />
-      <StatusBar activeTab={activeTab} investigationId={investigationId} />
+      <StatusBar activeTab={groups.activeFile} investigationId={investigationId} />
     </section>
   );
 }
 
-type PaneTreeProps = {
+/** Recursively lay out the structural pane tree; leaves render a group. */
+function GroupTreeView({
+  node,
+  groups,
+  investigationId,
+}: {
   node: PaneNode;
+  groups: Groups;
   investigationId: string;
-  focusedId: string;
-  multi: boolean;
-  onFocus: (id: string) => void;
-  onClose: (id: string) => void;
-  onDrop: (id: string, edge: Edge, path: string | null) => void;
-};
-
-function PaneTreeView(props: PaneTreeProps) {
-  const { node } = props;
+}) {
   if (node.type === "leaf") {
-    return <PaneLeafView {...props} leaf={node} />;
+    const group = groups.groups[node.id];
+    if (!group) return null;
+    return <GroupPane group={group} groups={groups} investigationId={investigationId} />;
   }
   const row = node.dir === "row";
   return (
@@ -1463,7 +1270,7 @@ function PaneTreeView(props: PaneTreeProps) {
         flexDirection: row ? "row" : "column",
       }}
     >
-      <PaneTreeView {...props} node={node.a} />
+      <GroupTreeView node={node.a} groups={groups} investigationId={investigationId} />
       <div
         aria-hidden
         style={
@@ -1472,63 +1279,70 @@ function PaneTreeView(props: PaneTreeProps) {
             : { height: 1, background: "var(--paper-3)", flexShrink: 0 }
         }
       />
-      <PaneTreeView {...props} node={node.b} />
+      <GroupTreeView node={node.b} groups={groups} investigationId={investigationId} />
     </div>
   );
 }
 
-function PaneLeafView({
-  leaf: pane,
+/** One editor group: its own tab strip + breadcrumb + the active file,
+ * with VSCode-style edge drop zones for incoming tab/file drags. */
+function GroupPane({
+  group,
+  groups,
   investigationId,
-  focusedId,
-  multi,
-  onFocus,
-  onClose,
-  onDrop,
-}: PaneTreeProps & { leaf: { id: string; path: string | null } }) {
+}: {
+  group: EditorGroup;
+  groups: Groups;
+  investigationId: string;
+}) {
   const [edge, setEdge] = useState<Edge | null>(null);
+  const active = groups.isSplit && group.id === groups.activeGroupId;
+  const activePath = group.activePath;
 
-  const readPath = (e: React.DragEvent): string | null => {
-    for (const type of ["application/x-rca-tab", "application/x-rca-file"]) {
-      const raw = e.dataTransfer.getData(type);
-      if (raw) {
-        try {
-          return (JSON.parse(raw) as { path: string }).path;
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    return null;
-  };
-
-  const hasDragPayload = (e: React.DragEvent) =>
+  const hasPayload = (e: React.DragEvent) =>
     e.dataTransfer.types.includes("application/x-rca-tab") ||
     e.dataTransfer.types.includes("application/x-rca-file");
 
-  const focused = multi && pane.id === focusedId;
+  const handleDrop = (e: React.DragEvent, where: Edge) => {
+    const tabRaw = e.dataTransfer.getData("application/x-rca-tab");
+    if (tabRaw) {
+      try {
+        const { groupId, path } = JSON.parse(tabRaw) as { groupId: string; path: string };
+        groups.dropTabOnGroup(groupId, group.id, where, path, e.ctrlKey || e.metaKey);
+        return;
+      } catch {
+        /* ignore */
+      }
+    }
+    const fileRaw = e.dataTransfer.getData("application/x-rca-file");
+    if (fileRaw) {
+      try {
+        const { path } = JSON.parse(fileRaw) as { path: string };
+        // file from the sidebar — no source group to clear (copy=true)
+        groups.dropTabOnGroup("", group.id, where, path, true);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
 
   return (
     <div
-      onMouseDown={() => onFocus(pane.id)}
+      onMouseDown={() => groups.focusGroup(group.id)}
       onDragOver={(e) => {
-        if (!hasDragPayload(e)) return;
+        if (!hasPayload(e)) return;
         e.preventDefault();
         const r = e.currentTarget.getBoundingClientRect();
         setEdge(edgeForPoint(e.clientX, e.clientY, r));
       }}
       onDragLeave={(e) => {
-        // only clear when leaving the pane itself, not entering a child
         if (!e.currentTarget.contains(e.relatedTarget as Node)) setEdge(null);
       }}
       onDrop={(e) => {
         const where = edge ?? "center";
         setEdge(null);
-        const path = readPath(e);
-        if (path) {
-          e.preventDefault();
-          onDrop(pane.id, where, path);
-        }
+        e.preventDefault();
+        handleDrop(e, where);
       }}
       style={{
         position: "relative",
@@ -1537,42 +1351,15 @@ function PaneLeafView({
         minHeight: 0,
         display: "flex",
         flexDirection: "column",
-        outline: focused ? "2px solid var(--accent)" : "none",
+        outline: active ? "2px solid var(--accent)" : "none",
         outlineOffset: -2,
       }}
     >
-      {multi && (
-        <div
-          style={{
-            padding: "2px 8px",
-            borderBottom: "1px solid var(--paper-3)",
-            background: "var(--paper)",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 11,
-            color: "var(--text-paper-d)",
-            minHeight: 24,
-          }}
-        >
-          <Icon name="file" size={11} />
-          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
-            {pane.path ? basename(pane.path) : "(empty)"}
-          </span>
-          <button
-            type="button"
-            onClick={() => onClose(pane.id)}
-            title="Close pane"
-            aria-label="close pane"
-            style={{ color: "var(--text-paper-d2)" }}
-          >
-            <Icon name="x" size={11} />
-          </button>
-        </div>
-      )}
+      <GroupTabStrip group={group} groups={groups} />
+      <Breadcrumb activeTab={activePath} />
       <div className="scrollable" style={{ flex: 1, overflow: "auto", padding: 20 }}>
-        {pane.path ? (
-          <FileView investigationId={investigationId} path={pane.path} />
+        {activePath ? (
+          <FileView investigationId={investigationId} path={activePath} />
         ) : (
           <div
             style={{
@@ -1726,36 +1513,14 @@ function Breadcrumb({ activeTab }: { activeTab: string | null }) {
   );
 }
 
-function TabStrip({
-  tabs,
-  active,
-  onSelect,
-  onClose,
-  onReorder,
-  onTogglePin,
-  onCloseOthers,
-  onCloseToRight,
-  onCloseAll,
-  onSplit,
-  split,
-  onUnsplit,
-}: {
-  tabs: OpenTab[];
-  active: string | null;
-  onSelect: (p: string) => void;
-  onClose: (p: string) => void;
-  onReorder: (from: number, to: number) => void;
-  onTogglePin: (p: string) => void;
-  onCloseOthers: (keep: string) => void;
-  onCloseToRight: (from: string) => void;
-  onCloseAll: () => void;
-  onSplit: (dir: SplitDir, path: string | null) => void;
-  split: boolean;
-  onUnsplit: () => void;
-}) {
+/** A single editor group's tab strip — drives only its own group. Tabs
+ * carry their group id so a drag onto another group moves/copies. */
+function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }) {
+  const active = group.activePath;
   const activeIsNotebook = active != null && pickRenderer(active) === "notebook";
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
+  const gid = group.id;
 
   return (
     <div
@@ -1769,7 +1534,7 @@ function TabStrip({
       }}
     >
       <div className="scrollable" style={{ display: "flex", flex: 1, overflowX: "auto" }}>
-        {tabs.map((t, i) => {
+        {group.tabs.map((t: EditorTab, i) => {
           const isActive = t.path === active;
           return (
             <div
@@ -1777,31 +1542,40 @@ function TabStrip({
               role="tab"
               aria-selected={isActive}
               draggable
-              onClick={() => onSelect(t.path)}
-              onDoubleClick={() => onTogglePin(t.path)}
+              onClick={() => groups.selectTab(gid, t.path)}
+              onDoubleClick={() => groups.togglePin(gid, t.path)}
               onContextMenu={(e) => {
                 e.preventDefault();
                 setMenu({ path: t.path, x: e.clientX, y: e.clientY });
               }}
               onDragStart={(e) => {
                 setDragFrom(i);
-                // Carry a payload so a Ctrl/Cmd-drag onto a pane opens
-                // this file in a new split.
                 e.dataTransfer.setData(
                   "application/x-rca-tab",
-                  JSON.stringify({ path: t.path, ctrl: e.ctrlKey || e.metaKey }),
+                  JSON.stringify({ groupId: gid, path: t.path }),
                 );
                 e.dataTransfer.effectAllowed = "copyMove";
               }}
-              onDragOver={(e) => e.preventDefault()}
-              onDrop={() => {
-                if (dragFrom != null) onReorder(dragFrom, i);
+              onDragOver={(e) => {
+                // reorder only when the drag is a tab from THIS group
+                if (e.dataTransfer.types.includes("application/x-rca-tab")) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                e.stopPropagation();
+                const raw = e.dataTransfer.getData("application/x-rca-tab");
+                let sameGroup = false;
+                try {
+                  sameGroup = raw ? (JSON.parse(raw) as { groupId: string }).groupId === gid : false;
+                } catch {
+                  /* ignore */
+                }
+                if (sameGroup && dragFrom != null) groups.reorderTab(gid, dragFrom, i);
                 setDragFrom(null);
               }}
               title={
                 t.pinned
                   ? "Pinned · double-click to unpin"
-                  : "Drag to reorder · Ctrl/⌘-drag into the editor for a new pane"
+                  : "Drag to reorder · drag to another pane to move (Ctrl/⌘ to copy) · drag to an edge to split"
               }
               style={{
                 display: "inline-flex",
@@ -1824,7 +1598,7 @@ function TabStrip({
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
-                  onClose(t.path);
+                  groups.closeTab(gid, t.path);
                 }}
                 aria-label={`close ${basename(t.path)}`}
                 style={{
@@ -1837,11 +1611,7 @@ function TabStrip({
                   borderRadius: 3,
                 }}
               >
-                {t.modified ? (
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: "var(--warn)" }} />
-                ) : (
-                  <Icon name="x" size={10} />
-                )}
+                <Icon name="x" size={10} />
               </button>
             </div>
           );
@@ -1852,26 +1622,22 @@ function TabStrip({
           path={menu.path}
           x={menu.x}
           y={menu.y}
-          pinned={tabs.find((t) => t.path === menu.path)?.pinned ?? false}
+          pinned={group.tabs.find((t) => t.path === menu.path)?.pinned ?? false}
           onClose={() => setMenu(null)}
-          onCloseTab={onClose}
-          onTogglePin={onTogglePin}
-          onCloseOthers={onCloseOthers}
-          onCloseToRight={onCloseToRight}
-          onCloseAll={onCloseAll}
-          onSplit={onSplit}
+          onCloseTab={(p) => groups.closeTab(gid, p)}
+          onTogglePin={(p) => groups.togglePin(gid, p)}
+          onCloseOthers={(p) => groups.closeOthers(gid, p)}
+          onCloseToRight={(p) => groups.closeToRight(gid, p)}
+          onCloseAll={() => groups.closeGroupTabs(gid)}
+          onSplit={(dir, p) => groups.splitGroup(gid, dir === "up" ? "top" : dir === "down" ? "bottom" : dir, p)}
         />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 8px" }}>
         <button
           type="button"
-          title={split ? "Collapse to one pane" : "Split right"}
-          onClick={() => (split ? onUnsplit() : onSplit("right", active))}
-          style={{
-            ...iconBtn,
-            color: split ? "var(--accent)" : "var(--text-paper-d)",
-            background: split ? "var(--accent-soft)" : "transparent",
-          }}
+          title="Split right"
+          onClick={() => groups.splitGroup(gid, "right", active)}
+          style={{ ...iconBtn, color: "var(--text-paper-d)" }}
         >
           <Icon name="split" size={14} />
         </button>

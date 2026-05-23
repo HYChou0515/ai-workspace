@@ -2,64 +2,53 @@ import { describe, expect, it } from "vitest";
 
 import {
   edgeForPoint,
-  type PaneNode,
   leaf,
-  leaves,
+  leafIds,
+  type PaneNode,
   removeLeaf,
-  setLeafPath,
   splitLeaf,
 } from "./paneTree";
 
-const ids = (n: PaneNode) => leaves(n).map((l) => l.id);
-
 describe("paneTree", () => {
   it("splits a leaf right → old left, new right", () => {
-    const t = splitLeaf(leaf("a", "/a"), "a", "right", "b", "/b");
+    const t = splitLeaf(leaf("a"), "a", "right", "b");
     expect(t.type).toBe("split");
     if (t.type === "split") {
       expect(t.dir).toBe("row");
-      expect(ids(t)).toEqual(["a", "b"]);
+      expect(leafIds(t)).toEqual(["a", "b"]);
     }
   });
 
   it("splits a leaf left → new on the left", () => {
-    const t = splitLeaf(leaf("a", "/a"), "a", "left", "b", "/b");
-    expect(ids(t)).toEqual(["b", "a"]);
+    expect(leafIds(splitLeaf(leaf("a"), "a", "left", "b"))).toEqual(["b", "a"]);
   });
 
   it("splits bottom → col dir, new below", () => {
-    const t = splitLeaf(leaf("a", "/a"), "a", "bottom", "b", "/b");
+    const t = splitLeaf(leaf("a"), "a", "bottom", "b");
     if (t.type === "split") {
       expect(t.dir).toBe("col");
-      expect(ids(t)).toEqual(["a", "b"]);
+      expect(leafIds(t)).toEqual(["a", "b"]);
     }
   });
 
   it("nests: splitting one leaf leaves siblings untouched", () => {
-    let t: PaneNode = splitLeaf(leaf("a", "/a"), "a", "right", "b", "/b"); // [a|b]
-    t = splitLeaf(t, "b", "bottom", "c", "/c"); // a | (b / c)
-    expect(ids(t)).toEqual(["a", "b", "c"]);
+    let t: PaneNode = splitLeaf(leaf("a"), "a", "right", "b"); // [a|b]
+    t = splitLeaf(t, "b", "bottom", "c"); // a | (b / c)
+    expect(leafIds(t)).toEqual(["a", "b", "c"]);
     if (t.type === "split") {
       expect(t.dir).toBe("row");
-      expect(t.a.type).toBe("leaf"); // a stays a plain leaf
-      expect(t.b.type).toBe("split"); // b became a vertical split
+      expect(t.a.type).toBe("leaf");
+      expect(t.b.type).toBe("split");
     }
   });
 
   it("removeLeaf collapses the parent to the sibling", () => {
-    let t: PaneNode = splitLeaf(leaf("a", "/a"), "a", "right", "b", "/b");
-    t = removeLeaf(t, "b");
-    expect(t).toEqual(leaf("a", "/a"));
+    const t = removeLeaf(splitLeaf(leaf("a"), "a", "right", "b"), "b");
+    expect(t).toEqual(leaf("a"));
   });
 
   it("removeLeaf on the sole root leaf is a no-op", () => {
-    expect(removeLeaf(leaf("a", "/a"), "a")).toEqual(leaf("a", "/a"));
-  });
-
-  it("setLeafPath updates only the target leaf", () => {
-    const t = setLeafPath(splitLeaf(leaf("a", "/a"), "a", "right", "b", "/b"), "a", "/z");
-    expect(leaves(t).find((l) => l.id === "a")?.path).toBe("/z");
-    expect(leaves(t).find((l) => l.id === "b")?.path).toBe("/b");
+    expect(removeLeaf(leaf("a"), "a")).toEqual(leaf("a"));
   });
 
   it("edgeForPoint picks center in the middle, edges near the sides", () => {
