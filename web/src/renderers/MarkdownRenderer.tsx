@@ -9,6 +9,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { Icon } from "../components/Icon";
+import { MonacoEditor } from "../components/MonacoEditor";
 import { useFileBuffer } from "../hooks/fileBuffer";
 
 export function MarkdownRenderer({ path }: { investigationId: string; path: string }) {
@@ -72,23 +73,14 @@ export function MarkdownRenderer({ path }: { investigationId: string; path: stri
       </header>
 
       {editing ? (
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          style={{
-            width: "100%",
-            minHeight: 360,
-            border: "1px solid var(--paper-3)",
-            borderRadius: "var(--radius-btn)",
-            padding: 12,
-            fontFamily: "var(--font-mono)",
-            fontSize: 13,
-            lineHeight: 1.6,
-            resize: "vertical",
-            outline: "none",
-            background: "var(--paper)",
-          }}
-        />
+        <div style={{ height: 480 }}>
+          <MonacoEditor
+            value={text}
+            onChange={setText}
+            language="markdown"
+            minHeight={480}
+          />
+        </div>
       ) : (
         <article className="md-body">
           <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>

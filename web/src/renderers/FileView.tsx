@@ -8,6 +8,7 @@ import { FishboneRenderer } from "./fishbone/FishboneRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
 import { ReportRenderer } from "./report/ReportRenderer";
+import { TextRenderer } from "./TextRenderer";
 
 export function FileView({
   investigationId,
@@ -28,23 +29,33 @@ export function FileView({
       return <FishboneRenderer investigationId={investigationId} path={path} />;
     case "csv":
     case "json":
-    case "image":
     case "text":
-      return <NotYet path={path} kind={kind} />;
+      return <TextRenderer investigationId={investigationId} path={path} />;
+    case "image":
+      return <ImageView investigationId={investigationId} path={path} />;
   }
 }
 
-function NotYet({ path, kind }: { path: string; kind: string }) {
+function ImageView({
+  investigationId,
+  path,
+}: {
+  investigationId: string;
+  path: string;
+}) {
+  // Served straight off the read endpoint; the browser fetches the bytes.
+  const src = `/investigations/${encodeURIComponent(investigationId)}/files/${path
+    .split("/")
+    .map(encodeURIComponent)
+    .join("/")}`;
   return (
-    <div style={{ color: "var(--text-paper-d)" }}>
-      <div className="caps">Renderer pending — {kind}</div>
-      <div style={{ marginTop: 8, fontSize: "var(--text-body)", color: "var(--text-paper)" }}>
-        <code style={{ fontFamily: "var(--font-mono)" }}>{path}</code>
-      </div>
-      <div style={{ marginTop: 6, fontSize: 13 }}>
-        Lands in a later step (§12.8 notebook · §12.9 report version selector ·
-        §12.10 fishbone).
-      </div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="caps">{path}</div>
+      <img
+        src={src}
+        alt={path}
+        style={{ maxWidth: "100%", borderRadius: "var(--radius-card)" }}
+      />
     </div>
   );
 }
