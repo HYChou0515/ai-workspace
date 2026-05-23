@@ -26,7 +26,7 @@ from specstar import SpecStar
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import RunCancelled, RunDone, ToolStart, create_app
 from workspace_app.api.events import AgentEvent
-from workspace_app.api.registry import WorkspaceRegistry
+from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxSpec
@@ -60,7 +60,7 @@ async def test_delete_on_workspace_with_no_in_flight_turn_returns_204():
     async with AsyncClient(
         transport=ASGITransport(app=_make_app(runner)), base_url="http://t"
     ) as client:
-        resp = await client.delete("/workspaces/never-touched/messages/current")
+        resp = await client.delete("/investigations/never-touched/messages/current")
         assert resp.status_code == 204
 
 
@@ -80,12 +80,12 @@ async def test_post_then_delete_cancels_the_driver_task():
         # DELETE returns 204 even when a turn is in flight, and the next
         # POST returns a 200 (i.e. the cancel→start dance worked).
         post_task = asyncio.create_task(
-            client.post("/workspaces/ws/messages", json={"content": "first"})
+            client.post("/investigations/ws/messages", json={"content": "first"})
         )
         # Give the runner a beat to enter its blocked wait.
         await asyncio.wait_for(runner.first_yielded.wait(), timeout=2.0)
 
-        del_resp = await client.delete("/workspaces/ws/messages/current")
+        del_resp = await client.delete("/investigations/ws/messages/current")
         assert del_resp.status_code == 204
 
         # Release the runner so the original POST can finish its drain.
@@ -110,7 +110,7 @@ async def test_second_post_cancels_first_and_first_response_carries_run_cancelle
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
         first_post = asyncio.create_task(
-            client.post("/workspaces/ws/messages", json={"content": "one"})
+            client.post("/investigations/ws/messages", json={"content": "one"})
         )
         await asyncio.wait_for(runner.first_yielded.wait(), timeout=2.0)
 
@@ -120,7 +120,7 @@ async def test_second_post_cancels_first_and_first_response_carries_run_cancelle
         runner.release.set()  # turn-2 runs to completion immediately
 
         second_post = asyncio.create_task(
-            client.post("/workspaces/ws/messages", json={"content": "two"})
+            client.post("/investigations/ws/messages", json={"content": "two"})
         )
 
         second_resp = await asyncio.wait_for(second_post, timeout=2.0)
@@ -146,7 +146,7 @@ async def test_concurrent_posts_to_different_workspaces_dont_cancel_each_other()
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as client:
         a_post = asyncio.create_task(
-            client.post("/workspaces/ws-A/messages", json={"content": "a"})
+            client.post("/investigations/ws-A/messages", json={"content": "a"})
         )
         await asyncio.wait_for(runner.first_yielded.wait(), timeout=2.0)
 
@@ -159,7 +159,7 @@ async def test_concurrent_posts_to_different_workspaces_dont_cancel_each_other()
         runner.release.set()  # ws-B finishes immediately
 
         b_resp = await asyncio.wait_for(
-            client.post("/workspaces/ws-B/messages", json={"content": "b"}),
+            client.post("/investigations/ws-B/messages", json={"content": "b"}),
             timeout=2.0,
         )
         assert b_resp.status_code == 200
@@ -182,11 +182,11 @@ async def test_drive_run_emits_run_cancelled_on_task_cancel():
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
 
     queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
     ctx = AgentToolContext(
-        workspace_id="ws-direct",
+        investigation_id="ws-direct",
         sandbox=sandbox,
         filestore=filestore,
         sync=sync,

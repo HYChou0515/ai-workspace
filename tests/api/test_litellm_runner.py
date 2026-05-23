@@ -228,7 +228,7 @@ def _ctx() -> AgentToolContext:
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     return AgentToolContext(
-        workspace_id="ws-x",
+        investigation_id="ws-x",
         sandbox=sandbox,
         filestore=filestore,
         sync=SandboxSync(filestore=filestore, sandbox=sandbox),
@@ -346,7 +346,7 @@ async def test_live_run_against_ollama_emits_at_least_one_event():
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     ctx = AgentToolContext(
-        workspace_id="ws-live",
+        investigation_id="ws-live",
         sandbox=sandbox,
         filestore=filestore,
         sync=SandboxSync(filestore=filestore, sandbox=sandbox),

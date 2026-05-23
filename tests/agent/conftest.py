@@ -18,7 +18,7 @@ def ctx() -> RunContextWrapper[AgentToolContext]:
     filestore = SpecstarFileStore(spec)
     return RunContextWrapper(
         AgentToolContext(
-            workspace_id="ws-test",
+            investigation_id="ws-test",
             sandbox=sandbox,
             filestore=filestore,
             sync=SandboxSync(filestore=filestore, sandbox=sandbox),

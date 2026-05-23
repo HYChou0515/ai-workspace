@@ -21,13 +21,13 @@ class AgentToolContext:
     before each shell so the sandbox sees writes the agent just made.
 
     `ensure_sandbox_via` lets the caller (typically the API layer's
-    WorkspaceRegistry) own handle creation — so the registry's
+    InvestigationRegistry) own handle creation — so the registry's
     restore-after-create hook fires and idle-kill can later find and
     reap the handle. When unset, ctx falls back to a direct
     `sandbox.create(...)`; useful in tests that don't wire a registry.
     """
 
-    workspace_id: str
+    investigation_id: str
     sandbox: Sandbox
     filestore: FileStore
     sync: SandboxSync

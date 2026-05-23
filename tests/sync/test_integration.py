@@ -1,7 +1,7 @@
 """End-to-end persistence test: workspace files survive sandbox restarts.
 
 This is the user-facing promise plan-backend §3.4 exists to deliver.
-Glues together WorkspaceRegistry (sticky session, restore-after-create,
+Glues together InvestigationRegistry (sticky session, restore-after-create,
 reverse-before-kill), SandboxSync (the three move ops), MockSandbox
 (stand-in for any real adapter), and SpecstarFileStore (durable store).
 """
@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from specstar import SpecStar
 
-from workspace_app.api.registry import WorkspaceRegistry
+from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxSpec
@@ -25,7 +25,7 @@ def stack():
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     return registry, sandbox, filestore
 
 

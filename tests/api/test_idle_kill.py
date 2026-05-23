@@ -91,7 +91,7 @@ async def test_idle_killer_reaps_session_past_threshold():
         idle_check_interval=timedelta(seconds=0.05),
     )
     async with _running_app(app) as client:
-        resp = await client.post("/workspaces/ws/messages", json={"content": "x"})
+        resp = await client.post("/investigations/ws/messages", json={"content": "x"})
         assert resp.status_code == 200
         assert sandbox.create_calls == 1
         # Wait long enough for idle threshold + at least one sweep.
@@ -108,7 +108,7 @@ async def test_active_session_within_threshold_is_not_reaped():
         idle_check_interval=timedelta(seconds=0.05),
     )
     async with _running_app(app) as client:
-        await client.post("/workspaces/ws/messages", json={"content": "x"})
+        await client.post("/investigations/ws/messages", json={"content": "x"})
         # Sweep happens but nothing's idle yet.
         await asyncio.sleep(0.2)
     # Lifespan-shutdown's close_all will count as a kill — so we only
@@ -125,8 +125,8 @@ async def test_shutdown_close_all_kills_alive_sessions():
         idle_check_interval=timedelta(seconds=60),
     )
     async with _running_app(app) as client:
-        await client.post("/workspaces/ws-a/messages", json={"content": "a"})
-        await client.post("/workspaces/ws-b/messages", json={"content": "b"})
+        await client.post("/investigations/ws-a/messages", json={"content": "a"})
+        await client.post("/investigations/ws-b/messages", json={"content": "b"})
         assert sandbox.create_calls == 2
         assert sandbox.kill_calls == 0  # nothing reaped yet
     # Lifespan exit happens here.

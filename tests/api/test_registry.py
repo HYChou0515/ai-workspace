@@ -1,4 +1,4 @@
-from workspace_app.api.registry import WorkspaceRegistry
+from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
@@ -21,21 +21,21 @@ class _CountingSandbox(MockSandbox):
 
 
 async def test_session_for_new_workspace_returns_session_with_no_handle():
-    registry = WorkspaceRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
     session = await registry.session("ws-1")
-    assert session.workspace_id == "ws-1"
+    assert session.investigation_id == "ws-1"
     assert session.handle is None
 
 
-async def test_same_workspace_id_returns_same_session_instance():
-    registry = WorkspaceRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+async def test_same_investigation_id_returns_same_session_instance():
+    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
     a = await registry.session("ws-1")
     b = await registry.session("ws-1")
     assert a is b
 
 
-async def test_different_workspace_ids_return_distinct_sessions():
-    registry = WorkspaceRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+async def test_different_investigation_ids_return_distinct_sessions():
+    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
     a = await registry.session("ws-1")
     b = await registry.session("ws-2")
     assert a is not b
@@ -43,7 +43,7 @@ async def test_different_workspace_ids_return_distinct_sessions():
 
 async def test_ensure_handle_creates_sandbox_on_first_call():
     sandbox = MockSandbox()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s = await registry.session("ws-1")
     assert s.handle is None
     handle = await registry.ensure_handle(s)
@@ -53,7 +53,7 @@ async def test_ensure_handle_creates_sandbox_on_first_call():
 
 async def test_ensure_handle_reuses_same_handle_on_second_call():
     sandbox = _CountingSandbox()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s = await registry.session("ws-1")
     h1 = await registry.ensure_handle(s)
     h2 = await registry.ensure_handle(s)
@@ -71,7 +71,7 @@ async def test_concurrent_ensure_handle_calls_create_exactly_once():
             return SandboxHandle(id=f"h-{self.create_calls}")
 
     sandbox = _SlowSandbox()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s = await registry.session("ws-1")
 
     handles = await asyncio.gather(*[registry.ensure_handle(s) for _ in range(8)])
@@ -83,7 +83,7 @@ async def test_kill_idle_kills_sessions_past_threshold():
     from datetime import UTC, datetime, timedelta
 
     sandbox = _CountingSandbox()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     # Push the session's last_active 30 minutes into the past.
@@ -101,7 +101,7 @@ async def test_kill_idle_leaves_recent_sessions_alone():
     from datetime import timedelta
 
     sandbox = _CountingSandbox()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
 
@@ -115,11 +115,11 @@ async def test_kill_idle_leaves_recent_sessions_alone():
 async def test_kill_idle_ignores_sessions_with_no_handle():
     """A session that never made a sandbox shouldn't get a kill call,
     but should still be evicted from the registry once idle — otherwise
-    the dict grows without bound from every workspace_id ever requested."""
+    the dict grows without bound from every investigation_id ever requested."""
     from datetime import UTC, datetime, timedelta
 
     sandbox = _CountingSandbox()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s = await registry.session("ws-1")
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
 
@@ -133,7 +133,7 @@ async def test_kill_idle_ignores_sessions_with_no_handle():
 
 async def test_close_all_kills_every_alive_handle():
     sandbox = _CountingSandbox()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s1 = await registry.session("ws-1")
     s2 = await registry.session("ws-2")
     await registry.session("ws-3")  # no handle ever created
@@ -154,7 +154,7 @@ class _RecordingSync:
     """Stand-in for SandboxSync that records calls so we can assert order."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []  # (op, workspace_id)
+        self.calls: list[tuple[str, str]] = []  # (op, investigation_id)
 
     async def restore(self, workspace_id, handle):
         self.calls.append(("restore", workspace_id))
@@ -172,7 +172,7 @@ class _RecordingSync:
 async def test_ensure_handle_calls_sync_restore_after_create():
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     assert sync.calls == [("restore", "ws-1")]
@@ -182,7 +182,7 @@ async def test_ensure_handle_calls_sync_restore_after_create():
 async def test_ensure_handle_skips_restore_when_handle_already_alive():
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     await registry.ensure_handle(s)  # already alive
@@ -207,7 +207,7 @@ async def test_kill_idle_calls_reverse_before_sandbox_kill():
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
@@ -221,7 +221,7 @@ async def test_kill_idle_does_not_reverse_for_handleless_sessions():
 
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     s = await registry.session("ws-1")
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
 
@@ -244,7 +244,7 @@ async def test_close_all_reverses_before_killing_each():
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
-    registry = WorkspaceRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     s1 = await registry.session("ws-1")
     s2 = await registry.session("ws-2")
     await registry.ensure_handle(s1)
@@ -262,3 +262,66 @@ async def test_close_all_reverses_before_killing_each():
     )
     assert reverse_idx_1 < kill_idx_1
     assert reverse_idx_2 < kill_idx_2
+
+
+# ---- close_session (manual close) ----
+
+
+async def test_close_session_reverses_then_kills_then_evicts():
+    """Manual close — used by POST /investigations/{id}/close — runs
+    reverse-sync, kills the sandbox handle, and removes the session
+    from the registry."""
+    events: list[str] = []
+
+    class _RecordingSandbox(_CountingSandbox):
+        async def kill(self, handle):
+            events.append("sandbox.kill")
+            await super().kill(handle)
+
+    class _RecordingSyncWithLog(_RecordingSync):
+        async def reverse(self, workspace_id, handle):
+            events.append("sync.reverse")
+            return await super().reverse(workspace_id, handle)
+
+    sandbox = _RecordingSandbox()
+    sync = _RecordingSyncWithLog()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+
+    await registry.close_session("ws-1")
+    assert events == ["sync.reverse", "sandbox.kill"]
+    new = await registry.session("ws-1")
+    assert new is not s
+
+
+async def test_close_session_is_noop_for_unknown_workspace():
+    sandbox = _CountingSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    await registry.close_session("never-touched")
+    assert sandbox.kill_calls == 0
+
+
+async def test_close_session_skips_reverse_when_no_handle():
+    """Session was created but ensure_handle never called — no handle
+    to kill, no sync.reverse to run, but the session still gets evicted."""
+    sandbox = _CountingSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    s = await registry.session("ws-1")
+    await registry.close_session("ws-1")
+    assert sandbox.kill_calls == 0
+    assert sync.calls == []
+    new = await registry.session("ws-1")
+    assert new is not s
+
+
+async def test_close_session_without_sync_just_kills_handle():
+    """When the registry was constructed without a sync hook, close_session
+    still kills the handle — it just skips the reverse-sync step."""
+    sandbox = _CountingSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    await registry.close_session("ws-1")
+    assert sandbox.kill_calls == 1

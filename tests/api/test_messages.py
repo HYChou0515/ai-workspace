@@ -2,7 +2,7 @@ import json
 
 from specstar import QB
 
-from workspace_app.resources import Conversation, Workspace
+from workspace_app.resources import Conversation, Investigation
 
 from .conftest import Harness
 
@@ -17,13 +17,13 @@ def _parse_sse(body: str) -> list[dict]:
 
 
 def test_post_message_returns_sse_stream(harness: Harness):
-    response = harness.client.post("/workspaces/ws-1/messages", json={"content": "hello"})
+    response = harness.client.post("/investigations/ws-1/messages", json={"content": "hello"})
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
 
 
 def test_post_message_streams_all_scripted_events(harness: Harness):
-    response = harness.client.post("/workspaces/ws-1/messages", json={"content": "hello"})
+    response = harness.client.post("/investigations/ws-1/messages", json={"content": "hello"})
     events = _parse_sse(response.text)
     types = [e["type"] for e in events]
     assert types == ["tool_start", "tool_end", "message_delta", "message_delta", "done"]
@@ -32,24 +32,24 @@ def test_post_message_streams_all_scripted_events(harness: Harness):
 def test_post_message_appends_to_conversation(harness: Harness):
     # Create another workspace first so the conversation-lookup loop has to
     # skip a non-matching entry — exercises the false branch of the inner if.
-    harness.client.post("/workspaces/ws-other/messages", json={"content": "ignored"})
-    harness.client.post("/workspaces/ws-1/messages", json={"content": "first"})
-    harness.client.post("/workspaces/ws-1/messages", json={"content": "second"})
+    harness.client.post("/investigations/ws-other/messages", json={"content": "ignored"})
+    harness.client.post("/investigations/ws-1/messages", json={"content": "first"})
+    harness.client.post("/investigations/ws-1/messages", json={"content": "second"})
     rm = harness.spec.get_resource_manager(Conversation)
     convs: list[Conversation] = []
     for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
         data = r.data
         assert isinstance(data, Conversation)
-        if data.workspace_id == "ws-1":
+        if data.investigation_id == "ws-1":
             convs.append(data)
     assert len(convs) == 1
     assert [m.content for m in convs[0].messages] == ["first", "second"]
 
 
-def test_workspace_crud_via_specstar_routes(harness: Harness):
-    resp = harness.client.post("/workspace", json={"name": "demo"})
+def test_investigation_crud_via_specstar_routes(harness: Harness):
+    resp = harness.client.post("/investigation", json={"title": "demo", "owner": "default-user"})
     assert resp.status_code == 200
-    rm = harness.spec.get_resource_manager(Workspace)
+    rm = harness.spec.get_resource_manager(Investigation)
     assert rm.count_resources(QB.all()) == 1  # ty: ignore[invalid-argument-type]
 
 
@@ -106,7 +106,7 @@ def test_spa_mount_skipped_when_dist_missing(tmp_path):
         spa_dist=tmp_path / "does-not-exist",
     )
     # POST messages still works.
-    resp = TestClient(app).post("/workspaces/x/messages", json={"content": "y"})
+    resp = TestClient(app).post("/investigations/x/messages", json={"content": "y"})
     assert resp.status_code == 200
 
 
@@ -139,14 +139,16 @@ def test_create_app_works_without_explicit_spec():
         filestore=_FS(),
         runner=ScriptedAgentRunner([RunDone()]),
     )
-    assert TestClient(app).post("/workspaces/x/messages", json={"content": "y"}).status_code == 200
+    assert (
+        TestClient(app).post("/investigations/x/messages", json={"content": "y"}).status_code == 200
+    )
 
 
 async def test_list_files_returns_path_size_pairs(harness: Harness):
     await harness.filestore.write("ws-files", "/a.txt", b"hello")
     await harness.filestore.write("ws-files", "/sub/b.txt", b"world!")
 
-    resp = harness.client.get("/workspaces/ws-files/files")
+    resp = harness.client.get("/investigations/ws-files/files")
     assert resp.status_code == 200
     by_path = {it["path"]: it["size"] for it in resp.json()}
     assert by_path == {"/a.txt": 5, "/sub/b.txt": 6}
@@ -156,14 +158,14 @@ async def test_list_files_prefix_filter(harness: Harness):
     await harness.filestore.write("ws-files", "/src/a.py", b"a")
     await harness.filestore.write("ws-files", "/src/b.py", b"b")
     await harness.filestore.write("ws-files", "/README", b"r")
-    resp = harness.client.get("/workspaces/ws-files/files?prefix=/src/")
+    resp = harness.client.get("/investigations/ws-files/files?prefix=/src/")
     paths = [it["path"] for it in resp.json()]
     assert sorted(paths) == ["/src/a.py", "/src/b.py"]
 
 
 async def test_read_file_returns_text_for_utf8(harness: Harness):
     await harness.filestore.write("ws-files", "/a.txt", b"hello")
-    resp = harness.client.get("/workspaces/ws-files/files/a.txt")
+    resp = harness.client.get("/investigations/ws-files/files/a.txt")
     assert resp.status_code == 200
     assert resp.content == b"hello"
     assert resp.headers["content-type"].startswith("text/plain")
@@ -171,13 +173,13 @@ async def test_read_file_returns_text_for_utf8(harness: Harness):
 
 async def test_read_file_returns_octet_stream_for_binary(harness: Harness):
     await harness.filestore.write("ws-files", "/bin", b"\xff\xfe\x00\x01")
-    resp = harness.client.get("/workspaces/ws-files/files/bin")
+    resp = harness.client.get("/investigations/ws-files/files/bin")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/octet-stream")
 
 
 def test_read_file_missing_returns_404(harness: Harness):
-    resp = harness.client.get("/workspaces/ws-files/files/nope")
+    resp = harness.client.get("/investigations/ws-files/files/nope")
     assert resp.status_code == 404
 
 
@@ -205,7 +207,7 @@ def test_runner_exception_is_emitted_as_error_event():
         filestore=SpecstarFileStore(spec),
         runner=_Boom(),
     )
-    resp = TestClient(app).post("/workspaces/x/messages", json={"content": "y"})
+    resp = TestClient(app).post("/investigations/x/messages", json={"content": "y"})
     body = resp.text
     assert "error" in body
     assert "boom" in body
