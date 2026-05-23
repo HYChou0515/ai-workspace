@@ -220,7 +220,6 @@ function NotebookBody({
   if (nb.cells.length === 0) {
     return (
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-        <div className="caps">{path}</div>
         <p style={{ color: "var(--text-paper-d)" }}>
           Empty notebook. Add the first cell to get started.
         </p>
@@ -246,7 +245,6 @@ function NotebookBody({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div className="caps">{path}</div>
       {nb.cells.map((cell, i) => (
         <Cell
           key={i}

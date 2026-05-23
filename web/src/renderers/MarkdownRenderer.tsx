@@ -29,20 +29,17 @@ export function MarkdownRenderer({ path }: { investigationId: string; path: stri
   const text = entry.text;
   const editing = isEditing(path);
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {editing ? (
-        <div style={{ height: 480 }}>
-          <MonacoEditor value={text} onChange={setText} language="markdown" minHeight={480} />
-        </div>
-      ) : (
-        <article className="md-body">
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
-        </article>
-      )}
-
-      <style>{MARKDOWN_CSS}</style>
+  // Editing fills the pane (Monaco scrolls internally); preview flows and
+  // the pane scrolls. The path lives in the breadcrumb, not here.
+  return editing ? (
+    <div style={{ height: "100%", minHeight: 0 }}>
+      <MonacoEditor value={text} onChange={setText} language="markdown" minHeight={0} />
     </div>
+  ) : (
+    <article className="md-body">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+      <style>{MARKDOWN_CSS}</style>
+    </article>
   );
 }
 

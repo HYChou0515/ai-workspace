@@ -50,7 +50,6 @@ function ImageView({
     .join("/")}`;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      <div className="caps">{path}</div>
       <img
         src={src}
         alt={path}

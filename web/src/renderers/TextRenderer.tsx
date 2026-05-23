@@ -18,41 +18,19 @@ export function TextRenderer({ path }: { investigationId: string; path: string }
     return <Status>Binary file — {entry.size} bytes.</Status>;
   }
 
+  // No path/status header — the pane breadcrumb shows the path and the tab
+  // shows the dirty dot. The editor fills the whole pane.
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%" }}>
-      <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-        }}
-      >
-        <div className="caps">{path}</div>
-        <span
-          style={{
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            color: "var(--text-paper-d2)",
-          }}
-        >
-          {saveLabel(entry.save)}
-        </span>
-      </div>
-      <div style={{ flex: 1, minHeight: 360 }}>
-        <MonacoEditor
-          value={entry.text}
-          onChange={setText}
-          language={monacoLanguage(path)}
-          minimap
-          minHeight={360}
-        />
-      </div>
+    <div style={{ height: "100%", minHeight: 0 }}>
+      <MonacoEditor
+        value={entry.text}
+        onChange={setText}
+        language={monacoLanguage(path)}
+        minimap
+        minHeight={0}
+      />
     </div>
   );
-}
-
-function saveLabel(s: string): string {
-  return s === "saving" ? "saving…" : s === "saved" ? "autosaved" : s === "dirty" ? "unsaved…" : "";
 }
 
 function Status({ children, tone = "muted" }: { children: React.ReactNode; tone?: "muted" | "err" }) {

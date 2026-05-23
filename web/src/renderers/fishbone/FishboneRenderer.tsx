@@ -55,7 +55,6 @@ export function FishboneRenderer({ path }: { investigationId: string; path: stri
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div className="caps">{path}</div>
       <svg
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         style={{ width: "100%", maxWidth: 1000, height: "auto" }}
