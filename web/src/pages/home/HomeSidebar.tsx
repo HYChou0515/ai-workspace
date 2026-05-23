@@ -34,6 +34,7 @@ export function HomeSidebar({
   filters,
   onFilters,
   onNewInvestigation,
+  onOpenTemplates,
   onOpenInvestigation,
 }: {
   items: Investigation[];
@@ -45,6 +46,7 @@ export function HomeSidebar({
   filters: Filters;
   onFilters: (next: Filters) => void;
   onNewInvestigation: () => void;
+  onOpenTemplates: () => void;
   onOpenInvestigation: (id: string) => void;
 }) {
   const byStatus = countByStatus(items);
@@ -71,8 +73,7 @@ export function HomeSidebar({
 
   const onNavClick = (key: HomeTab | ExtraNav) => {
     if (key === "templates") {
-      // No templates surface yet — but the modal is the closest thing.
-      onNewInvestigation();
+      onOpenTemplates();
       return;
     }
     // "pinned" and "recently_viewed" are now real HomeTab filter views.

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import type { InvestigationInput } from "../api/types";
 import { NewInvestigationModal } from "../components/NewInvestigationModal";
+import { TemplatesModal } from "../components/TemplatesModal";
 import { useInvestigations } from "../hooks/useInvestigations";
 import { usePersistentDeque, usePersistentSet } from "../hooks/usePersistentSet";
 import { HomeMain } from "./home/HomeMain";
@@ -23,6 +24,20 @@ export function Home() {
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<HomeTab>("all");
   const [modalOpen, setModalOpen] = useState(false);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [presetTemplate, setPresetTemplate] = useState<string | undefined>(undefined);
+  const [templates, setTemplates] = useState<string[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .listTemplates()
+      .then((t) => alive && setTemplates(t))
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
   // Seed filters from the URL — breadcrumb topic/product links land here
   // (e.g. /?topic=Reflow%20zone-3&product=MX-7%20board).
   const [filters, setFilters] = useState<Filters>(() => ({
@@ -86,7 +101,11 @@ export function Home() {
         recent={recent.values}
         filters={filters}
         onFilters={setFilters}
-        onNewInvestigation={() => setModalOpen(true)}
+        onNewInvestigation={() => {
+          setPresetTemplate(undefined);
+          setModalOpen(true);
+        }}
+        onOpenTemplates={() => setTemplatesOpen(true)}
         onOpenInvestigation={openInvestigation}
       />
       <HomeMain
@@ -107,10 +126,21 @@ export function Home() {
         togglePin={pinned.toggle}
         onOpenInvestigation={openInvestigation}
       />
+      <TemplatesModal
+        open={templatesOpen}
+        templates={templates}
+        onClose={() => setTemplatesOpen(false)}
+        onPick={(profile) => {
+          setTemplatesOpen(false);
+          setPresetTemplate(profile);
+          setModalOpen(true);
+        }}
+      />
       <NewInvestigationModal
         open={modalOpen}
         onSubmit={handleCreate}
         onClose={() => setModalOpen(false)}
+        initialTemplate={presetTemplate}
       />
     </div>
   );

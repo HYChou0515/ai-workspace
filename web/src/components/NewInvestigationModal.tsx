@@ -13,10 +13,13 @@ export function NewInvestigationModal({
   open,
   onSubmit,
   onClose,
+  initialTemplate,
 }: {
   open: boolean;
   onSubmit: (input: InvestigationInput) => void;
   onClose: () => void;
+  /** Preselect this template profile when opened from the Templates gallery. */
+  initialTemplate?: string;
 }) {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -47,6 +50,11 @@ export function NewInvestigationModal({
       alive = false;
     };
   }, [open]);
+
+  // Preselect the template the gallery launched us with.
+  useEffect(() => {
+    if (open && initialTemplate) setTemplate(initialTemplate);
+  }, [open, initialTemplate]);
 
   if (!open) return null;
 
