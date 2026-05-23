@@ -67,6 +67,10 @@ class LocalProcessSandbox:
         target = self._resolve(cwd, remote_path)
         return await asyncio.to_thread(target.read_bytes)
 
+    async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
+        self._require(handle)
+        return ("127.0.0.1", container_port)
+
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         cwd = self._require(handle)
         base = self._resolve(cwd, root) if root.strip("/") else cwd

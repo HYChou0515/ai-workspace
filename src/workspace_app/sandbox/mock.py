@@ -6,6 +6,7 @@ from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, San
 class MockSandbox:
     def __init__(self) -> None:
         self._fs: dict[str, dict[str, bytes]] = {}
+        self._exposed: dict[str, list[int]] = {}
 
     def _require(self, handle: SandboxHandle) -> dict[str, bytes]:
         if handle.id not in self._fs:
@@ -15,11 +16,25 @@ class MockSandbox:
     async def create(self, spec: SandboxSpec) -> SandboxHandle:
         handle = SandboxHandle(id=str(uuid.uuid4()))
         self._fs[handle.id] = {}
+        self._exposed[handle.id] = list(spec.exposed_ports)
         return handle
 
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)
         del self._fs[handle.id]
+        self._exposed.pop(handle.id, None)
+
+    async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
+        self._require(handle)
+        ports = self._exposed.setdefault(handle.id, [])
+        if container_port not in ports:
+            ports.append(container_port)
+        return ("127.0.0.1", container_port)
+
+    def exposed_ports(self, handle: SandboxHandle) -> list[int]:
+        """Test-only spy: which ports has the agent asked to expose?"""
+        self._require(handle)
+        return list(self._exposed.get(handle.id, []))
 
     async def exec(self, handle: SandboxHandle, cmd: list[str]) -> ExecResult:
         fs = self._require(handle)

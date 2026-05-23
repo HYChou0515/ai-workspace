@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING, Any
 from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, SandboxSpec
 
 if TYPE_CHECKING:
-    from docker import DockerClient
     from docker.models.containers import Container
+
+    from docker import DockerClient
 
 
 _WORKDIR = "/workspace"
@@ -48,6 +49,10 @@ class DockerSandbox:
         return handle
 
     def _start_container(self, spec: SandboxSpec) -> Container:
+        # Pre-publish the requested container ports to random host ports.
+        # `None` for the host side tells docker to pick a free one; we
+        # look it up later via `expose_port`.
+        ports = {f"{p}/tcp": None for p in spec.exposed_ports} or None
         return self._client.containers.run(
             spec.image,
             command=["sleep", "infinity"],
@@ -58,6 +63,7 @@ class DockerSandbox:
             auto_remove=False,
             labels={"workspace-app": "1"},
             entrypoint=[],
+            ports=ports,
         )
 
     async def kill(self, handle: SandboxHandle) -> None:
@@ -106,6 +112,20 @@ class DockerSandbox:
             raise FileNotFoundError(remote_path) from exc
         data = b"".join(stream)
         return _extract_single_file_from_tar(data, target.name)
+
+    async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
+        container = self._require(handle)
+        await asyncio.to_thread(container.reload)
+        attrs: Any = container.attrs or {}
+        port_map = (attrs.get("NetworkSettings") or {}).get("Ports") or {}
+        binds = port_map.get(f"{container_port}/tcp") or []
+        if not binds:
+            raise ValueError(
+                f"port {container_port} not pre-published — declare it in "
+                "SandboxSpec.exposed_ports before create()"
+            )
+        first = binds[0]
+        return (first.get("HostIp") or "127.0.0.1", int(first["HostPort"]))
 
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         container = self._require(handle)

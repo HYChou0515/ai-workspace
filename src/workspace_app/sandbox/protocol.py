@@ -15,6 +15,11 @@ class SandboxHandle:
 class SandboxSpec:
     image: str = "python:3.12-slim"
     env: dict[str, str] | None = None
+    # Ports inside the sandbox that must be reachable from the backend.
+    # Docker requires these to be declared up-front (you can't publish a
+    # port on a running container), so the KernelService pre-declares
+    # the 5 ZMQ ports here when it knows it'll need them.
+    exposed_ports: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -46,3 +51,4 @@ class Sandbox(Protocol):
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None: ...
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes: ...
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]: ...
+    async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]: ...
