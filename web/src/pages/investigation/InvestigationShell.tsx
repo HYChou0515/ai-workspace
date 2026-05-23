@@ -2235,61 +2235,101 @@ function PanelBody({
   // the full panel height) — see TerminalPane.
 
   if (tab === "run_history") {
-    const calls = log.entries.filter(
-      (e) => e.kind === "tool_call",
-    );
+    const calls = log.entries.filter((e) => e.kind === "tool_call");
     if (calls.length === 0) {
       return <div style={{ color: "var(--text-paper-d)" }}>No tool runs yet.</div>;
     }
+    // Full run detail: command + args + the complete output, not just a name.
     return (
       <>
         {calls.map((e, i) =>
           e.kind === "tool_call" ? (
-            <LogLine
-              key={i}
-              ts={e.call.status === "running" ? "•" : "✓"}
-              kind={e.call.status === "running" ? "accent" : "muted"}
-              text={`${e.call.name}(${Object.keys(e.call.args).join(", ")})`}
-            />
+            <div key={i} style={{ marginBottom: 10 }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+                <span style={{ color: e.call.status === "running" ? "var(--accent)" : "var(--text-paper-d2)" }}>
+                  {e.call.status === "running" ? "•" : "✓"}
+                </span>
+                <span style={{ fontWeight: 600 }}>{e.call.name}</span>
+                <span style={{ color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  {argsLine(e.call.args)}
+                </span>
+              </div>
+              {e.call.parseError && (
+                <div style={{ color: "var(--warn)", fontSize: 12, marginLeft: 16 }}>
+                  parse-error → {e.call.parseError}
+                </div>
+              )}
+              {e.call.output !== undefined && e.call.output !== "" && (
+                <pre style={logPre}>{e.call.output}</pre>
+              )}
+            </div>
           ) : null,
         )}
       </>
     );
   }
 
-  // agent_log — show a derived line per entry
-  type Line = { k: "info" | "accent" | "warn" | "muted"; t: string; key: number };
-  const lines: Line[] = log.entries.flatMap((e, i): Line[] => {
-    if (e.kind === "banner") return [{ k: "warn", t: e.text, key: i }];
-    if (e.kind === "tool_call") {
-      return [
-        {
-          k: e.call.status === "running" ? "accent" : "muted",
-          t: `${e.call.status === "running" ? "tool_start" : "tool_end"} ${e.call.name}`,
-          key: i,
-        },
-      ];
-    }
-    return [
-      {
-        k: e.message.role === "user" ? "info" : "muted",
-        t: `${e.message.role}: ${e.message.content.slice(0, 80)}`,
-        key: i,
-      },
-    ];
-  });
-  if (lines.length === 0 && !log.streaming) {
+  // agent_log — the full event transcript (more than the chat box: every
+  // message in full, every tool start/end with args + complete output).
+  if (log.entries.length === 0 && !log.streaming) {
     return <div style={{ color: "var(--text-paper-d)" }}>Idle.</div>;
   }
   return (
     <>
-      {lines.map((l) => (
-        <LogLine key={l.key} ts="" kind={l.k} text={l.t} />
-      ))}
+      {log.entries.map((e, i) => {
+        if (e.kind === "banner") return <LogLine key={i} ts="" kind="warn" text={e.text} />;
+        if (e.kind === "tool_call") {
+          return (
+            <div key={i} style={{ marginBottom: 6 }}>
+              <div style={{ display: "flex", gap: 8 }}>
+                <span style={{ width: 64, color: e.call.status === "running" ? "var(--accent)" : "var(--text-paper-d)", flexShrink: 0 }}>
+                  {e.call.status === "running" ? "tool ▸" : "tool ✓"}
+                </span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                  {e.call.name}({argsLine(e.call.args)})
+                </span>
+              </div>
+              {e.call.output !== undefined && e.call.output !== "" && (
+                <pre style={logPre}>{e.call.output}</pre>
+              )}
+            </div>
+          );
+        }
+        return (
+          <div key={i} style={{ marginBottom: 6 }}>
+            <div style={{ color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)" }}>
+              {e.message.role}
+            </div>
+            {e.message.reasoning && (
+              <pre style={{ ...logPre, opacity: 0.7 }}>{e.message.reasoning}</pre>
+            )}
+            {e.message.content !== "" && <pre style={logPre}>{e.message.content}</pre>}
+          </div>
+        );
+      })}
       {log.streaming && <LogLine ts="" kind="accent" text="…streaming" />}
     </>
   );
 }
+
+/** Compact `k=v` arg summary for a tool call. */
+function argsLine(args: Record<string, unknown>): string {
+  return Object.entries(args)
+    .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
+    .join(" ");
+}
+
+const logPre: React.CSSProperties = {
+  margin: "2px 0 0 16px",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+  fontFamily: "var(--font-mono)",
+  fontSize: 12,
+  color: "var(--text-paper)",
+  background: "var(--paper-2)",
+  padding: "6px 8px",
+  borderRadius: 4,
+};
 
 function LogLine({
   ts,
