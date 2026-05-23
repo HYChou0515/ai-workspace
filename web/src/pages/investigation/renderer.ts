@@ -44,6 +44,35 @@ export function pickRenderer(path: string): RendererKey {
   }
 }
 
+/** True when the active view is a raw full-bleed code editor (Monaco) vs a
+ * rendered preview. Drives the pane padding — editors sit edge-to-edge,
+ * previews get breathing room. */
+export function isRawEditorView(kind: RendererKey, editing: boolean): boolean {
+  if (kind === "text" || kind === "csv" || kind === "json") return true;
+  if (kind === "markdown" || kind === "image") return editing;
+  return false; // notebook / report / fishbone render their own layout
+}
+
+/** MIME type for an image path, for building a Blob URL from edited bytes. */
+export function imageMime(path: string): string {
+  const ext = path.toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "gif":
+      return "image/gif";
+    case "svg":
+      return "image/svg+xml";
+    case "webp":
+      return "image/webp";
+    default:
+      return "application/octet-stream";
+  }
+}
+
 /** Does this file type have markdown headings worth showing in the
  * Outline panel? Both the markdown renderer and the report renderer
  * (which wraps /report.v*.md) render markdown bodies. */

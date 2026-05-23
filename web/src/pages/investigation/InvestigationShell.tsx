@@ -34,7 +34,13 @@ import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
 import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
-import { basename, breadcrumbSegments, dirChildren, pickRenderer } from "./renderer";
+import {
+  basename,
+  breadcrumbSegments,
+  dirChildren,
+  isRawEditorView,
+  pickRenderer,
+} from "./renderer";
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPane } from "./TerminalPane";
 
@@ -1454,6 +1460,10 @@ function GroupPane({
 }) {
   const [edge, setEdge] = useState<Edge | null>(null);
   const activePath = group.activePath;
+  const { isEditing } = useEditMode();
+  // Raw editors sit edge-to-edge (pad 0); rendered previews get breathing room.
+  const rawEditor =
+    activePath != null && isRawEditorView(pickRenderer(activePath), isEditing(activePath));
 
   const hasPayload = (e: React.DragEvent) =>
     e.dataTransfer.types.includes("application/x-rca-tab") ||
@@ -1515,7 +1525,10 @@ function GroupPane({
         files={files}
         onOpen={(p) => groups.openInGroup(group.id, p, { preview: false })}
       />
-      <div className="scrollable" style={{ flex: 1, overflow: "auto", padding: 20 }}>
+      <div
+        className="scrollable"
+        style={{ flex: 1, overflow: "auto", padding: rawEditor ? 0 : 20 }}
+      >
         {activePath ? (
           <FileView investigationId={investigationId} path={activePath} />
         ) : (

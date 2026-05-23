@@ -1,6 +1,45 @@
 import { describe, expect, it } from "vitest";
 
-import { basename, breadcrumbSegments, dirChildren, dirname, pickRenderer } from "./renderer";
+import {
+  basename,
+  breadcrumbSegments,
+  dirChildren,
+  dirname,
+  imageMime,
+  isRawEditorView,
+  pickRenderer,
+} from "./renderer";
+
+describe("isRawEditorView", () => {
+  it("text-like kinds are always raw editors", () => {
+    for (const k of ["text", "csv", "json"] as const) {
+      expect(isRawEditorView(k, false)).toBe(true);
+      expect(isRawEditorView(k, true)).toBe(true);
+    }
+  });
+  it("markdown and image are raw editors only while editing", () => {
+    expect(isRawEditorView("markdown", true)).toBe(true);
+    expect(isRawEditorView("markdown", false)).toBe(false);
+    expect(isRawEditorView("image", true)).toBe(true);
+    expect(isRawEditorView("image", false)).toBe(false);
+  });
+  it("rendered views are never raw editors", () => {
+    for (const k of ["notebook", "report", "fishbone"] as const) {
+      expect(isRawEditorView(k, true)).toBe(false);
+    }
+  });
+});
+
+describe("imageMime", () => {
+  it("maps extensions to image MIME types", () => {
+    expect(imageMime("/a.png")).toBe("image/png");
+    expect(imageMime("/a.JPG")).toBe("image/jpeg");
+    expect(imageMime("/a.jpeg")).toBe("image/jpeg");
+    expect(imageMime("/a.gif")).toBe("image/gif");
+    expect(imageMime("/a.svg")).toBe("image/svg+xml");
+    expect(imageMime("/a.webp")).toBe("image/webp");
+  });
+});
 
 describe("pickRenderer", () => {
   it("routes /report.vN.md to the report renderer (not generic markdown)", () => {

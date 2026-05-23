@@ -3,8 +3,12 @@
  * Renderers that aren't shipped yet fall through to a "coming soon" stub.
  */
 
+import { useEffect, useMemo } from "react";
+
+import { encodeText } from "../api/encoding";
 import { useEditMode } from "../hooks/editMode";
-import { pickRenderer } from "../pages/investigation/renderer";
+import { useFileBuffer } from "../hooks/fileBuffer";
+import { imageMime, pickRenderer } from "../pages/investigation/renderer";
 import { FishboneRenderer } from "./fishbone/FishboneRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
@@ -44,20 +48,32 @@ function ImageView({
   investigationId: string;
   path: string;
 }) {
-  // Preview by default; the tab strip's Edit toggle flips to the byte
-  // editor so even an image can be opened and edited (#all-editable).
+  // Preview by default; the tab strip's Edit toggle flips to the byte editor
+  // so even an image can be edited (#all-editable). The preview renders the
+  // BUFFER's current bytes (not a cached server URL), so an edit shows up
+  // immediately and a no-longer-valid image reads as broken, not stale.
   const { isEditing } = useEditMode();
-  if (isEditing(path)) return <TextRenderer investigationId={investigationId} path={path} />;
+  const { entry } = useFileBuffer(path);
+  const editing = isEditing(path);
 
-  // Served straight off the read endpoint; the browser fetches the bytes.
-  const src = `/investigations/${encodeURIComponent(investigationId)}/files/${path
-    .split("/")
-    .map(encodeURIComponent)
-    .join("/")}`;
+  const url = useMemo(() => {
+    if (entry.status !== "ready" || entry.kind !== "text") return null;
+    const bytes = encodeText(entry.text, entry.encoding);
+    return URL.createObjectURL(
+      new Blob([bytes.buffer as ArrayBuffer], { type: imageMime(path) }),
+    );
+  }, [entry.status, entry.kind, entry.text, entry.encoding, path]);
+
+  useEffect(() => () => void (url && URL.revokeObjectURL(url)), [url]);
+
+  if (editing) return <TextRenderer investigationId={investigationId} path={path} />;
+  if (entry.status === "loading" || !url) {
+    return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
+  }
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
       <img
-        src={src}
+        src={url}
         alt={path}
         style={{ maxWidth: "100%", borderRadius: "var(--radius-card)" }}
       />
