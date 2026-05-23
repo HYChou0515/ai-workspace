@@ -3,7 +3,7 @@
  * nav list, topics, footer user. Driven by aggregated state.
  */
 
-import type { Investigation } from "../../api/types";
+import { formatInvestigationId, type Investigation } from "../../api/types";
 import { Icon } from "../../components/Icon";
 import { RcaLockup } from "../../components/RcaMark";
 import {
@@ -70,22 +70,12 @@ export function HomeSidebar({
   ];
 
   const onNavClick = (key: HomeTab | ExtraNav) => {
-    if (key === "pinned") {
-      // No HomeTab corresponds; switch to all + populate ids? Simplest:
-      // surface them in the "recently viewed" section below. For now,
-      // ensure "all" tab is active and let user use the table.
-      onTab("all");
-      return;
-    }
-    if (key === "recently_viewed") {
-      onTab("all");
-      return;
-    }
     if (key === "templates") {
       // No templates surface yet — but the modal is the closest thing.
       onNewInvestigation();
       return;
     }
+    // "pinned" and "recently_viewed" are now real HomeTab filter views.
     onTab(key);
   };
 
@@ -166,7 +156,7 @@ export function HomeSidebar({
                 key={inv.resource_id}
                 onClick={() => onOpenInvestigation(inv.resource_id)}
                 primary={inv.title}
-                secondary={inv.resource_id}
+                secondary={formatInvestigationId(inv.resource_id)}
               />
             ))}
           </Section>
@@ -182,7 +172,7 @@ export function HomeSidebar({
                   key={id}
                   onClick={() => onOpenInvestigation(id)}
                   primary={inv.title}
-                  secondary={inv.resource_id}
+                  secondary={formatInvestigationId(inv.resource_id)}
                 />
               );
             })}

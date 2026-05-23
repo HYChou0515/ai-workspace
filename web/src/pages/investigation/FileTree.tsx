@@ -50,9 +50,19 @@ export function FileTree({
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
   // Inline rename: the path being renamed.
   const [renaming, setRenaming] = useState<string | null>(null);
+  // Selected node — new file/folder is born relative to it (VSCode).
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [rootDrop, setRootDrop] = useState(false);
   const [uploadMenu, setUploadMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Where a new file/folder lands: inside the selected folder, or beside
+  // the selected file, else the root.
+  const createDir = (() => {
+    if (!selectedPath) return "";
+    const isFolder = files.some((f) => f.path.startsWith(selectedPath + "/"));
+    return isFolder ? selectedPath : selectedPath.split("/").slice(0, -1).join("/");
+  })();
   const folderInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = () => onChanged?.();
@@ -77,15 +87,28 @@ export function FileTree({
     if (firstPath) onOpen(firstPath, { preview: false });
   };
 
-  // Move (or Ctrl/⌘-copy) a dragged file into `destDir` ("" = root).
+  // Move (or Ctrl/⌘-copy) a dragged file OR folder into `destDir` ("" =
+  // root). Folders move their whole subtree, file by file.
   const dropFileInto = async (srcPath: string, destDir: string, copy: boolean) => {
-    const dest = `${destDir}/${basename(srcPath)}`.replace(/\/+/g, "/");
-    if (dest === srcPath) return;
+    const name = basename(srcPath);
+    const destBase = `${destDir}/${name}`.replace(/\/+/g, "/");
+    // A folder drag has children under "<srcPath>/"; relocate each, keeping
+    // the relative layout. A plain file has just itself.
+    const children = files.filter((f) => f.path.startsWith(srcPath + "/"));
+    const isFolder = children.length > 0;
+    const moves: [string, string][] = isFolder
+      ? children.map((f) => [f.path, `${destBase}${f.path.slice(srcPath.length)}`.replace(/\/+/g, "/")])
+      : [[srcPath, destBase]];
+    // No-op / nesting-into-self guards.
+    if (moves.some(([from, to]) => to === from)) return;
+    if (destBase === srcPath || destBase.startsWith(srcPath + "/")) return;
     try {
-      if (copy) await api.copyFile(investigationId, srcPath, dest);
-      else await api.moveFile(investigationId, srcPath, dest);
+      for (const [from, to] of moves) {
+        if (copy) await api.copyFile(investigationId, from, to);
+        else await api.moveFile(investigationId, from, to);
+      }
       refresh();
-      if (!copy) onOpen(dest, { preview: false });
+      if (!copy && !isFolder) onOpen(destBase, { preview: false });
     } catch (e) {
       alert(`${copy ? "Copy" : "Move"} failed: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -164,16 +187,22 @@ export function FileTree({
         </span>
         <button
           type="button"
-          title="New file"
-          onClick={() => setCreating({ kind: "file", dir: "" })}
+          title={createDir ? `New file in ${createDir}/` : "New file"}
+          onClick={() => {
+            if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
+            setCreating({ kind: "file", dir: createDir });
+          }}
           style={{ color: "var(--text-paper-d)", padding: 2 }}
         >
           <Icon name="plus" size={13} />
         </button>
         <button
           type="button"
-          title="New folder"
-          onClick={() => setCreating({ kind: "folder", dir: "" })}
+          title={createDir ? `New folder in ${createDir}/` : "New folder"}
+          onClick={() => {
+            if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
+            setCreating({ kind: "folder", dir: createDir });
+          }}
           style={{ color: "var(--text-paper-d)", padding: 2 }}
         >
           <Icon name="folder" size={13} />
@@ -307,10 +336,12 @@ export function FileTree({
             node={node}
             depth={0}
             activePath={activePath}
+            selectedPath={selectedPath}
             collapsed={collapsed}
             creating={creating}
             renaming={renaming}
             onOpen={onOpen}
+            onSelect={setSelectedPath}
             onCommitCreate={(name) => void commitCreate(name)}
             onCancelCreate={() => setCreating(null)}
             onCommitRename={(n, name) => void commitRename(n, name)}
@@ -319,6 +350,7 @@ export function FileTree({
             readDragFile={readDragFile}
             onContext={(n, e) => {
               e.preventDefault();
+              setSelectedPath(n.path);
               setMenu({ node: n, x: e.clientX, y: e.clientY });
             }}
           />
@@ -401,10 +433,12 @@ function TreeRow({
   node,
   depth,
   activePath,
+  selectedPath,
   collapsed,
   creating,
   renaming,
   onOpen,
+  onSelect,
   onContext,
   onCommitCreate,
   onCancelCreate,
@@ -416,10 +450,12 @@ function TreeRow({
   node: TreeNode;
   depth: number;
   activePath: string | null;
+  selectedPath: string | null;
   collapsed: ReturnType<typeof usePersistentSet>;
   creating: Creating;
   renaming: string | null;
   onOpen: OpenFn;
+  onSelect: (path: string) => void;
   onContext: (node: TreeNode, e: React.MouseEvent) => void;
   onCommitCreate: (name: string) => void;
   onCancelCreate: () => void;
@@ -450,9 +486,22 @@ function TreeRow({
       <div>
         <button
           type="button"
-          onClick={() => collapsed.toggle(node.path)}
+          draggable
+          onDragStart={(e) => {
+            e.dataTransfer.setData(
+              "application/x-rca-file",
+              JSON.stringify({ path: node.path }),
+            );
+            e.dataTransfer.effectAllowed = "copyMove";
+            setDragging(true);
+          }}
+          onDragEnd={() => setDragging(false)}
+          onClick={() => {
+            onSelect(node.path);
+            collapsed.toggle(node.path);
+          }}
           onContextMenu={(e) => onContext(node, e)}
-          // Drop target: move/copy a dragged file into this folder.
+          // Drop target: move/copy a dragged file or folder into this folder.
           onDragOver={(e) => {
             if (e.dataTransfer.types.includes("application/x-rca-file")) {
               e.preventDefault();
@@ -470,6 +519,7 @@ function TreeRow({
               onDropFile(d.path, node.path, e.ctrlKey || e.metaKey);
             }
           }}
+          title="Drag onto another folder to move · Ctrl/⌘ to copy"
           style={{
             display: "flex",
             alignItems: "center",
@@ -479,7 +529,16 @@ function TreeRow({
             textAlign: "left",
             color: "var(--text-paper-d)",
             fontSize: 12,
-            background: dropOver ? "var(--accent-soft)" : "transparent",
+            background: dropOver
+              ? "var(--accent-soft)"
+              : node.path === selectedPath
+                ? "var(--paper-2)"
+                : "transparent",
+            borderLeft:
+              node.path === selectedPath
+                ? "2px solid var(--accent)"
+                : "2px solid transparent",
+            opacity: dragging ? 0.4 : 1,
           }}
         >
           <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={12} />
@@ -502,10 +561,12 @@ function TreeRow({
                 node={c}
                 depth={depth + 1}
                 activePath={activePath}
+                selectedPath={selectedPath}
                 collapsed={collapsed}
                 creating={creating}
                 renaming={renaming}
                 onOpen={onOpen}
+                onSelect={onSelect}
                 onContext={onContext}
                 onCommitCreate={onCommitCreate}
                 onCancelCreate={onCancelCreate}
@@ -535,7 +596,10 @@ function TreeRow({
         setDragging(true);
       }}
       onDragEnd={() => setDragging(false)}
-      onClick={() => onOpen(node.path, { preview: true })}
+      onClick={() => {
+        onSelect(node.path);
+        onOpen(node.path, { preview: true });
+      }}
       onDoubleClick={() => onOpen(node.path, { preview: false })}
       onContextMenu={(e) => onContext(node, e)}
       title="Drag onto a folder to move · Ctrl/⌘-drag to copy · drag into a pane to open there"

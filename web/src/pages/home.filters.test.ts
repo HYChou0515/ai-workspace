@@ -45,8 +45,9 @@ describe("applyFilters", () => {
     expect(got.map((i) => i.resource_id)).toEqual(["INC-1"]);
   });
 
-  it("query matches formatted id (INC-…)", () => {
-    const got = applyFilters(items, { ...EMPTY_FILTERS, query: "INC-2" });
+  it("query matches the short formatted id", () => {
+    // formatInvestigationId("INC-2") → "INC2" (dashes stripped, first 8)
+    const got = applyFilters(items, { ...EMPTY_FILTERS, query: "INC2" });
     expect(got.map((i) => i.resource_id)).toEqual(["INC-2"]);
   });
 

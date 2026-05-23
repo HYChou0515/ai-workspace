@@ -9,18 +9,18 @@ import {
 } from "./types";
 
 describe("formatInvestigationId", () => {
-  it("passes already-formatted ids through unchanged", () => {
-    expect(formatInvestigationId("INC-2026-0142")).toBe("INC-2026-0142");
-  });
-
-  it("converts specstar uuid ids to a short display form", () => {
+  it("takes the first 8 hex of a specstar uuid, no prefix", () => {
     expect(
       formatInvestigationId("investigation:7855cbe8-2c14-4cff-a55d-64a1d6f71c56"),
-    ).toBe("INC-7855CBE8");
+    ).toBe("7855cbe8");
   });
 
-  it("upper-cases anything else as-is", () => {
-    expect(formatInvestigationId("local-1")).toBe("LOCAL-1");
+  it("strips dashes before truncating", () => {
+    expect(formatInvestigationId("investigation:ab-cd-ef-12-34")).toBe("abcdef12");
+  });
+
+  it("handles a bare id without a colon", () => {
+    expect(formatInvestigationId("local-1")).toBe("local1");
   });
 });
 

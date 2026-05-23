@@ -63,6 +63,7 @@ export function HomeMain({
   sortDir,
   onSort,
   pinned,
+  recent,
   togglePin,
   onOpenInvestigation,
 }: {
@@ -76,6 +77,7 @@ export function HomeMain({
   sortDir: SortDir;
   onSort: (key: SortKey, dir: SortDir) => void;
   pinned: ReadonlySet<string>;
+  recent: string[];
   togglePin: (id: string) => void;
   onOpenInvestigation: (id: string) => void;
 }) {
@@ -86,7 +88,7 @@ export function HomeMain({
   const topics = topicsOf(items);
 
   const rows = sortBy(
-    applyFilters(filterByTab(items, activeTab, currentUser), filters),
+    applyFilters(filterByTab(items, activeTab, currentUser, { pinned, recent }), filters),
     sortKey,
     sortDir,
     pinned,
@@ -215,7 +217,6 @@ export function HomeMain({
               }}
             >
               <Th width={32} />
-              <Th width={120}>ID</Th>
               <Th>Investigation</Th>
               <Th width={88}>Severity</Th>
               <Th width={120}>Status</Th>
@@ -229,7 +230,7 @@ export function HomeMain({
             {rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={9}
+                  colSpan={8}
                   style={{ padding: 32, textAlign: "center", color: "var(--text-paper-d)" }}
                 >
                   No investigations match this view.{" "}
@@ -278,7 +279,6 @@ export function HomeMain({
                       <Icon name="pin" size={14} />
                     </button>
                   </Td>
-                  <Td mono>{formatInvestigationId(inv.resource_id)}</Td>
                   <Td>
                     <div style={{ fontWeight: 600 }}>{inv.title}</div>
                     <div style={{ color: "var(--text-paper-d)", fontSize: 12 }}>

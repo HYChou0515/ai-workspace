@@ -15,6 +15,7 @@ import { Popover, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
+import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import { FileBufferProvider } from "../../hooks/fileBuffer";
 import {
   type EditorGroup,
@@ -143,6 +144,7 @@ export function InvestigationShell({
   return (
     <AgentProvider investigationId={investigation.resource_id}>
      <FileBufferProvider investigationId={investigation.resource_id}>
+     <EditModeProvider>
       <div
         data-testid="page-investigation"
         style={{
@@ -217,6 +219,7 @@ export function InvestigationShell({
           onTheme={setTheme}
         />
       </div>
+     </EditModeProvider>
      </FileBufferProvider>
     </AgentProvider>
   );
@@ -1517,7 +1520,10 @@ function Breadcrumb({ activeTab }: { activeTab: string | null }) {
  * carry their group id so a drag onto another group moves/copies. */
 function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }) {
   const active = group.activePath;
-  const activeIsNotebook = active != null && pickRenderer(active) === "notebook";
+  const activeKind = active != null ? pickRenderer(active) : null;
+  const activeIsNotebook = activeKind === "notebook";
+  const activeIsMarkdown = activeKind === "markdown";
+  const editMode = useEditMode();
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
   const gid = group.id;
@@ -1633,6 +1639,30 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
         />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 8px" }}>
+        {activeIsMarkdown && active && (
+          <button
+            type="button"
+            title={editMode.isEditing(active) ? "Preview" : "Edit"}
+            onClick={() => editMode.toggle(active)}
+            style={{
+              ...iconBtn,
+              padding: "0 8px",
+              width: "auto",
+              fontSize: 12,
+              display: "inline-flex",
+              gap: 4,
+              color: editMode.isEditing(active) ? "var(--accent)" : "var(--text-paper-d)",
+              background: editMode.isEditing(active) ? "var(--accent-soft)" : "transparent",
+            }}
+          >
+            <Icon
+              name="eye"
+              size={12}
+              color={editMode.isEditing(active) ? "var(--accent)" : "var(--text-paper-d)"}
+            />
+            {editMode.isEditing(active) ? "Preview" : "Edit"}
+          </button>
+        )}
         <button
           type="button"
           title="Split right"
@@ -1641,29 +1671,25 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
         >
           <Icon name="split" size={14} />
         </button>
-        <button
-          type="button"
-          title={activeIsNotebook ? "Run all cells" : "Open a notebook to run cells"}
-          disabled={!activeIsNotebook}
-          onClick={() => active && emitRunAll(active)}
-          style={{
-            ...iconBtn,
-            padding: "0 8px",
-            width: "auto",
-            color: activeIsNotebook ? "var(--accent)" : "var(--text-paper-d2)",
-            fontSize: 12,
-            display: "inline-flex",
-            gap: 4,
-            cursor: activeIsNotebook ? "pointer" : "not-allowed",
-          }}
-        >
-          <Icon
-            name="play"
-            size={12}
-            color={activeIsNotebook ? "var(--accent)" : "var(--text-paper-d2)"}
-          />{" "}
-          Run all
-        </button>
+        {/* Run-all only exists for notebooks */}
+        {activeIsNotebook && active && (
+          <button
+            type="button"
+            title="Run all cells"
+            onClick={() => emitRunAll(active)}
+            style={{
+              ...iconBtn,
+              padding: "0 8px",
+              width: "auto",
+              color: "var(--accent)",
+              fontSize: 12,
+              display: "inline-flex",
+              gap: 4,
+            }}
+          >
+            <Icon name="play" size={12} color="var(--accent)" /> Run all
+          </button>
+        )}
       </div>
     </div>
   );

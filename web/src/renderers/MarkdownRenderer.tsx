@@ -4,19 +4,19 @@
  * swaps to a textarea editor with debounced autosave.
  */
 
-import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
-import { Icon } from "../components/Icon";
 import { MonacoEditor } from "../components/MonacoEditor";
+import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 
 export function MarkdownRenderer({ path }: { investigationId: string; path: string }) {
   // Content + edits live in the shared per-path buffer, so this file
-  // opened in two split panes edits live on both sides.
+  // opened in two split panes edits live on both sides. The Edit/Preview
+  // toggle lives in the group tab strip (VSCode-style) via useEditMode.
   const { entry, setText } = useFileBuffer(path);
-  const [editing, setEditing] = useState(false);
+  const { isEditing } = useEditMode();
 
   if (entry.status === "loading") return <Status>Loading {path}…</Status>;
   if (entry.status === "error") {
@@ -27,59 +27,13 @@ export function MarkdownRenderer({ path }: { investigationId: string; path: stri
   }
 
   const text = entry.text;
-  const status = entry.save;
+  const editing = isEditing(path);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <header
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          paddingBottom: 8,
-          borderBottom: "1px solid var(--paper-3)",
-        }}
-      >
-        <div className="caps">{path}</div>
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            fontFamily: "var(--font-mono)",
-            fontSize: 11,
-            color: "var(--text-paper-d2)",
-          }}
-        >
-          <span aria-live="polite">{statusLabel(status)}</span>
-          <button
-            type="button"
-            onClick={() => setEditing((v) => !v)}
-            style={{
-              padding: "4px 10px",
-              border: "1px solid var(--paper-3)",
-              borderRadius: "var(--radius-btn)",
-              fontSize: 12,
-              color: editing ? "var(--accent)" : "var(--text-paper)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-            }}
-          >
-            <Icon name="eye" size={12} />
-            {editing ? "Preview" : "Edit"}
-          </button>
-        </div>
-      </header>
-
       {editing ? (
         <div style={{ height: 480 }}>
-          <MonacoEditor
-            value={text}
-            onChange={setText}
-            language="markdown"
-            minHeight={480}
-          />
+          <MonacoEditor value={text} onChange={setText} language="markdown" minHeight={480} />
         </div>
       ) : (
         <article className="md-body">
@@ -90,21 +44,6 @@ export function MarkdownRenderer({ path }: { investigationId: string; path: stri
       <style>{MARKDOWN_CSS}</style>
     </div>
   );
-}
-
-function statusLabel(s: "clean" | "dirty" | "saving" | "saved" | "error"): string {
-  switch (s) {
-    case "clean":
-      return "";
-    case "dirty":
-      return "unsaved…";
-    case "saving":
-      return "saving…";
-    case "saved":
-      return "autosaved";
-    case "error":
-      return "save failed";
-  }
 }
 
 function Status({

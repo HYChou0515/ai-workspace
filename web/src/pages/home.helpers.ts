@@ -8,6 +8,8 @@ import { formatInvestigationId, isCritical, isOpen } from "../api/types";
 
 export type HomeTab =
   | "all"
+  | "pinned"
+  | "recently_viewed"
   | "my_open"
   | "watching"
   | "triaging"
@@ -106,10 +108,20 @@ export function filterByTab(
   items: Investigation[],
   tab: HomeTab,
   currentUser: string,
+  ctx?: { pinned?: ReadonlySet<string>; recent?: string[] },
 ): Investigation[] {
   switch (tab) {
     case "all":
       return items;
+    case "pinned":
+      return items.filter((i) => ctx?.pinned?.has(i.resource_id));
+    case "recently_viewed": {
+      const order = ctx?.recent ?? [];
+      const rank = new Map(order.map((id, i) => [id, i]));
+      return items
+        .filter((i) => rank.has(i.resource_id))
+        .sort((a, b) => (rank.get(a.resource_id)! - rank.get(b.resource_id)!));
+    }
     case "my_open":
       return items.filter((i) => i.owner === currentUser && isOpen(i.status));
     case "watching":

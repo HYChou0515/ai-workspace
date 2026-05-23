@@ -203,13 +203,19 @@ export function useEditorGroups(initialPaths: string[]) {
     (fromGroup: string, toGroup: string, edge: Edge, path: string, copy: boolean) => {
       if (edge === "center") {
         openInGroup(toGroup, path, { preview: false });
+        // open-in-place onto the SAME group is a no-op, so only vacate the
+        // source when it's genuinely a different group.
+        if (!copy && fromGroup && fromGroup !== toGroup) closeTab(fromGroup, path);
       } else {
+        // an edge drop always lands in a brand-new group → vacate the
+        // source unless the user held Ctrl/⌘ to copy (even when the drag
+        // started from the very group being split).
         const id = newGroupId();
         setTree((t) => splitLeaf(t, toGroup, edge, id));
         setGroups((prev) => ({ ...prev, [id]: { id, tabs: [{ path }], activePath: path } }));
         setActiveGroupId(id);
+        if (!copy && fromGroup) closeTab(fromGroup, path);
       }
-      if (!copy && fromGroup !== toGroup) closeTab(fromGroup, path);
     },
     [openInGroup, closeTab],
   );

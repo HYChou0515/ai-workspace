@@ -103,6 +103,7 @@ export function Home() {
           setSortDir(d);
         }}
         pinned={new Set(pinned.values)}
+        recent={recent.values}
         togglePin={pinned.toggle}
         onOpenInvestigation={openInvestigation}
       />
