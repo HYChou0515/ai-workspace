@@ -24,7 +24,7 @@ async def test_seed_writes_the_six_designed_files(filestore: SpecstarFileStore):
         "/pareto.ipynb",
         "/fishbone.canvas",
         "/5-why.md",
-        "/report.md",
+        "/report.v1.md",
         "/data/reflow.zone3.sample.csv",
     }
     assert set(written) == expected

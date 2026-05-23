@@ -73,7 +73,7 @@ def test_post_investigation_seeds_template_files(harness: Harness):
         "/pareto.ipynb",
         "/fishbone.canvas",
         "/5-why.md",
-        "/report.md",
+        "/report.v1.md",
         "/data/reflow.zone3.sample.csv",
     }
     assert expected.issubset(paths)

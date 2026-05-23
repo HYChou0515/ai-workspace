@@ -314,6 +314,15 @@ def create_app(
             await kernels.restart(handle)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    # Re-customize the OpenAPI schema now that *all* custom routes are
+    # registered. specstar.apply(app) ran earlier and cached a schema that
+    # only saw the routes existing at that moment; without this second
+    # pass the custom `/investigations/*/messages|files|notebooks|close`
+    # routes wouldn't appear in /openapi.json (the routes themselves
+    # still work — they're in app.routes — but FE / Swagger discovery
+    # would be incomplete).
+    spec.openapi(app)
+
     # Mount the built SPA last so API routes registered above take precedence
     # over the catch-all static handler. If no build exists, skip silently —
     # the API alone is still usable (e.g. via curl or the specstar admin UI).
