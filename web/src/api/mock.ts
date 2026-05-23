@@ -490,6 +490,21 @@ export const mockApi: ApiClient = {
     hit.updated_time = nowIso();
   },
 
+  async deleteFile(investigationId: string, path: string) {
+    await delay(15);
+    files.get(investigationId)?.delete(path);
+  },
+
+  async moveFile(investigationId: string, from: string, to: string) {
+    await delay(15);
+    const fs = ensureFiles(investigationId);
+    const f = fs.get(from);
+    if (!f) throw new Error(`not found: ${from}`);
+    if (fs.has(to)) throw new Error(`target exists: ${to}`);
+    fs.set(to, f);
+    fs.delete(from);
+  },
+
   async cancelMessage(_investigationId: string) {
     await delay(10);
   },

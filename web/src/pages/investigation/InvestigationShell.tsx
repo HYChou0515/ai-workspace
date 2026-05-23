@@ -24,6 +24,7 @@ import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
+import { FileTree } from "./FileTree";
 import { basename, breadcrumbSegments, hasOutline, pickRenderer } from "./renderer";
 import { TerminalPane } from "./TerminalPane";
 
@@ -950,15 +951,6 @@ function EvidenceSidebar({
   onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
 }) {
-  // Group by top-level directory; root-level files go under "(root)"
-  const byDir = new Map<string, FileInfo[]>();
-  for (const f of files) {
-    const parts = f.path.split("/").filter(Boolean);
-    const head = parts.length <= 1 ? "(root)" : parts[0]!;
-    if (!byDir.has(head)) byDir.set(head, []);
-    byDir.get(head)!.push(f);
-  }
-
   return (
     <SidebarFrame
       investigation={investigation}
@@ -991,36 +983,13 @@ function EvidenceSidebar({
       )}
 
       <Section title="Investigation files">
-        {[...byDir.entries()].map(([dir, items]) => (
-          <div key={dir}>
-            {dir !== "(root)" && (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  padding: "4px 14px",
-                  color: "var(--text-paper-d)",
-                  fontSize: 12,
-                }}
-              >
-                <Icon name="chev_d" size={12} />
-                <Icon name="folder" size={13} />
-                <span>{dir}</span>
-              </div>
-            )}
-            {items.map((f) => (
-              <TreeRow
-                key={f.path}
-                label={basename(f.path)}
-                path={f.path}
-                indent={dir === "(root)" ? 14 : 28}
-                active={f.path === activePath}
-                onOpen={onOpenFile}
-              />
-            ))}
-          </div>
-        ))}
+        <FileTree
+          investigationId={investigation.resource_id}
+          files={files}
+          activePath={activePath}
+          onOpen={onOpenFile}
+          onChanged={onFilesChanged}
+        />
       </Section>
 
       <OutlineSection activePath={activePath} investigationId={investigation.resource_id} />

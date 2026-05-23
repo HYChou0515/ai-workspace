@@ -122,6 +122,10 @@ export interface ApiClient {
     path: string,
     body: string | Blob | ArrayBuffer,
   ): Promise<void>;
+  /** DELETE /investigations/{id}/files/{path} → 204. */
+  deleteFile(investigationId: string, path: string): Promise<void>;
+  /** POST /investigations/{id}/files/move — rename/move (409 if target exists). */
+  moveFile(investigationId: string, from: string, to: string): Promise<void>;
 
   streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent>;
   /** DELETE /investigations/{id}/messages/current — tears the in-flight
