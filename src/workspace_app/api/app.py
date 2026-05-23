@@ -11,7 +11,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
@@ -37,6 +37,12 @@ class _CellExecuteBody(BaseModel):
 
 class _ExecBody(BaseModel):
     cmd: list[str]
+
+
+class _MoveBody(BaseModel):
+    # `from` is a Python keyword — accept it on the wire via alias.
+    from_: str = Field(alias="from")
+    to: str
 
 
 class _CloseInvestigationBody(BaseModel):
@@ -262,6 +268,37 @@ def create_app(
     async def write_file(investigation_id: str, path: str, request: Request) -> Response:
         body = await request.body()
         await filestore.write(investigation_id, "/" + path.lstrip("/"), body)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    # POST /files/move is registered before the {path:path} routes so the
+    # literal "move" segment can't be swallowed as a path (it's a distinct
+    # method anyway, but keeping it first documents intent).
+    @app.post(
+        "/investigations/{investigation_id}/files/move",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def move_file(investigation_id: str, body: _MoveBody) -> Response:
+        src = "/" + body.from_.lstrip("/")
+        dst = "/" + body.to.lstrip("/")
+        try:
+            data = await filestore.read(investigation_id, src)
+        except FileNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if await filestore.exists(investigation_id, dst):
+            raise HTTPException(status_code=409, detail=f"target exists: {dst}")
+        await filestore.write(investigation_id, dst, data)
+        await filestore.delete(investigation_id, src)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.delete(
+        "/investigations/{investigation_id}/files/{path:path}",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def delete_file(investigation_id: str, path: str) -> Response:
+        try:
+            await filestore.delete(investigation_id, "/" + path.lstrip("/"))
+        except FileNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/investigations/{investigation_id}/files/{path:path}")
