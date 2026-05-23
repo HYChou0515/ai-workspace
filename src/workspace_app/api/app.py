@@ -22,6 +22,7 @@ from ..rca.templates import list_profiles, seed_investigation
 from ..resources import Conversation, Investigation, Message, Severity, Status, register_all
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
+from .activity import ActivityLog
 from .events import AgentEvent, CellEvent, RunCancelled, RunError, to_sse
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
@@ -80,6 +81,7 @@ def create_app(
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     kernels = KernelService()
+    activity = ActivityLog()
 
     async def _idle_killer() -> None:
         """Periodically reap sandboxes whose last_active is past the
@@ -111,6 +113,11 @@ def create_app(
         """Template profile names the New Investigation picker offers."""
         return list_profiles()
 
+    @app.get("/activity")
+    async def get_activity() -> list[dict]:
+        """Recent activity feed (newest first) for the notifications popover."""
+        return activity.entries()
+
     # Register custom POST /investigation BEFORE spec.apply — FastAPI's
     # route matcher uses first-registered-wins, so our seeded-create
     # handler takes priority over specstar's stock CRUD POST.
@@ -133,6 +140,11 @@ def create_app(
             await seed_investigation(filestore, rev.resource_id, inv, body.template_profile)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        activity.record(
+            "investigation_created",
+            f"Created investigation “{inv.title}”",
+            {"investigation_id": rev.resource_id},
+        )
         # Mirror specstar's auto-POST response shape (flat RevisionInfo dict).
         return {
             "resource_id": rev.resource_id,
@@ -227,6 +239,11 @@ def create_app(
             while True:
                 item = await queue.get()
                 if item is None:
+                    activity.record(
+                        "agent_turn_complete",
+                        "Agent finished a turn",
+                        {"investigation_id": investigation_id},
+                    )
                     return
                 yield to_sse(item)
 
@@ -257,6 +274,11 @@ def create_app(
         current.status = Status.RESOLVED if body.status == "resolved" else Status.ABANDONED
         inv_rm.update(investigation_id, current)
         await registry.close_session(investigation_id)
+        activity.record(
+            "investigation_closed",
+            f"Closed “{current.title}” as {body.status}",
+            {"investigation_id": investigation_id},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- Files API (plan-backend §3.8) ----
@@ -276,7 +298,13 @@ def create_app(
     )
     async def write_file(investigation_id: str, path: str, request: Request) -> Response:
         body = await request.body()
-        await filestore.write(investigation_id, "/" + path.lstrip("/"), body)
+        norm = "/" + path.lstrip("/")
+        await filestore.write(investigation_id, norm, body)
+        activity.record(
+            "file_written",
+            f"Wrote {norm}",
+            {"investigation_id": investigation_id, "path": norm},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # POST /files/move is registered before the {path:path} routes so the
@@ -297,6 +325,11 @@ def create_app(
             raise HTTPException(status_code=409, detail=f"target exists: {dst}")
         await filestore.write(investigation_id, dst, data)
         await filestore.delete(investigation_id, src)
+        activity.record(
+            "file_moved",
+            f"Moved {src} → {dst}",
+            {"investigation_id": investigation_id, "path": dst},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.delete(
@@ -304,10 +337,16 @@ def create_app(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def delete_file(investigation_id: str, path: str) -> Response:
+        norm = "/" + path.lstrip("/")
         try:
-            await filestore.delete(investigation_id, "/" + path.lstrip("/"))
+            await filestore.delete(investigation_id, norm)
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        activity.record(
+            "file_deleted",
+            f"Deleted {norm}",
+            {"investigation_id": investigation_id, "path": norm},
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/investigations/{investigation_id}/files/{path:path}")

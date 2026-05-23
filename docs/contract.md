@@ -178,6 +178,9 @@ POST body shape:
 | `GET`    | `/investigations/{id}/files[?prefix=<p>]` | list files: `[{"path", "size"}]`           | ✅ |
 | `GET`    | `/investigations/{id}/files/{path:path}`  | read file body (text/plain or octet-stream) | ✅ |
 | `PUT`    | `/investigations/{id}/files/{path:path}`  | write raw bytes (FE auto-saves notebooks here) | ✅ |
+| `DELETE` | `/investigations/{id}/files/{path:path}`  | delete a file → 204 (404 if absent)        | ✅ |
+| `POST`   | `/investigations/{id}/files/move`         | rename/move: body `{"from", "to"}` → 204 (409 if target exists) | ✅ |
+| `POST`   | `/investigations/{id}/exec`               | run shell cmd: body `{"cmd": [string]}` → `{exit_code, stdout, stderr}` | ✅ |
 
 ### 2.4 Notebook execution
 
@@ -187,14 +190,26 @@ POST body shape:
 | `DELETE` | `/investigations/{id}/notebooks/{path}/cells/{idx}/execute` | interrupt cell                                | ✅ |
 | `POST`   | `/investigations/{id}/notebooks/{path}/kernel/restart`      | restart per-notebook kernel → 204             | ✅ |
 
-### 2.5 Specstar admin (auto-generated, behind `/docs`)
+### 2.5 Meta
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| `GET`    | `/templates` | template profile names for the New Investigation picker | ✅ |
+| `GET`    | `/activity`  | recent-activity feed (newest first): `[{ts, kind, text, ref}]` | ✅ |
+
+`POST /investigation` accepts an optional `template_profile` (default
+`"default"`); an unknown profile 422s. Activity `kind` ∈
+`investigation_created | investigation_closed | file_written |
+file_moved | file_deleted | agent_turn_complete`.
+
+### 2.6 Specstar admin (auto-generated, behind `/docs`)
 
 specstar emits ~30 routes per registered resource (CRUD + meta + blobs
 + revisions + search). FE uses only the handful listed above. The
 auto-generated routes are still callable for admin/debug; visible at
 `GET /openapi.json` and the interactive Swagger UI at `GET /docs`.
 
-### 2.6 Reports — no dedicated endpoints
+### 2.7 Reports — no dedicated endpoints
 
 Reports use the file-naming convention `/report.v{N}.md`:
 - Agent writes `/report.v1.md`, `/report.v2.md`, … via `write_file`.
@@ -203,7 +218,7 @@ Reports use the file-naming convention `/report.v{N}.md`:
 - "Generate new version" is just an agent chat prompt — agent writes
   the next `/report.v{N+1}.md`. No special endpoint.
 
-### 2.7 RCA-domain agent tools — none
+### 2.8 RCA-domain agent tools — none
 
 No `spc_read`, `defects_aoi`, `pareto_build`, etc. routes. The agent
 uses only the generic tools (`exec`, `read_file`, `write_file`, `ls`,
