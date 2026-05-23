@@ -24,6 +24,7 @@ export type Filters = {
   severities: Severity[];
   owners: string[];
   topics: string[];
+  products: string[];
   statuses: Status[];
 };
 
@@ -32,6 +33,7 @@ export const EMPTY_FILTERS: Filters = {
   severities: [],
   owners: [],
   topics: [],
+  products: [],
   statuses: [],
 };
 
@@ -41,6 +43,7 @@ export function isFiltersEmpty(f: Filters): boolean {
     f.severities.length === 0 &&
     f.owners.length === 0 &&
     f.topics.length === 0 &&
+    f.products.length === 0 &&
     f.statuses.length === 0
   );
 }
@@ -156,6 +159,7 @@ export function applyFilters(
       // any-of: at least one of the investigation's topics must be selected
       if (!i.topics.some((t) => f.topics.includes(t))) return false;
     }
+    if (f.products.length > 0 && !f.products.includes(i.product)) return false;
     return true;
   });
 }

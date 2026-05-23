@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "../api";
 import type { InvestigationInput } from "../api/types";
@@ -20,9 +20,16 @@ const CURRENT_USER = "default-user";
 
 export function Home() {
   const result = useInvestigations();
+  const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<HomeTab>("all");
   const [modalOpen, setModalOpen] = useState(false);
-  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  // Seed filters from the URL — breadcrumb topic/product links land here
+  // (e.g. /?topic=Reflow%20zone-3&product=MX-7%20board).
+  const [filters, setFilters] = useState<Filters>(() => ({
+    ...EMPTY_FILTERS,
+    topics: searchParams.getAll("topic"),
+    products: searchParams.getAll("product"),
+  }));
   const [sortKey, setSortKey] = useState<SortKey>("updated");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const pinned = usePersistentSet("rca:pinned");

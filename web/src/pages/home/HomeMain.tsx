@@ -102,7 +102,7 @@ export function HomeMain({
 
   const setQuery = (q: string) => onFilters({ ...filters, query: q });
   const clearAll = () =>
-    onFilters({ query: "", severities: [], owners: [], topics: [], statuses: [] });
+    onFilters({ query: "", severities: [], owners: [], topics: [], products: [], statuses: [] });
 
   return (
     <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>

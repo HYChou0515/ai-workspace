@@ -9,7 +9,7 @@ import { useNavigate } from "react-router-dom";
 
 import { api } from "../../api";
 import type { CloseStatus, FileInfo, Investigation } from "../../api/types";
-import { formatInvestigationId, isOpen } from "../../api/types";
+import { isOpen } from "../../api/types";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
@@ -549,21 +549,31 @@ function TopBar({
           color: "var(--text-paper-d)",
         }}
       >
-        <span>acme</span>
+        {investigation.topics.map((t) => (
+          <CrumbLink
+            key={t}
+            label={t}
+            onClick={() => navigate(`/?topic=${encodeURIComponent(t)}`)}
+            title={`Filter investigations by topic “${t}”`}
+          />
+        ))}
+        {investigation.product && (
+          <>
+            <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
+            <CrumbLink
+              label={investigation.product}
+              onClick={() => navigate(`/?product=${encodeURIComponent(investigation.product)}`)}
+              title={`Filter investigations by product “${investigation.product}”`}
+            />
+          </>
+        )}
         <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
-        <span>{investigation.product || "SMT process"}</span>
-        <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
-        <span
-          style={{
-            color: "var(--text-paper)",
-            fontWeight: 600,
-            fontFamily: "var(--font-mono)",
-          }}
-        >
-          {formatInvestigationId(investigation.resource_id)}
+        <span style={{ color: "var(--text-paper)", fontWeight: 600 }}>
+          {investigation.title}
         </span>
         <SeverityChip level={investigation.severity} />
         <StatusChip status={investigation.status} />
+        <IdChip resourceId={investigation.resource_id} />
       </div>
       <span style={{ flex: 1 }} />
 
@@ -794,6 +804,76 @@ function CloseInvestigationButton({
         </div>
       )}
     </Popover>
+  );
+}
+
+function CrumbLink({
+  label,
+  onClick,
+  title,
+}: {
+  label: string;
+  onClick: () => void;
+  title?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      style={{
+        color: "var(--text-paper-d)",
+        fontSize: "var(--text-body-sm)",
+        padding: "1px 4px",
+        borderRadius: 3,
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.color = "var(--accent-h)";
+        e.currentTarget.style.background = "var(--paper-2)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = "var(--text-paper-d)";
+        e.currentTarget.style.background = "transparent";
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
+function IdChip({ resourceId }: { resourceId: string }) {
+  const [copied, setCopied] = useState(false);
+  const short = (resourceId.split(":").pop() ?? resourceId).slice(0, 8);
+  const copy = async () => {
+    try {
+      await navigator.clipboard?.writeText(resourceId);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard blocked — ignore */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      title={`Copy full id: ${resourceId}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: "1px 8px",
+        borderRadius: "var(--radius-chip)",
+        border: "1px solid var(--paper-3)",
+        background: "var(--paper-2)",
+        fontFamily: "var(--font-mono)",
+        fontSize: 11,
+        color: "var(--text-paper)",
+      }}
+    >
+      {copied ? <Icon name="check" size={11} color="var(--ok)" /> : null}
+      {copied ? "copied" : short}
+    </button>
   );
 }
 
