@@ -78,3 +78,23 @@ select {
   font-size: var(--text-mono-caps);
   color: var(--text-paper-d);
 }
+
+/* Print: isolate the report card so "Export PDF" (window.print) emits a
+   clean document — no chrome, sidebars, ribbon, or agent panel. */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .report-print-target,
+  .report-print-target * {
+    visibility: visible;
+  }
+  .report-print-target {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    border: none !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+  }
+}

@@ -11,7 +11,7 @@ import { api } from "../../api";
 import type { CloseStatus, FileInfo, Investigation } from "../../api/types";
 import { formatInvestigationId, isOpen } from "../../api/types";
 import { Icon, type IconName } from "../../components/Icon";
-import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
+import { Popover, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
@@ -21,7 +21,7 @@ import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
-import { basename, breadcrumbSegments, pickRenderer } from "./renderer";
+import { basename, breadcrumbSegments, hasOutline, pickRenderer } from "./renderer";
 import { TerminalPane } from "./TerminalPane";
 
 type OpenTab = { path: string; modified: boolean };
@@ -586,31 +586,9 @@ function TopBar({
         )}
       >
         {() => (
-          <div style={{ minWidth: 200 }}>
-            <div style={{ padding: "8px 10px" }}>
-              <div style={{ fontWeight: 600, fontSize: 12 }}>
-                {investigation.owner}
-              </div>
-              <div
-                style={{
-                  marginTop: 2,
-                  fontSize: 11,
-                  color: "var(--text-paper-d)",
-                  fontFamily: "var(--font-mono)",
-                }}
-              >
-                single-user · no auth in v1
-              </div>
-            </div>
-            <PopoverDivider />
-            <div
-              style={{
-                padding: "6px 10px",
-                fontSize: 11,
-                color: "var(--text-paper-d)",
-              }}
-            >
-              Sign-in lands when multi-tenant ships.
+          <div style={{ minWidth: 160 }}>
+            <div style={{ padding: "8px 10px", fontWeight: 600, fontSize: 12 }}>
+              {investigation.owner}
             </div>
           </div>
         )}
@@ -999,8 +977,9 @@ function OutlineSection({
   activePath: string | null;
   investigationId: string;
 }) {
-  // Only meaningful for markdown — pull the file content and extract headings.
-  const renderable = activePath && pickRenderer(activePath) === "markdown";
+  // Outline is meaningful for any markdown-bodied file — that's the
+  // markdown renderer AND the report renderer (/report.v*.md).
+  const renderable = activePath != null && hasOutline(activePath);
   const content = useFileContent(
     investigationId,
     renderable ? activePath : null,
@@ -1010,7 +989,7 @@ function OutlineSection({
     return (
       <Section title="Outline">
         <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
-          (open a markdown file to see headings)
+          (open a markdown or report file to see headings)
         </div>
       </Section>
     );
@@ -1651,14 +1630,6 @@ function TabStrip({
           }}
         >
           <Icon name="split" size={14} />
-        </button>
-        <button
-          type="button"
-          title="Layers (v2) — use Split view to compare files side by side"
-          disabled
-          style={{ ...iconBtn, color: "var(--text-paper-d2)", cursor: "not-allowed" }}
-        >
-          <Icon name="layers" size={14} />
         </button>
         <button
           type="button"

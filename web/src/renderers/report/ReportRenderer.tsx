@@ -5,12 +5,13 @@
  * is viewing anything but the current version.
  */
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { useFiles } from "../../hooks/useInvestigation";
 import { useFileContent } from "../../hooks/useFileContent";
+import { useAgent } from "../../hooks/useAgent";
 import { Icon } from "../../components/Icon";
 import {
   type ReportVersion,
@@ -26,11 +27,14 @@ export function ReportRenderer({
   path: string;
 }) {
   const files = useFiles(investigationId);
+  const { send, log } = useAgent();
   const [selectedPath, setSelectedPath] = useState(path);
+  const bodyRef = useRef<HTMLDivElement>(null);
 
   if (files.kind === "loading") return <Status>Loading versions…</Status>;
   if (files.kind === "error") return <Status tone="err">{files.error.message}</Status>;
 
+  const refresh = files.refresh;
   const versions = reportVersions(files.items);
   if (versions.length === 0) {
     return <Status>No report versions yet. Ask the agent to draft one.</Status>;
@@ -41,30 +45,53 @@ export function ReportRenderer({
     null;
   if (!selected) return <Status>Unable to resolve version.</Status>;
 
+  const maxV = Math.max(...versions.map((v) => v.v));
+
+  // Clicking a version chip always gives feedback — even re-clicking the
+  // active one scrolls the report into view (so it never feels dead).
+  const onSelect = (v: ReportVersion) => {
+    setSelectedPath(v.path);
+    bodyRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  const onExport = () => window.print();
+
+  const onGenerate = async () => {
+    if (log.streaming) return;
+    const next = maxV + 1;
+    await send(
+      `Review the current findings (brief, 5-Why, fishbone, notebooks) and ` +
+        `write \`/report.v${next}.md\` — a full 8D report that supersedes ` +
+        `v${maxV}. Use the file conventions in your system prompt.`,
+    );
+    refresh(); // pick up the freshly-written version
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       <VersionRibbon
         versions={versions}
         selected={selected}
-        onSelect={(v) => setSelectedPath(v.path)}
+        onSelect={onSelect}
+        onExport={onExport}
+        onGenerate={() => void onGenerate()}
+        generating={log.streaming}
       />
       {!selected.isCurrent && (
         <SupersededNotice
           current={versions.find((v) => v.isCurrent) ?? selected}
-          onJump={(v) => setSelectedPath(v.path)}
+          onJump={onSelect}
         />
       )}
-      <ReportBody
-        investigationId={investigationId}
-        path={selected.path}
-        superseded={!selected.isCurrent}
-        version={selected.v}
-      />
-      <VersionHistory
-        versions={versions}
-        selected={selected}
-        onSelect={(v) => setSelectedPath(v.path)}
-      />
+      <div ref={bodyRef}>
+        <ReportBody
+          investigationId={investigationId}
+          path={selected.path}
+          superseded={!selected.isCurrent}
+          version={selected.v}
+        />
+      </div>
+      <VersionHistory versions={versions} selected={selected} onSelect={onSelect} />
     </div>
   );
 }
@@ -73,13 +100,28 @@ function VersionRibbon({
   versions,
   selected,
   onSelect,
+  onExport,
+  onGenerate,
+  generating,
 }: {
   versions: ReportVersion[];
   selected: ReportVersion;
   onSelect: (v: ReportVersion) => void;
+  onExport: () => void;
+  onGenerate: () => void;
+  generating: boolean;
 }) {
+  // brief pulse on the chip the user just clicked, so a re-click of the
+  // already-active version still reads as "registered".
+  const [pulse, setPulse] = useState<number | null>(null);
+  const click = (v: ReportVersion) => {
+    setPulse(v.v);
+    window.setTimeout(() => setPulse((p) => (p === v.v ? null : p)), 350);
+    onSelect(v);
+  };
   return (
     <div
+      className="report-ribbon"
       style={{
         background: "var(--ink)",
         color: "var(--text-dark)",
@@ -100,7 +142,7 @@ function VersionRibbon({
             <button
               key={v.v}
               type="button"
-              onClick={() => onSelect(v)}
+              onClick={() => click(v)}
               style={{
                 padding: "2px 10px",
                 borderRadius: "var(--radius-chip)",
@@ -109,6 +151,8 @@ function VersionRibbon({
                 background: active ? "var(--accent)" : "transparent",
                 color: active ? "var(--white)" : "var(--text-dark-d)",
                 border: active ? "1px solid var(--accent)" : "1px solid var(--ink-4)",
+                transform: pulse === v.v ? "scale(1.12)" : "scale(1)",
+                transition: "transform 0.15s ease",
               }}
             >
               v{v.v} · {v.isCurrent ? "current" : "superseded"}
@@ -119,6 +163,8 @@ function VersionRibbon({
       <span style={{ flex: 1 }} />
       <button
         type="button"
+        onClick={onExport}
+        title="Print / save the report as PDF"
         style={{
           padding: "4px 10px",
           border: "1px solid var(--ink-4)",
@@ -131,16 +177,19 @@ function VersionRibbon({
       </button>
       <button
         type="button"
-        title="Ask the agent in chat: 'Generate a new report version summarising current findings.'"
+        onClick={onGenerate}
+        disabled={generating}
+        title="Ask the agent to draft the next report version"
         style={{
           padding: "4px 12px",
-          background: "var(--accent)",
+          background: generating ? "var(--ink-4)" : "var(--accent)",
           color: "var(--white)",
           borderRadius: "var(--radius-btn)",
           fontSize: 12,
+          cursor: generating ? "wait" : "pointer",
         }}
       >
-        Generate new version
+        {generating ? "Generating…" : "Generate new version"}
       </button>
     </div>
   );
@@ -221,7 +270,10 @@ function ReportBody({
   }
 
   return (
-    <div style={{ ...cardStyle(), position: "relative", opacity: superseded ? 0.85 : 1 }}>
+    <div
+      className="report-print-target"
+      style={{ ...cardStyle(), position: "relative", opacity: superseded ? 0.85 : 1 }}
+    >
       {superseded && (
         <div
           style={{

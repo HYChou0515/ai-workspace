@@ -44,6 +44,14 @@ export function pickRenderer(path: string): RendererKey {
   }
 }
 
+/** Does this file type have markdown headings worth showing in the
+ * Outline panel? Both the markdown renderer and the report renderer
+ * (which wraps /report.v*.md) render markdown bodies. */
+export function hasOutline(path: string): boolean {
+  const kind = pickRenderer(path);
+  return kind === "markdown" || kind === "report";
+}
+
 /** Basename of a file path. Used in tab strip and breadcrumb. */
 export function basename(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
