@@ -18,14 +18,28 @@ def filestore() -> SpecstarFileStore:
 def test_list_profiles_includes_default_and_example():
     profiles = list_profiles()
     assert "default" in profiles
+    assert "methodology" in profiles
     assert "smt-reflow-example" in profiles
 
 
-async def test_default_profile_is_minimal(filestore: SpecstarFileStore):
-    """Default seeds just title + methodology skeletons — no pretend SOP
-    content. .tpl suffix is stripped on the way in."""
+async def test_default_profile_seeds_something(filestore: SpecstarFileStore):
+    """The default profile is user-owned content — we don't pin its files,
+    only that creating an investigation seeds at least one non-empty file."""
     inv = Investigation(title="Solder voids spike", owner="alice")
     written = await seed_investigation(filestore, "inv-1", inv)
+    assert len(written) > 0
+    first = (await filestore.read("inv-1", written[0])).decode()
+    assert first.strip() != ""
+
+
+# The methodology profile holds the blank skeleton (brief / 5-why / fishbone
+# / report) the substitution + copy tests assert against — stable test
+# content independent of whatever the user puts in `default`.
+async def test_methodology_profile_skeleton(filestore: SpecstarFileStore):
+    """methodology seeds title + methodology skeletons. .tpl suffix is
+    stripped on the way in."""
+    inv = Investigation(title="Solder voids spike", owner="alice")
+    written = await seed_investigation(filestore, "inv-1", inv, profile="methodology")
     assert set(written) == {
         "/brief.md",
         "/5-why.md",
@@ -46,7 +60,7 @@ async def test_tpl_substitutes_investigation_fields(filestore: SpecstarFileStore
         severity=Severity.P1,
         status=Status.TRIAGING,
     )
-    await seed_investigation(filestore, "inv-1", inv)
+    await seed_investigation(filestore, "inv-1", inv, profile="methodology")
     brief = (await filestore.read("inv-1", "/brief.md")).decode()
     assert "Solder voids spike" in brief
     assert "alice" in brief
@@ -60,7 +74,7 @@ async def test_tpl_substitutes_investigation_fields(filestore: SpecstarFileStore
 
 async def test_empty_product_renders_em_dash(filestore: SpecstarFileStore):
     inv = Investigation(title="t", owner="alice")  # no product
-    await seed_investigation(filestore, "inv-1", inv)
+    await seed_investigation(filestore, "inv-1", inv, profile="methodology")
     brief = (await filestore.read("inv-1", "/brief.md")).decode()
     assert "**Product**: —" in brief
 
@@ -85,7 +99,7 @@ async def test_non_tpl_files_copied_byte_for_byte(filestore: SpecstarFileStore):
     """fishbone.canvas has no .tpl suffix → copied verbatim, $-looking
     text inside (if any) is never substituted."""
     inv = Investigation(title="t", owner="alice")
-    await seed_investigation(filestore, "inv-1", inv)
+    await seed_investigation(filestore, "inv-1", inv, profile="methodology")
     canvas = (await filestore.read("inv-1", "/fishbone.canvas")).decode()
     assert "Machine" in canvas
     assert "Environment" in canvas
@@ -100,8 +114,12 @@ async def test_unknown_profile_raises(filestore: SpecstarFileStore):
 async def test_seed_into_multiple_investigations_is_isolated(
     filestore: SpecstarFileStore,
 ):
-    await seed_investigation(filestore, "inv-1", Investigation(title="first", owner="alice"))
-    await seed_investigation(filestore, "inv-2", Investigation(title="second", owner="bob"))
+    await seed_investigation(
+        filestore, "inv-1", Investigation(title="first", owner="alice"), profile="methodology"
+    )
+    await seed_investigation(
+        filestore, "inv-2", Investigation(title="second", owner="bob"), profile="methodology"
+    )
     b1 = (await filestore.read("inv-1", "/brief.md")).decode()
     b2 = (await filestore.read("inv-2", "/brief.md")).decode()
     assert "first" in b1 and "alice" in b1

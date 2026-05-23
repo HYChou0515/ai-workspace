@@ -61,9 +61,9 @@ def test_get_templates_lists_profiles(harness: Harness):
     assert "smt-reflow-example" in profiles
 
 
-def test_post_investigation_seeds_minimal_default(harness: Harness):
-    """Default profile seeds a lean starter set — title + methodology
-    skeletons, no pretend SOP content."""
+def test_post_investigation_seeds_default_files(harness: Harness):
+    """Creating with the default profile seeds at least one starter file
+    (its content is user-owned, so we don't pin the exact filenames)."""
     resp = harness.client.post(
         "/investigation",
         json={"title": "Solder voids spike", "owner": "alice"},
@@ -74,6 +74,16 @@ def test_post_investigation_seeds_minimal_default(harness: Harness):
     files_resp = harness.client.get(f"/investigations/{inv_id}/files")
     assert files_resp.status_code == 200
     paths = {item["path"] for item in files_resp.json()}
+    assert len(paths) > 0
+
+
+def test_post_investigation_methodology_profile_seeds_skeleton(harness: Harness):
+    resp = harness.client.post(
+        "/investigation",
+        json={"title": "x", "owner": "alice", "template_profile": "methodology"},
+    )
+    inv_id = resp.json()["resource_id"]
+    paths = {it["path"] for it in harness.client.get(f"/investigations/{inv_id}/files").json()}
     assert paths == {"/brief.md", "/5-why.md", "/fishbone.canvas", "/report.v1.md"}
 
 
@@ -110,6 +120,7 @@ def test_post_investigation_substitutes_brief_md(harness: Harness):
             "description": "5 of 240 cracked at injection-point.",
             "product": "Housing G2",
             "severity": "P1",
+            "template_profile": "methodology",
         },
     )
     assert resp.status_code == 200
