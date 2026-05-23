@@ -107,11 +107,19 @@ export function InvestigationShell({
     });
   };
 
-  // Global keyboard: ⌘P palette · ⌘B sidebar · ⌘J bottom panel.
+  // Latest tab state for the keyboard handler (kept in a ref so the
+  // listener binds once instead of re-subscribing on every tab change).
+  const tabsRef = useRef({ openTabs, activeTab, closeTab, setActiveTab });
+  tabsRef.current = { openTabs, activeTab, closeTab, setActiveTab };
+
+  // Global keyboard: ⌘P palette · ⌘B sidebar · ⌘J bottom panel ·
+  // ⌘W close active tab · ⌘1-9 jump to the Nth tab.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey)) return;
       const k = e.key.toLowerCase();
+      const { openTabs: tabs, activeTab: active, closeTab: close, setActiveTab: select } =
+        tabsRef.current;
       if (k === "p") {
         e.preventDefault();
         setPaletteOpen(true);
@@ -121,6 +129,18 @@ export function InvestigationShell({
       } else if (k === "j") {
         e.preventDefault();
         setBottomOpen((v) => !v);
+      } else if (k === "w") {
+        if (active) {
+          e.preventDefault();
+          close(active);
+        }
+      } else if (k >= "1" && k <= "9") {
+        const idx = Number.parseInt(k, 10) - 1;
+        const target = tabs[idx];
+        if (target) {
+          e.preventDefault();
+          select(target.path);
+        }
       }
     };
     document.addEventListener("keydown", onKey);
