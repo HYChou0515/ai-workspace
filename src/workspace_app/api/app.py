@@ -6,12 +6,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from specstar import SpecStar
+from specstar.types import ResourceIDNotFoundError
 
 from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileNotFound, FileStore
@@ -26,6 +28,10 @@ from .runner import AgentRunner
 
 class _MessageBody(BaseModel):
     content: str
+
+
+class _CloseInvestigationBody(BaseModel):
+    status: Literal["resolved", "abandoned"]
 
 
 class _InvestigationCreateBody(BaseModel):
@@ -47,7 +53,7 @@ def create_app(
     filestore: FileStore,
     runner: AgentRunner,
     spa_dist: Path | None = None,
-    idle_timeout: timedelta = timedelta(minutes=15),
+    idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
 ) -> FastAPI:
     if spec is None:
@@ -208,6 +214,23 @@ def create_app(
         session = await registry.session(investigation_id)
         async with session.lock:
             await _cancel_prior_turn(session)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/investigations/{investigation_id}/close",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def close_investigation(investigation_id: str, body: _CloseInvestigationBody) -> Response:
+        inv_rm = spec.get_resource_manager(Investigation)
+        try:
+            current = inv_rm.get(investigation_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        assert isinstance(current, Investigation)
+        # Pydantic Literal already restricts to resolved/abandoned.
+        current.status = Status.RESOLVED if body.status == "resolved" else Status.ABANDONED
+        inv_rm.update(investigation_id, current)
+        await registry.close_session(investigation_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- Files API (plan-backend §3.8) ----

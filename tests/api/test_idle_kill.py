@@ -133,10 +133,11 @@ async def test_shutdown_close_all_kills_alive_sessions():
     assert sandbox.kill_calls == 2
 
 
-async def test_default_idle_timeout_matches_grill_me_decision():
-    """Default knob is 15 min to match Q10/b1, not some arbitrary value."""
+async def test_default_idle_timeout_matches_rca_pivot():
+    """Default knob is 8h per the RCA pivot (was 15min for the prior
+    workspace-app — RCA sessions are long-running per grill-me Q10)."""
     import inspect
 
     sig = inspect.signature(create_app)
     default = sig.parameters["idle_timeout"].default
-    assert default == timedelta(minutes=15)
+    assert default == timedelta(hours=8)
