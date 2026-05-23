@@ -70,10 +70,12 @@ export function Popover({
 
 export function PopoverItem({
   selected,
+  disabled,
   onClick,
   children,
 }: {
   selected?: boolean;
+  disabled?: boolean;
   onClick: () => void;
   children: React.ReactNode;
 }) {
@@ -81,6 +83,7 @@ export function PopoverItem({
     <button
       type="button"
       onClick={onClick}
+      disabled={disabled}
       style={{
         display: "flex",
         alignItems: "center",
@@ -91,9 +94,11 @@ export function PopoverItem({
         background: "transparent",
         borderRadius: 4,
         fontSize: 13,
-        color: "var(--text-paper)",
+        color: disabled ? "var(--text-paper-d2)" : "var(--text-paper)",
+        cursor: disabled ? "not-allowed" : "pointer",
       }}
       onMouseEnter={(e) => {
+        if (disabled) return;
         (e.currentTarget as HTMLButtonElement).style.background = "var(--paper-2)";
       }}
       onMouseLeave={(e) => {

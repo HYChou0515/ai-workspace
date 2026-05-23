@@ -9,6 +9,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import type {
+  AgentConfigInfo,
   ApiClient,
   CellRef,
   CloseStatus,
@@ -232,6 +233,11 @@ const investigations: Investigation[] = [
   },
 ];
 
+const agentConfigs: AgentConfigInfo[] = [
+  { resource_id: "agent-config:qwen-local", name: "RCA · Qwen3 (local)", model: "ollama_chat/qwen3:14b" },
+  { resource_id: "agent-config:claude-opus", name: "RCA · Claude Opus", model: "claude-opus-4-7" },
+];
+
 const conversations = new Map<string, Conversation>();
 
 function ensureConversation(id: string): Conversation {
@@ -409,6 +415,19 @@ export const mockApi: ApiClient = {
     return { ...inv };
   },
 
+  async listAgentConfigs() {
+    await delay(10);
+    return agentConfigs.map((c) => ({ ...c }));
+  },
+
+  async attachAgentConfig(investigationId: string, configId: string | null) {
+    await delay(10);
+    const hit = investigations.find((i) => i.resource_id === investigationId);
+    if (!hit) throw new Error(`not found: ${investigationId}`);
+    hit.attached_agent_config_id = configId;
+    hit.updated_time = nowIso();
+  },
+
   async listTemplates() {
     await delay(10);
     return ["default", "smt-reflow-example"];
@@ -506,11 +525,12 @@ export const mockApi: ApiClient = {
     yield { type: "cell_done", execution_count: args.cellIndex + 1 };
   },
 
-  async closeInvestigation(id: string, status: CloseStatus) {
+  async closeInvestigation(id: string, status: CloseStatus | null) {
     await delay(20);
     const hit = investigations.find((i) => i.resource_id === id);
     if (!hit) throw new Error(`not found: ${id}`);
-    hit.status = status;
+    // null = pure close: tear the session down, leave status untouched.
+    if (status !== null) hit.status = status;
     hit.updated_time = nowIso();
   },
 

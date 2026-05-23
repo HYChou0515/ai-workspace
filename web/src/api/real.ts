@@ -16,6 +16,7 @@ import type { AgentEvent, CellEvent } from "../events";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
+  AgentConfigInfo,
   ApiClient,
   CellRef,
   CloseStatus,
@@ -67,6 +68,8 @@ type ConversationStruct = {
   investigation_id: string;
   messages: Conversation["messages"];
 };
+
+type AgentConfigStruct = { name: string; model: string };
 
 async function json<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
@@ -142,6 +145,38 @@ export const realApi: ApiClient = {
     return this.getInvestigation(created.resource_id);
   },
 
+  async listAgentConfigs(): Promise<AgentConfigInfo[]> {
+    try {
+      const arr = await json<SpecstarEntry<AgentConfigStruct>[]>(
+        await fetch("/agent-config"),
+      );
+      return arr.map((e) => ({
+        resource_id: e.revision_info.resource_id,
+        name: e.data.name,
+        model: e.data.model,
+      }));
+    } catch {
+      return []; // BE older than the agent-config seeding
+    }
+  },
+
+  async attachAgentConfig(investigationId: string, configId: string | null) {
+    // specstar PATCH is RFC-6902 JSON Patch.
+    const resp = await fetch(
+      `/investigation/${encodeURIComponent(investigationId)}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify([
+          { op: "replace", path: "/attached_agent_config_id", value: configId },
+        ]),
+      },
+    );
+    if (!resp.ok) {
+      throw new HttpError(resp.status, `attach agent config failed: ${resp.status}`);
+    }
+  },
+
   async listTemplates() {
     try {
       return await json<string[]>(await fetch("/templates"));
@@ -158,7 +193,7 @@ export const realApi: ApiClient = {
     }
   },
 
-  async closeInvestigation(id: string, status: CloseStatus) {
+  async closeInvestigation(id: string, status: CloseStatus | null) {
     const resp = await fetch(
       `/investigations/${encodeURIComponent(id)}/close`,
       {

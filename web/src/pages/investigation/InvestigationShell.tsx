@@ -8,10 +8,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../../api";
-import type { CloseStatus, FileInfo, Investigation } from "../../api/types";
+import type { AgentConfigInfo, CloseStatus, FileInfo, Investigation } from "../../api/types";
 import { isOpen } from "../../api/types";
 import { Icon, type IconName } from "../../components/Icon";
-import { Popover, PopoverItem } from "../../components/Popover";
+import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
@@ -39,13 +39,6 @@ import { TerminalPane } from "./TerminalPane";
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
 export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
-
-const MODEL_OPTIONS = [
-  "claude-opus-4",
-  "claude-sonnet-4",
-  "qwen3:14b",
-  "gpt-4o",
-];
 
 export function InvestigationShell({
   investigation,
@@ -77,8 +70,35 @@ export function InvestigationShell({
   const [activityMode, setActivityMode] = useState<ActivityMode>("evidence");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [model, setModel] = useState(MODEL_OPTIONS[0]!);
   const [theme, setTheme] = useThemeMode();
+
+  // Agent picker (#11): the live agent runs with the config attached to
+  // this investigation. Options come from the BE seed list.
+  const [agentConfigs, setAgentConfigs] = useState<AgentConfigInfo[]>([]);
+  const [attachedConfigId, setAttachedConfigId] = useState<string | null>(
+    investigation.attached_agent_config_id,
+  );
+  useEffect(() => {
+    let live = true;
+    api
+      .listAgentConfigs()
+      .then((cs) => {
+        if (live) setAgentConfigs(cs);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+  const selectAgentConfig = useCallback(
+    (id: string | null) => {
+      setAttachedConfigId(id); // optimistic
+      api.attachAgentConfig(investigation.resource_id, id).catch((e) => {
+        console.error("attachAgentConfig failed", e);
+      });
+    },
+    [investigation.resource_id],
+  );
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
   // toggle the sidebar / bottom panel.
@@ -158,8 +178,9 @@ export function InvestigationShell({
         <TopBar
           investigation={investigation}
           onCommandPalette={() => setPaletteOpen(true)}
-          model={model}
-          onModel={setModel}
+          configs={agentConfigs}
+          attachedConfigId={attachedConfigId}
+          onSelectConfig={selectAgentConfig}
         />
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
           <ActivityBar
@@ -212,9 +233,9 @@ export function InvestigationShell({
         <SettingsModal
           open={settingsOpen}
           onClose={() => setSettingsOpen(false)}
-          model={model}
-          onModel={setModel}
-          modelOptions={MODEL_OPTIONS}
+          configs={agentConfigs}
+          attachedConfigId={attachedConfigId}
+          onSelectConfig={selectAgentConfig}
           theme={theme}
           onTheme={setTheme}
         />
@@ -228,17 +249,17 @@ export function InvestigationShell({
 function SettingsModal({
   open,
   onClose,
-  model,
-  onModel,
-  modelOptions,
+  configs,
+  attachedConfigId,
+  onSelectConfig,
   theme,
   onTheme,
 }: {
   open: boolean;
   onClose: () => void;
-  model: string;
-  onModel: (m: string) => void;
-  modelOptions: readonly string[];
+  configs: AgentConfigInfo[];
+  attachedConfigId: string | null;
+  onSelectConfig: (id: string | null) => void;
   theme: "system" | "light" | "dark";
   onTheme: (t: "system" | "light" | "dark") => void;
 }) {
@@ -302,35 +323,52 @@ function SettingsModal({
           </button>
         </div>
 
-        <SettingsSection label="Agent model">
+        <SettingsSection label="Agent">
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {modelOptions.map((m) => (
-              <label
-                key={m}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "6px 10px",
-                  border: "1px solid var(--paper-3)",
-                  borderRadius: "var(--radius-btn)",
-                  cursor: "pointer",
-                  background: m === model ? "var(--accent-soft)" : "var(--white)",
-                  fontSize: 12,
-                }}
-              >
-                <input
-                  type="radio"
-                  name="model"
-                  checked={m === model}
-                  onChange={() => onModel(m)}
-                />
-                <span style={{ fontFamily: "var(--font-mono)" }}>{m}</span>
-              </label>
-            ))}
+            {configs.length === 0 && (
+              <p style={{ margin: 0, fontSize: 12, color: "var(--text-paper-d)" }}>
+                No agent configs available.
+              </p>
+            )}
+            {configs.map((c) => {
+              const active = c.resource_id === attachedConfigId;
+              return (
+                <label
+                  key={c.resource_id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "6px 10px",
+                    border: "1px solid var(--paper-3)",
+                    borderRadius: "var(--radius-btn)",
+                    cursor: "pointer",
+                    background: active ? "var(--accent-soft)" : "var(--white)",
+                    fontSize: 12,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="agent-config"
+                    checked={active}
+                    onChange={() => onSelectConfig(c.resource_id)}
+                  />
+                  <span style={{ flex: 1 }}>{c.name}</span>
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 11,
+                      color: "var(--text-paper-d2)",
+                    }}
+                  >
+                    {c.model}
+                  </span>
+                </label>
+              );
+            })}
             <p style={{ margin: 0, fontSize: 11, color: "var(--text-paper-d)" }}>
-              v1 default is the local Qwen via LiteLLM/Ollama; pick another
-              model to route through your hosted credentials.
+              The selected agent’s model + prompt drive every turn in this
+              investigation. v1 default is the local Qwen via LiteLLM/Ollama.
             </p>
           </div>
         </SettingsSection>
@@ -420,14 +458,17 @@ function SettingsSection({
 function TopBar({
   investigation,
   onCommandPalette,
-  model,
-  onModel,
+  configs,
+  attachedConfigId,
+  onSelectConfig,
 }: {
   investigation: Investigation;
   onCommandPalette: () => void;
-  model: string;
-  onModel: (m: string) => void;
+  configs: AgentConfigInfo[];
+  attachedConfigId: string | null;
+  onSelectConfig: (id: string | null) => void;
 }) {
+  const attached = configs.find((c) => c.resource_id === attachedConfigId) ?? null;
   const navigate = useNavigate();
   return (
     <div
@@ -525,6 +566,7 @@ function TopBar({
           <button
             type="button"
             onClick={onClick}
+            title="Agent"
             style={{
               height: 28,
               padding: "0 10px",
@@ -534,25 +576,50 @@ function TopBar({
               display: "inline-flex",
               alignItems: "center",
               gap: 4,
+              maxWidth: 200,
               background: open ? "var(--paper-2)" : "transparent",
+              color: attached ? "var(--text-paper)" : "var(--text-paper-d)",
             }}
           >
-            {model} <Icon name="chev_d" size={12} />
+            <Icon name="sparkle" size={12} />
+            <span
+              style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            >
+              {attached ? attached.name : "Select agent"}
+            </span>
+            <Icon name="chev_d" size={12} />
           </button>
         )}
       >
         {(close) => (
-          <div style={{ minWidth: 200 }}>
-            {MODEL_OPTIONS.map((m) => (
+          <div style={{ minWidth: 240 }}>
+            <div className="caps" style={{ padding: "6px 10px" }}>Agent</div>
+            {configs.length === 0 && (
+              <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--text-paper-d)" }}>
+                No agent configs.
+              </div>
+            )}
+            {configs.map((c) => (
               <PopoverItem
-                key={m}
-                selected={m === model}
+                key={c.resource_id}
+                selected={c.resource_id === attachedConfigId}
                 onClick={() => {
-                  onModel(m);
+                  onSelectConfig(c.resource_id);
                   close();
                 }}
               >
-                {m}
+                <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                  <span>{c.name}</span>
+                  <span
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: 10,
+                      color: "var(--text-paper-d2)",
+                    }}
+                  >
+                    {c.model}
+                  </span>
+                </span>
               </PopoverItem>
             ))}
           </div>
@@ -657,12 +724,13 @@ function CloseInvestigationButton({
   investigation: Investigation;
 }) {
   const navigate = useNavigate();
-  const [pending, setPending] = useState<CloseStatus | null>(null);
+  // "pure" = leave-as-is teardown (status untouched); the others flip status.
+  const [pending, setPending] = useState<CloseStatus | "pure" | null>(null);
   const alreadyClosed = !isOpen(investigation.status);
 
-  const close = async (status: CloseStatus, dismiss: () => void) => {
+  const close = async (status: CloseStatus | null, dismiss: () => void) => {
     if (pending) return;
-    setPending(status);
+    setPending(status ?? "pure");
     try {
       await api.closeInvestigation(investigation.resource_id, status);
       dismiss();
@@ -682,8 +750,7 @@ function CloseInvestigationButton({
         <button
           type="button"
           onClick={onClick}
-          title={alreadyClosed ? `Already ${investigation.status}` : "Close investigation"}
-          disabled={alreadyClosed}
+          title="Close workspace"
           style={{
             height: 28,
             padding: "0 10px",
@@ -694,31 +761,53 @@ function CloseInvestigationButton({
             alignItems: "center",
             gap: 4,
             background: open ? "var(--paper-2)" : "transparent",
-            color: alreadyClosed ? "var(--text-paper-d2)" : "var(--text-paper-d)",
-            cursor: alreadyClosed ? "not-allowed" : "pointer",
+            color: "var(--text-paper-d)",
+            cursor: "pointer",
           }}
         >
-          <Icon name="check" size={12} /> Close
+          <Icon name="x" size={12} /> Close
         </button>
       )}
     >
       {(dismiss) => (
-        <div style={{ minWidth: 200 }}>
-          <div className="caps" style={{ padding: "6px 10px" }}>Close as…</div>
+        <div style={{ minWidth: 240 }}>
+          {/* Pure close — leave the workspace without changing status, so
+              an unattended investigation can free its sandbox. */}
           <PopoverItem
             onClick={() => {
-              void close("resolved", dismiss);
+              void close(null, dismiss);
+            }}
+          >
+            <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+              <span>{pending === "pure" ? "Closing…" : "Close (leave open)"}</span>
+              <span style={{ fontSize: 10, color: "var(--text-paper-d2)" }}>
+                Tear down the session, keep status
+              </span>
+            </span>
+          </PopoverItem>
+          <PopoverDivider />
+          <div className="caps" style={{ padding: "6px 10px" }}>Resolve as…</div>
+          <PopoverItem
+            disabled={alreadyClosed}
+            onClick={() => {
+              if (!alreadyClosed) void close("resolved", dismiss);
             }}
           >
             {pending === "resolved" ? "Closing…" : "Resolved"}
           </PopoverItem>
           <PopoverItem
+            disabled={alreadyClosed}
             onClick={() => {
-              void close("abandoned", dismiss);
+              if (!alreadyClosed) void close("abandoned", dismiss);
             }}
           >
             {pending === "abandoned" ? "Closing…" : "Abandoned"}
           </PopoverItem>
+          {alreadyClosed && (
+            <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--text-paper-d2)" }}>
+              Already {investigation.status}.
+            </div>
+          )}
         </div>
       )}
     </Popover>

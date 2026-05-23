@@ -68,6 +68,14 @@ export type Conversation = {
 
 export type FileInfo = { path: string; size: number };
 
+/** An agent profile the picker offers — model + prompt live BE-side; the
+ * FE only needs enough to label the radio and PATCH the attachment. */
+export type AgentConfigInfo = {
+  resource_id: string;
+  name: string;
+  model: string;
+};
+
 export type ActivityEntry = {
   ts: string; // ISO-8601
   kind: string; // investigation_created | file_written | agent_turn_complete | ...
@@ -118,7 +126,14 @@ export interface ApiClient {
   listInvestigations(): Promise<Investigation[]>;
   getInvestigation(id: string): Promise<Investigation>;
   createInvestigation(input: InvestigationInput): Promise<Investigation>;
-  closeInvestigation(id: string, status: CloseStatus): Promise<void>;
+  /** Close the workspace. `status` resolved|abandoned flips the status;
+   * `null` is a pure close — tear the session down, leave status alone. */
+  closeInvestigation(id: string, status: CloseStatus | null): Promise<void>;
+  /** GET /agent-config — agent profiles the picker offers. */
+  listAgentConfigs(): Promise<AgentConfigInfo[]>;
+  /** PATCH /investigation/{id} — attach (or, with null, detach) the agent
+   * config that drives this investigation's turns. */
+  attachAgentConfig(investigationId: string, configId: string | null): Promise<void>;
   /** GET /templates — template profile names for the New Investigation picker. */
   listTemplates(): Promise<string[]>;
   /** GET /activity — recent-activity feed (newest first). */
