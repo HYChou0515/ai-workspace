@@ -35,7 +35,7 @@ export function NotebookRenderer({
   investigationId: string;
   path: string;
 }) {
-  const { entry, setText } = useFileBuffer(path);
+  const { entry, setText, save } = useFileBuffer(path);
 
   if (entry.status === "loading") return <Status>Loading {path}…</Status>;
   if (entry.status === "error") {
@@ -63,6 +63,7 @@ export function NotebookRenderer({
       initial={nb}
       bufferText={entry.text}
       onPersist={setText}
+      onSave={save}
     />
   );
 }
@@ -73,12 +74,14 @@ function NotebookBody({
   initial,
   bufferText,
   onPersist,
+  onSave,
 }: {
   investigationId: string;
   path: string;
   initial: Notebook;
   bufferText: string;
   onPersist: (text: string) => void;
+  onSave: () => Promise<void>;
 }) {
   const [nb, setNb] = useState<Notebook>(initial);
   // run state keyed by cell index; lives outside `cells` so re-renders
@@ -176,9 +179,12 @@ function NotebookBody({
         console.error("cell run failed", err);
       } finally {
         abortRefs.current.delete(idx);
+        // Running persists the notebook (source + outputs) — explicit-save
+        // model means a run is the notebook's "save". No-op when clean.
+        void onSave();
       }
     },
-    [investigationId, path, persist],
+    [investigationId, path, persist, onSave],
   );
 
   const interruptCell = (idx: number) => {

@@ -4,7 +4,7 @@
  * owns the file/tab state shared between them.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { api } from "../../api";
@@ -15,8 +15,9 @@ import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
+import { DialogProvider, useDialog } from "../../components/Dialog";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
-import { FileBufferProvider } from "../../hooks/fileBuffer";
+import { FileBufferProvider, FileBufferStore, useIsDirty } from "../../hooks/fileBuffer";
 import {
   type EditorGroup,
   type EditorTab,
@@ -41,6 +42,12 @@ type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
 export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
 
+/** Close a tab through the dirty-aware path (save-on-close prompt). Provided
+ * by ShellBody so the deep tab strip can request closes without prop drilling. */
+const RequestCloseContext = createContext<(groupId: string, path: string) => void>(() => {});
+
+/** Provider shell: owns the shared file-buffer store + dialog/confirm
+ * context, then renders the workspace body inside them. */
 export function InvestigationShell({
   investigation,
   files,
@@ -52,6 +59,43 @@ export function InvestigationShell({
   dirs?: string[];
   onFilesChanged?: () => void;
 }) {
+  const bufferStore = useMemo(
+    () => new FileBufferStore(investigation.resource_id),
+    [investigation.resource_id],
+  );
+  return (
+    <DialogProvider>
+      <AgentProvider investigationId={investigation.resource_id}>
+        <FileBufferProvider investigationId={investigation.resource_id} store={bufferStore}>
+          <EditModeProvider>
+            <ShellBody
+              investigation={investigation}
+              files={files}
+              dirs={dirs}
+              onFilesChanged={onFilesChanged}
+              bufferStore={bufferStore}
+            />
+          </EditModeProvider>
+        </FileBufferProvider>
+      </AgentProvider>
+    </DialogProvider>
+  );
+}
+
+function ShellBody({
+  investigation,
+  files,
+  dirs = [],
+  onFilesChanged,
+  bufferStore,
+}: {
+  investigation: Investigation;
+  files: FileInfo[];
+  dirs?: string[];
+  onFilesChanged?: () => void;
+  bufferStore: FileBufferStore;
+}) {
+  const dialog = useDialog();
   // The initial open tabs mirror the design's six view-files (those that
   // exist).
   const designViews = useMemo(
@@ -129,6 +173,35 @@ export function InvestigationShell({
   const gRef = useRef(groups);
   gRef.current = groups;
 
+  // Close a tab, prompting to save when it's the LAST open view of a dirty
+  // file (a sibling pane still showing it means no data is at risk).
+  const requestCloseTab = useCallback(
+    async (groupId: string, path: string) => {
+      const g = gRef.current;
+      const openElsewhere = Object.entries(g.groups).some(
+        ([gid, grp]) => gid !== groupId && grp.tabs.some((t) => t.path === path),
+      );
+      if (bufferStore.isDirty(path) && !openElsewhere) {
+        const choice = await dialog.confirm({
+          title: `Save changes to ${basename(path)}?`,
+          body: "Your changes will be lost if you don't save them.",
+          actions: [
+            { id: "save", label: "Save", variant: "primary" },
+            { id: "discard", label: "Don't Save", variant: "danger" },
+            { id: "cancel", label: "Cancel" },
+          ],
+        });
+        if (choice === null || choice === "cancel") return;
+        if (choice === "save") await bufferStore.save(path);
+        if (choice === "discard") bufferStore.discard(path);
+      }
+      gRef.current.closeTab(groupId, path);
+    },
+    [bufferStore, dialog],
+  );
+  const requestCloseRef = useRef(requestCloseTab);
+  requestCloseRef.current = requestCloseTab;
+
   // Global keyboard: ⌘P palette · ⌘B sidebar · ⌘J bottom panel ·
   // ⌘W close the active group's active tab · ⌘1-9 jump to its Nth tab.
   useEffect(() => {
@@ -145,11 +218,17 @@ export function InvestigationShell({
       } else if (k === "j") {
         e.preventDefault();
         setBottomOpen((v) => !v);
+      } else if (k === "s") {
+        const active = g.activeGroup?.activePath;
+        if (active) {
+          e.preventDefault();
+          void bufferStore.save(active);
+        }
       } else if (k === "w") {
         const active = g.activeGroup?.activePath;
         if (active) {
           e.preventDefault();
-          g.closeTab(g.activeGroupId, active);
+          void requestCloseRef.current(g.activeGroupId, active);
         }
       } else if (k >= "1" && k <= "9") {
         const idx = Number.parseInt(k, 10) - 1;
@@ -165,9 +244,7 @@ export function InvestigationShell({
   }, []);
 
   return (
-    <AgentProvider investigationId={investigation.resource_id}>
-     <FileBufferProvider investigationId={investigation.resource_id}>
-     <EditModeProvider>
+    <RequestCloseContext.Provider value={requestCloseTab}>
       <div
         data-testid="page-investigation"
         style={{
@@ -245,9 +322,7 @@ export function InvestigationShell({
           onTheme={setTheme}
         />
       </div>
-     </EditModeProvider>
-     </FileBufferProvider>
-    </AgentProvider>
+    </RequestCloseContext.Provider>
   );
 }
 
@@ -1738,6 +1813,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
   const activeIsNotebook = activeKind === "notebook";
   const activeIsMarkdown = activeKind === "markdown";
   const editMode = useEditMode();
+  const requestClose = useContext(RequestCloseContext);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
   const [menu, setMenu] = useState<{ path: string; x: number; y: number } | null>(null);
   const gid = group.id;
@@ -1763,6 +1839,13 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
               aria-selected={isActive}
               draggable
               onClick={() => groups.selectTab(gid, t.path)}
+              onMouseDown={(e) => {
+                if (e.button === 1) {
+                  // middle-click closes the tab (VSCode)
+                  e.preventDefault();
+                  requestClose(gid, t.path);
+                }
+              }}
               onDoubleClick={() => groups.togglePin(gid, t.path)}
               onContextMenu={(e) => {
                 e.preventDefault();
@@ -1820,25 +1903,10 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
             >
               <Icon name={t.pinned ? "pin" : "file"} size={12} />
               <span style={{ fontSize: 12 }}>{basename(t.path)}</span>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  groups.closeTab(gid, t.path);
-                }}
-                aria-label={`close ${basename(t.path)}`}
-                style={{
-                  width: 16,
-                  height: 16,
-                  display: "inline-flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  color: "var(--text-paper-d2)",
-                  borderRadius: 3,
-                }}
-              >
-                <Icon name="x" size={10} />
-              </button>
+              <TabClose
+                path={t.path}
+                onClose={() => requestClose(gid, t.path)}
+              />
             </div>
           );
         })}
@@ -1850,7 +1918,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
           y={menu.y}
           pinned={group.tabs.find((t) => t.path === menu.path)?.pinned ?? false}
           onClose={() => setMenu(null)}
-          onCloseTab={(p) => groups.closeTab(gid, p)}
+          onCloseTab={(p) => requestClose(gid, p)}
           onTogglePin={(p) => groups.togglePin(gid, p)}
           onCloseOthers={(p) => groups.closeOthers(gid, p)}
           onCloseToRight={(p) => groups.closeToRight(gid, p)}
@@ -1912,6 +1980,42 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
         )}
       </div>
     </div>
+  );
+}
+
+/** Tab close affordance: a dirty file shows a ● dot that becomes the close
+ * ✕ on hover (VSCode). Reads dirty state without forcing the file to load. */
+function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
+  const dirty = useIsDirty(path);
+  const [hover, setHover] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onClose();
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      aria-label={dirty ? `${basename(path)} (unsaved) — close` : `close ${basename(path)}`}
+      style={{
+        width: 16,
+        height: 16,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "var(--text-paper-d2)",
+        borderRadius: 3,
+      }}
+    >
+      {dirty && !hover ? (
+        <span aria-hidden style={{ fontSize: 12, lineHeight: 1, color: "var(--text-paper-d)" }}>
+          ●
+        </span>
+      ) : (
+        <Icon name="x" size={10} />
+      )}
+    </button>
   );
 }
 

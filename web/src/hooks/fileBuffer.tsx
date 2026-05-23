@@ -196,6 +196,15 @@ export function useFileBufferStore(): FileBufferStore {
   return store;
 }
 
+/** Subscribe to a path's dirty flag WITHOUT triggering a load — for the
+ * tab strip, which must not pre-fetch every open tab's content. */
+export function useIsDirty(path: string): boolean {
+  const store = useFileBufferStore();
+  const subscribe = useCallback((cb: () => void) => store.subscribe(path, cb), [store, path]);
+  const getSnapshot = useCallback(() => store.isDirty(path), [store, path]);
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
 export function useFileBuffer(path: string) {
   const store = useFileBufferStore();
   const subscribe = useCallback((cb: () => void) => store.subscribe(path, cb), [store, path]);
