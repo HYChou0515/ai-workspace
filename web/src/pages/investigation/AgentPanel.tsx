@@ -5,6 +5,8 @@
  */
 
 import { useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { api } from "../../api";
 import { Icon } from "../../components/Icon";
@@ -95,7 +97,8 @@ export function AgentPanel({
   };
 
   const onComposerKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+    // Enter sends; Shift+Enter inserts a newline (standard chat behaviour).
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       submit();
     }
@@ -464,16 +467,8 @@ function MessageBlock({ message }: { message: Message }) {
           <span>{message.author ?? "Agent"}</span>
         </div>
         {message.reasoning && <ReasoningBlock text={message.reasoning} />}
-        <div
-          style={{
-            marginLeft: 28,
-            marginTop: 4,
-            fontSize: 13,
-            color: "var(--text-paper)",
-            whiteSpace: "pre-wrap",
-          }}
-        >
-          {message.content}
+        <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
         </div>
       </div>
     );
