@@ -10,7 +10,7 @@ const INVESTIGATIONS = [
     title: "Solder voids spike",
     summary: "Void rate 2.3× baseline since 08-14 14:00",
     severity: "P1", sevTone: "err",
-    line: "Line 3", product: "MX-7 board", lot: "25-W14",
+    topics: ["Reflow zone-3"], product: "MX-7 board", lot: "25-W14",
     status: "triaging", statusTone: "warn",
     owner: { name: "Alice Chen", initials: "AC" },
     members: ["AC","BL","DJ","EH"],
@@ -23,7 +23,7 @@ const INVESTIGATIONS = [
     title: "Dead pixel cluster, top-left corner",
     summary: "12 panels at incoming inspection, cluster within 80×80 region",
     severity: "P2", sevTone: "warn",
-    line: "Panel test 2", product: "Display M7-S", lot: "25-W13",
+    topics: ["Panel inspection", "Display M7-S"], product: "Display M7-S", lot: "25-W13",
     status: "awaiting review", statusTone: "accent",
     owner: { name: "Bob Liu", initials: "BL" },
     members: ["BL","CK"],
@@ -37,7 +37,7 @@ const INVESTIGATIONS = [
     title: "Crack at flange · gen-2 housing",
     summary: "5 of 240 units cracked at injection-point flange",
     severity: "P2", sevTone: "warn",
-    line: "Molding A", product: "Housing G2", lot: "25-W14",
+    topics: ["Injection molding"], product: "Housing G2", lot: "25-W14",
     status: "triaging", statusTone: "warn",
     owner: { name: "Carol K.", initials: "CK" },
     members: ["CK","DJ","FH"],
@@ -49,7 +49,7 @@ const INVESTIGATIONS = [
     title: "Yield drop -4.2pp at Cell test fixture #7",
     summary: "Drop persists 3 shifts; fixture contact resistance suspect",
     severity: "P1", sevTone: "err",
-    line: "Cell test", product: "Battery 18650", lot: "25-W14",
+    topics: ["Cell test fixture", "Contact resistance", "Yield drop"], product: "Battery 18650", lot: "25-W14",
     status: "draft", statusTone: "default",
     owner: { name: "Dan J.", initials: "DJ" },
     members: ["DJ"],
@@ -61,7 +61,7 @@ const INVESTIGATIONS = [
     title: "Glue underfill voids — corner pads",
     summary: "Corner pads U7/U8 showing voids under X-ray inspection",
     severity: "P3", sevTone: "warn",
-    line: "Underfill 1", product: "Module N4", lot: "25-W12",
+    topics: ["Underfill"], product: "Module N4", lot: "25-W12",
     status: "resolved", statusTone: "ok",
     owner: { name: "Eve H.", initials: "EH" },
     members: ["EH","FH","GR"],
@@ -74,7 +74,7 @@ const INVESTIGATIONS = [
     title: "Wirebond pull strength under spec",
     summary: "Pull test results 3.8gf vs 4.5gf spec on lot 25-W12",
     severity: "P2", sevTone: "warn",
-    line: "Bonding 2", product: "Sensor V2", lot: "25-W12",
+    topics: ["Wirebond"], product: "Sensor V2", lot: "25-W12",
     status: "resolved", statusTone: "ok",
     owner: { name: "Frank H.", initials: "FH" },
     members: ["FH","GR"],
@@ -87,7 +87,7 @@ const INVESTIGATIONS = [
     title: "Color delta on top-cover paint",
     summary: "ΔE > 2.0 on batch B-25-0814, supplier-side suspected",
     severity: "P3", sevTone: "warn",
-    line: "Paint 1", product: "Top cover", lot: "25-W12",
+    topics: ["Paint color"], product: "Top cover", lot: "25-W12",
     status: "resolved", statusTone: "ok",
     owner: { name: "Gail R.", initials: "GR" },
     members: ["GR"],
@@ -100,7 +100,7 @@ const INVESTIGATIONS = [
     title: "Capacitor C14 placement offset",
     summary: "Investigation closed without root cause; defects stopped after vendor lot rotated",
     severity: "P4", sevTone: "default",
-    line: "SMT 1", product: "MX-7 board", lot: "25-W12",
+    topics: ["SMT placement"], product: "MX-7 board", lot: "25-W12",
     status: "abandoned", statusTone: "default",
     owner: { name: "Hank P.", initials: "HP" },
     members: ["HP"],
@@ -228,7 +228,7 @@ function HomeRCA({ onSelect, onNew }) {
         <div style={{ padding: "16px 28px", display: "flex", gap: 8, alignItems: "center" }}>
           <Btn size="sm" icon={<I name="filter" size={13}/>}>Filter</Btn>
           <Btn size="sm" iconRight={<I name="chev_d" size={12}/>}>Severity · any</Btn>
-          <Btn size="sm" iconRight={<I name="chev_d" size={12}/>}>Line · any</Btn>
+          <Btn size="sm" iconRight={<I name="chev_d" size={12}/>}>Topic · any</Btn>
           <Btn size="sm" iconRight={<I name="chev_d" size={12}/>}>Owner · any</Btn>
           <Btn size="sm" iconRight={<I name="chev_d" size={12}/>}>Updated · any</Btn>
           <div style={{ flex: 1 }}/>
@@ -245,7 +245,7 @@ function HomeRCA({ onSelect, onNew }) {
             {/* head */}
             <div style={{ display: "grid", gridTemplateColumns: "32px 2.6fr 0.9fr 1.3fr 1fr 1fr 1fr 32px", padding: "10px 16px", borderBottom: `1px solid ${RCA.paper3}`, alignItems: "center", gap: 10 }}>
               <div></div>
-              {["Investigation","Severity","Line · product","Owner","Updated","Agent"].map((h, i) => (
+              {["Investigation","Severity","Topic · product","Owner","Updated","Agent"].map((h, i) => (
                 <div key={i} className="caps" style={{ fontSize: 10, color: RCA.textPaperD }}>{h}</div>
               ))}
               <div></div>
@@ -267,15 +267,21 @@ function HomeRCA({ onSelect, onNew }) {
                         report · {r.reportV || "v3"}
                       </RcaChip>
                     )}
-                    <RcaChip tone="outline">lot {r.lot}</RcaChip>
                   </div>
                 </div>
                 <div>
                   <RcaChip dot tone={r.sevTone}>{r.severity}</RcaChip>
                 </div>
-                <div style={{ fontSize: 13 }}>
-                  <div>{r.line}</div>
-                  <div style={{ fontSize: 11, color: RCA.textPaperD, fontFamily: RCA.fMono }}>{r.product}</div>
+                <div style={{ fontSize: 13, minWidth: 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", overflow: "hidden" }}>
+                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{r.topics[0]}</span>
+                    {r.topics.length > 1 && (
+                      <span title={r.topics.slice(1).join(", ")} style={{ flexShrink: 0, padding: "1px 5px", border: `1px solid ${RCA.paper3}`, borderRadius: 3, fontSize: 10, color: RCA.textPaperD, fontFamily: RCA.fMono, background: RCA.paper }}>
+                        +{r.topics.length - 1}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 11, color: RCA.textPaperD, fontFamily: RCA.fMono, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.product}</div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <Avatar name={r.owner.initials} size={26}/>

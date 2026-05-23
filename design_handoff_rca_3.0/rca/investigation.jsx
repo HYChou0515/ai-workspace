@@ -124,8 +124,10 @@ function InvestigationRCA({ onBack } = {}) {
               <span style={{ color: RCA.textPaperD }}>Severity</span><RcaChip dot tone="err" style={{ width: "fit-content" }}>P1 · critical</RcaChip>
               <span style={{ color: RCA.textPaperD }}>Status</span><span>triaging</span>
               <span style={{ color: RCA.textPaperD }}>Owner</span><span>Alice Chen</span>
-              <span style={{ color: RCA.textPaperD }}>Line</span><span className="mono">Line 3 · Reflow</span>
-              <span style={{ color: RCA.textPaperD }}>Lot</span><span className="mono">25-W14</span>
+              <span style={{ color: RCA.textPaperD }}>Topic</span>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                <RcaChip tone="outline" style={{ width: "fit-content" }}>Reflow zone-3</RcaChip>
+              </div>
               <span style={{ color: RCA.textPaperD }}>Opened</span><span>08-14 14:32</span>
             </div>
           </div>

@@ -269,7 +269,7 @@ function FiveWhyView({ width = 720 }) {
         <CapsLabel style={{ marginBottom: 10 }}>Corrective actions · drafted</CapsLabel>
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {[
-            { kind: "Containment", title: "Hold lot 25-W14 from MX-7 shipment", owner: "Alice", due: "today" },
+            { kind: "Containment", title: "Hold MX-7 affected batches from shipment", owner: "Alice", due: "today" },
             { kind: "Corrective", title: "Re-tune reflow zone-3 PID for current throughput", owner: "Bob", due: "08-17" },
             { kind: "Preventive", title: "Add throughput change to change-control matrix", owner: "Carol", due: "08-21" },
             { kind: "Preventive", title: "Add SPC alarm for zone-actual vs set-point > 2°C", owner: "Bob", due: "08-24" },
@@ -297,8 +297,8 @@ const REPORT_VERSIONS = [
     summary: "Re-tuned containment scope; expanded preventive to cover throughput-aggregation flags.",
     sections: [
       { label: "D1 · Team",        body: "Alice Chen (process), Bob Liu (reflow), Carol Kao (quality), Dan Jen (yield)." },
-      { label: "D2 · Problem",     body: "Void rate on MX-7 board climbed from 1.4% baseline to 3.2% starting 08-14 14:00, sustained across 4 shifts. Affects lot 25-W14, Line 3.", emphasize: true },
-      { label: "D3 · Containment", body: "Lot 25-W14 held at outgoing. Lots 25-W12, 25-W13 sampled for void rate. AOI sampling raised from 1/100 to 1/10 on Line 3. 4-hour incident review cadence active." },
+      { label: "D2 · Problem",     body: "Void rate on MX-7 board climbed from 1.4% baseline to 3.2% starting 08-14 14:00, sustained across 4 shifts on the affected line.", emphasize: true },
+      { label: "D3 · Containment", body: "Affected MX-7 output held at outgoing. AOI sampling raised from 1/100 to 1/10 on the affected line. 4-hour incident review cadence active." },
       { label: "D4 · Root cause",
         body: "Reflow zone-3 PID gains, tuned for the prior throughput profile, failed to maintain 245°C set-point under the current throughput. The throughput increase (effective 08-12) was not flagged by change-control as requiring PID retune. Drift of ~3.2°C preceded the void spike by 30 minutes and persisted.",
         emphasize: true },
@@ -478,14 +478,14 @@ function NewInvestigation({ onClose, onCreate }) {
             <Field label="Status">
               <Picker options={["draft", "triaging"]} active={1}/>
             </Field>
-            <Field label="Production line">
-              <Select value="Line 3 · Reflow"/>
+            <Field label="Topic(s)">
+              <div style={{ display: "flex", alignItems: "center", gap: 6, minHeight: 38, padding: "6px 10px", background: RCA.white, border: `1px solid ${RCA.paper3}`, borderRadius: 6, flexWrap: "wrap" }}>
+                <RcaChip tone="default" style={{ background: RCA.paper2 }}>Reflow zone-3 ×</RcaChip>
+                <span style={{ fontSize: 12, color: RCA.textPaperD2 }}>+ add topic</span>
+              </div>
             </Field>
             <Field label="Product / part">
               <Select value="MX-7 board"/>
-            </Field>
-            <Field label="Lot · batch">
-              <Select value="25-W14" mono/>
             </Field>
             <Field label="Owner">
               <div style={{ display: "flex", alignItems: "center", gap: 8, height: 38, padding: "0 10px", background: RCA.white, border: `1px solid ${RCA.paper3}`, borderRadius: 6 }}>
