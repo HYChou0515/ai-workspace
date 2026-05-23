@@ -87,6 +87,20 @@ export type FileContent =
   | { kind: "text"; path: string; size: number; text: string }
   | { kind: "binary"; path: string; size: number };
 
+/** VSCode-style search toggles (#8). */
+export type SearchOptions = {
+  regex?: boolean;
+  caseSensitive?: boolean;
+  wholeWord?: boolean;
+  /** comma/space-separated globs to include (empty = all). */
+  include?: string;
+  /** comma/space-separated globs to exclude. */
+  exclude?: string;
+};
+
+export type SearchMatch = { line: number; col: number; text: string };
+export type SearchResult = { path: string; matches: SearchMatch[] };
+
 /* ---------------------- ApiClient interface ---------------------- */
 
 export type SendMessageArgs = {
@@ -174,6 +188,22 @@ export interface ApiClient {
   /** POST /investigations/{id}/exec — run a shell command in the
    * sandbox and return its ExecResult. Backs the Terminal pane. */
   execShell(investigationId: string, cmd: string[]): Promise<ExecResult>;
+
+  /** POST /investigations/{id}/search — global text search over the
+   * FileStore. Empty query → no results. */
+  searchFiles(
+    investigationId: string,
+    query: string,
+    opts?: SearchOptions,
+  ): Promise<SearchResult[]>;
+  /** POST /investigations/{id}/replace — replace every match across the
+   * (filtered) files; returns the total replacement count. */
+  replaceInFiles(
+    investigationId: string,
+    query: string,
+    replacement: string,
+    opts?: SearchOptions,
+  ): Promise<number>;
 }
 
 /* --------------------------- Helpers ---------------------------- */

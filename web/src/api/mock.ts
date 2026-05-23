@@ -20,8 +20,56 @@ import type {
   InvestigationInput,
   Message,
   NotebookRef,
+  SearchMatch,
+  SearchOptions,
+  SearchResult,
   SendMessageArgs,
 } from "./types";
+
+/* --- search core: mirrors the BE's api/search.py for offline parity --- */
+
+function compileQuery(query: string, opts: SearchOptions): RegExp {
+  let pattern = opts.regex ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (opts.wholeWord) pattern = `\\b(?:${pattern})\\b`;
+  return new RegExp(pattern, opts.caseSensitive ? "g" : "gi");
+}
+
+function globs(spec: string | undefined): string[] {
+  return (spec ?? "").split(/[,\s]+/).filter(Boolean);
+}
+
+function globToRe(glob: string): RegExp {
+  const g = glob.replace(/^\//, "");
+  // "dir/**" → anything under dir/
+  if (g.endsWith("/**")) {
+    const prefix = g.slice(0, -3).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`^${prefix}(?:/.*)?$`);
+  }
+  const re = g
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, "[^/]*")
+    .replace(/\?/g, "[^/]");
+  return new RegExp(`^${re}$`);
+}
+
+function pathSelected(path: string, include: string | undefined, exclude: string | undefined): boolean {
+  const rel = path.replace(/^\//, "");
+  const inc = globs(include).map(globToRe);
+  const exc = globs(exclude).map(globToRe);
+  if (inc.length && !inc.some((re) => re.test(rel))) return false;
+  if (exc.length && exc.some((re) => re.test(rel))) return false;
+  return true;
+}
+
+function searchLines(text: string, re: RegExp): SearchMatch[] {
+  const out: SearchMatch[] = [];
+  text.split("\n").forEach((line, i) => {
+    re.lastIndex = 0;
+    const m = re.exec(line);
+    if (m) out.push({ line: i + 1, col: m.index + 1, text: line.slice(0, 400) });
+  });
+  return out;
+}
 
 type MockFile = { text: string | null; bytes: number };
 
@@ -568,6 +616,51 @@ export const mockApi: ApiClient = {
 
   async restartKernel(_ref: NotebookRef) {
     await delay(20);
+  },
+
+  async searchFiles(investigationId: string, query: string, opts: SearchOptions = {}) {
+    await delay(20);
+    if (!query) return [];
+    const re = compileQuery(query, opts);
+    const tree = files.get(investigationId);
+    if (!tree) return [];
+    const results: SearchResult[] = [];
+    for (const [path, f] of [...tree.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+      if (f.text === null) continue; // skip binary
+      if (!pathSelected(path, opts.include, opts.exclude)) continue;
+      const matches = searchLines(f.text, re);
+      if (matches.length) results.push({ path, matches });
+    }
+    return results;
+  },
+
+  async replaceInFiles(
+    investigationId: string,
+    query: string,
+    replacement: string,
+    opts: SearchOptions = {},
+  ) {
+    await delay(20);
+    if (!query) return 0;
+    const re = compileQuery(query, opts);
+    const tree = files.get(investigationId);
+    if (!tree) return 0;
+    let replaced = 0;
+    for (const [path, f] of tree.entries()) {
+      if (f.text === null) continue;
+      if (!pathSelected(path, opts.include, opts.exclude)) continue;
+      let count = 0;
+      re.lastIndex = 0;
+      const next = f.text.replace(re, () => {
+        count += 1;
+        return replacement;
+      });
+      if (count) {
+        tree.set(path, { text: next, bytes: next.length });
+        replaced += count;
+      }
+    }
+    return replaced;
   },
 
   async execShell(_investigationId: string, cmd: string[]) {

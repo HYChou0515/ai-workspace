@@ -59,6 +59,15 @@ export function basename(path: string): string {
   return i === -1 ? trimmed : trimmed.slice(i + 1);
 }
 
+/** Directory portion of a path, leading slash stripped, for the search
+ * panel's dim file-location label. Root-level files return "". */
+export function dirname(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const i = trimmed.lastIndexOf("/");
+  if (i <= 0) return "";
+  return trimmed.slice(0, i).replace(/^\/+/, "");
+}
+
 /** Path segments excluding root and basename, for breadcrumb display. */
 export function breadcrumbSegments(path: string): string[] {
   const parts = path.split("/").filter((p) => p.length > 0);

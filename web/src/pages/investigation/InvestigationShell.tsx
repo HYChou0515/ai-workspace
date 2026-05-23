@@ -34,6 +34,7 @@ import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
 import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
 import { basename, breadcrumbSegments, pickRenderer } from "./renderer";
+import { SearchPanel } from "./SearchPanel";
 import { TerminalPane } from "./TerminalPane";
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
@@ -1010,7 +1011,12 @@ function ActivitySidebar(props: {
     case "evidence":
       return <EvidenceSidebar {...props} />;
     case "search":
-      return <SearchSidebar files={props.files} onOpenFile={props.onOpenFile} />;
+      return (
+        <SearchPanel
+          investigationId={props.investigation.resource_id}
+          onOpenFile={props.onOpenFile}
+        />
+      );
     case "history":
       return <HistorySidebar files={props.files} recentFiles={props.recentFiles} onOpenFile={props.onOpenFile} />;
     case "reviewers":
@@ -1056,63 +1062,6 @@ export function extractHeadings(md: string): { level: number; text: string }[] {
     }
   }
   return out;
-}
-
-/* ----------------------------- Search sidebar ----------------------------- */
-
-function SearchSidebar({
-  files,
-  onOpenFile,
-}: {
-  files: FileInfo[];
-  onOpenFile: OpenFileFn;
-}) {
-  const [q, setQ] = useState("");
-  const matches = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    if (!needle) return files.slice(0, 50);
-    return files.filter((f) => f.path.toLowerCase().includes(needle));
-  }, [q, files]);
-  return (
-    <aside style={sidebarStyle}>
-      <div style={sidebarHeader}>
-        <span className="caps">Search files</span>
-      </div>
-      <div style={{ padding: 10 }}>
-        <input
-          autoFocus
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          placeholder="Filename contains…"
-          style={{
-            width: "100%",
-            height: 28,
-            padding: "0 8px",
-            border: "1px solid var(--paper-3)",
-            borderRadius: "var(--radius-btn)",
-            outline: "none",
-            fontSize: 12,
-          }}
-        />
-      </div>
-      <div className="scrollable" style={{ flex: 1, overflowY: "auto" }}>
-        {matches.length === 0 && (
-          <div style={{ padding: "8px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
-            No matches.
-          </div>
-        )}
-        {matches.map((f) => (
-          <TreeRow
-            key={f.path}
-            label={basename(f.path)}
-            path={f.path}
-            active={false}
-            onOpen={onOpenFile}
-          />
-        ))}
-      </div>
-    </aside>
-  );
 }
 
 /* ----------------------------- History sidebar ----------------------------- */

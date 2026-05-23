@@ -27,6 +27,8 @@ import type {
   Investigation,
   InvestigationInput,
   NotebookRef,
+  SearchOptions,
+  SearchResult,
   SendMessageArgs,
 } from "./types";
 
@@ -106,6 +108,17 @@ function toInvestigation(e: SpecstarEntry<InvestigationStruct>): Investigation {
 
 function encodePath(path: string): string {
   return path.split("/").map(encodeURIComponent).join("/");
+}
+
+/** Map FE SearchOptions → the BE _SearchBody field names. */
+function searchBody(opts: SearchOptions): Record<string, unknown> {
+  return {
+    regex: opts.regex ?? false,
+    caseSensitive: opts.caseSensitive ?? false,
+    wholeWord: opts.wholeWord ?? false,
+    include: opts.include ?? "",
+    exclude: opts.exclude ?? "",
+  };
 }
 
 export const realApi: ApiClient = {
@@ -363,6 +376,36 @@ export const realApi: ApiClient = {
       throw new HttpError(resp.status, `exec failed: ${resp.status} ${detail.slice(0, 200)}`);
     }
     return (await resp.json()) as ExecResult;
+  },
+
+  async searchFiles(investigationId: string, query: string, opts: SearchOptions = {}) {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(investigationId)}/search`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query, ...searchBody(opts) }),
+      },
+    );
+    return json<SearchResult[]>(resp);
+  },
+
+  async replaceInFiles(
+    investigationId: string,
+    query: string,
+    replacement: string,
+    opts: SearchOptions = {},
+  ) {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(investigationId)}/replace`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ query, replacement, ...searchBody(opts) }),
+      },
+    );
+    const { replaced } = await json<{ replaced: number }>(resp);
+    return replaced;
   },
 
   async *streamCellEvents(args: ExecuteCellArgs): AsyncGenerator<CellEvent> {
