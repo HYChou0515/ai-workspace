@@ -8,10 +8,16 @@ function makeIO(initial: Record<string, string> = {}) {
     files,
     readFile: vi.fn(async (_id: string, path: string) => {
       if (!(path in files)) throw new Error(`not found: ${path}`);
-      return { kind: "text" as const, path, size: files[path]!.length, text: files[path]! };
+      return {
+        kind: "text" as const,
+        path,
+        size: files[path]!.length,
+        text: files[path]!,
+        encoding: "utf-8" as const,
+      };
     }),
-    writeFile: vi.fn(async (_id: string, path: string, body: string) => {
-      files[path] = body;
+    writeFile: vi.fn(async (_id: string, path: string, body: string | ArrayBuffer | Blob) => {
+      files[path] = typeof body === "string" ? body : "[bytes]";
     }),
   };
 }

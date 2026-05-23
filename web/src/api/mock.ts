@@ -575,7 +575,7 @@ export const mockApi: ApiClient = {
     const f = files.get(investigationId)?.get(path);
     if (!f) throw new Error(`file not found: ${path}`);
     if (f.text === null) return { kind: "binary", path, size: f.bytes };
-    return { kind: "text", path, size: f.bytes, text: f.text };
+    return { kind: "text", path, size: f.bytes, text: f.text, encoding: "utf-8" };
   },
 
   async writeFile(investigationId, path, body) {

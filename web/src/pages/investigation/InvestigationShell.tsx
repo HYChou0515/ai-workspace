@@ -1826,7 +1826,9 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
   const groupFocused = !groups.isSplit || groups.activeGroupId === group.id;
   const activeKind = active != null ? pickRenderer(active) : null;
   const activeIsNotebook = activeKind === "notebook";
-  const activeIsMarkdown = activeKind === "markdown";
+  // Markdown and images have a preview ↔ edit duality (the others are
+  // always editable text or always rendered).
+  const activeHasEditToggle = activeKind === "markdown" || activeKind === "image";
   const editMode = useEditMode();
   const requestClose = useContext(RequestCloseContext);
   const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -1942,7 +1944,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
         />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 8px" }}>
-        {activeIsMarkdown && active && (
+        {activeHasEditToggle && active && (
           <button
             type="button"
             title={editMode.isEditing(active) ? "Preview" : "Edit"}

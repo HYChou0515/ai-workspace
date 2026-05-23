@@ -13,6 +13,7 @@
  */
 
 import type { AgentEvent, CellEvent } from "../events";
+import { decodeBytes } from "./encoding";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -261,15 +262,11 @@ export const realApi: ApiClient = {
       `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
     );
     if (!resp.ok) throw new HttpError(resp.status, `read ${path} failed: ${resp.status}`);
-    const ctype = resp.headers.get("content-type") ?? "";
-    const sizeHeader = resp.headers.get("content-length");
-    const size = sizeHeader ? Number.parseInt(sizeHeader, 10) : 0;
-    if (ctype.startsWith("text/") || ctype.includes("json") || ctype.includes("xml")) {
-      const text = await resp.text();
-      return { kind: "text", path, text, size: size || text.length };
-    }
-    const blob = await resp.blob();
-    return { kind: "binary", path, size: blob.size };
+    // Read raw bytes and decode losslessly so EVERY file is editable —
+    // valid UTF-8 as text, anything else as byte-exact "binary" (latin1).
+    const bytes = new Uint8Array(await resp.arrayBuffer());
+    const { text, encoding } = decodeBytes(bytes);
+    return { kind: "text", path, text, size: bytes.length, encoding };
   },
 
   async writeFile(investigationId, path, body) {

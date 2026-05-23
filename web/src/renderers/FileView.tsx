@@ -3,6 +3,7 @@
  * Renderers that aren't shipped yet fall through to a "coming soon" stub.
  */
 
+import { useEditMode } from "../hooks/editMode";
 import { pickRenderer } from "../pages/investigation/renderer";
 import { FishboneRenderer } from "./fishbone/FishboneRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -43,6 +44,11 @@ function ImageView({
   investigationId: string;
   path: string;
 }) {
+  // Preview by default; the tab strip's Edit toggle flips to the byte
+  // editor so even an image can be opened and edited (#all-editable).
+  const { isEditing } = useEditMode();
+  if (isEditing(path)) return <TextRenderer investigationId={investigationId} path={path} />;
+
   // Served straight off the read endpoint; the browser fetches the bytes.
   const src = `/investigations/${encodeURIComponent(investigationId)}/files/${path
     .split("/")

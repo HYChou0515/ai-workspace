@@ -14,9 +14,8 @@ export function TextRenderer({ path }: { investigationId: string; path: string }
   if (entry.status === "error") {
     return <Status tone="err">{entry.error ?? "load failed"}</Status>;
   }
-  if (entry.kind !== "text") {
-    return <Status>Binary file — {entry.size} bytes.</Status>;
-  }
+  // Every file is editable: text loads as UTF-8, binary as byte-exact
+  // latin1 (entry.encoding), so even a true binary can be opened here.
 
   // No path/status header — the pane breadcrumb shows the path and the tab
   // shows the dirty dot. The editor fills the whole pane.

@@ -4,6 +4,9 @@
  */
 
 import type { AgentEvent, CellEvent } from "../events";
+import type { FileEncoding } from "./encoding";
+
+export type { FileEncoding };
 
 /* ----------------------------- Enums ----------------------------- */
 
@@ -84,7 +87,7 @@ export type ActivityEntry = {
 };
 
 export type FileContent =
-  | { kind: "text"; path: string; size: number; text: string }
+  | { kind: "text"; path: string; size: number; text: string; encoding: FileEncoding }
   | { kind: "binary"; path: string; size: number };
 
 /** VSCode-style search toggles (#8). */

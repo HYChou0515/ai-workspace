@@ -21,6 +21,7 @@ import {
 } from "react";
 
 import { api } from "../api";
+import { type FileEncoding, encodeText } from "../api/encoding";
 import type { FileContent } from "../api/types";
 
 export type SaveStatus = "clean" | "dirty" | "saving" | "saved" | "error";
@@ -30,6 +31,7 @@ export type BufferEntry = {
   kind: "text" | "binary" | null;
   text: string; // editable text body (empty for binary / not-yet-loaded)
   savedText: string; // last-persisted baseline; dirty = text !== savedText
+  encoding: FileEncoding; // how text re-encodes to bytes on save
   size: number;
   error: string | null;
   save: SaveStatus;
@@ -40,6 +42,7 @@ const LOADING: BufferEntry = {
   kind: null,
   text: "",
   savedText: "",
+  encoding: "utf-8",
   size: 0,
   error: null,
   save: "clean",
@@ -47,7 +50,7 @@ const LOADING: BufferEntry = {
 
 type IO = {
   readFile: (id: string, path: string) => Promise<FileContent>;
-  writeFile: (id: string, path: string, body: string) => Promise<void>;
+  writeFile: (id: string, path: string, body: string | ArrayBuffer | Blob) => Promise<void>;
 };
 
 export class FileBufferStore {
@@ -98,6 +101,7 @@ export class FileBufferStore {
           kind: content.kind,
           text,
           savedText: text,
+          encoding: content.kind === "text" ? content.encoding : "utf-8",
           size: content.size,
           error: null,
           save: "clean",
@@ -154,7 +158,13 @@ export class FileBufferStore {
     const text = entry.text;
     this.set(path, { save: "saving" });
     try {
-      await this.io.writeFile(this.investigationId, path, text);
+      // UTF-8 sends the string as-is; "binary" re-encodes byte-exact so a
+      // file opened losslessly (latin1) saves without corrupting bytes.
+      const body: string | ArrayBuffer =
+        entry.encoding === "binary"
+          ? (encodeText(text, "binary").buffer as ArrayBuffer)
+          : text;
+      await this.io.writeFile(this.investigationId, path, body);
       const after = this.entries.get(path);
       // Keep dirty if the user typed more while the write was in flight.
       const save = after && after.text !== text ? "dirty" : "saved";
