@@ -3,8 +3,9 @@
  *
  * One buffer per file path, shared by all panes/renderers viewing it, so
  * the same file opened in a split shows edits live on both sides (VSCode's
- * one-TextModel-per-file behaviour). Holds the editable text, tracks dirty
- * state, and debounces autosave back to the FileStore.
+ * one-TextModel-per-file behaviour). Holds the editable text and tracks
+ * dirty state against the last-saved baseline. Saving is EXPLICIT — edits
+ * never autosave; ⌘S (or a notebook run, or the close-prompt) calls save().
  *
  * IO is injected (readFile / writeFile) so the store is unit-testable
  * without a live backend.
@@ -28,6 +29,7 @@ export type BufferEntry = {
   status: "loading" | "ready" | "error";
   kind: "text" | "binary" | null;
   text: string; // editable text body (empty for binary / not-yet-loaded)
+  savedText: string; // last-persisted baseline; dirty = text !== savedText
   size: number;
   error: string | null;
   save: SaveStatus;
@@ -37,6 +39,7 @@ const LOADING: BufferEntry = {
   status: "loading",
   kind: null,
   text: "",
+  savedText: "",
   size: 0,
   error: null,
   save: "clean",
@@ -51,12 +54,10 @@ export class FileBufferStore {
   private entries = new Map<string, BufferEntry>();
   private listeners = new Map<string, Set<() => void>>();
   private inflight = new Set<string>();
-  private timers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     public readonly investigationId: string,
     private readonly io: IO = api,
-    private readonly debounceMs = 500,
   ) {}
 
   subscribe(path: string, cb: () => void): () => void {
@@ -91,10 +92,12 @@ export class FileBufferStore {
       .readFile(this.investigationId, path)
       .then((content) => {
         this.inflight.delete(path);
+        const text = content.kind === "text" ? content.text : "";
         this.set(path, {
           status: "ready",
           kind: content.kind,
-          text: content.kind === "text" ? content.text : "",
+          text,
+          savedText: text,
           size: content.size,
           error: null,
           save: "clean",
@@ -115,30 +118,55 @@ export class FileBufferStore {
     this.ensureLoaded(path);
   }
 
-  /** Update the in-memory text (live across all panes) + schedule save. */
+  /** Update the in-memory text (live across all panes). Marks dirty unless
+   * the text matches the last-saved baseline. Never autosaves. */
   setText(path: string, text: string): void {
-    this.set(path, { status: "ready", kind: "text", text, save: "dirty" });
-    const existing = this.timers.get(path);
-    if (existing) clearTimeout(existing);
-    this.timers.set(
-      path,
-      setTimeout(() => void this.flush(path), this.debounceMs),
-    );
+    const prev = this.entries.get(path) ?? LOADING;
+    this.set(path, {
+      status: "ready",
+      kind: "text",
+      text,
+      save: text === prev.savedText ? "clean" : "dirty",
+    });
   }
 
-  /** Push the current text to the backend now (used on cell_done, etc.). */
-  async flush(path: string): Promise<void> {
+  isDirty(path: string): boolean {
+    const e = this.entries.get(path);
+    return !!e && (e.save === "dirty" || e.save === "error");
+  }
+
+  dirtyPaths(): string[] {
+    return [...this.entries.keys()].filter((p) => this.isDirty(p));
+  }
+
+  /** Revert unsaved edits back to the last-saved content (close → Don't Save). */
+  discard(path: string): void {
+    const e = this.entries.get(path);
+    if (!e) return;
+    this.set(path, { text: e.savedText, save: "clean" });
+  }
+
+  /** Persist the buffer to the backend now (⌘S, notebook run, close→Save).
+   * No-op when clean. Updates the baseline so dirty clears. */
+  async save(path: string): Promise<void> {
     const entry = this.entries.get(path);
-    if (!entry || entry.save === "clean" || entry.save === "saving") return;
+    if (!entry || entry.save === "saving" || !this.isDirty(path)) return;
+    const text = entry.text;
     this.set(path, { save: "saving" });
     try {
-      await this.io.writeFile(this.investigationId, path, entry.text);
-      // only flip to saved if no further edits arrived while saving
+      await this.io.writeFile(this.investigationId, path, text);
       const after = this.entries.get(path);
-      if (after && after.save === "saving") this.set(path, { save: "saved" });
+      // Keep dirty if the user typed more while the write was in flight.
+      const save = after && after.text !== text ? "dirty" : "saved";
+      this.set(path, { savedText: text, save });
     } catch {
       this.set(path, { save: "error" });
     }
+  }
+
+  /** Back-compat alias — persist if dirty. */
+  flush(path: string): Promise<void> {
+    return this.save(path);
   }
 }
 
@@ -179,6 +207,7 @@ export function useFileBuffer(path: string) {
   return {
     entry,
     setText: useCallback((t: string) => store.setText(path, t), [store, path]),
+    save: useCallback(() => store.save(path), [store, path]),
     flush: useCallback(() => store.flush(path), [store, path]),
     reload: useCallback(() => store.reload(path), [store, path]),
   };
