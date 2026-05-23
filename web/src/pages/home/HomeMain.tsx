@@ -218,9 +218,10 @@ export function HomeMain({
             >
               <Th width={32} />
               <Th>Investigation</Th>
+              <Th width={140}>Product</Th>
+              <Th width={180}>Topics</Th>
               <Th width={88}>Severity</Th>
               <Th width={120}>Status</Th>
-              <Th width={140}>Product</Th>
               <Th width={88}>Owner</Th>
               <Th width={100}>Updated</Th>
               <Th width={56} />
@@ -230,7 +231,7 @@ export function HomeMain({
             {rows.length === 0 && (
               <tr>
                 <td
-                  colSpan={8}
+                  colSpan={9}
                   style={{ padding: 32, textAlign: "center", color: "var(--text-paper-d)" }}
                 >
                   No investigations match this view.{" "}
@@ -280,14 +281,15 @@ export function HomeMain({
                     </button>
                   </Td>
                   <Td>
-                    <div style={{ fontWeight: 600 }}>{inv.title}</div>
-                    <div style={{ color: "var(--text-paper-d)", fontSize: 12 }}>
+                    <div style={ellipsis(600, { fontWeight: 600 })}>{inv.title}</div>
+                    <div style={ellipsis(600, { color: "var(--text-paper-d)", fontSize: 12 })}>
                       {summarize(inv.description)}
                     </div>
                   </Td>
+                  <Td>{inv.product || <span style={{ color: "var(--text-paper-d2)" }}>—</span>}</Td>
+                  <Td><TopicsCell topics={inv.topics} /></Td>
                   <Td><SeverityChip level={inv.severity} /></Td>
                   <Td><StatusChip status={inv.status} /></Td>
-                  <Td>{inv.product || <span style={{ color: "var(--text-paper-d2)" }}>—</span>}</Td>
                   <Td>{inv.owner}</Td>
                   <Td mono>{relativeTime(inv.updated_time)}</Td>
                   <Td>
@@ -958,9 +960,46 @@ function Td({
         fontFamily: mono ? "var(--font-mono)" : undefined,
         fontSize: mono ? 12 : undefined,
         color: "var(--text-paper)",
+        whiteSpace: "nowrap", // nothing in the table wraps
       }}
     >
       {children}
     </td>
+  );
+}
+
+/** Single-line cell content that truncates with an ellipsis past `max` px. */
+function ellipsis(max: number, extra: React.CSSProperties = {}): React.CSSProperties {
+  return {
+    maxWidth: max,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    ...extra,
+  };
+}
+
+/** Topics as compact pills, single-line, ellipsised past the column width. */
+function TopicsCell({ topics }: { topics: string[] }) {
+  if (topics.length === 0) return <span style={{ color: "var(--text-paper-d2)" }}>—</span>;
+  return (
+    <div style={{ display: "flex", gap: 4, ...ellipsis(168) }} title={topics.join(", ")}>
+      {topics.map((t) => (
+        <span
+          key={t}
+          style={{
+            flexShrink: 0,
+            padding: "1px 7px",
+            borderRadius: 999,
+            background: "var(--paper-2)",
+            border: "1px solid var(--paper-3)",
+            fontSize: 11,
+            color: "var(--text-paper-d)",
+          }}
+        >
+          {t}
+        </span>
+      ))}
+    </div>
   );
 }
