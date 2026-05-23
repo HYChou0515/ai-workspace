@@ -16,7 +16,7 @@ from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..agent.context import AgentToolContext
-from ..filestore.protocol import FileNotFound, FileStore
+from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..kernels import KernelService
 from ..rca.prompts import load_system_prompt
 from ..rca.templates import list_profiles, seed_investigation
@@ -54,6 +54,10 @@ class _MoveBody(BaseModel):
     # `from` is a Python keyword — accept it on the wire via alias.
     from_: str = Field(alias="from")
     to: str
+
+
+class _MkdirBody(BaseModel):
+    path: str
 
 
 class _SearchBody(BaseModel):
@@ -363,6 +367,11 @@ def create_app(
             out.append({"path": p, "size": len(data)})
         return out
 
+    @app.get("/investigations/{investigation_id}/dirs")
+    async def list_dirs(investigation_id: str) -> list[str]:
+        """Directory paths (incl. empty ones) for the file tree."""
+        return sorted(await filestore.listdir(investigation_id))
+
     @app.put(
         "/investigations/{investigation_id}/files/{path:path}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -378,24 +387,67 @@ def create_app(
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    # POST /files/move is registered before the {path:path} routes so the
-    # literal "move" segment can't be swallowed as a path (it's a distinct
-    # method anyway, but keeping it first documents intent).
+    # POST /files/mkdir and /move and /copy are registered before the
+    # {path:path} routes so their literal segments can't be swallowed as a
+    # path (distinct methods anyway, but keeping them first documents intent).
+    @app.post(
+        "/investigations/{investigation_id}/files/mkdir",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def make_dir(investigation_id: str, body: _MkdirBody) -> Response:
+        norm = "/" + body.path.strip("/")
+        try:
+            await filestore.mkdir(investigation_id, norm)
+        except FileExists as exc:
+            raise HTTPException(status_code=409, detail=f"file exists at {norm}") from exc
+        activity.record(
+            "dir_created",
+            f"Created folder {norm}",
+            {"investigation_id": investigation_id, "path": norm},
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    async def _transfer(investigation_id: str, src: str, dst: str, *, copy: bool) -> None:
+        """Move or copy a file OR a directory subtree. Raises HTTPException
+        on missing source / occupied target / moving a dir into itself."""
+        if dst == src or dst.startswith(src + "/"):
+            raise HTTPException(status_code=400, detail="cannot move a path into itself")
+        if await filestore.is_dir(investigation_id, src):
+            occupied = await filestore.exists(investigation_id, dst) or await filestore.is_dir(
+                investigation_id, dst
+            )
+            if occupied:
+                raise HTTPException(status_code=409, detail=f"target exists: {dst}")
+            under = src + "/"
+            for p in sorted(await filestore.ls(investigation_id, under)):
+                data = await filestore.read(investigation_id, p)
+                await filestore.write(investigation_id, dst + p[len(src) :], data)
+            await filestore.mkdir(investigation_id, dst)
+            for d in await filestore.listdir(investigation_id, under):
+                await filestore.mkdir(investigation_id, dst + d[len(src) :])
+            if not copy:
+                await filestore.rmdir(investigation_id, src)
+            return
+        try:
+            data = await filestore.read(investigation_id, src)
+        except FileNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if await filestore.exists(investigation_id, dst) or await filestore.is_dir(
+            investigation_id, dst
+        ):
+            raise HTTPException(status_code=409, detail=f"target exists: {dst}")
+        await filestore.write(investigation_id, dst, data)
+        if not copy:
+            await filestore.delete(investigation_id, src)
+
     @app.post(
         "/investigations/{investigation_id}/files/move",
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def move_file(investigation_id: str, body: _MoveBody) -> Response:
-        src = "/" + body.from_.lstrip("/")
-        dst = "/" + body.to.lstrip("/")
-        try:
-            data = await filestore.read(investigation_id, src)
-        except FileNotFound as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if await filestore.exists(investigation_id, dst):
-            raise HTTPException(status_code=409, detail=f"target exists: {dst}")
-        await filestore.write(investigation_id, dst, data)
-        await filestore.delete(investigation_id, src)
+        src = "/" + body.from_.strip("/")
+        dst = "/" + body.to.strip("/")
+        await _transfer(investigation_id, src, dst, copy=False)
         activity.record(
             "file_moved",
             f"Moved {src} → {dst}",
@@ -408,15 +460,9 @@ def create_app(
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def copy_file(investigation_id: str, body: _MoveBody) -> Response:
-        src = "/" + body.from_.lstrip("/")
-        dst = "/" + body.to.lstrip("/")
-        try:
-            data = await filestore.read(investigation_id, src)
-        except FileNotFound as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if await filestore.exists(investigation_id, dst):
-            raise HTTPException(status_code=409, detail=f"target exists: {dst}")
-        await filestore.write(investigation_id, dst, data)
+        src = "/" + body.from_.strip("/")
+        dst = "/" + body.to.strip("/")
+        await _transfer(investigation_id, src, dst, copy=True)
         activity.record(
             "file_copied",
             f"Copied {src} → {dst}",
@@ -491,6 +537,14 @@ def create_app(
     )
     async def delete_file(investigation_id: str, path: str) -> Response:
         norm = "/" + path.lstrip("/")
+        if await filestore.is_dir(investigation_id, norm):
+            await filestore.rmdir(investigation_id, norm)
+            activity.record(
+                "dir_deleted",
+                f"Deleted folder {norm}",
+                {"investigation_id": investigation_id, "path": norm},
+            )
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
         try:
             await filestore.delete(investigation_id, norm)
         except FileNotFound as exc:

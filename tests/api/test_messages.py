@@ -197,6 +197,14 @@ def test_create_app_works_without_explicit_spec():
             return False
 
         async def delete(self, *a, **k): ...
+        async def mkdir(self, *a, **k): ...
+        async def rmdir(self, *a, **k): ...
+
+        async def is_dir(self, *a, **k):
+            return False
+
+        async def listdir(self, *a, **k):
+            return []
 
         def dirty_paths(self, *a, **k):
             return set()

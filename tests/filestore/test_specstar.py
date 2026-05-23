@@ -113,3 +113,61 @@ async def test_read_does_not_dirty(store: SpecstarFileStore):
 
 async def test_dirty_paths_for_unknown_workspace_is_empty(store: SpecstarFileStore):
     assert store.dirty_paths("never") == set()
+
+
+# --- Honest directories ---
+
+
+async def test_write_creates_ancestor_dirs(store: SpecstarFileStore):
+    await store.write("ws1", "/data/raw/x.csv", b"x")
+    assert await store.is_dir("ws1", "/data")
+    assert await store.is_dir("ws1", "/data/raw")
+    assert not await store.is_dir("ws1", "/data/raw/x.csv")
+
+
+async def test_mkdir_empty_dir_persists_without_files(store: SpecstarFileStore):
+    await store.mkdir("ws1", "/empty")
+    assert await store.is_dir("ws1", "/empty")
+    assert await store.ls("ws1") == []
+    assert "/empty" in await store.listdir("ws1")
+
+
+async def test_mkdir_over_existing_file_raises(store: SpecstarFileStore):
+    from workspace_app.filestore.protocol import FileExists
+
+    await store.write("ws1", "/d", b"x")
+    with pytest.raises(FileExists):
+        await store.mkdir("ws1", "/d")
+
+
+async def test_delete_last_file_keeps_dir(store: SpecstarFileStore):
+    await store.write("ws1", "/d/a.txt", b"a")
+    await store.delete("ws1", "/d/a.txt")
+    assert await store.is_dir("ws1", "/d")
+
+
+async def test_rmdir_removes_subtree(store: SpecstarFileStore):
+    await store.write("ws1", "/d/a.txt", b"a")
+    await store.write("ws1", "/d/sub/b.txt", b"b")
+    await store.mkdir("ws1", "/d/empty")
+    await store.rmdir("ws1", "/d")
+    assert not await store.is_dir("ws1", "/d")
+    assert not await store.is_dir("ws1", "/d/sub")
+    assert not await store.exists("ws1", "/d/a.txt")
+
+
+async def test_rmdir_missing_raises(store: SpecstarFileStore):
+    with pytest.raises(FileNotFound):
+        await store.rmdir("ws1", "/nope")
+
+
+async def test_listdir_returns_all_dirs(store: SpecstarFileStore):
+    await store.write("ws1", "/a/b/x", b"1")
+    await store.mkdir("ws1", "/c")
+    assert sorted(await store.listdir("ws1")) == ["/a", "/a/b", "/c"]
+
+
+async def test_rmdir_missing_dir_in_existing_workspace_raises(store: SpecstarFileStore):
+    await store.write("ws1", "/a.txt", b"x")  # creates the workspace record
+    with pytest.raises(FileNotFound):
+        await store.rmdir("ws1", "/nope")

@@ -10,7 +10,7 @@ from __future__ import annotations
 import pytest
 
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.filestore.protocol import FileNotFound
+from workspace_app.filestore.protocol import FileExists, FileNotFound
 
 
 @pytest.fixture
@@ -96,3 +96,73 @@ async def test_read_in_unknown_workspace_raises(fs: MemoryFileStore):
 
 async def test_ls_unknown_workspace_returns_empty(fs: MemoryFileStore):
     assert await fs.ls("never-existed") == []
+
+
+# --- Honest directories: dirs are first-class, no .keep hack ---
+
+
+async def test_write_creates_ancestor_dirs(fs: MemoryFileStore):
+    await fs.write("ws", "/data/raw/x.csv", b"x")
+    assert await fs.is_dir("ws", "/data")
+    assert await fs.is_dir("ws", "/data/raw")
+    assert not await fs.is_dir("ws", "/data/raw/x.csv")  # a file, not a dir
+
+
+async def test_mkdir_creates_empty_dir_with_no_files(fs: MemoryFileStore):
+    await fs.mkdir("ws", "/empty")
+    assert await fs.is_dir("ws", "/empty")
+    assert await fs.ls("ws") == []  # no placeholder file
+    assert "/empty" in await fs.listdir("ws")
+
+
+async def test_mkdir_creates_ancestors(fs: MemoryFileStore):
+    await fs.mkdir("ws", "/a/b/c")
+    assert await fs.is_dir("ws", "/a")
+    assert await fs.is_dir("ws", "/a/b")
+    assert await fs.is_dir("ws", "/a/b/c")
+
+
+async def test_mkdir_is_idempotent(fs: MemoryFileStore):
+    await fs.mkdir("ws", "/d")
+    await fs.mkdir("ws", "/d")
+    assert await fs.is_dir("ws", "/d")
+
+
+async def test_mkdir_over_existing_file_raises(fs: MemoryFileStore):
+    await fs.write("ws", "/d", b"x")
+    with pytest.raises(FileExists):
+        await fs.mkdir("ws", "/d")
+
+
+async def test_deleting_last_file_keeps_the_dir(fs: MemoryFileStore):
+    await fs.write("ws", "/d/a.txt", b"a")
+    await fs.delete("ws", "/d/a.txt")
+    assert await fs.is_dir("ws", "/d")  # empty dir survives — honest FS
+
+
+async def test_rmdir_removes_the_whole_subtree(fs: MemoryFileStore):
+    await fs.write("ws", "/d/a.txt", b"a")
+    await fs.write("ws", "/d/sub/b.txt", b"b")
+    await fs.mkdir("ws", "/d/empty")
+    await fs.rmdir("ws", "/d")
+    assert not await fs.is_dir("ws", "/d")
+    assert not await fs.is_dir("ws", "/d/sub")
+    assert not await fs.is_dir("ws", "/d/empty")
+    assert not await fs.exists("ws", "/d/a.txt")
+    assert not await fs.exists("ws", "/d/sub/b.txt")
+
+
+async def test_rmdir_missing_raises(fs: MemoryFileStore):
+    with pytest.raises(FileNotFound):
+        await fs.rmdir("ws", "/nope")
+
+
+async def test_listdir_returns_all_dirs(fs: MemoryFileStore):
+    await fs.write("ws", "/a/b/x", b"1")
+    await fs.mkdir("ws", "/c")
+    assert sorted(await fs.listdir("ws")) == ["/a", "/a/b", "/c"]
+
+
+async def test_dirs_are_isolated_per_workspace(fs: MemoryFileStore):
+    await fs.mkdir("ws1", "/d")
+    assert not await fs.is_dir("ws2", "/d")
