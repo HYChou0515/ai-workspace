@@ -8,6 +8,13 @@ import type { TreeNode } from "./fileTree";
 export type SelMods = { ctrl: boolean; shift: boolean };
 export type SelState = { selected: string[]; anchor: string | null };
 
+/** Keep only the top-most paths: drop any path nested under another path in
+ * the set. Moving/deleting a folder already covers its descendants, so a
+ * selection spanning a folder AND its children must act on the folder once. */
+export function topLevel(paths: string[]): string[] {
+  return paths.filter((p) => !paths.some((q) => q !== p && p.startsWith(q + "/")));
+}
+
 /** Flatten the visible rows (depth-first, skipping collapsed folders'
  * children) into display order — the basis for shift-range selection. */
 export function visibleOrder(tree: TreeNode[], isCollapsed: (path: string) => boolean): string[] {

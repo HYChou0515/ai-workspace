@@ -14,7 +14,7 @@ import { Icon } from "../../components/Icon";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { basename } from "./renderer";
-import { nextSelection, type SelState, visibleOrder } from "./treeSelection";
+import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
 
 type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
@@ -114,16 +114,19 @@ export function FileTree({
   // Move (or Ctrl/⌘-copy) dragged files/folders into `destDir` ("" = root).
   // The BE handles folders atomically (subtree move/copy).
   const dropFileInto = async (srcPaths: string[], destDir: string, copy: boolean) => {
+    // Moving a folder already relocates its subtree; drop any selected
+    // descendants so we don't then act on a path that no longer exists.
+    const tops = topLevel(srcPaths);
     try {
-      for (const srcPath of srcPaths) {
+      for (const srcPath of tops) {
         const destBase = `${destDir}/${basename(srcPath)}`.replace(/\/+/g, "/");
         if (destBase === srcPath || destBase.startsWith(srcPath + "/")) continue; // into-self
         if (copy) await api.copyFile(investigationId, srcPath, destBase);
         else await api.moveFile(investigationId, srcPath, destBase);
       }
       refresh();
-      if (!copy && srcPaths.length === 1) {
-        const only = srcPaths[0]!;
+      if (!copy && tops.length === 1) {
+        const only = tops[0]!;
         const isFolder = dirs.includes(only) || files.some((f) => f.path.startsWith(only + "/"));
         if (!isFolder) onOpen(`${destDir}/${basename(only)}`.replace(/\/+/g, "/"), { preview: false });
       }
@@ -180,13 +183,15 @@ export function FileTree({
   // Delete one or many paths (the BE removes a folder's whole subtree in a
   // single call). Confirms through the modal dialog.
   const deletePaths = async (paths: string[]) => {
-    if (paths.length === 0) return;
+    // Deleting a folder removes its subtree, so prune selected descendants.
+    const tops = topLevel(paths);
+    if (tops.length === 0) return;
     const body =
-      paths.length === 1
-        ? `Delete ${paths[0]}? This cannot be undone.`
-        : `Delete these ${paths.length} items? This cannot be undone.`;
+      tops.length === 1
+        ? `Delete ${tops[0]}? This cannot be undone.`
+        : `Delete these ${tops.length} items? This cannot be undone.`;
     const choice = await dialog.confirm({
-      title: paths.length === 1 ? "Delete item" : `Delete ${paths.length} items`,
+      title: tops.length === 1 ? "Delete item" : `Delete ${tops.length} items`,
       body,
       actions: [
         { id: "delete", label: "Delete", variant: "danger" },
@@ -194,7 +199,7 @@ export function FileTree({
       ],
     });
     if (choice !== "delete") return;
-    for (const p of paths) await api.deleteFile(investigationId, p);
+    for (const p of tops) await api.deleteFile(investigationId, p);
     setSel({ selected: [], anchor: null });
     refresh();
   };

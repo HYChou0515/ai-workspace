@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { TreeNode } from "./fileTree";
-import { nextSelection, visibleOrder } from "./treeSelection";
+import { nextSelection, topLevel, visibleOrder } from "./treeSelection";
 
 const order = ["/a", "/b", "/c", "/d"];
 const plain = { ctrl: false, shift: false };
@@ -50,6 +50,25 @@ describe("nextSelection", () => {
       selected: ["/b"],
       anchor: "/b",
     });
+  });
+});
+
+describe("topLevel", () => {
+  it("drops descendants of a selected folder", () => {
+    expect(topLevel(["/d", "/d/a.txt", "/c"])).toEqual(["/d", "/c"]);
+  });
+
+  it("keeps siblings that share no ancestor", () => {
+    expect(topLevel(["/d/a.txt", "/d/b.txt"])).toEqual(["/d/a.txt", "/d/b.txt"]);
+  });
+
+  it("collapses a deep chain to the top folder", () => {
+    expect(topLevel(["/a", "/a/b", "/a/b/c.txt"])).toEqual(["/a"]);
+  });
+
+  it("does not treat a name prefix as an ancestor", () => {
+    // "/data" is not an ancestor of "/database.md"
+    expect(topLevel(["/data", "/database.md"]).sort()).toEqual(["/data", "/database.md"]);
   });
 });
 
