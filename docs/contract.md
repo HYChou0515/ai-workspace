@@ -26,7 +26,10 @@ auto-generates REST routes (`/investigation`, `/agent-config`,
 
 ```python
 from enum import StrEnum
+from typing import Annotated
+
 from msgspec import Struct, field
+from specstar import OnDelete, Ref
 
 
 class Severity(StrEnum):
@@ -50,15 +53,27 @@ class Status(StrEnum):
 
 class Investigation(Struct):
     title: str                                            # required
+    owner: str                                            # required — user id; resolved via company API
     description: str = ""                                 # multi-line; design's "initial brief"
     severity: Severity = Severity.P2
     status: Status = Status.TRIAGING
     product: str = ""                                     # part / board (e.g. "MX-7 board")
-    owner: str = "default-user"                           # user id; resolved via company API
     members: list[str] = field(default_factory=list)      # additional user ids
     topics: list[str] = field(default_factory=list)       # free-form tags ("Reflow zone-3", ...)
-    attached_agent_config_id: str | None = None           # which AgentConfig to use
+    attached_agent_config_id: Annotated[
+        str | None, Ref("agent_config", on_delete=OnDelete.set_null)
+    ] = None
 ```
+
+`owner` has **no default** — every investigation must declare its
+creator at create time. The API layer reads the current user (v1:
+always `"default-user"`) and fills it; v2 SSO replaces that with a
+real user id.
+
+`attached_agent_config_id` is a `Ref` to `AgentConfig`. If the
+referenced config is deleted, the field auto-clears to `None` (the
+investigation keeps working with whatever default agent the API
+factories construct).
 
 ### 1.2 `Conversation`
 
@@ -66,14 +81,35 @@ class Investigation(Struct):
 class Message(Struct):
     role: str                                    # user / assistant / tool / system
     content: str
-    tool_call_id: str | None = None
-    tool_name: str | None = None
+    author: str | None = None                    # user id when role=user;
+                                                 # agent name when role=assistant
+    reasoning: str | None = None                 # LLM reasoning / thinking content
+                                                 # (Qwen3 <thinking>, OpenAI o-series, ...)
+    tool_call_id: str | None = None              # role=tool
+    tool_name: str | None = None                 # role=tool
 
 
 class Conversation(Struct):
-    investigation_id: str                        # was workspace_id in workspace-app
+    investigation_id: Annotated[
+        str, Ref("investigation", on_delete=OnDelete.cascade)
+    ]
     messages: list[Message] = field(default_factory=list)
 ```
+
+`investigation_id` is a `Ref` with `cascade` — deleting the
+investigation deletes its conversation along with it.
+
+`Message.author` carries the user id when `role == "user"` (so the
+multi-user UI can label "Alice / 14:30:12" vs "Bob / 14:31:05") and
+the agent identifier when `role == "assistant"` (forward-compatible
+with multi-agent setups; v1 it's just the active `AgentConfig.name`).
+
+`Message.reasoning` separates the model's chain-of-thought from
+`content`. Qwen3 returns `thinking` as a sibling field; OpenAI's
+o-series returns reasoning items; our runner consolidates both into
+this single field. FE can render it collapsed (ChatGPT-style "Show
+thinking") without conflating it with the assistant's user-facing
+answer.
 
 ### 1.3 `AgentConfig`
 
@@ -188,7 +224,7 @@ Mirrored in `web/src/events.ts`.
 
 | Variant | Shape | Terminal? | Notes |
 |---|---|---|---|
-| `MessageDelta`        | `{type: "message_delta", text: string}` | no | append to assistant message |
+| `MessageDelta`        | `{type: "message_delta", text: string, reasoning?: boolean}` | no | append to assistant message; if `reasoning=true`, append to the reasoning channel instead of the visible content |
 | `ToolStart`           | `{type: "tool_start", call_id: string, name: string, args: object}` | no | |
 | `ToolEnd`             | `{type: "tool_end", call_id: string, output: string}` | no | |
 | `RunDone`             | `{type: "done"}` | **yes** | normal completion |

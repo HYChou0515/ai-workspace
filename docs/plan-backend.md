@@ -100,7 +100,10 @@ not as a model field):
 
 ```python
 from enum import StrEnum
+from typing import Annotated
+
 from msgspec import Struct, field
+from specstar import OnDelete, Ref
 
 
 class Severity(StrEnum):
@@ -124,27 +127,33 @@ class Status(StrEnum):
 
 class Investigation(Struct):
     title: str                                            # required
+    owner: str                                            # required — user id (resolved via company API)
     description: str = ""                                 # multi-line; replaces design's "initial brief"
     severity: Severity = Severity.P2
     status: Status = Status.TRIAGING
     product: str = ""                                     # part / board, e.g. "MX-7 board"
-    owner: str = "default-user"                           # user id; resolved via company API
     members: list[str] = field(default_factory=list)      # user ids
     topics: list[str] = field(default_factory=list)       # free-form tags ("Reflow zone-3", ...)
-    attached_agent_config_id: str | None = None           # which AgentConfig to use
+    attached_agent_config_id: Annotated[
+        str | None, Ref("agent_config", on_delete=OnDelete.set_null)
+    ] = None
 ```
 
 ```python
-# Conversation — only the field rename
+# Message: + author (multi-user id) + reasoning (LLM thinking separate from answer)
 class Message(Struct):
     role: str                                              # user / assistant / tool / system
     content: str
-    tool_call_id: str | None = None
-    tool_name: str | None = None
+    author: str | None = None                              # user id when role=user; agent name when role=assistant
+    reasoning: str | None = None                           # Qwen3 thinking, o-series reasoning, etc.
+    tool_call_id: str | None = None                        # role=tool
+    tool_name: str | None = None                           # role=tool
 
 
 class Conversation(Struct):
-    investigation_id: str                                  # was workspace_id
+    investigation_id: Annotated[
+        str, Ref("investigation", on_delete=OnDelete.cascade)
+    ]
     messages: list[Message] = field(default_factory=list)
 ```
 
