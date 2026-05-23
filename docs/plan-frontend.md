@@ -359,11 +359,11 @@ Per Q11-final + grill-me reconciliation:
   - **description** (textarea, replaces design's "initial brief")
   - **topics** (chip-input — type-and-enter to add tag chips)
   - **severity** (segmented picker P0–P4)
-  - **line** (text/select)
   - **product** (text)
-  - *Dropped vs design: `lot`, `owner` picker, `status` picker,
-    template picker, auto-agent ribbon.* `owner` is auto-set to
-    current user, `status` auto-set to `triaging`.
+  - *Dropped vs design's original modal: `lot`, `line` (replaced by
+    topics), `owner` picker, `status` picker, template picker,
+    auto-agent ribbon.* `owner` is auto-set to current user, `status`
+    auto-set to `triaging`.
 - Footer: Cancel + `Create & ask agent` primary.
 - Submit: `POST /investigation` with the fields → server seeds the
   default template → navigate to `/investigations/{newId}`.
