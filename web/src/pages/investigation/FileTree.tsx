@@ -113,29 +113,35 @@ export function FileTree({
 
   // Move (or Ctrl/⌘-copy) dragged files/folders into `destDir` ("" = root).
   // The BE handles folders atomically (subtree move/copy).
+  // Returns true if it's safe to write/move onto `dest`: either nothing was
+  // there, or the user confirmed Replace (in which case the target is
+  // deleted first). VSCode-style replace prompt, shared by move/copy,
+  // rename and new file/folder so the BE never has to clobber.
+  const ensureReplaceable = async (dest: string): Promise<boolean> => {
+    const exists = files.some((f) => f.path === dest) || dirs.includes(dest);
+    if (!exists) return true;
+    const choice = await dialog.confirm({
+      title: "Replace existing item",
+      body: `“${basename(dest)}” already exists. Replace it?`,
+      actions: [
+        { id: "replace", label: "Replace", variant: "danger" },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (choice !== "replace") return false;
+    await api.deleteFile(investigationId, dest);
+    return true;
+  };
+
   const dropFileInto = async (srcPaths: string[], destDir: string, copy: boolean) => {
     // Moving a folder already relocates its subtree; drop any selected
     // descendants so we don't then act on a path that no longer exists.
     const tops = topLevel(srcPaths);
-    const existing = new Set<string>([...files.map((f) => f.path), ...dirs]);
     try {
       for (const srcPath of tops) {
         const destBase = `${destDir}/${basename(srcPath)}`.replace(/\/+/g, "/");
         if (destBase === srcPath || destBase.startsWith(srcPath + "/")) continue; // into-self
-        if (existing.has(destBase)) {
-          // VSCode-style replace prompt — the BE won't clobber, so confirm
-          // then delete the target before moving/copying onto it.
-          const choice = await dialog.confirm({
-            title: "Replace existing item",
-            body: `“${basename(destBase)}” already exists in ${destDir || "/"}. Replace it?`,
-            actions: [
-              { id: "replace", label: "Replace", variant: "danger" },
-              { id: "cancel", label: "Cancel" },
-            ],
-          });
-          if (choice !== "replace") continue;
-          await api.deleteFile(investigationId, destBase);
-        }
+        if (!(await ensureReplaceable(destBase))) continue;
         if (copy) await api.copyFile(investigationId, srcPath, destBase);
         else await api.moveFile(investigationId, srcPath, destBase);
       }
@@ -167,17 +173,21 @@ export function FileTree({
     setCreating(null);
     if (!c || !name.trim()) return;
     const clean = name.trim().replace(/^\/+|\/+$/g, "");
-    if (c.kind === "file") {
-      const path = `${c.dir}/${clean}`.replace(/\/+/g, "/");
-      await api.writeFile(investigationId, path, "");
-      refresh();
-      onOpen(path, { preview: false });
-    } else {
-      // Real, honest folder — no .keep placeholder.
-      const path = `${c.dir}/${clean}`.replace(/\/+/g, "/");
-      await api.mkdir(investigationId, path);
-      if (collapsed.has(path)) collapsed.toggle(path);
-      refresh();
+    const path = `${c.dir}/${clean}`.replace(/\/+/g, "/");
+    try {
+      if (!(await ensureReplaceable(path))) return;
+      if (c.kind === "file") {
+        await api.writeFile(investigationId, path, "");
+        refresh();
+        onOpen(path, { preview: false });
+      } else {
+        // Real, honest folder — no .keep placeholder.
+        await api.mkdir(investigationId, path);
+        if (collapsed.has(path)) collapsed.toggle(path);
+        refresh();
+      }
+    } catch (e) {
+      alert(`Create failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -187,6 +197,7 @@ export function FileTree({
     const next = `${parent}/${name.trim()}`.replace(/\/+/g, "/");
     if (!name.trim() || next === node.path) return;
     try {
+      if (!(await ensureReplaceable(next))) return;
       await api.moveFile(investigationId, node.path, next);
       refresh();
       if (!node.isDir) onOpen(next, { preview: false });

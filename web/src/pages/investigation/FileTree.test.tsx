@@ -75,4 +75,23 @@ describe("<FileTree /> multi-select", () => {
     expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /replace/i })).toBeInTheDocument();
   });
+
+  it("prompts to replace when a new file name collides", async () => {
+    const user = userEvent.setup();
+    renderTree();
+    await user.click(screen.getByTitle("New file"));
+    await user.type(await screen.findByPlaceholderText("file name"), "a.md{Enter}");
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+  });
+
+  it("prompts to replace when a rename collides with a sibling", async () => {
+    const user = userEvent.setup();
+    renderTree();
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    await user.click(await screen.findByRole("button", { name: /rename/i }));
+    const input = await screen.findByDisplayValue("a.md");
+    await user.clear(input);
+    await user.type(input, "b.md{Enter}");
+    expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+  });
 });
