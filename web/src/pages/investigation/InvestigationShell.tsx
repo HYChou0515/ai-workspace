@@ -173,6 +173,21 @@ function ShellBody({
   const gRef = useRef(groups);
   gRef.current = groups;
 
+  // VSCode-style delete-open-file handling: when a file disappears from the
+  // listing (deleted in the tree), auto-close its CLEAN tabs; keep dirty
+  // ones open so ⌘S can re-create the file.
+  const filePaths = useMemo(() => new Set(files.map((f) => f.path)), [files]);
+  useEffect(() => {
+    const g = gRef.current;
+    for (const [gid, grp] of Object.entries(g.groups)) {
+      for (const t of grp.tabs) {
+        if (!filePaths.has(t.path) && !bufferStore.isDirty(t.path)) {
+          g.closeTab(gid, t.path);
+        }
+      }
+    }
+  }, [filePaths, bufferStore]);
+
   // Close a tab, prompting to save when it's the LAST open view of a dirty
   // file (a sibling pane still showing it means no data is at risk).
   const requestCloseTab = useCallback(

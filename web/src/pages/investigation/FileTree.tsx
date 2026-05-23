@@ -9,10 +9,12 @@ import { useRef, useState } from "react";
 
 import { api } from "../../api";
 import type { FileInfo } from "../../api/types";
+import { useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { basename } from "./renderer";
+import { nextSelection, type SelState, visibleOrder } from "./treeSelection";
 
 type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
@@ -45,6 +47,7 @@ export function FileTree({
   onOpenInSplit?: (path: string) => void;
   onChanged?: () => void;
 }) {
+  const dialog = useDialog();
   const tree = buildFileTree(files, dirs);
   const collapsed = usePersistentSet(`rca:tree-collapsed:${investigationId}`);
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -52,21 +55,39 @@ export function FileTree({
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
   // Inline rename: the path being renamed.
   const [renaming, setRenaming] = useState<string | null>(null);
-  // Selected node — new file/folder is born relative to it (VSCode).
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // Multi-selection (VSCode): ctrl/shift/ctrl+shift click. `anchor` is the
+  // last-clicked node — new file/folder is born relative to it.
+  const [sel, setSel] = useState<SelState>({ selected: [], anchor: null });
+  const selectedSet = new Set(sel.selected);
+  const order = visibleOrder(tree, (p) => collapsed.has(p));
   const [rootDrop, setRootDrop] = useState(false);
   const [uploadMenu, setUploadMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Where a new file/folder lands: inside the selected folder, or beside
-  // the selected file, else the root.
+  // Where a new file/folder lands: inside the anchored folder, or beside
+  // the anchored file, else the root.
   const createDir = (() => {
-    if (!selectedPath) return "";
-    const isFolder =
-      dirs.includes(selectedPath) || files.some((f) => f.path.startsWith(selectedPath + "/"));
-    return isFolder ? selectedPath : selectedPath.split("/").slice(0, -1).join("/");
+    const anchor = sel.anchor;
+    if (!anchor) return "";
+    const isFolder = dirs.includes(anchor) || files.some((f) => f.path.startsWith(anchor + "/"));
+    return isFolder ? anchor : anchor.split("/").slice(0, -1).join("/");
   })();
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // Click on a row: update the selection; a plain (unmodified) click also
+  // opens a file / toggles a folder. Modifier clicks only adjust selection.
+  const activate = (node: TreeNode, e: React.MouseEvent) => {
+    const mods = { ctrl: e.ctrlKey || e.metaKey, shift: e.shiftKey };
+    setSel((s) => nextSelection(s, node.path, mods, order));
+    if (mods.ctrl || mods.shift) return;
+    if (node.isDir) collapsed.toggle(node.path);
+    else onOpen(node.path, { preview: true });
+  };
+
+  // Paths to act on for a node-targeted action: the whole selection when the
+  // node is part of a multi-selection, else just the node.
+  const targetsFor = (path: string): string[] =>
+    selectedSet.has(path) && sel.selected.length > 1 ? sel.selected : [path];
 
   const refresh = () => onChanged?.();
 
@@ -90,28 +111,34 @@ export function FileTree({
     if (firstPath) onOpen(firstPath, { preview: false });
   };
 
-  // Move (or Ctrl/⌘-copy) a dragged file OR folder into `destDir` ("" =
-  // root). The BE handles folders atomically (subtree move/copy).
-  const dropFileInto = async (srcPath: string, destDir: string, copy: boolean) => {
-    const name = basename(srcPath);
-    const destBase = `${destDir}/${name}`.replace(/\/+/g, "/");
-    if (destBase === srcPath || destBase.startsWith(srcPath + "/")) return; // into-self guard
-    const isFolder = dirs.includes(srcPath) || files.some((f) => f.path.startsWith(srcPath + "/"));
+  // Move (or Ctrl/⌘-copy) dragged files/folders into `destDir` ("" = root).
+  // The BE handles folders atomically (subtree move/copy).
+  const dropFileInto = async (srcPaths: string[], destDir: string, copy: boolean) => {
     try {
-      if (copy) await api.copyFile(investigationId, srcPath, destBase);
-      else await api.moveFile(investigationId, srcPath, destBase);
+      for (const srcPath of srcPaths) {
+        const destBase = `${destDir}/${basename(srcPath)}`.replace(/\/+/g, "/");
+        if (destBase === srcPath || destBase.startsWith(srcPath + "/")) continue; // into-self
+        if (copy) await api.copyFile(investigationId, srcPath, destBase);
+        else await api.moveFile(investigationId, srcPath, destBase);
+      }
       refresh();
-      if (!copy && !isFolder) onOpen(destBase, { preview: false });
+      if (!copy && srcPaths.length === 1) {
+        const only = srcPaths[0]!;
+        const isFolder = dirs.includes(only) || files.some((f) => f.path.startsWith(only + "/"));
+        if (!isFolder) onOpen(`${destDir}/${basename(only)}`.replace(/\/+/g, "/"), { preview: false });
+      }
     } catch (e) {
       alert(`${copy ? "Copy" : "Move"} failed: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
-  const readDragFile = (e: React.DragEvent): { path: string } | null => {
+  const readDragFile = (e: React.DragEvent): { paths: string[] } | null => {
     const raw = e.dataTransfer.getData("application/x-rca-file");
     if (!raw) return null;
     try {
-      return JSON.parse(raw) as { path: string };
+      const d = JSON.parse(raw) as { path?: string; paths?: string[] };
+      const paths = d.paths ?? (d.path ? [d.path] : []);
+      return paths.length ? { paths } : null;
     } catch {
       return null;
     }
@@ -150,11 +177,25 @@ export function FileTree({
     }
   };
 
-  const remove = async (node: TreeNode) => {
-    const label = node.isDir ? `folder ${node.path} and its contents` : node.path;
-    if (!confirm(`Delete ${label}?`)) return;
-    // The BE removes a folder's whole subtree (rmdir) in one call.
-    await api.deleteFile(investigationId, node.path);
+  // Delete one or many paths (the BE removes a folder's whole subtree in a
+  // single call). Confirms through the modal dialog.
+  const deletePaths = async (paths: string[]) => {
+    if (paths.length === 0) return;
+    const body =
+      paths.length === 1
+        ? `Delete ${paths[0]}? This cannot be undone.`
+        : `Delete these ${paths.length} items? This cannot be undone.`;
+    const choice = await dialog.confirm({
+      title: paths.length === 1 ? "Delete item" : `Delete ${paths.length} items`,
+      body,
+      actions: [
+        { id: "delete", label: "Delete", variant: "danger" },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (choice !== "delete") return;
+    for (const p of paths) await api.deleteFile(investigationId, p);
+    setSel({ selected: [], anchor: null });
     refresh();
   };
 
@@ -291,7 +332,23 @@ export function FileTree({
           const d = readDragFile(e);
           if (d) {
             e.preventDefault();
-            void dropFileInto(d.path, "", e.ctrlKey || e.metaKey);
+            void dropFileInto(d.paths, "", e.ctrlKey || e.metaKey);
+          }
+        }}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (sel.selected.length === 0) return;
+          if (e.key === "Delete" || e.key === "Backspace") {
+            e.preventDefault();
+            void deletePaths(sel.selected);
+          } else if (e.key === "Enter") {
+            // open every selected file (folders ignored)
+            e.preventDefault();
+            for (const p of sel.selected) {
+              if (!dirs.includes(p) && !files.some((f) => f.path.startsWith(p + "/"))) {
+                onOpen(p, { preview: false });
+              }
+            }
           }
         }}
         style={{
@@ -322,21 +379,31 @@ export function FileTree({
             node={node}
             depth={0}
             activePath={activePath}
-            selectedPath={selectedPath}
+            selectedSet={selectedSet}
+            multi={sel.selected.length > 1}
             collapsed={collapsed}
             creating={creating}
             renaming={renaming}
             onOpen={onOpen}
-            onSelect={setSelectedPath}
+            onActivate={activate}
+            onDoubleOpen={(p) => {
+              for (const t of targetsFor(p)) {
+                if (!dirs.includes(t) && !files.some((f) => f.path.startsWith(t + "/"))) {
+                  onOpen(t, { preview: false });
+                }
+              }
+            }}
+            dragPathsFor={targetsFor}
             onCommitCreate={(name) => void commitCreate(name)}
             onCancelCreate={() => setCreating(null)}
             onCommitRename={(n, name) => void commitRename(n, name)}
             onCancelRename={() => setRenaming(null)}
-            onDropFile={(srcPath, destDir, copy) => void dropFileInto(srcPath, destDir, copy)}
+            onDropFile={(srcPaths, destDir, copy) => void dropFileInto(srcPaths, destDir, copy)}
             readDragFile={readDragFile}
             onContext={(n, e) => {
               e.preventDefault();
-              setSelectedPath(n.path);
+              // right-clicking outside the current selection re-selects just it
+              if (!selectedSet.has(n.path)) setSel({ selected: [n.path], anchor: n.path });
               setMenu({ node: n, x: e.clientX, y: e.clientY });
             }}
           />
@@ -353,7 +420,7 @@ export function FileTree({
           onNewFile={(dir) => setCreating({ kind: "file", dir })}
           onNewFolder={(dir) => setCreating({ kind: "folder", dir })}
           onRename={(n) => setRenaming(n.path)}
-          onDelete={(n) => void remove(n)}
+          onDelete={(n) => void deletePaths(targetsFor(n.path))}
           onCopyPath={(p) => void navigator.clipboard?.writeText(p)}
           onOpenInSplit={onOpenInSplit}
         />
@@ -419,12 +486,15 @@ function TreeRow({
   node,
   depth,
   activePath,
-  selectedPath,
+  selectedSet,
+  multi,
   collapsed,
   creating,
   renaming,
   onOpen,
-  onSelect,
+  onActivate,
+  onDoubleOpen,
+  dragPathsFor,
   onContext,
   onCommitCreate,
   onCancelCreate,
@@ -436,19 +506,22 @@ function TreeRow({
   node: TreeNode;
   depth: number;
   activePath: string | null;
-  selectedPath: string | null;
+  selectedSet: Set<string>;
+  multi: boolean;
   collapsed: ReturnType<typeof usePersistentSet>;
   creating: Creating;
   renaming: string | null;
   onOpen: OpenFn;
-  onSelect: (path: string) => void;
+  onActivate: (node: TreeNode, e: React.MouseEvent) => void;
+  onDoubleOpen: (path: string) => void;
+  dragPathsFor: (path: string) => string[];
   onContext: (node: TreeNode, e: React.MouseEvent) => void;
   onCommitCreate: (name: string) => void;
   onCancelCreate: () => void;
   onCommitRename: (node: TreeNode, name: string) => void;
   onCancelRename: () => void;
-  onDropFile: (srcPath: string, destDir: string, copy: boolean) => void;
-  readDragFile: (e: React.DragEvent) => { path: string } | null;
+  onDropFile: (srcPaths: string[], destDir: string, copy: boolean) => void;
+  readDragFile: (e: React.DragEvent) => { paths: string[] } | null;
 }) {
   const indent = 8 + depth * 12;
   const isCollapsed = collapsed.has(node.path);
@@ -476,16 +549,13 @@ function TreeRow({
           onDragStart={(e) => {
             e.dataTransfer.setData(
               "application/x-rca-file",
-              JSON.stringify({ path: node.path }),
+              JSON.stringify({ path: node.path, paths: dragPathsFor(node.path) }),
             );
             e.dataTransfer.effectAllowed = "copyMove";
             setDragging(true);
           }}
           onDragEnd={() => setDragging(false)}
-          onClick={() => {
-            onSelect(node.path);
-            collapsed.toggle(node.path);
-          }}
+          onClick={(e) => onActivate(node, e)}
           onContextMenu={(e) => onContext(node, e)}
           // Drop target: move/copy a dragged file or folder into this folder.
           onDragOver={(e) => {
@@ -502,7 +572,7 @@ function TreeRow({
             if (d) {
               e.preventDefault();
               e.stopPropagation();
-              onDropFile(d.path, node.path, e.ctrlKey || e.metaKey);
+              onDropFile(d.paths, node.path, e.ctrlKey || e.metaKey);
             }
           }}
           title="Drag onto another folder to move · Ctrl/⌘ to copy"
@@ -517,13 +587,12 @@ function TreeRow({
             fontSize: 12,
             background: dropOver
               ? "var(--accent-soft)"
-              : node.path === selectedPath
+              : selectedSet.has(node.path)
                 ? "var(--paper-2)"
                 : "transparent",
-            borderLeft:
-              node.path === selectedPath
-                ? "2px solid var(--accent)"
-                : "2px solid transparent",
+            borderLeft: selectedSet.has(node.path)
+              ? "2px solid var(--accent)"
+              : "2px solid transparent",
             opacity: dragging ? 0.4 : 1,
           }}
         >
@@ -547,12 +616,15 @@ function TreeRow({
                 node={c}
                 depth={depth + 1}
                 activePath={activePath}
-                selectedPath={selectedPath}
+                selectedSet={selectedSet}
+                multi={multi}
                 collapsed={collapsed}
                 creating={creating}
                 renaming={renaming}
                 onOpen={onOpen}
-                onSelect={onSelect}
+                onActivate={onActivate}
+                onDoubleOpen={onDoubleOpen}
+                dragPathsFor={dragPathsFor}
                 onContext={onContext}
                 onCommitCreate={onCommitCreate}
                 onCancelCreate={onCancelCreate}
@@ -569,6 +641,7 @@ function TreeRow({
   }
 
   const active = node.path === activePath;
+  const selected = selectedSet.has(node.path);
   return (
     <button
       type="button"
@@ -576,19 +649,20 @@ function TreeRow({
       onDragStart={(e) => {
         e.dataTransfer.setData(
           "application/x-rca-file",
-          JSON.stringify({ path: node.path }),
+          JSON.stringify({ path: node.path, paths: dragPathsFor(node.path) }),
         );
         e.dataTransfer.effectAllowed = "copyMove";
         setDragging(true);
       }}
       onDragEnd={() => setDragging(false)}
-      onClick={() => {
-        onSelect(node.path);
-        onOpen(node.path, { preview: true });
-      }}
-      onDoubleClick={() => onOpen(node.path, { preview: false })}
+      onClick={(e) => onActivate(node, e)}
+      onDoubleClick={() => onDoubleOpen(node.path)}
       onContextMenu={(e) => onContext(node, e)}
-      title="Drag onto a folder to move · Ctrl/⌘-drag to copy · drag into a pane to open there"
+      title={
+        multi && selected
+          ? "Drag to move all selected · Ctrl/⌘ to copy"
+          : "Drag onto a folder to move · Ctrl/⌘-drag to copy · drag into a pane to open there"
+      }
       style={{
         display: "flex",
         alignItems: "center",
@@ -596,8 +670,9 @@ function TreeRow({
         width: "100%",
         padding: `4px 14px 4px ${indent + 16}px`,
         textAlign: "left",
-        background: active ? "var(--accent-soft)" : "transparent",
-        borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent",
+        background: active ? "var(--accent-soft)" : selected ? "var(--paper-2)" : "transparent",
+        borderLeft:
+          active || selected ? "2px solid var(--accent)" : "2px solid transparent",
         color: active ? "var(--accent-h)" : "var(--text-paper)",
         fontSize: 12,
         opacity: dragging ? 0.4 : 1,
