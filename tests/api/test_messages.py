@@ -53,6 +53,53 @@ def test_investigation_crud_via_specstar_routes(harness: Harness):
     assert rm.count_resources(QB.all()) == 1  # ty: ignore[invalid-argument-type]
 
 
+def test_post_investigation_seeds_template_files(harness: Harness):
+    """Creating an investigation drops the default starter template
+    into its FileStore so the user lands on a non-empty workspace."""
+    resp = harness.client.post(
+        "/investigation",
+        json={"title": "Solder voids spike", "owner": "alice"},
+    )
+    assert resp.status_code == 200
+    inv_id = resp.json()["resource_id"]
+
+    # Check via the existing files-list endpoint.
+    files_resp = harness.client.get(f"/investigations/{inv_id}/files")
+    assert files_resp.status_code == 200
+    paths = {item["path"] for item in files_resp.json()}
+    expected = {
+        "/brief.md",
+        "/drift.ipynb",
+        "/pareto.ipynb",
+        "/fishbone.canvas",
+        "/5-why.md",
+        "/report.md",
+        "/data/reflow.zone3.sample.csv",
+    }
+    assert expected.issubset(paths)
+
+
+def test_post_investigation_substitutes_brief_md(harness: Harness):
+    resp = harness.client.post(
+        "/investigation",
+        json={
+            "title": "Crack at flange",
+            "owner": "carol",
+            "description": "5 of 240 cracked at injection-point.",
+            "product": "Housing G2",
+            "severity": "P1",
+        },
+    )
+    assert resp.status_code == 200
+    inv_id = resp.json()["resource_id"]
+    brief = harness.client.get(f"/investigations/{inv_id}/files/brief.md").text
+    assert "Crack at flange" in brief
+    assert "carol" in brief
+    assert "Housing G2" in brief
+    assert "P1" in brief
+    assert "5 of 240 cracked" in brief
+
+
 def test_spa_index_served_at_root_when_dist_exists():
     """If web/dist has been built, GET / returns the React app's index.html."""
     from pathlib import Path

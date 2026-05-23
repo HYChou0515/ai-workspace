@@ -15,7 +15,8 @@ from specstar import SpecStar
 
 from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileNotFound, FileStore
-from ..resources import Conversation, Message, register_all
+from ..rca.templates import seed_investigation
+from ..resources import Conversation, Investigation, Message, Severity, Status, register_all
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .events import AgentEvent, RunCancelled, RunError, to_sse
@@ -25,6 +26,18 @@ from .runner import AgentRunner
 
 class _MessageBody(BaseModel):
     content: str
+
+
+class _InvestigationCreateBody(BaseModel):
+    title: str
+    owner: str
+    description: str = ""
+    severity: Severity = Severity.P2
+    status: Status = Status.TRIAGING
+    product: str = ""
+    members: list[str] = []
+    topics: list[str] = []
+    attached_agent_config_id: str | None = None
 
 
 def create_app(
@@ -68,6 +81,37 @@ def create_app(
             await registry.close_all()
 
     app = FastAPI(title="RCA 3.0", lifespan=lifespan)
+
+    # Register custom POST /investigation BEFORE spec.apply — FastAPI's
+    # route matcher uses first-registered-wins, so our seeded-create
+    # handler takes priority over specstar's stock CRUD POST.
+    @app.post("/investigation")
+    async def create_investigation(body: _InvestigationCreateBody) -> dict:
+        inv = Investigation(
+            title=body.title,
+            owner=body.owner,
+            description=body.description,
+            severity=body.severity,
+            status=body.status,
+            product=body.product,
+            members=list(body.members),
+            topics=list(body.topics),
+            attached_agent_config_id=body.attached_agent_config_id,
+        )
+        inv_rm = spec.get_resource_manager(Investigation)
+        rev = inv_rm.create(inv)
+        await seed_investigation(filestore, rev.resource_id, inv)
+        # Mirror specstar's auto-POST response shape (flat RevisionInfo dict).
+        return {
+            "resource_id": rev.resource_id,
+            "uid": str(rev.uid),
+            "revision_id": rev.revision_id,
+            "created_time": rev.created_time.isoformat(),
+            "updated_time": rev.updated_time.isoformat(),
+            "created_by": rev.created_by,
+            "updated_by": rev.updated_by,
+        }
+
     spec.apply(app)
 
     conv_rm = spec.get_resource_manager(Conversation)
