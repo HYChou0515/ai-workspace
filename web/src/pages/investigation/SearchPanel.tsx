@@ -112,78 +112,76 @@ export function SearchPanel({
         {busy && <span style={{ fontSize: 11, color: "var(--text-paper-d2)" }}>searching…</span>}
       </div>
 
-      <div style={{ padding: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-        <div style={{ display: "flex", alignItems: "stretch", gap: 4 }}>
-          <button
-            type="button"
-            aria-label={showReplace ? "Hide replace" : "Show replace"}
-            onClick={() => setShowReplace((v) => !v)}
-            style={{
-              ...iconToggle,
-              width: 20,
-              alignSelf: "stretch",
-              color: "var(--text-paper-d)",
-            }}
-          >
-            <Icon name={showReplace ? "chev_d" : "chev_r"} size={12} />
-          </button>
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+      <div style={{ padding: 10, display: "flex", alignItems: "flex-start", gap: 4 }}>
+        <button
+          type="button"
+          aria-label={showReplace ? "Hide replace" : "Show replace"}
+          onClick={() => setShowReplace((v) => !v)}
+          title={showReplace ? "Hide replace" : "Show replace"}
+          style={{ ...iconToggle, width: 18, height: 30, color: "var(--text-paper-d)" }}
+        >
+          <Icon name={showReplace ? "chev_d" : "chev_r"} size={12} />
+        </button>
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={fieldWrap}>
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search"
+              style={input}
+            />
+            <div style={{ display: "flex", gap: 2 }}>
+              <Toggle label="Match case" on={caseSensitive} onClick={() => setCaseSensitive((v) => !v)}>
+                Aa
+              </Toggle>
+              <Toggle label="Whole word" on={wholeWord} onClick={() => setWholeWord((v) => !v)}>
+                <span style={{ textDecoration: "underline" }}>ab</span>
+              </Toggle>
+              <Toggle label="Use regex" on={regex} onClick={() => setRegex((v) => !v)}>
+                .*
+              </Toggle>
+            </div>
+          </div>
+
+          {showReplace && (
             <div style={fieldWrap}>
               <input
-                autoFocus
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search"
+                value={replacement}
+                onChange={(e) => setReplacement(e.target.value)}
+                placeholder="Replace"
                 style={input}
               />
-              <div style={{ display: "flex", gap: 2 }}>
-                <Toggle label="Match case" on={caseSensitive} onClick={() => setCaseSensitive((v) => !v)}>
-                  Aa
-                </Toggle>
-                <Toggle label="Whole word" on={wholeWord} onClick={() => setWholeWord((v) => !v)}>
-                  <span style={{ textDecoration: "underline" }}>ab</span>
-                </Toggle>
-                <Toggle label="Use regex" on={regex} onClick={() => setRegex((v) => !v)}>
-                  .*
-                </Toggle>
-              </div>
+              <button
+                type="button"
+                onClick={() => void replaceAll()}
+                disabled={!query || busy}
+                title="Replace all"
+                aria-label="Replace all"
+                style={{ ...iconToggle, width: 26, opacity: !query || busy ? 0.5 : 1 }}
+              >
+                <Icon name="check" size={13} />
+              </button>
             </div>
+          )}
 
-            {showReplace && (
-              <div style={fieldWrap}>
-                <input
-                  value={replacement}
-                  onChange={(e) => setReplacement(e.target.value)}
-                  placeholder="Replace"
-                  style={input}
-                />
-                <button
-                  type="button"
-                  onClick={() => void replaceAll()}
-                  disabled={!query || busy}
-                  title="Replace all"
-                  aria-label="Replace all"
-                  style={{ ...iconToggle, width: 26, opacity: !query || busy ? 0.5 : 1 }}
-                >
-                  <Icon name="check" size={13} />
-                </button>
-              </div>
-            )}
+          <div style={fieldWrap}>
+            <input
+              value={include}
+              onChange={(e) => setInclude(e.target.value)}
+              placeholder="files to include — e.g. *.md, src/**"
+              style={input}
+            />
+          </div>
+          <div style={fieldWrap}>
+            <input
+              value={exclude}
+              onChange={(e) => setExclude(e.target.value)}
+              placeholder="files to exclude"
+              style={input}
+            />
           </div>
         </div>
-
-        <input
-          value={include}
-          onChange={(e) => setInclude(e.target.value)}
-          placeholder="files to include (e.g. *.md, src/**)"
-          style={{ ...input, fontSize: 11 }}
-        />
-        <input
-          value={exclude}
-          onChange={(e) => setExclude(e.target.value)}
-          placeholder="files to exclude"
-          style={{ ...input, fontSize: 11 }}
-        />
       </div>
 
       <div style={{ padding: "0 12px 6px", fontSize: 11, color: "var(--text-paper-d)" }}>
