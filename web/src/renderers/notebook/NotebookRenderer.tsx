@@ -12,6 +12,7 @@ import { api } from "../../api";
 import { CellEditor } from "../../components/CellEditor";
 import { Icon } from "../../components/Icon";
 import { useFileContent } from "../../hooks/useFileContent";
+import { onRunAll } from "../../lib/editorEvents";
 import { CellOutput } from "./CellOutput";
 import {
   type CellRunState,
@@ -70,11 +71,17 @@ function NotebookBody({
   // don't churn the underlying NbCell shape until cell_done persists.
   const [runs, setRuns] = useState<Map<number, CellRunState>>(new Map());
   const abortRefs = useRef<Map<number, AbortController>>(new Map());
+  const nbRef = useRef<Notebook>(initial);
 
   useEffect(() => {
     setNb(initial);
     setRuns(new Map());
+    nbRef.current = initial;
   }, [initial]);
+
+  useEffect(() => {
+    nbRef.current = nb;
+  }, [nb]);
 
   const updateCellSource = (i: number, src: string) => {
     setNb((prev) => {
@@ -98,62 +105,74 @@ function NotebookBody({
     [investigationId, path],
   );
 
-  const runCell = async (idx: number) => {
-    const cell = nb.cells[idx];
-    if (!cell || cell.cell_type !== "code") return;
-    const code = cellSource(cell);
+  const runCell = useCallback(
+    async (idx: number) => {
+      const cell = nbRef.current.cells[idx];
+      if (!cell || cell.cell_type !== "code") return;
+      const code = cellSource(cell);
 
-    setRuns((prev) => {
-      const next = new Map(prev);
-      next.set(idx, startRun());
-      return next;
-    });
+      let local: CellRunState = startRun();
+      setRuns((prev) => {
+        const next = new Map(prev);
+        next.set(idx, local);
+        return next;
+      });
 
-    const controller = new AbortController();
-    abortRefs.current.set(idx, controller);
+      const controller = new AbortController();
+      abortRefs.current.set(idx, controller);
 
-    try {
-      for await (const ev of api.streamCellEvents({
-        investigationId,
-        notebookPath: path,
-        cellIndex: idx,
-        code,
-        signal: controller.signal,
-      })) {
-        setRuns((prev) => {
-          const next = new Map(prev);
-          const cur = next.get(idx) ?? startRun();
-          next.set(idx, reduceCellEvent(cur, ev));
-          return next;
-        });
-        if (ev.type === "cell_done") {
-          // Fold outputs back into the cell + save.
-          setNb((prev) => {
-            const cells = [...prev.cells];
-            const before = cells[idx];
-            if (!before) return prev;
-            const final = reduceCellEvent(
-              runs.get(idx) ?? startRun(),
-              ev,
-            );
-            cells[idx] = mergeIntoCell(before, final);
-            const next = { ...prev, cells };
-            void persist(next);
+      try {
+        for await (const ev of api.streamCellEvents({
+          investigationId,
+          notebookPath: path,
+          cellIndex: idx,
+          code,
+          signal: controller.signal,
+        })) {
+          local = reduceCellEvent(local, ev);
+          const snapshot = local;
+          setRuns((prev) => {
+            const next = new Map(prev);
+            next.set(idx, snapshot);
             return next;
           });
+          if (ev.type === "cell_done") {
+            setNb((prev) => {
+              const cells = [...prev.cells];
+              const before = cells[idx];
+              if (!before) return prev;
+              cells[idx] = mergeIntoCell(before, snapshot);
+              const next = { ...prev, cells };
+              void persist(next);
+              return next;
+            });
+          }
         }
+      } catch (err: unknown) {
+        if ((err as { name?: string } | null)?.name === "AbortError") return;
+        console.error("cell run failed", err);
+      } finally {
+        abortRefs.current.delete(idx);
       }
-    } catch (err: unknown) {
-      if ((err as { name?: string } | null)?.name === "AbortError") return;
-      console.error("cell run failed", err);
-    } finally {
-      abortRefs.current.delete(idx);
-    }
-  };
+    },
+    [investigationId, path, persist],
+  );
 
   const interruptCell = (idx: number) => {
     abortRefs.current.get(idx)?.abort();
   };
+
+  const runAllCells = useCallback(async () => {
+    for (let i = 0; i < nbRef.current.cells.length; i++) {
+      const c = nbRef.current.cells[i];
+      if (c?.cell_type === "code") {
+        await runCell(i);
+      }
+    }
+  }, [runCell]);
+
+  // Subscribe to tab-strip "Run all" events for this notebook.
+  useEffect(() => onRunAll(path, () => void runAllCells()), [path, runAllCells]);
 
   const addCell = () => {
     setNb((prev) => ({

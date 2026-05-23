@@ -13,8 +13,14 @@ describe("formatInvestigationId", () => {
     expect(formatInvestigationId("INC-2026-0142")).toBe("INC-2026-0142");
   });
 
-  it("upgrades a specstar-style raw id (`inv-2026-0142`) to display form", () => {
-    expect(formatInvestigationId("inv-2026-0142")).toBe("INC-2026-0142");
+  it("converts specstar uuid ids to a short display form", () => {
+    expect(
+      formatInvestigationId("investigation:7855cbe8-2c14-4cff-a55d-64a1d6f71c56"),
+    ).toBe("INC-7855CBE8");
+  });
+
+  it("upper-cases anything else as-is", () => {
+    expect(formatInvestigationId("local-1")).toBe("LOCAL-1");
   });
 });
 

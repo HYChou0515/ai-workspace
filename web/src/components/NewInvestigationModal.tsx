@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { InvestigationInput, Severity } from "../api/types";
 
@@ -23,6 +23,15 @@ export function NewInvestigationModal({
   const [product, setProduct] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
   const [topicDraft, setTopicDraft] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
 
   if (!open) return null;
 

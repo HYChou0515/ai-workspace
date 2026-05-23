@@ -107,10 +107,21 @@ export interface ApiClient {
 
 /* --------------------------- Helpers ---------------------------- */
 
-/** Format specstar's raw resource_id (e.g. `inv-2026-0142`) for display. */
+/** Format specstar's raw resource_id for display.
+ *
+ * Inputs we handle:
+ *  - `INC-2026-0142` (mock seed)   → unchanged
+ *  - `investigation:<uuid>`        → `INC-<UUID first 8 hex>`
+ *  - anything else                 → upper-cased as-is
+ */
 export function formatInvestigationId(resourceId: string): string {
-  const prefixed = resourceId.startsWith("INC-") ? resourceId : `INC-${resourceId.replace(/^inv-/i, "")}`;
-  return prefixed.toUpperCase();
+  if (resourceId.startsWith("INC-")) return resourceId;
+  const colon = resourceId.indexOf(":");
+  if (colon >= 0) {
+    const tail = resourceId.slice(colon + 1).replace(/-/g, "").slice(0, 8);
+    return `INC-${tail.toUpperCase()}`;
+  }
+  return resourceId.toUpperCase();
 }
 
 /** First non-empty line of `description`. */

@@ -6,6 +6,7 @@
 
 import { useRef, useState } from "react";
 
+import { api } from "../../api";
 import { Icon } from "../../components/Icon";
 import { RcaMark } from "../../components/RcaMark";
 import { useAgent } from "../../hooks/useAgent";
@@ -14,10 +15,60 @@ import type { Message } from "../../api/types";
 
 const SUGGESTIONS = ["Show SPC analysis", "Run Pareto", "Sketch a fishbone"];
 
+const TEXT_EXTENSIONS = new Set([
+  ".md",
+  ".markdown",
+  ".txt",
+  ".csv",
+  ".tsv",
+  ".json",
+  ".log",
+  ".py",
+  ".yaml",
+  ".yml",
+  ".xml",
+  ".html",
+]);
+
+function isTextFile(name: string): boolean {
+  const idx = name.lastIndexOf(".");
+  if (idx === -1) return false;
+  return TEXT_EXTENSIONS.has(name.slice(idx).toLowerCase());
+}
+
 export function AgentPanel({ investigationId }: { investigationId: string }) {
-  const { log, send, cancel } = useAgent(investigationId);
+  const { log, send, cancel } = useAgent();
   const [draft, setDraft] = useState("");
+  const [attaching, setAttaching] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const onAttach = async (file: File) => {
+    if (!isTextFile(file.name)) {
+      alert(
+        `Only text files (.md/.txt/.csv/.json/.py/etc.) can be attached in v1. Got: ${file.name}`,
+      );
+      return;
+    }
+    if (file.size > 256 * 1024) {
+      alert(`File too large (${(file.size / 1024).toFixed(0)} KB) — v1 cap is 256 KB.`);
+      return;
+    }
+    setAttaching(true);
+    try {
+      const text = await file.text();
+      const path = `/uploads/${file.name}`;
+      await api.writeFile(investigationId, path, text);
+      const ref = `I've attached \`${path}\` — please review it.\n\n`;
+      setDraft((d) => (d ? `${ref}${d}` : ref));
+      composerRef.current?.focus();
+    } catch (err) {
+      console.error("attach failed", err);
+      alert(`Attach failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setAttaching(false);
+    }
+  };
 
   const submit = () => {
     const text = draft.trim();
@@ -158,8 +209,32 @@ export function AgentPanel({ investigationId }: { investigationId: string }) {
           }}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <button type="button" style={{ color: "var(--text-paper-d)" }}>
-            <Icon name="plus" size={14} /> attach
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".md,.markdown,.txt,.csv,.tsv,.json,.log,.py,.yaml,.yml,.xml,.html"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              e.target.value = "";
+              if (f) void onAttach(f);
+            }}
+            style={{ display: "none" }}
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={attaching}
+            title="Attach a text file (≤256 KB)"
+            style={{
+              color: "var(--text-paper-d)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 12,
+            }}
+          >
+            <Icon name="plus" size={14} />
+            {attaching ? "uploading…" : "attach"}
           </button>
           <span style={{ flex: 1 }} />
           <span

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { api } from "../api";
 import {
@@ -9,15 +16,22 @@ import {
 } from "../pages/investigation/agentLog";
 
 /**
- * Owns the agent conversation for a single investigation:
- *  - hydrates the persisted Conversation on mount
- *  - streams replies via SSE, folding events into an AgentLog
- *  - exposes send/cancel
+ * Single source of truth for the agent conversation per investigation.
  *
- * Pure render-from-state — components subscribe to `log` and pick the
- * pieces they need to draw.
+ * Hydrates Conversation on mount, streams replies via SSE, exposes send/cancel.
+ * The Provider wraps the workspace so both AgentPanel and the bottom panel
+ * (which surfaces agent-log lines) read the same log.
  */
-export function useAgent(investigationId: string) {
+
+type AgentState = {
+  log: AgentLog;
+  send: (content: string) => Promise<void>;
+  cancel: () => void;
+};
+
+const AgentContext = createContext<AgentState | null>(null);
+
+export function useAgentInternal(investigationId: string): AgentState {
   const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -31,7 +45,6 @@ export function useAgent(investigationId: string) {
         setLog(conv ? logFromMessages(conv.messages) : EMPTY_LOG);
       })
       .catch(() => {
-        // No persisted conversation yet — start fresh.
         if (mounted) setLog(EMPTY_LOG);
       });
     return () => {
@@ -45,7 +58,6 @@ export function useAgent(investigationId: string) {
       const trimmed = content.trim();
       if (!trimmed) return;
 
-      // Optimistically append the user message.
       setLog((prev) => ({
         ...prev,
         streaming: true,
@@ -86,4 +98,25 @@ export function useAgent(investigationId: string) {
   }, []);
 
   return { log, send, cancel };
+}
+
+export function AgentProvider({
+  investigationId,
+  children,
+}: {
+  investigationId: string;
+  children: React.ReactNode;
+}) {
+  const value = useAgentInternal(investigationId);
+  return (
+    <AgentContext.Provider value={value}>{children}</AgentContext.Provider>
+  );
+}
+
+export function useAgent(): AgentState {
+  const ctx = useContext(AgentContext);
+  if (!ctx) {
+    throw new Error("useAgent must be used inside <AgentProvider>");
+  }
+  return ctx;
 }

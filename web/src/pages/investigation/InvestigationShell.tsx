@@ -13,8 +13,10 @@ import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
+import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { useFileContent } from "../../hooks/useFileContent";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
+import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
@@ -109,55 +111,57 @@ export function InvestigationShell({
   };
 
   return (
-    <div
-      data-testid="page-investigation"
-      style={{
-        height: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        background: "var(--paper)",
-        overflow: "hidden",
-      }}
-    >
-      <TopBar
-        investigation={investigation}
-        onCommandPalette={() => setPaletteOpen(true)}
-        model={model}
-        onModel={setModel}
-      />
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        <ActivityBar
-          mode={activityMode}
-          onMode={setActivityMode}
-          onFocusAgent={focusAgentComposer}
-          onSettings={() => alert("Settings panel not implemented.")}
-        />
-        <ActivitySidebar
-          mode={activityMode}
+    <AgentProvider investigationId={investigation.resource_id}>
+      <div
+        data-testid="page-investigation"
+        style={{
+          height: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          background: "var(--paper)",
+          overflow: "hidden",
+        }}
+      >
+        <TopBar
           investigation={investigation}
-          files={files}
-          activePath={activeTab}
-          openTabs={openTabs}
-          recentFiles={recentFiles.values}
-          onOpenFile={openFile}
+          onCommandPalette={() => setPaletteOpen(true)}
+          model={model}
+          onModel={setModel}
         />
-        <EditorArea
-          investigationId={investigation.resource_id}
-          openTabs={openTabs}
-          activeTab={activeTab}
-          onSelectTab={setActiveTab}
-          onCloseTab={closeTab}
-        />
-        <AgentPanel investigationId={investigation.resource_id} />
-      </div>
+        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+          <ActivityBar
+            mode={activityMode}
+            onMode={setActivityMode}
+            onFocusAgent={focusAgentComposer}
+            onSettings={() => alert("Settings panel not implemented.")}
+          />
+          <ActivitySidebar
+            mode={activityMode}
+            investigation={investigation}
+            files={files}
+            activePath={activeTab}
+            openTabs={openTabs}
+            recentFiles={recentFiles.values}
+            onOpenFile={openFile}
+          />
+          <EditorArea
+            investigationId={investigation.resource_id}
+            openTabs={openTabs}
+            activeTab={activeTab}
+            onSelectTab={setActiveTab}
+            onCloseTab={closeTab}
+          />
+          <AgentPanel investigationId={investigation.resource_id} />
+        </div>
 
-      <CommandPalette
-        open={paletteOpen}
-        files={files}
-        onClose={() => setPaletteOpen(false)}
-        onPick={openFile}
-      />
-    </div>
+        <CommandPalette
+          open={paletteOpen}
+          files={files}
+          onClose={() => setPaletteOpen(false)}
+          onPick={openFile}
+        />
+      </div>
+    </AgentProvider>
   );
 }
 
@@ -953,6 +957,7 @@ function EditorArea({
   onCloseTab: (p: string) => void;
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
+  const [layoutMode, setLayoutMode] = useState<"single" | "split">("single");
 
   return (
     <section style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -961,6 +966,8 @@ function EditorArea({
         active={activeTab}
         onSelect={onSelectTab}
         onClose={onCloseTab}
+        layoutMode={layoutMode}
+        onLayoutMode={setLayoutMode}
       />
       <Breadcrumb activeTab={activeTab} />
       <div
@@ -1025,12 +1032,18 @@ function TabStrip({
   active,
   onSelect,
   onClose,
+  layoutMode,
+  onLayoutMode,
 }: {
   tabs: OpenTab[];
   active: string | null;
   onSelect: (p: string) => void;
   onClose: (p: string) => void;
+  layoutMode: "single" | "split";
+  onLayoutMode: (m: "single" | "split") => void;
 }) {
+  const activeIsNotebook = active != null && pickRenderer(active) === "notebook";
+
   return (
     <div
       style={{
@@ -1092,6 +1105,55 @@ function TabStrip({
             </div>
           );
         })}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 8px" }}>
+        <button
+          type="button"
+          title={layoutMode === "split" ? "Single column" : "Split view"}
+          onClick={() => onLayoutMode(layoutMode === "split" ? "single" : "split")}
+          style={{
+            ...iconBtn,
+            color:
+              layoutMode === "split" ? "var(--accent)" : "var(--text-paper-d)",
+            background:
+              layoutMode === "split" ? "var(--accent-soft)" : "transparent",
+          }}
+        >
+          <Icon name="split" size={14} />
+        </button>
+        <button
+          type="button"
+          title="Layers"
+          onClick={() =>
+            alert("Layer manager not implemented — single layer per file in v1.")
+          }
+          style={iconBtn}
+        >
+          <Icon name="layers" size={14} />
+        </button>
+        <button
+          type="button"
+          title={activeIsNotebook ? "Run all cells" : "Open a notebook to run cells"}
+          disabled={!activeIsNotebook}
+          onClick={() => active && emitRunAll(active)}
+          style={{
+            ...iconBtn,
+            padding: "0 8px",
+            width: "auto",
+            color: activeIsNotebook ? "var(--accent)" : "var(--text-paper-d2)",
+            fontSize: 12,
+            display: "inline-flex",
+            gap: 4,
+            cursor: activeIsNotebook ? "pointer" : "not-allowed",
+          }}
+        >
+          <Icon
+            name="play"
+            size={12}
+            color={activeIsNotebook ? "var(--accent)" : "var(--text-paper-d2)"}
+          />{" "}
+          Run all
+        </button>
       </div>
     </div>
   );
@@ -1170,29 +1232,130 @@ function PanelBody({
 }: {
   tab: "problems" | "output" | "terminal" | "agent_log" | "run_history";
 }) {
+  const { log } = useAgent();
+
   if (tab === "problems") {
-    return <div style={{ color: "var(--text-paper-d)" }}>No problems detected.</div>;
+    const banners = log.entries.filter((e) => e.kind === "banner");
+    const toolErrors = log.entries.filter(
+      (e) => e.kind === "tool_call" && e.call.parseError,
+    );
+    if (!log.error && banners.length === 0 && toolErrors.length === 0) {
+      return <div style={{ color: "var(--text-paper-d)" }}>No problems detected.</div>;
+    }
+    return (
+      <>
+        {log.error && <LogLine ts="now" kind="warn" text={`stream error: ${log.error}`} />}
+        {banners.map((b, i) =>
+          b.kind === "banner" ? <LogLine key={`b-${i}`} ts="—" kind="warn" text={b.text} /> : null,
+        )}
+        {toolErrors.map((e, i) =>
+          e.kind === "tool_call" && e.call.parseError ? (
+            <LogLine
+              key={`e-${i}`}
+              ts="—"
+              kind="warn"
+              text={`${e.call.name}: parse-error → ${e.call.parseError}`}
+            />
+          ) : null,
+        )}
+      </>
+    );
   }
+
   if (tab === "output") {
-    return <div style={{ color: "var(--text-paper-d)" }}>No build output.</div>;
+    const calls = log.entries.filter((e) => e.kind === "tool_call");
+    if (calls.length === 0) {
+      return <div style={{ color: "var(--text-paper-d)" }}>No tool output yet.</div>;
+    }
+    return (
+      <>
+        {calls.map((e, i) =>
+          e.kind === "tool_call" && e.call.output !== undefined ? (
+            <div key={i} style={{ marginBottom: 4 }}>
+              <div style={{ color: "var(--accent)" }}>
+                → {e.call.name}
+                {e.call.status === "running" && (
+                  <span style={{ color: "var(--text-paper-d)" }}> (running)</span>
+                )}
+              </div>
+              <pre
+                style={{
+                  margin: 0,
+                  whiteSpace: "pre-wrap",
+                  color: "var(--text-paper)",
+                  fontSize: 12,
+                }}
+              >
+                {e.call.output}
+              </pre>
+            </div>
+          ) : null,
+        )}
+      </>
+    );
   }
+
   if (tab === "terminal") {
     return (
       <div style={{ color: "var(--text-paper-d)" }}>
-        Terminal not wired in v1 — use the notebook cells to exec.
+        Terminal not wired in v1 — use notebook cells to exec or ask the agent.
       </div>
     );
   }
+
   if (tab === "run_history") {
-    return <div style={{ color: "var(--text-paper-d)" }}>No agent runs yet.</div>;
+    const calls = log.entries.filter(
+      (e) => e.kind === "tool_call",
+    );
+    if (calls.length === 0) {
+      return <div style={{ color: "var(--text-paper-d)" }}>No tool runs yet.</div>;
+    }
+    return (
+      <>
+        {calls.map((e, i) =>
+          e.kind === "tool_call" ? (
+            <LogLine
+              key={i}
+              ts={e.call.status === "running" ? "•" : "✓"}
+              kind={e.call.status === "running" ? "accent" : "muted"}
+              text={`${e.call.name}(${Object.keys(e.call.args).join(", ")})`}
+            />
+          ) : null,
+        )}
+      </>
+    );
   }
-  // agent_log
+
+  // agent_log — show a derived line per entry
+  type Line = { k: "info" | "accent" | "warn" | "muted"; t: string; key: number };
+  const lines: Line[] = log.entries.flatMap((e, i): Line[] => {
+    if (e.kind === "banner") return [{ k: "warn", t: e.text, key: i }];
+    if (e.kind === "tool_call") {
+      return [
+        {
+          k: e.call.status === "running" ? "accent" : "muted",
+          t: `${e.call.status === "running" ? "tool_start" : "tool_end"} ${e.call.name}`,
+          key: i,
+        },
+      ];
+    }
+    return [
+      {
+        k: e.message.role === "user" ? "info" : "muted",
+        t: `${e.message.role}: ${e.message.content.slice(0, 80)}`,
+        key: i,
+      },
+    ];
+  });
+  if (lines.length === 0 && !log.streaming) {
+    return <div style={{ color: "var(--text-paper-d)" }}>Idle.</div>;
+  }
   return (
     <>
-      <LogLine ts="13:30:01" kind="info" text="agent run started" />
-      <LogLine ts="13:30:04" kind="accent" text="tool_start exec head spc.csv" />
-      <LogLine ts="13:30:05" kind="muted" text="tool_end (12 lines)" />
-      <LogLine ts="13:30:06" kind="warn" text="parse-error retry: closing array" />
+      {lines.map((l) => (
+        <LogLine key={l.key} ts="" kind={l.k} text={l.t} />
+      ))}
+      {log.streaming && <LogLine ts="" kind="accent" text="…streaming" />}
     </>
   );
 }
