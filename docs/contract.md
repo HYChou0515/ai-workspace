@@ -152,19 +152,19 @@ this section adds an `Authorization:` requirement.
 
 | Method | Path | Purpose | Status |
 |---|---|---|---|
-| `GET`    | `/investigation`                       | list investigations (specstar auto) | ⏳ rename |
-| `POST`   | `/investigation`                       | **custom-wrapped:** create + seed default template files + start at TRIAGING | ⏳ §3, §5 |
-| `GET`    | `/investigation/{id}`                  | get one (specstar auto) | ⏳ rename |
-| `PATCH`  | `/investigation/{id}`                  | partial update (specstar auto) | ⏳ rename |
-| `DELETE` | `/investigation/{id}`                  | soft-delete (specstar auto) | ⏳ rename |
-| `POST`   | `/investigations/{id}/close`           | manual close: `{"status": "resolved" \| "abandoned"}` → tears sandbox down | ⏳ §6 |
+| `GET`    | `/investigation`                       | list investigations (specstar auto) | ✅ |
+| `POST`   | `/investigation`                       | **custom-wrapped:** create + seed default template files + start at TRIAGING | ✅ |
+| `GET`    | `/investigation/{id}`                  | get one (specstar auto) | ✅ |
+| `PATCH`  | `/investigation/{id}`                  | partial update (specstar auto) | ✅ |
+| `DELETE` | `/investigation/{id}`                  | soft-delete (specstar auto) | ✅ |
+| `POST`   | `/investigations/{id}/close`           | manual close: `{"status": "resolved" \| "abandoned"}` → tears sandbox down | ✅ |
 
 ### 2.2 Chat / agent turn
 
 | Method | Path | Purpose | Status |
 |---|---|---|---|
-| `POST`   | `/investigations/{id}/messages`            | send a user message → SSE stream of `AgentEvent` | ⏳ rename |
-| `DELETE` | `/investigations/{id}/messages/current`    | interrupt the in-flight turn (RunCancelled goes to old stream) | ⏳ rename |
+| `POST`   | `/investigations/{id}/messages`            | send a user message → SSE stream of `AgentEvent` | ✅ |
+| `DELETE` | `/investigations/{id}/messages/current`    | interrupt the in-flight turn (RunCancelled goes to old stream) | ✅ |
 
 POST body shape:
 ```json
@@ -175,17 +175,17 @@ POST body shape:
 
 | Method | Path | Purpose | Status |
 |---|---|---|---|
-| `GET`    | `/investigations/{id}/files[?prefix=<p>]` | list files: `[{"path", "size"}]`           | ⏳ rename |
-| `GET`    | `/investigations/{id}/files/{path:path}`  | read file body (text/plain or octet-stream) | ⏳ rename |
-| `PUT`    | `/investigations/{id}/files/{path:path}`  | write raw bytes (FE auto-saves notebooks here) | ⏳ §7.4 |
+| `GET`    | `/investigations/{id}/files[?prefix=<p>]` | list files: `[{"path", "size"}]`           | ✅ |
+| `GET`    | `/investigations/{id}/files/{path:path}`  | read file body (text/plain or octet-stream) | ✅ |
+| `PUT`    | `/investigations/{id}/files/{path:path}`  | write raw bytes (FE auto-saves notebooks here) | ✅ |
 
 ### 2.4 Notebook execution
 
 | Method | Path | Purpose | Status |
 |---|---|---|---|
-| `POST`   | `/investigations/{id}/notebooks/{path}/cells/{idx}/execute` | run cell: body `{"code": "string"}` → SSE stream of `CellEvent` | ⏳ §7.3 |
-| `DELETE` | `/investigations/{id}/notebooks/{path}/cells/{idx}/execute` | interrupt cell                                | ⏳ §7.3 |
-| `POST`   | `/investigations/{id}/notebooks/{path}/kernel/restart`      | restart per-notebook kernel → 204             | ⏳ §7.3 |
+| `POST`   | `/investigations/{id}/notebooks/{path}/cells/{idx}/execute` | run cell: body `{"code": "string"}` → SSE stream of `CellEvent` | ✅ |
+| `DELETE` | `/investigations/{id}/notebooks/{path}/cells/{idx}/execute` | interrupt cell                                | ✅ |
+| `POST`   | `/investigations/{id}/notebooks/{path}/kernel/restart`      | restart per-notebook kernel → 204             | ✅ |
 
 ### 2.5 Specstar admin (auto-generated, behind `/docs`)
 
