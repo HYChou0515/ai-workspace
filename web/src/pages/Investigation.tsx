@@ -26,6 +26,7 @@ export function Investigation() {
     <InvestigationShell
       investigation={inv.data}
       files={files.items}
+      dirs={files.dirs}
       onFilesChanged={files.refresh}
     />
   );

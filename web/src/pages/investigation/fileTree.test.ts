@@ -34,4 +34,21 @@ describe("buildFileTree", () => {
     ]);
     expect(tree.map((n) => n.name)).toEqual(["a.md", "z.md"]);
   });
+
+  it("includes empty directories passed explicitly", () => {
+    const tree = buildFileTree([{ path: "/brief.md", size: 1 }], ["/empty", "/data/inner"]);
+    const names = tree.map((n) => `${n.name}${n.isDir ? "/" : ""}`);
+    // dirs first (alpha), then the file
+    expect(names).toEqual(["data/", "empty/", "brief.md"]);
+    const data = tree.find((n) => n.name === "data")!;
+    expect(data.children.map((c) => c.name)).toEqual(["inner"]);
+    expect(data.children[0]!.isDir).toBe(true);
+    expect(tree.find((n) => n.name === "empty")!.children).toEqual([]);
+  });
+
+  it("does not duplicate a dir that also has files", () => {
+    const tree = buildFileTree([{ path: "/data/a.csv", size: 1 }], ["/data"]);
+    expect(tree.filter((n) => n.name === "data")).toHaveLength(1);
+    expect(tree[0]!.children.map((c) => c.name)).toEqual(["a.csv"]);
+  });
 });

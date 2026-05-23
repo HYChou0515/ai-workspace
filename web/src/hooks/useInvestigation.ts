@@ -37,24 +37,27 @@ export function useInvestigation(id: string): InvState {
 
 type FilesState =
   | { kind: "loading" }
-  | { kind: "ready"; items: FileInfo[]; refresh: () => void }
+  | { kind: "ready"; items: FileInfo[]; dirs: string[]; refresh: () => void }
   | { kind: "error"; error: Error; refresh: () => void };
 
 export function useFiles(investigationId: string): FilesState {
   const [items, setItems] = useState<FileInfo[] | null>(null);
+  const [dirs, setDirs] = useState<string[]>([]);
   const [error, setError] = useState<Error | null>(null);
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
     let mounted = true;
     setError(null);
-    api
-      .listFiles(investigationId)
-      .then((res) => mounted && setItems(res))
+    Promise.all([api.listFiles(investigationId), api.listDirs(investigationId)])
+      .then(([fs, ds]) => {
+        if (!mounted) return;
+        setItems(fs);
+        setDirs(ds);
+      })
       .catch(
         (e: unknown) =>
-          mounted &&
-          setError(e instanceof Error ? e : new Error(String(e))),
+          mounted && setError(e instanceof Error ? e : new Error(String(e))),
       );
     return () => {
       mounted = false;
@@ -64,5 +67,5 @@ export function useFiles(investigationId: string): FilesState {
   const refresh = () => setTick((n) => n + 1);
   if (error) return { kind: "error", error, refresh };
   if (items === null) return { kind: "loading" };
-  return { kind: "ready", items, refresh };
+  return { kind: "ready", items, dirs, refresh };
 }

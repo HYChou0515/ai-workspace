@@ -164,7 +164,13 @@ export interface ApiClient {
     path: string,
     body: string | Blob | ArrayBuffer,
   ): Promise<void>;
-  /** DELETE /investigations/{id}/files/{path} → 204. */
+  /** POST /investigations/{id}/files/mkdir — create an empty folder (real
+   * directory; no .keep placeholder). 409 if a file occupies the path. */
+  mkdir(investigationId: string, path: string): Promise<void>;
+  /** GET /investigations/{id}/dirs — directory paths incl. empty ones. */
+  listDirs(investigationId: string): Promise<string[]>;
+  /** DELETE /investigations/{id}/files/{path} → 204. Removes a file, or a
+   * folder and its whole subtree when the path is a directory. */
   deleteFile(investigationId: string, path: string): Promise<void>;
   /** POST /investigations/{id}/files/move — rename/move (409 if target exists). */
   moveFile(investigationId: string, from: string, to: string): Promise<void>;

@@ -325,6 +325,55 @@ function ensureFiles(id: string): Map<string, MockFile> {
   return m;
 }
 
+// Real directories (incl. empty ones) — mirrors the BE FileStore so the
+// file tree behaves identically offline. write() seeds ancestor dirs.
+const dirsByWs = new Map<string, Set<string>>();
+function ensureDirs(id: string): Set<string> {
+  let s = dirsByWs.get(id);
+  if (!s) {
+    s = new Set();
+    dirsByWs.set(id, s);
+  }
+  return s;
+}
+function dirAncestors(path: string): string[] {
+  const parts = path.replace(/^\/+|\/+$/g, "").split("/");
+  return parts.slice(0, -1).map((_, i) => "/" + parts.slice(0, i + 1).join("/"));
+}
+
+/** Move/copy a file OR a directory subtree (mirrors the BE _transfer). */
+function transferMock(ws: string, from: string, to: string, copy: boolean): void {
+  if (to === from || to.startsWith(from + "/")) throw new Error("cannot move into itself");
+  const fs = ensureFiles(ws);
+  const ds = ensureDirs(ws);
+  if (ds.has(from)) {
+    if (fs.has(to) || ds.has(to)) throw new Error(`target exists: ${to}`);
+    const under = from + "/";
+    for (const p of [...fs.keys()]) {
+      if (p.startsWith(under)) {
+        const dest = to + p.slice(from.length);
+        fs.set(dest, { ...fs.get(p)! });
+        for (const d of dirAncestors(dest)) ds.add(d);
+        if (!copy) fs.delete(p);
+      }
+    }
+    for (const d of [...ds]) {
+      if (d === from || d.startsWith(under)) {
+        ds.add(to + d.slice(from.length));
+        if (!copy) ds.delete(d);
+      }
+    }
+    ds.add(to);
+    return;
+  }
+  const f = fs.get(from);
+  if (!f) throw new Error(`not found: ${from}`);
+  if (fs.has(to) || ds.has(to)) throw new Error(`target exists: ${to}`);
+  fs.set(to, { ...f });
+  for (const d of dirAncestors(to)) ds.add(d);
+  if (!copy) fs.delete(from);
+}
+
 const STARTER_BRIEF = `# Investigation Brief
 
 ## Context
@@ -538,6 +587,7 @@ export const mockApi: ApiClient = {
     } else {
       ensureFiles(investigationId).set(path, { text: null, bytes: body.byteLength });
     }
+    for (const d of dirAncestors(path)) ensureDirs(investigationId).add(d);
   },
 
   async *streamAgentEvents(args: SendMessageArgs) {
@@ -582,28 +632,41 @@ export const mockApi: ApiClient = {
     hit.updated_time = nowIso();
   },
 
+  async mkdir(investigationId: string, path: string) {
+    await delay(10);
+    if (ensureFiles(investigationId).has(path)) throw new Error(`file exists at ${path}`);
+    const ds = ensureDirs(investigationId);
+    ds.add(path);
+    for (const d of dirAncestors(path)) ds.add(d);
+  },
+
+  async listDirs(investigationId: string) {
+    await delay(10);
+    return [...ensureDirs(investigationId)].sort();
+  },
+
   async deleteFile(investigationId: string, path: string) {
     await delay(15);
-    files.get(investigationId)?.delete(path);
+    const ds = ensureDirs(investigationId);
+    if (ds.has(path)) {
+      // folder delete = remove the subtree (dirs + files under it)
+      const under = path + "/";
+      for (const d of [...ds]) if (d === path || d.startsWith(under)) ds.delete(d);
+      const fs = ensureFiles(investigationId);
+      for (const p of [...fs.keys()]) if (p.startsWith(under)) fs.delete(p);
+      return;
+    }
+    files.get(investigationId)?.delete(path); // file delete leaves dirs intact
   },
 
   async moveFile(investigationId: string, from: string, to: string) {
     await delay(15);
-    const fs = ensureFiles(investigationId);
-    const f = fs.get(from);
-    if (!f) throw new Error(`not found: ${from}`);
-    if (fs.has(to)) throw new Error(`target exists: ${to}`);
-    fs.set(to, f);
-    fs.delete(from);
+    transferMock(investigationId, from, to, false);
   },
 
   async copyFile(investigationId: string, from: string, to: string) {
     await delay(15);
-    const fs = ensureFiles(investigationId);
-    const f = fs.get(from);
-    if (!f) throw new Error(`not found: ${from}`);
-    if (fs.has(to)) throw new Error(`target exists: ${to}`);
-    fs.set(to, { ...f });
+    transferMock(investigationId, from, to, true);
   },
 
   async cancelMessage(_investigationId: string) {

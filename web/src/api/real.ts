@@ -290,6 +290,33 @@ export const realApi: ApiClient = {
     if (!resp.ok) throw new HttpError(resp.status, `delete ${path} failed: ${resp.status}`);
   },
 
+  async mkdir(investigationId: string, path: string) {
+    const resp = await fetch(
+      `/investigations/${encodeURIComponent(investigationId)}/files/mkdir`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ path }),
+      },
+    );
+    if (!resp.ok) {
+      const detail = await resp.text().catch(() => "");
+      throw new HttpError(resp.status, `mkdir failed: ${resp.status} ${detail.slice(0, 120)}`);
+    }
+  },
+
+  async listDirs(investigationId: string) {
+    try {
+      return await json<string[]>(
+        await fetch(`/investigations/${encodeURIComponent(investigationId)}/dirs`),
+      );
+    } catch (err) {
+      // BE older than the dirs endpoint — degrade to inferred-only dirs.
+      if (err instanceof HttpError && (err.status === 404 || err.status === 405)) return [];
+      throw err;
+    }
+  },
+
   async moveFile(investigationId: string, from: string, to: string) {
     const resp = await fetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/move`,

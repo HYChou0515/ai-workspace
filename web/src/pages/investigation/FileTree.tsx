@@ -31,6 +31,7 @@ const uploadMenuItem: React.CSSProperties = {
 export function FileTree({
   investigationId,
   files,
+  dirs = [],
   activePath,
   onOpen,
   onOpenInSplit,
@@ -38,12 +39,13 @@ export function FileTree({
 }: {
   investigationId: string;
   files: FileInfo[];
+  dirs?: string[];
   activePath: string | null;
   onOpen: OpenFn;
   onOpenInSplit?: (path: string) => void;
   onChanged?: () => void;
 }) {
-  const tree = buildFileTree(files);
+  const tree = buildFileTree(files, dirs);
   const collapsed = usePersistentSet(`rca:tree-collapsed:${investigationId}`);
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
@@ -60,7 +62,8 @@ export function FileTree({
   // the selected file, else the root.
   const createDir = (() => {
     if (!selectedPath) return "";
-    const isFolder = files.some((f) => f.path.startsWith(selectedPath + "/"));
+    const isFolder =
+      dirs.includes(selectedPath) || files.some((f) => f.path.startsWith(selectedPath + "/"));
     return isFolder ? selectedPath : selectedPath.split("/").slice(0, -1).join("/");
   })();
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -88,25 +91,15 @@ export function FileTree({
   };
 
   // Move (or Ctrl/⌘-copy) a dragged file OR folder into `destDir` ("" =
-  // root). Folders move their whole subtree, file by file.
+  // root). The BE handles folders atomically (subtree move/copy).
   const dropFileInto = async (srcPath: string, destDir: string, copy: boolean) => {
     const name = basename(srcPath);
     const destBase = `${destDir}/${name}`.replace(/\/+/g, "/");
-    // A folder drag has children under "<srcPath>/"; relocate each, keeping
-    // the relative layout. A plain file has just itself.
-    const children = files.filter((f) => f.path.startsWith(srcPath + "/"));
-    const isFolder = children.length > 0;
-    const moves: [string, string][] = isFolder
-      ? children.map((f) => [f.path, `${destBase}${f.path.slice(srcPath.length)}`.replace(/\/+/g, "/")])
-      : [[srcPath, destBase]];
-    // No-op / nesting-into-self guards.
-    if (moves.some(([from, to]) => to === from)) return;
-    if (destBase === srcPath || destBase.startsWith(srcPath + "/")) return;
+    if (destBase === srcPath || destBase.startsWith(srcPath + "/")) return; // into-self guard
+    const isFolder = dirs.includes(srcPath) || files.some((f) => f.path.startsWith(srcPath + "/"));
     try {
-      for (const [from, to] of moves) {
-        if (copy) await api.copyFile(investigationId, from, to);
-        else await api.moveFile(investigationId, from, to);
-      }
+      if (copy) await api.copyFile(investigationId, srcPath, destBase);
+      else await api.moveFile(investigationId, srcPath, destBase);
       refresh();
       if (!copy && !isFolder) onOpen(destBase, { preview: false });
     } catch (e) {
@@ -135,12 +128,10 @@ export function FileTree({
       refresh();
       onOpen(path, { preview: false });
     } else {
-      // Folders are implicit; drop a keep-file so the empty folder shows.
-      const path = `${c.dir}/${clean}/.keep`.replace(/\/+/g, "/");
-      await api.writeFile(investigationId, path, "");
-      if (collapsed.has(`${c.dir}/${clean}`.replace(/\/+/g, "/"))) {
-        collapsed.toggle(`${c.dir}/${clean}`.replace(/\/+/g, "/"));
-      }
+      // Real, honest folder — no .keep placeholder.
+      const path = `${c.dir}/${clean}`.replace(/\/+/g, "/");
+      await api.mkdir(investigationId, path);
+      if (collapsed.has(path)) collapsed.toggle(path);
       refresh();
     }
   };
@@ -160,15 +151,10 @@ export function FileTree({
   };
 
   const remove = async (node: TreeNode) => {
-    if (node.isDir) {
-      // delete every file under the folder prefix
-      const victims = files.filter((f) => f.path.startsWith(node.path + "/"));
-      if (!confirm(`Delete folder ${node.path} and its ${victims.length} file(s)?`)) return;
-      for (const v of victims) await api.deleteFile(investigationId, v.path);
-    } else {
-      if (!confirm(`Delete ${node.path}?`)) return;
-      await api.deleteFile(investigationId, node.path);
-    }
+    const label = node.isDir ? `folder ${node.path} and its contents` : node.path;
+    if (!confirm(`Delete ${label}?`)) return;
+    // The BE removes a folder's whole subtree (rmdir) in one call.
+    await api.deleteFile(investigationId, node.path);
     refresh();
   };
 

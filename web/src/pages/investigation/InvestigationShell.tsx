@@ -44,10 +44,12 @@ export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
 export function InvestigationShell({
   investigation,
   files,
+  dirs = [],
   onFilesChanged,
 }: {
   investigation: Investigation;
   files: FileInfo[];
+  dirs?: string[];
   onFilesChanged?: () => void;
 }) {
   // The initial open tabs mirror the design's six view-files (those that
@@ -196,6 +198,7 @@ export function InvestigationShell({
                   mode={activityMode}
                   investigation={investigation}
                   files={files}
+                  dirs={dirs}
                   activePath={groups.activeFile}
                   recentFiles={recentFiles.values}
                   onOpenFile={openFile}
@@ -1003,6 +1006,7 @@ function ActivitySidebar(props: {
   mode: ActivityMode;
   investigation: Investigation;
   files: FileInfo[];
+  dirs: string[];
   activePath: string | null;
   recentFiles: string[];
   onOpenFile: OpenFileFn;
@@ -1030,12 +1034,14 @@ function ActivitySidebar(props: {
 function EvidenceSidebar({
   investigation,
   files,
+  dirs,
   activePath,
   onOpenFile,
   onFilesChanged,
 }: {
   investigation: Investigation;
   files: FileInfo[];
+  dirs: string[];
   activePath: string | null;
   onOpenFile: OpenFileFn;
   onFilesChanged?: () => void;
@@ -1045,6 +1051,7 @@ function EvidenceSidebar({
       <FileTree
         investigationId={investigation.resource_id}
         files={files}
+        dirs={dirs}
         activePath={activePath}
         onOpen={onOpenFile}
         onChanged={onFilesChanged}
