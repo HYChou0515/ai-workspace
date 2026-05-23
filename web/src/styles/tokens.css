@@ -1,0 +1,94 @@
+/*
+ * RCA 3.0 — Design tokens
+ *
+ * Single source of truth for visual constants. Sourced verbatim from
+ * design_handoff_rca_3.0/README.md §"Design tokens". Guarded by
+ * tokens.test.ts — update both in the same commit when a token changes.
+ *
+ * Accent rule: --accent is for ONE primary action / answer per screen.
+ * The dot in the logo is part of the brand mark.
+ */
+
+:root {
+  /* Brand accent — the one orange */
+  --accent:      #F0502E;
+  --accent-h:    #D8431F;
+  --accent-soft: #FCE4DC;
+
+  /* Ink — dark surfaces (status bar, banner, dark mode panels) */
+  --ink:         #16181D;
+  --ink-2:       #1A1B1F;
+  --ink-3:       #23262E;
+  --ink-4:       #2E323B;
+
+  /* Paper — cream surfaces (default page bg, sidebars, hover, hairlines) */
+  --paper:       #F1ECE0;
+  --paper-2:     #E5E0D2;
+  --paper-3:     #D8D2C2;
+  --white:       #FBF9F4;
+
+  /* Text */
+  --text-paper:    #1A1B1F;
+  --text-paper-d:  #5C5F66;
+  --text-paper-d2: #8A8C90;
+  --text-dark:     #F1ECE0;
+  --text-dark-d:   #9CA0AB;
+
+  /* Semantic */
+  --ok:    #3A8A4A;
+  --warn:  #C68A2E;
+  --err:   #C44A3A;
+  --info:  #2D6CC9;
+
+  /* Font families
+   * - display: page titles, section headings, big numerics (Inter Tight 700/800)
+   * - body:    paragraphs, buttons, labels (Inter 400/500/600)
+   * - mono:    IDs, timestamps, code, sensor names, caps labels (JetBrains Mono 400/500/600)
+   */
+  --font-display: "Inter Tight", "Inter", system-ui, -apple-system, sans-serif;
+  --font-body:    "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, Menlo, monospace;
+
+  /* Type scale — size / line-height pairs
+   * Pair each --text-* with its --leading-*. Components pick the pair
+   * matching the role: hero numbers / page H1 / section H2 / card title
+   * / body / small / mono caps.
+   */
+  --text-display-xl:    56px;
+  --leading-display-xl: 1.05;
+  --text-display-lg:    40px;
+  --leading-display-lg: 1.10;
+  --text-display-md:    28px;
+  --leading-display-md: 1.15;
+  --text-display-sm:    22px;
+  --leading-display-sm: 1.20;
+  --text-body-lg:       18px;
+  --leading-body-lg:    1.55;
+  --text-body:          14px;
+  --leading-body:       1.55;
+  --text-body-sm:       13px;
+  --leading-body-sm:    1.5;
+  --text-small:         12px;
+  --leading-small:      1.5;
+  --text-xs:            11px;
+  --leading-xs:         1.5;
+  --text-mono-caps:     11px;
+  --tracking-mono-caps: 0.12em;
+
+  /* Spacing — 4px base. Use these in padding / gap / margin. */
+  --space-4:  4px;
+  --space-8:  8px;
+  --space-12: 12px;
+  --space-16: 16px;
+  --space-24: 24px;
+  --space-32: 32px;
+  --space-48: 48px;
+  --space-64: 64px;
+
+  /* Radii — chip < btn/input < card < modal; circle for avatar */
+  --radius-chip:   4px;
+  --radius-btn:    6px;
+  --radius-card:   8px;
+  --radius-modal:  12px;
+  --radius-avatar: 50%;
+}
