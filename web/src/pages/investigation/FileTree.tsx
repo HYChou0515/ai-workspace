@@ -36,30 +36,39 @@ export function FileTree({
   const tree = buildFileTree(files);
   const collapsed = usePersistentSet(`rca:tree-collapsed:${investigationId}`);
   const [menu, setMenu] = useState<Menu | null>(null);
+  // Inline creator (VSCode-style): type the name straight in the tree.
+  const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
+  // Inline rename: the path being renamed.
+  const [renaming, setRenaming] = useState<string | null>(null);
 
   const refresh = () => onChanged?.();
 
-  const newFile = async (dir: string) => {
-    const name = prompt(`New file in ${dir || "/"} — name:`);
-    if (!name) return;
-    const path = `${dir}/${name}`.replace(/\/+/g, "/");
-    await api.writeFile(investigationId, path, "");
-    refresh();
-    onOpen(path, { preview: false });
+  const commitCreate = async (name: string) => {
+    const c = creating;
+    setCreating(null);
+    if (!c || !name.trim()) return;
+    const clean = name.trim().replace(/^\/+|\/+$/g, "");
+    if (c.kind === "file") {
+      const path = `${c.dir}/${clean}`.replace(/\/+/g, "/");
+      await api.writeFile(investigationId, path, "");
+      refresh();
+      onOpen(path, { preview: false });
+    } else {
+      // Folders are implicit; drop a keep-file so the empty folder shows.
+      const path = `${c.dir}/${clean}/.keep`.replace(/\/+/g, "/");
+      await api.writeFile(investigationId, path, "");
+      if (collapsed.has(`${c.dir}/${clean}`.replace(/\/+/g, "/"))) {
+        collapsed.toggle(`${c.dir}/${clean}`.replace(/\/+/g, "/"));
+      }
+      refresh();
+    }
   };
 
-  const newFolder = async (dir: string) => {
-    const name = prompt(`New folder in ${dir || "/"} — name:`);
-    if (!name) return;
-    // Folders are implicit; drop a keep-file so the empty folder appears.
-    const path = `${dir}/${name}/.keep`.replace(/\/+/g, "/");
-    await api.writeFile(investigationId, path, "");
-    refresh();
-  };
-
-  const rename = async (node: TreeNode) => {
-    const next = prompt(`Rename ${node.path} to:`, node.path);
-    if (!next || next === node.path) return;
+  const commitRename = async (node: TreeNode, name: string) => {
+    setRenaming(null);
+    const parent = node.path.split("/").slice(0, -1).join("/");
+    const next = `${parent}/${name.trim()}`.replace(/\/+/g, "/");
+    if (!name.trim() || next === node.path) return;
     try {
       await api.moveFile(investigationId, node.path, next);
       refresh();
@@ -84,20 +93,37 @@ export function FileTree({
 
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "0 10px 4px" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 2, padding: "0 10px 4px" }}>
         <button
           type="button"
           title="New file at root"
-          onClick={() => void newFile("")}
+          onClick={() => setCreating({ kind: "file", dir: "" })}
           style={{ color: "var(--text-paper-d)" }}
         >
           <Icon name="plus" size={13} />
         </button>
+        <button
+          type="button"
+          title="New folder at root"
+          onClick={() => setCreating({ kind: "folder", dir: "" })}
+          style={{ color: "var(--text-paper-d)" }}
+        >
+          <Icon name="folder" size={13} />
+        </button>
       </div>
-      {tree.length === 0 && (
+      {tree.length === 0 && !creating && (
         <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
           No files yet.
         </div>
+      )}
+      {/* Root-level inline creator */}
+      {creating && creating.dir === "" && (
+        <InlineEdit
+          kind={creating.kind}
+          depth={0}
+          onCommit={(name) => void commitCreate(name)}
+          onCancel={() => setCreating(null)}
+        />
       )}
       {tree.map((node) => (
         <TreeRow
@@ -106,7 +132,13 @@ export function FileTree({
           depth={0}
           activePath={activePath}
           collapsed={collapsed}
+          creating={creating}
+          renaming={renaming}
           onOpen={onOpen}
+          onCommitCreate={(name) => void commitCreate(name)}
+          onCancelCreate={() => setCreating(null)}
+          onCommitRename={(n, name) => void commitRename(n, name)}
+          onCancelRename={() => setRenaming(null)}
           onContext={(n, e) => {
             e.preventDefault();
             setMenu({ node: n, x: e.clientX, y: e.clientY });
@@ -121,9 +153,9 @@ export function FileTree({
           y={menu.y}
           canSplit={!!onOpenInSplit && !menu.node.isDir}
           onClose={() => setMenu(null)}
-          onNewFile={(dir) => void newFile(dir)}
-          onNewFolder={(dir) => void newFolder(dir)}
-          onRename={(n) => void rename(n)}
+          onNewFile={(dir) => setCreating({ kind: "file", dir })}
+          onNewFolder={(dir) => setCreating({ kind: "folder", dir })}
+          onRename={(n) => setRenaming(n.path)}
           onDelete={(n) => void remove(n)}
           onCopyPath={(p) => void navigator.clipboard?.writeText(p)}
           onOpenInSplit={onOpenInSplit}
@@ -133,23 +165,100 @@ export function FileTree({
   );
 }
 
+/** Inline name input used for new file/folder + rename. */
+function InlineEdit({
+  kind,
+  depth,
+  initial = "",
+  onCommit,
+  onCancel,
+}: {
+  kind: "file" | "folder";
+  depth: number;
+  initial?: string;
+  onCommit: (name: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState(initial);
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        padding: `2px 14px 2px ${8 + depth * 12}px`,
+      }}
+    >
+      <Icon name={kind === "folder" ? "folder" : "file"} size={13} color="var(--text-paper-d)" />
+      <input
+        autoFocus
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") onCommit(value);
+          else if (e.key === "Escape") onCancel();
+        }}
+        onBlur={() => (value.trim() ? onCommit(value) : onCancel())}
+        placeholder={kind === "folder" ? "folder name" : "file name"}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          border: "1px solid var(--accent)",
+          borderRadius: 3,
+          padding: "1px 4px",
+          fontSize: 12,
+          outline: "none",
+          background: "var(--white)",
+          color: "var(--text-paper)",
+        }}
+      />
+    </div>
+  );
+}
+
+type Creating = { kind: "file" | "folder"; dir: string } | null;
+
 function TreeRow({
   node,
   depth,
   activePath,
   collapsed,
+  creating,
+  renaming,
   onOpen,
   onContext,
+  onCommitCreate,
+  onCancelCreate,
+  onCommitRename,
+  onCancelRename,
 }: {
   node: TreeNode;
   depth: number;
   activePath: string | null;
   collapsed: ReturnType<typeof usePersistentSet>;
+  creating: Creating;
+  renaming: string | null;
   onOpen: OpenFn;
   onContext: (node: TreeNode, e: React.MouseEvent) => void;
+  onCommitCreate: (name: string) => void;
+  onCancelCreate: () => void;
+  onCommitRename: (node: TreeNode, name: string) => void;
+  onCancelRename: () => void;
 }) {
   const indent = 8 + depth * 12;
   const isCollapsed = collapsed.has(node.path);
+
+  if (renaming === node.path) {
+    return (
+      <InlineEdit
+        kind={node.isDir ? "folder" : "file"}
+        depth={depth + (node.isDir ? 0 : 1)}
+        initial={node.name}
+        onCommit={(name) => onCommitRename(node, name)}
+        onCancel={onCancelRename}
+      />
+    );
+  }
 
   if (node.isDir) {
     return (
@@ -173,18 +282,35 @@ function TreeRow({
           <Icon name="folder" size={13} />
           <span>{node.name}</span>
         </button>
-        {!isCollapsed &&
-          node.children.map((c) => (
-            <TreeRow
-              key={c.path}
-              node={c}
-              depth={depth + 1}
-              activePath={activePath}
-              collapsed={collapsed}
-              onOpen={onOpen}
-              onContext={onContext}
-            />
-          ))}
+        {!isCollapsed && (
+          <>
+            {creating && creating.dir === node.path && (
+              <InlineEdit
+                kind={creating.kind}
+                depth={depth + 1}
+                onCommit={onCommitCreate}
+                onCancel={onCancelCreate}
+              />
+            )}
+            {node.children.map((c) => (
+              <TreeRow
+                key={c.path}
+                node={c}
+                depth={depth + 1}
+                activePath={activePath}
+                collapsed={collapsed}
+                creating={creating}
+                renaming={renaming}
+                onOpen={onOpen}
+                onContext={onContext}
+                onCommitCreate={onCommitCreate}
+                onCancelCreate={onCancelCreate}
+                onCommitRename={onCommitRename}
+                onCancelRename={onCancelRename}
+              />
+            ))}
+          </>
+        )}
       </div>
     );
   }

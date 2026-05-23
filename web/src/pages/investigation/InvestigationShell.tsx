@@ -38,6 +38,9 @@ type OpenTab = {
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
+type Pane = { id: string; path: string | null };
+type SplitDir = "left" | "right" | "up" | "down";
+
 export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
 
 const MODEL_OPTIONS = [
@@ -1502,31 +1505,58 @@ function EditorArea({
   onToggleBottom: () => void;
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
-  const [layoutMode, setLayoutMode] = useState<"single" | "split">("single");
-  // Right column's active tab. When null we mirror activeTab; once the
-  // user explicitly picks a different tab on the right side, this holds
-  // their pick so the two columns can show different files.
-  const [rightTab, setRightTab] = useState<string | null>(null);
 
-  // Pick a sensible default for the right column the first time the
-  // user enters split mode: prefer the next open tab so the user
-  // immediately sees two different files side by side.
+  // Multi-pane editor (VSCode editor groups). `panes` is a flat ordered
+  // list laid out along one `orientation`; the focused pane tracks the
+  // global active tab so the tab strip drives whichever pane has focus.
+  const [panes, setPanes] = useState<Pane[]>([{ id: "p0", path: activeTab }]);
+  const [orientation, setOrientation] = useState<"row" | "col">("row");
+  const [focusedId, setFocusedId] = useState("p0");
+  const paneSeq = useRef(1);
+
+  // activeTab → focused pane (tab strip drives the focused group).
   useEffect(() => {
-    if (layoutMode !== "split" || rightTab) return;
-    const idx = openTabs.findIndex((t) => t.path === activeTab);
-    const next = openTabs[idx + 1] ?? openTabs.find((t) => t.path !== activeTab);
-    if (next) setRightTab(next.path);
-  }, [layoutMode, rightTab, openTabs, activeTab]);
+    setPanes((prev) => prev.map((p) => (p.id === focusedId ? { ...p, path: activeTab } : p)));
+  }, [activeTab, focusedId]);
 
-  // If the right column's tab was closed, drop the pin so it falls back
-  // to mirroring the left.
+  // Drop panes whose file was closed; collapse to a single pane if needed.
   useEffect(() => {
-    if (rightTab && !openTabs.some((t) => t.path === rightTab)) {
-      setRightTab(null);
-    }
-  }, [openTabs, rightTab]);
+    setPanes((prev) => {
+      const live = prev.filter(
+        (p, i) => i === 0 || p.path == null || openTabs.some((t) => t.path === p.path),
+      );
+      return live.length === prev.length ? prev : live.length ? live : [{ id: "p0", path: activeTab }];
+    });
+  }, [openTabs, activeTab]);
 
-  const effectiveRight = rightTab ?? activeTab;
+  const focusPane = (id: string) => {
+    setFocusedId(id);
+    const p = panes.find((x) => x.id === id);
+    if (p?.path && p.path !== activeTab) onSelectTab(p.path);
+  };
+
+  const splitInto = (dir: "left" | "right" | "up" | "down", path: string | null) => {
+    const id = `p${paneSeq.current++}`;
+    setOrientation(dir === "left" || dir === "right" ? "row" : "col");
+    setPanes((prev) => {
+      const idx = Math.max(0, prev.findIndex((p) => p.id === focusedId));
+      const at = dir === "left" || dir === "up" ? idx : idx + 1;
+      const next = [...prev];
+      next.splice(at, 0, { id, path: path ?? activeTab });
+      return next;
+    });
+    setFocusedId(id);
+  };
+
+  const closePane = (id: string) =>
+    setPanes((prev) => {
+      if (prev.length <= 1) return prev;
+      const next = prev.filter((p) => p.id !== id);
+      if (id === focusedId && next[0]) setFocusedId(next[0].id);
+      return next;
+    });
+
+  const split = panes.length > 1;
 
   return (
     <section style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
@@ -1540,59 +1570,35 @@ function EditorArea({
         onCloseOthers={onCloseOthers}
         onCloseToRight={onCloseToRight}
         onCloseAll={onCloseAll}
-        layoutMode={layoutMode}
-        onLayoutMode={(m) => {
-          setLayoutMode(m);
-          if (m === "single") setRightTab(null);
-        }}
+        onSplit={(dir, path) => splitInto(dir, path)}
+        split={split}
+        onUnsplit={() => setPanes((prev) => prev.slice(0, 1))}
       />
       <Breadcrumb activeTab={activeTab} />
-      {layoutMode === "split" ? (
-        <div style={{ flex: 1, display: "flex", minHeight: 0, background: "var(--white)" }}>
-          <SplitPane
+      <div
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: orientation === "row" ? "row" : "column",
+          minHeight: 0,
+          background: "var(--white)",
+        }}
+      >
+        {panes.map((pane, i) => (
+          <PaneView
+            key={pane.id}
             investigationId={investigationId}
-            path={activeTab}
-            placeholder="Pick a tab → it opens here."
+            pane={pane}
+            orientation={orientation}
+            first={i === 0}
+            focused={split && pane.id === focusedId}
+            showClose={split}
+            onFocus={() => focusPane(pane.id)}
+            onClose={() => closePane(pane.id)}
+            onDropTab={(path) => splitInto(orientation === "row" ? "right" : "down", path)}
           />
-          <div
-            style={{ width: 1, background: "var(--paper-3)", flexShrink: 0 }}
-            aria-hidden
-          />
-          <SplitPane
-            investigationId={investigationId}
-            path={effectiveRight}
-            placeholder="Pick from the dropdown above."
-            header={
-              <RightPaneTabPicker
-                openTabs={openTabs}
-                current={effectiveRight}
-                onPick={setRightTab}
-              />
-            }
-          />
-        </div>
-      ) : (
-        <div
-          className="scrollable"
-          style={{ flex: 1, overflow: "auto", padding: 20, background: "var(--white)" }}
-        >
-          {activeTab ? (
-            <FileView investigationId={investigationId} path={activeTab} />
-          ) : (
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                height: "100%",
-                color: "var(--text-paper-d)",
-              }}
-            >
-              Open a file from the sidebar to view it here.
-            </div>
-          )}
-        </div>
-      )}
+        ))}
+      </div>
 
       {bottomOpen && (
         <ResizeDivider
@@ -1614,107 +1620,123 @@ function EditorArea({
   );
 }
 
-function SplitPane({
+function PaneView({
   investigationId,
-  path,
-  placeholder,
-  header,
+  pane,
+  orientation,
+  first,
+  focused,
+  showClose,
+  onFocus,
+  onClose,
+  onDropTab,
 }: {
   investigationId: string;
-  path: string | null;
-  placeholder: string;
-  header?: React.ReactNode;
+  pane: Pane;
+  orientation: "row" | "col";
+  first: boolean;
+  focused: boolean;
+  showClose: boolean;
+  onFocus: () => void;
+  onClose: () => void;
+  onDropTab: (path: string) => void;
 }) {
-  return (
-    <div
-      style={{
-        flex: 1,
-        minWidth: 0,
-        display: "flex",
-        flexDirection: "column",
-      }}
-    >
-      {header && (
-        <div
-          style={{
-            padding: "4px 12px",
-            borderBottom: "1px solid var(--paper-3)",
-            background: "var(--paper)",
-            display: "flex",
-            alignItems: "center",
-            gap: 6,
-            fontSize: 11,
-            color: "var(--text-paper-d)",
-            minHeight: 28,
-          }}
-        >
-          {header}
-        </div>
-      )}
-      <div
-        className="scrollable"
-        style={{
-          flex: 1,
-          overflow: "auto",
-          padding: 20,
-        }}
-      >
-        {path ? (
-          <FileView investigationId={investigationId} path={path} />
-        ) : (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              height: "100%",
-              color: "var(--text-paper-d2)",
-              fontSize: 12,
-            }}
-          >
-            {placeholder}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RightPaneTabPicker({
-  openTabs,
-  current,
-  onPick,
-}: {
-  openTabs: OpenTab[];
-  current: string | null;
-  onPick: (p: string) => void;
-}) {
+  const [dropActive, setDropActive] = useState(false);
   return (
     <>
-      <Icon name="split" size={11} color="var(--accent)" />
-      <span style={{ fontFamily: "var(--font-mono)" }}>right pane:</span>
-      <select
-        value={current ?? ""}
-        onChange={(e) => {
-          if (e.target.value) onPick(e.target.value);
+      {!first && (
+        <div
+          aria-hidden
+          style={
+            orientation === "row"
+              ? { width: 1, background: "var(--paper-3)", flexShrink: 0 }
+              : { height: 1, background: "var(--paper-3)", flexShrink: 0 }
+          }
+        />
+      )}
+      <div
+        onMouseDown={onFocus}
+        onDragOver={(e) => {
+          // Accept a Ctrl/Cmd tab-drag → opens that file in a new pane.
+          if (e.dataTransfer.types.includes("application/x-rca-tab")) {
+            e.preventDefault();
+            setDropActive(true);
+          }
+        }}
+        onDragLeave={() => setDropActive(false)}
+        onDrop={(e) => {
+          setDropActive(false);
+          const payload = e.dataTransfer.getData("application/x-rca-tab");
+          if (payload) {
+            try {
+              const { path, ctrl } = JSON.parse(payload) as { path: string; ctrl: boolean };
+              if (ctrl && path) {
+                e.preventDefault();
+                onDropTab(path);
+              }
+            } catch {
+              /* ignore malformed payload */
+            }
+          }
         }}
         style={{
-          fontSize: 11,
-          fontFamily: "var(--font-mono)",
-          padding: "2px 4px",
-          border: "1px solid var(--paper-3)",
-          borderRadius: 3,
-          background: "var(--white)",
-          color: "var(--text-paper)",
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          outline: focused ? "2px solid var(--accent)" : "none",
+          outlineOffset: -2,
+          background: dropActive ? "var(--accent-soft)" : "transparent",
         }}
       >
-        {openTabs.length === 0 && <option value="">(no tabs)</option>}
-        {openTabs.map((t) => (
-          <option key={t.path} value={t.path}>
-            {basename(t.path)}
-          </option>
-        ))}
-      </select>
+        {showClose && (
+          <div
+            style={{
+              padding: "2px 8px",
+              borderBottom: "1px solid var(--paper-3)",
+              background: "var(--paper)",
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 11,
+              color: "var(--text-paper-d)",
+              minHeight: 24,
+            }}
+          >
+            <Icon name="file" size={11} />
+            <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis" }}>
+              {pane.path ? basename(pane.path) : "(empty)"}
+            </span>
+            <button
+              type="button"
+              onClick={onClose}
+              title="Close pane"
+              aria-label="close pane"
+              style={{ color: "var(--text-paper-d2)" }}
+            >
+              <Icon name="x" size={11} />
+            </button>
+          </div>
+        )}
+        <div className="scrollable" style={{ flex: 1, overflow: "auto", padding: 20 }}>
+          {pane.path ? (
+            <FileView investigationId={investigationId} path={pane.path} />
+          ) : (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                height: "100%",
+                color: "var(--text-paper-d)",
+              }}
+            >
+              Open a file from the sidebar to view it here.
+            </div>
+          )}
+        </div>
+      </div>
     </>
   );
 }
@@ -1730,6 +1752,7 @@ function TabContextMenu({
   onCloseOthers,
   onCloseToRight,
   onCloseAll,
+  onSplit,
 }: {
   path: string;
   x: number;
@@ -1741,6 +1764,7 @@ function TabContextMenu({
   onCloseOthers: (keep: string) => void;
   onCloseToRight: (from: string) => void;
   onCloseAll: () => void;
+  onSplit: (dir: SplitDir, path: string) => void;
 }) {
   const item = (label: string, fn: () => void) => (
     <button
@@ -1781,6 +1805,11 @@ function TabContextMenu({
           padding: "4px 0",
         }}
       >
+        {item("Split right", () => onSplit("right", path))}
+        {item("Split left", () => onSplit("left", path))}
+        {item("Split up", () => onSplit("up", path))}
+        {item("Split down", () => onSplit("down", path))}
+        <div style={{ height: 1, background: "var(--paper-3)", margin: "4px 0" }} />
         {item(pinned ? "Unpin" : "Pin", () => onTogglePin(path))}
         {item("Copy path", () => void navigator.clipboard?.writeText(path))}
         <div style={{ height: 1, background: "var(--paper-3)", margin: "4px 0" }} />
@@ -1833,8 +1862,9 @@ function TabStrip({
   onCloseOthers,
   onCloseToRight,
   onCloseAll,
-  layoutMode,
-  onLayoutMode,
+  onSplit,
+  split,
+  onUnsplit,
 }: {
   tabs: OpenTab[];
   active: string | null;
@@ -1845,8 +1875,9 @@ function TabStrip({
   onCloseOthers: (keep: string) => void;
   onCloseToRight: (from: string) => void;
   onCloseAll: () => void;
-  layoutMode: "single" | "split";
-  onLayoutMode: (m: "single" | "split") => void;
+  onSplit: (dir: SplitDir, path: string | null) => void;
+  split: boolean;
+  onUnsplit: () => void;
 }) {
   const activeIsNotebook = active != null && pickRenderer(active) === "notebook";
   const [dragFrom, setDragFrom] = useState<number | null>(null);
@@ -1878,13 +1909,26 @@ function TabStrip({
                 e.preventDefault();
                 setMenu({ path: t.path, x: e.clientX, y: e.clientY });
               }}
-              onDragStart={() => setDragFrom(i)}
+              onDragStart={(e) => {
+                setDragFrom(i);
+                // Carry a payload so a Ctrl/Cmd-drag onto a pane opens
+                // this file in a new split.
+                e.dataTransfer.setData(
+                  "application/x-rca-tab",
+                  JSON.stringify({ path: t.path, ctrl: e.ctrlKey || e.metaKey }),
+                );
+                e.dataTransfer.effectAllowed = "copyMove";
+              }}
               onDragOver={(e) => e.preventDefault()}
               onDrop={() => {
                 if (dragFrom != null) onReorder(dragFrom, i);
                 setDragFrom(null);
               }}
-              title={t.pinned ? "Pinned · double-click to unpin" : undefined}
+              title={
+                t.pinned
+                  ? "Pinned · double-click to unpin"
+                  : "Drag to reorder · Ctrl/⌘-drag into the editor for a new pane"
+              }
               style={{
                 display: "inline-flex",
                 alignItems: "center",
@@ -1941,19 +1985,18 @@ function TabStrip({
           onCloseOthers={onCloseOthers}
           onCloseToRight={onCloseToRight}
           onCloseAll={onCloseAll}
+          onSplit={onSplit}
         />
       )}
       <div style={{ display: "flex", alignItems: "center", gap: 4, padding: "0 8px" }}>
         <button
           type="button"
-          title={layoutMode === "split" ? "Single column" : "Split view"}
-          onClick={() => onLayoutMode(layoutMode === "split" ? "single" : "split")}
+          title={split ? "Collapse to one pane" : "Split right"}
+          onClick={() => (split ? onUnsplit() : onSplit("right", active))}
           style={{
             ...iconBtn,
-            color:
-              layoutMode === "split" ? "var(--accent)" : "var(--text-paper-d)",
-            background:
-              layoutMode === "split" ? "var(--accent-soft)" : "transparent",
+            color: split ? "var(--accent)" : "var(--text-paper-d)",
+            background: split ? "var(--accent-soft)" : "transparent",
           }}
         >
           <Icon name="split" size={14} />
