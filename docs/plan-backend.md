@@ -92,48 +92,94 @@ What we **don't** do in v1:
 ## 3. Schema migration: Workspace → Investigation
 
 Replace `src/workspace_app/resources/workspace.py` with
-`investigation.py` and update `register_all`. We're not preserving
-backwards compat with any old data because specstar is in-memory
-during dev; field-rename is the migration.
+`investigation.py` and update `register_all`. specstar is in-memory
+during dev; no migration concern. Final model after grill alignment
+with the (updated) design — `line` removed in favor of `topics`,
+`lot` dropped (still appears in agent narration / notebook code but
+not as a model field):
 
 ```python
 from enum import StrEnum
 from msgspec import Struct, field
 
+
 class Severity(StrEnum):
-    P0 = "P0"   # critical
-    P1 = "P1"   # high
-    P2 = "P2"
-    P3 = "P3"
-    P4 = "P4"   # informational
+    P0 = "P0"   # halt
+    P1 = "P1"   # critical
+    P2 = "P2"   # major
+    P3 = "P3"   # minor
+    P4 = "P4"   # cosmetic
+
 
 class Status(StrEnum):
-    TRIAGING = "triaging"          # default state on create
+    """Per grill-me Q10 + design.
+       create → TRIAGING → AWAITING_REVIEW → RESOLVED  (happy path)
+                                          └→ ABANDONED  (closed without RC)
+    Design's 'draft' state is dropped — we don't create in draft."""
+    TRIAGING = "triaging"
     AWAITING_REVIEW = "awaiting_review"
     RESOLVED = "resolved"
     ABANDONED = "abandoned"
-    # draft + closed-manual handled by status transitions, not stored separately
+
 
 class Investigation(Struct):
-    title: str                                    # required
-    description: str = ""                         # multi-line, replaces design's "Initial brief"
-    topics: list[str] = field(default_factory=list)  # tag list — left-sidebar TOPICS section groups by these
+    title: str                                            # required
+    description: str = ""                                 # multi-line; replaces design's "initial brief"
     severity: Severity = Severity.P2
-    line: str = ""                                # production line ("SMT 1")
-    product: str = ""                             # product code
-    owner: str = "default-user"                   # auto-set; future SSO will replace
     status: Status = Status.TRIAGING
-    members: list[str] = field(default_factory=list)
-    attached_agent_config_id: str | None = None
-    # lot / sparkline / agent-running flag — derived, not stored
+    product: str = ""                                     # part / board, e.g. "MX-7 board"
+    owner: str = "default-user"                           # user id; resolved via company API
+    members: list[str] = field(default_factory=list)      # user ids
+    topics: list[str] = field(default_factory=list)       # free-form tags ("Reflow zone-3", ...)
+    attached_agent_config_id: str | None = None           # which AgentConfig to use
 ```
 
-**Removed** (vs design): `lot`, `draft`, separate `pinned` flag (use a
-client-side preference or specstar metadata).
+```python
+# Conversation — only the field rename
+class Message(Struct):
+    role: str                                              # user / assistant / tool / system
+    content: str
+    tool_call_id: str | None = None
+    tool_name: str | None = None
 
-`AgentConfig` and `Conversation` stay as-is; the RCA-specific
-prompt + tool subset lives in `AgentConfig.system_prompt` +
-`AgentConfig.allowed_tools`.
+
+class Conversation(Struct):
+    investigation_id: str                                  # was workspace_id
+    messages: list[Message] = field(default_factory=list)
+```
+
+```python
+# AgentConfig — only the defaults bump
+class AgentConfig(Struct):
+    name: str
+    model: str = "ollama_chat/qwen3:14b"
+    system_prompt: str = ""                                # §8 loads RCA prompt here
+    allowed_tools: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    sandbox_image: str = "workspace-app/sandbox:py312-ds"  # ← was python:3.12-slim
+    idle_timeout_seconds: int = 28800                      # ← was 900 (15min); now 8h per Q10
+```
+
+### Not stored (derived elsewhere)
+
+| Design surface | Where it comes from |
+|---|---|
+| `INC-2026-0142` (id) | specstar's `resource_id`; FE formats the display string |
+| `summary` (table row second line) | first line of `description`, FE-derived |
+| `sevTone` / `statusTone` | FE color mapping constants |
+| `lot` | dropped from model — still appears in agent narration / notebook code as plain text |
+| `updated` ("12 min ago") | specstar's `updated_time` + FE relative-format |
+| `agent: "running" \| "idle"` | `InvestigationRegistry`'s `session.current_turn` aliveness |
+| `pinned` | client-side `localStorage` preference |
+| `reportV` / `reportProgress` | derive from `/report.v*.md` file listing + agent run state |
+
+### Why `line` was removed
+
+The latest design dropped `line` (production line) entirely and uses
+`topics: list[str]` for the same role plus more — investigations now
+tag with concepts like `"Reflow zone-3"`, `"Cell test fixture"`,
+`"Contact resistance"`. Home sidebar's TOPICS section groups by these
+tags. Table column renamed `Line · product` → `Topic · product`.
 
 **Files:**
 - `src/workspace_app/resources/investigation.py` — replaces `workspace.py`
@@ -146,7 +192,8 @@ prompt + tool subset lives in `AgentConfig.system_prompt` +
   specstar auto-route `/workspace` → `/investigation`
 
 **Tests:** all existing tests work after a rename; add coverage for the
-new `Severity`/`Status` enums and topic-list semantics.
+new `Severity` / `Status` enums and the topic-list / members-list
+default-factory semantics.
 
 ---
 
