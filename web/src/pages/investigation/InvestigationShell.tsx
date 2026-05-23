@@ -324,7 +324,13 @@ function ShellBody({
             ariaLabel="resize agent panel"
             onResize={(d) => setAgentW(agentW - d)}
           />
-          <AgentPanel investigationId={investigation.resource_id} width={agentW} />
+          <AgentPanel
+            investigationId={investigation.resource_id}
+            width={agentW}
+            suggestions={
+              agentConfigs.find((c) => c.resource_id === attachedConfigId)?.suggestions
+            }
+          />
         </div>
 
         <CommandPalette

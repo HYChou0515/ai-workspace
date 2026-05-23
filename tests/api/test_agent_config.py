@@ -39,6 +39,17 @@ def test_get_agent_config_lists_them(harness: Harness):
     assert "ollama_chat/qwen3:14b" in models
 
 
+def test_seeded_configs_carry_suggestion_prompts(harness: Harness):
+    """The agent-panel quick-prompt chips live on the AgentConfig (BE), not
+    hardcoded in the FE."""
+    entries = harness.client.get("/agent-config").json()
+    for e in entries:
+        suggestions = e["data"]["suggestions"]
+        assert isinstance(suggestions, list)
+        assert len(suggestions) > 0
+        assert all(isinstance(s, str) and s for s in suggestions)
+
+
 def test_attached_config_drives_the_turn():
     """A message turn runs with the investigation's attached AgentConfig
     (model + prompt), surfaced on the tool context."""

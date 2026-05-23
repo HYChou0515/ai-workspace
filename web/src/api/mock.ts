@@ -281,9 +281,26 @@ const investigations: Investigation[] = [
   },
 ];
 
+const AGENT_SUGGESTIONS = [
+  "Show the SPC analysis",
+  "Run a Pareto of defect modes",
+  "Sketch a fishbone",
+  "Draft a 5-Why",
+  "Draft the report",
+];
 const agentConfigs: AgentConfigInfo[] = [
-  { resource_id: "agent-config:qwen-local", name: "RCA · Qwen3 (local)", model: "ollama_chat/qwen3:14b" },
-  { resource_id: "agent-config:claude-opus", name: "RCA · Claude Opus", model: "claude-opus-4-7" },
+  {
+    resource_id: "agent-config:qwen-local",
+    name: "RCA · Qwen3 (local)",
+    model: "ollama_chat/qwen3:14b",
+    suggestions: AGENT_SUGGESTIONS,
+  },
+  {
+    resource_id: "agent-config:claude-opus",
+    name: "RCA · Claude Opus",
+    model: "claude-opus-4-7",
+    suggestions: AGENT_SUGGESTIONS,
+  },
 ];
 
 const conversations = new Map<string, Conversation>();

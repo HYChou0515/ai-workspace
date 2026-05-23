@@ -13,7 +13,9 @@ import { useAgent } from "../../hooks/useAgent";
 import type { AgentEntry, ToolCallView } from "./agentLog";
 import type { Message } from "../../api/types";
 
-const SUGGESTIONS = ["Show SPC analysis", "Run Pareto", "Sketch a fishbone"];
+// Fallback only — the real quick-prompts come from the attached AgentConfig
+// (BE), passed in via `suggestions`.
+const DEFAULT_SUGGESTIONS = ["Show SPC analysis", "Run Pareto", "Sketch a fishbone"];
 
 const TEXT_EXTENSIONS = new Set([
   ".md",
@@ -39,10 +41,14 @@ function isTextFile(name: string): boolean {
 export function AgentPanel({
   investigationId,
   width = 380,
+  suggestions,
 }: {
   investigationId: string;
   width?: number;
+  /** Quick-prompt chips from the attached AgentConfig (BE). */
+  suggestions?: string[];
 }) {
+  const chips = suggestions && suggestions.length > 0 ? suggestions : DEFAULT_SUGGESTIONS;
   const { log, send, cancel } = useAgent();
   const [draft, setDraft] = useState("");
   const [attaching, setAttaching] = useState(false);
@@ -157,7 +163,7 @@ export function AgentPanel({
           flexWrap: "wrap",
         }}
       >
-        {SUGGESTIONS.map((s) => (
+        {chips.map((s) => (
           <button
             key={s}
             type="button"

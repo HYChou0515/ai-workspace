@@ -100,10 +100,30 @@ def _seed_agent_configs(spec: SpecStar) -> None:
     if rm.count_resources(QB.all()):  # ty: ignore[invalid-argument-type]
         return
     prompt = load_system_prompt()
+    # RCA workflow quick-prompts — the agent panel renders these as chips.
+    suggestions = [
+        "Show the SPC analysis",
+        "Run a Pareto of defect modes",
+        "Sketch a fishbone",
+        "Draft a 5-Why",
+        "Draft the report",
+    ]
     rm.create(
-        AgentConfig(name="RCA · Qwen3 (local)", model="ollama_chat/qwen3:14b", system_prompt=prompt)
+        AgentConfig(
+            name="RCA · Qwen3 (local)",
+            model="ollama_chat/qwen3:14b",
+            system_prompt=prompt,
+            suggestions=suggestions,
+        )
     )
-    rm.create(AgentConfig(name="RCA · Claude Opus", model="claude-opus-4-7", system_prompt=prompt))
+    rm.create(
+        AgentConfig(
+            name="RCA · Claude Opus",
+            model="claude-opus-4-7",
+            system_prompt=prompt,
+            suggestions=suggestions,
+        )
+    )
 
 
 def create_app(

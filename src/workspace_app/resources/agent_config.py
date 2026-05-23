@@ -5,6 +5,11 @@ class AgentConfig(Struct):
     name: str
     model: str = "ollama_chat/qwen3:14b"
     system_prompt: str = ""
+    suggestions: list[str] = field(default_factory=list)
+    """Quick-prompt chips shown in the agent panel. Sent verbatim as the
+    user prompt when clicked — so the prompt library lives with the agent
+    config, not hardcoded in the FE."""
+
     allowed_tools: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     sandbox_image: str = "workspace-app/sandbox:py312-ds"

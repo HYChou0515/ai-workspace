@@ -10,15 +10,17 @@ describe("agent config picker (mock client)", () => {
     inv = created.resource_id;
   });
 
-  it("lists at least one local + one hosted config", async () => {
+  it("lists at least one local + one hosted config, each with suggestions", async () => {
     const configs = await mockApi.listAgentConfigs();
     const models = configs.map((c) => c.model);
     expect(models.some((m) => m.includes("qwen"))).toBe(true);
     expect(models.some((m) => m.includes("claude"))).toBe(true);
-    // every entry is renderable as a radio option
+    // every entry is renderable as a radio option + carries quick-prompts
     for (const c of configs) {
       expect(c.resource_id).toBeTruthy();
       expect(c.name).toBeTruthy();
+      expect(Array.isArray(c.suggestions)).toBe(true);
+      expect(c.suggestions.length).toBeGreaterThan(0);
     }
   });
 

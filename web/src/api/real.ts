@@ -72,7 +72,7 @@ type ConversationStruct = {
   messages: Conversation["messages"];
 };
 
-type AgentConfigStruct = { name: string; model: string };
+type AgentConfigStruct = { name: string; model: string; suggestions?: string[] };
 
 async function json<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
@@ -168,6 +168,7 @@ export const realApi: ApiClient = {
         resource_id: e.revision_info.resource_id,
         name: e.data.name,
         model: e.data.model,
+        suggestions: e.data.suggestions ?? [],
       }));
     } catch {
       return []; // BE older than the agent-config seeding

@@ -77,6 +77,8 @@ export type AgentConfigInfo = {
   resource_id: string;
   name: string;
   model: string;
+  /** Quick-prompt chips for the agent panel (sent verbatim when clicked). */
+  suggestions: string[];
 };
 
 export type ActivityEntry = {
