@@ -68,6 +68,35 @@ export function dirname(path: string): string {
   return trimmed.slice(0, i).replace(/^\/+/, "");
 }
 
+export type DirEntry = { name: string; path: string; isDir: boolean };
+
+/** Immediate children of directory `dir` (no leading slash, "" = root)
+ * derived from a flat path list. Folders first (alpha), then files
+ * (alpha). Folder `path` is the dir key (re-feedable to dirChildren);
+ * file `path` is the full "/..." path (feedable to onOpenFile). */
+export function dirChildren(paths: string[], dir: string): DirEntry[] {
+  const prefix = dir ? `${dir}/` : "";
+  const dirs = new Set<string>();
+  const filesOut: DirEntry[] = [];
+  for (const raw of paths) {
+    const rel = raw.replace(/^\/+/, "");
+    if (!rel.startsWith(prefix)) continue;
+    const rest = rel.slice(prefix.length);
+    if (!rest) continue;
+    const slash = rest.indexOf("/");
+    if (slash === -1) {
+      filesOut.push({ name: rest, path: `/${rel}`, isDir: false });
+    } else {
+      dirs.add(rest.slice(0, slash));
+    }
+  }
+  const dirsOut: DirEntry[] = [...dirs]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => ({ name, path: `${prefix}${name}`, isDir: true }));
+  filesOut.sort((a, b) => a.name.localeCompare(b.name));
+  return [...dirsOut, ...filesOut];
+}
+
 /** Path segments excluding root and basename, for breadcrumb display. */
 export function breadcrumbSegments(path: string): string[] {
   const parts = path.split("/").filter((p) => p.length > 0);

@@ -33,7 +33,7 @@ import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
 import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
-import { basename, breadcrumbSegments, pickRenderer } from "./renderer";
+import { basename, breadcrumbSegments, dirChildren, pickRenderer } from "./renderer";
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPane } from "./TerminalPane";
 
@@ -212,6 +212,7 @@ export function InvestigationShell({
           <EditorArea
             investigationId={investigation.resource_id}
             groups={groups}
+            files={files}
             bottomHeight={bottomH}
             bottomOpen={bottomOpen}
             onResizeBottom={(d) => setBottomH(bottomH - d)}
@@ -1245,6 +1246,7 @@ type Groups = ReturnType<typeof useEditorGroups>;
 function EditorArea({
   investigationId,
   groups,
+  files,
   bottomHeight,
   bottomOpen,
   onResizeBottom,
@@ -1252,6 +1254,7 @@ function EditorArea({
 }: {
   investigationId: string;
   groups: Groups;
+  files: FileInfo[];
   bottomHeight: number;
   bottomOpen: boolean;
   onResizeBottom: (deltaPx: number) => void;
@@ -1262,7 +1265,12 @@ function EditorArea({
   return (
     <section style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
       <div style={{ flex: 1, display: "flex", minHeight: 0, background: "var(--white)" }}>
-        <GroupTreeView node={groups.tree} groups={groups} investigationId={investigationId} />
+        <GroupTreeView
+          node={groups.tree}
+          groups={groups}
+          investigationId={investigationId}
+          files={files}
+        />
       </div>
 
       {bottomOpen && (
@@ -1290,15 +1298,24 @@ function GroupTreeView({
   node,
   groups,
   investigationId,
+  files,
 }: {
   node: PaneNode;
   groups: Groups;
   investigationId: string;
+  files: FileInfo[];
 }) {
   if (node.type === "leaf") {
     const group = groups.groups[node.id];
     if (!group) return null;
-    return <GroupPane group={group} groups={groups} investigationId={investigationId} />;
+    return (
+      <GroupPane
+        group={group}
+        groups={groups}
+        investigationId={investigationId}
+        files={files}
+      />
+    );
   }
   const row = node.dir === "row";
   return (
@@ -1311,7 +1328,7 @@ function GroupTreeView({
         flexDirection: row ? "row" : "column",
       }}
     >
-      <GroupTreeView node={node.a} groups={groups} investigationId={investigationId} />
+      <GroupTreeView node={node.a} groups={groups} investigationId={investigationId} files={files} />
       <div
         aria-hidden
         style={
@@ -1320,7 +1337,7 @@ function GroupTreeView({
             : { height: 1, background: "var(--paper-3)", flexShrink: 0 }
         }
       />
-      <GroupTreeView node={node.b} groups={groups} investigationId={investigationId} />
+      <GroupTreeView node={node.b} groups={groups} investigationId={investigationId} files={files} />
     </div>
   );
 }
@@ -1331,10 +1348,12 @@ function GroupPane({
   group,
   groups,
   investigationId,
+  files,
 }: {
   group: EditorGroup;
   groups: Groups;
   investigationId: string;
+  files: FileInfo[];
 }) {
   const [edge, setEdge] = useState<Edge | null>(null);
   const active = groups.isSplit && group.id === groups.activeGroupId;
@@ -1397,7 +1416,11 @@ function GroupPane({
       }}
     >
       <GroupTabStrip group={group} groups={groups} />
-      <Breadcrumb activeTab={activePath} />
+      <Breadcrumb
+        activeTab={activePath}
+        files={files}
+        onOpen={(p) => groups.openInGroup(group.id, p, { preview: false })}
+      />
       <div className="scrollable" style={{ flex: 1, overflow: "auto", padding: 20 }}>
         {activePath ? (
           <FileView investigationId={investigationId} path={activePath} />
@@ -1524,32 +1547,178 @@ function TabContextMenu({
   );
 }
 
-function Breadcrumb({ activeTab }: { activeTab: string | null }) {
-  const segments = activeTab ? breadcrumbSegments(activeTab) : [];
+const crumbBar: React.CSSProperties = {
+  height: 28,
+  borderBottom: "1px solid var(--paper-3)",
+  display: "flex",
+  alignItems: "center",
+  padding: "0 12px",
+  background: "var(--white)",
+  fontSize: 12,
+  color: "var(--text-paper-d)",
+  gap: 2,
+};
+
+/** VSCode-style breadcrumb: each segment is clickable and drops down the
+ * sibling entries at its level; selecting a file opens it, a folder drills
+ * in (#6/#7). */
+export function Breadcrumb({
+  activeTab,
+  files,
+  onOpen,
+}: {
+  activeTab: string | null;
+  files: FileInfo[];
+  onOpen: (path: string) => void;
+}) {
+  if (!activeTab) {
+    return (
+      <div style={crumbBar}>
+        <span style={{ color: "var(--text-paper-d2)" }}>No file open</span>
+      </div>
+    );
+  }
+  const folders = breadcrumbSegments(activeTab); // ancestor folder names
+  const paths = files.map((f) => f.path);
   return (
-    <div
-      style={{
-        height: 28,
-        borderBottom: "1px solid var(--paper-3)",
-        display: "flex",
-        alignItems: "center",
-        padding: "0 16px",
-        background: "var(--white)",
-        fontSize: 12,
-        color: "var(--text-paper-d)",
-        gap: 6,
-      }}
-    >
-      <Icon name="folder" size={12} />
-      {segments.map((s, i) => (
-        <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          {s}
+    <div style={crumbBar}>
+      {folders.map((name, i) => (
+        <span key={`${name}-${i}`} style={{ display: "inline-flex", alignItems: "center" }}>
+          <CrumbSegment
+            label={name}
+            siblingsDir={folders.slice(0, i).join("/")}
+            paths={paths}
+            onOpen={onOpen}
+          />
           <Icon name="chev_r" size={10} color="var(--text-paper-d2)" />
         </span>
       ))}
-      <span style={{ color: "var(--text-paper)" }}>
-        {activeTab ? basename(activeTab) : "no file"}
-      </span>
+      <CrumbSegment
+        label={basename(activeTab)}
+        siblingsDir={folders.join("/")}
+        paths={paths}
+        onOpen={onOpen}
+        active
+      />
+    </div>
+  );
+}
+
+/** One breadcrumb crumb — a button that pops a sibling browser. */
+function CrumbSegment({
+  label,
+  siblingsDir,
+  paths,
+  onOpen,
+  active,
+}: {
+  label: string;
+  siblingsDir: string;
+  paths: string[];
+  onOpen: (path: string) => void;
+  active?: boolean;
+}) {
+  return (
+    <Popover
+      trigger={({ onClick, open }) => (
+        <button
+          type="button"
+          onClick={onClick}
+          style={{
+            padding: "2px 6px",
+            borderRadius: 4,
+            background: open ? "var(--paper-2)" : "transparent",
+            color: active ? "var(--text-paper)" : "var(--text-paper-d)",
+            fontWeight: active ? 600 : 400,
+            fontSize: 12,
+          }}
+        >
+          {label}
+        </button>
+      )}
+    >
+      {(close) => (
+        <DirBrowser startDir={siblingsDir} paths={paths} onOpen={onOpen} close={close} />
+      )}
+    </Popover>
+  );
+}
+
+/** Drill-down listing inside a breadcrumb dropdown. Files open + close;
+ * folders re-root the listing to their children. */
+function DirBrowser({
+  startDir,
+  paths,
+  onOpen,
+  close,
+}: {
+  startDir: string;
+  paths: string[];
+  onOpen: (path: string) => void;
+  close: () => void;
+}) {
+  const [dir, setDir] = useState(startDir);
+  const entries = useMemo(() => dirChildren(paths, dir), [paths, dir]);
+  return (
+    <div style={{ minWidth: 220, maxHeight: 320, overflowY: "auto" }}>
+      {dir && (
+        <button
+          type="button"
+          onClick={() => setDir(dir.split("/").slice(0, -1).join("/"))}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 6,
+            width: "100%",
+            padding: "5px 10px",
+            fontSize: 12,
+            color: "var(--text-paper-d2)",
+            background: "transparent",
+          }}
+        >
+          <Icon name="chev_l" size={12} /> /{dir}
+        </button>
+      )}
+      {entries.length === 0 && (
+        <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--text-paper-d2)" }}>
+          Empty
+        </div>
+      )}
+      {entries.map((e) => (
+        <button
+          key={e.path}
+          type="button"
+          onClick={() => {
+            if (e.isDir) {
+              setDir(e.path);
+            } else {
+              onOpen(e.path);
+              close();
+            }
+          }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            padding: "5px 10px",
+            fontSize: 12,
+            textAlign: "left",
+            background: "transparent",
+            color: "var(--text-paper)",
+          }}
+          onMouseEnter={(ev) => {
+            (ev.currentTarget as HTMLButtonElement).style.background = "var(--paper-2)";
+          }}
+          onMouseLeave={(ev) => {
+            (ev.currentTarget as HTMLButtonElement).style.background = "transparent";
+          }}
+        >
+          <Icon name={e.isDir ? "folder" : "file"} size={13} color="var(--text-paper-d)" />
+          <span style={{ flex: 1 }}>{e.name}</span>
+          {e.isDir && <Icon name="chev_r" size={11} color="var(--text-paper-d2)" />}
+        </button>
+      ))}
     </div>
   );
 }
