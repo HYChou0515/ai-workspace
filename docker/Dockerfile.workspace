@@ -1,0 +1,16 @@
+# Default RCA sandbox image — see plan-backend §7.5.
+#
+# Bundles ipykernel (so the kernel can spawn in the container) +
+# jupyter_client (CLI side; included for parity with the BE) +
+# a small data-science stack so the seeded drift / pareto notebooks
+# work without an extra pip install.
+#
+# Build:  docker build -t workspace-app/sandbox:py312-ds \
+#                      -f docker/Dockerfile.workspace .
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir \
+    ipykernel jupyter_client \
+    numpy pandas matplotlib scipy
+
+WORKDIR /workspace
