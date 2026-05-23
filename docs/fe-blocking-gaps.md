@@ -161,23 +161,31 @@ surface clean and avoid confusion with the new file routes once they land.
 
 ---
 
-## SPA mount observation
+## SPA bundle delivery (FE → BE)
 
-`web/src/workspace_app/api/app.py` mounts `web/dist` via FastAPI's
-`StaticFiles` — that's correct. But on 2026-05-23 the BE process listening on
-`127.0.0.1:8000` is rooted at **`/home/hychou/project/kb/ai-workspace/`**, not
-this repo. As a result the served HTML is an old `<title>Workspace</title>`
-build from the parent project. If you intend the BE to serve the RCA 3.0 FE:
+The canonical BE lives at `/home/hychou/project/kb/ai-workspace/` (the BE
+agent's working copy). FastAPI's `StaticFiles` mount points at
+`<be-repo>/web/dist`, so the served HTML/JS/CSS comes from **that** tree, not
+this FE repo's `web/dist`.
 
-```bash
-# from the RCA-FE repo root
-cd /home/hychou/project/kb/ai-workspace-fe
-cd web && pnpm run build && cd ..
-uv run python -m workspace_app
-```
+On 2026-05-23 the served page was still `<title>Workspace</title>` (no fonts,
+no token vars, no RCA shell) — meaning the BE's `web/dist` predates the §12
+build that lives in this FE repo. Once the BE side pulls the latest dist
+the served `/` will be `<title>RCA · 3.0</title>` and `/assets/` will contain
+the hashed bundle from this repo.
 
-Then the served `/` will be `<title>RCA · 3.0</title>` and `/assets/`
-will contain the latest hashed bundle.
+The integration mechanism is up to you — options I'd consider:
+
+- A small sync step in the BE's run script that `rsync`'s this repo's
+  `web/dist/` into the BE repo's `web/dist/` before `uvicorn` starts.
+- Point `create_app(spa_dist=...)` (the BE's `app.py` already takes a
+  `spa_dist: Path | None = None` override) at `/home/hychou/project/kb/ai-workspace-fe/web/dist` directly.
+- Commit `web/dist/` from this repo into the BE repo on each FE release.
+
+I don't have a preference — flag whichever you pick so the FE README can
+document it. Note that the FE source-of-truth lives only in this repo; the
+`src/workspace_app/` tree inside `ai-workspace-fe/` is a stale pre-pivot
+snapshot kept here as reference and should **not** be edited.
 
 ---
 
