@@ -20,16 +20,20 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<Entry[]>([]);
   const [historyIdx, setHistoryIdx] = useState<number | null>(null);
+  const [running, setRunning] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [history]);
 
+  const stop = () => abortRef.current?.abort();
+
   const run = async (line: string) => {
     const cmd = line.trim();
-    if (!cmd) return;
+    if (!cmd || running) return;
     const tokens = cmd.split(/\s+/);
     const entry: Entry = {
       prompt: prompt(investigationId),
@@ -40,12 +44,14 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
     setDraft("");
     setHistoryIdx(null);
 
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setRunning(true);
     try {
-      const result = await api.execShell(investigationId, tokens);
-      setHistory((h) =>
-        h.map((e) => (e === entry ? { ...e, result } : e)),
-      );
+      const result = await api.execShell(investigationId, tokens, controller.signal);
+      setHistory((h) => h.map((e) => (e === entry ? { ...e, result } : e)));
     } catch (err) {
+      const aborted = err instanceof DOMException && err.name === "AbortError";
       setHistory((h) =>
         h.map((e) =>
           e === entry
@@ -53,17 +59,23 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
                 ...e,
                 result: {
                   kind: "error",
-                  message: err instanceof Error ? err.message : String(err),
+                  message: aborted ? "^C  interrupted (still running in sandbox until it exits)" : err instanceof Error ? err.message : String(err),
                 },
               }
             : e,
         ),
       );
+    } finally {
+      if (abortRef.current === controller) abortRef.current = null;
+      setRunning(false);
     }
   };
 
   const onKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
+    if (e.ctrlKey && (e.key === "c" || e.key === "C")) {
+      e.preventDefault();
+      stop();
+    } else if (e.key === "Enter") {
       e.preventDefault();
       void run(draft);
     } else if (e.key === "ArrowUp") {
@@ -152,6 +164,25 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
             color: "var(--text-paper)",
           }}
         />
+        {running && (
+          <button
+            type="button"
+            onClick={stop}
+            title="Stop (Ctrl+C)"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "2px 8px",
+              border: "1px solid var(--paper-3)",
+              borderRadius: "var(--radius-btn)",
+              color: "var(--err)",
+              fontSize: 11,
+            }}
+          >
+            <Icon name="x" size={11} /> Stop
+          </button>
+        )}
       </div>
     </div>
   );

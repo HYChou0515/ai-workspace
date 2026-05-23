@@ -9,6 +9,7 @@ the agent and the host.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import shutil
 import tempfile
 import uuid
@@ -18,10 +19,13 @@ from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, San
 
 
 class LocalProcessSandbox:
-    def __init__(self, *, root_dir: Path | None = None) -> None:
+    def __init__(self, *, root_dir: Path | None = None, exec_timeout: float = 60.0) -> None:
         self._root = root_dir or Path(tempfile.gettempdir()) / "workspace-app-sandbox"
         self._root.mkdir(parents=True, exist_ok=True)
         self._dirs: dict[str, Path] = {}
+        # Hard cap on a single command — a hung/interactive program (vim,
+        # top) is killed rather than blocking the request forever.
+        self._exec_timeout = exec_timeout
 
     def _require(self, handle: SandboxHandle) -> Path:
         path = self._dirs.get(handle.id)
@@ -46,10 +50,23 @@ class LocalProcessSandbox:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             cwd=cwd,
+            # /dev/null stdin: a program reading input gets EOF instead of
+            # blocking on a terminal it doesn't have.
+            stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await proc.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), self._exec_timeout)
+        except TimeoutError:
+            proc.kill()
+            with contextlib.suppress(BaseException):
+                await proc.wait()
+            return ExecResult(
+                exit_code=124,  # conventional timeout exit code (GNU timeout)
+                stdout=b"",
+                stderr=f"timed out after {self._exec_timeout:g}s and was killed\n".encode(),
+            )
         return ExecResult(
             exit_code=proc.returncode if proc.returncode is not None else -1,
             stdout=stdout,

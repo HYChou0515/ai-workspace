@@ -743,7 +743,7 @@ export const mockApi: ApiClient = {
     return replaced;
   },
 
-  async execShell(_investigationId: string, cmd: string[]) {
+  async execShell(_investigationId: string, cmd: string[], _signal?: AbortSignal) {
     await delay(40);
     if (cmd.length === 0) {
       return { exit_code: 2, stdout: "", stderr: "empty command\n" };

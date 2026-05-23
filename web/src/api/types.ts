@@ -197,8 +197,9 @@ export interface ApiClient {
   restartKernel(ref: NotebookRef): Promise<void>;
 
   /** POST /investigations/{id}/exec — run a shell command in the
-   * sandbox and return its ExecResult. Backs the Terminal pane. */
-  execShell(investigationId: string, cmd: string[]): Promise<ExecResult>;
+   * sandbox and return its ExecResult. Backs the Terminal pane. `signal`
+   * lets the terminal's Stop button abort a long-running command. */
+  execShell(investigationId: string, cmd: string[], signal?: AbortSignal): Promise<ExecResult>;
 
   /** POST /investigations/{id}/search — global text search over the
    * FileStore. Empty query → no results. */

@@ -28,6 +28,26 @@ async def test_exec_false_returns_exit_1(sandbox: LocalProcessSandbox):
     assert r.exit_code == 1
 
 
+async def test_exec_times_out_instead_of_hanging(tmp_path):
+    """A command that runs longer than the timeout is killed and returns a
+    timeout result, so an interactive program (vim) can't freeze the
+    terminal forever."""
+    sandbox = LocalProcessSandbox(root_dir=tmp_path, exec_timeout=0.3)
+    h = await sandbox.create(SandboxSpec())
+    r = await sandbox.exec(h, ["sleep", "5"])
+    assert r.exit_code != 0
+    assert b"timed out" in r.stderr.lower()
+
+
+async def test_exec_reads_eof_on_stdin(sandbox: LocalProcessSandbox):
+    """stdin is /dev/null so a program reading stdin gets EOF rather than
+    blocking on input it can never receive."""
+    h = await sandbox.create(SandboxSpec())
+    r = await sandbox.exec(h, ["cat"])  # cat with no args reads stdin → EOF
+    assert r.exit_code == 0
+    assert r.stdout == b""
+
+
 async def test_upload_download_roundtrip(sandbox: LocalProcessSandbox):
     h = await sandbox.create(SandboxSpec())
     await sandbox.upload(h, b"payload", "/notes.txt")

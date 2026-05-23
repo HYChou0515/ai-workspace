@@ -387,13 +387,14 @@ export const realApi: ApiClient = {
     yield* parseSseStream(resp.body) as AsyncGenerator<AgentEvent>;
   },
 
-  async execShell(investigationId: string, cmd: string[]): Promise<ExecResult> {
+  async execShell(investigationId: string, cmd: string[], signal?: AbortSignal): Promise<ExecResult> {
     const resp = await fetch(
       `/investigations/${encodeURIComponent(investigationId)}/exec`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ cmd }),
+        signal,
       },
     );
     if (!resp.ok) {
