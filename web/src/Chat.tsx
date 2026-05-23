@@ -139,6 +139,15 @@ export function Chat({ workspaceId, onFileMutation }: Props) {
         <button type="button" onClick={() => void send()} disabled={running || !draft.trim()}>
           {running ? "Running…" : "Send"}
         </button>
+        {running && (
+          <button
+            type="button"
+            className="stop"
+            onClick={() => abortRef.current?.abort()}
+          >
+            Stop
+          </button>
+        )}
       </div>
     </div>
   );

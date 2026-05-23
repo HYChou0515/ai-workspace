@@ -317,3 +317,11 @@ body { margin: 0; }
 }
 
 .composer button:disabled { background: #94a3b8; cursor: default; }
+
+.composer button.stop {
+  background: #fff;
+  color: #dc2626;
+  border: 1px solid #dc2626;
+}
+
+.composer button.stop:hover { background: #fef2f2; }

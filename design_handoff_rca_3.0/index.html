@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<title>RCA 3.0 · Design System + Product</title>
+<link rel="icon" href="assets/favicon.ico" sizes="any">
+<meta name="theme-color" content="#16181D">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #F1ECE0; font-family: 'Inter', system-ui, sans-serif; color: #16181D; }
+  * { box-sizing: border-box; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="design-canvas.jsx"></script>
+<script type="text/babel" src="rca/system.jsx"></script>
+<script type="text/babel" src="rca/design-system-page.jsx"></script>
+<script type="text/babel" src="rca/home.jsx"></script>
+<script type="text/babel" src="rca/views/analyses.jsx"></script>
+<script type="text/babel" src="rca/investigation.jsx"></script>
+
+<script type="text/babel">
+function App() {
+  return (
+    <DesignCanvas title="RCA 3.0" subtitle="Design system + product surfaces. Brand applied, content reframed for defect root-cause analysis.">
+
+      <DCSection id="ds" title="Design System" subtitle="Tokens, components, principles.">
+        <DCArtboard id="ds-page" label="RCA Design System · v1" width={1280} height={2440}>
+          <DSScreen/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="home" title="Home · Investigation list" subtitle="What you land on. Org-wide visibility, table-dense, severity-first.">
+        <DCArtboard id="home" label="Investigations" width={HOME_W} height={HOME_H}>
+          <HomeRCA/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="inv" title="Investigation workspace" subtitle="VSCode-shaped, but every surface is RCA. Agent runs tools, notebook captures the case, evidence is one click away. → Tabs are clickable; click chips in the agent panel to drive the view.">
+        <DCArtboard id="inv" label="INC-2026-0142 · Solder voids · Line 3" width={INV_W} height={INV_H}>
+          <InvestigationRCA/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="analyses" title="Analysis views" subtitle="Each is renderable as a tab inside the investigation. Shown isolated for review.">
+        <DCArtboard id="pareto" label="03 · Pareto" width={980} height={500}>
+          <div className="rca" style={{ padding: 20, background: RCA.paper, width: 980 }}><ParetoView/></div>
+        </DCArtboard>
+        <DCArtboard id="fishbone" label="04 · Fishbone (6M)" width={980} height={560}>
+          <div className="rca" style={{ padding: 20, background: RCA.paper, width: 980 }}><FishboneView/></div>
+        </DCArtboard>
+        <DCArtboard id="fivewhy" label="05 · 5-Why · corrective actions" width={760} height={1080}>
+          <div className="rca" style={{ padding: 20, background: RCA.paper, width: 760 }}><FiveWhyView width={720}/></div>
+        </DCArtboard>
+        <DCArtboard id="report" label="Report · 8D draft" width={800} height={1200}>
+          <div className="rca" style={{ padding: 20, background: RCA.paper, width: 800 }}><ReportView width={760}/></div>
+        </DCArtboard>
+        <DCArtboard id="new-inv" label="New investigation modal" width={760} height={680}>
+          <div className="rca" style={{ position: "relative", width: 760, height: 680, background: RCA.paper, borderRadius: 8, overflow: "hidden", border: `1px solid ${RCA.paper3}` }}>
+            <NewInvestigation onClose={() => {}} onCreate={() => {}}/>
+          </div>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="prototype" title="Clickable prototype" subtitle="Open the live app in a new tab.">
+        <DCArtboard id="link" label="Open prototype" width={600} height={260}>
+          <a href="RCA 3.0 prototype.html" target="_blank" rel="noopener" className="rca" style={{ display: "flex", flexDirection: "column", justifyContent: "center", width: 600, height: 260, padding: 32, background: RCA.ink, color: RCA.textDark, borderRadius: 8, textDecoration: "none", gap: 12 }}>
+            <RCALockup size={28} onDark/>
+            <h2 className="display" style={{ fontSize: 28, color: RCA.textDark, marginTop: 8 }}>
+              Open the prototype <span style={{ color: RCA.accent }}>→</span>
+            </h2>
+            <p style={{ fontSize: 13, color: RCA.textDarkD, margin: 0, lineHeight: 1.5 }}>
+              Click an investigation → switch tabs → ask the agent. Best at 1440px+ wide.
+            </p>
+          </a>
+        </DCArtboard>
+      </DCSection>
+
+    </DesignCanvas>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
