@@ -4,7 +4,7 @@ import pytest
 from specstar import SpecStar
 
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
-from workspace_app.rca.templates import seed_investigation
+from workspace_app.rca.templates import list_profiles, seed_investigation
 from workspace_app.resources import Investigation, Severity, Status
 
 
@@ -15,24 +15,29 @@ def filestore() -> SpecstarFileStore:
     return SpecstarFileStore(spec)
 
 
-async def test_seed_writes_the_six_designed_files(filestore: SpecstarFileStore):
+def test_list_profiles_includes_default_and_example():
+    profiles = list_profiles()
+    assert "default" in profiles
+    assert "smt-reflow-example" in profiles
+
+
+async def test_default_profile_is_minimal(filestore: SpecstarFileStore):
+    """Default seeds just title + methodology skeletons — no pretend SOP
+    content. .tpl suffix is stripped on the way in."""
     inv = Investigation(title="Solder voids spike", owner="alice")
     written = await seed_investigation(filestore, "inv-1", inv)
-    expected = {
+    assert set(written) == {
         "/brief.md",
-        "/drift.ipynb",
-        "/pareto.ipynb",
-        "/fishbone.canvas",
         "/5-why.md",
+        "/fishbone.canvas",
         "/report.v1.md",
-        "/data/reflow.zone3.sample.csv",
     }
-    assert set(written) == expected
+    # report is just the title, no D1-D8 SOP
+    report = (await filestore.read("inv-1", "/report.v1.md")).decode()
+    assert report.strip() == "# RCA Report — Solder voids spike"
 
 
-async def test_markdown_substitutes_investigation_fields(
-    filestore: SpecstarFileStore,
-):
+async def test_tpl_substitutes_investigation_fields(filestore: SpecstarFileStore):
     inv = Investigation(
         title="Solder voids spike",
         owner="alice",
@@ -49,6 +54,8 @@ async def test_markdown_substitutes_investigation_fields(
     assert "P1" in brief
     assert "triaging" in brief
     assert "Void rate 2.3x baseline" in brief
+    # the $-style placeholders are fully substituted — no literal $ left
+    assert "$title" not in brief
 
 
 async def test_empty_product_renders_em_dash(filestore: SpecstarFileStore):
@@ -58,24 +65,36 @@ async def test_empty_product_renders_em_dash(filestore: SpecstarFileStore):
     assert "**Product**: —" in brief
 
 
-async def test_non_markdown_files_come_through_unchanged(
-    filestore: SpecstarFileStore,
-):
-    """CSV / ipynb / canvas are copied byte-for-byte. No substitution
-    (so `{title}` inside an ipynb cell wouldn't get mangled)."""
+async def test_smt_example_profile_has_rich_files(filestore: SpecstarFileStore):
+    """The worked-example profile demonstrates the full kit: notebooks,
+    sample data, filled-in brief — copied verbatim for non-.tpl files."""
+    inv = Investigation(title="t", owner="alice")
+    written = await seed_investigation(filestore, "inv-ex", inv, profile="smt-reflow-example")
+    assert "/drift.ipynb" in written
+    assert "/pareto.ipynb" in written
+    assert "/data/reflow.zone3.sample.csv" in written
+
+    csv = (await filestore.read("inv-ex", "/data/reflow.zone3.sample.csv")).decode()
+    assert csv.startswith("ts,zone3_setpoint,zone3_actual,void_rate")
+
+    ipynb = (await filestore.read("inv-ex", "/drift.ipynb")).decode()
+    assert '"nbformat": 4' in ipynb
+
+
+async def test_non_tpl_files_copied_byte_for_byte(filestore: SpecstarFileStore):
+    """fishbone.canvas has no .tpl suffix → copied verbatim, $-looking
+    text inside (if any) is never substituted."""
     inv = Investigation(title="t", owner="alice")
     await seed_investigation(filestore, "inv-1", inv)
-
-    csv = (await filestore.read("inv-1", "/data/reflow.zone3.sample.csv")).decode()
-    assert csv.startswith("ts,zone3_setpoint,zone3_actual,void_rate")
-    assert "245.0" in csv
-
     canvas = (await filestore.read("inv-1", "/fishbone.canvas")).decode()
     assert "Machine" in canvas
     assert "Environment" in canvas
 
-    ipynb = (await filestore.read("inv-1", "/drift.ipynb")).decode()
-    assert '"nbformat": 4' in ipynb
+
+async def test_unknown_profile_raises(filestore: SpecstarFileStore):
+    inv = Investigation(title="t", owner="alice")
+    with pytest.raises(ValueError, match="unknown template profile"):
+        await seed_investigation(filestore, "inv-1", inv, profile="does-not-exist")
 
 
 async def test_seed_into_multiple_investigations_is_isolated(

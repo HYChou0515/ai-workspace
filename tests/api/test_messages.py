@@ -53,9 +53,17 @@ def test_investigation_crud_via_specstar_routes(harness: Harness):
     assert rm.count_resources(QB.all()) == 1  # ty: ignore[invalid-argument-type]
 
 
-def test_post_investigation_seeds_template_files(harness: Harness):
-    """Creating an investigation drops the default starter template
-    into its FileStore so the user lands on a non-empty workspace."""
+def test_get_templates_lists_profiles(harness: Harness):
+    resp = harness.client.get("/templates")
+    assert resp.status_code == 200
+    profiles = resp.json()
+    assert "default" in profiles
+    assert "smt-reflow-example" in profiles
+
+
+def test_post_investigation_seeds_minimal_default(harness: Harness):
+    """Default profile seeds a lean starter set — title + methodology
+    skeletons, no pretend SOP content."""
     resp = harness.client.post(
         "/investigation",
         json={"title": "Solder voids spike", "owner": "alice"},
@@ -63,20 +71,34 @@ def test_post_investigation_seeds_template_files(harness: Harness):
     assert resp.status_code == 200
     inv_id = resp.json()["resource_id"]
 
-    # Check via the existing files-list endpoint.
     files_resp = harness.client.get(f"/investigations/{inv_id}/files")
     assert files_resp.status_code == 200
     paths = {item["path"] for item in files_resp.json()}
-    expected = {
-        "/brief.md",
-        "/drift.ipynb",
-        "/pareto.ipynb",
-        "/fishbone.canvas",
-        "/5-why.md",
-        "/report.v1.md",
-        "/data/reflow.zone3.sample.csv",
-    }
-    assert expected.issubset(paths)
+    assert paths == {"/brief.md", "/5-why.md", "/fishbone.canvas", "/report.v1.md"}
+
+
+def test_post_investigation_with_example_profile_seeds_rich_kit(harness: Harness):
+    resp = harness.client.post(
+        "/investigation",
+        json={
+            "title": "Solder voids spike",
+            "owner": "alice",
+            "template_profile": "smt-reflow-example",
+        },
+    )
+    assert resp.status_code == 200
+    inv_id = resp.json()["resource_id"]
+    paths = {it["path"] for it in harness.client.get(f"/investigations/{inv_id}/files").json()}
+    assert "/drift.ipynb" in paths
+    assert "/data/reflow.zone3.sample.csv" in paths
+
+
+def test_post_investigation_unknown_profile_returns_422(harness: Harness):
+    resp = harness.client.post(
+        "/investigation",
+        json={"title": "x", "owner": "alice", "template_profile": "nope"},
+    )
+    assert resp.status_code == 422
 
 
 def test_post_investigation_substitutes_brief_md(harness: Harness):

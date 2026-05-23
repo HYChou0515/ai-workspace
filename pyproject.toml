@@ -55,4 +55,4 @@ target-version = "py312"
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ty.src]
-exclude = ["src/workspace_app/rca/templates/default/**"]
+exclude = ["src/workspace_app/rca/templates/*/**"]

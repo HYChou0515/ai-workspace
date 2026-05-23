@@ -18,7 +18,7 @@ from specstar.types import ResourceIDNotFoundError
 from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileNotFound, FileStore
 from ..kernels import KernelService
-from ..rca.templates import seed_investigation
+from ..rca.templates import list_profiles, seed_investigation
 from ..resources import Conversation, Investigation, Message, Severity, Status, register_all
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
@@ -59,6 +59,7 @@ class _InvestigationCreateBody(BaseModel):
     members: list[str] = []
     topics: list[str] = []
     attached_agent_config_id: str | None = None
+    template_profile: str = "default"
 
 
 def create_app(
@@ -105,6 +106,11 @@ def create_app(
 
     app = FastAPI(title="RCA 3.0", lifespan=lifespan)
 
+    @app.get("/templates")
+    async def get_templates() -> list[str]:
+        """Template profile names the New Investigation picker offers."""
+        return list_profiles()
+
     # Register custom POST /investigation BEFORE spec.apply — FastAPI's
     # route matcher uses first-registered-wins, so our seeded-create
     # handler takes priority over specstar's stock CRUD POST.
@@ -123,7 +129,10 @@ def create_app(
         )
         inv_rm = spec.get_resource_manager(Investigation)
         rev = inv_rm.create(inv)
-        await seed_investigation(filestore, rev.resource_id, inv)
+        try:
+            await seed_investigation(filestore, rev.resource_id, inv, body.template_profile)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         # Mirror specstar's auto-POST response shape (flat RevisionInfo dict).
         return {
             "resource_id": rev.resource_id,

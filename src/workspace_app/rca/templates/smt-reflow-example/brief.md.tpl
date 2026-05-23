@@ -1,13 +1,13 @@
-# {title}
+# $title
 
-- **Owner**: {owner}
-- **Severity**: {severity}
-- **Status**: {status}
-- **Product**: {product}
+- **Owner**: $owner
+- **Severity**: $severity
+- **Status**: $status
+- **Product**: $product
 
 ## Initial observation
 
-{description}
+$description
 
 ## Hypotheses
 

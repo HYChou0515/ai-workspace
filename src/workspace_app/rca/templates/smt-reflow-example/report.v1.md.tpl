@@ -1,10 +1,10 @@
-# RCA Report — {title}
+# RCA Report — $title
 
 ## D1 · Team
 _(members who worked on this investigation)_
 
 ## D2 · Problem
-{description}
+$description
 
 ## D3 · Containment
 _(immediate actions to limit impact)_
