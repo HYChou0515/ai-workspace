@@ -68,6 +68,13 @@ export type Conversation = {
 
 export type FileInfo = { path: string; size: number };
 
+export type ActivityEntry = {
+  ts: string; // ISO-8601
+  kind: string; // investigation_created | file_written | agent_turn_complete | ...
+  text: string;
+  ref: { investigation_id?: string; path?: string };
+};
+
 export type FileContent =
   | { kind: "text"; path: string; size: number; text: string }
   | { kind: "binary"; path: string; size: number };
@@ -114,6 +121,8 @@ export interface ApiClient {
   closeInvestigation(id: string, status: CloseStatus): Promise<void>;
   /** GET /templates — template profile names for the New Investigation picker. */
   listTemplates(): Promise<string[]>;
+  /** GET /activity — recent-activity feed (newest first). */
+  listActivity(): Promise<ActivityEntry[]>;
 
   getConversation(investigationId: string): Promise<Conversation | null>;
 

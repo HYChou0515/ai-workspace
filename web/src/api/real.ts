@@ -15,6 +15,7 @@
 import type { AgentEvent, CellEvent } from "../events";
 import { parseSseStream } from "./sse";
 import type {
+  ActivityEntry,
   ApiClient,
   CellRef,
   CloseStatus,
@@ -146,6 +147,14 @@ export const realApi: ApiClient = {
       return await json<string[]>(await fetch("/templates"));
     } catch {
       return ["default"]; // BE older than the templates endpoint
+    }
+  },
+
+  async listActivity() {
+    try {
+      return await json<ActivityEntry[]>(await fetch("/activity"));
+    } catch {
+      return [];
     }
   },
 

@@ -414,6 +414,25 @@ export const mockApi: ApiClient = {
     return ["default", "smt-reflow-example"];
   },
 
+  async listActivity() {
+    await delay(10);
+    const now = Date.now();
+    return [
+      {
+        ts: new Date(now - 30 * 60_000).toISOString(),
+        kind: "agent_turn_complete",
+        text: "Agent finished a turn",
+        ref: { investigation_id: "INC-2026-0142" },
+      },
+      {
+        ts: new Date(now - 78 * 60_000).toISOString(),
+        kind: "file_written",
+        text: "Wrote /report.v1.md",
+        ref: { investigation_id: "INC-2026-0142", path: "/report.v1.md" },
+      },
+    ];
+  },
+
   async getConversation(investigationId) {
     await delay(30);
     const conv = conversations.get(investigationId);

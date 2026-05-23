@@ -5,8 +5,10 @@
  */
 
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
-import type { Investigation, Severity, Status } from "../../api/types";
+import { api } from "../../api";
+import type { ActivityEntry, Investigation, Severity, Status } from "../../api/types";
 import {
   formatInvestigationId,
   isCritical,
@@ -398,49 +400,7 @@ function TopBar({
         </span>
       </label>
       <span style={{ flex: 1 }} />
-      <Popover
-        align="end"
-        trigger={({ onClick, open }) => (
-          <button
-            type="button"
-            onClick={onClick}
-            style={{
-              height: 32,
-              padding: "0 10px",
-              border: "1px solid var(--paper-3)",
-              borderRadius: "var(--radius-btn)",
-              fontSize: "var(--text-body-sm)",
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              background: open ? "var(--paper-2)" : "transparent",
-            }}
-          >
-            <Icon name="bell" size={14} />
-            <span
-              style={{
-                background: "var(--accent)",
-                color: "var(--white)",
-                borderRadius: 8,
-                padding: "0 4px",
-                fontSize: 10,
-                fontFamily: "var(--font-mono)",
-              }}
-            >
-              3
-            </span>
-          </button>
-        )}
-      >
-        {() => (
-          <div style={{ minWidth: 240, padding: "8px 4px" }}>
-            <div className="caps" style={{ padding: "4px 10px" }}>Notifications</div>
-            <NotifLine ts="13:30" text="Agent updated /report.v3.md" />
-            <NotifLine ts="12:48" text="Bob added a comment on INC-2026-0141" />
-            <NotifLine ts="11:12" text="Investigation INC-2026-0140 escalated to P0" />
-          </div>
-        )}
-      </Popover>
+      <NotificationsBell />
       <button
         type="button"
         onClick={focusAgent}
@@ -463,22 +423,142 @@ function TopBar({
   );
 }
 
-function NotifLine({ ts, text }: { ts: string; text: string }) {
+const NOTIF_SEEN_KEY = "rca:notif-seen";
+
+function NotificationsBell() {
+  const navigate = useNavigate();
+  const [items, setItems] = useState<ActivityEntry[]>([]);
+  const [lastSeen, setLastSeen] = useState<string>(
+    () => localStorage.getItem(NOTIF_SEEN_KEY) ?? "",
+  );
+
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .listActivity()
+        .then((a) => alive && setItems(a))
+        .catch(() => undefined);
+    void load();
+    // light polling so the badge updates while the user lingers on Home
+    const t = window.setInterval(load, 20_000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, []);
+
+  const unread = items.filter((a) => a.ts > lastSeen).length;
+
+  const markSeen = () => {
+    const newest = items[0]?.ts ?? new Date().toISOString();
+    setLastSeen(newest);
+    try {
+      localStorage.setItem(NOTIF_SEEN_KEY, newest);
+    } catch {
+      /* ignore */
+    }
+  };
+
   return (
-    <div
+    <Popover
+      align="end"
+      trigger={({ onClick, open }) => (
+        <button
+          type="button"
+          onClick={() => {
+            if (!open) markSeen(); // mark read as the panel opens
+            onClick();
+          }}
+          title="Recent activity"
+          style={{
+            height: 32,
+            padding: "0 10px",
+            border: "1px solid var(--paper-3)",
+            borderRadius: "var(--radius-btn)",
+            fontSize: "var(--text-body-sm)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            background: open ? "var(--paper-2)" : "transparent",
+          }}
+        >
+          <Icon name="bell" size={14} />
+          {unread > 0 && (
+            <span
+              style={{
+                background: "var(--accent)",
+                color: "var(--white)",
+                borderRadius: 8,
+                padding: "0 5px",
+                fontSize: 10,
+                fontFamily: "var(--font-mono)",
+              }}
+            >
+              {unread}
+            </span>
+          )}
+        </button>
+      )}
+    >
+      {(close) => (
+        <div style={{ minWidth: 280, maxHeight: 360, overflowY: "auto", padding: "8px 4px" }}>
+          <div className="caps" style={{ padding: "4px 10px" }}>
+            Recent activity
+          </div>
+          {items.length === 0 && (
+            <div style={{ padding: "8px 10px", color: "var(--text-paper-d)", fontSize: 12 }}>
+              No activity yet.
+            </div>
+          )}
+          {items.map((a, i) => (
+            <NotifLine
+              key={i}
+              entry={a}
+              onClick={() => {
+                const id = a.ref.investigation_id;
+                if (id) navigate(`/investigations/${id}`);
+                close();
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+function NotifLine({ entry, onClick }: { entry: ActivityEntry; onClick: () => void }) {
+  const when = relativeTime(entry.ts);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
       style={{
+        width: "100%",
+        textAlign: "left",
         padding: "6px 10px",
         display: "flex",
         gap: 8,
         fontSize: 12,
         color: "var(--text-paper)",
+        background: "transparent",
       }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--paper-2)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
-      <span style={{ fontFamily: "var(--font-mono)", color: "var(--text-paper-d2)", width: 40 }}>
-        {ts}
+      <span
+        style={{
+          fontFamily: "var(--font-mono)",
+          color: "var(--text-paper-d2)",
+          width: 64,
+          flexShrink: 0,
+        }}
+      >
+        {when}
       </span>
-      <span style={{ flex: 1 }}>{text}</span>
-    </div>
+      <span style={{ flex: 1 }}>{entry.text}</span>
+    </button>
   );
 }
 
