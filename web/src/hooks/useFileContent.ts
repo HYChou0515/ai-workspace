@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../api";
 import type { FileContent } from "../api/types";
@@ -38,49 +38,4 @@ export function useFileContent(
     };
   }, [investigationId, path, tick]);
   return state;
-}
-
-/**
- * Debounced text-file autosave. Returns `{ text, setText, status }` where
- * status indicates the last save outcome — used by the editor breadcrumb
- * "autosaved Xs ago" badge.
- */
-export function useAutosave(
-  investigationId: string,
-  path: string,
-  initial: string,
-) {
-  const [text, setText] = useState(initial);
-  const [status, setStatus] = useState<"clean" | "dirty" | "saving" | "saved" | "error">(
-    "clean",
-  );
-  const initialRef = useRef(initial);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    initialRef.current = initial;
-    setText(initial);
-    setStatus("clean");
-  }, [investigationId, path, initial]);
-
-  useEffect(() => {
-    if (text === initialRef.current) return;
-    setStatus("dirty");
-    if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(async () => {
-      setStatus("saving");
-      try {
-        await api.writeFile(investigationId, path, text);
-        initialRef.current = text;
-        setStatus("saved");
-      } catch {
-        setStatus("error");
-      }
-    }, 500);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [text, investigationId, path]);
-
-  return { text, setText, status };
 }

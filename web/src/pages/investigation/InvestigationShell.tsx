@@ -14,6 +14,7 @@ import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
+import { FileBufferProvider } from "../../hooks/fileBuffer";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { useFileContent } from "../../hooks/useFileContent";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
@@ -118,6 +119,7 @@ export function InvestigationShell({
 
   return (
     <AgentProvider investigationId={investigation.resource_id}>
+     <FileBufferProvider investigationId={investigation.resource_id}>
       <div
         data-testid="page-investigation"
         style={{
@@ -177,6 +179,7 @@ export function InvestigationShell({
           onTheme={setTheme}
         />
       </div>
+     </FileBufferProvider>
     </AgentProvider>
   );
 }

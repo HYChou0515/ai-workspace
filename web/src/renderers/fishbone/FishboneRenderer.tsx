@@ -7,27 +7,23 @@
  * items render in accent (orange) bold.
  */
 
-import { useFileContent } from "../../hooks/useFileContent";
+import { useFileBuffer } from "../../hooks/fileBuffer";
 import { type FishboneBranch, parseFishbone } from "./schema";
 
 const WIDTH = 880;
 const HEIGHT = 480;
 const PAD_X = 80;
 
-export function FishboneRenderer({
-  investigationId,
-  path,
-}: {
-  investigationId: string;
-  path: string;
-}) {
-  const state = useFileContent(investigationId, path);
-  if (state.kind === "loading") return <Status>Loading {path}…</Status>;
-  if (state.kind === "error") return <Status tone="err">{state.error.message}</Status>;
-  if (state.content.kind !== "text") {
+export function FishboneRenderer({ path }: { investigationId: string; path: string }) {
+  const { entry } = useFileBuffer(path);
+  if (entry.status === "loading") return <Status>Loading {path}…</Status>;
+  if (entry.status === "error") {
+    return <Status tone="err">{entry.error ?? "load failed"}</Status>;
+  }
+  if (entry.kind !== "text") {
     return <Status>Binary .canvas file — cannot render.</Status>;
   }
-  const fb = parseFishbone(state.content.text);
+  const fb = parseFishbone(entry.text);
   if (!fb) {
     return (
       <div>
@@ -42,7 +38,7 @@ export function FishboneRenderer({
             overflow: "auto",
           }}
         >
-          {state.content.text}
+          {entry.text}
         </pre>
       </div>
     );

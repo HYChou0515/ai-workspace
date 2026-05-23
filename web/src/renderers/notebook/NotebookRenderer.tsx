@@ -11,7 +11,7 @@ import remarkGfm from "remark-gfm";
 import { api } from "../../api";
 import { CellEditor } from "../../components/CellEditor";
 import { Icon } from "../../components/Icon";
-import { useFileContent } from "../../hooks/useFileContent";
+import { useFileBuffer } from "../../hooks/fileBuffer";
 import { onRunAll } from "../../lib/editorEvents";
 import { CellOutput } from "./CellOutput";
 import {
@@ -35,17 +35,19 @@ export function NotebookRenderer({
   investigationId: string;
   path: string;
 }) {
-  const file = useFileContent(investigationId, path);
+  const { entry, setText } = useFileBuffer(path);
 
-  if (file.kind === "loading") return <Status>Loading {path}…</Status>;
-  if (file.kind === "error") return <Status tone="err">{file.error.message}</Status>;
-  if (file.content.kind !== "text") {
+  if (entry.status === "loading") return <Status>Loading {path}…</Status>;
+  if (entry.status === "error") {
+    return <Status tone="err">{entry.error ?? "load failed"}</Status>;
+  }
+  if (entry.kind !== "text") {
     return <Status>Binary file — cannot parse as notebook.</Status>;
   }
 
   let nb: Notebook;
   try {
-    nb = file.content.text.trim() === "" ? emptyNotebook() : parseNotebook(file.content.text);
+    nb = entry.text.trim() === "" ? emptyNotebook() : parseNotebook(entry.text);
   } catch (err) {
     return (
       <Status tone="err">
@@ -54,17 +56,29 @@ export function NotebookRenderer({
     );
   }
 
-  return <NotebookBody investigationId={investigationId} path={path} initial={nb} />;
+  return (
+    <NotebookBody
+      investigationId={investigationId}
+      path={path}
+      initial={nb}
+      bufferText={entry.text}
+      onPersist={setText}
+    />
+  );
 }
 
 function NotebookBody({
   investigationId,
   path,
   initial,
+  bufferText,
+  onPersist,
 }: {
   investigationId: string;
   path: string;
   initial: Notebook;
+  bufferText: string;
+  onPersist: (text: string) => void;
 }) {
   const [nb, setNb] = useState<Notebook>(initial);
   // run state keyed by cell index; lives outside `cells` so re-renders
@@ -72,12 +86,22 @@ function NotebookBody({
   const [runs, setRuns] = useState<Map<number, CellRunState>>(new Map());
   const abortRefs = useRef<Map<number, AbortController>>(new Map());
   const nbRef = useRef<Notebook>(initial);
+  // Tracks the JSON we last wrote so an external buffer change (the agent,
+  // or the other split pane) re-seeds our local state, but our own writes
+  // don't bounce back and reset the cursor.
+  const lastSerialized = useRef<string>(bufferText);
 
   useEffect(() => {
-    setNb(initial);
-    setRuns(new Map());
-    nbRef.current = initial;
-  }, [initial]);
+    if (bufferText === lastSerialized.current) return;
+    try {
+      const fresh = bufferText.trim() === "" ? emptyNotebook() : parseNotebook(bufferText);
+      lastSerialized.current = bufferText;
+      setNb(fresh);
+      nbRef.current = fresh;
+    } catch {
+      // ignore transient parse errors mid-edit on the other side
+    }
+  }, [bufferText]);
 
   useEffect(() => {
     nbRef.current = nb;
@@ -89,20 +113,19 @@ function NotebookBody({
       const c = next[i];
       if (!c) return prev;
       next[i] = { ...c, source: src };
-      return { ...prev, cells: next };
+      const updated = { ...prev, cells: next };
+      void persist(updated);
+      return updated;
     });
   };
 
   const persist = useCallback(
     async (notebook: Notebook) => {
       const json = JSON.stringify(notebook, null, 2);
-      try {
-        await api.writeFile(investigationId, path, json);
-      } catch (e) {
-        console.error("notebook save failed", e);
-      }
+      lastSerialized.current = json;
+      onPersist(json); // routes through the shared buffer (autosave + sync)
     },
-    [investigationId, path],
+    [onPersist],
   );
 
   const runCell = useCallback(

@@ -9,43 +9,24 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { Icon } from "../components/Icon";
-import { useAutosave, useFileContent } from "../hooks/useFileContent";
+import { useFileBuffer } from "../hooks/fileBuffer";
 
-export function MarkdownRenderer({
-  investigationId,
-  path,
-}: {
-  investigationId: string;
-  path: string;
-}) {
-  const state = useFileContent(investigationId, path);
+export function MarkdownRenderer({ path }: { investigationId: string; path: string }) {
+  // Content + edits live in the shared per-path buffer, so this file
+  // opened in two split panes edits live on both sides.
+  const { entry, setText } = useFileBuffer(path);
+  const [editing, setEditing] = useState(false);
 
-  if (state.kind === "loading") return <Status>Loading {path}…</Status>;
-  if (state.kind === "error") return <Status tone="err">{state.error.message}</Status>;
-  if (state.content.kind !== "text") {
+  if (entry.status === "loading") return <Status>Loading {path}…</Status>;
+  if (entry.status === "error") {
+    return <Status tone="err">{entry.error ?? "load failed"}</Status>;
+  }
+  if (entry.kind !== "text") {
     return <Status>Binary file — cannot display as markdown.</Status>;
   }
 
-  return (
-    <MarkdownBody
-      investigationId={investigationId}
-      path={path}
-      initial={state.content.text}
-    />
-  );
-}
-
-function MarkdownBody({
-  investigationId,
-  path,
-  initial,
-}: {
-  investigationId: string;
-  path: string;
-  initial: string;
-}) {
-  const { text, setText, status } = useAutosave(investigationId, path, initial);
-  const [editing, setEditing] = useState(false);
+  const text = entry.text;
+  const status = entry.save;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
