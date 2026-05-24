@@ -9,32 +9,42 @@ from ..sandbox.protocol import OutputSink, Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
 
 if TYPE_CHECKING:
+    from ..kb.retriever import Retriever
     from ..resources import AgentConfig
+    from ..resources.kb import RetrievedPassage
 
 
 @dataclass
 class AgentToolContext:
     """Per-run context passed into agent tools.
 
-    Sandbox is created lazily on first `exec` call (Q10 a2+ policy):
-    pure file ops (read/write/ls/exists/delete) never spin one up,
-    so a chat that doesn't run shell commands stays free.
+    Two flavours share this context so they can share `LitellmAgentRunner`:
 
-    `sync` bridges FileStore (durable, agent's file tools target it) and
-    Sandbox (ephemeral, exec runs there): exec_impl calls sync.flush
-    before each shell so the sandbox sees writes the agent just made.
+    - The **RCA workspace** agent sets `investigation_id` + `sandbox` +
+      `filestore` + `sync` and gets the file/exec tools. Sandbox is created
+      lazily on first `exec` call (Q10 a2+ policy): pure file ops never spin one
+      up, so a chat that doesn't run shell commands stays free. `sync` bridges
+      FileStore (durable, the agent's file tools target it) and Sandbox
+      (ephemeral, exec runs there): exec_impl calls sync.flush before each shell
+      so the sandbox sees writes the agent just made.
+
+    - The **KB** agent sets `retriever` + `collection_ids` and gets only the
+      `kb_search` tool — no sandbox, no file store. Each `kb_search` appends to
+      `kb_passages` (a per-turn registry) so the answer's `[n]` markers map back
+      to the passage that produced them.
 
     `ensure_sandbox_via` lets the caller (typically the API layer's
     InvestigationRegistry) own handle creation — so the registry's
-    restore-after-create hook fires and idle-kill can later find and
-    reap the handle. When unset, ctx falls back to a direct
-    `sandbox.create(...)`; useful in tests that don't wire a registry.
+    restore-after-create hook fires and idle-kill can later find and reap the
+    handle. When unset, ctx falls back to a direct `sandbox.create(...)`; useful
+    in tests that don't wire a registry.
     """
 
-    investigation_id: str
-    sandbox: Sandbox
-    filestore: FileStore
-    sync: SandboxSync
+    # RCA workspace agent (file/exec tools).
+    investigation_id: str | None = None
+    sandbox: Sandbox | None = None
+    filestore: FileStore | None = None
+    sync: SandboxSync | None = None
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
     handle: SandboxHandle | None = None
     ensure_sandbox_via: Callable[[], Awaitable[SandboxHandle]] | None = None
@@ -45,7 +55,13 @@ class AgentToolContext:
     # so the runner can emit live tool-log events. Set per-run by the runner.
     on_exec_output: OutputSink | None = None
 
+    # KB agent (kb_search tool).
+    retriever: Retriever | None = None
+    collection_ids: list[str] = field(default_factory=list)
+    kb_passages: list[RetrievedPassage] = field(default_factory=list)
+
     async def ensure_sandbox(self) -> SandboxHandle:
+        assert self.sandbox is not None  # file/exec tools imply an RCA context
         if self.handle is None:
             if self.ensure_sandbox_via is not None:
                 self.handle = await self.ensure_sandbox_via()

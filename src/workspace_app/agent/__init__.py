@@ -4,6 +4,7 @@ from .tools import (
     delete_file_impl,
     exec_impl,
     exists_impl,
+    kb_search_impl,
     ls_impl,
     read_file_impl,
     write_file_impl,
@@ -18,4 +19,5 @@ __all__ = [
     "ls_impl",
     "exists_impl",
     "delete_file_impl",
+    "kb_search_impl",
 ]
