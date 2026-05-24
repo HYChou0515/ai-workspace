@@ -34,6 +34,10 @@
   --text-dark:     #F1ECE0;
   --text-dark-d:   #9CA0AB;
 
+  /* Brand mark stroke — flips with theme so the inline RcaMark renders the
+   * right variant (dark stroke on light); the apex dot stays --accent. */
+  --brand-mark:    #1A1B1F;
+
   /* Semantic */
   --ok:    #3A8A4A;
   --warn:  #C68A2E;
@@ -110,4 +114,7 @@
   --text-paper-d2: #71757D;
 
   --accent-soft: #3A241D;
+
+  /* cream stroke for the mark on the dark surface (= rca-mark-light.svg) */
+  --brand-mark:  #F1ECE0;
 }

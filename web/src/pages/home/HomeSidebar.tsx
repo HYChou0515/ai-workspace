@@ -4,8 +4,8 @@
  */
 
 import { formatInvestigationId, type Investigation } from "../../api/types";
-import { Icon } from "../../components/Icon";
 import { RcaLockup } from "../../components/RcaMark";
+import { SettingsButton } from "../../components/SettingsButton";
 import {
   type Filters,
   type HomeTab,
@@ -255,14 +255,7 @@ export function HomeSidebar({
             Process engineer
           </div>
         </div>
-        <button
-          type="button"
-          title="Settings (not yet implemented)"
-          onClick={() => alert("Settings not yet implemented.")}
-          style={{ color: "var(--text-paper-d)" }}
-        >
-          <Icon name="settings" size={14} />
-        </button>
+        <SettingsButton />
       </footer>
     </aside>
   );

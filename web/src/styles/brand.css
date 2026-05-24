@@ -1,0 +1,97 @@
+/*
+ * Brand entry animation. The mark's three nested chevrons draw in (staggered),
+ * the crossbar follows, then the apex orange dot appears and the "RCA · 3.0"
+ * wordmark + subtitle rise. Derived from the brand mark; kept brief + skippable.
+ * prefers-reduced-motion shows everything instantly.
+ */
+
+/* ----- the mark draw-in (RcaMark animate) ----- */
+
+.rca-mark-draw .rca-stroke {
+  stroke-dasharray: 1; /* pathLength=1 on each stroke normalizes this */
+  stroke-dashoffset: 1;
+  animation: rca-draw 0.5s ease forwards;
+}
+.rca-mark-draw .rca-stroke:nth-of-type(1) { animation-delay: 0s; }
+.rca-mark-draw .rca-stroke:nth-of-type(2) { animation-delay: 0.12s; }
+.rca-mark-draw .rca-stroke:nth-of-type(3) { animation-delay: 0.24s; }
+.rca-mark-draw .rca-stroke:nth-of-type(4) { animation-delay: 0.32s; } /* crossbar */
+@keyframes rca-draw {
+  to { stroke-dashoffset: 0; }
+}
+.rca-mark-draw .rca-dot {
+  opacity: 0;
+  animation: rca-dot-in 0.32s ease 0.46s forwards;
+}
+@keyframes rca-dot-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* ----- the full-screen intro overlay ----- */
+
+.brand-intro {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--paper);
+  cursor: pointer; /* click anywhere to skip */
+}
+.brand-intro.is-leaving {
+  animation: brand-out 0.42s ease forwards;
+}
+@keyframes brand-out {
+  to { opacity: 0; visibility: hidden; }
+}
+.brand-intro__lockup {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+.brand-intro__word {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 40px;
+  letter-spacing: -0.03em;
+  color: var(--brand-mark);
+  opacity: 0;
+  animation: brand-up 0.5s ease 0.38s forwards;
+}
+.brand-intro__dot {
+  width: 7px;
+  height: 7px;
+  background: var(--accent);
+  margin: 0 9px;
+  transform: translateY(-3px);
+}
+.brand-intro__sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+  opacity: 0;
+  animation: brand-up 0.5s ease 0.52s forwards;
+}
+@keyframes brand-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rca-mark-draw .rca-stroke,
+  .rca-mark-draw .rca-dot,
+  .brand-intro__word,
+  .brand-intro__sub {
+    animation: none;
+    opacity: 1;
+    stroke-dashoffset: 0;
+    transform: none;
+  }
+}

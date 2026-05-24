@@ -6,6 +6,7 @@ import "katex/dist/katex.min.css";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/kb.css";
+import "./styles/brand.css";
 
 initTheme();
 

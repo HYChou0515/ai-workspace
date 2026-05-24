@@ -7,18 +7,25 @@
 
 export function RcaMark({
   size = 24,
-  color = "var(--ink-2)",
+  color = "var(--brand-mark)",
   dot = "var(--accent)",
+  animate = false,
 }: {
   size?: number;
   color?: string;
   dot?: string;
+  /** Draw the chevrons in + pop the apex dot (the brand entry animation). */
+  animate?: boolean;
 }) {
+  // pathLength=1 normalizes the dash math across the differently-long strokes
+  // so brand.css can stagger them with one keyframe (see .rca-mark-draw).
+  const stroke = animate ? { pathLength: 1, className: "rca-stroke" } : {};
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 100 100"
+      className={animate ? "rca-mark-draw" : undefined}
       style={{ display: "block", flexShrink: 0 }}
       aria-hidden
     >
@@ -29,6 +36,7 @@ export function RcaMark({
         strokeWidth="6.4"
         strokeLinecap="round"
         strokeLinejoin="round"
+        {...stroke}
       />
       <path
         d="M33 78 L50 32 L67 78"
@@ -37,6 +45,7 @@ export function RcaMark({
         strokeWidth="6.4"
         strokeLinecap="round"
         strokeLinejoin="round"
+        {...stroke}
       />
       <path
         d="M42 78 L50 46 L58 78"
@@ -45,6 +54,7 @@ export function RcaMark({
         strokeWidth="6.4"
         strokeLinecap="round"
         strokeLinejoin="round"
+        {...stroke}
       />
       <path
         d="M28.3 68 H71.7"
@@ -52,8 +62,9 @@ export function RcaMark({
         stroke={color}
         strokeWidth="6.4"
         strokeLinecap="round"
+        {...stroke}
       />
-      <circle cx="50" cy="20" r="6.4" fill={dot} />
+      <circle cx="50" cy="20" r="6.4" fill={dot} className={animate ? "rca-dot" : undefined} />
     </svg>
   );
 }
@@ -71,7 +82,9 @@ export function RcaLockup({
   onDark?: boolean;
   compact?: boolean;
 }) {
-  const fg = onDark ? "var(--text-dark)" : "var(--ink-2)";
+  // onDark forces the on-ink palette (e.g. a dark ribbon regardless of theme);
+  // otherwise follow the theme via the flipping tokens.
+  const fg = onDark ? "var(--text-dark)" : "var(--brand-mark)";
   const dim = onDark ? "var(--text-dark-d)" : "var(--text-paper-d)";
   return (
     <div style={{ display: "inline-flex", alignItems: "center", gap: size * 0.5 }}>

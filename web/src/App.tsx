@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
+import { BrandIntro } from "./components/BrandIntro";
 import { Home } from "./pages/Home";
 import { Investigation } from "./pages/Investigation";
 import { KbDocPage } from "./pages/kb/KbDocPage";
@@ -29,6 +30,7 @@ export function App() {
   return (
     <BrowserRouter>
       <AppRoutes />
+      <BrandIntro />
     </BrowserRouter>
   );
 }

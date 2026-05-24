@@ -43,6 +43,12 @@ describe("tokens.css drift guard", () => {
     expect(css).toMatch(/--text-dark-d:\s*#9CA0AB/);
   });
 
+  it("declares a theme-flipping brand mark stroke (light + dark)", () => {
+    const css = readTokens();
+    expect(css).toMatch(/--brand-mark:\s*#1A1B1F/); // light: dark stroke
+    expect(css).toMatch(/--brand-mark:\s*#F1ECE0/); // dark: cream stroke
+  });
+
   it("declares the semantic (ok / warn / err / info) palette", () => {
     const css = readTokens();
     expect(css).toMatch(/--ok:\s*#3A8A4A/);
