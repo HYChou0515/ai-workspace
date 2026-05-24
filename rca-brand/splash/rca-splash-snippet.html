@@ -1,0 +1,48 @@
+<!-- ============================================================
+     RCA 3.0 — Splash 片段
+     用法:把整段貼進你的 index.html <body> 最前面。
+     字體請在 <head> 自行引入 Fraunces / JetBrains Mono,
+     或改用你 app 既有的字體。
+     ============================================================ -->
+<style>
+  #rca-splash{--bg:#F2EEE4;--stroke:#1A1B1F;--accent:#F0502E;--sub:#6A675F;
+    position:fixed;inset:0;z-index:9999;background:var(--bg);
+    display:flex;align-items:center;justify-content:center;
+    font-family:"Fraunces",serif;transition:opacity .5s ease}
+  @media (prefers-color-scheme:dark){#rca-splash{--bg:#16181D;--stroke:#F4F1EA;--sub:#9A968C}}
+  #rca-splash.rca-hide{opacity:0;pointer-events:none}
+  #rca-splash .sp{display:flex;flex-direction:column;align-items:center;gap:21px}
+  #rca-splash .mark{width:128px;height:128px;opacity:0;transform:translateY(14px);animation:rcaMarkIn .6s ease forwards}
+  @keyframes rcaMarkIn{to{opacity:1;transform:translateY(0)}}
+  #rca-splash .layer{fill:none;stroke:var(--stroke);stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:200;stroke-dashoffset:200;animation:rcaDraw .55s ease forwards}
+  #rca-splash .l1{animation-delay:.15s}#rca-splash .l2{animation-delay:.42s}#rca-splash .l3{animation-delay:.69s}
+  @keyframes rcaDraw{to{stroke-dashoffset:0}}
+  #rca-splash .bar{fill:none;stroke:var(--stroke);stroke-width:3.4;stroke-linecap:round;stroke-dasharray:44;stroke-dashoffset:44;animation:rcaDraw .4s ease forwards;animation-delay:1s}
+  #rca-splash .dot{fill:var(--accent);opacity:0;transform-origin:50px 20px;animation:rcaDot .5s cubic-bezier(.34,1.56,.64,1) forwards,rcaBreathe 2.4s ease-in-out 3s infinite;animation-delay:1.25s,3s}
+  @keyframes rcaDot{0%{opacity:0;transform:scale(0) translateY(-8px)}60%{opacity:1;transform:scale(1.25)}100%{opacity:1;transform:scale(1)}}
+  @keyframes rcaBreathe{0%,100%{opacity:1}50%{opacity:.55}}
+  #rca-splash .nm{font-size:42px;font-weight:600;color:var(--stroke);line-height:1;text-align:center;opacity:0;transform:translateY(12px);animation:rcaUp 1.05s cubic-bezier(.2,.7,.2,1) forwards;animation-delay:2s}
+  #rca-splash .nm b{color:var(--accent)}
+  #rca-splash .sl{font-family:"JetBrains Mono",monospace;font-size:11.5px;letter-spacing:.34em;text-transform:uppercase;color:var(--sub);margin-top:10px;text-align:center;opacity:0;transform:translateY(10px);animation:rcaUp 1.05s cubic-bezier(.2,.7,.2,1) forwards;animation-delay:2.4s}
+  @keyframes rcaUp{to{opacity:1;transform:translateY(0)}}
+  @media (prefers-reduced-motion:reduce){#rca-splash *{animation:none!important;opacity:1!important;transform:none!important;stroke-dashoffset:0!important}}
+</style>
+<div id="rca-splash"><div class="sp">
+  <svg class="mark" viewBox="0 0 100 100" role="img" aria-label="RCA 3.0">
+    <path class="layer l1" d="M24 78 L50 18 L76 78"/><path class="layer l2" d="M33 78 L50 32 L67 78"/>
+    <path class="layer l3" d="M42 78 L50 46 L58 78"/><path class="bar" d="M28.3 68 H71.7"/>
+    <circle class="dot" cx="50" cy="20" r="4.1"/>
+  </svg>
+  <div><div class="nm">RCA<b>.</b>3.0</div><div class="sl">Analysis &middot; AI &middot; Agent</div></div>
+</div></div>
+<script>
+(function(){
+  var s=document.getElementById('rca-splash'),MIN=2600,t0=Date.now(),done=false;
+  function hide(){if(done)return;done=true;
+    setTimeout(function(){s.classList.add('rca-hide');
+      s.addEventListener('transitionend',function(){s.remove();},{once:true});
+    },Math.max(0,MIN-(Date.now()-t0)));}
+  window.RCASplash={hide:hide};
+  setTimeout(hide,10000); // 後備逾時
+})();
+</script>

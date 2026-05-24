@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RCA 3.0</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300..600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{ --bg:#F2EEE4; --stroke:#1A1B1F; --accent:#F0502E; --sub:#6A675F; }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#16181D; --stroke:#F4F1EA; --accent:#F0502E; --sub:#9A968C; }
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+
+  /* full-screen overlay; sits on top until dismissed */
+  #rca-splash{
+    position:fixed;inset:0;z-index:9999;
+    background:var(--bg);
+    display:flex;align-items:center;justify-content:center;
+    font-family:"Fraunces",serif;
+    transition:opacity .5s ease;
+  }
+  #rca-splash.rca-hide{opacity:0;pointer-events:none}
+
+  .splash{display:flex;flex-direction:column;align-items:center;gap:21px}
+
+  .mark{width:128px;height:128px;opacity:0;transform:translateY(14px);animation:markIn .6s ease forwards}
+  @keyframes markIn{to{opacity:1;transform:translateY(0)}}
+
+  .layer{fill:none;stroke:var(--stroke);stroke-width:3.4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:200;stroke-dashoffset:200;animation:draw .55s ease forwards}
+  .l1{animation-delay:.15s}
+  .l2{animation-delay:.42s}
+  .l3{animation-delay:.69s}
+  @keyframes draw{to{stroke-dashoffset:0}}
+
+  .bar{fill:none;stroke:var(--stroke);stroke-width:3.4;stroke-linecap:round;stroke-dasharray:44;stroke-dashoffset:44;animation:draw .4s ease forwards;animation-delay:1.0s}
+
+  .dot{fill:var(--accent);opacity:0;transform-origin:50px 20px;animation:dotPop .5s cubic-bezier(.34,1.56,.64,1) forwards, breathe 2.4s ease-in-out 3.0s infinite;animation-delay:1.25s,3.0s}
+  @keyframes dotPop{0%{opacity:0;transform:scale(0) translateY(-8px)}60%{opacity:1;transform:scale(1.25) translateY(0)}100%{opacity:1;transform:scale(1) translateY(0)}}
+  @keyframes breathe{0%,100%{opacity:1}50%{opacity:.55}}
+
+  .word{text-align:center}
+  .word .name{font-size:42px;font-weight:600;letter-spacing:.01em;color:var(--stroke);line-height:1;opacity:0;transform:translateY(12px);animation:fadeUp 1.05s cubic-bezier(.2,.7,.2,1) forwards;animation-delay:2.0s}
+  .word .name b{color:var(--accent);font-weight:600}
+  .word .slogan{font-family:"JetBrains Mono",monospace;font-size:11.5px;letter-spacing:.34em;text-transform:uppercase;color:var(--sub);margin-top:10px;opacity:0;transform:translateY(10px);animation:fadeUp 1.05s cubic-bezier(.2,.7,.2,1) forwards;animation-delay:2.4s}
+  @keyframes fadeUp{to{opacity:1;transform:translateY(0)}}
+
+  /* respect reduced-motion: show final state instantly */
+  @media (prefers-reduced-motion: reduce){
+    .mark,.layer,.bar,.dot,.word .name,.word .slogan{animation:none!important;opacity:1!important;transform:none!important;stroke-dashoffset:0!important}
+  }
+</style>
+</head>
+<body>
+  <!-- ==== RCA 3.0 splash overlay ==== -->
+  <div id="rca-splash">
+    <div class="splash">
+      <svg class="mark" viewBox="0 0 100 100" role="img" aria-label="RCA 3.0">
+        <path class="layer l1" d="M24 78 L50 18 L76 78"/>
+        <path class="layer l2" d="M33 78 L50 32 L67 78"/>
+        <path class="layer l3" d="M42 78 L50 46 L58 78"/>
+        <path class="bar" d="M28.3 68 H71.7"/>
+        <circle class="dot" cx="50" cy="20" r="4.1"/>
+      </svg>
+      <div class="word">
+        <div class="name">RCA<b>.</b>3.0</div>
+        <div class="slogan">Analysis &middot; AI &middot; Agent</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function(){
+    var splash = document.getElementById('rca-splash');
+    var MIN_SHOW = 2600;          // 動畫至少播完(ms) — 與時間軸對齊
+    var started = Date.now();
+    var dismissed = false;
+
+    // 隱藏 splash:等動畫播完 + app 就緒後才淡出
+    function hideSplash(){
+      if(dismissed) return; dismissed = true;
+      var wait = Math.max(0, MIN_SHOW - (Date.now() - started));
+      setTimeout(function(){
+        splash.classList.add('rca-hide');
+        splash.addEventListener('transitionend', function(){
+          if(splash.parentNode) splash.parentNode.removeChild(splash);
+        }, {once:true});
+      }, wait);
+    }
+
+    // 對外暴露,讓 app 載入完成時呼叫:window.RCASplash.hide()
+    window.RCASplash = { hide: hideSplash };
+
+    // 後備:若 10 秒內 app 沒主動呼叫,自動淡出避免卡住
+    setTimeout(hideSplash, 10000);
+  })();
+  </script>
+</body>
+</html>
