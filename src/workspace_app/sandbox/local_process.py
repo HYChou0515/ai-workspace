@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import os
 import shutil
 import subprocess
 import tempfile
@@ -27,7 +28,14 @@ import uuid
 from functools import cache
 from pathlib import Path
 
-from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import (
+    ExecResult,
+    FileEntry,
+    OutputSink,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 # Bootstrap run (as namespace-root) before chroot: overlay the host's system
 # dirs read-only onto the sandbox root, wire up a usable /dev + ephemeral
@@ -124,7 +132,12 @@ class LocalProcessSandbox:
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
         del self._dirs[handle.id]
 
-    async def exec(self, handle: SandboxHandle, cmd: list[str]) -> ExecResult:
+    async def exec(
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+    ) -> ExecResult:
         cwd = self._require(handle)
         argv = _jail_argv(str(cwd), cmd) if self._isolate else cmd
         proc = await asyncio.create_subprocess_exec(
@@ -135,27 +148,55 @@ class LocalProcessSandbox:
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # Unbuffer Python so a long-running script's prints stream live to
+            # on_output rather than sitting in a pipe buffer until it exits.
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
         )
+        # stdout/stderr are PIPE above, so the StreamReaders are always present.
+        assert proc.stdout is not None and proc.stderr is not None
+        out_buf: list[bytes] = []
+        err_buf: list[bytes] = []
+
+        async def _pump(stream: asyncio.StreamReader, buf: list[bytes], sink: OutputSink | None):
+            while True:
+                chunk = await stream.read(4096)
+                if not chunk:
+                    break
+                buf.append(chunk)
+                if sink is not None:
+                    sink(chunk)
+
+        readers = asyncio.gather(
+            _pump(proc.stdout, out_buf, on_output),
+            _pump(proc.stderr, err_buf, None),
+        )
+        timed_out = False
         try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), self._exec_timeout)
+            await asyncio.wait_for(readers, self._exec_timeout)
+            await proc.wait()
         except TimeoutError:
+            timed_out = True
+            readers.cancel()
+            with contextlib.suppress(BaseException):
+                await readers
             proc.kill()
             with contextlib.suppress(BaseException):
                 await proc.wait()
-            return ExecResult(
-                exit_code=124,  # conventional timeout exit code (GNU timeout)
-                stdout=b"",
-                stderr=f"timed out after {self._exec_timeout:g}s and was killed\n".encode(),
-            )
         finally:
             # The jail leaves /dev device-node files behind (bind targets);
             # drop them so they don't reverse-sync into the workspace.
             if self._isolate:
                 await asyncio.to_thread(shutil.rmtree, cwd / "dev", ignore_errors=True)
+
+        stdout = b"".join(out_buf)
+        if timed_out:
+            # Keep the partial output the command produced before the kill.
+            note = f"timed out after {self._exec_timeout:g}s and was killed\n".encode()
+            return ExecResult(exit_code=124, stdout=stdout, stderr=b"".join(err_buf) + note)
         return ExecResult(
             exit_code=proc.returncode if proc.returncode is not None else -1,
             stdout=stdout,
-            stderr=stderr,
+            stderr=b"".join(err_buf),
         )
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:

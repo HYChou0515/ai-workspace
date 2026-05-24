@@ -8,6 +8,8 @@ provider dispatch (openai/, anthropic/, ollama/, together/, ...).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import time
 from collections.abc import AsyncIterator
@@ -29,6 +31,7 @@ from .events import (
     RunError,
     ToolCallParseError,
     ToolEnd,
+    ToolLog,
     ToolStart,
 )
 
@@ -293,54 +296,89 @@ class LitellmAgentRunner:
         agent = _agent_for(ctx.agent_config or self._config, extra_instructions=feedback)
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
-        # ↑ sending the prompt
-        yield AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0)
 
-        completion_chars = 0
-        last_emit = 0.0
-        splitter = ThinkSplitter()
+        # The SDK delivers model output via stream_events(), but a running
+        # tool (a long exec) produces stdout *between* those events with no
+        # SDK channel to surface it. So we fan both into one queue: a producer
+        # task drives stream_events(), and the exec tool pushes ToolLog chunks
+        # via ctx.on_exec_output — the drain loop yields whichever arrives
+        # first, so tool output shows up live while the command is still
+        # running.
+        queue: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
+        done = object()
+        ctx.on_exec_output = lambda b: queue.put_nowait(ToolLog(text=b.decode("utf-8", "replace")))
+
         streamed = Runner.run_streamed(agent, input=prompt, context=ctx, max_turns=self._max_turns)
-        async for event in streamed.stream_events():
-            if getattr(event, "type", None) == "raw_response_event":
-                data = getattr(event, "data", None)
-                delta = getattr(data, "delta", None)
-                channel = _delta_channel(getattr(data, "type", "") or "")
-                if isinstance(delta, str) and delta and channel != "ignore":
-                    completion_chars += len(delta)
-                    if channel == "reasoning":
-                        yield MessageDelta(text=delta, reasoning=True)
-                    else:  # content — still split any inline <think> tags
-                        content, reasoning = splitter.feed(delta)
-                        if reasoning:
-                            yield MessageDelta(text=reasoning, reasoning=True)
-                        if content:
-                            yield MessageDelta(text=content)
-                    now = time.monotonic()
-                    if now - last_emit >= 0.2:  # throttle live metric updates
-                        last_emit = now
-                        yield AgentMetrics(
-                            phase="down",
-                            prompt_tokens=prompt_tok,
-                            completion_tokens=_approx_tokens(completion_chars),
-                            elapsed_ms=round((now - t0) * 1000),
-                        )
-                continue
-            mapped = _map_event(event)
-            if mapped is not None:
-                yield mapped
 
-        tail_content, tail_reasoning = splitter.flush()
-        if tail_reasoning:
-            yield MessageDelta(text=tail_reasoning, reasoning=True)
-        if tail_content:
-            yield MessageDelta(text=tail_content)
+        async def produce() -> None:
+            try:
+                # ↑ sending the prompt
+                queue.put_nowait(AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0))
+                completion_chars = 0
+                last_emit = 0.0
+                splitter = ThinkSplitter()
+                async for event in streamed.stream_events():
+                    if getattr(event, "type", None) == "raw_response_event":
+                        data = getattr(event, "data", None)
+                        delta = getattr(data, "delta", None)
+                        channel = _delta_channel(getattr(data, "type", "") or "")
+                        if isinstance(delta, str) and delta and channel != "ignore":
+                            completion_chars += len(delta)
+                            if channel == "reasoning":
+                                queue.put_nowait(MessageDelta(text=delta, reasoning=True))
+                            else:  # content — still split any inline <think> tags
+                                content, reasoning = splitter.feed(delta)
+                                if reasoning:
+                                    queue.put_nowait(MessageDelta(text=reasoning, reasoning=True))
+                                if content:
+                                    queue.put_nowait(MessageDelta(text=content))
+                            now = time.monotonic()
+                            if now - last_emit >= 0.2:  # throttle live metric updates
+                                last_emit = now
+                                queue.put_nowait(
+                                    AgentMetrics(
+                                        phase="down",
+                                        prompt_tokens=prompt_tok,
+                                        completion_tokens=_approx_tokens(completion_chars),
+                                        elapsed_ms=round((now - t0) * 1000),
+                                    )
+                                )
+                        continue
+                    mapped = _map_event(event)
+                    if mapped is not None:
+                        queue.put_nowait(mapped)
 
-        prompt_final, completion_final = _final_tokens(
-            _exact_usage(streamed), prompt_tok, completion_chars
-        )
-        yield AgentMetrics(
-            phase="final",
-            prompt_tokens=prompt_final,
-            completion_tokens=completion_final,
-            elapsed_ms=round((time.monotonic() - t0) * 1000),
-        )
+                tail_content, tail_reasoning = splitter.flush()
+                if tail_reasoning:
+                    queue.put_nowait(MessageDelta(text=tail_reasoning, reasoning=True))
+                if tail_content:
+                    queue.put_nowait(MessageDelta(text=tail_content))
+
+                prompt_final, completion_final = _final_tokens(
+                    _exact_usage(streamed), prompt_tok, completion_chars
+                )
+                queue.put_nowait(
+                    AgentMetrics(
+                        phase="final",
+                        prompt_tokens=prompt_final,
+                        completion_tokens=completion_final,
+                        elapsed_ms=round((time.monotonic() - t0) * 1000),
+                    )
+                )
+            finally:
+                queue.put_nowait(done)
+
+        task = asyncio.create_task(produce())
+        try:
+            while True:
+                item = await queue.get()
+                if item is done:
+                    break
+                yield item  # ty: ignore[invalid-yield]  # not the sentinel → AgentEvent
+        finally:
+            if not task.done():
+                task.cancel()
+            # Re-raise producer failures (e.g. MaxTurnsExceeded) so run()'s
+            # retry/terminal handling still fires.
+            with contextlib.suppress(asyncio.CancelledError):
+                await task

@@ -119,6 +119,35 @@ async def test_walk_excludes_directories(sandbox: LocalProcessSandbox):
     assert [e.path for e in entries] == ["/a/b/c.txt"]
 
 
+# ---------------- Live output streaming (on_output) ----------------
+
+
+async def test_exec_streams_lines_to_on_output(tmp_path):
+    """When given an on_output sink, exec streams stdout to it as it arrives
+    and still returns the full output in the result."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = await sb.create(SandboxSpec())
+    chunks: list[bytes] = []
+    r = await sb.exec(h, ["sh", "-c", "echo a; echo b"], on_output=chunks.append)
+    assert r.exit_code == 0
+    assert b"".join(chunks) == b"a\nb\n"
+    assert r.stdout == b"a\nb\n"
+
+
+async def test_exec_streaming_timeout_preserves_partial_stdout(tmp_path):
+    """A long/looping command that times out keeps whatever it printed before
+    the kill — both streamed and in the result (fixes the discard-on-timeout
+    bug that left run history empty)."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False, exec_timeout=0.5)
+    h = await sb.create(SandboxSpec())
+    streamed: list[bytes] = []
+    r = await sb.exec(h, ["sh", "-c", "echo first; sleep 5; echo never"], on_output=streamed.append)
+    assert r.exit_code == 124
+    assert b"first\n" in r.stdout
+    assert b"never" not in r.stdout
+    assert b"first\n" in b"".join(streamed)
+
+
 # ---------------- Isolation (user-namespace + chroot jail) ----------------
 
 from workspace_app.sandbox.local_process import _jail_argv, _userns_supported  # noqa: E402

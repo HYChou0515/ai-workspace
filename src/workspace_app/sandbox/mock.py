@@ -1,6 +1,13 @@
 import uuid
 
-from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import (
+    ExecResult,
+    FileEntry,
+    OutputSink,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 
 class MockSandbox:
@@ -36,8 +43,22 @@ class MockSandbox:
         self._require(handle)
         return list(self._exposed.get(handle.id, []))
 
-    async def exec(self, handle: SandboxHandle, cmd: list[str]) -> ExecResult:
+    async def exec(
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+    ) -> ExecResult:
         fs = self._require(handle)
+        result = self._exec_result(fs, cmd)
+        # Stream the (whole) stdout to the sink in one shot — enough for tests
+        # that assert live output is forwarded.
+        if on_output is not None and result.stdout:
+            on_output(result.stdout)
+        return result
+
+    @staticmethod
+    def _exec_result(fs: dict[str, bytes], cmd: list[str]) -> ExecResult:
         match cmd:
             case ["echo", *args]:
                 text = " ".join(args)

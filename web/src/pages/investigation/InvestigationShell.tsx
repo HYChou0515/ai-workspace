@@ -2216,12 +2216,12 @@ function PanelBody({
     return (
       <>
         {calls.map((e, i) =>
-          e.kind === "tool_call" && e.call.output !== undefined ? (
+          e.kind === "tool_call" && callBody(e.call) !== undefined ? (
             <div key={i} style={{ marginBottom: 4 }}>
               <div style={{ color: "var(--accent)" }}>
                 → {e.call.name}
                 {e.call.status === "running" && (
-                  <span style={{ color: "var(--text-paper-d)" }}> (running)</span>
+                  <span style={{ color: "var(--text-paper-d)" }}> (running…)</span>
                 )}
               </div>
               <pre
@@ -2232,7 +2232,7 @@ function PanelBody({
                   fontSize: 12,
                 }}
               >
-                {e.call.output}
+                {callBody(e.call)}
               </pre>
             </div>
           ) : null,
@@ -2282,9 +2282,7 @@ function PanelBody({
                   parse-error → {e.call.parseError}
                 </div>
               )}
-              {e.call.output !== undefined && e.call.output !== "" && (
-                <pre style={logPre}>{e.call.output}</pre>
-              )}
+              {callBody(e.call) && <pre style={logPre}>{callBody(e.call)}</pre>}
             </details>
           ) : null,
         )}
@@ -2329,9 +2327,7 @@ function PanelBody({
                   {e.call.name}({argsLine(e.call.args)})
                 </span>
               </div>
-              {e.call.output !== undefined && e.call.output !== "" && (
-                <pre style={logPre}>{e.call.output}</pre>
-              )}
+              {callBody(e.call) && <pre style={logPre}>{callBody(e.call)}</pre>}
             </div>
           );
         }
@@ -2376,9 +2372,16 @@ function argsLine(args: Record<string, unknown>): string {
 type RunCall = {
   status: "running" | "done";
   output?: string;
+  liveOutput?: string;
   startedAt?: number;
   endedAt?: number;
 };
+
+/** The text to show for a tool call: its live stdout while running, the
+ * final formatted output once done. */
+function callBody(call: RunCall): string | undefined {
+  return call.status === "done" ? call.output : (call.liveOutput ?? call.output);
+}
 
 /** ✓ / ✗N exit glyph: parses `exit_code=N` that exec prepends to output. */
 function exitGlyph(call: RunCall): string {

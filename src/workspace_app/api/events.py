@@ -30,6 +30,17 @@ class ToolEnd:
 
 
 @dataclass(frozen=True)
+class ToolLog:
+    """A chunk of stdout from a still-running tool (e.g. a long exec),
+    streamed live. `call_id` may be empty — the FE then attaches it to the
+    latest running tool call."""
+
+    text: str
+    call_id: str = ""
+    type: Literal["tool_log"] = "tool_log"
+
+
+@dataclass(frozen=True)
 class RunDone:
     type: Literal["done"] = "done"
 
@@ -90,6 +101,7 @@ AgentEvent = (
     MessageDelta
     | ToolStart
     | ToolEnd
+    | ToolLog
     | RunDone
     | RunError
     | RunCancelled

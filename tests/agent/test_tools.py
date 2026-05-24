@@ -33,6 +33,15 @@ async def test_exec_reuses_same_sandbox_handle(ctx: RunContextWrapper[AgentToolC
     assert ctx.context.handle is h1
 
 
+async def test_exec_streams_output_to_context_sink(ctx: RunContextWrapper[AgentToolContext]):
+    """exec forwards the command's stdout to the context's on_exec_output sink
+    as it runs, so the runner can surface it live in run history."""
+    chunks: list[bytes] = []
+    ctx.context.on_exec_output = chunks.append
+    await exec_impl(ctx, ["echo", "hello"])
+    assert b"".join(chunks) == b"hello\n"
+
+
 async def test_write_then_read_roundtrip(ctx: RunContextWrapper[AgentToolContext]):
     msg = await write_file_impl(ctx, "/notes.txt", "hello world")
     assert "wrote" in msg

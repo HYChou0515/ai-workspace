@@ -536,8 +536,14 @@ function ReasoningBlock({ text }: { text: string }) {
 }
 
 function ToolCallCard({ call }: { call: ToolCallView }) {
+  // While running, show whatever stdout has streamed so far; once done, the
+  // final formatted output supersedes it. Auto-expand a streaming tool so its
+  // live log is visible without a click.
+  const body = call.status === "done" ? call.output : (call.liveOutput ?? call.output);
+  const streamingLive = call.status === "running" && !!call.liveOutput;
   return (
     <details
+      open={streamingLive}
       style={{
         marginLeft: 28,
         background: "var(--white)",
@@ -566,8 +572,10 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
         <span>
           {call.name}({summarizeArgs(call.args)})
         </span>
-        {call.output !== undefined && (
-          <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>· result</span>
+        {body !== undefined && (
+          <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>
+            · {streamingLive ? "streaming…" : "result"}
+          </span>
         )}
       </summary>
       {call.parseError && (
@@ -575,7 +583,7 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
           retry: {call.parseError}
         </div>
       )}
-      {call.output !== undefined && (
+      {body !== undefined && (
         <pre
           style={{
             color: "var(--text-paper-d)",
@@ -586,7 +594,7 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
             overflow: "auto",
           }}
         >
-          {call.output}
+          {body}
         </pre>
       )}
     </details>

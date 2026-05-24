@@ -4,9 +4,9 @@ import pytest
 
 pytest.importorskip("docker")
 
-import docker  # noqa: E402
 from docker.errors import DockerException  # noqa: E402
 
+import docker  # noqa: E402
 from workspace_app.sandbox.docker import DockerSandbox  # noqa: E402
 from workspace_app.sandbox.protocol import (  # noqa: E402
     SandboxHandle,
@@ -69,6 +69,14 @@ async def test_exec_false_returns_exit_1(sandbox: DockerSandbox):
     h = await sandbox.create(SandboxSpec(image=_IMAGE))
     r = await sandbox.exec(h, ["false"])
     assert r.exit_code == 1
+
+
+async def test_exec_forwards_stdout_to_on_output(sandbox: DockerSandbox):
+    h = await sandbox.create(SandboxSpec(image=_IMAGE))
+    chunks: list[bytes] = []
+    r = await sandbox.exec(h, ["echo", "hello"], on_output=chunks.append)
+    assert r.exit_code == 0
+    assert b"".join(chunks) == b"hello\n"
 
 
 async def test_upload_download_roundtrip(sandbox: DockerSandbox):

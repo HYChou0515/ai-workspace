@@ -28,6 +28,10 @@ export type ToolStart = {
 
 export type ToolEnd = { type: "tool_end"; call_id: string; output: string };
 
+/** Incremental stdout from a still-running tool (e.g. a long exec). call_id
+ * may be empty — then it attaches to the latest running tool. */
+export type ToolLog = { type: "tool_log"; call_id: string; text: string };
+
 export type RunDone = { type: "done" };
 
 export type RunError = { type: "error"; message: string };
@@ -61,6 +65,7 @@ export type AgentEvent =
   | MessageDelta
   | ToolStart
   | ToolEnd
+  | ToolLog
   | RunDone
   | RunError
   | RunCancelled

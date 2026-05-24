@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from ..filestore.protocol import FileStore
-from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
+from ..sandbox.protocol import OutputSink, Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
 
 if TYPE_CHECKING:
@@ -41,6 +41,9 @@ class AgentToolContext:
     # The investigation's attached AgentConfig (model + prompt) for this
     # turn; when set, LitellmAgentRunner uses it instead of its default.
     agent_config: AgentConfig | None = None
+    # Optional sink the exec tool streams a command's stdout to while it runs,
+    # so the runner can emit live tool-log events. Set per-run by the runner.
+    on_exec_output: OutputSink | None = None
 
     async def ensure_sandbox(self) -> SandboxHandle:
         if self.handle is None:

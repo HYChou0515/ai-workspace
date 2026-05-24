@@ -17,6 +17,8 @@ export type ToolCallView = {
   args: Record<string, unknown>;
   status: "running" | "done";
   output?: string;
+  /** stdout streamed live while the tool is still running (tool_log). */
+  liveOutput?: string;
   parseError?: string;
   /** epoch ms when the call started / finished (for duration + timestamps). */
   startedAt?: number;
@@ -97,6 +99,17 @@ function findCall(entries: AgentEntry[], call_id: string): number {
   return -1;
 }
 
+/** Index of the tool call a tool_log belongs to: the matching call_id, or
+ * (when call_id is empty) the latest still-running tool call. */
+function liveCallIdx(entries: AgentEntry[], call_id: string): number {
+  if (call_id) return findCall(entries, call_id);
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (e && e.kind === "tool_call" && e.call.status === "running") return i;
+  }
+  return -1;
+}
+
 function lastAssistantIdx(entries: AgentEntry[]): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
@@ -168,6 +181,20 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           entries[idx] = {
             kind: "tool_call",
             call: { ...e.call, status: "done", output: ev.output, endedAt: now },
+          };
+        }
+      }
+      return { ...log, entries };
+    }
+
+    case "tool_log": {
+      const idx = liveCallIdx(entries, ev.call_id);
+      if (idx >= 0) {
+        const e = entries[idx];
+        if (e && e.kind === "tool_call") {
+          entries[idx] = {
+            kind: "tool_call",
+            call: { ...e.call, liveOutput: (e.call.liveOutput ?? "") + ev.text },
           };
         }
       }

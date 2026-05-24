@@ -72,6 +72,50 @@ describe("reduceAgent", () => {
     }
   });
 
+  it("appends tool_log chunks to the running tool's live output", () => {
+    const log = fold([
+      { type: "tool_start", call_id: "c1", name: "exec", args: { cmd: ["loop"] } },
+      { type: "tool_log", call_id: "c1", text: "1s *\n" },
+      { type: "tool_log", call_id: "c1", text: "2s **\n" },
+    ]);
+    const e = log.entries[0];
+    if (e?.kind === "tool_call") {
+      expect(e.call.status).toBe("running");
+      expect(e.call.liveOutput).toBe("1s *\n2s **\n");
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
+
+  it("attaches tool_log to the latest running tool when call_id is empty", () => {
+    const log = fold([
+      { type: "tool_start", call_id: "c1", name: "exec", args: {} },
+      { type: "tool_log", call_id: "", text: "live line\n" },
+    ]);
+    const e = log.entries[0];
+    if (e?.kind === "tool_call") {
+      expect(e.call.liveOutput).toBe("live line\n");
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
+
+  it("keeps live output visible after tool_end sets the final output", () => {
+    const log = fold([
+      { type: "tool_start", call_id: "c1", name: "exec", args: {} },
+      { type: "tool_log", call_id: "c1", text: "streamed\n" },
+      { type: "tool_end", call_id: "c1", output: "exit_code=0\n--- stdout ---\nstreamed\n" },
+    ]);
+    const e = log.entries[0];
+    if (e?.kind === "tool_call") {
+      expect(e.call.status).toBe("done");
+      expect(e.call.output).toContain("streamed");
+      expect(e.call.liveOutput).toBe("streamed\n");
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
+
   it("marks streaming=false on terminal events", () => {
     expect(fold([{ type: "done" }], { ...EMPTY_LOG, streaming: true }).streaming).toBe(false);
     expect(fold([{ type: "error", message: "x" }], { ...EMPTY_LOG, streaming: true }).streaming).toBe(false);

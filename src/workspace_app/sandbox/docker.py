@@ -16,7 +16,14 @@ import uuid
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from .protocol import ExecResult, FileEntry, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import (
+    ExecResult,
+    FileEntry,
+    OutputSink,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 if TYPE_CHECKING:
     from docker.models.containers import Container
@@ -77,11 +84,20 @@ class DockerSandbox:
             container.kill()
         container.remove(force=True)
 
-    async def exec(self, handle: SandboxHandle, cmd: list[str]) -> ExecResult:
+    async def exec(
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+    ) -> ExecResult:
         container = self._require(handle)
         result: Any = await asyncio.to_thread(container.exec_run, cmd, demux=True, workdir=_WORKDIR)
         exit_code = result.exit_code if result.exit_code is not None else -1
         stdout_b, stderr_b = result.output
+        # This adapter doesn't stream incrementally; hand the whole stdout to
+        # the sink at the end so callers still see the output.
+        if on_output is not None and stdout_b:
+            on_output(stdout_b)
         return ExecResult(
             exit_code=exit_code,
             stdout=stdout_b or b"",

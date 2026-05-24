@@ -19,7 +19,9 @@ async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) ->
     # Flush any FileStore writes the agent made via write_file/delete_file
     # so the shell command sees the same view of the workspace.
     await ctx.context.sync.flush(ctx.context.investigation_id, handle)
-    result = await ctx.context.sandbox.exec(handle, cmd)
+    # Stream stdout live (when the runner wired a sink) so a long-running
+    # command's output shows up in run history as it happens.
+    result = await ctx.context.sandbox.exec(handle, cmd, on_output=ctx.context.on_exec_output)
     return _format_exec(result)
 
 

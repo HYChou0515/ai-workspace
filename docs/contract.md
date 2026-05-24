@@ -242,6 +242,7 @@ Mirrored in `web/src/events.ts`.
 | `MessageDelta`        | `{type: "message_delta", text: string, reasoning?: boolean}` | no | append to assistant message; if `reasoning=true`, append to the reasoning channel instead of the visible content |
 | `ToolStart`           | `{type: "tool_start", call_id: string, name: string, args: object}` | no | |
 | `ToolEnd`             | `{type: "tool_end", call_id: string, output: string}` | no | |
+| `ToolLog`             | `{type: "tool_log", text: string, call_id: string?}` | no | live stdout chunk from a running tool; empty `call_id` attaches to the latest running call |
 | `RunDone`             | `{type: "done"}` | **yes** | normal completion |
 | `RunError`            | `{type: "error", message: string}` | yes | catch-all failure |
 | `RunCancelled`        | `{type: "run_cancelled"}` | yes | user interrupted (DELETE or new POST) |
