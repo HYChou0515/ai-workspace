@@ -18,10 +18,6 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { type AgentEntry, formatMetrics, type ToolCallView } from "./agentLog";
 import type { Message } from "../../api/types";
 
-// Fallback only — the real quick-prompts come from the attached AgentConfig
-// (BE), passed in via `suggestions`.
-const DEFAULT_SUGGESTIONS = ["Show SPC analysis", "Run Pareto", "Sketch a fishbone"];
-
 const TEXT_EXTENSIONS = new Set([
   ".md",
   ".markdown",
@@ -53,7 +49,9 @@ export function AgentPanel({
   /** Quick-prompt chips from the attached AgentConfig (BE). */
   suggestions?: string[];
 }) {
-  const chips = suggestions && suggestions.length > 0 ? suggestions : DEFAULT_SUGGESTIONS;
+  // Quick-prompt chips come ONLY from the attached AgentConfig (BE) — the FE
+  // never invents its own. No config suggestions → no chip row.
+  const chips = suggestions ?? [];
   const { log, send, cancel } = useAgent();
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
   const [draft, setDraft] = useState("");
@@ -174,16 +172,17 @@ export function AgentPanel({
         )}
       </div>
 
-      <div
-        style={{
-          padding: "8px 12px",
-          borderTop: "1px solid var(--paper-3)",
-          display: "flex",
-          gap: 6,
-          flexWrap: "wrap",
-        }}
-      >
-        {chips.map((s) => (
+      {chips.length > 0 && (
+        <div
+          style={{
+            padding: "8px 12px",
+            borderTop: "1px solid var(--paper-3)",
+            display: "flex",
+            gap: 6,
+            flexWrap: "wrap",
+          }}
+        >
+          {chips.map((s) => (
           <button
             key={s}
             type="button"
@@ -206,8 +205,9 @@ export function AgentPanel({
             <Icon name="sparkle" size={12} color="var(--accent)" />
             {s}
           </button>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       <form
         onSubmit={(e) => {
