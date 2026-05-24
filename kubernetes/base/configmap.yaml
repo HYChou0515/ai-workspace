@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rca-config
+data:
+  # Server (see src/workspace_app/factories.py: Settings).
+  APP_HOST: "0.0.0.0"
+  APP_PORT: "8000"
+  # External sub-path when the ingress strips a prefix (e.g. "/my-svc/rca").
+  # Only affects generated URLs (OpenAPI/docs). Overlays set this; "" = root.
+  APP_ROOT_PATH: ""
+  DEFAULT_USER: "default-user"
+
+  # Sandbox: in-pod subprocess. Pods usually lack unprivileged userns, so
+  # disable isolation (falls back to direct exec). Workspace files live on the
+  # PVC mounted at /data.
+  SANDBOX_KIND: "local"
+  SANDBOX_ROOT: "/data/sandbox"
+  SANDBOX_ISOLATE: "false"
+
+  # File store. "memory" = volatile (resets on restart). For durable
+  # investigations/conversations/KB data, see the README note on persistence.
+  FILESTORE_KIND: "memory"
+
+  # KB: point LiteLLM at the Ollama service. The embedder model MUST match the
+  # dim the image was built with, and a real embedder requires the model pulled
+  # in Ollama (see README). "" KB_LLM_MODEL disables multi-query/HyDE/rerank.
+  OLLAMA_API_BASE: "http://ollama:11434"
+  KB_EMBED_MODEL: "ollama/bge-m3"
+  KB_EMBED_DIM: "1024"
+  KB_LLM_MODEL: "ollama_chat/qwen3:14b"

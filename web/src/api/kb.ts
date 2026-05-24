@@ -8,6 +8,7 @@
  */
 
 import type { AgentEvent } from "../events";
+import { apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
 
@@ -114,14 +115,14 @@ const jsonHeaders = { "content-type": "application/json" };
 
 export const realKbApi: KbApi = {
   async getAgentConfig() {
-    return (await ok(await fetch("/kb/agent"), "kb agent config")).json();
+    return (await ok(await apiFetch("/kb/agent"), "kb agent config")).json();
   },
   async listCollections() {
-    return (await ok(await fetch("/kb/collections"), "list collections")).json();
+    return (await ok(await apiFetch("/kb/collections"), "list collections")).json();
   },
   async createCollection(name, description = "") {
     const resp = await ok(
-      await fetch("/kb/collections", {
+      await apiFetch("/kb/collections", {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ name, description }),
@@ -131,14 +132,14 @@ export const realKbApi: KbApi = {
     return resp.json();
   },
   async listDocuments(collectionId) {
-    const resp = await fetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`);
+    const resp = await apiFetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`);
     return (await ok(resp, "list documents")).json();
   },
   async uploadDocument(collectionId, file, path) {
     const form = new FormData();
     form.append("file", file, path ?? file.name);
     const resp = await ok(
-      await fetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`, {
+      await apiFetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`, {
         method: "POST",
         body: form,
       }),
@@ -150,15 +151,15 @@ export const realKbApi: KbApi = {
     // documentId is a path-shaped id ({collection}/{user}/{path}); the route is
     // {doc_id:path}, so encode each segment but keep the slashes.
     const encoded = documentId.split("/").map(encodeURIComponent).join("/");
-    return (await ok(await fetch(`/kb/documents/${encoded}`), "render document")).json();
+    return (await ok(await apiFetch(`/kb/documents/${encoded}`), "render document")).json();
   },
 
   async listChats() {
-    return (await ok(await fetch("/kb/chats"), "list chats")).json();
+    return (await ok(await apiFetch("/kb/chats"), "list chats")).json();
   },
   async createChat(title, collectionIds) {
     const resp = await ok(
-      await fetch("/kb/chats", {
+      await apiFetch("/kb/chats", {
         method: "POST",
         headers: jsonHeaders,
         body: JSON.stringify({ title, collection_ids: collectionIds }),
@@ -169,16 +170,16 @@ export const realKbApi: KbApi = {
     return { ...data, message_count: 0 };
   },
   async getChat(chatId) {
-    return (await ok(await fetch(`/kb/chats/${encodeURIComponent(chatId)}`), "get chat")).json();
+    return (await ok(await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`), "get chat")).json();
   },
   async deleteChat(chatId) {
     await ok(
-      await fetch(`/kb/chats/${encodeURIComponent(chatId)}`, { method: "DELETE" }),
+      await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`, { method: "DELETE" }),
       "delete chat",
     );
   },
   async *streamMessage(args) {
-    const resp = await fetch(`/kb/chats/${encodeURIComponent(args.chatId)}/messages`, {
+    const resp = await apiFetch(`/kb/chats/${encodeURIComponent(args.chatId)}/messages`, {
       method: "POST",
       headers: jsonHeaders,
       body: JSON.stringify({ content: args.content }),

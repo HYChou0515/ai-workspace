@@ -14,6 +14,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
+import { apiFetch } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -125,20 +126,20 @@ function searchBody(opts: SearchOptions): Record<string, unknown> {
 export const realApi: ApiClient = {
   async listInvestigations() {
     const arr = await json<SpecstarEntry<InvestigationStruct>[]>(
-      await fetch("/investigation"),
+      await apiFetch("/investigation"),
     );
     return arr.map(toInvestigation);
   },
 
   async getInvestigation(id: string) {
     const entry = await json<SpecstarEntry<InvestigationStruct>>(
-      await fetch(`/investigation/${encodeURIComponent(id)}`),
+      await apiFetch(`/investigation/${encodeURIComponent(id)}`),
     );
     return toInvestigation(entry);
   },
 
   async createInvestigation(input: InvestigationInput) {
-    const resp = await fetch("/investigation", {
+    const resp = await apiFetch("/investigation", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -162,7 +163,7 @@ export const realApi: ApiClient = {
   async listAgentConfigs(): Promise<AgentConfigInfo[]> {
     try {
       const arr = await json<SpecstarEntry<AgentConfigStruct>[]>(
-        await fetch("/agent-config"),
+        await apiFetch("/agent-config"),
       );
       return arr.map((e) => ({
         resource_id: e.revision_info.resource_id,
@@ -177,7 +178,7 @@ export const realApi: ApiClient = {
 
   async attachAgentConfig(investigationId: string, configId: string | null) {
     // specstar PATCH is RFC-6902 JSON Patch.
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigation/${encodeURIComponent(investigationId)}`,
       {
         method: "PATCH",
@@ -194,7 +195,7 @@ export const realApi: ApiClient = {
 
   async listTemplates() {
     try {
-      return await json<string[]>(await fetch("/templates"));
+      return await json<string[]>(await apiFetch("/templates"));
     } catch {
       return ["default"]; // BE older than the templates endpoint
     }
@@ -202,14 +203,14 @@ export const realApi: ApiClient = {
 
   async listActivity() {
     try {
-      return await json<ActivityEntry[]>(await fetch("/activity"));
+      return await json<ActivityEntry[]>(await apiFetch("/activity"));
     } catch {
       return [];
     }
   },
 
   async closeInvestigation(id: string, status: CloseStatus | null) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(id)}/close`,
       {
         method: "POST",
@@ -225,7 +226,7 @@ export const realApi: ApiClient = {
   async getConversation(investigationId: string) {
     try {
       const arr = await json<SpecstarEntry<ConversationStruct>[]>(
-        await fetch("/conversation"),
+        await apiFetch("/conversation"),
       );
       const hit = arr.find((e) => e.data.investigation_id === investigationId);
       if (!hit) return null;
@@ -244,7 +245,7 @@ export const realApi: ApiClient = {
     const qs = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
     try {
       return await json<FileInfo[]>(
-        await fetch(
+        await apiFetch(
           `/investigations/${encodeURIComponent(investigationId)}/files${qs}`,
         ),
       );
@@ -259,7 +260,7 @@ export const realApi: ApiClient = {
   },
 
   async readFile(investigationId, path) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
     );
     if (!resp.ok) throw new HttpError(resp.status, `read ${path} failed: ${resp.status}`);
@@ -271,7 +272,7 @@ export const realApi: ApiClient = {
   },
 
   async writeFile(investigationId, path, body) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
       { method: "PUT", body },
     );
@@ -281,7 +282,7 @@ export const realApi: ApiClient = {
   },
 
   async deleteFile(investigationId: string, path: string) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
       { method: "DELETE" },
     );
@@ -289,7 +290,7 @@ export const realApi: ApiClient = {
   },
 
   async mkdir(investigationId: string, path: string) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/mkdir`,
       {
         method: "POST",
@@ -306,7 +307,7 @@ export const realApi: ApiClient = {
   async listDirs(investigationId: string) {
     try {
       return await json<string[]>(
-        await fetch(`/investigations/${encodeURIComponent(investigationId)}/dirs`),
+        await apiFetch(`/investigations/${encodeURIComponent(investigationId)}/dirs`),
       );
     } catch (err) {
       // BE older than the dirs endpoint — degrade to inferred-only dirs.
@@ -316,7 +317,7 @@ export const realApi: ApiClient = {
   },
 
   async moveFile(investigationId: string, from: string, to: string) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/move`,
       {
         method: "POST",
@@ -331,7 +332,7 @@ export const realApi: ApiClient = {
   },
 
   async copyFile(investigationId: string, from: string, to: string) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/copy`,
       {
         method: "POST",
@@ -348,21 +349,21 @@ export const realApi: ApiClient = {
   async cancelMessage(investigationId: string) {
     // Idempotent on the BE; swallow network/404 noise so a double-click
     // on Stop doesn't surface a scary toast.
-    await fetch(
+    await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/messages/current`,
       { method: "DELETE" },
     ).catch(() => undefined);
   },
 
   async interruptCell(ref: CellRef) {
-    await fetch(
+    await apiFetch(
       `/investigations/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/cells/${ref.cellIndex}/execute`,
       { method: "DELETE" },
     ).catch(() => undefined);
   },
 
   async restartKernel(ref: NotebookRef) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/kernel/restart`,
       { method: "POST" },
     );
@@ -372,7 +373,7 @@ export const realApi: ApiClient = {
   },
 
   async *streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent> {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(args.investigationId)}/messages`,
       {
         method: "POST",
@@ -388,7 +389,7 @@ export const realApi: ApiClient = {
   },
 
   async execShell(investigationId: string, cmd: string[], signal?: AbortSignal): Promise<ExecResult> {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/exec`,
       {
         method: "POST",
@@ -405,7 +406,7 @@ export const realApi: ApiClient = {
   },
 
   async searchFiles(investigationId: string, query: string, opts: SearchOptions = {}) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/search`,
       {
         method: "POST",
@@ -422,7 +423,7 @@ export const realApi: ApiClient = {
     replacement: string,
     opts: SearchOptions = {},
   ) {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/replace`,
       {
         method: "POST",
@@ -435,7 +436,7 @@ export const realApi: ApiClient = {
   },
 
   async *streamCellEvents(args: ExecuteCellArgs): AsyncGenerator<CellEvent> {
-    const resp = await fetch(
+    const resp = await apiFetch(
       `/investigations/${encodeURIComponent(args.investigationId)}/notebooks/${encodePath(args.notebookPath)}/cells/${args.cellIndex}/execute`,
       {
         method: "POST",

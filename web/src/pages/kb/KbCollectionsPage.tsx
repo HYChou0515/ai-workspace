@@ -9,7 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbCollection, type KbDocument } from "../../api/kb";
 import { Icon } from "../../components/Icon";
-import { docPath } from "./kbLinks";
+import { docHref } from "./kbLinks";
 
 export function KbCollectionsPage({
   client = kbApi,
@@ -220,7 +220,7 @@ export function KbCollectionsPage({
                     </span>
                     <a
                       className="kb-iconbtn"
-                      href={docPath(d.resource_id)}
+                      href={docHref(d.resource_id)}
                       target="_blank"
                       rel="noreferrer"
                       title="Open in new tab"

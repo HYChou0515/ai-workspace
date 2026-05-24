@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rca-app
+  annotations:
+    # Root deploy by default. For a sub-path deploy the overlay rewrites the
+    # prefix away so the backend sees "/" (see overlays/production).
+    nginx.ingress.kubernetes.io/rewrite-target: /
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: rca.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: rca-app
+                port:
+                  name: http

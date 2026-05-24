@@ -28,7 +28,9 @@ export function AppRoutes() {
 
 export function App() {
   return (
-    <BrowserRouter>
+    // basename = the deploy sub-path (Vite's BASE_URL), so client routing works
+    // under e.g. company.com/my-svc/rca. Defaults to "/".
+    <BrowserRouter basename={import.meta.env.BASE_URL}>
       <AppRoutes />
       <BrandIntro />
     </BrowserRouter>

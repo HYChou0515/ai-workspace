@@ -6,6 +6,8 @@
  * else stays a normal link.
  */
 
+import { API_BASE } from "../../api/http";
+
 const KB_DOC_PREFIX = "kb://doc/";
 
 /**
@@ -20,13 +22,23 @@ export function parseKbDocHref(href: string): string | null {
 }
 
 /**
- * The in-app route for a document's dedicated page (new-tab target). The id is
- * path-shaped ({collection}/{user}/{path}); each segment is encoded but the
- * slashes are kept so the `/kb/doc/*` splat route can read it back. An optional
- * cited passage rides along as `?hl=` for highlighting.
+ * The in-app ROUTE for a document's dedicated page (for react-router
+ * `navigate`, which prepends the basename itself). The id is path-shaped
+ * ({collection}/{user}/{path}); each segment is encoded but the slashes are
+ * kept so the `/kb/doc/*` splat route reads it back. Optional cited passage
+ * rides along as `?hl=` for highlighting.
  */
 export function docPath(documentId: string, snippet?: string): string {
   const encoded = documentId.split("/").map(encodeURIComponent).join("/");
   const hl = snippet ? `?hl=${encodeURIComponent(snippet)}` : "";
   return `/kb/doc/${encoded}${hl}`;
+}
+
+/**
+ * The full HREF for opening a document in a NEW TAB (`<a href target=_blank>`).
+ * Unlike `docPath`, this includes the deploy sub-path prefix (API_BASE), since
+ * a raw anchor doesn't go through the router's basename.
+ */
+export function docHref(documentId: string, snippet?: string): string {
+  return API_BASE + docPath(documentId, snippet);
 }

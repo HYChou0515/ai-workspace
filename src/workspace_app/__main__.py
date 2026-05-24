@@ -42,7 +42,7 @@ def main() -> None:
         kb_chunker=get_chunker(settings),
         kb_llm=get_kb_llm(settings),
     )
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    uvicorn.run(app, host=settings.host, port=settings.port, root_path=settings.root_path)
 
 
 if __name__ == "__main__":

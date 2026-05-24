@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Shared building blocks. Environment specifics (namespace, image tag, host /
+# sub-path, replicas, config) live in overlays/{production,staging}.
+resources:
+  - configmap.yaml
+  - pvc.yaml
+  - service.yaml
+  - deployment.yaml
+  - ingress.yaml

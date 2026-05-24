@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rca-config
+data:
+  # Deployed under https://company.com/my-svc/rca — the ingress strips the
+  # prefix, so this only fixes generated URLs (OpenAPI/docs). The SPA's base
+  # path is baked into the image at build time (BASE_PATH=/my-svc/rca/).
+  APP_ROOT_PATH: "/my-svc/rca"
+  # Durable file store in production (persisted on the PVC; see README).
+  FILESTORE_KIND: "specstar"

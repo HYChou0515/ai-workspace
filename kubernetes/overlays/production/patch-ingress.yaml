@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: rca-app
+  annotations:
+    # Sub-path deploy https://company.com/my-svc/rca:
+    # capture group 2 is everything after the prefix → backend sees "/..."
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/use-regex: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: company.com
+      http:
+        paths:
+          - path: /my-svc/rca(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: rca-app
+                port:
+                  name: http
+  # tls:
+  #   - hosts: [company.com]
+  #     secretName: company-com-tls

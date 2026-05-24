@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rca-config
+data:
+  APP_ROOT_PATH: "/my-svc/rca"
+  # Staging keeps the volatile in-memory store (cheap, resets freely).
+  FILESTORE_KIND: "memory"

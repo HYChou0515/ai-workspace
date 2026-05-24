@@ -9,7 +9,7 @@ import { useEffect, useState } from "react";
 import { kbApi, type KbApi } from "../../api/kb";
 import { Icon } from "../../components/Icon";
 import { KbDocBody } from "./KbDocBody";
-import { docPath } from "./kbLinks";
+import { docHref } from "./kbLinks";
 
 export function KbDocViewer({
   documentId,
@@ -37,7 +37,7 @@ export function KbDocViewer({
           <span className="kb-docviewer__name">{filename ?? docId.split("/").pop()}</span>
           <a
             className="kb-iconbtn"
-            href={docPath(docId, snippet)}
+            href={docHref(docId, snippet)}
             target="_blank"
             rel="noreferrer"
             title="Open in new tab"

@@ -48,6 +48,10 @@ class Settings:
     default_user: str = "default-user"
     host: str = "127.0.0.1"
     port: int = 8000
+    # External sub-path when behind a path-stripping proxy (e.g. "/my-svc/rca").
+    # Only affects generated URLs (OpenAPI/docs); the SPA's own base path is a
+    # build-time setting (VITE_BASE_PATH). Default "" = served at root.
+    root_path: str = ""
 
     # sandbox (execution environment)
     sandbox_kind: str = "local"  # local | docker | mock
@@ -85,6 +89,7 @@ class Settings:
             default_user=e.get("DEFAULT_USER", d.default_user),
             host=e.get("APP_HOST", d.host),
             port=int(e.get("APP_PORT", str(d.port))),
+            root_path=e.get("APP_ROOT_PATH", d.root_path),
             sandbox_kind=e.get("SANDBOX_KIND", d.sandbox_kind),
             sandbox_root=e.get("SANDBOX_ROOT", d.sandbox_root),
             exec_timeout=float(e.get("SANDBOX_EXEC_TIMEOUT", str(d.exec_timeout))),

@@ -1,0 +1,103 @@
+# GitLab CI for workspace-app (RCA + KB).
+#   test   → backend (ruff/ty/pytest @ 100% coverage) + frontend (tsc/vitest/build)
+#   build  → kaniko builds & pushes the app image to the GitLab registry
+#   deploy → manual kubectl apply -k of the staging / production overlay
+#
+# Project CI/CD variables expected:
+#   BASE_PATH   sub-path the SPA is built for, e.g. "/my-svc/rca/" (default "/")
+#   KUBECONFIG  (file-type) cluster creds for the deploy jobs
+# CI_REGISTRY*, CI_DEFAULT_BRANCH are provided by GitLab.
+
+stages: [test, build, deploy]
+
+variables:
+  IMAGE: $CI_REGISTRY_IMAGE/rca-app
+  BASE_PATH: "/"
+
+# ---------------------------------------------------------------- test
+
+backend-test:
+  stage: test
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  variables:
+    UV_CACHE_DIR: .uv-cache
+  cache:
+    key: uv-$CI_COMMIT_REF_SLUG
+    paths: [.uv-cache]
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends libmagic1 && rm -rf /var/lib/apt/lists/*
+  script:
+    - uv sync --frozen
+    - uv run ruff check
+    - uv run ruff format --check
+    - uv run ty check
+    - uv run coverage run -m pytest
+    - uv run coverage report --fail-under=100
+  coverage: '/^TOTAL.+?(\d+\%)$/'
+
+frontend-test:
+  stage: test
+  image: node:22-bookworm-slim
+  cache:
+    key: pnpm-$CI_COMMIT_REF_SLUG
+    paths: [web/.pnpm-store]
+  before_script:
+    - npm install -g pnpm@9
+    - cd web
+    - pnpm config set store-dir .pnpm-store
+  script:
+    - pnpm install --frozen-lockfile
+    - pnpm run typecheck
+    - pnpm exec vitest run
+    - pnpm run build
+
+# ---------------------------------------------------------------- build
+
+build-image:
+  stage: build
+  image:
+    name: gcr.io/kaniko-project/executor:debug
+    entrypoint: [""]
+  script:
+    - mkdir -p /kaniko/.docker
+    - echo "{\"auths\":{\"$CI_REGISTRY\":{\"auth\":\"$(printf '%s:%s' "$CI_REGISTRY_USER" "$CI_REGISTRY_PASSWORD" | base64 | tr -d '\n')\"}}}" > /kaniko/.docker/config.json
+    - >-
+      /kaniko/executor
+      --context "$CI_PROJECT_DIR"
+      --dockerfile "$CI_PROJECT_DIR/docker/Dockerfile"
+      --build-arg "BASE_PATH=$BASE_PATH"
+      --destination "$IMAGE:$CI_COMMIT_SHORT_SHA"
+      --destination "$IMAGE:latest"
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------- deploy
+
+.deploy:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  script:
+    - kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+    - kubectl apply -k "kubernetes/overlays/$ENVIRONMENT"
+    # roll the just-built image (overlays pin a static tag by name)
+    - kubectl -n "$NAMESPACE" set image "deployment/rca-app-$ENVIRONMENT" "rca-app=$IMAGE:$CI_COMMIT_SHORT_SHA"
+    - kubectl -n "$NAMESPACE" rollout status "deployment/rca-app-$ENVIRONMENT" --timeout=180s
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
+
+deploy-staging:
+  extends: .deploy
+  variables:
+    ENVIRONMENT: staging
+    NAMESPACE: rca-staging
+  environment:
+    name: staging
+
+deploy-production:
+  extends: .deploy
+  variables:
+    ENVIRONMENT: production
+    NAMESPACE: rca-prod
+  environment:
+    name: production

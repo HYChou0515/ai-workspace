@@ -1,0 +1,17 @@
+# Keep the build context small + reproducible (the image rebuilds deps/SPA).
+.git
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+node_modules
+web/node_modules
+web/dist
+docs
+design_handoff_rca_3.0
+kubernetes
+*.md
+!README.md
