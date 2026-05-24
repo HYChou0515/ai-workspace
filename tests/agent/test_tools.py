@@ -101,13 +101,37 @@ async def test_exec_after_write_file_sees_the_content(
     assert "hello from agent" in out
 
 
-def test_build_tools_returns_all_six_by_default():
+def test_build_tools_returns_the_workspace_set_by_default():
     tools = build_tools()
     names = {t.name for t in tools}
-    assert names == {"exec", "read_file", "write_file", "ls", "exists", "delete_file"}
+    # file/exec tools + ask_knowledge_base (RCA consults the KB); NOT kb_search,
+    # which is the KB agent's own opt-in tool.
+    assert names == {
+        "exec",
+        "read_file",
+        "write_file",
+        "ls",
+        "exists",
+        "delete_file",
+        "ask_knowledge_base",
+    }
+    assert "kb_search" not in names
     assert all(isinstance(t, FunctionTool) for t in tools)
 
 
 def test_build_tools_filters_by_allowed_list():
     tools = build_tools(allowed=["exec", "read_file"])
     assert {t.name for t in tools} == {"exec", "read_file"}
+
+
+async def test_ask_knowledge_base_delegates_to_the_context_bridge():
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
+
+    async def fake_ask(question: str) -> str:
+        return f"KB answer to: {question}"
+
+    ctx = RunContextWrapper(AgentToolContext(ask_kb=fake_ask))
+    out = await ask_knowledge_base_impl(ctx, "why did zone three drift?")
+    assert out == "KB answer to: why did zone three drift?"

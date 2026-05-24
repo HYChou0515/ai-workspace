@@ -36,7 +36,7 @@ def merge_passages(
         by_doc.setdefault(c.document_id, []).append(c)
 
     passages: list[RetrievedPassage] = []
-    for doc_id, group in by_doc.items():
+    for group in by_doc.values():
         group.sort(key=lambda c: c.start)
         run: list[ScoredChunk] = []
         for c in group:

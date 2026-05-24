@@ -7,11 +7,26 @@ from specstar import SpecStar
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent, MessageDelta, RunDone
+from workspace_app.api.kb_chat_routes import answer_question
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.kb.retriever import Retriever
+from workspace_app.resources import register_all
 from workspace_app.resources.kb import EMBED_DIM, RetrievedPassage
 from workspace_app.sandbox.mock import MockSandbox
+
+
+def _reflow_passage() -> RetrievedPassage:
+    return RetrievedPassage(
+        collection_id="c",
+        document_id="c/u/reflow.md",
+        filename="reflow.md",
+        start=0,
+        end=16,
+        source_chunk_ids=["c/u/reflow.md#0"],
+        text="zone three drift",
+    )
 
 
 class _KbRunner:
@@ -23,17 +38,7 @@ class _KbRunner:
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         self.seen_collections = list(ctx.collection_ids)
-        ctx.kb_passages.append(
-            RetrievedPassage(
-                collection_id="c",
-                document_id="c/u/reflow.md",
-                filename="reflow.md",
-                start=0,
-                end=16,
-                source_chunk_ids=["c/u/reflow.md#0"],
-                text="zone three drift",
-            )
-        )
+        ctx.kb_passages.append(_reflow_passage())
         yield MessageDelta(text="searching the kb", reasoning=True)  # <think> channel
         yield MessageDelta(text="Zone three drifted ")
         yield MessageDelta(text="[1].")
@@ -44,6 +49,23 @@ class _BoomRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         raise RuntimeError("model exploded")
         yield  # pragma: no cover — unreachable, makes this an async generator
+
+
+class _DualRunner:
+    """One runner that plays both sides of the RCA → KB bridge: a KB turn
+    (retriever set) answers from the registry; an RCA turn (no retriever) calls
+    the ask_knowledge_base bridge and relays what the KB said."""
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        if ctx.retriever is not None:  # KB turn
+            ctx.kb_passages.append(_reflow_passage())
+            yield MessageDelta(text="Zone three drifted [1].")
+            yield RunDone()
+        else:  # RCA turn — consult the KB as a tool
+            assert ctx.ask_kb is not None
+            answer = await ctx.ask_kb(prompt)
+            yield MessageDelta(text=f"KB says: {answer}")
+            yield RunDone()
 
 
 def _client(runner: object) -> TestClient:
@@ -116,3 +138,47 @@ def test_run_error_is_streamed_and_nothing_persisted():
     # only the user's message persisted — the failed turn produced no answer
     msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
     assert [m["role"] for m in msgs] == ["user"]
+
+
+async def test_answer_question_returns_synthesized_answer_with_sources_footer():
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    register_all(spec)
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+
+    answer = await answer_question(_KbRunner(), retriever, ["c"], "why voids?")
+
+    assert "Zone three drifted [1]." in answer  # visible content only (no <think>)
+    assert "Sources: [1] reflow.md" in answer  # cited source appended
+
+
+class _PlainRunner:
+    """A KB turn that cites nothing — answers without searching."""
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        yield MessageDelta(text="I don't see that in the knowledge base.")
+        yield RunDone()
+
+
+async def test_answer_question_without_citations_has_no_footer():
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    register_all(spec)
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+
+    answer = await answer_question(_PlainRunner(), retriever, ["c"], "off-topic?")
+
+    assert answer == "I don't see that in the knowledge base."  # no Sources footer
+
+
+def test_rca_agent_consults_kb_through_ask_knowledge_base():
+    # RCA turn calls the bridge, which runs the KB agent over all collections.
+    client = _client(_DualRunner())
+    client.post("/kb/collections", json={"name": "kb"})  # a collection to search
+
+    r = client.post("/investigations/ws-kb/messages", json={"content": "consult the kb"})
+
+    assert r.status_code == 200
+    body = r.text.lower()
+    assert "zone three drifted" in body  # the KB agent's answer reached RCA
+    assert "sources:" in body  # carried through with its citation footer

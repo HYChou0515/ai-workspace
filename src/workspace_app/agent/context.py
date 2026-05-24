@@ -59,6 +59,10 @@ class AgentToolContext:
     retriever: Retriever | None = None
     collection_ids: list[str] = field(default_factory=list)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
+    # RCA → KB bridge: when set (by the API layer), the RCA agent's
+    # `ask_knowledge_base` tool runs the KB agent via this callable and gets
+    # back a synthesized, cited answer. Wraps the KB agent (grill Q "Option 1").
+    ask_kb: Callable[[str], Awaitable[str]] | None = None
 
     async def ensure_sandbox(self) -> SandboxHandle:
         assert self.sandbox is not None  # file/exec tools imply an RCA context

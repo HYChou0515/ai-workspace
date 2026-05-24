@@ -1,5 +1,6 @@
 from .context import AgentToolContext
 from .tools import (
+    ask_knowledge_base_impl,
     build_tools,
     delete_file_impl,
     exec_impl,
@@ -20,4 +21,5 @@ __all__ = [
     "exists_impl",
     "delete_file_impl",
     "kb_search_impl",
+    "ask_knowledge_base_impl",
 ]

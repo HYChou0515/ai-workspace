@@ -34,7 +34,7 @@ from ..resources import (
     Status,
     register_all,
 )
-from ..resources.kb import EMBED_DIM
+from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .activity import ActivityLog
@@ -48,7 +48,7 @@ from .events import (
     ToolStart,
     to_sse,
 )
-from .kb_chat_routes import register_kb_chat_routes
+from .kb_chat_routes import answer_question, register_kb_chat_routes
 from .kb_routes import register_kb_routes
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
@@ -284,7 +284,21 @@ def create_app(
     register_kb_routes(app, spec, ingestor)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
-    register_kb_chat_routes(app, spec, runner, Retriever(spec, embedder=embedder))
+    kb_retriever = Retriever(spec, embedder=embedder)
+    register_kb_chat_routes(app, spec, runner, kb_retriever)
+
+    async def _ask_kb(question: str) -> str:
+        """RCA → KB bridge: run the KB agent over every collection and return
+        its synthesized, cited answer. Wired onto each RCA turn's context so
+        the ask_knowledge_base tool can reach the KB agent."""
+        from specstar import QB
+
+        coll_rm = spec.get_resource_manager(Collection)
+        ids = [
+            r.info.resource_id  # ty: ignore[unresolved-attribute]
+            for r in coll_rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        ]
+        return await answer_question(runner, kb_retriever, ids, question)
 
     conv_rm = spec.get_resource_manager(Conversation)
 
@@ -382,6 +396,8 @@ def create_app(
                 ensure_sandbox_via=lambda: registry.ensure_handle(session),
                 # Drive the turn with the investigation's attached agent.
                 agent_config=_resolve_agent_config(investigation_id),
+                # Lets the agent's ask_knowledge_base tool reach the KB agent.
+                ask_kb=_ask_kb,
             )
             session.current_turn = asyncio.create_task(_drive_run(body.content, ctx, queue))
 

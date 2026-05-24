@@ -31,6 +31,30 @@ from .events import AgentEvent, MessageDelta, RunError, to_sse
 from .runner import AgentRunner
 
 
+async def answer_question(
+    runner: AgentRunner, retriever: Retriever, collection_ids: list[str], question: str
+) -> str:
+    """Run one KB-agent turn to completion (no streaming) and return its answer
+    with a compact sources footer. This is how the RCA agent's
+    `ask_knowledge_base` tool consults the KB — a synthesized, cited reply
+    rather than raw passages."""
+    ctx = AgentToolContext(
+        retriever=retriever,
+        collection_ids=collection_ids,
+        agent_config=default_kb_agent_config(),
+    )
+    parts: list[str] = []
+    async for ev in runner.run(question, ctx):
+        if isinstance(ev, MessageDelta) and not ev.reasoning:
+            parts.append(ev.text)
+    answer = "".join(parts)
+    cites = parse_citations(answer, ctx.kb_passages)
+    if cites:
+        footer = "; ".join(f"[{c.marker}] {c.filename}" for c in cites)
+        answer = f"{answer}\n\nSources: {footer}"
+    return answer
+
+
 class _ChatBody(BaseModel):
     title: str = "New chat"
     collection_ids: list[str] = []

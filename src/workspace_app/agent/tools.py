@@ -102,6 +102,19 @@ def kb_search_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
     return "\n\n".join(lines)
 
 
+async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
+    """Ask the knowledge-base agent a question about the in-house documents.
+
+    Use this when the investigation needs facts, procedures, or history that
+    live in the knowledge base rather than in the workspace files. Returns a
+    synthesized answer with a Sources list. Phrase a focused question, not just
+    keywords.
+    """
+    ask_kb = ctx.context.ask_kb
+    assert ask_kb is not None  # the API layer wires this for RCA runs
+    return await ask_kb(question)
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -109,13 +122,23 @@ _IMPLS = {
     "ls": ls_impl,
     "exists": exists_impl,
     "delete_file": delete_file_impl,
+    "ask_knowledge_base": ask_knowledge_base_impl,
     "kb_search": kb_search_impl,
 }
 
-# The RCA workspace toolset — what `build_tools(None)` hands out. `kb_search`
-# lives in `_IMPLS` for lookup but is opt-in only (the KB agent asks for it
-# explicitly): it needs a retriever in the context, which RCA runs never set.
-_WORKSPACE_TOOLS = ["exec", "read_file", "write_file", "ls", "exists", "delete_file"]
+# The RCA workspace toolset — what `build_tools(None)` hands out. It includes
+# ask_knowledge_base (the RCA agent consults the KB through it). `kb_search`
+# lives in `_IMPLS` for lookup but is opt-in only — it's the KB agent's OWN
+# tool and needs a retriever in the context, which RCA runs never set.
+_WORKSPACE_TOOLS = [
+    "exec",
+    "read_file",
+    "write_file",
+    "ls",
+    "exists",
+    "delete_file",
+    "ask_knowledge_base",
+]
 
 
 def build_tools(allowed: list[str] | None = None) -> list[FunctionTool]:
