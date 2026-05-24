@@ -6,8 +6,8 @@ collection_ids, no sandbox), streams the agent's events over SSE, and persists
 the assistant answer with its [n] citations resolved against the passages the
 turn's kb_search calls accumulated.
 
-v1: user + assistant messages persist; tool-call events stream live to the FE
-but aren't stored — the durable artifact is the answer + its citations.
+User, assistant (with [n] citations), and tool-call messages all persist, so
+reopening a thread shows the answer, its sources, and what the agent searched.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from ..kb.agent import default_kb_agent_config
 from ..kb.citations import parse_citations
 from ..kb.retriever import Retriever
 from ..resources.kb import KbChat, KbMessage
-from .events import AgentEvent, MessageDelta, RunError, to_sse
+from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolStart, to_sse
 from .runner import AgentRunner
 
 
@@ -148,11 +148,14 @@ def register_kb_chat_routes(
 
         async def gen() -> AsyncIterator[str]:
             produced: list[KbMessage] = []
+            pending_tools: dict[str, ToolStart] = {}
 
             def add_assistant(text: str, reasoning: bool) -> None:
-                if not produced:
-                    produced.append(KbMessage(role="assistant", created_at=_now_ms()))
-                last = produced[-1]
+                last = produced[-1] if produced else None
+                # A tool message between answers starts a fresh assistant turn.
+                if last is None or last.role != "assistant":
+                    last = KbMessage(role="assistant", created_at=_now_ms())
+                    produced.append(last)
                 if reasoning:
                     last.reasoning = (last.reasoning or "") + text
                 else:
@@ -162,15 +165,30 @@ def register_kb_chat_routes(
                 item = await queue.get()
                 if item is None:
                     if produced:
-                        # resolve [n] against the passages this turn's searches found
+                        # resolve [n] on answers against the turn's searched passages
                         for m in produced:
-                            m.citations = parse_citations(m.content, ctx.kb_passages)
+                            if m.role == "assistant":
+                                m.citations = parse_citations(m.content, ctx.kb_passages)
                         fresh = _load(chat_id)
                         fresh.messages.extend(produced)
                         chat_rm.update(chat_id, fresh)
                     return
                 if isinstance(item, MessageDelta):
                     add_assistant(item.text, item.reasoning)
+                elif isinstance(item, ToolStart):
+                    pending_tools[item.call_id] = item
+                elif isinstance(item, ToolEnd):
+                    start = pending_tools.pop(item.call_id, None)
+                    produced.append(
+                        KbMessage(
+                            role="tool",
+                            content=item.output,
+                            tool_call_id=item.call_id,
+                            tool_name=start.name if start else None,
+                            tool_args=dict(start.args) if start else None,
+                            created_at=_now_ms(),
+                        )
+                    )
                 yield to_sse(item)
 
         return StreamingResponse(gen(), media_type="text/event-stream")

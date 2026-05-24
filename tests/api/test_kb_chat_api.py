@@ -6,7 +6,7 @@ from specstar import SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
-from workspace_app.api.events import AgentEvent, MessageDelta, RunDone
+from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, ToolEnd, ToolStart
 from workspace_app.api.kb_chat_routes import answer_question
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
@@ -49,6 +49,25 @@ class _BoomRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         raise RuntimeError("model exploded")
         yield  # pragma: no cover — unreachable, makes this an async generator
+
+
+class _ToolRunner:
+    """Emits a kb_search tool call, then an answer — so persistence of the
+    tool message + the assistant-after-tool continuation are exercised."""
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        ctx.kb_passages.append(_reflow_passage())
+        yield MessageDelta(text="Let me check. ")
+        yield ToolStart(call_id="t1", name="kb_search", args={"query": "reflow"})
+        yield ToolEnd(call_id="t1", output="[1] reflow.md: zone three drift")
+        yield MessageDelta(text="Zone three drifted [1].")
+        yield RunDone()
+
+
+class _OrphanToolRunner:
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        yield ToolEnd(call_id="ghost", output="stray output")
+        yield RunDone()
 
 
 class _DualRunner:
@@ -138,6 +157,36 @@ def test_run_error_is_streamed_and_nothing_persisted():
     # only the user's message persisted — the failed turn produced no answer
     msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
     assert [m["role"] for m in msgs] == ["user"]
+
+
+def test_send_message_persists_tool_calls_then_the_answer():
+    client = _client(_ToolRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": ["c"]}).json()["resource_id"]
+
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "why voids?"})
+
+    msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "tool", "assistant"]
+    tool = msgs[2]
+    assert tool["tool_name"] == "kb_search"
+    assert tool["tool_args"] == {"query": "reflow"}
+    # the answer after the tool is its own message, and it's the one that's cited
+    answer = msgs[3]
+    assert answer["content"] == "Zone three drifted [1]."
+    assert len(answer["citations"]) == 1
+    assert tool["citations"] == []  # tool output isn't citation-parsed
+
+
+def test_orphan_tool_end_persists_with_null_name_args():
+    client = _client(_OrphanToolRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
+
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q"})
+
+    msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
+    tool = next(m for m in msgs if m["role"] == "tool")
+    assert tool["content"] == "stray output"
+    assert tool["tool_name"] is None and tool["tool_args"] is None
 
 
 async def test_answer_question_returns_synthesized_answer_with_sources_footer():
