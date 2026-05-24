@@ -1,0 +1,164 @@
+"""Composition root — `Settings` + `get_*(settings) -> Protocol` factories.
+
+The single place that decides *which* implementation backs each Protocol seam
+(sandbox / filestore / runner / embedder / chunker / KB llm) + the specstar data
+layer. Everything downstream (`create_app` and the app internals) depends only
+on the Protocols, never on a concrete implementation or on `Settings`.
+
+`__main__` reads `Settings.from_env()` and wires the factories into
+`create_app`. Tests inject mocks/scripted impls directly and do NOT go through
+these factories — the factories serve the production composition only.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+
+from specstar import SpecStar
+
+from .api.litellm_runner import LitellmAgentRunner
+from .api.runner import AgentRunner
+from .filestore.memory import MemoryFileStore
+from .filestore.protocol import FileStore
+from .filestore.specstar_impl import SpecstarFileStore
+from .kb.chunker import Chunker, FixedTokenChunker
+from .kb.embedder import Embedder, HashEmbedder, LitellmEmbedder
+from .kb.llm import LitellmLlm, Llm
+from .rca.agent import default_rca_agent_config
+from .resources.kb import EMBED_DIM
+from .sandbox.local_process import LocalProcessSandbox
+from .sandbox.mock import MockSandbox
+from .sandbox.protocol import Sandbox
+
+
+def _flag(value: str | None) -> bool | None:
+    """Tri-state: unset → None (auto-detect); set → truthy parse."""
+    if value is None:
+        return None
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+@dataclass(frozen=True)
+class Settings:
+    """All deployment knobs, read from the environment in one place."""
+
+    default_user: str = "default-user"
+    host: str = "127.0.0.1"
+    port: int = 8000
+
+    # sandbox (execution environment)
+    sandbox_kind: str = "local"  # local | docker | mock
+    sandbox_root: str | None = None
+    exec_timeout: float = 60.0
+    sandbox_isolate: bool | None = None  # None = auto-detect userns
+
+    # file store
+    filestore_kind: str = "memory"  # memory | specstar
+
+    # agent runner (model + prompt come per-investigation from AgentConfig)
+    runner_max_retries: int = 2
+    runner_max_turns: int = 10
+
+    # KB embedder ("" → offline HashEmbedder). dim is EMBED_DIM (import-time;
+    # the DocChunk Vector width), never a separate knob — they must agree.
+    kb_embed_model: str = "ollama/qwen3-embedding"
+    kb_query_prefix: str = ""
+    kb_doc_prefix: str = ""
+
+    # KB chunker
+    kb_chunk_max_tokens: int = 256
+    kb_chunk_overlap: int = 32
+
+    # KB retrieval LLM ("" → None, disables multi-query / HyDE / rerank)
+    kb_llm_model: str = "ollama_chat/qwen3:14b"
+
+    @classmethod
+    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
+        import os
+
+        e = os.environ if env is None else env
+        d = cls()  # defaults
+        return cls(
+            default_user=e.get("DEFAULT_USER", d.default_user),
+            host=e.get("APP_HOST", d.host),
+            port=int(e.get("APP_PORT", str(d.port))),
+            sandbox_kind=e.get("SANDBOX_KIND", d.sandbox_kind),
+            sandbox_root=e.get("SANDBOX_ROOT", d.sandbox_root),
+            exec_timeout=float(e.get("SANDBOX_EXEC_TIMEOUT", str(d.exec_timeout))),
+            sandbox_isolate=_flag(e.get("SANDBOX_ISOLATE")),
+            filestore_kind=e.get("FILESTORE_KIND", d.filestore_kind),
+            runner_max_retries=int(e.get("RUNNER_MAX_RETRIES", str(d.runner_max_retries))),
+            runner_max_turns=int(e.get("RUNNER_MAX_TURNS", str(d.runner_max_turns))),
+            kb_embed_model=e.get("KB_EMBED_MODEL", d.kb_embed_model),
+            kb_query_prefix=e.get("KB_QUERY_PREFIX", d.kb_query_prefix),
+            kb_doc_prefix=e.get("KB_DOC_PREFIX", d.kb_doc_prefix),
+            kb_chunk_max_tokens=int(e.get("KB_CHUNK_MAX_TOKENS", str(d.kb_chunk_max_tokens))),
+            kb_chunk_overlap=int(e.get("KB_CHUNK_OVERLAP", str(d.kb_chunk_overlap))),
+            kb_llm_model=e.get("KB_LLM_MODEL", d.kb_llm_model),
+        )
+
+
+def get_spec(settings: Settings) -> SpecStar:
+    spec = SpecStar()
+    spec.configure(default_user=settings.default_user, default_now=lambda: datetime.now(UTC))
+    return spec
+
+
+def get_sandbox(settings: Settings) -> Sandbox:
+    match settings.sandbox_kind:
+        case "mock":
+            return MockSandbox()
+        case "local":
+            return LocalProcessSandbox(
+                root_dir=Path(settings.sandbox_root) if settings.sandbox_root else None,
+                exec_timeout=settings.exec_timeout,
+                isolate=settings.sandbox_isolate,
+            )
+        case "docker":
+            from .sandbox.docker import DockerSandbox
+
+            return DockerSandbox()
+        case other:
+            raise ValueError(f"unknown SANDBOX_KIND: {other!r}")
+
+
+def get_filestore(settings: Settings, spec: SpecStar) -> FileStore:
+    match settings.filestore_kind:
+        case "memory":
+            return MemoryFileStore()
+        case "specstar":
+            return SpecstarFileStore(spec)
+        case other:
+            raise ValueError(f"unknown FILESTORE_KIND: {other!r}")
+
+
+def get_runner(settings: Settings) -> AgentRunner:
+    return LitellmAgentRunner(
+        default_rca_agent_config(),
+        max_retries=settings.runner_max_retries,
+        max_turns=settings.runner_max_turns,
+    )
+
+
+def get_embedder(settings: Settings) -> Embedder:
+    if settings.kb_embed_model:
+        return LitellmEmbedder(
+            settings.kb_embed_model,
+            dim=EMBED_DIM,
+            query_prefix=settings.kb_query_prefix,
+            doc_prefix=settings.kb_doc_prefix,
+        )
+    return HashEmbedder(dim=EMBED_DIM)
+
+
+def get_chunker(settings: Settings) -> Chunker:
+    return FixedTokenChunker(
+        max_tokens=settings.kb_chunk_max_tokens, overlap_tokens=settings.kb_chunk_overlap
+    )
+
+
+def get_kb_llm(settings: Settings) -> Llm | None:
+    return LitellmLlm(settings.kb_llm_model) if settings.kb_llm_model else None

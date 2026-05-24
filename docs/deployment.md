@@ -64,31 +64,44 @@ uv run python -m workspace_app
 
 ## 3. 自訂進入點
 
-不要改核心程式，**自己寫一支進入點**注入你的元件：
+「**選哪個實作**」集中在 **組裝根**：`src/workspace_app/factories.py` 的 `Settings`
+（一律從環境變數讀）+ 一組 `get_*(settings) -> Protocol` factory。預設進入點
+`__main__.py` 只是薄薄一層：`Settings.from_env()` → 呼叫 factory → 餵進 `create_app`。
+`create_app` 與 app 內部**只依賴 Protocol**，不認得任何實作，也不認得 `Settings`。
+
+最常見的客製化「不用寫程式」——設環境變數即可（完整清單見 `factories.Settings`）：
+
+```bash
+SANDBOX_KIND=docker FILESTORE_KIND=specstar \
+KB_EMBED_MODEL=ollama/bge-m3 KB_LLM_MODEL= \
+APP_HOST=0.0.0.0 APP_PORT=8000 \
+uv run python -m workspace_app
+```
+
+要在程式裡完全掌控（換成 factory 不認得的實作、或自組 `Settings`），**自己寫一支進入點**：
 
 ```python
 # my_deploy.py
-from datetime import UTC, datetime, timedelta
 import uvicorn
-from specstar import SpecStar
-
 from workspace_app.api import create_app
-from workspace_app.api.litellm_runner import LitellmAgentRunner
-from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.sandbox.local_process import LocalProcessSandbox
-from workspace_app.rca.agent import default_rca_agent_config
+from workspace_app.factories import (
+    Settings, get_spec, get_sandbox, get_filestore, get_runner,
+    get_embedder, get_chunker, get_kb_llm,
+)
 
 def main() -> None:
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    s = Settings.from_env()              # 或直接 Settings(sandbox_kind="docker", ...)
+    spec = get_spec(s)
     app = create_app(
         spec=spec,
-        sandbox=LocalProcessSandbox(),          # ← 換這裡
-        filestore=MemoryFileStore(),            # ← 換這裡
-        runner=LitellmAgentRunner(default_rca_agent_config()),  # ← 換這裡
-        idle_timeout=timedelta(hours=8),
+        sandbox=get_sandbox(s),          # ← 換實作就改 SANDBOX_KIND，或這裡塞你自己的
+        filestore=get_filestore(s, spec),
+        runner=get_runner(s),
+        kb_embedder=get_embedder(s),
+        kb_chunker=get_chunker(s),
+        kb_llm=get_kb_llm(s),            # None → 停用 multi-query/HyDE/rerank
     )
-    uvicorn.run(app, host="0.0.0.0", port=8000)  # 對外服務改 0.0.0.0
+    uvicorn.run(app, host=s.host, port=s.port)
 
 if __name__ == "__main__":
     main()
@@ -97,6 +110,11 @@ if __name__ == "__main__":
 ```bash
 uv run python my_deploy.py
 ```
+
+> 寫了一個全新的實作（例如自家的 `Sandbox`）但不想擴充 factory？直接把它傳進
+> `create_app(sandbox=MyRemoteSandbox(...), ...)` 即可——`create_app` 收的就是 Protocol。
+> factory 只是「正式環境用環境變數選內建實作」的便利層；**測試一律直接注入 Mock/Scripted，
+> 不走 factory**。
 
 ---
 
