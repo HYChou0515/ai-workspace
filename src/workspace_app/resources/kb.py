@@ -54,6 +54,9 @@ class SourceDoc(Struct):  # → resource "source-doc"
     path: str  # relative path within the upload; part of the id + cross-ref key
     content: Binary
     text: str | None = None
+    # Indexing lifecycle: created "indexing", flips to "ready" once its chunks
+    # are embedded (slow — runs off the upload request), or "error" on failure.
+    status: str = "ready"
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"

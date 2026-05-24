@@ -63,6 +63,7 @@ export const mockKbApi: KbApi = {
         path: docPath,
         content_type: "text/markdown",
         created_by: "me",
+        status: "ready",
       });
     }
     documents.set(collectionId, list);

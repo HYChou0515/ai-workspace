@@ -53,6 +53,16 @@ export function KbCollectionsPage({
     };
   }, [selectedId, client]);
 
+  // While any doc is still indexing (embedded in the background), re-poll the
+  // list so its chip flips to "ready".
+  useEffect(() => {
+    if (selectedId == null || !documents.some((d) => d.status === "indexing")) return;
+    const t = setTimeout(async () => {
+      setDocuments(await client.listDocuments(selectedId));
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [documents, selectedId, client]);
+
   const createCollection = async () => {
     const name = newName.trim();
     if (!name || busy) return;
@@ -172,7 +182,13 @@ export function KbCollectionsPage({
                       <Icon name="user" size={11} color="var(--text-paper-d2)" />
                       {d.created_by}
                     </span>
-                    <span className="kb-docs__type">{d.content_type}</span>
+                    <span className={`kb-status kb-status--${d.status}`}>
+                      {d.status === "indexing"
+                        ? "indexing…"
+                        : d.status === "error"
+                          ? "error"
+                          : "indexed"}
+                    </span>
                     <a
                       className="kb-iconbtn"
                       href={docPath(d.resource_id)}

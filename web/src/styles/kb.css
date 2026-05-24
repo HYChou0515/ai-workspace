@@ -834,3 +834,26 @@
   width: 100%;
   margin: 0 auto;
 }
+
+/* ------------------------- Doc index status chip ------------------------- */
+
+.kb-status {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  padding: 2px 8px;
+  border-radius: 10px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.kb-status--ready {
+  color: var(--ok);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+}
+.kb-status--indexing {
+  color: var(--accent-h);
+  background: var(--accent-soft);
+}
+.kb-status--error {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 40%, transparent);
+}

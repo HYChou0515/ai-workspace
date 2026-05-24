@@ -12,6 +12,7 @@ import tarfile
 import zipfile
 
 import magic
+import msgspec
 import xxhash
 from specstar import QB, SpecStar
 from specstar.types import Binary, ResourceIDNotFoundError
@@ -38,22 +39,50 @@ class Ingestor:
         self._embedder = embedder
 
     def ingest(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
-        """Ingest an upload into a collection; returns the SourceDoc ids touched.
+        """Store + index synchronously; returns the SourceDoc ids touched.
 
-        A zip/tar(.gz) is unpacked and each md/txt member ingested at its
-        archive-relative path; a lone file is ingested if it's md/txt. Members /
-        files of any other type are skipped. Content type is sniffed via magic,
-        not the extension."""
+        The synchronous path (tests, scripts). The API stores first (fast) and
+        indexes in the background — see `store` / `index`."""
+        touched = self.store(collection_id=collection_id, user=user, filename=filename, data=data)
+        for doc_id in touched:
+            self.index(doc_id)
+        return touched
+
+    def store(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
+        """Fast path: persist the SourceDoc(s) as ``status="indexing"`` and
+        return the ids that need indexing (new or changed). No chunking/embedding
+        — that's the slow `index` step.
+
+        A zip/tar(.gz) is unpacked and each md/txt member stored at its
+        archive-relative path; a lone file is stored if it's md/txt. Other types
+        are skipped. Content type is sniffed via magic, not the extension."""
         mime = magic.from_buffer(data, mime=True)
         members = self._extract(mime, data) if mime in _ARCHIVE_MIMES else [(filename, data)]
         touched: list[str] = []
         for path, member in members:
             if magic.from_buffer(member, mime=True) not in _TEXT_MIMES:
                 continue
-            doc_id = self._ingest_file(collection_id, user, path, member)
+            doc_id = self._store_file(collection_id, user, path, member)
             if doc_id is not None:
                 touched.append(doc_id)
         return touched
+
+    def index(self, doc_id: str) -> None:
+        """Slow path: (re)build a stored doc's chunks — chunk + embed — then
+        flip its status to ``ready`` (``error`` if embedding fails). Safe to run
+        off the request thread."""
+        drm = self._spec.get_resource_manager(SourceDoc)
+        doc = drm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        raw = drm.restore_binary(doc).content.data
+        assert isinstance(raw, bytes)
+        try:
+            self._delete_chunks(doc_id)
+            self._index(doc.collection_id, doc_id, raw)
+            status = "ready"
+        except Exception:  # noqa: BLE001 — surface failure as doc status, don't crash the worker
+            status = "error"
+        drm.update(doc_id, msgspec.structs.replace(doc, status=status))
 
     @staticmethod
     def _extract(mime: str, data: bytes) -> list[tuple[str, bytes]]:
@@ -72,7 +101,7 @@ class Ingestor:
                         out.append((m.name, f.read()))
         return out
 
-    def _ingest_file(self, collection_id: str, user: str, path: str, data: bytes) -> str | None:
+    def _store_file(self, collection_id: str, user: str, path: str, data: bytes) -> str | None:
         doc_id = f"{collection_id}/{user}/{path}"
         drm = self._spec.get_resource_manager(SourceDoc)
         try:
@@ -82,14 +111,14 @@ class Ingestor:
         # Identical bytes already at this id → no-op (don't churn a revision).
         if existing is not None and existing.content.file_id == xxhash.xxh3_128_hexdigest(data):
             return None
-        doc = SourceDoc(collection_id=collection_id, path=path, content=Binary(data=data))
+        doc = SourceDoc(
+            collection_id=collection_id, path=path, content=Binary(data=data), status="indexing"
+        )
         if existing is None:
             drm.create(doc, resource_id=doc_id)
         else:
-            # Changed content → new revision in place; rebuild the derived chunks.
-            self._delete_chunks(doc_id)
+            # Changed content → new revision in place; index() rebuilds the chunks.
             drm.update(doc_id, doc)
-        self._index(collection_id, doc_id, data)
         return doc_id
 
     def _delete_chunks(self, doc_id: str) -> None:

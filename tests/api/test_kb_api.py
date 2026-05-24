@@ -56,12 +56,14 @@ def test_upload_document_and_list():
     r = client.post(f"/kb/collections/{cid}/documents", files=files)
     assert r.status_code == 200
     assert r.json()["document_ids"] == [f"{cid}/default-user/guide.md"]
+    assert r.json()["status"] == "indexing"  # embedding runs in the background
 
     docs = client.get(f"/kb/collections/{cid}/documents").json()
     match = next(d for d in docs if d["resource_id"] == f"{cid}/default-user/guide.md")
     assert match["path"] == "guide.md"
     assert match["content_type"] in ("text/plain", "text/markdown")
     assert match["created_by"] == "default-user"  # specstar audit meta
+    assert match["status"] == "ready"  # background index finished (TestClient runs it)
 
 
 def test_folder_upload_preserves_relative_path():

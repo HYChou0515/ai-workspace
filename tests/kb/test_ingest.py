@@ -115,3 +115,38 @@ def test_ingest_unsupported_single_file_is_skipped(
         collection_id=cid, user="a", filename="logo.png", data=b"\x89PNG\r\n\x1a\n\x00\x00binary"
     )
     assert ids == []  # non-text, non-archive → nothing ingested
+
+
+def test_store_then_index_lifecycle_sets_status(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    [doc_id] = ing.store(collection_id=cid, user="u", filename="a.md", data=b"hello world")
+
+    drm = spec.get_resource_manager(SourceDoc)
+    assert drm.get(doc_id).data.status == "indexing"  # stored, not yet embedded
+    assert _chunks_of(spec, doc_id) == []  # no chunks until index()
+
+    ing.index(doc_id)
+    assert drm.get(doc_id).data.status == "ready"
+    assert _chunks_of(spec, doc_id)  # chunks now exist
+
+
+def test_index_marks_doc_error_when_embedding_fails(
+    spec: SpecStar, chunker: FixedTokenChunker
+):
+    class _BoomEmbedder:
+        dim = EMBED_DIM
+
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            raise RuntimeError("model down")
+
+        def embed_query(self, text: str) -> list[float]:
+            raise RuntimeError("model down")
+
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=_BoomEmbedder())
+    [doc_id] = ing.store(collection_id=cid, user="u", filename="a.md", data=b"hello world")
+    ing.index(doc_id)  # embedding fails → recorded as error, not raised
+    assert spec.get_resource_manager(SourceDoc).get(doc_id).data.status == "error"

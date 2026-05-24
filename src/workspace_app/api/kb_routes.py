@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import posixpath
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -47,15 +47,23 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
         return out
 
     @app.post("/kb/collections/{collection_id}/documents")
-    async def upload_document(collection_id: str, file: UploadFile = File(...)) -> dict:  # noqa: B008
+    async def upload_document(
+        collection_id: str,
+        background: BackgroundTasks,
+        file: UploadFile = File(...),  # noqa: B008
+    ) -> dict:
         data = await file.read()
-        ids = ingestor.ingest(
+        # Store fast (doc appears as "indexing"); embed in the background so a
+        # slow embedder doesn't block the upload response.
+        ids = ingestor.store(
             collection_id=collection_id,
             user=_DEFAULT_USER,
             filename=file.filename or "upload",
             data=data,
         )
-        return {"document_ids": ids}
+        for doc_id in ids:
+            background.add_task(ingestor.index, doc_id)
+        return {"document_ids": ids, "status": "indexing"}
 
     @app.get("/kb/collections/{collection_id}/documents")
     async def list_documents(collection_id: str) -> list[dict]:
@@ -70,6 +78,7 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
                     "path": data.path,
                     "content_type": data.content.content_type,
                     "created_by": r.info.created_by,  # ty: ignore[unresolved-attribute]
+                    "status": data.status,
                 }
             )
         return out

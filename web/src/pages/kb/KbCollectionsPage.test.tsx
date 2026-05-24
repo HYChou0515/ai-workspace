@@ -38,4 +38,24 @@ describe("KbCollectionsPage", () => {
     await userEvent.click(row);
     expect(onOpenDoc).toHaveBeenCalledWith(`${col.resource_id}/me/guide.md`);
   });
+
+  it("shows an indexing chip that flips to indexed by polling", async () => {
+    // a client whose doc starts "indexing" then becomes "ready" on re-poll
+    let status = "indexing";
+    const client = {
+      listCollections: async () => [{ resource_id: "c1", name: "kb", description: "" }],
+      listDocuments: async () => {
+        const s = status;
+        status = "ready"; // next poll returns ready
+        return [
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: s },
+        ];
+      },
+    } as unknown as Parameters<typeof KbCollectionsPage>[0]["client"];
+
+    render(<KbCollectionsPage client={client} />);
+    expect(await screen.findByText("indexing…")).toBeInTheDocument();
+    // the poll effect refetches and the chip flips
+    await waitFor(() => expect(screen.getByText("indexed")).toBeInTheDocument(), { timeout: 3000 });
+  });
 });

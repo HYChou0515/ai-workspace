@@ -22,6 +22,8 @@ export type KbDocument = {
   path: string;
   content_type: string;
   created_by: string;
+  /** Indexing lifecycle: "indexing" | "ready" | "error". */
+  status: string;
 };
 
 /** A document rendered for the citation viewer: markdown with kb:// links. */
