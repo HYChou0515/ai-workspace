@@ -857,3 +857,30 @@
   color: var(--err);
   border-color: color-mix(in srgb, var(--err) 40%, transparent);
 }
+
+/* ------------------------- Document filter search ------------------------- */
+
+.kb-docsearch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  margin-bottom: 12px;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+}
+.kb-docsearch:focus-within {
+  border-color: var(--accent);
+}
+.kb-docsearch input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: none;
+  font-family: var(--font-body);
+  font-size: var(--text-body-sm);
+  color: var(--ink);
+}

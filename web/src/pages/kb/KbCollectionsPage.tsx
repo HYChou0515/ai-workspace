@@ -21,6 +21,7 @@ export function KbCollectionsPage({
   const [collections, setCollections] = useState<KbCollection[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [documents, setDocuments] = useState<KbDocument[]>([]);
+  const [docQuery, setDocQuery] = useState("");
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -49,6 +50,7 @@ export function KbCollectionsPage({
 
   useEffect(() => {
     let mounted = true;
+    setDocQuery(""); // reset the filter when switching collections
     if (selectedId == null) {
       setDocuments([]);
       return;
@@ -99,6 +101,8 @@ export function KbCollectionsPage({
   };
 
   const selected = collections.find((c) => c.resource_id === selectedId) ?? null;
+  const q = docQuery.trim().toLowerCase();
+  const shownDocs = q ? documents.filter((d) => d.path.toLowerCase().includes(q)) : documents;
 
   return (
     <div className="kb-cols">
@@ -179,8 +183,21 @@ export function KbCollectionsPage({
             {documents.length === 0 ? (
               <p className="kb-cols__empty">Upload markdown, text, or an archive to index it.</p>
             ) : (
-              <ul className="kb-docs__rows">
-                {documents.map((d) => (
+              <>
+                <label className="kb-docsearch">
+                  <Icon name="search" size={14} color="var(--text-paper-d)" />
+                  <input
+                    type="search"
+                    placeholder="Filter documents by name…"
+                    value={docQuery}
+                    onChange={(e) => setDocQuery(e.target.value)}
+                  />
+                </label>
+                {shownDocs.length === 0 ? (
+                  <p className="kb-cols__empty">No documents match “{docQuery}”.</p>
+                ) : (
+                  <ul className="kb-docs__rows">
+                    {shownDocs.map((d) => (
                   <li key={d.resource_id} className="kb-docs__row">
                     <button
                       type="button"
@@ -211,9 +228,11 @@ export function KbCollectionsPage({
                     >
                       <Icon name="arrow_u" size={14} />
                     </a>
-                  </li>
-                ))}
-              </ul>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </>
             )}
           </>
         ) : (

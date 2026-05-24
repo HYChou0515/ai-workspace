@@ -39,6 +39,18 @@ describe("KbCollectionsPage", () => {
     expect(onOpenDoc).toHaveBeenCalledWith(`${col.resource_id}/me/guide.md`);
   });
 
+  it("filters documents in the collection by name", async () => {
+    const c = await mockKbApi.createCollection("kb");
+    await mockKbApi.uploadDocument(c.resource_id, new File(["x"], "reflow.md"));
+    await mockKbApi.uploadDocument(c.resource_id, new File(["x"], "wirebond.md"));
+    render(<KbCollectionsPage client={mockKbApi} />);
+
+    await screen.findByRole("button", { name: /reflow\.md/ });
+    await userEvent.type(screen.getByPlaceholderText("Filter documents by name…"), "wire");
+    expect(screen.queryByRole("button", { name: /reflow\.md/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /wirebond\.md/ })).toBeInTheDocument();
+  });
+
   it("shows an indexing chip that flips to indexed by polling", async () => {
     // a client whose doc starts "indexing" then becomes "ready" on re-poll
     let status = "indexing";
