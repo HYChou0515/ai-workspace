@@ -1,14 +1,14 @@
 """Retriever — hybrid retrieval over a set of collections.
 
-v1 pipeline: dense (in-process cosine over the stored chunk vectors) + sparse
-(BM25) → Reciprocal Rank Fusion → MMR diversification → parent-document merge →
-top-k RetrievedPassage. The Embedder is injected (asymmetric query embedding);
-the LLM-driven enhancements (multi-query, HyDE, rerank) layer on top in later
-slices via an optional `llm`.
+Pipeline: dense (specstar's native vector query over the stored chunk vectors —
+pgvector-indexed when available) + sparse (BM25) → Reciprocal Rank Fusion → MMR
+diversification → parent-document merge → top-k RetrievedPassage. The Embedder
+is injected (asymmetric query embedding); the LLM-driven enhancements
+(multi-query, HyDE, rerank) layer on top via an optional `llm`.
 
-(v2 will push the dense search down into specstar's vector query for scale; v1
-loads a collection's chunks and scores them in-process, which is simple, uses
-the stored vectors, and works uniformly across multiple collections.)
+The chunk set is still loaded once for the sparse (BM25) corpus, MMR similarity,
+and passage metadata; only the dense ranking is pushed into the store. Cosine is
+the shared metric, so the dense order matches the stored vectors' geometry.
 """
 
 from __future__ import annotations
@@ -58,7 +58,7 @@ class Retriever:
         ranked_lists: list[list[str]] = []
         for q in queries:
             qv = self._embedder.embed_query(q)
-            ranked_lists.append(self._dense_order(chunks, qv))
+            ranked_lists.append(self._dense_order(collection_ids, qv))
             ranked_lists.append(bm25_rank(q, corpus))
 
         # HyDE: embed a hypothetical answer (as a pseudo-document) and add it as
@@ -67,7 +67,7 @@ class Retriever:
             hyde = hypothetical_document(self._llm, query)
             if hyde:
                 hv = self._embedder.embed_documents([hyde])[0]
-                ranked_lists.append(self._dense_order(chunks, hv))
+                ranked_lists.append(self._dense_order(collection_ids, hv))
 
         fused = reciprocal_rank_fusion(ranked_lists)[: self._candidates]
 
@@ -100,9 +100,23 @@ class Retriever:
             passages = rerank_passages(self._llm, query, passages)
         return passages[: self._top_k]
 
-    def _dense_order(self, chunks: dict[str, DocChunk], vec: list[float]) -> list[str]:
-        """Chunk ids ordered nearest-first to `vec` by cosine distance."""
-        return sorted(chunks, key=lambda cid: cosine_distance(vec, chunks[cid].embedding))
+    def _dense_order(self, collection_ids: list[str], vec: list[float]) -> list[str]:
+        """Top candidate chunk ids nearest `vec`, via specstar's native vector
+        query (pgvector-indexed when available; computed in-store otherwise) —
+        no full in-process scan/sort. Ordered nearest-first by cosine distance."""
+        rm = self._spec.get_resource_manager(DocChunk)
+        query = (
+            QB["collection_id"]
+            .in_(collection_ids)
+            # specstar's order_by type union omits VectorDistanceSort (works at runtime)
+            .order_by(QB["embedding"].cosine(vec).asc())  # ty: ignore[invalid-argument-type]
+            .limit(self._candidates)
+            .build()
+        )
+        return [
+            r.info.resource_id  # ty: ignore[unresolved-attribute]
+            for r in rm.list_resources(query)
+        ]
 
     def _load_chunks(self, collection_ids: list[str]) -> dict[str, DocChunk]:
         rm = self._spec.get_resource_manager(DocChunk)
