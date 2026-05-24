@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 from agents import Agent, Runner
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
@@ -38,12 +38,24 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
-def _is_reasoning_delta(event_type: str) -> bool:
-    """The agents SDK surfaces a model's thinking as a separate stream event
-    (e.g. ``response.reasoning_summary_text.delta`` / ``…reasoning_text…``)
-    that still carries a ``.delta`` string like the visible-text deltas —
-    so we route by type, not just by the presence of ``.delta``."""
-    return "reasoning" in event_type
+def _delta_channel(event_type: str) -> Literal["content", "reasoning", "ignore"]:
+    """Classify a raw Responses ``*.delta`` event by its type. FIVE event
+    types carry a ``.delta`` string on the LiteLLM/Qwen path, so routing by
+    "has .delta" alone is wrong:
+
+      - response.output_text.delta            → the visible answer
+      - response.refusal.delta                → a refusal (still user-facing)
+      - response.reasoning_summary_text.delta → thinking (reasoning channel)
+      - response.reasoning_text.delta         → thinking (reasoning channel)
+      - response.function_call_arguments.delta→ streaming tool-call JSON; we
+        IGNORE it (the complete args arrive via the tool_called run item),
+        otherwise the args would leak into the answer text.
+    """
+    if event_type in ("response.output_text.delta", "response.refusal.delta"):
+        return "content"
+    if "reasoning" in event_type:
+        return "reasoning"
+    return "ignore"
 
 
 def _partial_suffix(s: str, tag: str) -> int:
@@ -274,13 +286,12 @@ class LitellmAgentRunner:
             if getattr(event, "type", None) == "raw_response_event":
                 data = getattr(event, "data", None)
                 delta = getattr(data, "delta", None)
-                if isinstance(delta, str) and delta:
+                channel = _delta_channel(getattr(data, "type", "") or "")
+                if isinstance(delta, str) and delta and channel != "ignore":
                     completion_chars += len(delta)
-                    if _is_reasoning_delta(getattr(data, "type", "") or ""):
-                        # separate reasoning event → reasoning channel
+                    if channel == "reasoning":
                         yield MessageDelta(text=delta, reasoning=True)
-                    else:
-                        # visible text — still split any inline <think> tags
+                    else:  # content — still split any inline <think> tags
                         content, reasoning = splitter.feed(delta)
                         if reasoning:
                             yield MessageDelta(text=reasoning, reasoning=True)

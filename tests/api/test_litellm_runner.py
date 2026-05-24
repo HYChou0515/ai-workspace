@@ -21,19 +21,22 @@ from workspace_app.api.litellm_runner import (
     LitellmAgentRunner,
     ThinkSplitter,
     _approx_tokens,
+    _delta_channel,
     _exact_usage,
-    _is_reasoning_delta,
     _map_event,
     diagnose_error,
 )
 from workspace_app.resources import AgentConfig
 
 
-def test_is_reasoning_delta_routes_by_event_type():
-    assert _is_reasoning_delta("response.reasoning_summary_text.delta") is True
-    assert _is_reasoning_delta("response.reasoning_text.delta") is True
-    assert _is_reasoning_delta("response.output_text.delta") is False
-    assert _is_reasoning_delta("") is False
+def test_delta_channel_classifies_every_delta_event_type():
+    assert _delta_channel("response.output_text.delta") == "content"
+    assert _delta_channel("response.refusal.delta") == "content"
+    assert _delta_channel("response.reasoning_summary_text.delta") == "reasoning"
+    assert _delta_channel("response.reasoning_text.delta") == "reasoning"
+    # streaming tool-call JSON must NOT leak into the answer
+    assert _delta_channel("response.function_call_arguments.delta") == "ignore"
+    assert _delta_channel("") == "ignore"
 
 
 def _drain(splitter: ThinkSplitter, chunks: list[str]) -> tuple[str, str]:
