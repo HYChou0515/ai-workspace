@@ -1875,6 +1875,15 @@ wheels = [
 ]
 
 [[package]]
+name = "python-magic"
+version = "0.4.27"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/da/db/0b3e28ac047452d079d375ec6798bf76a036a08182dbb39ed38116a49130/python-magic-0.4.27.tar.gz", hash = "sha256:c1ba14b08e4a5f5c31a302b7721239695b2f0f058d125bd5ce1ee36b9d9d3c3b", size = 14677, upload-time = "2022-06-07T20:16:59.508Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6c/73/9f872cb81fc5c3bb48f7227872c28975f998f3e7c2b1c16e95e6432bbb90/python_magic-0.4.27-py2.py3-none-any.whl", hash = "sha256:c212960ad306f700aa0d01e5d7a325d20548ff97eb9920dcd29513174f0294d3", size = 13840, upload-time = "2022-06-07T20:16:57.763Z" },
+]
+
+[[package]]
 name = "python-multipart"
 version = "0.0.29"
 source = { registry = "https://pypi.org/simple" }
@@ -2285,6 +2294,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/21/04/b2c18722ff79917762472fc800e7ca5d1580746925b246c4e82bf3111519/specstar-0.11.0-py3-none-any.whl", hash = "sha256:6b35233ef837adab4e9a86bc401241b79426787d47440bb23786faf9d100d0a8", size = 391013, upload-time = "2026-05-22T05:34:12.04Z" },
 ]
 
+[package.optional-dependencies]
+magic = [
+    { name = "python-magic" },
+]
+
 [[package]]
 name = "sse-starlette"
 version = "3.4.4"
@@ -2596,7 +2610,7 @@ dependencies = [
     { name = "jupyter-client" },
     { name = "litellm" },
     { name = "openai-agents" },
-    { name = "specstar" },
+    { name = "specstar", extra = ["magic"] },
 ]
 
 [package.dev-dependencies]
@@ -2616,7 +2630,7 @@ requires-dist = [
     { name = "jupyter-client", specifier = ">=8.8.0" },
     { name = "litellm", specifier = ">=1.85.1" },
     { name = "openai-agents", specifier = ">=0.17.3" },
-    { name = "specstar", specifier = ">=0.11.0" },
+    { name = "specstar", extras = ["magic"], specifier = ">=0.11.0" },
 ]
 
 [package.metadata.requires-dev]
