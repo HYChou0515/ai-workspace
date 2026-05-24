@@ -48,12 +48,19 @@ class _SpaStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):  # type: ignore[no-untyped-def]
         from starlette.exceptions import HTTPException as StarletteHTTPException
 
+        served_index = path in ("", ".", "/", "index.html")
         try:
-            return await super().get_response(path, scope)
+            response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
-            if exc.status_code == 404:
-                return await super().get_response("index.html", scope)
-            raise
+            if exc.status_code != 404:
+                raise
+            served_index = True  # history fallback → index.html
+            response = await super().get_response("index.html", scope)
+        # index.html must always be revalidated so a rebuild's new hashed-asset
+        # references are picked up; the hashed assets themselves stay cacheable.
+        if served_index:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 class _MessageBody(BaseModel):

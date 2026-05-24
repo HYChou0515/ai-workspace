@@ -59,6 +59,21 @@ def test_real_asset_is_served_directly(tmp_path: Path):
     assert "console.log" in resp.text
 
 
+def test_index_is_served_no_cache(tmp_path: Path):
+    """index.html must always be revalidated so a rebuild's new hashed-asset
+    references are picked up — both at `/` and via the history fallback."""
+    client = _client(tmp_path)
+    assert client.get("/").headers.get("cache-control") == "no-cache"
+    fallback = client.get("/investigations/investigation:abc-123")
+    assert fallback.headers.get("cache-control") == "no-cache"
+
+
+def test_hashed_asset_is_not_no_cache(tmp_path: Path):
+    """Real (hashed) assets stay cacheable — only index.html is no-cache."""
+    resp = _client(tmp_path).get("/assets/app.js")
+    assert resp.headers.get("cache-control") != "no-cache"
+
+
 def test_unknown_api_route_still_404s_json(tmp_path: Path):
     """API misses keep their JSON 404 — only non-API paths fall back."""
     resp = _client(tmp_path).get("/investigation/does-not-exist")
