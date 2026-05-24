@@ -2315,39 +2315,73 @@ function PanelBody({
         </div>
       )}
       {log.entries.map((e, i) => {
-        if (e.kind === "banner") return <LogLine key={i} ts="" kind="warn" text={e.text} />;
+        // The entry currently being produced (last, while streaming) renders
+        // live + expanded so it auto-scrolls; finished entries fold like the
+        // chat does. Switching <div>↔<details> on the same key remounts, so a
+        // just-finished entry collapses cleanly.
+        const active = log.streaming && i === log.entries.length - 1;
+        if (e.kind === "banner") {
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="warn" text={e.text} />;
+        }
         if (e.kind === "tool_call") {
-          return (
-            <div key={i} style={{ marginBottom: 6 }}>
-              <div style={{ display: "flex", gap: 8 }}>
-                <span style={{ width: 64, color: e.call.status === "running" ? "var(--accent)" : "var(--text-paper-d)", flexShrink: 0 }}>
-                  {e.call.status === "running" ? "tool ▸" : "tool ✓"}
-                </span>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
-                  {e.call.name}({argsLine(e.call.args)})
-                </span>
+          const running = e.call.status === "running";
+          const head = (
+            <>
+              <span style={logTs}>{fmtTs(e.call.startedAt)}</span>
+              <span
+                style={{ width: 56, flexShrink: 0, color: running ? "var(--accent)" : "var(--text-paper-d)" }}
+              >
+                {running ? "tool ▸" : "tool ✓"}
+              </span>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                {e.call.name}({argsLine(e.call.args)})
+              </span>
+            </>
+          );
+          const body = callBody(e.call);
+          if (active && running) {
+            return (
+              <div key={i} style={{ marginBottom: 6 }}>
+                <div style={{ display: "flex", gap: 8 }}>{head}</div>
+                {body && <pre style={logPre}>{body}</pre>}
               </div>
-              {callBody(e.call) && <pre style={logPre}>{callBody(e.call)}</pre>}
-            </div>
+            );
+          }
+          return (
+            <details key={i} style={{ marginBottom: 6 }}>
+              <summary style={logSummary}>{head}</summary>
+              {body && <pre style={logPre}>{body}</pre>}
+            </details>
           );
         }
-        // Conversation messages are folded — read the chat for the full
-        // exchange; the log is for the finer event/tool detail.
-        return (
-          <details key={i} style={{ marginBottom: 6 }}>
-            <summary
-              style={{
-                cursor: "pointer",
-                listStyle: "none",
-                color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)",
-              }}
-            >
+        const head = (
+          <>
+            <span style={logTs}>{fmtTs(e.at)}</span>
+            <span style={{ color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)" }}>
               {e.message.role}: {firstLine(e.message.content || e.message.reasoning || "")}
-            </summary>
+            </span>
+          </>
+        );
+        const body = (
+          <>
             {e.message.reasoning && (
               <pre style={{ ...logPre, opacity: 0.7 }}>{e.message.reasoning}</pre>
             )}
             {e.message.content !== "" && <pre style={logPre}>{e.message.content}</pre>}
+          </>
+        );
+        if (active && e.message.role === "assistant") {
+          return (
+            <div key={i} style={{ marginBottom: 6 }}>
+              <div style={{ display: "flex", gap: 8 }}>{head}</div>
+              {body}
+            </div>
+          );
+        }
+        return (
+          <details key={i} style={{ marginBottom: 6 }}>
+            <summary style={logSummary}>{head}</summary>
+            {body}
           </details>
         );
       })}
@@ -2405,6 +2439,25 @@ function runMeta(call: RunCall): string {
   }
   return parts.join("  ");
 }
+
+/** Wall-clock time for a log entry (blank when unknown, e.g. loaded history). */
+function fmtTs(at?: number): string {
+  return at != null ? new Date(at).toLocaleTimeString() : "";
+}
+
+const logTs: React.CSSProperties = {
+  width: 64,
+  flexShrink: 0,
+  color: "var(--text-paper-d2)",
+};
+
+const logSummary: React.CSSProperties = {
+  display: "flex",
+  gap: 8,
+  cursor: "pointer",
+  listStyle: "none",
+  alignItems: "baseline",
+};
 
 const logPre: React.CSSProperties = {
   margin: "2px 0 0 16px",

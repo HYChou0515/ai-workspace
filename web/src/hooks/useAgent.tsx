@@ -67,6 +67,7 @@ export function useAgentInternal(investigationId: string): AgentState {
           ...prev.entries,
           {
             kind: "message",
+            at: Date.now(),
             message: { role: "user", author: "default-user", content: trimmed },
           },
         ],

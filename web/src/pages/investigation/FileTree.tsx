@@ -245,6 +245,15 @@ export function FileTree({
         </span>
         <button
           type="button"
+          title="Refresh files"
+          aria-label="refresh files"
+          onClick={refresh}
+          style={{ color: "var(--text-paper-d)", padding: 2 }}
+        >
+          <Icon name="refresh" size={13} />
+        </button>
+        <button
+          type="button"
           title={createDir ? `New file in ${createDir}/` : "New file"}
           onClick={() => {
             if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);

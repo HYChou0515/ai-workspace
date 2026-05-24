@@ -34,9 +34,9 @@ export type AgentMetricsState = {
 };
 
 export type AgentEntry =
-  | { kind: "message"; message: Message }
+  | { kind: "message"; message: Message; at?: number }
   | { kind: "tool_call"; call: ToolCallView }
-  | { kind: "banner"; text: string };
+  | { kind: "banner"; text: string; at?: number };
 
 export type AgentLog = {
   entries: AgentEntry[];
@@ -152,6 +152,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       } else {
         entries.push({
           kind: "message",
+          at: now,
           message: ev.reasoning
             ? { role: "assistant", content: "", reasoning: ev.text, author: "RCA Agent" }
             : { role: "assistant", content: ev.text, author: "RCA Agent" },
@@ -214,21 +215,25 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           }
         }
       } else {
-        entries.push({ kind: "banner", text: `parse error: ${ev.hint}` });
+        entries.push({ kind: "banner", at: now, text: `parse error: ${ev.hint}` });
       }
       return { ...log, entries };
     }
 
     case "sandbox_killed_idle":
-      entries.push({ kind: "banner", text: "sandbox went idle — restarting on next exec" });
+      entries.push({
+        kind: "banner",
+        at: now,
+        text: "sandbox went idle — restarting on next exec",
+      });
       return { ...log, entries };
 
     case "max_turns_exceeded":
-      entries.push({ kind: "banner", text: `max turns (${ev.turns}) exceeded` });
+      entries.push({ kind: "banner", at: now, text: `max turns (${ev.turns}) exceeded` });
       return { ...log, entries, streaming: false, error: "max turns exceeded" };
 
     case "run_cancelled":
-      entries.push({ kind: "banner", text: "run cancelled" });
+      entries.push({ kind: "banner", at: now, text: "run cancelled" });
       return { ...log, entries, streaming: false };
 
     case "error":

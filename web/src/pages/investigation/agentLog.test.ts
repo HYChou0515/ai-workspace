@@ -116,6 +116,19 @@ describe("reduceAgent", () => {
     }
   });
 
+  it("stamps each log entry with the time it was created", () => {
+    const t = 1_700_000_000_000;
+    const log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "hi" }, t);
+    const m = log.entries[0];
+    if (m?.kind === "message") expect(m.at).toBe(t);
+    else throw new Error("expected message entry");
+
+    const banner = reduceAgent(EMPTY_LOG, { type: "max_turns_exceeded", turns: 5 }, t);
+    const b = banner.entries[0];
+    if (b?.kind === "banner") expect(b.at).toBe(t);
+    else throw new Error("expected banner entry");
+  });
+
   it("marks streaming=false on terminal events", () => {
     expect(fold([{ type: "done" }], { ...EMPTY_LOG, streaming: true }).streaming).toBe(false);
     expect(fold([{ type: "error", message: "x" }], { ...EMPTY_LOG, streaming: true }).streaming).toBe(false);
@@ -142,7 +155,9 @@ describe("reduceAgent", () => {
 
   it("pushes a banner for unattributed parse errors", () => {
     const log = fold([{ type: "tool_call_parse_error", hint: "global parse error" }]);
-    expect(log.entries).toEqual([{ kind: "banner", text: "parse error: global parse error" }]);
+    expect(log.entries).toMatchObject([
+      { kind: "banner", text: "parse error: global parse error" },
+    ]);
   });
 
   it("includes max_turns banner and clears streaming", () => {
