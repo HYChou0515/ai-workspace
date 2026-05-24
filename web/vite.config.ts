@@ -10,6 +10,7 @@ export default defineConfig({
       "/investigations": "http://localhost:8000",
       "/conversation": "http://localhost:8000",
       "/agent-config": "http://localhost:8000",
+      "/kb": "http://localhost:8000",
     },
   },
   build: {
