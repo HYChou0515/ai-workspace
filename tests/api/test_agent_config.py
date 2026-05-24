@@ -77,13 +77,22 @@ def test_attached_config_drives_the_turn():
     cfg_id = cfg["revision_info"]["resource_id"]
     inv_id = client.post(
         "/investigation",
-        json={"title": "t", "owner": "u", "attached_agent_config_id": cfg_id},
+        json={
+            "title": "t",
+            "owner": "u",
+            "attached_agent_config_id": cfg_id,
+            "template_profile": "methodology",
+        },
     ).json()["resource_id"]
 
     resp = client.post(f"/investigations/{inv_id}/messages", json={"content": "hi"})
     _ = resp.text  # drain the SSE stream so the turn runs
     assert captured and captured[0] is not None
     assert captured[0].model == "claude-opus-4-7"
+    # The investigation's template appendix is composed onto the config's
+    # prompt, so the agent is told about THIS template's starting files.
+    assert "/brief.md" in captured[0].system_prompt  # methodology appendix
+    assert "/SOP.md" not in captured[0].system_prompt  # not the default template's
 
 
 def test_no_attached_config_leaves_turn_on_default():

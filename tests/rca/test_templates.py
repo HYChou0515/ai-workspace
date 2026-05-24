@@ -4,7 +4,12 @@ import pytest
 from specstar import SpecStar
 
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
-from workspace_app.rca.templates import list_profiles, seed_investigation
+from workspace_app.rca.templates import (
+    compose_system_prompt,
+    list_profiles,
+    load_template_appendix,
+    seed_investigation,
+)
 from workspace_app.resources import Investigation, Severity, Status
 
 
@@ -20,6 +25,43 @@ def test_list_profiles_includes_default_and_example():
     assert "default" in profiles
     assert "methodology" in profiles
     assert "smt-reflow-example" in profiles
+
+
+def test_appendix_describes_each_profiles_starting_files():
+    """Each profile's _prompt.md appendix names the files THAT profile seeds,
+    so the agent isn't told about files from a different template."""
+    methodology = load_template_appendix("methodology")
+    assert "/brief.md" in methodology and "/5-why.md" in methodology
+    assert "/drift.ipynb" not in methodology  # methodology has no notebooks
+
+    smt = load_template_appendix("smt-reflow-example")
+    assert "/drift.ipynb" in smt and "/data/" in smt
+
+    default = load_template_appendix("default")
+    assert "/SOP.md" in default
+    assert "/brief.md" not in default  # default does NOT start with a brief
+
+
+def test_appendix_missing_returns_empty():
+    assert load_template_appendix("no-such-profile") == ""
+
+
+def test_compose_appends_appendix_to_base():
+    base = "# RCA Agent\nBASE BODY"
+    composed = compose_system_prompt(base, "methodology")
+    assert composed.startswith("# RCA Agent")
+    assert "/brief.md" in composed  # appendix concatenated
+
+    # A profile without an appendix leaves the base untouched.
+    assert compose_system_prompt(base, "no-such-profile") == base
+
+
+async def test_appendix_file_is_not_seeded_as_a_workspace_file(filestore: SpecstarFileStore):
+    """_prompt.md is prompt metadata, not a starting file — it must not land
+    in the investigation's workspace."""
+    inv = Investigation(title="x", owner="y")
+    written = await seed_investigation(filestore, "inv-x", inv, profile="methodology")
+    assert "/_prompt.md" not in written
 
 
 async def test_default_profile_seeds_something(filestore: SpecstarFileStore):

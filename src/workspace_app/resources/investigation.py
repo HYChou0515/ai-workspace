@@ -65,3 +65,8 @@ class Investigation(Struct):
     ] = None
     """Which AgentConfig drives this investigation's agent. If the
     referenced config is deleted, the back-pointer auto-clears."""
+
+    template_profile: str = "default"
+    """The template profile this investigation was seeded from. Persisted so
+    the agent's system prompt can be composed with that template's starting-
+    files appendix at turn time (see rca.templates.compose_system_prompt)."""

@@ -8,20 +8,17 @@ def test_load_system_prompt_returns_non_empty_markdown():
     assert "# RCA Agent" in text
 
 
-def test_prompt_teaches_file_conventions():
-    """Spot-check that the prompt names the conventional paths so the
-    agent knows the design's file schema (FE renderers depend on these)."""
+def test_base_prompt_teaches_app_level_conventions_not_a_fixed_layout():
+    """The base prompt carries only template-agnostic artifact conventions
+    (FE renderers depend on these). Template-specific starting files live in
+    each profile's `_prompt.md` appendix (see test_templates.py), so the base
+    must NOT hardcode one template's layout."""
     text = load_system_prompt()
-    for marker in (
-        "/brief.md",
-        "/drift.ipynb",
-        "/pareto.ipynb",
-        "/fishbone.canvas",
-        "/5-why.md",
-        "/report.v",
-        "/data/",
-    ):
-        assert marker in text, f"system prompt missing {marker!r}"
+    for marker in ("/report.v", ".canvas", ".ipynb"):
+        assert marker in text, f"base prompt missing convention {marker!r}"
+    # Template-specific files must NOT be baked into the base prompt.
+    for leaked in ("/brief.md", "/drift.ipynb", "/pareto.ipynb", "/data/"):
+        assert leaked not in text, f"base prompt should not hardcode {leaked!r}"
 
 
 def test_prompt_teaches_one_tool_call_per_turn():
@@ -35,7 +32,7 @@ def test_default_rca_agent_config_loads_prompt():
     cfg = default_rca_agent_config()
     assert cfg.name == "RCA Agent"
     assert "RCA Agent" in cfg.system_prompt
-    assert "/brief.md" in cfg.system_prompt
+    assert "/report.v" in cfg.system_prompt  # base carries the app conventions
     # Picks up the RCA-tuned AgentConfig defaults from §3.
     assert cfg.sandbox_image == "workspace-app/sandbox:py312-ds"
     assert cfg.idle_timeout_seconds == 28800

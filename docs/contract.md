@@ -63,7 +63,13 @@ class Investigation(Struct):
     attached_agent_config_id: Annotated[
         str | None, Ref("agent_config", on_delete=OnDelete.set_null)
     ] = None
+    template_profile: str = "default"                     # which template seeded this investigation
 ```
+
+`template_profile` records the template the investigation was created
+from; it's persisted so the agent's system prompt can be composed with
+that template's starting-files appendix at turn time (base prompt +
+`rca/templates/{profile}/_prompt.md`).
 
 `owner` has **no default** — every investigation must declare its
 creator at create time. The API layer reads the current user (v1:

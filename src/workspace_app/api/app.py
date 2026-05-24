@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
+import msgspec
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -19,7 +20,7 @@ from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..kernels import KernelService
 from ..rca.prompts import load_system_prompt
-from ..rca.templates import list_profiles, seed_investigation
+from ..rca.templates import compose_system_prompt, list_profiles, seed_investigation
 from ..resources import (
     AgentConfig,
     Conversation,
@@ -213,6 +214,7 @@ def create_app(
             members=list(body.members),
             topics=list(body.topics),
             attached_agent_config_id=body.attached_agent_config_id,
+            template_profile=body.template_profile,
         )
         inv_rm = spec.get_resource_manager(Investigation)
         rev = inv_rm.create(inv)
@@ -246,7 +248,9 @@ def create_app(
     conv_rm = spec.get_resource_manager(Conversation)
 
     def _resolve_agent_config(investigation_id: str) -> AgentConfig | None:
-        """The AgentConfig attached to this investigation, if any."""
+        """The AgentConfig attached to this investigation, with the
+        investigation's template appendix composed onto its system prompt so
+        the agent is told about *this* template's starting files."""
         inv_rm = spec.get_resource_manager(Investigation)
         try:
             inv = inv_rm.get(investigation_id).data
@@ -259,7 +263,9 @@ def create_app(
             cfg = cfg_rm.get(inv.attached_agent_config_id).data
         except ResourceIDNotFoundError:
             return None
-        return cfg if isinstance(cfg, AgentConfig) else None
+        assert isinstance(cfg, AgentConfig)  # the AgentConfig manager yields AgentConfig
+        composed = compose_system_prompt(cfg.system_prompt, inv.template_profile)
+        return msgspec.structs.replace(cfg, system_prompt=composed)
 
     def _conversation_for(investigation_id: str) -> tuple[str, Conversation]:
         # Linear scan over all Conversation resources for this

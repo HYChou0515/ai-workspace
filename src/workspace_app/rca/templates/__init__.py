@@ -29,6 +29,27 @@ from ...resources import Investigation
 _TEMPLATES_PKG = "workspace_app.rca.templates"
 _TPL_SUFFIX = ".tpl"
 _NON_PROFILE = {"__pycache__"}
+# Per-profile system-prompt appendix: describes THAT profile's starting files
+# so the agent prompt stays accurate when the template is swapped. It is prompt
+# metadata, not a workspace file, so seeding skips it.
+_PROMPT_FILE = "_prompt.md"
+
+
+def load_template_appendix(profile: str) -> str:
+    """The profile's system-prompt appendix (`_prompt.md`), or "" if it has
+    none / the profile doesn't exist."""
+    try:
+        return (resources.files(_TEMPLATES_PKG) / profile / _PROMPT_FILE).read_text("utf-8")
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
+        return ""
+
+
+def compose_system_prompt(base: str, profile: str) -> str:
+    """Stable base prompt + the profile's starting-files appendix. The base
+    carries app-level conventions (report versioning, fishbone schema, …); the
+    appendix carries the template-specific file layout."""
+    appendix = load_template_appendix(profile)
+    return f"{base}\n\n{appendix}".strip() if appendix else base
 
 
 def list_profiles() -> list[str]:
@@ -95,7 +116,7 @@ def _walk(node, prefix: PurePosixPath | None = None) -> list[PurePosixPath]:
     out: list[PurePosixPath] = []
     for child in node.iterdir():
         name = child.name
-        if name in ("__init__.py", "__pycache__") or name.endswith(".pyc"):
+        if name in ("__init__.py", "__pycache__", _PROMPT_FILE) or name.endswith(".pyc"):
             continue
         here = prefix / name
         if child.is_dir():
