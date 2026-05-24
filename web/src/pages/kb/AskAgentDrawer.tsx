@@ -23,6 +23,7 @@ export function AskAgentDrawer({
   open,
   onClose,
   collectionIds,
+  chatId = null,
   onOpenCitation,
   onManage,
   client,
@@ -30,11 +31,13 @@ export function AskAgentDrawer({
   open: boolean;
   onClose: () => void;
   collectionIds: string[];
+  /** Continue an existing thread; null starts a fresh one on first send. */
+  chatId?: string | null;
   onOpenCitation?: (c: KbCitation) => void;
   onManage?: () => void;
   client?: KbApi;
 }) {
-  const { messages, streaming, error, send } = useKbChat({ collectionIds, client });
+  const { messages, streaming, error, send } = useKbChat({ collectionIds, chatId, client });
   const [draft, setDraft] = useState("");
 
   if (!open) return null;

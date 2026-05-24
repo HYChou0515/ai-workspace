@@ -36,6 +36,7 @@ export function HomeSidebar({
   onNewInvestigation,
   onOpenTemplates,
   onOpenInvestigation,
+  onOpenKb,
 }: {
   items: Investigation[];
   currentUser: string;
@@ -48,6 +49,7 @@ export function HomeSidebar({
   onNewInvestigation: () => void;
   onOpenTemplates: () => void;
   onOpenInvestigation: (id: string) => void;
+  onOpenKb?: () => void;
 }) {
   const byStatus = countByStatus(items);
   const openTotal = byStatus.triaging + byStatus.awaiting_review;
@@ -108,6 +110,27 @@ export function HomeSidebar({
           }}
         >
           + New investigation
+        </button>
+        <button
+          type="button"
+          onClick={onOpenKb}
+          style={{
+            marginTop: 8,
+            width: "100%",
+            height: 34,
+            background: "var(--ink)",
+            color: "var(--text-dark)",
+            borderRadius: "var(--radius-btn)",
+            fontWeight: 500,
+            fontSize: "var(--text-body-sm)",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          <Icon name="sparkle" size={14} color="var(--accent)" />
+          Ask the knowledge base
         </button>
       </header>
 
