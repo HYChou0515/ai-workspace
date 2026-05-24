@@ -7,7 +7,9 @@
 
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 import { useFiles } from "../../hooks/useInvestigation";
 import { useFileContent } from "../../hooks/useFileContent";
@@ -299,7 +301,9 @@ function ReportBody({
         RCA report · v{version}
       </div>
       <article className="md-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{state.content.text}</ReactMarkdown>
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+          {state.content.text}
+        </ReactMarkdown>
       </article>
       <footer
         style={{

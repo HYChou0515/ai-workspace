@@ -23,10 +23,22 @@ from workspace_app.api.litellm_runner import (
     _approx_tokens,
     _delta_channel,
     _exact_usage,
+    _final_tokens,
     _map_event,
     diagnose_error,
 )
 from workspace_app.resources import AgentConfig
+
+
+def test_final_tokens_prefers_exact_but_falls_back_when_zero_or_absent():
+    # exact usage present and non-zero → use it
+    assert _final_tokens((118, 51), 120, 200) == (118, 51)
+    # Ollama reports (0, 0) → keep live approximations (200 chars ≈ 50 tok)
+    assert _final_tokens((0, 0), 120, 200) == (120, 50)
+    # no usage at all → approximations
+    assert _final_tokens(None, 120, 200) == (120, 50)
+    # partial: exact prompt 0 but completion known
+    assert _final_tokens((0, 51), 120, 200) == (120, 51)
 
 
 def test_delta_channel_classifies_every_delta_event_type():
@@ -188,7 +200,8 @@ def test_map_event_tool_called_with_dict_raw_item():
         type="run_item_stream_event",
         name="tool_called",
         item=_Item(
-            raw_item={"call_id": "c10", "name": "ls", "arguments": '{"prefix":"/"}'},
+            # some providers hand arguments as an already-parsed dict
+            raw_item={"call_id": "c10", "name": "ls", "arguments": {"prefix": "/"}},
         ),
     )
     out = _map_event(ev)

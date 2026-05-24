@@ -6,7 +6,9 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 import { api } from "../../api";
 import { CellEditor } from "../../components/CellEditor";
@@ -299,7 +301,9 @@ function Cell({
         <div style={{ flex: 1, minWidth: 0 }}>
           <CardHeader kind="markdown" />
           <div className="md-body" style={{ marginTop: 4 }}>
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{cellSource(cell)}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+              {cellSource(cell)}
+            </ReactMarkdown>
           </div>
         </div>
       </div>

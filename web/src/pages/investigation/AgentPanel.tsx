@@ -6,7 +6,9 @@
 
 import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 
 import { api } from "../../api";
 import { Icon } from "../../components/Icon";
@@ -483,7 +485,9 @@ function MessageBlock({ message }: { message: Message }) {
         </div>
         {message.reasoning && <ReasoningBlock text={message.reasoning} />}
         <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
+          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+            {message.content}
+          </ReactMarkdown>
         </div>
       </div>
     );
@@ -593,6 +597,11 @@ function summarizeArgs(args: Record<string, unknown>): string {
   const entries = Object.entries(args);
   if (entries.length === 0) return "";
   return entries
-    .map(([k, v]) => `${k}=${JSON.stringify(v).slice(0, 32)}`)
+    .map(([k, v]) => {
+      const s = JSON.stringify(v);
+      // truncate with an ellipsis so it doesn't cut off mid-token; the full
+      // args are in the run-history panel.
+      return `${k}=${s.length > 40 ? `${s.slice(0, 40)}…` : s}`;
+    })
     .join(", ");
 }

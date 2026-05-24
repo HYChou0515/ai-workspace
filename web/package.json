@@ -14,12 +14,15 @@
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "dompurify": "^3.4.5",
+    "katex": "^0.17.0",
     "monaco-editor": "^0.55.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.15.1",
-    "remark-gfm": "^4.0.1"
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

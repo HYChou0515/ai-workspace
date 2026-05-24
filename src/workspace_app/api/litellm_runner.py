@@ -123,6 +123,18 @@ def _exact_usage(streamed: Any) -> tuple[int, int] | None:
         return None
 
 
+def _final_tokens(
+    usage: tuple[int, int] | None, prompt_tok: int, completion_chars: int
+) -> tuple[int, int]:
+    """Settle the final token counts: prefer the provider's exact usage, but
+    keep the live approximations when it's absent or reports 0 (Ollama often
+    streams usage as 0 — otherwise the final line would flip to ↑0 ↓0)."""
+    approx_completion = _approx_tokens(completion_chars)
+    if usage is None:
+        return prompt_tok, approx_completion
+    return (usage[0] or prompt_tok, usage[1] or approx_completion)
+
+
 def _agent_for(
     config: AgentConfig, extra_instructions: str | None = None
 ) -> Agent[AgentToolContext]:
@@ -317,10 +329,12 @@ class LitellmAgentRunner:
         if tail_content:
             yield MessageDelta(text=tail_content)
 
-        usage = _exact_usage(streamed)
+        prompt_final, completion_final = _final_tokens(
+            _exact_usage(streamed), prompt_tok, completion_chars
+        )
         yield AgentMetrics(
             phase="final",
-            prompt_tokens=usage[0] if usage else prompt_tok,
-            completion_tokens=usage[1] if usage else _approx_tokens(completion_chars),
+            prompt_tokens=prompt_final,
+            completion_tokens=completion_final,
             elapsed_ms=round((time.monotonic() - t0) * 1000),
         )
