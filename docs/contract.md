@@ -176,11 +176,38 @@ POST body shape:
 | Method | Path | Purpose | Status |
 |---|---|---|---|
 | `GET`    | `/investigations/{id}/files[?prefix=<p>]` | list files: `[{"path", "size"}]`           | ✅ |
+| `GET`    | `/investigations/{id}/dirs`               | directory paths incl. empty ones (for the tree): `[string]` | ✅ |
 | `GET`    | `/investigations/{id}/files/{path:path}`  | read file body (text/plain or octet-stream) | ✅ |
-| `PUT`    | `/investigations/{id}/files/{path:path}`  | write raw bytes (FE auto-saves notebooks here) | ✅ |
-| `DELETE` | `/investigations/{id}/files/{path:path}`  | delete a file → 204 (404 if absent)        | ✅ |
-| `POST`   | `/investigations/{id}/files/move`         | rename/move: body `{"from", "to"}` → 204 (409 if target exists) | ✅ |
-| `POST`   | `/investigations/{id}/exec`               | run shell cmd: body `{"cmd": [string]}` → `{exit_code, stdout, stderr}` | ✅ |
+| `PUT`    | `/investigations/{id}/files/{path:path}`  | write raw bytes (FE auto-saves notebooks here) → 204 | ✅ |
+| `DELETE` | `/investigations/{id}/files/{path:path}`  | delete a file **or** directory subtree → 204 (404 if absent) | ✅ |
+| `POST`   | `/investigations/{id}/files/mkdir`        | create empty dir: body `{"path"}` → 204 (409 if a file occupies it) | ✅ |
+| `POST`   | `/investigations/{id}/files/move`         | rename/move file or dir subtree: body `{"from", "to"}` → 204 (400 into-self, 404 missing, 409 target exists) | ✅ |
+| `POST`   | `/investigations/{id}/files/copy`         | copy file or dir subtree: body `{"from", "to"}` → 204 (same errors as move) | ✅ |
+
+### 2.3b Search / replace (VSCode search panel)
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| `POST`   | `/investigations/{id}/search`  | full-text search → `[{"path", "matches": [{"line","col","text"}]}]` | ✅ |
+| `POST`   | `/investigations/{id}/replace` | search + replace across files → `{"replaced": int}` | ✅ |
+
+Search/replace body (`replace` adds `replacement`):
+```json
+{ "query": "string", "regex": false, "caseSensitive": false,
+  "wholeWord": false, "include": "", "exclude": "", "replacement": "" }
+```
+Empty `query` → no-op (`[]` / `{"replaced": 0}`); an invalid regex 422s.
+Binary (non-UTF-8) files are skipped.
+
+### 2.3c Direct sandbox shell (Terminal pane)
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| `POST`   | `/investigations/{id}/exec` | run a shell cmd **synchronously**: body `{"cmd": [string]}` → `{exit_code, stdout, stderr}`; empty `cmd` 422s | ✅ |
+
+> Note: this is the **Terminal** pane's one-shot exec (full result on return).
+> It is distinct from the agent's `exec` *tool*, which streams stdout live as
+> `ToolLog` events during a turn (see §3.1).
 
 ### 2.4 Notebook execution
 
@@ -197,10 +224,18 @@ POST body shape:
 | `GET`    | `/templates` | template profile names for the New Investigation picker | ✅ |
 | `GET`    | `/activity`  | recent-activity feed (newest first): `[{ts, kind, text, ref}]` | ✅ |
 
-`POST /investigation` accepts an optional `template_profile` (default
-`"default"`); an unknown profile 422s. Activity `kind` ∈
-`investigation_created | investigation_closed | file_written |
-file_moved | file_deleted | agent_turn_complete`.
+`POST /investigation` body:
+```json
+{ "title": "string", "owner": "string", "description": "",
+  "severity": "P2", "status": "triaging", "product": "",
+  "members": [], "topics": [],
+  "attached_agent_config_id": null, "template_profile": "default" }
+```
+`title` + `owner` required; the rest default as shown. An unknown
+`template_profile` 422s. Activity `kind` ∈
+`investigation_created | investigation_closed | session_closed |
+file_written | file_moved | file_copied | file_deleted |
+dir_created | dir_deleted | agent_turn_complete`.
 
 ### 2.6 Specstar admin (auto-generated, behind `/docs`)
 
@@ -247,7 +282,8 @@ Mirrored in `web/src/events.ts`.
 | `RunError`            | `{type: "error", message: string}` | yes | catch-all failure |
 | `RunCancelled`        | `{type: "run_cancelled"}` | yes | user interrupted (DELETE or new POST) |
 | `ToolCallParseError`  | `{type: "tool_call_parse_error", hint: string, call_id: string?, raw: string?}` | no | retry-with-feedback follows |
-| `MaxTurnsExceeded`    | `{type: "max_turns_exceeded", turns: number}` | yes | agent didn't converge |
+| `MaxTurnsExceeded`    | `{type: "max_turns_exceeded", turns: number}` | yes | agent didn't converge; `turns` is the runner's configured budget |
+| `AgentMetrics`        | `{type: "agent_metrics", phase: "up"\|"down"\|"final", prompt_tokens, completion_tokens, elapsed_ms}` | no | live token telemetry (↑/↓ tok/s); up/down approximate, final is exact usage when reported |
 
 Deferred (declared in FE for future use but not emitted yet):
 - `SandboxKilledIdle` `{type: "sandbox_killed_idle"}` — needs registry refactor.

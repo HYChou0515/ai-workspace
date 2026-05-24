@@ -110,8 +110,12 @@ web/
   src/         React SPA (Vite + TS): chat page that streams SSE
 ```
 
-## Deployment & customization
+## Documentation
 
-See **[docs/deployment.md](docs/deployment.md)** (繁體中文) for how to deploy and
-swap in your own sandbox, agent runner, agent configs, and workspace templates
-via `create_app`.
+Full docs live in **[docs/](docs/README.md)** (繁體中文):
+
+- **[architecture.md](docs/architecture.md)** — system design: layers/Protocols, agent-turn data flow, SSE events, sandbox/FileStore/sync lifecycle, user-ns isolation.
+- **[development.md](docs/development.md)** — dev conventions, TDD workflow, how to add an SSE event / agent tool / file renderer.
+- **[deployment.md](docs/deployment.md)** — deploy & swap in your own sandbox, agent runner, agent configs, and workspace templates via `create_app`.
+- **[user-guide.md](docs/user-guide.md)** — RCA workflow + the VSCode-style UI, shortcuts.
+- **[contract.md](docs/contract.md)** — authoritative HTTP routes + SSE event contract.
