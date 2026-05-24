@@ -25,7 +25,17 @@ class Chunk(Struct, frozen=True):
 
 
 class Chunker(Protocol):
-    def chunk(self, text: str) -> list[Chunk]: ...
+    """Splits a document's canonical text into retrievable chunks. Implement
+    `chunk` to swap the strategy (markdown-structure-aware, semantic, …); inject
+    via `create_app(kb_chunker=...)`.
+    """
+
+    def chunk(self, text: str) -> list[Chunk]:
+        """Split `text` into ordered `Chunk`s. Each chunk's `start`/`end` MUST
+        be valid char offsets into `text` (so `text[start:end]` is the verbatim
+        cited span); `seq` is its 0-based position. Return `[]` for empty input.
+        """
+        ...
 
 
 class FixedTokenChunker:

@@ -9,7 +9,17 @@ from typing import Protocol
 
 
 class Llm(Protocol):
-    def complete(self, prompt: str) -> str: ...
+    """A one-shot text completion used by the retriever's multi-query / HyDE /
+    rerank steps (and available to the KB agent). Implement `complete` to swap
+    the model; inject via `create_app(kb_llm=...)` (omit to disable those
+    LLM-driven enhancements).
+    """
+
+    def complete(self, prompt: str) -> str:
+        """Return the model's completion for `prompt` as plain text (no
+        streaming). Should not raise for an empty/garbage result — return what
+        you have (callers parse defensively and fall back)."""
+        ...
 
 
 class LitellmLlm:

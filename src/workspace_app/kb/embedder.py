@@ -17,10 +17,28 @@ from typing import Protocol
 
 
 class Embedder(Protocol):
+    """Turns text into vectors for KB retrieval. Asymmetric: documents and
+    queries may carry different instruction prefixes (bge / e5 / qwen3-embedding
+    style). Implement the three members to swap the embedding model; inject via
+    `create_app(kb_embedder=...)`.
+    """
+
     @property
-    def dim(self) -> int: ...
-    def embed_documents(self, texts: list[str]) -> list[list[float]]: ...
-    def embed_query(self, text: str) -> list[float]: ...
+    def dim(self) -> int:
+        """The vector width. MUST equal `EMBED_DIM` (the `DocChunk` Vector
+        column size) — query and document vectors are stored/compared at this
+        width."""
+        ...
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        """Embed a batch of documents (applying the document-side prefix);
+        returns one `dim`-length vector per input, in order."""
+        ...
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single search query (applying the query-side prefix); returns
+        one `dim`-length vector."""
+        ...
 
 
 class _PrefixedEmbedder:

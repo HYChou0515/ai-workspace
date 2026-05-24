@@ -40,6 +40,25 @@ def create_app(
 預設的 wiring 範例就是進入點 `src/workspace_app/__main__.py`——要客製化，**複製它改一份**
 就好。
 
+### 可抽換的 Protocol 一覽
+
+每個接點都是一個 **Protocol**（結構型別、duck typing，**不需要繼承任何基底類別**）。要換實作，
+就實作下表的 method 然後注入。**每個 method 的契約寫在原始碼的 docstring**（參數、回傳、要丟的
+例外、不變式），那是權威來源——下面只列要實作哪些：
+
+| Protocol | 檔案 | 要實作的 method | 注入 |
+|---|---|---|---|
+| `Sandbox` | `sandbox/protocol.py` | `create` / `kill` / `exec` / `upload` / `download` / `walk` / `expose_port` | `create_app(sandbox=…)`（§4） |
+| `FileStore` | `filestore/protocol.py` | `write`/`read`/`ls`/`exists`/`delete`、`mkdir`/`rmdir`/`is_dir`/`listdir`、`dirty_paths`/`clear_dirty` | `create_app(filestore=…)`（§5） |
+| `AgentRunner` | `api/runner.py` | `run`（async generator，yield `AgentEvent`） | `create_app(runner=…)`（§6） |
+| `Embedder` | `kb/embedder.py` | `dim` / `embed_documents` / `embed_query` | `create_app(kb_embedder=…)`（§8） |
+| `Chunker` | `kb/chunker.py` | `chunk` | `create_app(kb_chunker=…)`（§8） |
+| `Llm`（KB 檢索增強） | `kb/llm.py` | `complete` | `create_app(kb_llm=…)`（§8） |
+
+> 慣例：先讀該 Protocol 的 docstring 了解每個 method 要保證什麼，再實作。`Settings` + `get_*`
+> factory（§3）只負責「用環境變數選內建實作」；你的全新實作直接傳進 `create_app` 即可，不必
+> 動 factory。
+
 ---
 
 ## 2. 快速啟動（預設組合）
