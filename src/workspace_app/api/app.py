@@ -21,6 +21,7 @@ from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..kb.chunker import Chunker, FixedTokenChunker
 from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
+from ..kb.llm import Llm
 from ..kb.retriever import Retriever
 from ..kernels import KernelService
 from ..rca.prompts import load_system_prompt
@@ -181,6 +182,7 @@ def create_app(
     runner: AgentRunner,
     kb_embedder: Embedder | None = None,
     kb_chunker: Chunker | None = None,
+    kb_llm: Llm | None = None,
     spa_dist: Path | None = None,
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
@@ -284,7 +286,8 @@ def create_app(
     register_kb_routes(app, spec, ingestor)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
-    kb_retriever = Retriever(spec, embedder=embedder)
+    # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
+    kb_retriever = Retriever(spec, embedder=embedder, llm=kb_llm)
     register_kb_chat_routes(app, spec, runner, kb_retriever)
 
     async def _ask_kb(question: str) -> str:

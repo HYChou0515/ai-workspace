@@ -70,3 +70,27 @@ class HashEmbedder(_PrefixedEmbedder):
                 out.append(n / 2**31 - 1.0)
             counter += 1
         return out
+
+
+class LitellmEmbedder(_PrefixedEmbedder):
+    """Production embedder via LiteLLM (local Ollama or hosted). `dim` must match
+    the model's output AND the DocChunk Vector dim (KB_EMBED_DIM) — query and
+    doc vectors are stored/compared at that width. Asymmetric prefixes (e.g.
+    qwen3-embedding's instruction format) are configured by the caller."""
+
+    def __init__(
+        self, model: str, *, dim: int, query_prefix: str = "", doc_prefix: str = ""
+    ) -> None:
+        super().__init__(query_prefix=query_prefix, doc_prefix=doc_prefix)
+        self._model = model
+        self._dim = dim
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    def _embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover — live model
+        import litellm
+
+        resp = litellm.embedding(model=self._model, input=texts)
+        return [item["embedding"] for item in resp.data]

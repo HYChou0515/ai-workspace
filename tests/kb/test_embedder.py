@@ -1,4 +1,4 @@
-from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.kb.embedder import HashEmbedder, LitellmEmbedder
 
 
 def test_hash_embedder_is_deterministic_and_correct_dim():
@@ -24,3 +24,8 @@ def test_query_and_doc_instruction_prefixes_are_applied():
     assert pref.embed_query("x") == plain.embed_documents(["Q: x"])[0]
     assert pref.embed_documents(["x"])[0] == plain.embed_documents(["D: x"])[0]
 
+
+def test_litellm_embedder_constructs_and_reports_its_dim():
+    e = LitellmEmbedder("ollama/qwen3-embedding", dim=1024, query_prefix="Q: ")
+    assert isinstance(e, LitellmEmbedder)
+    assert e.dim == 1024  # must match the DocChunk Vector dim (KB_EMBED_DIM)
