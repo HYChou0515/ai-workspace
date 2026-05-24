@@ -109,3 +109,9 @@ src/workspace_app/
 web/
   src/         React SPA (Vite + TS): chat page that streams SSE
 ```
+
+## Deployment & customization
+
+See **[docs/deployment.md](docs/deployment.md)** (繁體中文) for how to deploy and
+swap in your own sandbox, agent runner, agent configs, and workspace templates
+via `create_app`.
