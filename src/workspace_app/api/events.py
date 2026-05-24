@@ -9,6 +9,9 @@ from typing import Literal
 class MessageDelta:
     type: Literal["message_delta"] = "message_delta"
     text: str = ""
+    # When True the text is the model's reasoning (<think>) channel, not the
+    # visible answer — the FE renders it collapsed.
+    reasoning: bool = False
 
 
 @dataclass(frozen=True)

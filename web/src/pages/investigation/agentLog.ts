@@ -100,8 +100,12 @@ function findCall(entries: AgentEntry[], call_id: string): number {
 function lastAssistantIdx(entries: AgentEntry[]): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
-    if (e && e.kind === "tool_call") return -1; // tool call ends the assistant run
-    if (e && e.kind === "message" && e.message.role === "assistant") return i;
+    if (!e) continue;
+    // A tool call OR a non-assistant message (e.g. the user's next prompt)
+    // ends the current assistant run — so a new turn starts fresh instead
+    // of appending to the previous turn's answer.
+    if (e.kind === "tool_call") return -1;
+    if (e.kind === "message") return e.message.role === "assistant" ? i : -1;
   }
   return -1;
 }

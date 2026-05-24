@@ -38,6 +38,62 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
+def _partial_suffix(s: str, tag: str) -> int:
+    """Length of the longest suffix of `s` that is a proper prefix of `tag`
+    — held back so a tag split across chunks isn't emitted mid-tag."""
+    for k in range(min(len(s), len(tag) - 1), 0, -1):
+        if s.endswith(tag[:k]):
+            return k
+    return 0
+
+
+class ThinkSplitter:
+    """Streaming splitter that separates Qwen3-style ``<think>…</think>``
+    reasoning from the visible answer. Feed it text chunks; each call
+    returns the (content, reasoning) deltas decoded so far, buffering any
+    partial tag at the tail until the next chunk completes it."""
+
+    OPEN = "<think>"
+    CLOSE = "</think>"
+
+    def __init__(self) -> None:
+        self._in_think = False
+        self._buf = ""
+
+    def feed(self, chunk: str) -> tuple[str, str]:
+        self._buf += chunk
+        content: list[str] = []
+        reasoning: list[str] = []
+        while True:
+            if not self._in_think:
+                idx = self._buf.find(self.OPEN)
+                if idx == -1:
+                    keep = _partial_suffix(self._buf, self.OPEN)
+                    content.append(self._buf[: len(self._buf) - keep])
+                    self._buf = self._buf[len(self._buf) - keep :]
+                    break
+                content.append(self._buf[:idx])
+                self._buf = self._buf[idx + len(self.OPEN) :]
+                self._in_think = True
+            else:
+                idx = self._buf.find(self.CLOSE)
+                if idx == -1:
+                    keep = _partial_suffix(self._buf, self.CLOSE)
+                    reasoning.append(self._buf[: len(self._buf) - keep])
+                    self._buf = self._buf[len(self._buf) - keep :]
+                    break
+                reasoning.append(self._buf[:idx])
+                self._buf = self._buf[idx + len(self.CLOSE) :]
+                self._in_think = False
+        return "".join(content), "".join(reasoning)
+
+    def flush(self) -> tuple[str, str]:
+        """Emit any buffered tail at stream end (an unclosed <think> is
+        treated as reasoning)."""
+        rest, self._buf = self._buf, ""
+        return ("", rest) if self._in_think else (rest, "")
+
+
 def _exact_usage(streamed: Any) -> tuple[int, int] | None:
     """The provider's exact (prompt, completion) token usage if reported."""
     try:
@@ -186,13 +242,20 @@ class LitellmAgentRunner:
 
         completion_chars = 0
         last_emit = 0.0
+        splitter = ThinkSplitter()
         streamed = Runner.run_streamed(agent, input=prompt, context=ctx)
         async for event in streamed.stream_events():
             if getattr(event, "type", None) == "raw_response_event":
                 delta = getattr(getattr(event, "data", None), "delta", None)
                 if isinstance(delta, str) and delta:
                     completion_chars += len(delta)
-                    yield MessageDelta(text=delta)  # ↓ token-by-token reply
+                    # Route <think> reasoning to the reasoning channel so the
+                    # FE renders it collapsed, separate from the answer.
+                    content, reasoning = splitter.feed(delta)
+                    if reasoning:
+                        yield MessageDelta(text=reasoning, reasoning=True)
+                    if content:
+                        yield MessageDelta(text=content)
                     now = time.monotonic()
                     if now - last_emit >= 0.2:  # throttle live metric updates
                         last_emit = now
@@ -206,6 +269,12 @@ class LitellmAgentRunner:
             mapped = _map_event(event)
             if mapped is not None:
                 yield mapped
+
+        tail_content, tail_reasoning = splitter.flush()
+        if tail_reasoning:
+            yield MessageDelta(text=tail_reasoning, reasoning=True)
+        if tail_content:
+            yield MessageDelta(text=tail_content)
 
         usage = _exact_usage(streamed)
         yield AgentMetrics(

@@ -1,10 +1,41 @@
 import json
+from datetime import UTC, datetime
 
-from specstar import QB
+from fastapi.testclient import TestClient
+from specstar import QB, SpecStar
 
+from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
+from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, Investigation
+from workspace_app.sandbox.mock import MockSandbox
 
 from .conftest import Harness
+
+
+def test_reasoning_delta_persists_to_reasoning_channel():
+    """A <think> reasoning delta is stored on the assistant message's
+    reasoning field, separate from the visible answer."""
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    runner = ScriptedAgentRunner(
+        [
+            MessageDelta(text="weighing the options", reasoning=True),
+            MessageDelta(text="The answer is 42."),
+            RunDone(),
+        ]
+    )
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+    client = TestClient(app)
+    client.post("/investigations/ws-z/messages", json={"content": "q"})
+    rm = spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.investigation_id == "ws-z"
+    )
+    assistant = next(m for m in conv.messages if m.role == "assistant")
+    assert assistant.content == "The answer is 42."
+    assert assistant.reasoning == "weighing the options"
 
 
 def _parse_sse(body: str) -> list[dict]:

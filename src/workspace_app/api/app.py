@@ -344,12 +344,15 @@ def create_app(
             # workspace would show only the user's own messages.
             produced: list[Message] = []
 
-            def add_assistant(text: str) -> None:
+            def add_assistant(text: str, reasoning: bool) -> None:
                 last = produced[-1] if produced else None
-                if last is not None and last.role == "assistant" and last.tool_call_id is None:
-                    last.content += text  # extend the in-progress reply
+                if last is None or last.role != "assistant" or last.tool_call_id is not None:
+                    last = Message(role="assistant", content="", author="RCA Agent")
+                    produced.append(last)
+                if reasoning:
+                    last.reasoning = (last.reasoning or "") + text
                 else:
-                    produced.append(Message(role="assistant", content=text, author="RCA Agent"))
+                    last.content += text
 
             while True:
                 item = await queue.get()
@@ -365,7 +368,7 @@ def create_app(
                     )
                     return
                 if isinstance(item, MessageDelta):
-                    add_assistant(item.text)
+                    add_assistant(item.text, item.reasoning)
                 elif isinstance(item, ToolEnd):
                     produced.append(
                         Message(role="tool", content=item.output, tool_call_id=item.call_id)

@@ -29,6 +29,7 @@ import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { formatMetrics } from "./agentLog";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
+import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
@@ -2071,6 +2072,8 @@ function BottomPanel({
   open: boolean;
   onToggle: () => void;
 }) {
+  const { log } = useAgent();
+  const bodyScrollRef = useStickToBottom<HTMLDivElement>(log);
   const tabs = [
     { key: "problems" as const, label: "Problems" },
     { key: "output" as const, label: "Output" },
@@ -2147,6 +2150,7 @@ function BottomPanel({
           </div>
         ) : (
           <div
+            ref={bodyScrollRef}
             className="scrollable"
             style={{
               flex: 1,
@@ -2245,8 +2249,17 @@ function PanelBody({
       <>
         {calls.map((e, i) =>
           e.kind === "tool_call" ? (
-            <div key={i} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+            <details key={i} style={{ marginBottom: 8 }}>
+              <summary
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "baseline",
+                  flexWrap: "wrap",
+                  cursor: "pointer",
+                  listStyle: "none",
+                }}
+              >
                 <span style={{ color: e.call.status === "running" ? "var(--accent)" : "var(--text-paper-d2)" }}>
                   {exitGlyph(e.call)}
                 </span>
@@ -2258,7 +2271,7 @@ function PanelBody({
                 <span style={{ color: "var(--text-paper-d2)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
                   {runMeta(e.call)}
                 </span>
-              </div>
+              </summary>
               {e.call.parseError && (
                 <div style={{ color: "var(--warn)", fontSize: 12, marginLeft: 16 }}>
                   parse-error → {e.call.parseError}
@@ -2267,7 +2280,7 @@ function PanelBody({
               {e.call.output !== undefined && e.call.output !== "" && (
                 <pre style={logPre}>{e.call.output}</pre>
               )}
-            </div>
+            </details>
           ) : null,
         )}
       </>
@@ -2317,21 +2330,35 @@ function PanelBody({
             </div>
           );
         }
+        // Conversation messages are folded — read the chat for the full
+        // exchange; the log is for the finer event/tool detail.
         return (
-          <div key={i} style={{ marginBottom: 6 }}>
-            <div style={{ color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)" }}>
-              {e.message.role}
-            </div>
+          <details key={i} style={{ marginBottom: 6 }}>
+            <summary
+              style={{
+                cursor: "pointer",
+                listStyle: "none",
+                color: e.message.role === "user" ? "var(--info)" : "var(--text-paper-d)",
+              }}
+            >
+              {e.message.role}: {firstLine(e.message.content || e.message.reasoning || "")}
+            </summary>
             {e.message.reasoning && (
               <pre style={{ ...logPre, opacity: 0.7 }}>{e.message.reasoning}</pre>
             )}
             {e.message.content !== "" && <pre style={logPre}>{e.message.content}</pre>}
-          </div>
+          </details>
         );
       })}
       {log.streaming && <LogLine ts="" kind="accent" text="…streaming" />}
     </>
   );
+}
+
+/** First line of a message, truncated — the folded-log summary. */
+function firstLine(s: string): string {
+  const line = s.split("\n", 1)[0] ?? "";
+  return line.length > 80 ? `${line.slice(0, 80)}…` : line;
 }
 
 /** Compact `k=v` arg summary for a tool call. */

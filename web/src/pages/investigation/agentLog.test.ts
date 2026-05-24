@@ -119,6 +119,32 @@ describe("reduceAgent", () => {
   });
 });
 
+describe("reduceAgent — turn boundaries", () => {
+  it("does not append a new turn's reply to the previous turn's answer", () => {
+    const log = fold([
+      { type: "message_delta", text: "First answer." },
+      { type: "done" },
+      // next turn: a fresh user prompt, then the agent's reply
+      // (user message is added by useAgent, not the reducer — simulate it)
+    ]);
+    // simulate the user message + a new assistant delta
+    const withUser: AgentLog = {
+      ...log,
+      entries: [
+        ...log.entries,
+        { kind: "message", message: { role: "user", content: "again" } },
+      ],
+    };
+    const next = reduceAgent(withUser, { type: "message_delta", text: "Second answer." });
+    const assistants = next.entries.filter(
+      (e) => e.kind === "message" && e.message.role === "assistant",
+    );
+    expect(assistants).toHaveLength(2);
+    if (assistants[0]?.kind === "message") expect(assistants[0].message.content).toBe("First answer.");
+    if (assistants[1]?.kind === "message") expect(assistants[1].message.content).toBe("Second answer.");
+  });
+});
+
 describe("reduceAgent — metrics + timing", () => {
   it("tracks live token metrics from agent_metrics events", () => {
     const log = fold([

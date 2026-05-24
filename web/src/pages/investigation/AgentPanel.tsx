@@ -12,6 +12,7 @@ import { api } from "../../api";
 import { Icon } from "../../components/Icon";
 import { RcaMark } from "../../components/RcaMark";
 import { useAgent } from "../../hooks/useAgent";
+import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { type AgentEntry, formatMetrics, type ToolCallView } from "./agentLog";
 import type { Message } from "../../api/types";
 
@@ -52,6 +53,7 @@ export function AgentPanel({
 }) {
   const chips = suggestions && suggestions.length > 0 ? suggestions : DEFAULT_SUGGESTIONS;
   const { log, send, cancel } = useAgent();
+  const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
   const [draft, setDraft] = useState("");
   const [attaching, setAttaching] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -121,6 +123,7 @@ export function AgentPanel({
       <ProgressBar streaming={log.streaming} />
 
       <div
+        ref={chatScrollRef}
         className="scrollable"
         style={{
           flex: 1,
@@ -530,7 +533,7 @@ function ReasoningBlock({ text }: { text: string }) {
 
 function ToolCallCard({ call }: { call: ToolCallView }) {
   return (
-    <div
+    <details
       style={{
         marginLeft: 28,
         background: "var(--white)",
@@ -539,40 +542,50 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
         padding: "8px 10px",
         fontFamily: "var(--font-mono)",
         fontSize: 12,
-        display: "flex",
-        flexDirection: "column",
-        gap: 4,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+      <summary
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          cursor: "pointer",
+          listStyle: "none",
+          color: "var(--text-paper)",
+        }}
+      >
         {call.status === "done" ? (
           <Icon name="check" size={12} color="var(--ok)" />
         ) : (
           <Icon name="play" size={11} color="var(--accent)" />
         )}
-        <span style={{ color: "var(--text-paper)" }}>
+        <span>
           {call.name}({summarizeArgs(call.args)})
         </span>
-      </div>
+        {call.output !== undefined && (
+          <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>· result</span>
+        )}
+      </summary>
       {call.parseError && (
-        <div style={{ color: "var(--warn)", fontSize: 11 }}>
+        <div style={{ color: "var(--warn)", fontSize: 11, marginTop: 4 }}>
           retry: {call.parseError}
         </div>
       )}
       {call.output !== undefined && (
-        <div
+        <pre
           style={{
             color: "var(--text-paper-d)",
             whiteSpace: "pre-wrap",
-            maxHeight: 96,
-            overflow: "hidden",
-            textOverflow: "ellipsis",
+            wordBreak: "break-word",
+            margin: "6px 0 0",
+            maxHeight: 260,
+            overflow: "auto",
           }}
         >
-          → {call.output}
-        </div>
+          {call.output}
+        </pre>
       )}
-    </div>
+    </details>
   );
 }
 

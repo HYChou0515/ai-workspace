@@ -19,12 +19,47 @@ from workspace_app.agent import AgentToolContext
 from workspace_app.api.events import MessageDelta, RunDone, RunError, ToolEnd, ToolStart
 from workspace_app.api.litellm_runner import (
     LitellmAgentRunner,
+    ThinkSplitter,
     _approx_tokens,
     _exact_usage,
     _map_event,
     diagnose_error,
 )
 from workspace_app.resources import AgentConfig
+
+
+def _drain(splitter: ThinkSplitter, chunks: list[str]) -> tuple[str, str]:
+    content, reasoning = "", ""
+    for ch in chunks:
+        c, r = splitter.feed(ch)
+        content += c
+        reasoning += r
+    c, r = splitter.flush()
+    return content + c, reasoning + r
+
+
+def test_think_splitter_separates_reasoning_from_answer():
+    content, reasoning = _drain(ThinkSplitter(), ["<think>secret plan</think>The answer."])
+    assert content == "The answer."
+    assert reasoning == "secret plan"
+
+
+def test_think_splitter_handles_tags_split_across_chunks():
+    content, reasoning = _drain(ThinkSplitter(), ["hello <thi", "nk>why</thi", "nk> world"])
+    assert content == "hello  world"
+    assert reasoning == "why"
+
+
+def test_think_splitter_passes_plain_text_through():
+    content, reasoning = _drain(ThinkSplitter(), ["just ", "an answer"])
+    assert content == "just an answer"
+    assert reasoning == ""
+
+
+def test_think_splitter_flushes_unclosed_think_as_reasoning():
+    content, reasoning = _drain(ThinkSplitter(), ["<think>still thinking"])
+    assert content == ""
+    assert reasoning == "still thinking"
 
 
 def test_runner_constructs_with_default_config():
