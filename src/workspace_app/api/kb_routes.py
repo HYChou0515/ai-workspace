@@ -69,6 +69,7 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
                     "resource_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
                     "path": data.path,
                     "content_type": data.content.content_type,
+                    "created_by": r.info.created_by,  # ty: ignore[unresolved-attribute]
                 }
             )
         return out

@@ -61,6 +61,7 @@ def test_upload_document_and_list():
     match = next(d for d in docs if d["resource_id"] == f"{cid}/default-user/guide.md")
     assert match["path"] == "guide.md"
     assert match["content_type"] in ("text/plain", "text/markdown")
+    assert match["created_by"] == "default-user"  # specstar audit meta
 
 
 def test_render_document_rewrites_crossrefs_and_returns_markdown():
