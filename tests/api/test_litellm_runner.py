@@ -397,20 +397,20 @@ async def test_runner_gives_up_after_max_retries():
 
 async def test_runner_emits_max_turns_exceeded_terminal():
     """When the underlying agents-SDK raises MaxTurnsExceeded, it's a
-    hard ceiling — no retry, terminal event."""
-    # Construct a fake agents-SDK MaxTurnsExceeded with a turns_run attr.
+    hard ceiling — no retry, terminal event. The SDK exception only carries
+    a free-text message, so the runner reports its OWN configured turn
+    budget (never a useless 0)."""
     from agents import MaxTurnsExceeded as _AgentsMTE
 
     from workspace_app.api.events import MaxTurnsExceeded as MTEEvent
 
-    exc = _AgentsMTE("Max turns (10) reached")
-    exc.turns_run = 10  # ty: ignore[unresolved-attribute]
-    runner = _RecordingRunner(scripts=[exc])
+    exc = _AgentsMTE("Max turns (7) exceeded")  # no turns_run attribute
+    runner = _RecordingRunner(scripts=[exc], max_turns=7)
     events = [ev async for ev in runner.run("p", _ctx())]
     types = [type(e).__name__ for e in events]
     assert types == ["MaxTurnsExceeded", "RunDone"]
     mte = next(e for e in events if isinstance(e, MTEEvent))
-    assert mte.turns == 10
+    assert mte.turns == 7
 
 
 async def test_runner_classifies_non_parse_retry_as_run_error():

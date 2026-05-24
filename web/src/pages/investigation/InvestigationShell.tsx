@@ -30,6 +30,7 @@ import { formatMetrics } from "./agentLog";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
+import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
 import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
@@ -180,6 +181,10 @@ function ShellBody({
   // Latest group state for the keyboard handler (bound once via a ref).
   const gRef = useRef(groups);
   gRef.current = groups;
+
+  // When an agent turn finishes it may have created/edited files via its
+  // tools — re-fetch the tree so those show up (it isn't otherwise notified).
+  useOnTurnEnd(useAgent().log.streaming, () => onFilesChanged?.());
 
   // VSCode-style delete-open-file handling: when a file disappears from the
   // listing (deleted in the tree), auto-close its CLEAN tabs; keep dirty

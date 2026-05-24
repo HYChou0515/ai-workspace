@@ -250,9 +250,15 @@ class LitellmAgentRunner:
     model on each retry. Caps retries so a wedged turn can't loop forever.
     """
 
-    def __init__(self, config: AgentConfig | None = None, max_retries: int = 2) -> None:
+    def __init__(
+        self,
+        config: AgentConfig | None = None,
+        max_retries: int = 2,
+        max_turns: int = 10,
+    ) -> None:
         self._config = config or AgentConfig(name="workspace-agent")
         self._max_retries = max_retries
+        self._max_turns = max_turns
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         feedback: str | None = None
@@ -263,11 +269,11 @@ class LitellmAgentRunner:
                     yield ev
                 yield RunDone()
                 return
-            except _AgentsMaxTurnsExceeded as exc:
-                # The agent burned through its turn budget — terminal,
-                # no retry would help.
-                turns = getattr(exc, "turns_run", getattr(exc, "max_turns", 0))
-                yield MaxTurnsExceeded(turns=int(turns) if turns else 0)
+            except _AgentsMaxTurnsExceeded:
+                # The agent burned through its turn budget — terminal, no
+                # retry would help. The SDK exception only carries a message,
+                # so we report our own configured ceiling (never a bare 0).
+                yield MaxTurnsExceeded(turns=self._max_turns)
                 yield RunDone()
                 return
             except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
@@ -293,7 +299,7 @@ class LitellmAgentRunner:
         completion_chars = 0
         last_emit = 0.0
         splitter = ThinkSplitter()
-        streamed = Runner.run_streamed(agent, input=prompt, context=ctx)
+        streamed = Runner.run_streamed(agent, input=prompt, context=ctx, max_turns=self._max_turns)
         async for event in streamed.stream_events():
             if getattr(event, "type", None) == "raw_response_event":
                 data = getattr(event, "data", None)
