@@ -25,9 +25,8 @@ def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
 ):
     cid = _new_collection(spec)
     ingestor = Ingestor(spec, chunker=chunker, embedder=embedder)
-    ids = ingestor.ingest(
-        collection_id=cid, user="alice", filename="guide.md", data=b"# Guide\none two three four five"
-    )
+    data = b"# Guide\none two three four five"
+    ids = ingestor.ingest(collection_id=cid, user="alice", filename="guide.md", data=data)
 
     assert ids == [f"{cid}/alice/guide.md"]
     doc = spec.get_resource_manager(SourceDoc).get(ids[0]).data

@@ -18,6 +18,9 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
+from ..kb.chunker import Chunker, FixedTokenChunker
+from ..kb.embedder import Embedder, HashEmbedder
+from ..kb.ingest import Ingestor
 from ..kernels import KernelService
 from ..rca.prompts import load_system_prompt
 from ..rca.templates import compose_system_prompt, list_profiles, seed_investigation
@@ -30,6 +33,7 @@ from ..resources import (
     Status,
     register_all,
 )
+from ..resources.kb import EMBED_DIM
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .activity import ActivityLog
@@ -43,6 +47,7 @@ from .events import (
     ToolStart,
     to_sse,
 )
+from .kb_routes import register_kb_routes
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
 from .search import InvalidQuery, compile_query, path_selected, search_text
@@ -172,6 +177,8 @@ def create_app(
     sandbox: Sandbox,
     filestore: FileStore,
     runner: AgentRunner,
+    kb_embedder: Embedder | None = None,
+    kb_chunker: Chunker | None = None,
     spa_dist: Path | None = None,
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
@@ -266,6 +273,16 @@ def create_app(
     # empty. The investigation's attached config (model + prompt) drives
     # the live agent — see _resolve_agent_config below.
     _seed_agent_configs(spec)
+
+    # KB chatbot subsystem: ingestion + collection/document/render routes.
+    # Embedder/Chunker are swappable; defaults are offline-friendly (production
+    # injects a LiteLLM embedder for real semantic search).
+    ingestor = Ingestor(
+        spec,
+        chunker=kb_chunker or FixedTokenChunker(),
+        embedder=kb_embedder or HashEmbedder(dim=EMBED_DIM),
+    )
+    register_kb_routes(app, spec, ingestor)
 
     conv_rm = spec.get_resource_manager(Conversation)
 
