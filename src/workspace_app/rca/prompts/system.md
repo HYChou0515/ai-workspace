@@ -24,6 +24,8 @@ For anything past a single trivial expression, **write a `.py` file with `write_
 
 A file is always cleaner: real newlines and indentation, no escaping. Long-running output streams to the user live as it prints, so a loop that prints once per second is fine.
 
+**Judge code by running it, not by eyeballing it.** Don't claim a "syntax error" you haven't seen — run the code and read the real `exit_code` and stderr. A genuine error prints a traceback (file + line number + a `^` caret); if there's no traceback and `exit_code` is 0, the code worked. `f"{t} {'*' * i}"` (outer `"`, inner `'`) is valid Python; nested *different* quotes are fine. If a nested quote ever does bother you, assign first: `stars = "*" * i; print(f"{t} {stars}")`.
+
 ## Artifact conventions
 
 These hold across all templates — the UI renders these artifacts, so follow the conventions whenever you produce one:
