@@ -26,6 +26,7 @@ import {
 } from "../../hooks/useEditorGroups";
 import { useThemeMode } from "../../hooks/theme";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
+import { formatMetrics } from "./agentLog";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { emitRunAll } from "../../lib/editorEvents";
@@ -2245,13 +2246,17 @@ function PanelBody({
         {calls.map((e, i) =>
           e.kind === "tool_call" ? (
             <div key={i} style={{ marginBottom: 10 }}>
-              <div style={{ display: "flex", gap: 8, alignItems: "baseline" }}>
+              <div style={{ display: "flex", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
                 <span style={{ color: e.call.status === "running" ? "var(--accent)" : "var(--text-paper-d2)" }}>
-                  {e.call.status === "running" ? "•" : "✓"}
+                  {exitGlyph(e.call)}
                 </span>
                 <span style={{ fontWeight: 600 }}>{e.call.name}</span>
                 <span style={{ color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
                   {argsLine(e.call.args)}
+                </span>
+                <span style={{ flex: 1 }} />
+                <span style={{ color: "var(--text-paper-d2)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                  {runMeta(e.call)}
                 </span>
               </div>
               {e.call.parseError && (
@@ -2276,6 +2281,23 @@ function PanelBody({
   }
   return (
     <>
+      {log.metrics && (
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            padding: "4px 8px",
+            marginBottom: 6,
+            borderRadius: 4,
+            background: "var(--paper-2)",
+            color: log.metrics.phase === "final" ? "var(--text-paper-d)" : "var(--accent)",
+            fontFamily: "var(--font-mono)",
+            fontSize: 12,
+          }}
+        >
+          {log.streaming && log.metrics.phase !== "final" ? "▸" : "✓"} {formatMetrics(log.metrics)}
+        </div>
+      )}
       {log.entries.map((e, i) => {
         if (e.kind === "banner") return <LogLine key={i} ts="" kind="warn" text={e.text} />;
         if (e.kind === "tool_call") {
@@ -2317,6 +2339,36 @@ function argsLine(args: Record<string, unknown>): string {
   return Object.entries(args)
     .map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
     .join(" ");
+}
+
+type RunCall = {
+  status: "running" | "done";
+  output?: string;
+  startedAt?: number;
+  endedAt?: number;
+};
+
+/** ✓ / ✗N exit glyph: parses `exit_code=N` that exec prepends to output. */
+function exitGlyph(call: RunCall): string {
+  if (call.status === "running") return "•";
+  const m = call.output?.match(/exit_code=(\d+)/);
+  if (m) return m[1] === "0" ? "✓ 0" : `✗ ${m[1]}`;
+  return "✓";
+}
+
+/** Per-run meta line: duration + start→end clock times. */
+function runMeta(call: RunCall): string {
+  const parts: string[] = [];
+  if (call.startedAt != null && call.endedAt != null) {
+    parts.push(`${((call.endedAt - call.startedAt) / 1000).toFixed(2)}s`);
+  } else if (call.status === "running") {
+    parts.push("running…");
+  }
+  if (call.startedAt != null) {
+    const t = new Date(call.startedAt).toLocaleTimeString();
+    parts.push(call.endedAt != null ? `${t}→${new Date(call.endedAt).toLocaleTimeString()}` : t);
+  }
+  return parts.join("  ");
 }
 
 const logPre: React.CSSProperties = {

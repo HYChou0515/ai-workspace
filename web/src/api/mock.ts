@@ -413,7 +413,10 @@ ensureFiles("INC-2026-0142").set("/brief.md", {
 type ScriptFn = (call: () => string) => AsyncGenerator<AgentEvent>;
 
 async function* happyPath(call: () => string): AsyncGenerator<AgentEvent> {
+  yield { type: "agent_metrics", phase: "up", prompt_tokens: 256, completion_tokens: 0, elapsed_ms: 0 };
+  await delay(120);
   yield { type: "message_delta", text: "Let me check the latest SPC trace. " };
+  yield { type: "agent_metrics", phase: "down", prompt_tokens: 256, completion_tokens: 9, elapsed_ms: 320 };
   await delay(120);
   const id = call();
   yield { type: "tool_start", call_id: id, name: "exec", args: { cmd: ["head", "spc.csv"] } };
@@ -421,6 +424,9 @@ async function* happyPath(call: () => string): AsyncGenerator<AgentEvent> {
   yield { type: "tool_end", call_id: id, output: "ts,temp\n13:28:00,237\n13:30:00,229\n" };
   await delay(80);
   yield { type: "message_delta", text: "Yes — a clean step at 13:28:42." };
+  yield { type: "agent_metrics", phase: "down", prompt_tokens: 256, completion_tokens: 18, elapsed_ms: 900 };
+  await delay(60);
+  yield { type: "agent_metrics", phase: "final", prompt_tokens: 251, completion_tokens: 21, elapsed_ms: 1020 };
   yield { type: "done" };
 }
 

@@ -46,6 +46,17 @@ export type ToolCallParseError = {
 
 export type MaxTurnsExceeded = { type: "max_turns_exceeded"; turns: number };
 
+/** Live token telemetry for the turn. phase: "up" sending the prompt,
+ * "down" streaming the reply (counts tick live, approx), "final" exact
+ * usage on completion. Mirrors api/events.py AgentMetrics. */
+export type AgentMetrics = {
+  type: "agent_metrics";
+  phase: "up" | "down" | "final";
+  prompt_tokens: number;
+  completion_tokens: number;
+  elapsed_ms: number;
+};
+
 export type AgentEvent =
   | MessageDelta
   | ToolStart
@@ -55,7 +66,8 @@ export type AgentEvent =
   | RunCancelled
   | SandboxKilledIdle
   | ToolCallParseError
-  | MaxTurnsExceeded;
+  | MaxTurnsExceeded
+  | AgentMetrics;
 
 /** Terminal events close the SSE stream and re-enable the composer. */
 export function isTerminal(ev: AgentEvent): boolean {

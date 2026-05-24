@@ -67,6 +67,22 @@ class MaxTurnsExceeded:
     type: Literal["max_turns_exceeded"] = "max_turns_exceeded"
 
 
+@dataclass(frozen=True)
+class AgentMetrics:
+    """Live token telemetry for the current turn. `phase` is:
+      - "up":    the prompt is being sent (Claude-Code's ↑),
+      - "down":  the completion is streaming back (↓), counts tick live,
+      - "final": the turn ended; counts are the model's exact usage.
+    Token counts during up/down are approximate (chars/4); final is exact
+    when the provider reports usage."""
+
+    phase: Literal["up", "down", "final"]
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    elapsed_ms: int = 0
+    type: Literal["agent_metrics"] = "agent_metrics"
+
+
 AgentEvent = (
     MessageDelta
     | ToolStart
@@ -76,6 +92,7 @@ AgentEvent = (
     | RunCancelled
     | ToolCallParseError
     | MaxTurnsExceeded
+    | AgentMetrics
 )
 
 

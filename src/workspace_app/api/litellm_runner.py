@@ -9,10 +9,11 @@ provider dispatch (openai/, anthropic/, ollama/, together/, ...).
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from agents import Agent, ItemHelpers, Runner
+from agents import Agent, Runner
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 
@@ -21,6 +22,7 @@ from ..agent.tools import build_tools
 from ..resources import AgentConfig
 from .events import (
     AgentEvent,
+    AgentMetrics,
     MaxTurnsExceeded,
     MessageDelta,
     RunDone,
@@ -29,6 +31,20 @@ from .events import (
     ToolEnd,
     ToolStart,
 )
+
+
+def _approx_tokens(chars: int) -> int:
+    """Rough live token estimate from character count (~4 chars/token)."""
+    return round(chars / 4)
+
+
+def _exact_usage(streamed: Any) -> tuple[int, int] | None:
+    """The provider's exact (prompt, completion) token usage if reported."""
+    try:
+        usage = streamed.context_wrapper.usage
+        return int(usage.input_tokens), int(usage.output_tokens)
+    except Exception:  # noqa: BLE001 — usage shape varies / may be absent
+        return None
 
 
 def _agent_for(
@@ -116,8 +132,9 @@ def _map_event(event: Any) -> AgentEvent | None:
             call_id=getattr(raw, "call_id", "") or getattr(raw, "id", ""),
             output=str(getattr(item, "output", "")),
         )
-    if name == "message_output_created":
-        return MessageDelta(text=ItemHelpers.text_message_output(item))
+    # message_output_created carries the FULL assistant message; we stream
+    # the incremental token deltas (raw_response_event) in _run_once instead,
+    # so dropping it here avoids emitting the reply twice.
     return None
 
 
@@ -162,8 +179,38 @@ class LitellmAgentRunner:
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
         agent = _agent_for(ctx.agent_config or self._config, extra_instructions=feedback)
+        t0 = time.monotonic()
+        prompt_tok = _approx_tokens(len(prompt))
+        # ↑ sending the prompt
+        yield AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0)
+
+        completion_chars = 0
+        last_emit = 0.0
         streamed = Runner.run_streamed(agent, input=prompt, context=ctx)
         async for event in streamed.stream_events():
+            if getattr(event, "type", None) == "raw_response_event":
+                delta = getattr(getattr(event, "data", None), "delta", None)
+                if isinstance(delta, str) and delta:
+                    completion_chars += len(delta)
+                    yield MessageDelta(text=delta)  # ↓ token-by-token reply
+                    now = time.monotonic()
+                    if now - last_emit >= 0.2:  # throttle live metric updates
+                        last_emit = now
+                        yield AgentMetrics(
+                            phase="down",
+                            prompt_tokens=prompt_tok,
+                            completion_tokens=_approx_tokens(completion_chars),
+                            elapsed_ms=round((now - t0) * 1000),
+                        )
+                continue
             mapped = _map_event(event)
             if mapped is not None:
                 yield mapped
+
+        usage = _exact_usage(streamed)
+        yield AgentMetrics(
+            phase="final",
+            prompt_tokens=usage[0] if usage else prompt_tok,
+            completion_tokens=usage[1] if usage else _approx_tokens(completion_chars),
+            elapsed_ms=round((time.monotonic() - t0) * 1000),
+        )

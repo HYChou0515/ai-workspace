@@ -62,6 +62,7 @@ export function useAgentInternal(investigationId: string): AgentState {
         ...prev,
         streaming: true,
         error: null,
+        metrics: null, // fresh telemetry for the new turn
         entries: [
           ...prev.entries,
           {

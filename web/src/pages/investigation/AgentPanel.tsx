@@ -12,7 +12,7 @@ import { api } from "../../api";
 import { Icon } from "../../components/Icon";
 import { RcaMark } from "../../components/RcaMark";
 import { useAgent } from "../../hooks/useAgent";
-import type { AgentEntry, ToolCallView } from "./agentLog";
+import { type AgentEntry, formatMetrics, type ToolCallView } from "./agentLog";
 import type { Message } from "../../api/types";
 
 // Fallback only — the real quick-prompts come from the attached AgentConfig
@@ -141,6 +141,18 @@ export function AgentPanel({
         {log.entries.map((e, i) => (
           <EntryView key={i} entry={e} />
         ))}
+        {log.streaming && log.metrics && (
+          <div
+            style={{
+              fontFamily: "var(--font-mono)",
+              fontSize: 11,
+              color: "var(--accent)",
+              padding: "2px 0 0 28px",
+            }}
+          >
+            {formatMetrics(log.metrics)}
+          </div>
+        )}
         {log.error && (
           <div
             style={{

@@ -1,6 +1,7 @@
 from .app import create_app
 from .events import (
     AgentEvent,
+    AgentMetrics,
     MaxTurnsExceeded,
     MessageDelta,
     RunCancelled,
@@ -14,6 +15,7 @@ from .runner import AgentRunner, ScriptedAgentRunner
 
 __all__ = [
     "AgentEvent",
+    "AgentMetrics",
     "AgentRunner",
     "MaxTurnsExceeded",
     "MessageDelta",

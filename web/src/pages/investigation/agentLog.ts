@@ -18,6 +18,17 @@ export type ToolCallView = {
   status: "running" | "done";
   output?: string;
   parseError?: string;
+  /** epoch ms when the call started / finished (for duration + timestamps). */
+  startedAt?: number;
+  endedAt?: number;
+};
+
+/** Live token telemetry for the current turn (Claude-Code-style ↑/↓). */
+export type AgentMetricsState = {
+  phase: "up" | "down" | "final";
+  promptTokens: number;
+  completionTokens: number;
+  elapsedMs: number;
 };
 
 export type AgentEntry =
@@ -31,12 +42,15 @@ export type AgentLog = {
   streaming: boolean;
   /** Non-null when the last terminal was an error. */
   error: string | null;
+  /** Live token telemetry for the current turn (null until first event). */
+  metrics: AgentMetricsState | null;
 };
 
 export const EMPTY_LOG: AgentLog = {
   entries: [],
   streaming: false,
   error: null,
+  metrics: null,
 };
 
 export function logFromMessages(messages: readonly Message[]): AgentLog {
@@ -57,7 +71,20 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       entries.push({ kind: "message", message: m });
     }
   }
-  return { entries, streaming: false, error: null };
+  return { entries, streaming: false, error: null, metrics: null };
+}
+
+/** tok/s for the completion phase (0 until any time has elapsed). */
+export function tokensPerSec(m: AgentMetricsState): number {
+  return m.elapsedMs > 0 ? Math.round(m.completionTokens / (m.elapsedMs / 1000)) : 0;
+}
+
+/** Claude-Code-style one-liner: ↑ prompt while sending, ↓ completion +
+ * tok/s while/after receiving. */
+export function formatMetrics(m: AgentMetricsState): string {
+  const secs = (m.elapsedMs / 1000).toFixed(1);
+  if (m.phase === "up") return `↑ ${m.promptTokens} tok · sending…`;
+  return `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok · ${tokensPerSec(m)} tok/s · ${secs}s`;
 }
 
 /* ------------------------- internal helpers ------------------------- */
@@ -81,10 +108,21 @@ function lastAssistantIdx(entries: AgentEntry[]): number {
 
 /* ------------------------------- reducer ------------------------------- */
 
-export function reduceAgent(log: AgentLog, ev: AgentEvent): AgentLog {
+export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.now()): AgentLog {
   const entries = [...log.entries];
 
   switch (ev.type) {
+    case "agent_metrics":
+      return {
+        ...log,
+        metrics: {
+          phase: ev.phase,
+          promptTokens: ev.prompt_tokens,
+          completionTokens: ev.completion_tokens,
+          elapsedMs: ev.elapsed_ms,
+        },
+      };
+
     case "message_delta": {
       const idx = lastAssistantIdx(entries);
       const last = idx >= 0 ? entries[idx] : undefined;
@@ -113,6 +151,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent): AgentLog {
           name: ev.name,
           args: ev.args,
           status: "running",
+          startedAt: now,
         },
       });
       return { ...log, entries };
@@ -124,7 +163,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent): AgentLog {
         if (e && e.kind === "tool_call") {
           entries[idx] = {
             kind: "tool_call",
-            call: { ...e.call, status: "done", output: ev.output },
+            call: { ...e.call, status: "done", output: ev.output, endedAt: now },
           };
         }
       }

@@ -4,12 +4,29 @@ import type { AgentEvent } from "../../events";
 import {
   EMPTY_LOG,
   type AgentLog,
+  formatMetrics,
   logFromMessages,
   reduceAgent,
+  tokensPerSec,
 } from "./agentLog";
 
+describe("metrics formatting", () => {
+  it("computes tok/s from completion tokens over elapsed", () => {
+    expect(tokensPerSec({ phase: "down", promptTokens: 100, completionTokens: 60, elapsedMs: 2000 })).toBe(30);
+    expect(tokensPerSec({ phase: "up", promptTokens: 100, completionTokens: 0, elapsedMs: 0 })).toBe(0);
+  });
+  it("shows ↑ while sending and ↑/↓ + tok/s while receiving", () => {
+    expect(formatMetrics({ phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0 })).toMatch(/↑ 256 tok/);
+    const down = formatMetrics({ phase: "down", promptTokens: 256, completionTokens: 40, elapsedMs: 1000 });
+    expect(down).toContain("↑ 256");
+    expect(down).toContain("↓ 40 tok");
+    expect(down).toContain("40 tok/s");
+  });
+});
+
 function fold(events: AgentEvent[], from: AgentLog = EMPTY_LOG): AgentLog {
-  return events.reduce(reduceAgent, from);
+  // wrap so Array.reduce's index isn't passed as reduceAgent's `now`
+  return events.reduce((log, ev) => reduceAgent(log, ev), from);
 }
 
 describe("reduceAgent", () => {
@@ -99,6 +116,43 @@ describe("reduceAgent", () => {
     ]);
     const msgs = log.entries.filter((e) => e.kind === "message");
     expect(msgs).toHaveLength(2);
+  });
+});
+
+describe("reduceAgent — metrics + timing", () => {
+  it("tracks live token metrics from agent_metrics events", () => {
+    const log = fold([
+      { type: "agent_metrics", phase: "up", prompt_tokens: 120, completion_tokens: 0, elapsed_ms: 0 },
+      { type: "agent_metrics", phase: "down", prompt_tokens: 120, completion_tokens: 40, elapsed_ms: 800 },
+      { type: "agent_metrics", phase: "final", prompt_tokens: 118, completion_tokens: 51, elapsed_ms: 1500 },
+    ]);
+    expect(log.metrics).toEqual({
+      phase: "final",
+      promptTokens: 118,
+      completionTokens: 51,
+      elapsedMs: 1500,
+    });
+  });
+
+  it("stamps tool start/end times so duration can be shown", () => {
+    let log = EMPTY_LOG;
+    log = reduceAgent(log, { type: "tool_start", call_id: "c1", name: "exec", args: {} }, 1000);
+    log = reduceAgent(log, { type: "tool_end", call_id: "c1", output: "ok" }, 1700);
+    const e = log.entries[0];
+    expect(e?.kind).toBe("tool_call");
+    if (e?.kind === "tool_call") {
+      expect(e.call.startedAt).toBe(1000);
+      expect(e.call.endedAt).toBe(1700);
+    }
+  });
+
+  it("preserves metrics across a terminal done event", () => {
+    const log = fold([
+      { type: "agent_metrics", phase: "final", prompt_tokens: 10, completion_tokens: 5, elapsed_ms: 200 },
+      { type: "done" },
+    ]);
+    expect(log.streaming).toBe(false);
+    expect(log.metrics?.completionTokens).toBe(5);
   });
 });
 

@@ -17,7 +17,13 @@ import pytest
 
 from workspace_app.agent import AgentToolContext
 from workspace_app.api.events import MessageDelta, RunDone, RunError, ToolEnd, ToolStart
-from workspace_app.api.litellm_runner import LitellmAgentRunner, _map_event, diagnose_error
+from workspace_app.api.litellm_runner import (
+    LitellmAgentRunner,
+    _approx_tokens,
+    _exact_usage,
+    _map_event,
+    diagnose_error,
+)
 from workspace_app.resources import AgentConfig
 
 
@@ -122,21 +128,39 @@ def test_map_event_drops_other_run_item_names():
     assert _map_event(ev) is None
 
 
-@dataclass
-class _RawMessage:
-    content: list
+def test_approx_tokens_from_chars():
+    assert _approx_tokens(0) == 0
+    assert _approx_tokens(4) == 1
+    assert _approx_tokens(10) == 2  # round(2.5)
 
 
-def test_map_event_maps_message_output_created():
+def test_exact_usage_reads_provider_usage():
+    class _Usage:
+        input_tokens = 120
+        output_tokens = 45
+
+    class _CtxWrapper:
+        usage = _Usage()
+
+    class _Streamed:
+        context_wrapper = _CtxWrapper()
+
+    assert _exact_usage(_Streamed()) == (120, 45)
+
+
+def test_exact_usage_returns_none_when_absent():
+    assert _exact_usage(object()) is None
+
+
+def test_map_event_drops_message_output_created():
+    # The full-message event is dropped — the reply streams as incremental
+    # raw token deltas (handled in _run_once) to avoid emitting it twice.
     ev = _StreamEvent(
         type="run_item_stream_event",
         name="message_output_created",
-        item=_Item(raw_item=_RawMessage(content=[])),
+        item=_Item(raw_item=None),
     )
-    out = _map_event(ev)
-    assert isinstance(out, MessageDelta)
-    # Empty content list → empty text, but the branch is exercised.
-    assert out.text == ""
+    assert _map_event(ev) is None
 
 
 def test_agent_for_with_system_prompt_set():
