@@ -227,6 +227,18 @@ async def test_isolated_exec_cleans_up_dev_scaffolding(tmp_path):
 
 
 @_needs_userns
+async def test_isolated_exec_python_is_python3(tmp_path):
+    """`python` inside the jail must resolve to Python 3 — a Debian host's
+    /usr/bin/python is often a legacy python2 symlink, which the jail would
+    otherwise inherit (breaking f-strings and every py3-only script)."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["python", "-c", "import sys; print(sys.version_info.major)"])
+    assert r.exit_code == 0
+    assert r.stdout.decode().strip() == "3"
+
+
+@_needs_userns
 async def test_isolated_exec_protects_host_usr_read_only(tmp_path):
     """System dirs are bind-mounted read-only — the agent can't tamper with
     the host's /usr from inside the jail."""

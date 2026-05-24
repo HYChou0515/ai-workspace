@@ -56,7 +56,13 @@ mount -t tmpfs tmpfs "$ROOT/tmp" 2>/dev/null || true
 for d in null zero full random urandom tty; do
   if [ -e "/dev/$d" ]; then : > "$ROOT/dev/$d"; mount --bind "/dev/$d" "$ROOT/dev/$d"; fi
 done
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+# `python` → python3 shim: a Debian host's /usr/bin/python is often a legacy
+# python2 symlink, and the jail's PATH (no pyenv shims) would inherit it. Put a
+# python→python3 link first on PATH, on the ephemeral tmpfs so it never touches
+# the workspace.
+mkdir -p "$ROOT/tmp/.jailbin"
+[ -e /usr/bin/python3 ] && ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python"
+export PATH="/tmp/.jailbin:/usr/bin:/bin:/usr/sbin:/sbin"
 exec /usr/sbin/chroot "$ROOT" "$@"
 """
 
