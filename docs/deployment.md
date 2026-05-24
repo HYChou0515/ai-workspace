@@ -15,7 +15,8 @@ React SPA (web/dist) ─► FastAPI app (create_app) ─┬─► AgentRunner Pr
                                                   ├─► Sandbox Protocol       ← 換執行環境
                                                   ├─► FileStore Protocol     ← 換檔案儲存
                                                   ├─► AgentConfig (resource) ← 換模型 / prompt / 工具
-                                                  └─► template profiles      ← 換新調查的起始檔案
+                                                  ├─► template profiles      ← 換新調查的起始檔案
+                                                  └─► KB embedder/chunker/檢索 LLM ← 換知識庫嵌入與檢索（§8）
 ```
 
 `create_app` 的簽章（`src/workspace_app/api/app.py`）：
@@ -26,7 +27,10 @@ def create_app(
     spec: SpecStar | None = None,   # 資料層；不給就自動建一個
     sandbox: Sandbox,               # 必填：執行環境
     filestore: FileStore,           # 必填：檔案儲存
-    runner: AgentRunner,            # 必填：agent 執行器
+    runner: AgentRunner,            # 必填：agent 執行器（RCA 與 KB 共用）
+    kb_embedder: Embedder | None = None,  # KB 嵌入；不給用離線 HashEmbedder（非語意）
+    kb_chunker: Chunker | None = None,    # KB 切塊；不給用 FixedTokenChunker
+    kb_llm: Llm | None = None,            # 給了才啟用 multi-query / HyDE / rerank
     spa_dist: Path | None = None,   # 前端靜態檔；預設找 <repo>/web/dist
     idle_timeout: timedelta = timedelta(hours=8),       # 閒置多久回收 sandbox
     idle_check_interval: timedelta = timedelta(seconds=60),
@@ -230,7 +234,8 @@ class AgentConfig(Struct):
 ```
 
 可用的工具名稱（`allowed_tools`）：`exec`、`read_file`、`write_file`、`ls`、
-`exists`、`delete_file`。
+`exists`、`delete_file`、`ask_knowledge_base`（RCA 查 KB，預設工具集已含）；
+`kb_search` 是 KB agent 專用、需 retriever，不在 RCA 預設集（見 §8）。
 
 ### 模型字串（LiteLLM）
 
@@ -276,7 +281,55 @@ rm.create(AgentConfig(
 
 ---
 
-## 8. Workspace 範本（新調查的起始檔案）
+## 8. 知識庫（KB）：embedder / chunker / 檢索 LLM / 環境變數
+
+KB 的「智慧」分三塊，都可由 `create_app` 注入（不給就用安全的離線預設）：
+
+- **`kb_embedder`（`Embedder` Protocol，`kb/embedder.py`）**——把文字轉成向量。預設
+  `HashEmbedder`：決定性但**非語意**（只夠跑離線/測試）。正式請用 `LitellmEmbedder`。
+- **`kb_chunker`（`Chunker` Protocol，`kb/chunker.py`）**——切塊。預設 `FixedTokenChunker`。
+- **`kb_llm`（`Llm` Protocol，`kb/llm.py`）**——**給了才會**在檢索時啟用 multi-query 擴展、
+  HyDE、LLM rerank；不給就只做 dense+BM25 混合檢索。
+
+預設進入點 `__main__.py` 已用環境變數接好 `LitellmEmbedder` + `LitellmLlm`：
+
+| 環境變數 | 預設 | 說明 |
+|---|---|---|
+| `KB_EMBED_MODEL` | `ollama/qwen3-embedding` | 嵌入模型（LiteLLM 字串）。用 `bge-m3` 就設 `ollama/bge-m3` |
+| `KB_EMBED_DIM` | `1024` | 儲存向量寬度，**必須等於模型輸出維度**；改了要重新索引 |
+| `KB_LLM_MODEL` | `ollama_chat/qwen3:14b` | KB agent ＋ 檢索增強用的聊天模型 |
+| `KB_QUERY_PREFIX` / `KB_DOC_PREFIX` | `""` | 非對稱指令前綴（部分嵌入模型需要） |
+
+```bash
+# 例：用 bge-m3（1024 維，與預設 KB_EMBED_DIM 相符）
+docker compose exec ollama ollama pull bge-m3
+KB_EMBED_MODEL=ollama/bge-m3 uv run python -m workspace_app
+```
+
+要在自己的進入點完全掌控，直接注入實作：
+
+```python
+from workspace_app.kb.embedder import LitellmEmbedder
+from workspace_app.kb.llm import LitellmLlm
+from workspace_app.resources.kb import EMBED_DIM
+
+app = create_app(
+    sandbox=..., filestore=..., runner=...,
+    kb_embedder=LitellmEmbedder("ollama/bge-m3", dim=EMBED_DIM),
+    kb_llm=LitellmLlm("ollama_chat/qwen3:14b"),   # 省略則停用 multi-query/HyDE/rerank
+)
+```
+
+要寫自己的 embedder/chunker，實作對應 Protocol 即可（`LitellmEmbedder` 繼承
+`_PrefixedEmbedder`，只需提供 `_embed` 與 `dim`）。
+
+> **維度一致性**：`KB_EMBED_DIM` 決定 `DocChunk.embedding` 的 `Vector` 寬度，在 import 時就定
+> 下。換成不同維度的模型，必須同步改 `KB_EMBED_DIM` **並重新上傳/索引**所有文件——舊向量是
+> 用舊寬度存的。沒有真 embedder 時退回 `HashEmbedder`（非語意，只能驗證接線、不能驗品質）。
+
+---
+
+## 9. Workspace 範本（新調查的起始檔案）
 
 開新調查時，會把某個**範本 profile**的檔案 seed 進該調查。Profile 就是
 `src/workspace_app/rca/templates/` 底下的一個子資料夾，picker 會自動列出所有子資料夾。
@@ -335,7 +388,7 @@ Suggested flow: read `/brief.md` → … → draft `/report.v{N+1}.md`.
 
 ---
 
-## 9. 改 Agent 的 System Prompt
+## 10. 改 Agent 的 System Prompt
 
 RCA 的 system prompt 是純 markdown，存在
 `src/workspace_app/rca/prompts/system.md`，由 `load_system_prompt()` 讀取。
@@ -346,7 +399,7 @@ RCA 的 system prompt 是純 markdown，存在
 
 ---
 
-## 10. 生產環境注意事項
+## 11. 生產環境注意事項
 
 - **對外服務**：`uvicorn.run(app, host="0.0.0.0", port=...)`。建議前面擺反向代理
   （TLS、驗證）；本應用本身沒有內建身份驗證。
@@ -362,7 +415,7 @@ RCA 的 system prompt 是純 markdown，存在
 
 ---
 
-## 11. 開發指令速查
+## 12. 開發指令速查
 
 ```bash
 # 後端

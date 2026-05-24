@@ -1,5 +1,11 @@
 # RCA 3.0 — Backend Plan
 
+> **Note (post-plan):** the **knowledge-base (KB) chatbot** subsystem was added
+> after this plan and is **not** covered below. It reuses the platform here
+> (AgentRunner, specstar, SSE) but adds its own layers (ingest / embed /
+> retrieve / KB agent). For KB see [architecture.md](architecture.md) §8 and
+> [contract.md](contract.md) §1.5 + §2.9.
+
 Living document for backend work. Frontend has its own plan at
 [`plan-frontend.md`](./plan-frontend.md) and a different agent owns it.
 

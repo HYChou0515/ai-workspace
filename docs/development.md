@@ -67,19 +67,29 @@ GREEN → 寫剛好讓它通過的最小程式 → 通過
 ```
 src/workspace_app/
   api/         create_app、SSE 端點、AgentRunner Protocol、LitellmAgentRunner、
-               InvestigationRegistry、events.py（AgentEvent/CellEvent）
-  agent/       AgentToolContext、tools.py（exec/read/write/ls/exists/delete）
+               InvestigationRegistry、events.py（AgentEvent/CellEvent）、
+               kb_routes.py（collections/docs）、kb_chat_routes.py（threads + chat SSE）
+  agent/       AgentToolContext（雙形態 RCA/KB）、tools.py（exec/read/write/ls/exists/
+               delete、kb_search、ask_knowledge_base）
   sandbox/     Protocol + Mock / LocalProcess / Docker
   filestore/   Protocol + Memory / Specstar
   sync/        SandboxSync（restore/flush/reverse）+ ignore 規則
-  resources/   msgspec.Struct（Investigation / AgentConfig / Conversation）
+  resources/   msgspec.Struct（Investigation / AgentConfig / Conversation；
+               KB：Collection / SourceDoc / DocChunk / KbChat）
+  kb/          chunker、embedder、ingest、retriever（hybrid）、fusion/bm25/merge、
+               query（multi-query/HyDE）、rerank、citations、llm、agent + prompt
   rca/         system prompt（prompts/system.md）、agent 工廠、範本 profiles
 
 web/src/
   pages/investigation/   InvestigationShell（VSCode 殼）、AgentPanel、FileTree、
                          SearchPanel、TerminalPane、agentLog.ts（reduceAgent）
+  pages/kb/              KbHome（/kb 殼）、AskAgentLauncher/AskAgentDrawer（快速問答）、
+                         KbChatPanel/KbChatView、KbChatsPage、KbCollectionsPage、
+                         KbDocBody/KbDocViewer/KbDocPage、kbLinks、rehypeHighlightSnippet
+  components/            AgentEntryView（RCA 與 KB 共用的 log 渲染）、Icon、…
+  api/                   index（RCA client）、kb.ts / kbMock.ts（KB client）
   renderers/             Markdown / Text / FileView / notebook / report / fishbone
-  hooks/                 useEditorGroups、useAgent、fileBuffer、useStickToBottom…
+  hooks/                 useEditorGroups、useAgent、useKbChat、fileBuffer…
   events.ts              AgentEvent/CellEvent（鏡像後端）
 ```
 
@@ -108,10 +118,17 @@ web/src/
 
 1. 在 `agent/tools.py` 寫 `async def my_tool_impl(ctx: RunContextWrapper[AgentToolContext], ...)`，
    透過 `ctx.context.filestore` / `ctx.context.sandbox` 操作。
-2. 加進 `_IMPLS` dict（key 是工具名）。`build_tools(allowed)` 會自動包成 `FunctionTool`。
+2. 加進 `_IMPLS` dict（key 是工具名）。`build_tools(allowed)` 會自動包成 `FunctionTool`；
+   `allowed=None` 回傳 `_WORKSPACE_TOOLS`（RCA 預設集，含 `ask_knowledge_base`）。
 3. 若工具有即時輸出需求，沿用 `ctx.context.on_exec_output` 那套 sink（見 exec_impl）。
 4. 在 `tests/agent/test_tools.py` 寫測試（用 `MockSandbox`/`SpecstarFileStore` 的 `ctx` fixture）。
-5. 要限制某 AgentConfig 能用哪些工具，設其 `allowed_tools`（空 = 全部）。
+5. 要限制某 AgentConfig 能用哪些工具，設其 `allowed_tools`（空 = 用 `_WORKSPACE_TOOLS`）。
+
+> **`AgentToolContext` 是雙形態**：RCA turn 帶 `sandbox/filestore/sync/investigation_id`；
+> KB turn 帶 `retriever/collection_ids`、沒有 sandbox。所以這些欄位都是 optional——RCA 工具
+> 開頭用 `_workspace(ctx)` 斷言取出 filestore/investigation_id，KB 的 `kb_search` 斷言 retriever。
+> 只給 KB 用、需要 retriever 的工具（如 `kb_search`）不要放進 `_WORKSPACE_TOOLS`，由 KB
+> AgentConfig 的 `allowed_tools` 明確要求。
 
 ---
 
@@ -146,7 +163,28 @@ web/src/
 
 ---
 
-## 9. 測試備註
+## 9. 怎麼換／新增 KB 的 chunker / embedder / 檢索步驟
+
+KB 的可抽換點都在 `src/workspace_app/kb/`，皆為小 Protocol：
+
+- **Chunker**（`chunker.py`）：`chunk(text) -> list[Chunk]`。新切法（如 markdown 結構感知）
+  實作 Protocol 即可；測試比對 `Chunk.start/end` 為對 canonical text 的字元 offset。
+- **Embedder**（`embedder.py`）：`dim` + `embed_documents` + `embed_query`。繼承
+  `_PrefixedEmbedder` 只需寫 `_embed` 與 `dim`（prefix 已處理）；live 呼叫標 `# pragma: no cover`。
+  注入靠 `create_app(kb_embedder=...)`（見 [deployment.md](deployment.md) §8）。
+- **檢索增強**（`query.py` / `rerank.py`，靠 `Llm` Protocol）：multi-query、HyDE、rerank 都是
+  「prompt 純函式 + 注入 `Llm`」——parsing 寫 vitest 等級的純測試（fake `Llm`），整合進
+  `Retriever.search`，並用 `# pragma: no cover` 圈住 live model 路徑。
+- **Retriever 管線**（`retriever.py`）：dense（specstar 原生向量查詢）+ BM25 → `fusion.py`
+  RRF → MMR → `merge.py` parent-doc 合併。加新訊號就多疊一個 ranked list 進 RRF。
+
+> 攝取是「`store`（快、同步、`status=indexing`）+ `index`（慢、背景）」兩段——慢的嵌入別放進
+> 上傳 request；測試可直接呼叫 `Ingestor.ingest`（= store + index 同步版）。引用解析（`[n]`→
+> `Citation`）在 `citations.py`，是純函式（passage registry 傳進去）。
+
+---
+
+## 10. 測試備註
 
 - Docker sandbox 測試在本機有 daemon 時跑、否則自動 skip。
 - Ollama live 測試（`test_live_run_against_ollama_*`）在 daemon/模型不在時自動 skip；

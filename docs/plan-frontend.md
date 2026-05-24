@@ -1,5 +1,11 @@
 # RCA 3.0 — Frontend Plan
 
+> **Note (post-plan):** the **knowledge-base (KB) chatbot** UI (the Ask-agent
+> drawer, the `/kb` collections + chat pages, the document viewer) was added
+> after this plan and is **not** covered below. It shares the agent-log
+> rendering (`components/AgentEntryView`) with the RCA panel. For KB see
+> [architecture.md](architecture.md) §8 and [contract.md](contract.md) §2.9.
+
 You're the frontend agent. This brief is self-contained — but if you
 want context on the BE items you depend on, see
 [`plan-backend.md`](./plan-backend.md).

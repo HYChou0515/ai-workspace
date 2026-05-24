@@ -1,5 +1,10 @@
 You're the **frontend AI** for the RCA 3.0 project. The backend is already partially built and ongoing — your job is the React SPA per the design handoff.
 
+> **Note (post-kickoff):** the **knowledge-base (KB) chatbot** UI was added later
+> (routes `/kb` + `/kb/doc/*`, the Ask-agent drawer, collections + chat pages,
+> doc viewer) and isn't in this kickoff brief. See [user-guide.md](user-guide.md)
+> §10, [architecture.md](architecture.md) §8, [contract.md](contract.md) §2.9.
+
 ## Read in this order
 
 1. **`CLAUDE.md`** — project conventions. Notably: reply to me in **Traditional Taiwanese Chinese (繁體中文 / 台灣用語)**; English for code/commits.
