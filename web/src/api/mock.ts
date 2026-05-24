@@ -535,6 +535,18 @@ export const mockApi: ApiClient = {
     return { ...inv };
   },
 
+  async updateInvestigation(id, input) {
+    await delay(40);
+    const hit = investigations.find((i) => i.resource_id === id);
+    if (!hit) throw new Error(`not found: ${id}`);
+    hit.title = input.title;
+    hit.description = input.description ?? "";
+    hit.severity = input.severity ?? "P2";
+    hit.product = input.product ?? "";
+    hit.topics = input.topics ?? [];
+    hit.updated_time = nowIso();
+  },
+
   async listAgentConfigs() {
     await delay(10);
     return agentConfigs.map((c) => ({ ...c }));

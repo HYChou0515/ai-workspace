@@ -11,6 +11,7 @@ import { api } from "../../api";
 import type { AgentConfigInfo, CloseStatus, FileInfo, Investigation } from "../../api/types";
 import { isOpen } from "../../api/types";
 import { Icon, type IconName } from "../../components/Icon";
+import { NewInvestigationModal } from "../../components/NewInvestigationModal";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
 import { ResizeDivider } from "../../components/ResizeDivider";
@@ -62,11 +63,13 @@ export function InvestigationShell({
   files,
   dirs = [],
   onFilesChanged,
+  onInvestigationChanged,
 }: {
   investigation: Investigation;
   files: FileInfo[];
   dirs?: string[];
   onFilesChanged?: () => void;
+  onInvestigationChanged?: () => void;
 }) {
   const bufferStore = useMemo(
     () => new FileBufferStore(investigation.resource_id),
@@ -82,6 +85,7 @@ export function InvestigationShell({
               files={files}
               dirs={dirs}
               onFilesChanged={onFilesChanged}
+              onInvestigationChanged={onInvestigationChanged}
               bufferStore={bufferStore}
             />
           </EditModeProvider>
@@ -96,14 +100,17 @@ function ShellBody({
   files,
   dirs = [],
   onFilesChanged,
+  onInvestigationChanged,
   bufferStore,
 }: {
   investigation: Investigation;
   files: FileInfo[];
   dirs?: string[];
   onFilesChanged?: () => void;
+  onInvestigationChanged?: () => void;
   bufferStore: FileBufferStore;
 }) {
+  const [editOpen, setEditOpen] = useState(false);
   const dialog = useDialog();
   // The initial open tabs mirror the design's six view-files (those that
   // exist).
@@ -286,9 +293,31 @@ function ShellBody({
         <TopBar
           investigation={investigation}
           onCommandPalette={() => setPaletteOpen(true)}
+          onEdit={() => setEditOpen(true)}
           configs={agentConfigs}
           attachedConfigId={attachedConfigId}
           onSelectConfig={selectAgentConfig}
+        />
+        <NewInvestigationModal
+          open={editOpen}
+          mode="edit"
+          initialValues={{
+            title: investigation.title,
+            description: investigation.description,
+            severity: investigation.severity,
+            product: investigation.product,
+            topics: investigation.topics,
+          }}
+          onClose={() => setEditOpen(false)}
+          onSubmit={(input) => {
+            api
+              .updateInvestigation(investigation.resource_id, input)
+              .then(() => {
+                setEditOpen(false);
+                onInvestigationChanged?.();
+              })
+              .catch((e) => console.error("update investigation failed", e));
+          }}
         />
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
           <ActivityBar
@@ -572,12 +601,14 @@ function SettingsSection({
 function TopBar({
   investigation,
   onCommandPalette,
+  onEdit,
   configs,
   attachedConfigId,
   onSelectConfig,
 }: {
   investigation: Investigation;
   onCommandPalette: () => void;
+  onEdit: () => void;
   configs: AgentConfigInfo[];
   attachedConfigId: string | null;
   onSelectConfig: (id: string | null) => void;
@@ -647,6 +678,15 @@ function TopBar({
         <SeverityChip level={investigation.severity} />
         <StatusChip status={investigation.status} />
         <IdChip resourceId={investigation.resource_id} />
+        <button
+          type="button"
+          onClick={onEdit}
+          title="Edit investigation details"
+          aria-label="Edit investigation details"
+          style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center" }}
+        >
+          <Icon name="settings" size={13} />
+        </button>
       </div>
       <span style={{ flex: 1 }} />
 

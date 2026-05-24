@@ -160,6 +160,24 @@ export const realApi: ApiClient = {
     return this.getInvestigation(created.resource_id);
   },
 
+  async updateInvestigation(id: string, input: InvestigationInput) {
+    // specstar PATCH is RFC-6902 JSON Patch (same route attachAgentConfig uses).
+    const resp = await apiFetch(`/investigation/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify([
+        { op: "replace", path: "/title", value: input.title },
+        { op: "replace", path: "/description", value: input.description ?? "" },
+        { op: "replace", path: "/severity", value: input.severity ?? "P2" },
+        { op: "replace", path: "/product", value: input.product ?? "" },
+        { op: "replace", path: "/topics", value: input.topics ?? [] },
+      ]),
+    });
+    if (!resp.ok) {
+      throw new HttpError(resp.status, `update investigation failed: ${resp.status}`);
+    }
+  },
+
   async listAgentConfigs(): Promise<AgentConfigInfo[]> {
     try {
       const arr = await json<SpecstarEntry<AgentConfigStruct>[]>(

@@ -81,4 +81,41 @@ describe("<NewInvestigationModal />", () => {
     await user.click(screen.getByRole("button", { name: /cancel/i }));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("edit mode: prefills, hides the template picker, saves changes", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(
+      <NewInvestigationModal
+        open
+        mode="edit"
+        initialValues={{
+          title: "Old title",
+          description: "old brief",
+          severity: "P1",
+          product: "MX-7 board",
+          topics: ["reflow"],
+        }}
+        onSubmit={onSubmit}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByLabelText(/title/i)).toHaveValue("Old title"); // prefilled
+    expect(screen.getByText("reflow")).toBeInTheDocument(); // topic chip
+    expect(screen.queryByLabelText(/template/i)).toBeNull(); // no template on edit
+
+    const title = screen.getByLabelText(/title/i);
+    await user.clear(title);
+    await user.type(title, "New title");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "New title",
+        severity: "P1",
+        product: "MX-7 board",
+        topics: ["reflow"],
+      }),
+    );
+  });
 });

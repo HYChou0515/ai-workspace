@@ -9,18 +9,33 @@ import type { InvestigationInput, Severity } from "../api/types";
  * Owner + status are server-defaulted (owner = current user, status =
  * triaging) and not exposed in this form.
  */
+export type InvestigationFormValues = {
+  title: string;
+  description: string;
+  severity: Severity;
+  product: string;
+  topics: string[];
+};
+
 export function NewInvestigationModal({
   open,
   onSubmit,
   onClose,
   initialTemplate,
+  mode = "create",
+  initialValues,
 }: {
   open: boolean;
   onSubmit: (input: InvestigationInput) => void;
   onClose: () => void;
   /** Preselect this template profile when opened from the Templates gallery. */
   initialTemplate?: string;
+  /** "edit" prefills from `initialValues`, hides the template picker (can't
+   * change an existing investigation's template), and relabels the modal. */
+  mode?: "create" | "edit";
+  initialValues?: InvestigationFormValues;
 }) {
+  const isEdit = mode === "edit";
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [severity, setSeverity] = useState<Severity>("P2");
@@ -55,6 +70,19 @@ export function NewInvestigationModal({
   useEffect(() => {
     if (open && initialTemplate) setTemplate(initialTemplate);
   }, [open, initialTemplate]);
+
+  // Edit mode: prefill from the current investigation when the modal opens.
+  // Keyed on `open` only so it doesn't clobber the user's edits as they type.
+  useEffect(() => {
+    if (open && isEdit && initialValues) {
+      setTitle(initialValues.title);
+      setDescription(initialValues.description);
+      setSeverity(initialValues.severity);
+      setProduct(initialValues.product);
+      setTopics(initialValues.topics);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   if (!open) return null;
 
@@ -117,7 +145,7 @@ export function NewInvestigationModal({
             borderBottom: "1px solid var(--paper-3)",
           }}
         >
-          <div className="caps">New investigation</div>
+          <div className="caps">{isEdit ? "Edit investigation" : "New investigation"}</div>
           <h2
             id="new-investigation-title"
             style={{
@@ -129,7 +157,7 @@ export function NewInvestigationModal({
               letterSpacing: "-0.02em",
             }}
           >
-            Start an RCA
+            {isEdit ? "Edit details" : "Start an RCA"}
           </h2>
         </header>
 
@@ -233,19 +261,21 @@ export function NewInvestigationModal({
             />
           </Field>
 
-          <Field label="Template">
-            <select
-              value={template}
-              onChange={(e) => setTemplate(e.target.value)}
-              style={inputStyle()}
-            >
-              {templates.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </Field>
+          {!isEdit && (
+            <Field label="Template">
+              <select
+                value={template}
+                onChange={(e) => setTemplate(e.target.value)}
+                style={inputStyle()}
+              >
+                {templates.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
         </div>
 
         <footer
@@ -262,7 +292,7 @@ export function NewInvestigationModal({
             Cancel
           </button>
           <button type="submit" disabled={!canSubmit} style={btnPrimary(!canSubmit)}>
-            Create &amp; ask agent
+            {isEdit ? "Save changes" : "Create & ask agent"}
           </button>
         </footer>
       </form>

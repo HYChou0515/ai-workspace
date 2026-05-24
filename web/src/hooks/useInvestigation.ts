@@ -7,29 +7,33 @@ import type { FileInfo, Investigation } from "../api/types";
 
 type InvState =
   | { kind: "loading" }
-  | { kind: "ready"; data: Investigation }
-  | { kind: "error"; error: Error };
+  | { kind: "ready"; data: Investigation; refresh: () => void }
+  | { kind: "error"; error: Error; refresh: () => void };
 
 export function useInvestigation(id: string): InvState {
   const [state, setState] = useState<InvState>({ kind: "loading" });
+  const [tick, setTick] = useState(0);
+  const refresh = () => setTick((n) => n + 1);
   useEffect(() => {
     let mounted = true;
     setState({ kind: "loading" });
     api
       .getInvestigation(id)
-      .then((data) => mounted && setState({ kind: "ready", data }))
+      .then((data) => mounted && setState({ kind: "ready", data, refresh }))
       .catch(
         (e: unknown) =>
           mounted &&
           setState({
             kind: "error",
             error: e instanceof Error ? e : new Error(String(e)),
+            refresh,
           }),
       );
     return () => {
       mounted = false;
     };
-  }, [id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, tick]);
   return state;
 }
 

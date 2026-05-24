@@ -164,6 +164,9 @@ export interface ApiClient {
   listInvestigations(): Promise<Investigation[]>;
   getInvestigation(id: string): Promise<Investigation>;
   createInvestigation(input: InvestigationInput): Promise<Investigation>;
+  /** PATCH /investigation/{id} — edit metadata (title/description/severity/
+   * product/topics) via specstar's JSON-Patch auto-route. */
+  updateInvestigation(id: string, input: InvestigationInput): Promise<void>;
   /** Close the workspace. `status` resolved|abandoned flips the status;
    * `null` is a pure close — tear the session down, leave status alone. */
   closeInvestigation(id: string, status: CloseStatus | null): Promise<void>;

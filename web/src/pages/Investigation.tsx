@@ -28,6 +28,7 @@ export function Investigation() {
       files={files.items}
       dirs={files.dirs}
       onFilesChanged={files.refresh}
+      onInvestigationChanged={inv.refresh}
     />
   );
 }
