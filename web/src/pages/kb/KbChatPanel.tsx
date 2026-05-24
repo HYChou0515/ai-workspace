@@ -141,6 +141,19 @@ export function KbChatPanel({
   );
 }
 
+type SearchResult = { n: string; file: string; text: string };
+
+/** Parse kb_search's "[1] file: text\n\n[2] …" output into result rows so the
+ * retrieved passages show as distinct search results, not the AI's answer. */
+function parseSearchResults(output: string): SearchResult[] {
+  const out: SearchResult[] = [];
+  for (const chunk of output.split(/\n\n+/)) {
+    const m = chunk.match(/^\[(\d+)\]\s+([^:]+):\s*([\s\S]*)$/);
+    if (m) out.push({ n: m[1], file: m[2], text: m[3].trim() });
+  }
+  return out;
+}
+
 function Message({
   message,
   onOpenCitation,
@@ -158,10 +171,28 @@ function Message({
   }
   if (message.role === "tool") {
     const query = typeof message.tool_args?.query === "string" ? message.tool_args.query : null;
+    const results = parseSearchResults(message.content);
     return (
-      <div className="kb-tool">
-        <Icon name="search" size={12} color="var(--text-paper-d2)" />
-        Searched the knowledge base{query ? `: "${query}"` : ""}
+      <div className="kb-results">
+        <div className="kb-results__head">
+          <Icon name="search" size={12} color="var(--text-paper-d2)" />
+          Searched the knowledge base{query ? ` · “${query}”` : ""}
+        </div>
+        {results.length > 0 ? (
+          <ul className="kb-results__list">
+            {results.map((r, i) => (
+              <li key={i} className="kb-results__item">
+                <span className="kb-cite__marker">[{r.n}]</span>
+                <div className="kb-cite__body">
+                  <span className="kb-cite__file">{r.file}</span>
+                  <span className="kb-results__text">{r.text}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="kb-results__empty">{message.content || "No matching passages."}</div>
+        )}
       </div>
     );
   }
@@ -171,7 +202,7 @@ function Message({
         <span className="kb-msg__mark">
           <Icon name="sparkle" size={12} color="var(--accent)" />
         </span>
-        KB Agent
+        Answer
       </div>
       <div className="kb-msg__text md-body">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>

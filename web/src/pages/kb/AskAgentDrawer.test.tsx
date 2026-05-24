@@ -49,6 +49,8 @@ describe("AskAgentDrawer (fast chat)", () => {
     // suggestions come from the KB agent config, not hardcoded in the FE
     const suggestion = await screen.findByRole("button", { name: /related past findings/i });
     await userEvent.click(suggestion);
-    await waitFor(() => expect(screen.getByText(/KB Agent/)).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByText(/reflow zone three drifted/i)).toBeInTheDocument(),
+    );
   });
 });

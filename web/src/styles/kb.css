@@ -884,3 +884,49 @@
   font-size: var(--text-body-sm);
   color: var(--ink);
 }
+
+/* --------------------- Search results (kb_search output) --------------------- */
+/* Visually distinct from the AI "Answer": a quoted, accent-bordered block. */
+
+.kb-results {
+  padding-left: 28px;
+}
+.kb-results__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d2);
+  margin-bottom: 6px;
+}
+.kb-results__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 12px;
+  border-left: 2px solid var(--paper-3);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kb-results__item {
+  display: flex;
+  gap: 8px;
+}
+.kb-results__text {
+  display: block;
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-paper-d);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.kb-results__empty {
+  padding-left: 12px;
+  border-left: 2px solid var(--paper-3);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d2);
+}
