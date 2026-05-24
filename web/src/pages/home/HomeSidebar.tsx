@@ -92,7 +92,7 @@ export function HomeSidebar({
       }}
     >
       <header style={{ padding: "20px 18px 16px", borderBottom: "1px solid var(--paper-3)" }}>
-        <RcaLockup size={28} />
+        <RcaLockup size={40} />
         <button
           type="button"
           onClick={onNewInvestigation}

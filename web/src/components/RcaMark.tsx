@@ -86,18 +86,20 @@ export function RcaLockup({
   // otherwise follow the theme via the flipping tokens.
   const fg = onDark ? "var(--text-dark)" : "var(--brand-mark)";
   const dim = onDark ? "var(--text-dark-d)" : "var(--text-paper-d)";
+  // `size` is the MARK size. The chevron fills ~60% of its box, so the design
+  // pairs a big mark with smaller text (mark 40 / wordmark 24 / subtitle 8.5).
   return (
-    <div style={{ display: "inline-flex", alignItems: "center", gap: size * 0.5 }}>
+    <div style={{ display: "inline-flex", alignItems: "center", gap: size * 0.28 }}>
       <RcaMark size={size} color={fg} />
       <div style={{ display: "flex", flexDirection: "column", lineHeight: 1 }}>
         <div
           style={{
             display: "flex",
             alignItems: "baseline",
-            gap: 4,
+            gap: 2,
             fontFamily: "var(--font-display)",
             fontWeight: 800,
-            fontSize: size * 0.85,
+            fontSize: size * 0.6,
             color: fg,
             letterSpacing: "-0.03em",
           }}
@@ -105,13 +107,13 @@ export function RcaLockup({
           <span>RCA</span>
           <span
             style={{
-              width: size * 0.16,
-              height: size * 0.16,
+              width: size * 0.125,
+              height: size * 0.125,
               background: "var(--accent)",
               marginLeft: size * 0.1,
               marginRight: size * 0.05,
               display: "inline-block",
-              transform: "translateY(-2px)",
+              transform: `translateY(-${size * 0.06}px)`,
             }}
           />
           <span>3.0</span>
@@ -120,11 +122,12 @@ export function RcaLockup({
           <div
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: size * 0.34,
+              fontSize: size * 0.21,
               color: dim,
-              letterSpacing: "0.32em",
-              marginTop: 4,
+              letterSpacing: "0.3em",
+              marginTop: size * 0.12,
               textTransform: "uppercase",
+              whiteSpace: "nowrap",
             }}
           >
             Analysis · AI · Agent
