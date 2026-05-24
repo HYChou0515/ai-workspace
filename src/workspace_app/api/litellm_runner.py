@@ -166,6 +166,21 @@ def classify_retry_event(exc: BaseException, hint: str) -> AgentEvent:
     return RunError(message=f"retry: {hint}")
 
 
+def _raw_field(raw: Any, key: str) -> Any:
+    """Read a field off a run item's raw_item, which may be an object
+    (ResponseFunctionToolCall) OR a TypedDict (FunctionCallOutput) depending
+    on the provider — the tool-output raw_item is a dict on the LiteLLM path,
+    so plain getattr would silently return nothing (call_id lost → the FE
+    tool stays "running" forever)."""
+    if isinstance(raw, dict):
+        return raw.get(key)
+    return getattr(raw, key, None)
+
+
+def _call_id(raw: Any) -> str:
+    return _raw_field(raw, "call_id") or _raw_field(raw, "id") or ""
+
+
 def _map_event(event: Any) -> AgentEvent | None:
     """Translate one openai-agents stream event into our AgentEvent shape.
 
@@ -179,21 +194,24 @@ def _map_event(event: Any) -> AgentEvent | None:
     if name == "tool_called":
         raw_call = item.raw_item
         args_obj: dict[str, object] = {}
-        raw_args = getattr(raw_call, "arguments", None)
+        raw_args = _raw_field(raw_call, "arguments")
         if isinstance(raw_args, str) and raw_args:
             try:
                 args_obj = json.loads(raw_args)
             except json.JSONDecodeError:
                 args_obj = {"_raw": raw_args}
+        elif isinstance(raw_args, dict):
+            args_obj = raw_args
         return ToolStart(
-            call_id=getattr(raw_call, "call_id", "") or getattr(raw_call, "id", ""),
-            name=getattr(raw_call, "name", "unknown"),
+            call_id=_call_id(raw_call),
+            name=_raw_field(raw_call, "name") or "unknown",
             args=args_obj,
         )
     if name == "tool_output":
-        raw = item.raw_item
+        # raw_item is a FunctionCallOutput TypedDict (dict) on the LiteLLM
+        # path — read call_id via _raw_field, not getattr.
         return ToolEnd(
-            call_id=getattr(raw, "call_id", "") or getattr(raw, "id", ""),
+            call_id=_call_id(item.raw_item),
             output=str(getattr(item, "output", "")),
         )
     # message_output_created carries the FULL assistant message; we stream

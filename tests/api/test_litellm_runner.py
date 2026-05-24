@@ -162,6 +162,39 @@ def test_map_event_maps_tool_output():
     assert "hi" in out.output
 
 
+def test_map_event_tool_output_with_dict_raw_item_keeps_call_id():
+    """LiteLLM's tool-output raw_item is a FunctionCallOutput dict — the
+    call_id must still be extracted (else the FE tool stays 'running')."""
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_output",
+        item=_Item(
+            raw_item={"call_id": "c9", "output": "ok", "type": "function_call_output"},
+            output="exit_code=0\nstdout: done",
+        ),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolEnd)
+    assert out.call_id == "c9"  # was "" before the dict fix → never matched ToolStart
+    assert "done" in out.output
+
+
+def test_map_event_tool_called_with_dict_raw_item():
+    """A dict-shaped function-call raw_item (call_id/name/arguments) maps too."""
+    ev = _StreamEvent(
+        type="run_item_stream_event",
+        name="tool_called",
+        item=_Item(
+            raw_item={"call_id": "c10", "name": "ls", "arguments": '{"prefix":"/"}'},
+        ),
+    )
+    out = _map_event(ev)
+    assert isinstance(out, ToolStart)
+    assert out.call_id == "c10"
+    assert out.name == "ls"
+    assert out.args == {"prefix": "/"}
+
+
 def test_map_event_drops_other_run_item_names():
     ev = _StreamEvent(
         type="run_item_stream_event",
