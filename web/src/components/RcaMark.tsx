@@ -33,7 +33,7 @@ export function RcaMark({
         d="M24 78 L50 18 L76 78"
         fill="none"
         stroke={color}
-        strokeWidth="6.4"
+        strokeWidth="3.4"
         strokeLinecap="round"
         strokeLinejoin="round"
         {...stroke}
@@ -42,7 +42,7 @@ export function RcaMark({
         d="M33 78 L50 32 L67 78"
         fill="none"
         stroke={color}
-        strokeWidth="6.4"
+        strokeWidth="3.4"
         strokeLinecap="round"
         strokeLinejoin="round"
         {...stroke}
@@ -51,7 +51,7 @@ export function RcaMark({
         d="M42 78 L50 46 L58 78"
         fill="none"
         stroke={color}
-        strokeWidth="6.4"
+        strokeWidth="3.4"
         strokeLinecap="round"
         strokeLinejoin="round"
         {...stroke}
@@ -60,11 +60,11 @@ export function RcaMark({
         d="M28.3 68 H71.7"
         fill="none"
         stroke={color}
-        strokeWidth="6.4"
+        strokeWidth="3.4"
         strokeLinecap="round"
         {...stroke}
       />
-      <circle cx="50" cy="20" r="6.4" fill={dot} className={animate ? "rca-dot" : undefined} />
+      <circle cx="50" cy="20" r="4.1" fill={dot} className={animate ? "rca-dot" : undefined} />
     </svg>
   );
 }

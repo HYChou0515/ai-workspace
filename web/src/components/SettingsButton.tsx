@@ -64,7 +64,7 @@ export function SettingsButton() {
                   fontFamily: "var(--font-display)",
                   fontWeight: 700,
                   fontSize: "var(--text-display-sm)",
-                  color: "var(--ink)",
+                  color: "var(--text-paper)",
                   flex: 1,
                 }}
               >
