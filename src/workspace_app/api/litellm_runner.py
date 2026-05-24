@@ -38,6 +38,14 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
+def _is_reasoning_delta(event_type: str) -> bool:
+    """The agents SDK surfaces a model's thinking as a separate stream event
+    (e.g. ``response.reasoning_summary_text.delta`` / ``…reasoning_text…``)
+    that still carries a ``.delta`` string like the visible-text deltas —
+    so we route by type, not just by the presence of ``.delta``."""
+    return "reasoning" in event_type
+
+
 def _partial_suffix(s: str, tag: str) -> int:
     """Length of the longest suffix of `s` that is a proper prefix of `tag`
     — held back so a tag split across chunks isn't emitted mid-tag."""
@@ -246,16 +254,20 @@ class LitellmAgentRunner:
         streamed = Runner.run_streamed(agent, input=prompt, context=ctx)
         async for event in streamed.stream_events():
             if getattr(event, "type", None) == "raw_response_event":
-                delta = getattr(getattr(event, "data", None), "delta", None)
+                data = getattr(event, "data", None)
+                delta = getattr(data, "delta", None)
                 if isinstance(delta, str) and delta:
                     completion_chars += len(delta)
-                    # Route <think> reasoning to the reasoning channel so the
-                    # FE renders it collapsed, separate from the answer.
-                    content, reasoning = splitter.feed(delta)
-                    if reasoning:
-                        yield MessageDelta(text=reasoning, reasoning=True)
-                    if content:
-                        yield MessageDelta(text=content)
+                    if _is_reasoning_delta(getattr(data, "type", "") or ""):
+                        # separate reasoning event → reasoning channel
+                        yield MessageDelta(text=delta, reasoning=True)
+                    else:
+                        # visible text — still split any inline <think> tags
+                        content, reasoning = splitter.feed(delta)
+                        if reasoning:
+                            yield MessageDelta(text=reasoning, reasoning=True)
+                        if content:
+                            yield MessageDelta(text=content)
                     now = time.monotonic()
                     if now - last_emit >= 0.2:  # throttle live metric updates
                         last_emit = now

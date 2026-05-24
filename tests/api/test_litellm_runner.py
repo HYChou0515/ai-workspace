@@ -22,10 +22,18 @@ from workspace_app.api.litellm_runner import (
     ThinkSplitter,
     _approx_tokens,
     _exact_usage,
+    _is_reasoning_delta,
     _map_event,
     diagnose_error,
 )
 from workspace_app.resources import AgentConfig
+
+
+def test_is_reasoning_delta_routes_by_event_type():
+    assert _is_reasoning_delta("response.reasoning_summary_text.delta") is True
+    assert _is_reasoning_delta("response.reasoning_text.delta") is True
+    assert _is_reasoning_delta("response.output_text.delta") is False
+    assert _is_reasoning_delta("") is False
 
 
 def _drain(splitter: ThinkSplitter, chunks: list[str]) -> tuple[str, str]:
