@@ -26,10 +26,16 @@ export function KbCollectionsPage({
   const fileRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
-  // webkitdirectory isn't a typed JSX attribute — set it on the element.
-  useEffect(() => {
-    if (folderRef.current) folderRef.current.webkitdirectory = true;
-  }, []);
+  // webkitdirectory isn't a typed JSX attribute, and the folder input only
+  // mounts once a collection is selected — so set it via a callback ref that
+  // fires on every (re)mount, not a one-shot effect.
+  const folderInputRef = (el: HTMLInputElement | null) => {
+    folderRef.current = el;
+    if (el) {
+      el.webkitdirectory = true;
+      el.setAttribute("webkitdirectory", "");
+    }
+  };
 
   const refreshCollections = useCallback(async () => {
     const cols = await client.listCollections();
@@ -162,7 +168,13 @@ export function KbCollectionsPage({
                 hidden
                 onChange={(e) => upload(e.target.files)}
               />
-              <input ref={folderRef} type="file" multiple hidden onChange={(e) => upload(e.target.files, true)} />
+              <input
+                ref={folderInputRef}
+                type="file"
+                multiple
+                hidden
+                onChange={(e) => upload(e.target.files, true)}
+              />
             </header>
             {documents.length === 0 ? (
               <p className="kb-cols__empty">Upload markdown, text, or an archive to index it.</p>
