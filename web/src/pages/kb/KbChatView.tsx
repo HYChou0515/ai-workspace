@@ -13,26 +13,32 @@ import { KbChatPanel } from "./KbChatPanel";
 export function KbChatView({
   chatId,
   onOpenCitation,
+  onChatCreated,
   client = kbApi,
 }: {
   /** null = a new conversation; otherwise continue this thread. */
   chatId: string | null;
   onOpenCitation?: (c: KbCitation) => void;
+  onChatCreated?: (chatId: string) => void;
   client?: KbApi;
 }) {
+  // Freeze the thread id at mount: when a fresh thread gets its real id mid-turn
+  // the parent updates the chatId prop, but we must NOT swap threads under the
+  // running stream. The parent remounts (via key) for genuine thread switches.
+  const [mountChatId] = useState(chatId);
   const [title, setTitle] = useState<string>("New chat");
 
   useEffect(() => {
     let on = true;
-    if (chatId == null) {
+    if (mountChatId == null) {
       setTitle("New chat");
       return;
     }
-    client.getChat(chatId).then((c) => on && setTitle(c.title || "Chat"));
+    client.getChat(mountChatId).then((c) => on && setTitle(c.title || "Chat"));
     return () => {
       on = false;
     };
-  }, [chatId, client]);
+  }, [mountChatId, client]);
 
   return (
     <div className="kb-chatview">
@@ -42,11 +48,10 @@ export function KbChatView({
         </span>
         <span className="kb-chatview__title">{title}</span>
       </header>
-      {/* key remounts the chat core when switching threads (or new) */}
       <KbChatPanel
-        key={chatId ?? "new"}
-        chatId={chatId}
+        chatId={mountChatId}
         onOpenCitation={onOpenCitation}
+        onChatCreated={onChatCreated}
         client={client}
       />
     </div>

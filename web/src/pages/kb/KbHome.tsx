@@ -27,9 +27,22 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const [tab, setTab] = useState<Tab>("collections");
   const [ask, setAsk] = useState(false);
   const [chatId, setChatId] = useState<Selected>(undefined);
+  const [viewKey, setViewKey] = useState(0);
+  const [chatListVersion, setChatListVersion] = useState(0);
   const [viewer, setViewer] = useState<Viewer | null>(null);
 
   const openCite = (c: KbCitation) => setViewer({ documentId: c.document_id, snippet: c.snippet });
+  // Explicitly open a thread (or a new one): remount the view.
+  const openThread = (id: string | null) => {
+    setChatId(id);
+    setViewKey((v) => v + 1);
+  };
+  // A new thread (first message) should appear in the list right away and its
+  // row should highlight — but DON'T bump viewKey (no remount mid-stream).
+  const onChatCreated = (id: string) => {
+    setChatId(id);
+    setChatListVersion((v) => v + 1);
+  };
 
   return (
     <div className="kb-shell">
@@ -72,8 +85,9 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
               <KbChatsPage
                 client={client}
                 selectedId={chatId ?? undefined}
-                onOpenChat={(id) => setChatId(id)}
-                onNewChat={() => setChatId(null)}
+                refreshSignal={chatListVersion}
+                onOpenChat={(id) => openThread(id)}
+                onNewChat={() => openThread(null)}
               />
               <div className="kb-chats-split__view">
                 {chatId === undefined ? (
@@ -81,7 +95,15 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
                     Select a conversation, or start a new one.
                   </div>
                 ) : (
-                  <KbChatView chatId={chatId} onOpenCitation={openCite} client={client} />
+                  // Keyed by viewKey (not chatId) so a fresh thread getting its
+                  // id mid-turn doesn't remount and kill the stream.
+                  <KbChatView
+                    key={viewKey}
+                    chatId={chatId}
+                    onOpenCitation={openCite}
+                    onChatCreated={onChatCreated}
+                    client={client}
+                  />
                 )}
               </div>
             </div>

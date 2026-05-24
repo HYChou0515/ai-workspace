@@ -930,3 +930,12 @@
   font-size: var(--text-xs);
   color: var(--text-paper-d2);
 }
+
+/* ------------------------- Live token metrics ------------------------- */
+
+.kb-metrics {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d2);
+  padding-left: 28px;
+}

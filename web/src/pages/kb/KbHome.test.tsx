@@ -53,6 +53,20 @@ describe("KbHome shell", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows a newly started chat in the conversations list right away", async () => {
+    await mockKbApi.createCollection("kb");
+    renderShell();
+    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
+    expect(screen.queryByRole("button", { name: /msgs/ })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /new chat/i }));
+    await userEvent.type(screen.getByPlaceholderText("Ask the knowledge base…"), "hello");
+    await userEvent.click(screen.getByRole("button", { name: /^send$/i }));
+
+    // the thread created on first send appears in the left list (a row w/ msgs)
+    await waitFor(() => expect(screen.getByRole("button", { name: /msgs/ })).toBeInTheDocument());
+  });
+
   it("opens the doc viewer when a citation is followed end-to-end", async () => {
     const col = await mockKbApi.createCollection("kb");
     renderShell();

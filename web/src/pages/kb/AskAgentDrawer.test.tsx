@@ -35,7 +35,8 @@ describe("AskAgentDrawer (fast chat)", () => {
     await waitFor(() =>
       expect(screen.getByText(/reflow zone three drifted/i)).toBeInTheDocument(),
     );
-    expect(await screen.findByText(/Searched the knowledge base/i)).toBeInTheDocument();
+    // tool use renders RCA-style as a kb_search(…) call card
+    expect(await screen.findByText(/kb_search/)).toBeInTheDocument();
 
     const cite = await screen.findByRole("button", { name: /reflow\.md/i });
     await userEvent.click(cite);

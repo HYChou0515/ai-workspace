@@ -12,11 +12,14 @@ import { Icon } from "../../components/Icon";
 export function KbChatsPage({
   client = kbApi,
   selectedId,
+  refreshSignal,
   onOpenChat,
   onNewChat,
 }: {
   client?: KbApi;
   selectedId?: string;
+  /** Bump to force a re-fetch (e.g. a new chat was just started). */
+  refreshSignal?: number;
   onOpenChat?: (chatId: string) => void;
   onNewChat?: () => void;
 }) {
@@ -28,7 +31,7 @@ export function KbChatsPage({
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+  }, [refresh, refreshSignal]);
 
   const remove = async (chatId: string) => {
     await client.deleteChat(chatId);

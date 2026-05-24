@@ -66,6 +66,20 @@ export type Message = {
   /** Epoch ms the message was produced; restores the agent log's timestamps
    * after a reload. Absent for messages saved before this existed. */
   created_at?: number | null;
+  /** Resolved [n] markers (KB answers). Rendered as clickable source cards. */
+  citations?: MessageCitation[];
+};
+
+/** A resolved [n] citation marker — points at a span of a source document. */
+export type MessageCitation = {
+  marker: number;
+  collection_id: string;
+  document_id: string;
+  filename: string;
+  start: number;
+  end: number;
+  source_chunk_ids: string[];
+  snippet: string;
 };
 
 export type Conversation = {
