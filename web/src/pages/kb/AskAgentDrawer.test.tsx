@@ -38,6 +38,8 @@ describe("AskAgentDrawer", () => {
     await waitFor(() =>
       expect(screen.getByText(/reflow zone three drifted/i)).toBeInTheDocument(),
     );
+    // the tool call the agent made is surfaced as a "searched" line (after refetch)
+    expect(await screen.findByText(/Searched the knowledge base/i)).toBeInTheDocument();
     // the citation card resolves and is clickable
     const cite = await screen.findByRole("button", { name: /reflow\.md/i });
     await userEvent.click(cite);

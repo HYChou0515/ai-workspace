@@ -12,6 +12,7 @@ import remarkGfm from "remark-gfm";
 import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
 import { Icon } from "../../components/Icon";
 import { parseKbDocHref } from "./kbLinks";
+import { rehypeHighlightSnippet } from "./rehypeHighlightSnippet";
 
 export function KbDocViewer({
   documentId,
@@ -67,6 +68,7 @@ export function KbDocViewer({
             <article className="md-body">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
+                rehypePlugins={snippet ? [[rehypeHighlightSnippet, snippet]] : []}
                 // Keep kb:// links intact (default sanitization would drop the
                 // unknown scheme); everything else goes through the default.
                 urlTransform={(url) => (url.startsWith("kb://") ? url : defaultUrlTransform(url))}

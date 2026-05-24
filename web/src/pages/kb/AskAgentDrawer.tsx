@@ -147,6 +147,16 @@ function Message({
       </div>
     );
   }
+  if (message.role === "tool") {
+    const query =
+      typeof message.tool_args?.query === "string" ? message.tool_args.query : null;
+    return (
+      <div className="kb-tool">
+        <Icon name="search" size={12} color="var(--text-paper-d2)" />
+        Searched the knowledge base{query ? `: "${query}"` : ""}
+      </div>
+    );
+  }
   return (
     <div className="kb-msg kb-msg--agent">
       <div className="kb-msg__who">

@@ -93,9 +93,21 @@ export const mockKbApi: KbApi = {
 
     const answer = "Per the knowledge base, reflow zone three drifted [1].";
     await delay(40);
+    yield { type: "tool_start", call_id: "t1", name: "kb_search", args: { query: args.content } };
+    yield { type: "tool_end", call_id: "t1", output: "[1] reflow.md: zone three drift" };
     yield { type: "message_delta", text: answer, reasoning: false };
     await delay(40);
 
+    chat.messages.push({
+      role: "tool",
+      content: "[1] reflow.md: zone three drift",
+      reasoning: null,
+      tool_name: "kb_search",
+      tool_args: { query: args.content },
+      tool_call_id: "t1",
+      created_at: Date.now(),
+      citations: [],
+    });
     chat.messages.push({
       role: "assistant",
       content: answer,

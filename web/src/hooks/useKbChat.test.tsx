@@ -21,8 +21,8 @@ describe("useKbChat", () => {
     expect(result.current.chatId).not.toBeNull(); // thread created
     expect(result.current.streaming).toBe(false);
     const roles = result.current.messages.map((m) => m.role);
-    expect(roles).toEqual(["user", "assistant"]);
-    const answer = result.current.messages[1];
+    expect(roles).toEqual(["user", "tool", "assistant"]); // tool call persisted too
+    const answer = result.current.messages.find((m) => m.role === "assistant")!;
     expect(answer.content).toContain("[1]");
     expect(answer.citations[0].filename).toBe("reflow.md"); // refetched, cited
   });
@@ -48,7 +48,7 @@ describe("useKbChat", () => {
     const { result } = renderHook(() =>
       useKbChat({ collectionIds: ["col-1"], chatId: chat.resource_id, client: mockKbApi }),
     );
-    await waitFor(() => expect(result.current.messages.length).toBe(2));
+    await waitFor(() => expect(result.current.messages.length).toBe(3));
     expect(result.current.messages[0].role).toBe("user");
   });
 

@@ -28,17 +28,20 @@ describe("KbDocViewer", () => {
         markdown: "# Reflow\n\nZone three drifted under load.",
       },
     });
-    render(
+    const { container } = render(
       <KbDocViewer
         documentId="col-1/u/reflow.md"
-        snippet="zone three drift"
+        snippet="Zone three drifted under load"
         onClose={() => {}}
         client={client}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/Zone three drifted under load/)).toBeInTheDocument());
-    expect(screen.getByText("Cited passage")).toBeInTheDocument();
-    expect(screen.getByText("zone three drift")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Cited passage")).toBeInTheDocument());
+    // the cited passage is highlighted in place within the rendered body
+    await waitFor(() => {
+      const mark = container.querySelector("mark.kb-hl");
+      expect(mark?.textContent).toBe("Zone three drifted under load");
+    });
   });
 
   it("follows a kb:// link to the target document in-place", async () => {

@@ -42,8 +42,8 @@ describe("KB api (mock client)", () => {
     expect(events.some((e) => e.type === "message_delta")).toBe(true);
 
     const detail = await kb.getChat(chat.resource_id);
-    expect(detail.messages.map((m) => m.role)).toEqual(["user", "assistant"]);
-    const answer = detail.messages[1];
+    expect(detail.messages.map((m) => m.role)).toEqual(["user", "tool", "assistant"]);
+    const answer = detail.messages.find((m) => m.role === "assistant")!;
     expect(answer.content).toContain("[1]");
     expect(answer.citations[0].filename).toBe("reflow.md");
   });
