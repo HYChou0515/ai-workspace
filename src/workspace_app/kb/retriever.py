@@ -24,15 +24,24 @@ from .bm25 import bm25_rank
 from .embedder import Embedder
 from .fusion import mmr, reciprocal_rank_fusion
 from .ingest import normalize_text
+from .llm import Llm
 from .merge import ScoredChunk, merge_passages
+from .query import expand_queries
 
 
 class Retriever:
     def __init__(
-        self, spec: SpecStar, *, embedder: Embedder, candidates: int = 20, top_k: int = 5
+        self,
+        spec: SpecStar,
+        *,
+        embedder: Embedder,
+        llm: Llm | None = None,
+        candidates: int = 20,
+        top_k: int = 5,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
+        self._llm = llm
         self._candidates = candidates
         self._top_k = top_k
 
@@ -41,10 +50,18 @@ class Retriever:
         if not chunks:
             return []
 
-        qv = self._embedder.embed_query(query)
-        dense = sorted(chunks, key=lambda cid: cosine_distance(qv, chunks[cid].embedding))
-        sparse = bm25_rank(query, [(cid, ch.text) for cid, ch in chunks.items()])
-        fused = reciprocal_rank_fusion([dense, sparse])[: self._candidates]
+        # Multi-query: an LLM (when given) widens recall with alternative phrasings;
+        # each variant contributes a dense + a sparse ranked list to the fusion.
+        queries = expand_queries(self._llm, query) if self._llm is not None else [query]
+        corpus = [(cid, ch.text) for cid, ch in chunks.items()]
+        ranked_lists: list[list[str]] = []
+        for q in queries:
+            qv = self._embedder.embed_query(q)
+            ranked_lists.append(
+                sorted(chunks, key=lambda cid: cosine_distance(qv, chunks[cid].embedding))
+            )
+            ranked_lists.append(bm25_rank(q, corpus))
+        fused = reciprocal_rank_fusion(ranked_lists)[: self._candidates]
 
         # RRF order → descending relevance scores; MMR for diversity (cosine of
         # the stored chunk vectors as the similarity).

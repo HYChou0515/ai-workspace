@@ -39,3 +39,27 @@ def test_hybrid_search_surfaces_the_keyword_matching_document(
 def test_search_over_empty_collection_returns_nothing(spec: SpecStar, embedder: HashEmbedder):
     cid = spec.get_resource_manager(Collection).create(Collection(name="empty")).resource_id
     assert Retriever(spec, embedder=embedder).search("anything", [cid]) == []
+
+
+class _FakeLlm:
+    def __init__(self, reply: str) -> None:
+        self._reply = reply
+        self.prompts: list[str] = []
+
+    def complete(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        return self._reply
+
+
+def test_multiquery_widens_recall_via_llm_variants(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid, user="u", filename="g.md", data=b"gamma delta epsilon zeta"
+    )
+    # the query itself matches nothing; the LLM variant "gamma" does
+    fake = _FakeLlm("gamma")
+    passages = Retriever(spec, embedder=embedder, llm=fake).search("zzz nomatch", [cid])
+    assert fake.prompts  # the multi-query step consulted the LLM
+    assert any(p.document_id == f"{cid}/u/g.md" for p in passages)  # surfaced via the variant
