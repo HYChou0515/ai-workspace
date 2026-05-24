@@ -63,3 +63,15 @@ def test_multiquery_widens_recall_via_llm_variants(
     passages = Retriever(spec, embedder=embedder, llm=fake).search("zzz nomatch", [cid])
     assert fake.prompts  # the multi-query step consulted the LLM
     assert any(p.document_id == f"{cid}/u/g.md" for p in passages)  # surfaced via the variant
+
+
+def test_empty_llm_replies_fall_back_to_the_plain_query(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # an LLM that returns nothing: no extra phrasings, no HyDE doc — still works
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid, user="u", filename="reflow.md", data=b"reflow oven temperature drift"
+    )
+    passages = Retriever(spec, embedder=embedder, llm=_FakeLlm("   ")).search("reflow", [cid])
+    assert passages[0].document_id == f"{cid}/u/reflow.md"

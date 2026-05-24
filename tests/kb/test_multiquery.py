@@ -36,3 +36,18 @@ def test_expand_with_fewer_variants_than_n():
 
 def test_litellm_llm_constructs():
     assert isinstance(LitellmLlm("ollama_chat/qwen3:14b"), LitellmLlm)
+
+
+def test_hypothetical_document_returns_the_stripped_completion():
+    from workspace_app.kb.query import hypothetical_document
+
+    llm = _FakeLlm("  Reflow zone three drifted, causing solder voids.\n")
+    doc = hypothetical_document(llm, "why solder voids")
+    assert doc == "Reflow zone three drifted, causing solder voids."
+    assert "why solder voids" in llm.prompts[0]  # the query seeds the hypothesis
+
+
+def test_hypothetical_document_empty_completion_is_empty():
+    from workspace_app.kb.query import hypothetical_document
+
+    assert hypothetical_document(_FakeLlm("   "), "q") == ""

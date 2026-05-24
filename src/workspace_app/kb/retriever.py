@@ -26,7 +26,8 @@ from .fusion import mmr, reciprocal_rank_fusion
 from .ingest import normalize_text
 from .llm import Llm
 from .merge import ScoredChunk, merge_passages
-from .query import expand_queries
+from .query import expand_queries, hypothetical_document
+from .rerank import rerank_passages
 
 
 class Retriever:
@@ -57,10 +58,17 @@ class Retriever:
         ranked_lists: list[list[str]] = []
         for q in queries:
             qv = self._embedder.embed_query(q)
-            ranked_lists.append(
-                sorted(chunks, key=lambda cid: cosine_distance(qv, chunks[cid].embedding))
-            )
+            ranked_lists.append(self._dense_order(chunks, qv))
             ranked_lists.append(bm25_rank(q, corpus))
+
+        # HyDE: embed a hypothetical answer (as a pseudo-document) and add it as
+        # one more dense probe, so we also match answer-shaped passages.
+        if self._llm is not None:
+            hyde = hypothetical_document(self._llm, query)
+            if hyde:
+                hv = self._embedder.embed_documents([hyde])[0]
+                ranked_lists.append(self._dense_order(chunks, hv))
+
         fused = reciprocal_rank_fusion(ranked_lists)[: self._candidates]
 
         # RRF order → descending relevance scores; MMR for diversity (cosine of
@@ -87,7 +95,14 @@ class Retriever:
             for cid in order
         ]
         passages = merge_passages(scored, text_of=self._canonical_text)
+        # Final LLM rerank over the merged passages (when an LLM is wired).
+        if self._llm is not None:
+            passages = rerank_passages(self._llm, query, passages)
         return passages[: self._top_k]
+
+    def _dense_order(self, chunks: dict[str, DocChunk], vec: list[float]) -> list[str]:
+        """Chunk ids ordered nearest-first to `vec` by cosine distance."""
+        return sorted(chunks, key=lambda cid: cosine_distance(vec, chunks[cid].embedding))
 
     def _load_chunks(self, collection_ids: list[str]) -> dict[str, DocChunk]:
         rm = self._spec.get_resource_manager(DocChunk)

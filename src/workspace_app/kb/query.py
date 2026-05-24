@@ -26,3 +26,14 @@ def expand_queries(llm: Llm, query: str, *, n: int = 3) -> list[str]:
         if len(out) == n + 1:
             break
     return out
+
+
+def hypothetical_document(llm: Llm, query: str) -> str:
+    """HyDE — a short hypothetical passage that *would* answer the query. We
+    embed it (as a pseudo-document) and add it as another dense probe, so
+    retrieval matches answer-shaped text, not just the question's wording."""
+    prompt = (
+        "Write a short factual passage (2-3 sentences) that would directly answer "
+        f"the question, as if quoted from an internal document.\n\nQuestion: {query}"
+    )
+    return llm.complete(prompt).strip()
