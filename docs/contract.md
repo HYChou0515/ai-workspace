@@ -93,6 +93,8 @@ class Message(Struct):
                                                  # (Qwen3 <thinking>, OpenAI o-series, ...)
     tool_call_id: str | None = None              # role=tool
     tool_name: str | None = None                 # role=tool
+    tool_args: dict[str, Any] | None = None      # role=tool — call args (captured from ToolStart)
+    created_at: int | None = None                # epoch ms; restores log timestamps on reload
 
 
 class Conversation(Struct):

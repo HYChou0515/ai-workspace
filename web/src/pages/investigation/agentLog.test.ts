@@ -252,4 +252,30 @@ describe("logFromMessages", () => {
     expect(log.entries[0]?.kind).toBe("message");
     expect(log.entries[2]?.kind).toBe("tool_call");
   });
+
+  it("restores timestamps + tool name/args so a reload keeps the full detail", () => {
+    const t = 1_700_000_000_000;
+    const log = logFromMessages([
+      { role: "user", author: "alice", content: "hello", created_at: t },
+      {
+        role: "tool",
+        content: "exit_code=0",
+        tool_name: "exec",
+        tool_call_id: "c1",
+        tool_args: { cmd: ["echo", "hi"] },
+        created_at: t + 500,
+      },
+    ]);
+    const msg = log.entries[0];
+    if (msg?.kind === "message") expect(msg.at).toBe(t);
+    else throw new Error("expected message");
+    const tool = log.entries[1];
+    if (tool?.kind === "tool_call") {
+      expect(tool.call.name).toBe("exec");
+      expect(tool.call.args).toEqual({ cmd: ["echo", "hi"] });
+      expect(tool.call.startedAt).toBe(t + 500);
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
 });

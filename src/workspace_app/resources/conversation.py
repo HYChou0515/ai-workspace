@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from msgspec import Struct, field
 from specstar import OnDelete, Ref
@@ -28,6 +28,15 @@ class Message(Struct):
 
     tool_name: str | None = None
     """Only set when role=tool — the tool that produced this output."""
+
+    tool_args: dict[str, Any] | None = None
+    """Only set when role=tool — the tool call's arguments (captured from the
+    ToolStart), so a reloaded log shows the full call, not just its output."""
+
+    created_at: int | None = None
+    """Epoch milliseconds when the message was produced. Persisted so the agent
+    log's timestamps survive a reload. None for messages created before this
+    field existed (the FE then shows no time)."""
 
 
 class Conversation(Struct):

@@ -38,6 +38,29 @@ def test_reasoning_delta_persists_to_reasoning_channel():
     assert assistant.reasoning == "weighing the options"
 
 
+def test_tool_end_without_a_matching_start_persists_with_null_name_args():
+    """Defensive: a ToolEnd with no preceding ToolStart still persists (name +
+    args null), rather than crashing the turn."""
+    from workspace_app.api import ToolEnd
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    runner = ScriptedAgentRunner([ToolEnd(call_id="orphan", output="out"), RunDone()])
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+    client = TestClient(app)
+    client.post("/investigations/ws-orphan/messages", json={"content": "q"})
+    rm = spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.investigation_id == "ws-orphan"
+    )
+    tool = next(m for m in conv.messages if m.role == "tool")
+    assert tool.content == "out"
+    assert tool.tool_name is None and tool.tool_args is None
+    assert isinstance(tool.created_at, int)
+
+
 def _parse_sse(body: str) -> list[dict]:
     events = []
     for chunk in body.split("\n\n"):
@@ -79,6 +102,24 @@ def test_post_message_appends_to_conversation(harness: Harness):
     # workspace restores the full turn, not just the user's message.
     assert ("tool", "exit_code=0\n--- stdout ---\nhi") in roles
     assert ("assistant", "Done. The file printed 'hi'.") in roles
+
+
+def test_turn_persists_timestamps_and_tool_call_detail(harness: Harness):
+    """A reloaded log must restore the full detail: every message carries a
+    `created_at`, and the tool message keeps the tool's name + args (captured
+    from ToolStart), not just its output."""
+    harness.client.post("/investigations/ws-ts/messages", json={"content": "hi"})
+    rm = harness.spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.investigation_id == "ws-ts"
+    )
+    assert conv.messages, "expected a persisted turn"
+    assert all(isinstance(m.created_at, int) and m.created_at > 0 for m in conv.messages)
+    tool = next(m for m in conv.messages if m.role == "tool")
+    assert tool.tool_name == "exec"
+    assert tool.tool_args == {"cmd": ["echo", "hi"]}
 
 
 def test_assistant_reply_persists_for_reload(harness: Harness):

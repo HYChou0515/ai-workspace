@@ -33,10 +33,25 @@ from ..resources import (
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .activity import ActivityLog
-from .events import AgentEvent, CellEvent, MessageDelta, RunCancelled, RunError, ToolEnd, to_sse
+from .events import (
+    AgentEvent,
+    CellEvent,
+    MessageDelta,
+    RunCancelled,
+    RunError,
+    ToolEnd,
+    ToolStart,
+    to_sse,
+)
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
 from .search import InvalidQuery, compile_query, path_selected, search_text
+
+
+def _now_ms() -> int:
+    """Epoch milliseconds — stamped on persisted messages so the agent log's
+    timestamps survive a reload (FE `Date` works in ms)."""
+    return round(datetime.now(UTC).timestamp() * 1000)
 
 
 class _SpaStaticFiles(StaticFiles):
@@ -327,7 +342,7 @@ def create_app(
     @app.post("/investigations/{investigation_id}/messages")
     async def send_message(investigation_id: str, body: _MessageBody) -> StreamingResponse:
         rid, conv = _conversation_for(investigation_id)
-        conv.messages.append(Message(role="user", content=body.content))
+        conv.messages.append(Message(role="user", content=body.content, created_at=_now_ms()))
         conv_rm.update(rid, conv)
 
         session = await registry.session(investigation_id)
@@ -356,11 +371,16 @@ def create_app(
             # the conversation persists them — otherwise re-entering the
             # workspace would show only the user's own messages.
             produced: list[Message] = []
+            # call_id → its ToolStart, so the persisted tool message can keep
+            # the tool's name + args (ToolEnd alone carries only the output).
+            pending_tools: dict[str, ToolStart] = {}
 
             def add_assistant(text: str, reasoning: bool) -> None:
                 last = produced[-1] if produced else None
                 if last is None or last.role != "assistant" or last.tool_call_id is not None:
-                    last = Message(role="assistant", content="", author="RCA Agent")
+                    last = Message(
+                        role="assistant", content="", author="RCA Agent", created_at=_now_ms()
+                    )
                     produced.append(last)
                 if reasoning:
                     last.reasoning = (last.reasoning or "") + text
@@ -382,9 +402,19 @@ def create_app(
                     return
                 if isinstance(item, MessageDelta):
                     add_assistant(item.text, item.reasoning)
+                elif isinstance(item, ToolStart):
+                    pending_tools[item.call_id] = item
                 elif isinstance(item, ToolEnd):
+                    start = pending_tools.pop(item.call_id, None)
                     produced.append(
-                        Message(role="tool", content=item.output, tool_call_id=item.call_id)
+                        Message(
+                            role="tool",
+                            content=item.output,
+                            tool_call_id=item.call_id,
+                            tool_name=start.name if start else None,
+                            tool_args=dict(start.args) if start else None,
+                            created_at=_now_ms(),
+                        )
                     )
                 yield to_sse(item)
 

@@ -64,13 +64,15 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         call: {
           call_id: m.tool_call_id ?? "—",
           name: m.tool_name ?? "tool",
-          args: {},
+          args: m.tool_args ?? {},
           status: "done",
           output: m.content,
+          startedAt: m.created_at ?? undefined,
+          endedAt: m.created_at ?? undefined,
         },
       });
     } else {
-      entries.push({ kind: "message", message: m });
+      entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
     }
   }
   return { entries, streaming: false, error: null, metrics: null };

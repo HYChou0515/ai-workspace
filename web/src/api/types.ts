@@ -61,6 +61,11 @@ export type Message = {
   reasoning?: string | null;
   tool_call_id?: string | null;
   tool_name?: string | null;
+  /** role=tool only — the tool call's arguments (for log reload). */
+  tool_args?: Record<string, unknown> | null;
+  /** Epoch ms the message was produced; restores the agent log's timestamps
+   * after a reload. Absent for messages saved before this existed. */
+  created_at?: number | null;
 };
 
 export type Conversation = {
