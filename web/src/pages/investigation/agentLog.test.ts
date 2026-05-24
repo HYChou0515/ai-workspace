@@ -116,6 +116,19 @@ describe("reduceAgent", () => {
     }
   });
 
+  it("keeps the assistant message's timestamp stable across streaming deltas", () => {
+    const t = 1_700_000_000_000;
+    let log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "Hel" }, t);
+    log = reduceAgent(log, { type: "message_delta", text: "lo" }, t + 999);
+    const m = log.entries[0];
+    if (m?.kind === "message") {
+      expect(m.message.content).toBe("Hello");
+      expect(m.at).toBe(t); // the first delta's time, not lost on append
+    } else {
+      throw new Error("expected message");
+    }
+  });
+
   it("stamps each log entry with the time it was created", () => {
     const t = 1_700_000_000_000;
     const log = reduceAgent(EMPTY_LOG, { type: "message_delta", text: "hi" }, t);

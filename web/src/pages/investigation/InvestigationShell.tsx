@@ -2434,20 +2434,24 @@ function runMeta(call: RunCall): string {
     parts.push("running…");
   }
   if (call.startedAt != null) {
-    const t = new Date(call.startedAt).toLocaleTimeString();
-    parts.push(call.endedAt != null ? `${t}→${new Date(call.endedAt).toLocaleTimeString()}` : t);
+    const fmt = (ms: number) => new Date(ms).toLocaleTimeString([], { hour12: false });
+    const t = fmt(call.startedAt);
+    parts.push(call.endedAt != null ? `${t}→${fmt(call.endedAt)}` : t);
   }
   return parts.join("  ");
 }
 
-/** Wall-clock time for a log entry (blank when unknown, e.g. loaded history). */
+/** Wall-clock time for a log entry (blank when unknown, e.g. loaded history).
+ * 24-hour HH:MM:SS — compact and locale-stable, so it never wraps the column
+ * the way a 12-hour "3:53:42 PM" does. */
 function fmtTs(at?: number): string {
-  return at != null ? new Date(at).toLocaleTimeString() : "";
+  return at != null ? new Date(at).toLocaleTimeString([], { hour12: false }) : "";
 }
 
 const logTs: React.CSSProperties = {
   width: 64,
   flexShrink: 0,
+  whiteSpace: "nowrap",
   color: "var(--text-paper-d2)",
 };
 

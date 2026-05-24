@@ -150,7 +150,9 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         const updated: Message = ev.reasoning
           ? { ...m, reasoning: (m.reasoning ?? "") + ev.text }
           : { ...m, content: m.content + ev.text };
-        entries[idx] = { kind: "message", message: updated };
+        // Preserve the entry's original timestamp — don't drop `at` on append,
+        // or the live time vanishes after the first delta.
+        entries[idx] = { kind: "message", at: last.at ?? now, message: updated };
       } else {
         entries.push({
           kind: "message",
