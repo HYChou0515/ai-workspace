@@ -21,6 +21,7 @@ export type KbDocument = {
   resource_id: string;
   path: string;
   content_type: string;
+  created_by: string;
 };
 
 /** A document rendered for the citation viewer: markdown with kb:// links. */
@@ -73,7 +74,14 @@ export type SendKbMessageArgs = {
   signal?: AbortSignal;
 };
 
+export type KbAgentConfig = {
+  name: string;
+  suggestions: string[];
+};
+
 export interface KbApi {
+  /** The KB agent's display name + quick-prompt chips (lives with the config). */
+  getAgentConfig(): Promise<KbAgentConfig>;
   listCollections(): Promise<KbCollection[]>;
   createCollection(name: string, description?: string): Promise<KbCollection>;
   listDocuments(collectionId: string): Promise<KbDocument[]>;
@@ -101,6 +109,9 @@ async function ok(resp: Response, what: string): Promise<Response> {
 const jsonHeaders = { "content-type": "application/json" };
 
 export const realKbApi: KbApi = {
+  async getAgentConfig() {
+    return (await ok(await fetch("/kb/agent"), "kb agent config")).json();
+  },
   async listCollections() {
     return (await ok(await fetch("/kb/collections"), "list collections")).json();
   },

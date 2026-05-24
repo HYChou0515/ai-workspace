@@ -17,6 +17,7 @@ import {
 } from "../../api/types";
 import { Icon } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
+import { AskAgentLauncher } from "../kb/AskAgentLauncher";
 import { SeverityChip, StatusChip } from "../../components/StatusChip";
 import {
   type Filters,
@@ -326,17 +327,6 @@ function TopBar({
     return () => document.removeEventListener("keydown", k);
   }, [bellOpen]);
 
-  const focusAgent = () => {
-    const composer = document.querySelector<HTMLTextAreaElement>(
-      "[data-testid='agent-panel'] textarea",
-    );
-    if (composer) {
-      composer.focus();
-    } else {
-      // No agent panel on Home — surface a hint instead.
-      alert("Open an investigation to chat with the agent.");
-    }
-  };
 
   return (
     <div
@@ -403,24 +393,7 @@ function TopBar({
       </label>
       <span style={{ flex: 1 }} />
       <NotificationsBell />
-      <button
-        type="button"
-        onClick={focusAgent}
-        style={{
-          height: 32,
-          padding: "0 14px",
-          borderRadius: "var(--radius-btn)",
-          background: "var(--ink)",
-          color: "var(--text-dark)",
-          fontSize: "var(--text-body-sm)",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-        }}
-      >
-        <Icon name="sparkle" size={12} color="var(--accent)" />
-        Ask agent
-      </button>
+      <AskAgentLauncher />
     </div>
   );
 }

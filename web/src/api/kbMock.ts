@@ -36,6 +36,12 @@ function summarize(chat: KbChatDetail): KbChatSummary {
 }
 
 export const mockKbApi: KbApi = {
+  async getAgentConfig() {
+    return {
+      name: "KB Agent",
+      suggestions: ["What does the knowledge base say about this?", "Find related past findings"],
+    };
+  },
   async listCollections() {
     return [...collections.values()];
   },
@@ -51,7 +57,12 @@ export const mockKbApi: KbApi = {
     const id = `${collectionId}/me/${file.name}`;
     const list = documents.get(collectionId) ?? [];
     if (!list.some((d) => d.resource_id === id)) {
-      list.push({ resource_id: id, path: file.name, content_type: "text/markdown" });
+      list.push({
+        resource_id: id,
+        path: file.name,
+        content_type: "text/markdown",
+        created_by: "me",
+      });
     }
     documents.set(collectionId, list);
     return [id];

@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { Home } from "./pages/Home";
 import { Investigation } from "./pages/Investigation";
+import { KbDocPage } from "./pages/kb/KbDocPage";
 import { KbHome } from "./pages/kb/KbHome";
 
 /**
@@ -18,6 +19,7 @@ export function AppRoutes() {
       <Route path="/" element={<Home />} />
       <Route path="/investigations/:id" element={<Investigation />} />
       <Route path="/kb" element={<KbHome />} />
+      <Route path="/kb/doc/*" element={<KbDocPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

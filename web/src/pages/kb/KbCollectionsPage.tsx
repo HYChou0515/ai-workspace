@@ -9,6 +9,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbCollection, type KbDocument } from "../../api/kb";
 import { Icon } from "../../components/Icon";
+import { docPath } from "./kbLinks";
 
 export function KbCollectionsPage({
   client = kbApi,
@@ -142,16 +143,30 @@ export function KbCollectionsPage({
             ) : (
               <ul className="kb-docs__rows">
                 {documents.map((d) => (
-                  <li key={d.resource_id}>
+                  <li key={d.resource_id} className="kb-docs__row">
                     <button
                       type="button"
-                      className="kb-docs__row"
+                      className="kb-docs__open"
                       onClick={() => onOpenDoc?.(d.resource_id)}
                     >
                       <Icon name="file" size={14} color="var(--text-paper-d)" />
                       <span className="kb-docs__path">{d.path}</span>
-                      <span className="kb-docs__type">{d.content_type}</span>
                     </button>
+                    <span className="kb-docs__by" title="Added by">
+                      <Icon name="user" size={11} color="var(--text-paper-d2)" />
+                      {d.created_by}
+                    </span>
+                    <span className="kb-docs__type">{d.content_type}</span>
+                    <a
+                      className="kb-iconbtn"
+                      href={docPath(d.resource_id)}
+                      target="_blank"
+                      rel="noreferrer"
+                      title="Open in new tab"
+                      aria-label={`Open ${d.path} in new tab`}
+                    >
+                      <Icon name="arrow_u" size={14} />
+                    </a>
                   </li>
                 ))}
               </ul>

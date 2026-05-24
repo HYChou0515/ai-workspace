@@ -1,7 +1,7 @@
 /**
- * KB chat history — the threads you've had with the knowledge base. Select one
- * to continue it in the drawer; start a new one; delete. (The design's
- * list+preview, trimmed to what the backend persists.)
+ * KB chat history list — the threads you've had with the knowledge base.
+ * Select one to open it (full-page KbChatView, not a drawer), start a new one,
+ * or delete. Used as the left pane of the Chats split in KbHome.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -11,10 +11,12 @@ import { Icon } from "../../components/Icon";
 
 export function KbChatsPage({
   client = kbApi,
+  selectedId,
   onOpenChat,
   onNewChat,
 }: {
   client?: KbApi;
+  selectedId?: string;
   onOpenChat?: (chatId: string) => void;
   onNewChat?: () => void;
 }) {
@@ -55,7 +57,7 @@ export function KbChatsPage({
             <li key={c.resource_id} className="kb-chats__row">
               <button
                 type="button"
-                className="kb-chats__open"
+                className={`kb-chats__open${c.resource_id === selectedId ? " is-active" : ""}`}
                 onClick={() => onOpenChat?.(c.resource_id)}
               >
                 <Icon name="chat" size={15} color="var(--text-paper-d)" />

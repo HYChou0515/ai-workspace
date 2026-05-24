@@ -38,6 +38,21 @@ describe("KbHome shell", () => {
     );
   });
 
+  it("opens a NEW chat as a full-page view, not a drawer", async () => {
+    await mockKbApi.createCollection("kb");
+    renderShell();
+    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
+    expect(screen.getByText(/Select a conversation/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /new chat/i }));
+    // the in-page conversation composer appears…
+    expect(await screen.findByPlaceholderText("Ask the knowledge base…")).toBeInTheDocument();
+    // …and it is NOT the slide-in drawer dialog
+    expect(
+      screen.queryByRole("dialog", { name: /Ask the knowledge base/i }),
+    ).not.toBeInTheDocument();
+  });
+
   it("opens the doc viewer when a citation is followed end-to-end", async () => {
     const col = await mockKbApi.createCollection("kb");
     renderShell();

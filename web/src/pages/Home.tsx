@@ -107,7 +107,6 @@ export function Home() {
         }}
         onOpenTemplates={() => setTemplatesOpen(true)}
         onOpenInvestigation={openInvestigation}
-        onOpenKb={() => navigate("/kb")}
       />
       <HomeMain
         items={items}

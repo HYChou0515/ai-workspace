@@ -1,39 +1,35 @@
 /**
- * KB shell (route /kb) — sidebar nav between the collections-management and
- * chat-history surfaces, a top-bar "Ask agent" entry, and the drawer + doc
- * viewer overlays wired together: citations and document rows both open the
- * viewer; chat rows open the drawer on that thread.
+ * KB shell (route /kb) — sidebar nav between collections-management and chat
+ * history. The Chats tab is a list + a full-page conversation (KbChatView) for
+ * the selected/new thread (NOT a drawer). The top-bar "Ask agent" opens the
+ * fast-chat drawer for a quick throwaway question. Citations and document rows
+ * open the doc viewer overlay.
  */
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { Icon } from "../../components/Icon";
 import { AskAgentDrawer } from "./AskAgentDrawer";
 import { KbChatsPage } from "./KbChatsPage";
+import { KbChatView } from "./KbChatView";
 import { KbCollectionsPage } from "./KbCollectionsPage";
 import { KbDocViewer } from "./KbDocViewer";
 
 type Tab = "collections" | "chats";
-
 type Viewer = { documentId: string; snippet?: string };
+// undefined = nothing selected yet; null = a new chat; string = an existing one.
+type Selected = string | null | undefined;
 
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("collections");
-  const [allCollectionIds, setAllCollectionIds] = useState<string[]>([]);
-  const [drawer, setDrawer] = useState<{ open: boolean; chatId: string | null }>({
-    open: false,
-    chatId: null,
-  });
+  const [ask, setAsk] = useState(false);
+  const [chatId, setChatId] = useState<Selected>(undefined);
   const [viewer, setViewer] = useState<Viewer | null>(null);
 
-  useEffect(() => {
-    client.listCollections().then((cols) => setAllCollectionIds(cols.map((c) => c.resource_id)));
-  }, [client, drawer.open]);
-
-  const openCitation = (c: KbCitation) => setViewer({ documentId: c.document_id, snippet: c.snippet });
+  const openCite = (c: KbCitation) => setViewer({ documentId: c.document_id, snippet: c.snippet });
 
   return (
     <div className="kb-shell">
@@ -63,11 +59,7 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
           <span className="kb-topbar__title">
             {tab === "collections" ? "Collections" : "Conversations"}
           </span>
-          <button
-            type="button"
-            className="kb-btn kb-btn--primary"
-            onClick={() => setDrawer({ open: true, chatId: null })}
-          >
+          <button type="button" className="kb-btn kb-btn--primary" onClick={() => setAsk(true)}>
             <Icon name="sparkle" size={14} /> Ask agent
           </button>
         </header>
@@ -76,26 +68,35 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
           {tab === "collections" ? (
             <KbCollectionsPage client={client} onOpenDoc={(id) => setViewer({ documentId: id })} />
           ) : (
-            <KbChatsPage
-              client={client}
-              onOpenChat={(chatId) => setDrawer({ open: true, chatId })}
-              onNewChat={() => setDrawer({ open: true, chatId: null })}
-            />
+            <div className="kb-chats-split">
+              <KbChatsPage
+                client={client}
+                selectedId={chatId ?? undefined}
+                onOpenChat={(id) => setChatId(id)}
+                onNewChat={() => setChatId(null)}
+              />
+              <div className="kb-chats-split__view">
+                {chatId === undefined ? (
+                  <div className="kb-chats-split__empty">
+                    Select a conversation, or start a new one.
+                  </div>
+                ) : (
+                  <KbChatView chatId={chatId} onOpenCitation={openCite} client={client} />
+                )}
+              </div>
+            </div>
           )}
         </div>
       </main>
 
       <AskAgentDrawer
-        key={drawer.chatId ?? "new"}
-        open={drawer.open}
-        chatId={drawer.chatId}
-        collectionIds={allCollectionIds}
-        onClose={() => setDrawer({ open: false, chatId: null })}
+        open={ask}
+        onClose={() => setAsk(false)}
         onManage={() => {
-          setDrawer({ open: false, chatId: null });
+          setAsk(false);
           setTab("collections");
         }}
-        onOpenCitation={openCitation}
+        onOpenCitation={openCite}
         client={client}
       />
 

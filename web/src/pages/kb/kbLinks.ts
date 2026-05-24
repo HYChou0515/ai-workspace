@@ -18,3 +18,15 @@ export function parseKbDocHref(href: string): string | null {
   const id = rest.split("#", 1)[0];
   return id.length > 0 ? id : null;
 }
+
+/**
+ * The in-app route for a document's dedicated page (new-tab target). The id is
+ * path-shaped ({collection}/{user}/{path}); each segment is encoded but the
+ * slashes are kept so the `/kb/doc/*` splat route can read it back. An optional
+ * cited passage rides along as `?hl=` for highlighting.
+ */
+export function docPath(documentId: string, snippet?: string): string {
+  const encoded = documentId.split("/").map(encodeURIComponent).join("/");
+  const hl = snippet ? `?hl=${encodeURIComponent(snippet)}` : "";
+  return `/kb/doc/${encoded}${hl}`;
+}

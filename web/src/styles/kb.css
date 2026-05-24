@@ -474,20 +474,38 @@
   gap: 6px;
 }
 .kb-docs__row {
-  width: 100%;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: 10px;
+  padding: 6px 12px 6px 6px;
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-btn);
+}
+.kb-docs__row:hover {
+  border-color: var(--accent);
+}
+.kb-docs__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: none;
+  background: none;
   font-family: var(--font-body);
   cursor: pointer;
   text-align: left;
 }
-.kb-docs__row:hover {
-  border-color: var(--accent);
+.kb-docs__by {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d2);
+  white-space: nowrap;
 }
 .kb-docs__path {
   flex: 1;
@@ -674,4 +692,145 @@
   border-radius: 2px;
   padding: 0 2px;
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* --------------------- Collection picker (chat scope) --------------------- */
+
+.kb-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.kb-picker__label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--text-paper-d2);
+  margin-right: 2px;
+}
+.kb-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--paper-3);
+  border-radius: 14px;
+  background: var(--white);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  cursor: pointer;
+}
+.kb-chip.is-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-h);
+  font-weight: 600;
+}
+
+/* ----------------------- Chat panel (drawer + view) ----------------------- */
+
+.kb-chatpanel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.kb-chatpanel__body {
+  flex: 1;
+  overflow: auto;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+
+/* ------------------------- Full-page chat view ------------------------- */
+
+.kb-chatview {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+.kb-chatview__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--paper-3);
+}
+.kb-chatview__mark {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-chip);
+  background: var(--ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.kb-chatview__title {
+  font-size: var(--text-body);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* ------------------------- Chats split (list + view) ------------------------- */
+
+.kb-chats-split {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+.kb-chats-split > .kb-chats {
+  border-right: 1px solid var(--paper-3);
+}
+.kb-chats-split__view {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.kb-chats-split__empty {
+  margin: auto;
+  color: var(--text-paper-d2);
+  font-size: var(--text-body-sm);
+}
+.kb-chats__open.is-active {
+  background: var(--accent-soft);
+  border-radius: var(--radius-btn);
+}
+
+/* ------------------------- Dedicated doc page ------------------------- */
+
+.kb-docpage {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--paper);
+  color: var(--text-paper);
+}
+.kb-docpage__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--paper-3);
+}
+.kb-docpage__name {
+  font-family: var(--font-mono);
+  font-size: var(--text-body-sm);
+  color: var(--ink);
+}
+.kb-docpage__body {
+  flex: 1;
+  overflow: auto;
+  padding: 24px 28px 48px;
+  max-width: 860px;
+  width: 100%;
+  margin: 0 auto;
 }
