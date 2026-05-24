@@ -150,6 +150,63 @@ derives them from the truth above + sibling state.
 
 ---
 
+### 1.5 KB models (`Collection` / `SourceDoc` / `DocChunk` / `KbChat`)
+
+```python
+class Collection(Struct):                 # → resource "collection"
+    name: str
+    description: str = ""
+
+class SourceDoc(Struct):                  # → resource "source-doc"
+    # natural-key id = f"{collection_id}/{created_by}/{path}"
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    path: str                             # relative path; part of the id + cross-ref key
+    content: Binary                       # original bytes; content.file_id = xxh3 (dedup);
+                                          # content.content_type auto-sniffed via magic
+    text: str | None = None               # derived/extracted text (None ⇒ decode content)
+    status: str = "ready"                 # indexing | ready | error (set during async index)
+
+class DocChunk(Struct):                   # → resource "doc-chunk" (derived; current-only)
+    collection_id: str
+    source_doc_id: Annotated[str, Ref("source-doc", on_delete=OnDelete.cascade)]
+    seq: int
+    start: int                            # char offsets into the canonical (normalized) text
+    end: int
+    text: str
+    embedding: Annotated[list[float], Vector(dim=EMBED_DIM, distance="cosine")]
+
+class Citation(Struct):                   # a resolved [n] marker in a KB answer
+    marker: int                           # the [n]
+    collection_id: str
+    document_id: str                      # SourceDoc id = {collection}/{user}/{path}
+    filename: str                         # basename(path)
+    start: int                            # merged span into canonical text
+    end: int
+    source_chunk_ids: list[str]           # DocChunk ids that composed the cited passage
+    snippet: str = ""
+
+class KbMessage(Struct):
+    role: str                             # user / assistant / tool
+    content: str = ""
+    reasoning: str | None = None
+    tool_call_id: str | None = None
+    tool_name: str | None = None
+    tool_args: dict[str, Any] | None = None
+    citations: list[Citation] = field(default_factory=list)
+    created_at: int | None = None         # epoch ms
+
+class KbChat(Struct):                     # → resource "kb-chat"
+    title: str = "New chat"
+    collection_ids: list[str] = field(default_factory=list)
+    messages: list[KbMessage] = field(default_factory=list)
+```
+
+`EMBED_DIM = int(os.getenv("KB_EMBED_DIM", "1024"))` — the stored vector width;
+must match the embedder's output. `DocChunk` is derived and **hard-deleted** on
+re-index (a soft delete would leave stale chunks in vector/keyword search).
+
+---
+
 ## 2. HTTP routes
 
 All paths are JSON unless noted. Auth: every request implicitly runs
@@ -269,6 +326,27 @@ uses only the generic tools (`exec`, `read_file`, `write_file`, `ls`,
 workflow / file conventions. Mock SPC / AOI data lives as CSV
 fixtures inside the seeded template (`/data/*.csv`).
 
+### 2.9 KB chatbot
+
+| Method | Path | Purpose | Status |
+|---|---|---|---|
+| `GET`    | `/kb/agent`                              | KB agent display name + quick-prompt suggestions: `{name, suggestions}` | ✅ |
+| `POST`   | `/kb/collections`                        | create a collection: body `{name, description?}` → `{resource_id, name, description}` | ✅ |
+| `GET`    | `/kb/collections`                        | list collections: `[{resource_id, name, description}]` | ✅ |
+| `POST`   | `/kb/collections/{id}/documents`         | multipart upload (`file`); stores fast + indexes in background → `{document_ids, status:"indexing"}` | ✅ |
+| `GET`    | `/kb/collections/{id}/documents`         | list docs: `[{resource_id, path, content_type, created_by, status}]` | ✅ |
+| `GET`    | `/kb/documents/{doc_id:path}`            | render a document → `{filename, collection_id, markdown}` (relative links rewritten to `kb://doc/{id}`) | ✅ |
+| `POST`   | `/kb/chats`                              | create a thread: body `{title?, collection_ids}` → `{resource_id, title, collection_ids}` | ✅ |
+| `GET`    | `/kb/chats`                              | list threads: `[{resource_id, title, collection_ids, message_count}]` | ✅ |
+| `GET`    | `/kb/chats/{id}`                         | thread detail: `{resource_id, title, collection_ids, messages:[KbMessage…]}` (404 if missing) | ✅ |
+| `DELETE` | `/kb/chats/{id}`                         | delete a thread → 204 (hard delete) | ✅ |
+| `POST`   | `/kb/chats/{id}/messages`                | send a user message → SSE stream of `AgentEvent` (same union as RCA); persists the answer + `[n]` citations | ✅ |
+
+Folder upload = the FE posts each file with its relative path as the multipart
+filename (one SourceDoc per file, same as unpacking an archive). Citations are
+**not** in the SSE stream — refetch `GET /kb/chats/{id}` on `done` to get the
+persisted assistant `KbMessage` with its resolved `[n]` `Citation`s.
+
 ---
 
 ## 3. SSE event types
@@ -278,7 +356,9 @@ endpoints. Both serialize one JSON object per `data:` line.
 
 ### 3.1 `AgentEvent` — over `POST /investigations/{id}/messages`
 
-Mirrored in `web/src/events.ts`.
+Mirrored in `web/src/events.ts`. The **KB chat** (`POST /kb/chats/{id}/messages`,
+§2.9) streams this **same union** — the KB agent reuses the runner, and the FE
+renders both chats with the shared agent-log view.
 
 | Variant | Shape | Terminal? | Notes |
 |---|---|---|---|
