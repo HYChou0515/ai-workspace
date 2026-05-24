@@ -5,6 +5,16 @@ sandboxes. Each workspace owns a persistent file store; a sandbox is
 created on demand when the agent needs to run a shell command, and is
 killed when idle.
 
+It also ships a **knowledge-base (KB) chatbot**: upload in-house documents
+(markdown / text, or zip/tar archives, or a whole folder) into named
+**collections**, which are chunked, embedded, and stored for hybrid retrieval
+(dense vector + BM25 + RRF + MMR + parent-document merge, with optional
+multi-query / HyDE / LLM rerank). A KB **agent** answers questions over those
+collections with inline `[n]` citations that link back to the source document —
+and the RCA workspace agent can consult it through an `ask_knowledge_base` tool.
+Reach it from the top-bar **Ask agent** drawer (fast chat) or the **`/kb`** page
+(collections management + full conversations).
+
 See [`CLAUDE.md`](./CLAUDE.md) for the architecture diagram and the
 Sandbox / FileStore / AgentRunner Protocol boundaries.
 
@@ -22,6 +32,8 @@ That entry point wires the production defaults:
 - `LocalProcessSandbox` (subprocess-based; safe inside a VM/devcontainer)
 - `SpecstarFileStore` (per-workspace blob via specstar)
 - `LitellmAgentRunner` pointing at Ollama (see step 3)
+- KB: a `LitellmEmbedder` for real semantic vectors + a retrieval LLM that
+  enables multi-query / HyDE / rerank (env-configurable — see step 3)
 - The React SPA from `web/dist` if it has been built
 
 Swap any layer by importing `workspace_app.api.create_app` and passing
@@ -65,6 +77,38 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama pull qwen2.5-coder:7b-instruct
 ```
 
+#### KB models (embeddings + retrieval LLM)
+
+The KB needs an **embedding** model (for vector search) and a **chat** model
+(for the KB agent + query enhancements). Pull an embedder — `bge-m3` is a good
+1024-dim default (matches `KB_EMBED_DIM`):
+
+```bash
+docker compose exec ollama ollama pull bge-m3        # 1024-dim, multilingual
+docker compose exec ollama ollama pull qwen3:14b     # KB agent / retrieval LLM
+```
+
+Then point the app at the embedder you pulled (the default assumes a
+`qwen3-embedding` tag, so set this explicitly for `bge-m3`):
+
+```bash
+KB_EMBED_MODEL=ollama/bge-m3 uv run python -m workspace_app
+```
+
+KB env vars (all optional except matching the embedder you pulled):
+
+| var | default | notes |
+| --- | --- | --- |
+| `KB_EMBED_MODEL` | `ollama/qwen3-embedding` | LiteLLM model string for embeddings |
+| `KB_EMBED_DIM` | `1024` | must equal the model's output width; re-index if changed |
+| `KB_LLM_MODEL` | `ollama_chat/qwen3:14b` | KB agent + multi-query / HyDE / rerank |
+| `KB_QUERY_PREFIX` / `KB_DOC_PREFIX` | `""` | asymmetric instruction prefixes (some embedders want them) |
+
+If you swap to an embedder with a different dimension, set `KB_EMBED_DIM` to
+match **and re-upload** documents — existing vectors are stored at the old
+width. Without a real embedder the app falls back to a deterministic
+non-semantic `HashEmbedder` (offline/tests only).
+
 Once the model is pulled, the previously-skipped live smoke test should
 pass:
 
@@ -101,13 +145,20 @@ model isn't present.
 src/workspace_app/
   sandbox/     Protocol + Mock / LocalProcess / Docker adapters
   filestore/   Protocol + SpecstarFileStore impl
-  resources/   msgspec.Structs registered with specstar
-  agent/       Tool wrappers (exec, read/write/ls/exists/delete)
+  resources/   msgspec.Structs registered with specstar (incl. KB: Collection,
+               SourceDoc, DocChunk, KbChat)
+  agent/       Tool wrappers (exec, read/write/ls/exists/delete, kb_search,
+               ask_knowledge_base)
+  kb/          KB subsystem: chunker, embedder, ingest, retriever (hybrid),
+               fusion/bm25/merge, query (multi-query/HyDE), rerank, citations,
+               KB agent config + prompt
   api/         FastAPI app factory, SSE endpoint, AgentRunner Protocol,
-               LitellmAgentRunner
+               LitellmAgentRunner, kb_routes (collections/docs) + kb_chat_routes
+               (threads + streaming chat)
 
 web/
-  src/         React SPA (Vite + TS): chat page that streams SSE
+  src/         React SPA (Vite + TS): RCA chat + KB chat (shared agent-log
+               rendering), collections management, document viewer
 ```
 
 ## Documentation
