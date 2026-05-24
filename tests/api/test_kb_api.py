@@ -64,6 +64,18 @@ def test_upload_document_and_list():
     assert match["created_by"] == "default-user"  # specstar audit meta
 
 
+def test_folder_upload_preserves_relative_path():
+    # a folder upload sends each file with its relative path as the filename;
+    # the doc id + path preserve that structure (handled like an archive member)
+    client = _client()
+    cid = _new_collection(client)
+    files = {"file": ("manuals/reflow/guide.md", b"# Guide\nzone three", "text/markdown")}
+    r = client.post(f"/kb/collections/{cid}/documents", files=files)
+    assert r.json()["document_ids"] == [f"{cid}/default-user/manuals/reflow/guide.md"]
+    docs = client.get(f"/kb/collections/{cid}/documents").json()
+    assert any(d["path"] == "manuals/reflow/guide.md" for d in docs)
+
+
 def test_render_document_rewrites_crossrefs_and_returns_markdown():
     import io
     import zipfile

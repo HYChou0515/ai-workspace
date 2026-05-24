@@ -23,6 +23,15 @@ describe("KB api (mock client)", () => {
     expect(docs.map((d) => d.path)).toEqual(["guide.md"]);
   });
 
+  it("preserves a relative path on folder upload", async () => {
+    const c = await kb.createCollection("kb");
+    const file = new File(["x"], "a.md", { type: "text/markdown" });
+    const ids = await kb.uploadDocument(c.resource_id, file, "manuals/reflow/a.md");
+    expect(ids).toEqual([`${c.resource_id}/me/manuals/reflow/a.md`]);
+    const docs = await kb.listDocuments(c.resource_id);
+    expect(docs.map((d) => d.path)).toEqual(["manuals/reflow/a.md"]);
+  });
+
   it("creates a chat and lists it with a message count", async () => {
     const c = await kb.createCollection("kb");
     const chat = await kb.createChat("Reflow Q", [c.resource_id]);

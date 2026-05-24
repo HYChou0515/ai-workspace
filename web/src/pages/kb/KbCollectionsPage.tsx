@@ -24,6 +24,12 @@ export function KbCollectionsPage({
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
+
+  // webkitdirectory isn't a typed JSX attribute — set it on the element.
+  useEffect(() => {
+    if (folderRef.current) folderRef.current.webkitdirectory = true;
+  }, []);
 
   const refreshCollections = useCallback(async () => {
     const cols = await client.listCollections();
@@ -61,12 +67,13 @@ export function KbCollectionsPage({
     }
   };
 
-  const upload = async (files: FileList | null) => {
+  const upload = async (files: FileList | null, asFolder = false) => {
     if (!files || !selectedId || busy) return;
     setBusy(true);
     try {
       for (const file of Array.from(files)) {
-        await client.uploadDocument(selectedId, file);
+        // Folder uploads keep each file's relative path (handled like an archive).
+        await client.uploadDocument(selectedId, file, asFolder ? file.webkitRelativePath : undefined);
       }
       setDocuments(await client.listDocuments(selectedId));
     } finally {
@@ -129,6 +136,14 @@ export function KbCollectionsPage({
               >
                 <Icon name="upload" size={13} /> Upload
               </button>
+              <button
+                type="button"
+                className="kb-btn"
+                disabled={busy}
+                onClick={() => folderRef.current?.click()}
+              >
+                <Icon name="folder" size={13} /> Upload folder
+              </button>
               <input
                 ref={fileRef}
                 type="file"
@@ -137,6 +152,7 @@ export function KbCollectionsPage({
                 hidden
                 onChange={(e) => upload(e.target.files)}
               />
+              <input ref={folderRef} type="file" multiple hidden onChange={(e) => upload(e.target.files, true)} />
             </header>
             {documents.length === 0 ? (
               <p className="kb-cols__empty">Upload markdown, text, or an archive to index it.</p>

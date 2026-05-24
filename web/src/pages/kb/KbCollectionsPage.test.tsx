@@ -19,8 +19,9 @@ describe("KbCollectionsPage", () => {
     await waitFor(() =>
       expect(screen.getByRole("button", { name: /Process SOPs/ })).toBeInTheDocument(),
     );
-    // selected → its (empty) documents pane shows the upload affordance
-    expect(screen.getByRole("button", { name: /upload/i })).toBeInTheDocument();
+    // selected → its (empty) documents pane shows the upload affordances
+    expect(screen.getByRole("button", { name: "Upload" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Upload folder" })).toBeInTheDocument();
   });
 
   it("uploads a document and lists it; clicking opens it", async () => {

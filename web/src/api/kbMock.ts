@@ -53,13 +53,14 @@ export const mockKbApi: KbApi = {
   async listDocuments(collectionId) {
     return documents.get(collectionId) ?? [];
   },
-  async uploadDocument(collectionId, file) {
-    const id = `${collectionId}/me/${file.name}`;
+  async uploadDocument(collectionId, file, path) {
+    const docPath = path ?? file.name;
+    const id = `${collectionId}/me/${docPath}`;
     const list = documents.get(collectionId) ?? [];
     if (!list.some((d) => d.resource_id === id)) {
       list.push({
         resource_id: id,
-        path: file.name,
+        path: docPath,
         content_type: "text/markdown",
         created_by: "me",
       });

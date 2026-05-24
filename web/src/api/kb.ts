@@ -85,8 +85,10 @@ export interface KbApi {
   listCollections(): Promise<KbCollection[]>;
   createCollection(name: string, description?: string): Promise<KbCollection>;
   listDocuments(collectionId: string): Promise<KbDocument[]>;
-  /** Multipart upload; returns the ingested document ids (one per archive member). */
-  uploadDocument(collectionId: string, file: File): Promise<string[]>;
+  /** Multipart upload; returns the ingested document ids (one per archive
+   * member). `path` overrides the stored filename — used for folder uploads to
+   * preserve each file's relative path. */
+  uploadDocument(collectionId: string, file: File, path?: string): Promise<string[]>;
   /** Render a source document to markdown (kb:// links) for the citation viewer. */
   renderDocument(documentId: string): Promise<KbRenderedDoc>;
 
@@ -130,9 +132,9 @@ export const realKbApi: KbApi = {
     const resp = await fetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`);
     return (await ok(resp, "list documents")).json();
   },
-  async uploadDocument(collectionId, file) {
+  async uploadDocument(collectionId, file, path) {
     const form = new FormData();
-    form.append("file", file);
+    form.append("file", file, path ?? file.name);
     const resp = await ok(
       await fetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`, {
         method: "POST",
