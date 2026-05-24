@@ -45,7 +45,16 @@ input,
 textarea,
 select {
   font: inherit;
-  color: inherit;
+  color: var(--text-paper);
+  /* Flip with the theme — without this the UA default (white) bg stays white in
+   * dark mode, leaving the themed (light) text invisible. Inline/class styles
+   * that set their own background still override this. */
+  background-color: var(--white);
+}
+
+::placeholder {
+  color: var(--text-paper-d2);
+  opacity: 1;
 }
 
 /* Scrollbars */

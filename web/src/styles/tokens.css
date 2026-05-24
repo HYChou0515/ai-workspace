@@ -10,6 +10,8 @@
  */
 
 :root {
+  color-scheme: light; /* UA controls/scrollbars render light by default */
+
   /* Brand accent — the one orange */
   --accent:      #F0502E;
   --accent-h:    #D8431F;
@@ -104,6 +106,8 @@
  * every component restyles for free.
  */
 [data-theme="dark"] {
+  color-scheme: dark; /* dark UA controls/scrollbars */
+
   --paper:       #16181D;
   --paper-2:     #1F222A;
   --paper-3:     #2E323B;
