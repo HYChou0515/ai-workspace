@@ -109,7 +109,7 @@ const INVESTIGATIONS = [
   },
 ];
 
-function HomeRCA({ onSelect, onNew }) {
+function HomeRCA({ onSelect, onNew, onAskAgent, onOpenKB, onOpenChats }) {
   return (
     <div className="rca" style={{ width: HOME_W, height: HOME_H, background: RCA.paper, display: "flex", overflow: "hidden" }}>
 
@@ -149,6 +149,14 @@ function HomeRCA({ onSelect, onNew }) {
           ))}
         </nav>
 
+        <div style={{ padding: "16px 8px 8px" }}>
+          <CapsLabel style={{ marginBottom: 8, paddingLeft: 10 }}>Knowledge</CapsLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+            <NavItem icon="layers" label="Knowledge base" badge={9} onClick={onOpenKB}/>
+            <NavItem icon="chat" label="Chats" badge={10} onClick={onOpenChats}/>
+          </div>
+        </div>
+
         <div style={{ padding: "20px 18px 8px" }}>
           <CapsLabel style={{ marginBottom: 8 }}>Topics</CapsLabel>
           <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
@@ -187,7 +195,7 @@ function HomeRCA({ onSelect, onNew }) {
           </div>
           <div style={{ flex: 1 }}/>
           <Btn variant="ghost" icon={<I name="bell" size={15}/>}>3</Btn>
-          <Btn icon={<I name="sparkle" size={14}/>}>Ask agent</Btn>
+          <Btn icon={<I name="sparkle" size={14}/>} onClick={onAskAgent}>Ask agent</Btn>
         </div>
 
         {/* page header */}
@@ -312,9 +320,9 @@ function HomeRCA({ onSelect, onNew }) {
   );
 }
 
-function NavItem({ icon, label, badge, active }) {
+function NavItem({ icon, label, badge, active, onClick }) {
   return (
-    <div style={{
+    <div onClick={onClick} style={{
       display: "flex", alignItems: "center", gap: 10,
       padding: "7px 10px",
       borderRadius: 4,

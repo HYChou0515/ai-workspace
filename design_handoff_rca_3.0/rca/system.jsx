@@ -115,7 +115,7 @@ function RCALockup({ size = 28, onDark, compact, version = "3.0" }) {
 // ============================================================
 
 // Button — variants: primary | secondary | ghost | dark
-function Btn({ children, variant = "secondary", size = "md", onDark, icon, iconRight, style, fullWidth, disabled }) {
+function Btn({ children, variant = "secondary", size = "md", onDark, icon, iconRight, style, fullWidth, disabled, onClick, title }) {
   const sizes = {
     sm: { h: 28, px: 10, fs: 12, gap: 6, ic: 13 },
     md: { h: 36, px: 14, fs: 13, gap: 8, ic: 15 },
@@ -135,7 +135,7 @@ function Btn({ children, variant = "secondary", size = "md", onDark, icon, iconR
       : { bg: RCA.ink, fg: RCA.textDark, bd: "transparent" },
   }[variant];
   return (
-    <button disabled={disabled} style={{
+    <button disabled={disabled} onClick={onClick} title={title} style={{
       display: "inline-flex", alignItems: "center", gap: sizes.gap, justifyContent: "center",
       height: sizes.h, padding: `0 ${sizes.px}px`,
       background: variants.bg, color: variants.fg,
