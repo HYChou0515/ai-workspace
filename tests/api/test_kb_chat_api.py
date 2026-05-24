@@ -101,6 +101,13 @@ def _client(runner: object) -> TestClient:
     return TestClient(app)
 
 
+def test_kb_agent_config_exposes_suggestions():
+    client = _client(_KbRunner())
+    body = client.get("/kb/agent").json()
+    assert body["name"] == "KB Agent"
+    assert isinstance(body["suggestions"], list) and body["suggestions"]
+
+
 def test_create_list_get_delete_chat():
     client = _client(_KbRunner())
     cid = client.post("/kb/chats", json={"title": "Reflow", "collection_ids": ["c"]}).json()[

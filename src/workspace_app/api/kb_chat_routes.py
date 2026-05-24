@@ -81,6 +81,13 @@ def register_kb_chat_routes(
         assert isinstance(data, KbChat)  # the KbChat manager yields KbChat
         return data
 
+    @app.get("/kb/agent")
+    async def kb_agent_config() -> dict:
+        """The KB agent's display name + quick-prompt suggestions (the chat UI
+        renders these as chips — they live with the config, not the FE)."""
+        cfg = default_kb_agent_config()
+        return {"name": cfg.name, "suggestions": cfg.suggestions}
+
     @app.post("/kb/chats")
     async def create_chat(body: _ChatBody) -> dict:
         rev = chat_rm.create(KbChat(title=body.title, collection_ids=body.collection_ids))

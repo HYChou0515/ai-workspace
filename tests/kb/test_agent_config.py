@@ -7,3 +7,4 @@ def test_kb_agent_config_has_only_kb_search_and_a_prompt():
     assert config.allowed_tools == ["kb_search"]
     assert "knowledge base" in config.system_prompt.lower()
     assert "[n]" in config.system_prompt  # tells the model how to cite
+    assert config.suggestions  # quick-prompt chips ship with the config, not the FE

@@ -15,4 +15,11 @@ def default_kb_agent_config() -> AgentConfig:
         name="KB Agent",
         system_prompt=load_kb_system_prompt(),
         allowed_tools=["kb_search"],
+        # Quick-prompt chips for the chat UI live with the config, not hardcoded
+        # in the FE (same rule as the RCA agent's suggestions).
+        suggestions=[
+            "What does the knowledge base say about this?",
+            "Summarize what we know on this topic",
+            "Find related past findings",
+        ],
     )
