@@ -300,6 +300,12 @@ mkdir -p src/workspace_app/rca/templates/my-profile
   （例如 `brief.md.tpl` → `/brief.md`）。可用變數：`title`、`owner`、`severity`、
   `status`、`product`、`description`、`members`、`topics`。佔位符用 `$name` / `${name}`，
   **打錯字會直接報錯**（不會默默輸出 `$foo`）。
+- `_prompt.md`（**強烈建議放一份**）：這個 profile 的 **system prompt 附錄**，描述它 seed 了
+  哪些起始檔案。Agent 的 prompt 是「template-無關的 base（`rca/prompts/system.md`）+ 該 profile 的
+  `_prompt.md`」在 turn 時組起來的（`compose_system_prompt`），所以漏寫的話，agent 不會知道你 seed
+  了哪些檔。它是 prompt metadata、**不會**被 seed 成 workspace 檔（`_walk` 自動跳過）。附錄只寫「本
+  template 的起始檔 + 建議流程」；跨 template 的慣例（`/report.vN.md` 版本、`.canvas` schema、notebook
+  由 user 執行）留在 base，不要重複。
 - 其他副檔名：**原封不動**複製（notebook、`.canvas`、CSV…）。
 
 範例 `my-profile/brief.md.tpl`：
@@ -310,6 +316,18 @@ mkdir -p src/workspace_app/rca/templates/my-profile
 > 嚴重度 ${severity}．負責人 ${owner}
 
 ${description}
+```
+
+範例 `my-profile/_prompt.md`：
+
+```markdown
+## Your workspace — `my-profile` template
+
+| Path | Purpose |
+|---|---|
+| `/brief.md` | One-page problem statement. Read first. |
+
+Suggested flow: read `/brief.md` → … → draft `/report.v{N+1}.md`.
 ```
 
 > `list_profiles()` 用「是不是資料夾」來判斷，所以 profile 名稱可以有連字號

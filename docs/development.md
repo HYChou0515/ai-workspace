@@ -132,7 +132,21 @@ web/src/
 
 ---
 
-## 8. 測試備註
+## 8. 怎麼新增一個 workspace template（profile）
+
+每個 profile 是 `src/workspace_app/rca/templates/` 底下的一個子資料夾；picker（`GET /templates`）會自動列出。
+
+1. 建資料夾，放進起始檔案：`*.tpl` 會做 `string.Template` 變數替換並去掉 `.tpl` 副檔名落地（可用變數見 [deployment.md](deployment.md) §8）；其他副檔名原封不動複製。
+2. **務必同時放一份 `_prompt.md` 附錄**，只描述**這個 template 的起始檔案**——system prompt 的「base + 附錄」會在 turn 時依投資調查的 `template_profile` 組起來（`rca.templates.compose_system_prompt`）。沒有 `_prompt.md` 的話，agent 只會拿到 template-無關的 base，不知道你 seed 了哪些檔。
+   - `_prompt.md` 是 prompt metadata，**不是** workspace 檔——seeding 會自動跳過它（`_walk` 排除），不會出現在檔案樹。
+   - **不要把跨 template 的慣例**（`/report.vN.md` 版本規則、fishbone `.canvas` schema、notebook 由 user 執行…）寫進附錄；那些屬於 base `system.md`，附錄只寫「這個 template 有哪些起始檔 + 建議流程」。
+3. 在 `tests/rca/test_templates.py` 加測試：profile 出現在 `list_profiles()`、seed 出預期檔案、`load_template_appendix(profile)` 描述的是自己的檔案。
+
+> 為什麼要這條：prompt 與 template 解耦後（commit `ca1c728`），漏寫 `_prompt.md` 不會壞掉但 agent 會「不知道有哪些起始檔」。把附錄和檔案放在同一個資料夾，新增 template 時就不會忘。
+
+---
+
+## 9. 測試備註
 
 - Docker sandbox 測試在本機有 daemon 時跑、否則自動 skip。
 - Ollama live 測試（`test_live_run_against_ollama_*`）在 daemon/模型不在時自動 skip；
