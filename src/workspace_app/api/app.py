@@ -21,6 +21,7 @@ from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..kb.chunker import Chunker, FixedTokenChunker
 from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
+from ..kb.retriever import Retriever
 from ..kernels import KernelService
 from ..rca.prompts import load_system_prompt
 from ..rca.templates import compose_system_prompt, list_profiles, seed_investigation
@@ -47,6 +48,7 @@ from .events import (
     ToolStart,
     to_sse,
 )
+from .kb_chat_routes import register_kb_chat_routes
 from .kb_routes import register_kb_routes
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
@@ -277,12 +279,12 @@ def create_app(
     # KB chatbot subsystem: ingestion + collection/document/render routes.
     # Embedder/Chunker are swappable; defaults are offline-friendly (production
     # injects a LiteLLM embedder for real semantic search).
-    ingestor = Ingestor(
-        spec,
-        chunker=kb_chunker or FixedTokenChunker(),
-        embedder=kb_embedder or HashEmbedder(dim=EMBED_DIM),
-    )
+    embedder = kb_embedder or HashEmbedder(dim=EMBED_DIM)
+    ingestor = Ingestor(spec, chunker=kb_chunker or FixedTokenChunker(), embedder=embedder)
     register_kb_routes(app, spec, ingestor)
+    # The chat agent shares the injected runner; its retriever uses the same
+    # embedder as ingestion so query and document vectors are comparable.
+    register_kb_chat_routes(app, spec, runner, Retriever(spec, embedder=embedder))
 
     conv_rm = spec.get_resource_manager(Conversation)
 
