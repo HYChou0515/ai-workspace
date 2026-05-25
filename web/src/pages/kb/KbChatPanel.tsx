@@ -50,7 +50,7 @@ export function KbChatPanel({
   }, [collections]);
 
   const collectionIds = useMemo(() => [...selected], [selected]);
-  const { log, send } = useKbChat({ collectionIds, chatId, client, onChatCreated });
+  const { log, send, cancel } = useKbChat({ collectionIds, chatId, client, onChatCreated });
 
   const submit = (text: string) => {
     const t = text.trim();
@@ -133,14 +133,20 @@ export function KbChatPanel({
           />
           <div className="kb-composer__row">
             <span className="kb-composer__hint">⌘↵ to send</span>
-            <button
-              type="button"
-              className="kb-btn kb-btn--primary"
-              disabled={log.streaming || !draft.trim()}
-              onClick={() => submit(draft)}
-            >
-              <Icon name="arrow_r" size={13} /> Send
-            </button>
+            {log.streaming ? (
+              <button type="button" className="kb-btn kb-btn--stop" onClick={cancel}>
+                <Icon name="x" size={13} /> Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="kb-btn kb-btn--primary"
+                disabled={!draft.trim()}
+                onClick={() => submit(draft)}
+              >
+                <Icon name="arrow_r" size={13} /> Send
+              </button>
+            )}
           </div>
         </div>
       </div>

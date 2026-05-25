@@ -102,6 +102,9 @@ export interface KbApi {
   /** Stream one chat turn. Citations are not in the stream — refetch the chat
    * on done to get the persisted assistant message with its [n] resolved. */
   streamMessage(args: SendKbMessageArgs): AsyncGenerator<AgentEvent>;
+  /** Interrupt the chat's in-flight turn server-side (the stream gets a
+   * run_cancelled event, then closes). Mirrors the RCA workspace cancel. */
+  cancelMessage(chatId: string): Promise<void>;
 }
 
 /* ------------------------------- real ------------------------------- */
@@ -187,6 +190,14 @@ export const realKbApi: KbApi = {
     });
     if (!resp.ok || !resp.body) throw new Error(`kb message failed: ${resp.status}`);
     yield* parseSseStream(resp.body);
+  },
+  async cancelMessage(chatId) {
+    await ok(
+      await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}/messages/current`, {
+        method: "DELETE",
+      }),
+      "cancel kb message",
+    );
   },
 };
 

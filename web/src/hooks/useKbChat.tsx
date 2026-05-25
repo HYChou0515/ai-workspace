@@ -24,6 +24,7 @@ export type UseKbChat = {
   chatId: string | null;
   log: AgentLog;
   send: (content: string) => Promise<void>;
+  cancel: () => void;
   reset: () => void;
 };
 
@@ -121,11 +122,19 @@ export function useKbChat({
     [chatId, collectionIds, client, log.streaming, onChatCreated, qc],
   );
 
+  const cancel = useCallback(() => {
+    // Abort the local stream AND tell the BE to tear the turn down (mirrors
+    // useAgent.cancel) — closing the socket alone doesn't always reach the
+    // runner. Only an already-created thread has a server turn to cancel.
+    abortRef.current?.abort();
+    if (chatId) void client.cancelMessage(chatId);
+  }, [chatId, client]);
+
   const reset = useCallback(() => {
     abortRef.current?.abort();
     setChatId(null);
     setLog(EMPTY_LOG);
   }, []);
 
-  return { chatId, log, send, reset };
+  return { chatId, log, send, cancel, reset };
 }

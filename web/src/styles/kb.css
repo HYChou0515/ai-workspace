@@ -288,6 +288,10 @@
 .kb-btn--primary:hover:not(:disabled) {
   background: var(--accent-h);
 }
+.kb-btn--stop {
+  border-color: var(--err);
+  color: var(--err);
+}
 .kb-iconbtn {
   display: inline-flex;
   align-items: center;

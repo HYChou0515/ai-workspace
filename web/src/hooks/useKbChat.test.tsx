@@ -73,4 +73,23 @@ describe("useKbChat", () => {
     expect(result.current.chatId).toBeNull();
     expect(result.current.log.entries).toEqual([]);
   });
+
+  it("cancel tells the BE to tear down the in-flight turn", async () => {
+    const spy = vi.spyOn(mockKbApi, "cancelMessage");
+    const { result } = renderHook(() => useKbChat({ collectionIds: ["col-1"], client: mockKbApi }));
+    await act(async () => {
+      await result.current.send("hello"); // creates the thread → a turn to cancel
+    });
+    act(() => result.current.cancel());
+    expect(spy).toHaveBeenCalledWith(result.current.chatId);
+    spy.mockRestore();
+  });
+
+  it("cancel with no active thread only aborts locally (no BE call)", () => {
+    const spy = vi.spyOn(mockKbApi, "cancelMessage");
+    const { result } = renderHook(() => useKbChat({ collectionIds: [], client: mockKbApi }));
+    act(() => result.current.cancel());
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
 });

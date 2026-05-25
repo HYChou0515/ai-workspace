@@ -99,6 +99,9 @@ export const mockKbApi: KbApi = {
   async deleteChat(chatId) {
     chats.delete(chatId);
   },
+  async cancelMessage(_chatId) {
+    // No server turn to cancel in the mock; the FE aborts the stream locally.
+  },
   async *streamMessage(args: SendKbMessageArgs): AsyncGenerator<AgentEvent> {
     const chat = chats.get(args.chatId);
     if (!chat) throw new Error(`chat not found: ${args.chatId}`);
