@@ -38,6 +38,10 @@ class Message(Struct):
     log's timestamps survive a reload. None for messages created before this
     field existed (the FE then shows no time)."""
 
+    mentions: list[str] = field(default_factory=list)
+    """Only set when role=mention — the user ids summoned ("@ come look").
+    A mention is a human-to-human event in the thread, NOT an agent turn."""
+
 
 class Conversation(Struct):
     investigation_id: Annotated[str, Ref("investigation", on_delete=OnDelete.cascade)]

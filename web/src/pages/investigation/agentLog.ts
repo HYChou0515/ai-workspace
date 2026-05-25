@@ -36,6 +36,7 @@ export type AgentMetricsState = {
 export type AgentEntry =
   | { kind: "message"; message: Message; at?: number }
   | { kind: "tool_call"; call: ToolCallView }
+  | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
   | { kind: "banner"; text: string; at?: number };
 
 export type AgentLog = {
@@ -70,6 +71,14 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
           startedAt: m.created_at ?? undefined,
           endedAt: m.created_at ?? undefined,
         },
+      });
+    } else if (m.role === "mention") {
+      entries.push({
+        kind: "mention",
+        by: m.author ?? "",
+        users: m.mentions ?? [],
+        note: m.content,
+        at: m.created_at ?? undefined,
       });
     } else {
       entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });

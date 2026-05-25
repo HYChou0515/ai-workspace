@@ -50,7 +50,7 @@ export type InvestigationInput = {
   templateProfile?: string;
 };
 
-export type MessageRole = "user" | "assistant" | "tool" | "system";
+export type MessageRole = "user" | "assistant" | "tool" | "system" | "mention";
 
 export type Message = {
   role: MessageRole;
@@ -68,6 +68,8 @@ export type Message = {
   created_at?: number | null;
   /** Resolved [n] markers (KB answers). Rendered as clickable source cards. */
   citations?: MessageCitation[];
+  /** role=mention only — the user ids summoned ("@ come look"). */
+  mentions?: string[];
 };
 
 /** A resolved [n] citation marker — points at a span of a source document. */
@@ -198,6 +200,9 @@ export interface ApiClient {
   /** Close the workspace. `status` resolved|abandoned flips the status;
    * `null` is a pure close — tear the session down, leave status alone. */
   closeInvestigation(id: string, status: CloseStatus | null): Promise<void>;
+  /** @mention users in an investigation — a "come look" summon that notifies
+   * them (does NOT run the agent). POST /investigations/{id}/mentions. */
+  addMention(investigationId: string, userIds: string[], note?: string): Promise<void>;
   /** GET /agent-config — agent profiles the picker offers. */
   listAgentConfigs(): Promise<AgentConfigInfo[]>;
   /** PATCH /investigation/{id} — attach (or, with null, detach) the agent

@@ -9,8 +9,12 @@ import { useRef, useState } from "react";
 import { api } from "../../api";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
+import { Popover } from "../../components/Popover";
 import { RcaMark } from "../../components/RcaMark";
+import { UserChip } from "../../components/UserChip";
+import { UserPicker } from "../../components/UserPicker";
 import { useAgent } from "../../hooks/useAgent";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { formatMetrics } from "./agentLog";
 
@@ -48,9 +52,11 @@ export function AgentPanel({
   // Quick-prompt chips come ONLY from the attached AgentConfig (BE) — the FE
   // never invents its own. No config suggestions → no chip row.
   const chips = suggestions ?? [];
-  const { log, send, cancel } = useAgent();
+  const me = useCurrentUser();
+  const { log, send, mention, cancel } = useAgent();
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
   const [draft, setDraft] = useState("");
+  const [mentions, setMentions] = useState<string[]>([]);
   const [attaching, setAttaching] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -84,7 +90,16 @@ export function AgentPanel({
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || log.streaming) return;
+    if (log.streaming) return;
+    // A message that @-mentions people is a summon — it notifies them and does
+    // NOT run the agent (the draft becomes the note).
+    if (mentions.length > 0) {
+      void mention(mentions, text);
+      setMentions([]);
+      setDraft("");
+      return;
+    }
+    if (!text) return;
     setDraft("");
     void send(text);
   };
@@ -219,12 +234,37 @@ export function AgentPanel({
           gap: 6,
         }}
       >
+        {mentions.length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+            <span style={{ fontSize: 11, color: "var(--text-paper-d)" }}>Summon:</span>
+            {mentions.map((id) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMentions((m) => m.filter((x) => x !== id))}
+                title="Remove"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "2px 6px",
+                  border: "1px solid var(--paper-3)",
+                  borderRadius: "var(--radius-chip)",
+                  fontSize: 12,
+                }}
+              >
+                <UserChip userId={id} size={16} />
+                <Icon name="x" size={11} />
+              </button>
+            ))}
+          </div>
+        )}
         <textarea
           ref={composerRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onComposerKeyDown}
-          placeholder="Ask the agent…"
+          placeholder={mentions.length > 0 ? "Add a note (optional)…" : "Ask the agent…"}
           rows={3}
           style={{
             border: "1px solid var(--paper-3)",
@@ -248,6 +288,33 @@ export function AgentPanel({
             }}
             style={{ display: "none" }}
           />
+          <Popover
+            trigger={({ onClick }) => (
+              <button
+                type="button"
+                onClick={onClick}
+                title="@ mention someone to come look (notifies them — no agent run)"
+                style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}
+              >
+                <Icon name="user" size={14} /> @
+              </button>
+            )}
+          >
+            {() => (
+              <div style={{ padding: 8 }}>
+                <div className="caps" style={{ padding: "0 4px 6px" }}>
+                  Summon people
+                </div>
+                <UserPicker
+                  selected={mentions}
+                  exclude={[me]}
+                  onToggle={(id) =>
+                    setMentions((m) => (m.includes(id) ? m.filter((x) => x !== id) : [...m, id]))
+                  }
+                />
+              </div>
+            )}
+          </Popover>
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
@@ -289,20 +356,26 @@ export function AgentPanel({
               Stop
             </button>
           ) : (
-            <button
-              type="submit"
-              disabled={!draft.trim()}
-              style={{
-                padding: "6px 14px",
-                borderRadius: "var(--radius-btn)",
-                background: draft.trim() ? "var(--accent)" : "var(--paper-3)",
-                color: draft.trim() ? "var(--white)" : "var(--text-paper-d)",
-                fontSize: 12,
-                fontWeight: 500,
-              }}
-            >
-              Send
-            </button>
+            (() => {
+              const summoning = mentions.length > 0;
+              const enabled = summoning || draft.trim().length > 0;
+              return (
+                <button
+                  type="submit"
+                  disabled={!enabled}
+                  style={{
+                    padding: "6px 14px",
+                    borderRadius: "var(--radius-btn)",
+                    background: enabled ? "var(--accent)" : "var(--paper-3)",
+                    color: enabled ? "var(--white)" : "var(--text-paper-d)",
+                    fontSize: 12,
+                    fontWeight: 500,
+                  }}
+                >
+                  {summoning ? "Notify" : "Send"}
+                </button>
+              );
+            })()
           )}
         </div>
       </form>

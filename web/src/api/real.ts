@@ -133,6 +133,13 @@ export const realApi: ApiClient = {
   async getUsers() {
     return json<User[]>(await apiFetch("/users"));
   },
+  async addMention(investigationId, userIds, note = "") {
+    await apiFetch(`/investigations/${encodeURIComponent(investigationId)}/mentions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user_ids: userIds, note }),
+    });
+  },
   async getNotifications() {
     return json<NotificationItem[]>(await apiFetch("/notifications"));
   },

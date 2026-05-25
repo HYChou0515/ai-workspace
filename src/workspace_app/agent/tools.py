@@ -118,6 +118,22 @@ async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], ques
     return await ask_kb(question, ctx.context.on_exec_output, ctx.context.investigation_id)
 
 
+async def mention_user_impl(
+    ctx: RunContextWrapper[AgentToolContext], user_id: str, reason: str = ""
+) -> str:
+    """Summon a human teammate to look at this investigation.
+
+    Use when the case needs a person — a domain expert, the owner, a reviewer.
+    They get a notification linking here. Pass their user id and a short reason.
+    """
+    mention = ctx.context.mention
+    assert mention is not None  # the API layer wires this for RCA runs
+    investigation_id = ctx.context.investigation_id
+    assert investigation_id is not None  # mentions belong to an investigation
+    mention(investigation_id, [user_id], reason)
+    return f"Notified {user_id} to come look at this investigation."
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -125,6 +141,7 @@ _IMPLS = {
     "ls": ls_impl,
     "exists": exists_impl,
     "delete_file": delete_file_impl,
+    "mention_user": mention_user_impl,
     "ask_knowledge_base": ask_knowledge_base_impl,
     "kb_search": kb_search_impl,
 }
@@ -141,6 +158,7 @@ _WORKSPACE_TOOLS = [
     "exists",
     "delete_file",
     "ask_knowledge_base",
+    "mention_user",
 ]
 
 

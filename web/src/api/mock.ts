@@ -521,6 +521,7 @@ export const mockApi: ApiClient = {
   },
   async markAllNotificationsRead() {},
   async markNotificationRead() {},
+  async addMention() {},
 
   async listInvestigations() {
     await delay(40);

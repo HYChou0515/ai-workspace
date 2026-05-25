@@ -114,6 +114,7 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "exists",
         "delete_file",
         "ask_knowledge_base",
+        "mention_user",
     }
     assert "kb_search" not in names
     assert all(isinstance(t, FunctionTool) for t in tools)
@@ -143,3 +144,19 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
     assert out == "KB answer to: why did zone three drift?"
     # the run's output sink is handed to the bridge so KB progress can stream
     assert received["emit"] is sink
+
+
+async def test_mention_user_delegates_to_the_context_hook():
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, mention_user_impl
+
+    calls: list[tuple[str, list[str], str]] = []
+
+    def fake_mention(investigation_id: str, user_ids: list[str], note: str) -> None:
+        calls.append((investigation_id, user_ids, note))
+
+    ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", mention=fake_mention))
+    out = await mention_user_impl(ctx, "alice", "please review the SPC")
+    assert "alice" in out
+    assert calls == [("inv-1", ["alice"], "please review the SPC")]

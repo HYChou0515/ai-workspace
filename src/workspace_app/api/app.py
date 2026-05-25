@@ -111,6 +111,11 @@ class _MessageBody(BaseModel):
     content: str
 
 
+class _MentionBody(BaseModel):
+    user_ids: list[str]
+    note: str = ""
+
+
 class _CellExecuteBody(BaseModel):
     code: str
 
@@ -370,6 +375,50 @@ def create_app(
 
     conv_rm = spec.get_resource_manager(Conversation)
 
+    def _record_mention(
+        investigation_id: str,
+        inv_title: str,
+        user_ids: list[str],
+        note: str,
+        *,
+        actor: str | None,
+        author: str,
+    ) -> None:
+        """Append a `role="mention"` entry to the conversation (a human-to-human
+        "come look", NOT an agent turn) and notify each mentioned user. `actor`
+        is the summoner (a user id, or None when the agent did it)."""
+        rid, conv = _conversation_for(investigation_id)
+        conv.messages.append(
+            Message(
+                role="mention",
+                content=note,
+                author=author,
+                mentions=list(user_ids),
+                created_at=_now_ms(),
+            )
+        )
+        conv_rm.update(rid, conv)
+        for uid in user_ids:
+            if uid == actor:
+                continue  # don't summon yourself
+            notify(
+                spec,
+                recipient=uid,
+                kind="mention",
+                title=f'You were mentioned in "{inv_title}"',
+                body=note,
+                link=f"/investigations/{investigation_id}",
+                actor=actor,
+            )
+
+    def _agent_mention(investigation_id: str, user_ids: list[str], note: str) -> None:
+        """The agent's `mention_user` tool reaches this — same summon, authored
+        by the agent."""
+        inv_rm = spec.get_resource_manager(Investigation)
+        inv = inv_rm.get(investigation_id).data
+        assert isinstance(inv, Investigation)
+        _record_mention(investigation_id, inv.title, user_ids, note, actor=None, author="RCA Agent")
+
     def _first_agent_config() -> AgentConfig | None:
         """The default agent (issue #2): the first config in the store, by
         creation time. ``None`` only if the store has no configs at all."""
@@ -451,6 +500,8 @@ def create_app(
             agent_config=_resolve_agent_config(investigation_id),
             # Lets the agent's ask_knowledge_base tool reach the KB agent.
             ask_kb=_ask_kb,
+            # Lets the agent's mention_user tool summon a human to this case.
+            mention=_agent_mention,
         )
 
         def persist(produced: list[TurnMessage]) -> None:
@@ -474,6 +525,23 @@ def create_app(
     )
     async def cancel_message(investigation_id: str) -> Response:
         await turn_engine.cancel(investigation_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/investigations/{investigation_id}/mentions",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def mention_users(investigation_id: str, body: _MentionBody) -> Response:
+        """@-mention people in the chat — a pure "come look" summon (does NOT
+        run the agent): records a mention entry + notifies each user."""
+        inv_rm = spec.get_resource_manager(Investigation)
+        try:
+            inv = inv_rm.get(investigation_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        assert isinstance(inv, Investigation)
+        me = get_user_id()
+        _record_mention(investigation_id, inv.title, body.user_ids, body.note, actor=me, author=me)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(

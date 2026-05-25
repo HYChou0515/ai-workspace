@@ -68,6 +68,9 @@ class AgentToolContext:
     # call. `origin_id` is this investigation's id, so the KB citations it
     # produces are logged against it.
     ask_kb: Callable[[str, OutputSink | None, str | None], Awaitable[str]] | None = None
+    # RCA agent's `mention_user` tool reaches this to summon a human to the
+    # investigation. Args: (investigation_id, user_ids, note). Wired by the API.
+    mention: Callable[[str, list[str], str], None] | None = None
 
     async def ensure_sandbox(self) -> SandboxHandle:
         assert self.sandbox is not None  # file/exec tools imply an RCA context

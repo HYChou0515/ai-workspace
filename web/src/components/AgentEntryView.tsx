@@ -16,6 +16,7 @@ import type { Message, MessageCitation } from "../api/types";
 import type { AgentEntry, ToolCallView } from "../pages/investigation/agentLog";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
+import { UserChip } from "./UserChip";
 
 export function EntryView({
   entry,
@@ -42,7 +43,39 @@ export function EntryView({
   if (entry.kind === "tool_call") {
     return <ToolCallCard call={entry.call} />;
   }
+  if (entry.kind === "mention") {
+    return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
+  }
   return <MessageBlock message={entry.message} onOpenCitation={onOpenCitation} />;
+}
+
+function MentionLine({ by, users, note }: { by: string; users: string[]; note: string }) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 10px",
+        background: "var(--paper-2)",
+        borderLeft: "2px solid var(--text-paper-d2)",
+        fontSize: 12,
+        color: "var(--text-paper-d)",
+      }}
+    >
+      <Icon name="user" size={13} color="var(--text-paper-d)" />
+      {by ? <UserChip userId={by} size={18} /> : <span>The agent</span>}
+      <span>summoned</span>
+      {users.map((u, i) => (
+        <span key={u} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+          <UserChip userId={u} size={18} />
+          {i < users.length - 1 && <span>,</span>}
+        </span>
+      ))}
+      {note && <span style={{ color: "var(--text-paper)" }}>— {note}</span>}
+    </div>
+  );
 }
 
 function MessageBlock({

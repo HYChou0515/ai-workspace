@@ -29,6 +29,8 @@ import { useCurrentUser } from "./useCurrentUser";
 type AgentState = {
   log: AgentLog;
   send: (content: string) => Promise<void>;
+  /** @mention people to "come look" — notifies them, does NOT run the agent. */
+  mention: (userIds: string[], note: string) => Promise<void>;
   cancel: () => void;
 };
 
@@ -113,7 +115,23 @@ export function useAgentInternal(investigationId: string): AgentState {
     void api.cancelMessage(investigationId);
   }, [investigationId]);
 
-  return { log, send, cancel };
+  const mention = useCallback(
+    async (userIds: string[], note: string) => {
+      if (userIds.length === 0) return;
+      await api.addMention(investigationId, userIds, note);
+      // Optimistic: a mention is its own log entry (not an agent turn).
+      setLog((prev) => ({
+        ...prev,
+        entries: [
+          ...prev.entries,
+          { kind: "mention", by: currentUser, users: userIds, note, at: Date.now() },
+        ],
+      }));
+    },
+    [investigationId, currentUser],
+  );
+
+  return { log, send, mention, cancel };
 }
 
 export function AgentProvider({

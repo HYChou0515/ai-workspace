@@ -291,4 +291,24 @@ describe("logFromMessages", () => {
       throw new Error("expected tool_call");
     }
   });
+
+  it("maps a role=mention message to a mention entry", () => {
+    const log = logFromMessages([
+      {
+        role: "mention",
+        author: "alice",
+        mentions: ["bob", "carol"],
+        content: "please look",
+        created_at: 123,
+      },
+    ]);
+    const e = log.entries[0];
+    if (e?.kind === "mention") {
+      expect(e.by).toBe("alice");
+      expect(e.users).toEqual(["bob", "carol"]);
+      expect(e.note).toBe("please look");
+    } else {
+      throw new Error("expected mention");
+    }
+  });
 });

@@ -2392,6 +2392,16 @@ function PanelBody({
             </details>
           );
         }
+        if (e.kind === "mention") {
+          return (
+            <LogLine
+              key={i}
+              ts={fmtTs(e.at)}
+              kind="warn"
+              text={`summoned ${e.users.join(", ")}${e.note ? ` — ${e.note}` : ""}`}
+            />
+          );
+        }
         const head = (
           <>
             <span style={logTs}>{fmtTs(e.at)}</span>
