@@ -4,6 +4,7 @@ and the document render endpoint. Registered onto the app by `create_app`.
 
 from __future__ import annotations
 
+import asyncio
 import posixpath
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
@@ -16,6 +17,13 @@ from ..kb.links import rewrite_md_links
 from ..resources.kb import Collection, SourceDoc
 
 _DEFAULT_USER = "default-user"  # v1: no auth; uploads are attributed to this user
+
+
+async def _index_in_thread(ingestor: Ingestor, doc_id: str) -> None:
+    """Background indexing as an async task that immediately offloads the
+    blocking embed/IO work to a worker thread — so the event loop keeps
+    serving other requests while a doc embeds."""
+    await asyncio.to_thread(ingestor.index, doc_id)
 
 
 class _CollectionBody(BaseModel):
@@ -53,16 +61,19 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
         file: UploadFile = File(...),  # noqa: B008
     ) -> dict:
         data = await file.read()
-        # Store fast (doc appears as "indexing"); embed in the background so a
-        # slow embedder doesn't block the upload response.
-        ids = ingestor.store(
+        # store/index are synchronous (libmagic sniff, specstar I/O, embedding
+        # HTTP) — never run them inline on the event loop or one upload stalls
+        # every other request. Offload both to a worker thread: store is awaited
+        # (the response needs the ids); index runs in the background.
+        ids = await asyncio.to_thread(
+            ingestor.store,
             collection_id=collection_id,
             user=_DEFAULT_USER,
             filename=file.filename or "upload",
             data=data,
         )
         for doc_id in ids:
-            background.add_task(ingestor.index, doc_id)
+            background.add_task(_index_in_thread, ingestor, doc_id)
         return {"document_ids": ids, "status": "indexing"}
 
     @app.get("/kb/collections/{collection_id}/documents")
