@@ -18,7 +18,7 @@
 | **P3** | chat 分享(唯讀)+ shared-with-me(point 2) | ✅ 完成 |
 | **P4** | mention(人 @ 人 + agent `mention_user` 工具)(point 6) | ✅ 完成 |
 | **P5** | FE KB 大改:collection/doc 頁 + home nav + 抽屜 manage/history(points 3/4/5) | ✅ 完成(Size/Updated 欄延後,需 backend bytes/updated_at) |
-| **P6** | `root_path` 小修 | ☐ 未開始 |
+| **P6** | `root_path` 小修 | ✅ 完成 |
 
 每階段完成定義:`uv run ruff check && ruff format --check && ty check` 全清、後端
 `coverage report` **100%**、FE `pnpm typecheck`+`vitest`+`build` 綠、commit 完成、本表打勾。
@@ -237,8 +237,8 @@ chunk,視為**歷史**(只在當前 index 世代內有意義)。doc/collection i
 - [x] 接真資料:cited(P2)、owner=`created_by`、chunks=`DocChunk` 數。
       size=bytes 延後(SourceDoc.content 未輸出長度;需 backend 小修 + 測試)。
 
-### P6 · root_path 小修
-- [ ] `create_app(..., root_path="")` → `FastAPI(root_path=...)`;`__main__` 傳進去、
+### P6 · root_path 小修  ✅
+- [x] `create_app(..., root_path="")` → `FastAPI(root_path=...)`;`__main__` 傳進去、
       `uvicorn.run` 拿掉;測試 `create_app(root_path="/x").root_path == "/x"`。
 
 ---
