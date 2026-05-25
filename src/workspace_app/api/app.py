@@ -42,18 +42,36 @@ from .activity import ActivityLog
 from .events import (
     AgentEvent,
     CellEvent,
-    MessageDelta,
-    RunCancelled,
-    RunError,
-    ToolEnd,
-    ToolStart,
     to_sse,
 )
 from .kb_chat_routes import answer_question, kb_progress, register_kb_chat_routes
 from .kb_routes import register_kb_routes
-from .registry import InvestigationRegistry, InvestigationSession
+from .registry import InvestigationRegistry
 from .runner import AgentRunner
 from .search import InvalidQuery, compile_query, path_selected, search_text
+from .turns import ChatTurnEngine, TurnMessage
+
+
+def _to_rca_message(m: TurnMessage) -> Message:
+    """Map a turn's neutral output to the RCA Conversation model: assistant
+    answers are authored by the agent + carry reasoning; tool messages keep the
+    call's id/name/args."""
+    if m.role == "assistant":
+        return Message(
+            role="assistant",
+            content=m.content,
+            author="RCA Agent",
+            reasoning=m.reasoning,
+            created_at=m.created_at,
+        )
+    return Message(
+        role="tool",
+        content=m.content,
+        tool_call_id=m.tool_call_id,
+        tool_name=m.tool_name,
+        tool_args=m.tool_args,
+        created_at=m.created_at,
+    )
 
 
 def _now_ms() -> int:
@@ -288,7 +306,10 @@ def create_app(
     # embedder as ingestion so query and document vectors are comparable.
     # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
     kb_retriever = Retriever(spec, embedder=embedder, llm=kb_llm)
-    register_kb_chat_routes(app, spec, runner, kb_retriever)
+    # One turn engine drives every chat surface (RCA workspace + KB chat): one
+    # cancellable in-flight turn per conversation, SSE streaming, cancel hook.
+    turn_engine = ChatTurnEngine(runner)
+    register_kb_chat_routes(app, spec, turn_engine, kb_retriever)
 
     async def _ask_kb(question: str, emit: OutputSink | None = None) -> str:
         """RCA → KB bridge: run the KB agent over every collection and return
@@ -374,40 +395,6 @@ def create_app(
         assert isinstance(got, Conversation)
         return rev.resource_id, got
 
-    async def _cancel_prior_turn(session: InvestigationSession) -> None:
-        """Cancel the session's in-flight turn and wait for it to wind down.
-
-        Called inside session.lock so the cancel→replace transition is
-        serialized. The cancelled task drains its own event queue and
-        emits RunCancelled to its subscriber (the old StreamingResponse)
-        before exiting.
-        """
-        prev = session.current_turn
-        if prev is None or prev.done():
-            return
-        prev.cancel()
-        with contextlib.suppress(BaseException):
-            await prev
-
-    async def _drive_run(
-        content: str,
-        ctx: AgentToolContext,
-        queue: asyncio.Queue[AgentEvent | None],
-    ) -> None:
-        """Pump events from runner.run into the per-turn queue. Translate
-        cancellation and any other failure into a terminal event so the
-        subscriber stream always closes cleanly."""
-        try:
-            async for ev in runner.run(content, ctx):
-                await queue.put(ev)
-        except asyncio.CancelledError:
-            await queue.put(RunCancelled())
-            raise
-        except Exception as exc:  # noqa: BLE001
-            await queue.put(RunError(message=f"{type(exc).__name__}: {exc}"))
-        finally:
-            await queue.put(None)  # sentinel: stream closed
-
     @app.post("/investigations/{investigation_id}/messages")
     async def send_message(investigation_id: str, body: _MessageBody) -> StreamingResponse:
         rid, conv = _conversation_for(investigation_id)
@@ -415,90 +402,44 @@ def create_app(
         conv_rm.update(rid, conv)
 
         session = await registry.session(investigation_id)
-        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+        ctx = AgentToolContext(
+            investigation_id=investigation_id,
+            sandbox=sandbox,
+            filestore=filestore,
+            sync=sync,
+            sandbox_spec=SandboxSpec(),
+            handle=session.handle,
+            # Route lazy-create through the registry so session.handle is set
+            # (so idle-kill/close_all can find it) and the restore-after-create
+            # hook fires.
+            ensure_sandbox_via=lambda: registry.ensure_handle(session),
+            # Drive the turn with the investigation's attached agent.
+            agent_config=_resolve_agent_config(investigation_id),
+            # Lets the agent's ask_knowledge_base tool reach the KB agent.
+            ask_kb=_ask_kb,
+        )
 
-        async with session.lock:
-            await _cancel_prior_turn(session)
-            ctx = AgentToolContext(
-                investigation_id=investigation_id,
-                sandbox=sandbox,
-                filestore=filestore,
-                sync=sync,
-                sandbox_spec=SandboxSpec(),
-                handle=session.handle,
-                # Route lazy-create through the registry so session.handle
-                # is set (so idle-kill/close_all can find it) and the
-                # restore-after-create hook fires.
-                ensure_sandbox_via=lambda: registry.ensure_handle(session),
-                # Drive the turn with the investigation's attached agent.
-                agent_config=_resolve_agent_config(investigation_id),
-                # Lets the agent's ask_knowledge_base tool reach the KB agent.
-                ask_kb=_ask_kb,
+        def persist(produced: list[TurnMessage]) -> None:
+            # Persist the agent's reply + tool outputs so re-entering the
+            # workspace shows them, not just the user's own messages.
+            if produced:
+                rid2, conv2 = _conversation_for(investigation_id)
+                conv2.messages.extend(_to_rca_message(m) for m in produced)
+                conv_rm.update(rid2, conv2)
+            activity.record(
+                "agent_turn_complete",
+                "Agent finished a turn",
+                {"investigation_id": investigation_id},
             )
-            session.current_turn = asyncio.create_task(_drive_run(body.content, ctx, queue))
 
-        async def gen() -> AsyncIterator[str]:
-            # Accumulate the agent's reply + tool outputs as they stream, so
-            # the conversation persists them — otherwise re-entering the
-            # workspace would show only the user's own messages.
-            produced: list[Message] = []
-            # call_id → its ToolStart, so the persisted tool message can keep
-            # the tool's name + args (ToolEnd alone carries only the output).
-            pending_tools: dict[str, ToolStart] = {}
-
-            def add_assistant(text: str, reasoning: bool) -> None:
-                last = produced[-1] if produced else None
-                if last is None or last.role != "assistant" or last.tool_call_id is not None:
-                    last = Message(
-                        role="assistant", content="", author="RCA Agent", created_at=_now_ms()
-                    )
-                    produced.append(last)
-                if reasoning:
-                    last.reasoning = (last.reasoning or "") + text
-                else:
-                    last.content += text
-
-            while True:
-                item = await queue.get()
-                if item is None:
-                    if produced:
-                        rid2, conv2 = _conversation_for(investigation_id)
-                        conv2.messages.extend(produced)
-                        conv_rm.update(rid2, conv2)
-                    activity.record(
-                        "agent_turn_complete",
-                        "Agent finished a turn",
-                        {"investigation_id": investigation_id},
-                    )
-                    return
-                if isinstance(item, MessageDelta):
-                    add_assistant(item.text, item.reasoning)
-                elif isinstance(item, ToolStart):
-                    pending_tools[item.call_id] = item
-                elif isinstance(item, ToolEnd):
-                    start = pending_tools.pop(item.call_id, None)
-                    produced.append(
-                        Message(
-                            role="tool",
-                            content=item.output,
-                            tool_call_id=item.call_id,
-                            tool_name=start.name if start else None,
-                            tool_args=dict(start.args) if start else None,
-                            created_at=_now_ms(),
-                        )
-                    )
-                yield to_sse(item)
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+        return await turn_engine.stream(investigation_id, body.content, ctx, on_complete=persist)
 
     @app.delete(
         "/investigations/{investigation_id}/messages/current",
         status_code=status.HTTP_204_NO_CONTENT,
     )
     async def cancel_message(investigation_id: str) -> Response:
-        session = await registry.session(investigation_id)
-        async with session.lock:
-            await _cancel_prior_turn(session)
+        await turn_engine.cancel(investigation_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
@@ -530,6 +471,7 @@ def create_app(
                 {"investigation_id": investigation_id},
             )
         await registry.close_session(investigation_id)
+        turn_engine.forget(investigation_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # ---- Files API (plan-backend §3.8) ----

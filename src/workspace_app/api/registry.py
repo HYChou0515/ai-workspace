@@ -40,10 +40,9 @@ class InvestigationSession:
     investigation_id: str
     handle: SandboxHandle | None = None
     last_active: datetime = field(default_factory=_utcnow)
+    # Serializes sandbox creation (ensure_handle) for this investigation. Turn
+    # lifecycle (the in-flight agent turn) lives in ChatTurnEngine, not here.
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    # The asyncio.Task driving the in-flight agent turn, if any. Cleared
-    # to None when the turn finishes (normally, errored, or cancelled).
-    current_turn: asyncio.Task | None = None
 
 
 @dataclass

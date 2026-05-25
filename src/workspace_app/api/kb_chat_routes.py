@@ -12,8 +12,7 @@ reopening a thread shows the answer, its sources, and what the agent searched.
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException, Response
@@ -27,8 +26,9 @@ from ..kb.agent import default_kb_agent_config
 from ..kb.citations import parse_citations
 from ..kb.retriever import Retriever
 from ..resources.kb import KbChat, KbMessage
-from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolStart, to_sse
+from .events import AgentEvent, MessageDelta, ToolStart
 from .runner import AgentRunner
+from .turns import ChatTurnEngine, TurnMessage
 
 
 def kb_progress(ev: AgentEvent) -> str | None:
@@ -91,7 +91,7 @@ def _now_ms() -> int:
 
 
 def register_kb_chat_routes(
-    app: FastAPI, spec: SpecStar, runner: AgentRunner, retriever: Retriever
+    app: FastAPI, spec: SpecStar, engine: ChatTurnEngine, retriever: Retriever
 ) -> None:
     chat_rm = spec.get_resource_manager(KbChat)
 
@@ -149,6 +149,7 @@ def register_kb_chat_routes(
     async def delete_chat(chat_id: str) -> Response:
         _load(chat_id)  # 404 if missing
         chat_rm.permanently_delete(chat_id)
+        engine.forget(chat_id)
         return Response(status_code=204)
 
     @app.post("/kb/chats/{chat_id}/messages")
@@ -162,65 +163,35 @@ def register_kb_chat_routes(
             collection_ids=chat.collection_ids,
             agent_config=default_kb_agent_config(),
         )
-        queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
 
-        async def drive() -> None:
-            try:
-                async for ev in runner.run(body.content, ctx):
-                    await queue.put(ev)
-            except Exception as exc:  # noqa: BLE001 — surface as a terminal error event
-                await queue.put(RunError(message=f"{type(exc).__name__}: {exc}"))
-            finally:
-                await queue.put(None)
+        def persist(produced: list[TurnMessage]) -> None:
+            if not produced:
+                return
+            fresh = _load(chat_id)
+            for m in produced:
+                km = KbMessage(
+                    role=m.role,
+                    content=m.content,
+                    reasoning=m.reasoning,
+                    tool_call_id=m.tool_call_id,
+                    tool_name=m.tool_name,
+                    tool_args=m.tool_args,
+                    created_at=m.created_at,
+                )
+                # Resolve [n] on answers against the passages this turn searched.
+                if m.role == "assistant":
+                    km.citations = parse_citations(m.content, ctx.kb_passages)
+                fresh.messages.append(km)
+            chat_rm.update(chat_id, fresh)
 
-        asyncio.create_task(drive())
+        return await engine.stream(chat_id, body.content, ctx, on_complete=persist)
 
-        async def gen() -> AsyncIterator[str]:
-            produced: list[KbMessage] = []
-            pending_tools: dict[str, ToolStart] = {}
-
-            def add_assistant(text: str, reasoning: bool) -> None:
-                last = produced[-1] if produced else None
-                # A tool message between answers starts a fresh assistant turn.
-                if last is None or last.role != "assistant":
-                    last = KbMessage(role="assistant", created_at=_now_ms())
-                    produced.append(last)
-                if reasoning:
-                    last.reasoning = (last.reasoning or "") + text
-                else:
-                    last.content += text
-
-            while True:
-                item = await queue.get()
-                if item is None:
-                    if produced:
-                        # resolve [n] on answers against the turn's searched passages
-                        for m in produced:
-                            if m.role == "assistant":
-                                m.citations = parse_citations(m.content, ctx.kb_passages)
-                        fresh = _load(chat_id)
-                        fresh.messages.extend(produced)
-                        chat_rm.update(chat_id, fresh)
-                    return
-                if isinstance(item, MessageDelta):
-                    add_assistant(item.text, item.reasoning)
-                elif isinstance(item, ToolStart):
-                    pending_tools[item.call_id] = item
-                elif isinstance(item, ToolEnd):
-                    start = pending_tools.pop(item.call_id, None)
-                    produced.append(
-                        KbMessage(
-                            role="tool",
-                            content=item.output,
-                            tool_call_id=item.call_id,
-                            tool_name=start.name if start else None,
-                            tool_args=dict(start.args) if start else None,
-                            created_at=_now_ms(),
-                        )
-                    )
-                yield to_sse(item)
-
-        return StreamingResponse(gen(), media_type="text/event-stream")
+    @app.delete("/kb/chats/{chat_id}/messages/current", status_code=204)
+    async def cancel_message(chat_id: str) -> Response:
+        """Interrupt the chat's in-flight turn (its stream gets RunCancelled,
+        then closes). 204 even when nothing is running — same as RCA."""
+        await engine.cancel(chat_id)
+        return Response(status_code=204)
 
 
 def _message_dict(m: KbMessage) -> dict:
