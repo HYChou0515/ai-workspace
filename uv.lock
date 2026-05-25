@@ -2274,7 +2274,7 @@ wheels = [
 
 [[package]]
 name = "specstar"
-version = "0.11.0"
+version = "0.11.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -2289,9 +2289,9 @@ dependencies = [
     { name = "ty" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b1/4a/f427bbb1b79bac274ec9f2871e2d19881422e67621e14c9e7153348e36bf/specstar-0.11.0.tar.gz", hash = "sha256:d5c160a3579ee42dda2bc5cd51aae1c11bf8ab2d1a96027c2e989fc2efe35089", size = 1072991, upload-time = "2026-05-22T05:34:14.941Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/af/185e8fd7b861c5554a1cc63f46aa21855517cd340217f326897bc39f46a7/specstar-0.11.4.tar.gz", hash = "sha256:eb9e26e9a9e73225283295c16afa76cd302744e4382d942cf7210130493dd426", size = 1090982, upload-time = "2026-05-24T15:17:49.317Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/21/04/b2c18722ff79917762472fc800e7ca5d1580746925b246c4e82bf3111519/specstar-0.11.0-py3-none-any.whl", hash = "sha256:6b35233ef837adab4e9a86bc401241b79426787d47440bb23786faf9d100d0a8", size = 391013, upload-time = "2026-05-22T05:34:12.04Z" },
+    { url = "https://files.pythonhosted.org/packages/15/bb/380e5371992c28bbab2fbfb4488ba8db999b87c352f171732efe7565088e/specstar-0.11.4-py3-none-any.whl", hash = "sha256:e7c5f03e6088ef6b574abee1c5b6416e3ea8ae3720df7025e2798218aa8d1b07", size = 409609, upload-time = "2026-05-24T15:17:47.08Z" },
 ]
 
 [package.optional-dependencies]
@@ -2630,7 +2630,7 @@ requires-dist = [
     { name = "jupyter-client", specifier = ">=8.8.0" },
     { name = "litellm", specifier = ">=1.85.1" },
     { name = "openai-agents", specifier = ">=0.17.3" },
-    { name = "specstar", extras = ["magic"], specifier = ">=0.11.0" },
+    { name = "specstar", extras = ["magic"], specifier = ">=0.11.4" },
 ]
 
 [package.metadata.requires-dev]
