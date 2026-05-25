@@ -110,12 +110,29 @@ export function KbCollectionsPage({
   };
 
   const selected = collections.find((c) => c.resource_id === selectedId) ?? null;
+  // Library KPIs: how many collections, and which one is cited most.
+  const mostCited = collections.reduce<(typeof collections)[number] | null>(
+    (best, c) => ((c.cited ?? 0) > (best?.cited ?? 0) ? c : best),
+    null,
+  );
   const q = docQuery.trim().toLowerCase();
   const shownDocs = q ? documents.filter((d) => d.path.toLowerCase().includes(q)) : documents;
 
   return (
     <div className="kb-cols">
       <section className="kb-cols__list" aria-label="Collections">
+        <div className="kb-kpis">
+          <div className="kb-kpi">
+            <span className="kb-kpi__value">{collections.length}</span>
+            <span className="kb-kpi__label">Collections</span>
+          </div>
+          <div className="kb-kpi">
+            <span className="kb-kpi__value kb-kpi__value--text" title={mostCited?.name}>
+              {mostCited && (mostCited.cited ?? 0) > 0 ? mostCited.name : "—"}
+            </span>
+            <span className="kb-kpi__label">Most cited</span>
+          </div>
+        </div>
         <div className="kb-cols__create">
           <input
             className="kb-input"

@@ -87,6 +87,25 @@ describe("KbCollectionsPage", () => {
     expect(row).toHaveTextContent("4 cited");
   });
 
+  it("summarizes the library with a KPI strip (count + most-cited)", async () => {
+    const client = {
+      listCollections: async () => [
+        { resource_id: "c1", name: "Reflow SOPs", description: "", cited: 3 },
+        { resource_id: "c2", name: "Wirebond SOPs", description: "", cited: 9 },
+      ],
+      listDocuments: async () => [],
+    } as unknown as Parameters<typeof KbCollectionsPage>[0]["client"];
+
+    render(<KbCollectionsPage client={client} />);
+
+    // wait for the list to load (a collection row appears) before reading KPIs
+    await screen.findByRole("button", { name: /Wirebond SOPs/ });
+    const collectionsKpi = screen.getByText(/^Collections$/i).closest(".kb-kpi")!;
+    expect(collectionsKpi).toHaveTextContent("2");
+    const citedKpi = screen.getByText(/^Most cited$/i).closest(".kb-kpi")!;
+    expect(citedKpi).toHaveTextContent("Wirebond SOPs");
+  });
+
   it("shows an indexing chip that flips to indexed by polling", async () => {
     // a client whose doc starts "indexing" then becomes "ready" on re-poll
     let status = "indexing";
