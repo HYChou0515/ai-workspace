@@ -13,6 +13,18 @@ import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { docHref } from "./kbLinks";
 
+/** Compact byte size: B / KB / MB, rounded to whole units. */
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${Math.round(n / (1024 * 1024))} MB`;
+}
+
+/** Short "MMM D" update date. */
+function fmtDate(ms: number): string {
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 export function KbCollectionsPage({
   client = kbApi,
   onOpenDoc,
@@ -239,6 +251,11 @@ export function KbCollectionsPage({
                       <Icon name="file" size={14} color="var(--text-paper-d)" />
                       <span className="kb-docs__path">{d.path}</span>
                     </button>
+                    {typeof d.size === "number" && (
+                      <span className="kb-docs__metric" title="File size">
+                        {fmtBytes(d.size)}
+                      </span>
+                    )}
                     {typeof d.chunks === "number" && (
                       <span className="kb-docs__metric" title="Indexed chunks">
                         <Icon name="layers" size={11} color="var(--text-paper-d2)" />
@@ -249,6 +266,12 @@ export function KbCollectionsPage({
                       <Icon name="quote" size={11} color="var(--text-paper-d2)" />
                       {d.cited ?? 0} cited
                     </span>
+                    {typeof d.updated_at === "number" && (
+                      <span className="kb-docs__metric" title="Last updated">
+                        <Icon name="clock" size={11} color="var(--text-paper-d2)" />
+                        {fmtDate(d.updated_at)}
+                      </span>
+                    )}
                     <span className="kb-docs__by" title="Added by">
                       <Icon name="user" size={11} color="var(--text-paper-d2)" />
                       {d.created_by}

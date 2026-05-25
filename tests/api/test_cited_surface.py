@@ -91,3 +91,19 @@ def test_cited_counts_surface_on_collections_documents_and_chunks():
     chunks = c.get("/kb/documents/chunks", params={"id": docid}).json()
     assert any(ch["chunk_id"] == chunk_id and ch["cited"] == 1 for ch in chunks)
     assert [ch["seq"] for ch in chunks] == sorted(ch["seq"] for ch in chunks)  # ordered by seq
+
+
+def test_documents_carry_byte_size_and_update_time():
+    c, _ = _app()
+    cid = c.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    body = b"# Guide\none two three four five"
+    files = {"file": ("guide.md", body, "text/markdown")}
+    docid = c.post(f"/kb/collections/{cid}/documents", files=files).json()["document_ids"][0]
+
+    doc = next(
+        d for d in c.get(f"/kb/collections/{cid}/documents").json() if d["resource_id"] == docid
+    )
+    # specstar computes the blob size on store — surfaced verbatim (bytes)
+    assert doc["size"] == len(body)
+    # updated_at is the resource's revision time, epoch ms
+    assert isinstance(doc["updated_at"], int) and doc["updated_at"] > 0

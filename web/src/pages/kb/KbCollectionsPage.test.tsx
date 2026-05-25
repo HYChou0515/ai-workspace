@@ -71,6 +71,8 @@ describe("KbCollectionsPage", () => {
           status: "ready",
           chunks: 12,
           cited: 4,
+          size: 2048,
+          updated_at: Date.UTC(2026, 4, 20),
         },
       ],
     } as unknown as Parameters<typeof KbCollectionsPage>[0]["client"];
@@ -81,10 +83,11 @@ describe("KbCollectionsPage", () => {
     const colBtn = await screen.findByRole("button", { name: /Reflow SOPs/ });
     expect(colBtn).toHaveTextContent("7");
 
-    // the document row surfaces its chunk count and cited count
+    // the document row surfaces its chunk count, cited count, and byte size
     const row = (await screen.findByRole("button", { name: /a\.md/ })).closest("li")!;
     expect(row).toHaveTextContent("12 chunks");
     expect(row).toHaveTextContent("4 cited");
+    expect(row).toHaveTextContent("2 KB");
   });
 
   it("summarizes the library with a KPI strip (count + most-cited)", async () => {

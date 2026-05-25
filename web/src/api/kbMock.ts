@@ -82,7 +82,8 @@ export const mockKbApi: KbApi = {
     const id = `${collectionId}/me/${docPath}`;
     const list = documents.get(collectionId) ?? [];
     if (!list.some((d) => d.resource_id === id)) {
-      const chunks = synthChunks(id, await file.text());
+      const body = await file.text();
+      const chunks = synthChunks(id, body);
       docChunks.set(id, chunks);
       list.push({
         resource_id: id,
@@ -92,6 +93,8 @@ export const mockKbApi: KbApi = {
         status: "ready",
         chunks: chunks.length,
         cited: 0,
+        size: file.size || body.length,
+        updated_at: Date.now(),
       });
     }
     documents.set(collectionId, list);

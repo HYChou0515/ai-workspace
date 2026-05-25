@@ -91,6 +91,11 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
             assert isinstance(data, SourceDoc)
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
             chunks = chrm.count_resources((QB["source_doc_id"] == rid).build())
+            # specstar computes the blob size on store; updated_time is the
+            # current revision's timestamp (epoch ms for the wire).
+            size = data.content.size
+            assert isinstance(size, int)
+            updated = r.info.updated_time  # ty: ignore[unresolved-attribute]
             out.append(
                 {
                     "resource_id": rid,
@@ -100,6 +105,8 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
                     "status": data.status,
                     "chunks": chunks,
                     "cited": cited.get(rid, 0),
+                    "size": size,
+                    "updated_at": int(updated.timestamp() * 1000),
                 }
             )
         return out

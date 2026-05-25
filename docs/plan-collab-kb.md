@@ -17,7 +17,7 @@
 | **P2** | `CitationEvent` + 三種 cited 聚合(point 1) | ✅ 完成 |
 | **P3** | chat 分享(唯讀)+ shared-with-me(point 2) | ✅ 完成 |
 | **P4** | mention(人 @ 人 + agent `mention_user` 工具)(point 6) | ✅ 完成 |
-| **P5** | FE KB 大改:collection/doc 頁 + home nav + 抽屜 manage/history(points 3/4/5) | ✅ 完成(Size/Updated 欄延後,需 backend bytes/updated_at) |
+| **P5** | FE KB 大改:collection/doc 頁 + home nav + 抽屜 manage/history(points 3/4/5) | ✅ 完成 |
 | **P6** | `root_path` 小修 | ✅ 完成 |
 
 每階段完成定義:`uv run ruff check && ruff format --check && ty check` 全清、後端
@@ -231,11 +231,10 @@ chunk,視為**歷史**(只在當前 index 世代內有意義)。doc/collection i
 - [x] HomeSidebar:`KNOWLEDGE BASE` 組(Knowledge / Chat),位置在 Template 下、Topics 上。
 - [x] AskAgentDrawer:manage(→ collections)+ history(→ chats);KbHome 讀 `?tab=chats`。
 - [x] Collection 列表頁:KPI(Collections / Most cited)+ 既有名稱篩選 + `cited N×` chip。
-- [x] Collection 詳情:Documents 列加上 Uploaded-by / Chunks / Cited 欄。
-      (Updated / Size 欄延後——backend 尚未輸出 `updated_at` / bytes;見下方備註。)
+- [x] Collection 詳情:Documents 列加上 Uploaded-by / Chunks / Cited / **Size / Updated** 欄。
 - [x] Doc 預覽:File ⇄ Chunks toggle(每 chunk span + cited);沿用既有 kb:// 連結處理。
-- [x] 接真資料:cited(P2)、owner=`created_by`、chunks=`DocChunk` 數。
-      size=bytes 延後(SourceDoc.content 未輸出長度;需 backend 小修 + 測試)。
+- [x] 接真資料:cited(P2)、owner=`created_by`、chunks=`DocChunk` 數、
+      **size=`Binary.size`(specstar store 時自算)、updated=`info.updated_time`**。
 
 ### P6 · root_path 小修  ✅
 - [x] `create_app(..., root_path="")` → `FastAPI(root_path=...)`;`__main__` 傳進去、

@@ -30,6 +30,9 @@ export type KbDocument = {
   /** Indexed chunk count + how many times this doc was cited. */
   chunks?: number;
   cited?: number;
+  /** Stored blob size in bytes + the resource's last-update time (epoch ms). */
+  size?: number;
+  updated_at?: number;
 };
 
 export type KbDocChunk = {
