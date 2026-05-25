@@ -16,7 +16,7 @@
 | **P1** | 地基:`Auth`/`UserDirectory` Protocol + `<UserChip>` + `Notification` + bell + status 通知 | ✅ 完成 |
 | **P2** | `CitationEvent` + 三種 cited 聚合(point 1) | ✅ 完成 |
 | **P3** | chat 分享(唯讀)+ shared-with-me(point 2) | ✅ 完成 |
-| **P4** | mention(人 @ 人 + agent `mention_user` 工具)(point 6) | ☐ 未開始 |
+| **P4** | mention(人 @ 人 + agent `mention_user` 工具)(point 6) | ✅ 完成 |
 | **P5** | FE KB 大改:collection/doc 頁 + home nav + 抽屜 manage/history(points 3/4/5) | ☐ 未開始 |
 | **P6** | `root_path` 小修 | ☐ 未開始 |
 
@@ -219,13 +219,13 @@ chunk,視為**歷史**(只在當前 index 世代內有意義)。doc/collection i
 - [x] 被分享者唯讀(只有 owner 能 `send_message`;後端擋非 owner 發言)。
 - [x] FE:Chats 頁 My / Shared-with-me 兩區 + 分享動作(`UserPicker`)。
 
-### P4 · mention(人 + agent)
-- [ ] `Message.mentions` + `role="mention"` 支援。
-- [ ] `POST /investigations/{id}/mentions` → 留 mention entry + 發 `mention` 通知,**不跑 agent**。
-- [ ] FE:含 `@user` 的訊息走 mentions 端點(不送 agent);composer `@` 自動完成;
-      chat log 渲染 `role="mention"` 為人對人事件。
-- [ ] agent `mention_user` 工具:`AgentToolContext.mention` hook(像 `ask_kb`)→ API 層
-      建 mention entry + 發通知(`actor=agent`);加進 RCA toolset。
+### P4 · mention(人 + agent)  ✅
+- [x] `Message.mentions` + `role="mention"` 支援。
+- [x] `POST /investigations/{id}/mentions` → 留 mention entry + 發 `mention` 通知,**不跑 agent**。
+- [x] FE:有 mention 的送出走 mentions 端點(不送 agent);composer `@` picker(`UserPicker`);
+      chat log + bottom panel 渲染 `role="mention"` 為人對人事件。(原始鍵盤 inline-autocomplete 留作後續打磨。)
+- [x] agent `mention_user` 工具:`AgentToolContext.mention` hook(像 `ask_kb`)→ API 層
+      建 mention entry + 發通知(`actor=None`);加進 RCA toolset。
 
 ### P5 · FE KB 大改(points 3/4/5)
 - [ ] HomeSidebar:`KNOWLEDGE BASE` 組(Knowledge / Chats),位置在 Template 下、Topics 上。
