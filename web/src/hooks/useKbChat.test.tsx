@@ -1,10 +1,15 @@
 // @vitest-environment happy-dom
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook as rtlRenderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mockKbApi, _resetKbMock } from "../api/kbMock";
 import type { AgentEntry } from "../pages/investigation/agentLog";
+import { QueryWrap } from "../test/queryWrapper";
 import { useKbChat } from "./useKbChat";
+
+// useKbChat hydrates through TanStack Query — give every hook a client.
+const renderHook = <T,>(cb: () => T) =>
+  rtlRenderHook(cb, { wrapper: QueryWrap });
 
 const assistantText = (entries: AgentEntry[]): string =>
   entries

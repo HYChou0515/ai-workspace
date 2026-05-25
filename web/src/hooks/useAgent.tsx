@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import {
   createContext,
   useCallback,
@@ -8,6 +9,7 @@ import {
 } from "react";
 
 import { api } from "../api";
+import { qk } from "../api/queryKeys";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -37,23 +39,29 @@ export function useAgentInternal(investigationId: string): AgentState {
   const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Hydrate the persisted conversation. staleTime 0 so each mount sees the
+  // turns the backend persisted after the last stream; the guard below keeps a
+  // refetch from clobbering the log we're streaming into.
+  const { data: conv } = useQuery({
+    queryKey: qk.conversation(investigationId),
+    queryFn: () => api.getConversation(investigationId),
+    staleTime: 0,
+  });
+
+  // Reset + abort the running stream when switching investigations.
+  const hydratedFor = useRef<string | null>(null);
   useEffect(() => {
-    let mounted = true;
+    hydratedFor.current = null;
     setLog(EMPTY_LOG);
-    api
-      .getConversation(investigationId)
-      .then((conv) => {
-        if (!mounted) return;
-        setLog(conv ? logFromMessages(conv.messages) : EMPTY_LOG);
-      })
-      .catch(() => {
-        if (mounted) setLog(EMPTY_LOG);
-      });
-    return () => {
-      mounted = false;
-      abortRef.current?.abort();
-    };
+    return () => abortRef.current?.abort();
   }, [investigationId]);
+
+  // Seed the log from the hydrated conversation, once per thread.
+  useEffect(() => {
+    if (conv === undefined || hydratedFor.current === investigationId) return;
+    hydratedFor.current = investigationId;
+    setLog(conv ? logFromMessages(conv.messages) : EMPTY_LOG);
+  }, [conv, investigationId]);
 
   const send = useCallback(
     async (content: string) => {
