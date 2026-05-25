@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api";
+import { qk } from "../api/queryKeys";
 import type { FileContent } from "../api/types";
 
 type State =
@@ -9,33 +10,17 @@ type State =
   | { kind: "error"; error: Error };
 
 /**
- * Read a single file. Re-reads when path or `tick` changes; `tick` lets
- * callers force a refresh after they write.
+ * Read a single file, cached under `qk.file(id, path)`. Disabled until a path
+ * is given. A write that invalidates `qk.files(id)` does not touch this key,
+ * so callers that edit a file should invalidate `qk.file(id, path)` too.
  */
-export function useFileContent(
-  investigationId: string,
-  path: string | null,
-  tick = 0,
-): State {
-  const [state, setState] = useState<State>({ kind: "loading" });
-  useEffect(() => {
-    if (!path) return;
-    let mounted = true;
-    setState({ kind: "loading" });
-    api
-      .readFile(investigationId, path)
-      .then((content) => mounted && setState({ kind: "ready", content }))
-      .catch(
-        (e: unknown) =>
-          mounted &&
-          setState({
-            kind: "error",
-            error: e instanceof Error ? e : new Error(String(e)),
-          }),
-      );
-    return () => {
-      mounted = false;
-    };
-  }, [investigationId, path, tick]);
-  return state;
+export function useFileContent(investigationId: string, path: string | null): State {
+  const q = useQuery({
+    queryKey: qk.file(investigationId, path ?? ""),
+    queryFn: () => api.readFile(investigationId, path as string),
+    enabled: path !== null,
+  });
+  if (q.isPending) return { kind: "loading" };
+  if (q.isError) return { kind: "error", error: q.error };
+  return { kind: "ready", content: q.data };
 }

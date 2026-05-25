@@ -14,7 +14,7 @@ export const qk = {
   files: (id: string) => ["files", id] as const,
   dirs: (id: string) => ["dirs", id] as const,
   file: (id: string, path: string) => ["file", id, path] as const,
-  activity: (id: string) => ["activity", id] as const,
+  activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
 
   agentConfigs: ["agentConfigs"] as const,

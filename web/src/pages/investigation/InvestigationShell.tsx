@@ -32,6 +32,7 @@ import {
   useCloseInvestigation,
   useUpdateInvestigation,
 } from "../../hooks/useInvestigationMutations";
+import { useAgentConfigs } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
@@ -143,23 +144,11 @@ function ShellBody({
   const [theme, setTheme] = useThemeMode();
 
   // Agent picker (#11): the live agent runs with the config attached to
-  // this investigation. Options come from the BE seed list.
-  const [agentConfigs, setAgentConfigs] = useState<AgentConfigInfo[]>([]);
+  // this investigation. Options come from the BE seed list (cached).
+  const agentConfigs = useAgentConfigs();
   const [attachedConfigId, setAttachedConfigId] = useState<string | null>(
     investigation.attached_agent_config_id,
   );
-  useEffect(() => {
-    let live = true;
-    api
-      .listAgentConfigs()
-      .then((cs) => {
-        if (live) setAgentConfigs(cs);
-      })
-      .catch(() => undefined);
-    return () => {
-      live = false;
-    };
-  }, []);
   const selectAgentConfig = useCallback(
     (id: string | null) => {
       setAttachedConfigId(id); // optimistic

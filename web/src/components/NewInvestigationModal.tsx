@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
-import { api } from "../api";
 import type { InvestigationInput, Severity } from "../api/types";
+import { useTemplates } from "../hooks/useResources";
 
 /**
  * "+ New investigation" modal. Simplified from the design per plan §9:
@@ -42,7 +42,9 @@ export function NewInvestigationModal({
   const [product, setProduct] = useState("");
   const [topics, setTopics] = useState<string[]>([]);
   const [topicDraft, setTopicDraft] = useState("");
-  const [templates, setTemplates] = useState<string[]>(["default"]);
+  // Cached templates; fall back to ["default"] until the list loads / if empty.
+  const fetched = useTemplates();
+  const templates = fetched.length > 0 ? fetched : ["default"];
   const [template, setTemplate] = useState("default");
 
   useEffect(() => {
@@ -53,18 +55,6 @@ export function NewInvestigationModal({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, onClose]);
-
-  useEffect(() => {
-    if (!open) return;
-    let alive = true;
-    api
-      .listTemplates()
-      .then((t) => alive && t.length > 0 && setTemplates(t))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, [open]);
 
   // Preselect the template the gallery launched us with.
   useEffect(() => {

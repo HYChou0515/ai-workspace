@@ -7,8 +7,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { api } from "../../api";
 import type { ActivityEntry, Investigation, Severity, Status } from "../../api/types";
+import { useActivity } from "../../hooks/useResources";
 import {
   formatInvestigationId,
   isCritical,
@@ -402,26 +402,10 @@ const NOTIF_SEEN_KEY = "rca:notif-seen";
 
 function NotificationsBell() {
   const navigate = useNavigate();
-  const [items, setItems] = useState<ActivityEntry[]>([]);
+  const items = useActivity();
   const [lastSeen, setLastSeen] = useState<string>(
     () => localStorage.getItem(NOTIF_SEEN_KEY) ?? "",
   );
-
-  useEffect(() => {
-    let alive = true;
-    const load = () =>
-      api
-        .listActivity()
-        .then((a) => alive && setItems(a))
-        .catch(() => undefined);
-    void load();
-    // light polling so the badge updates while the user lingers on Home
-    const t = window.setInterval(load, 20_000);
-    return () => {
-      alive = false;
-      window.clearInterval(t);
-    };
-  }, []);
 
   const unread = items.filter((a) => a.ts > lastSeen).length;
 

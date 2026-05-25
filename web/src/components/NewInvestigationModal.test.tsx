@@ -1,10 +1,16 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { QueryWrap } from "../test/queryWrapper";
 import { NewInvestigationModal } from "./NewInvestigationModal";
+
+// The modal reads templates through useTemplates (TanStack Query), so every
+// render needs a QueryClient in scope.
+const render = (ui: ReactElement) => rtlRender(ui, { wrapper: QueryWrap });
 
 afterEach(cleanup);
 

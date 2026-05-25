@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
-import { api } from "../api";
 import type { InvestigationInput } from "../api/types";
 import { NewInvestigationModal } from "../components/NewInvestigationModal";
 import { TemplatesModal } from "../components/TemplatesModal";
@@ -9,6 +8,7 @@ import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useCreateInvestigation } from "../hooks/useInvestigationMutations";
 import { useInvestigations } from "../hooks/useInvestigations";
 import { usePersistentDeque, usePersistentSet } from "../hooks/usePersistentSet";
+import { useTemplates } from "../hooks/useResources";
 import { HomeMain } from "./home/HomeMain";
 import { HomeSidebar } from "./home/HomeSidebar";
 import {
@@ -28,18 +28,8 @@ export function Home() {
   const [modalOpen, setModalOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [presetTemplate, setPresetTemplate] = useState<string | undefined>(undefined);
-  const [templates, setTemplates] = useState<string[]>([]);
+  const templates = useTemplates();
 
-  useEffect(() => {
-    let alive = true;
-    api
-      .listTemplates()
-      .then((t) => alive && setTemplates(t))
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, []);
   // Seed filters from the URL — breadcrumb topic/product links land here
   // (e.g. /?topic=Reflow%20zone-3&product=MX-7%20board).
   const [filters, setFilters] = useState<Filters>(() => ({
