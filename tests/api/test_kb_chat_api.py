@@ -82,7 +82,7 @@ class _DualRunner:
             yield RunDone()
         else:  # RCA turn — consult the KB as a tool
             assert ctx.ask_kb is not None
-            answer = await ctx.ask_kb(prompt)
+            answer = await ctx.ask_kb(prompt, ctx.on_exec_output)
             yield MessageDelta(text=f"KB says: {answer}")
             yield RunDone()
 
@@ -238,3 +238,86 @@ def test_rca_agent_consults_kb_through_ask_knowledge_base():
     body = r.text.lower()
     assert "zone three drifted" in body  # the KB agent's answer reached RCA
     assert "sources:" in body  # carried through with its citation footer
+
+
+# ── #4: stream the KB sub-agent's intermediate state ──────────────────────────
+
+
+def test_kb_progress_surfaces_searches_and_reasoning_only():
+    from workspace_app.api.kb_chat_routes import kb_progress
+
+    assert (
+        kb_progress(ToolStart(call_id="a", name="kb_search", args={"query": "voids"}))
+        == "🔎 kb_search: voids\n"
+    )
+    assert kb_progress(ToolStart(call_id="b", name="kb_search", args={})) == "🔎 kb_search\n"
+    assert kb_progress(MessageDelta(text="weighing it", reasoning=True)) == "weighing it"
+    assert kb_progress(MessageDelta(text="the answer")) is None  # content isn't progress
+    assert kb_progress(ToolEnd(call_id="a", output="x")) is None
+    assert kb_progress(RunDone()) is None
+
+
+async def test_answer_question_forwards_every_event_to_on_event():
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    register_all(spec)
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+
+    seen: list[AgentEvent] = []
+    await answer_question(_KbRunner(), retriever, ["c"], "why voids?", on_event=seen.append)
+
+    assert any(isinstance(e, MessageDelta) and e.reasoning for e in seen)  # reasoning seen
+    assert any(isinstance(e, RunDone) for e in seen)  # ran to completion
+
+
+class _StreamingDualRunner:
+    """RCA turn sets its output sink (like the real runner does) and consults
+    the KB; the KB turn emits a search + reasoning so we can assert the bridge
+    relays that intermediate state into the RCA run's sink."""
+
+    def __init__(self) -> None:
+        self.relayed: list[str] = []
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        if ctx.retriever is not None:  # KB turn
+            ctx.kb_passages.append(_reflow_passage())
+            yield ToolStart(call_id="s1", name="kb_search", args={"query": "voids"})
+            yield ToolEnd(call_id="s1", output="[1] reflow.md: zone three drift")
+            yield MessageDelta(text="weighing the evidence", reasoning=True)
+            yield MessageDelta(text="Zone three drifted [1].")
+            yield RunDone()
+        else:  # RCA turn
+            assert ctx.ask_kb is not None
+            ctx.on_exec_output = lambda b: self.relayed.append(b.decode())
+            answer = await ctx.ask_kb(prompt, ctx.on_exec_output)
+            yield MessageDelta(text=f"KB says: {answer}")
+            yield RunDone()
+
+
+def test_ask_knowledge_base_relays_kb_progress_to_the_run_sink():
+    runner = _StreamingDualRunner()
+    client = _client(runner)
+    client.post("/kb/collections", json={"name": "kb"})
+
+    r = client.post("/investigations/ws-kb/messages", json={"content": "consult the kb"})
+    assert r.status_code == 200
+    _ = r.text  # drain the stream so the turn (and the bridge) runs
+
+    relayed = "".join(runner.relayed)
+    assert "🔎 kb_search: voids" in relayed  # the KB agent's search surfaced live
+    assert "weighing the evidence" in relayed  # its reasoning surfaced live
+
+
+def test_kb_chat_streams_tool_and_reasoning_before_the_answer():
+    # #4 Part B: the KB chat SSE carries the agent's intermediate events
+    # (tool calls + reasoning) live, not just the final answer.
+    client = _client(_ToolRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": ["c"]}).json()["resource_id"]
+
+    r = client.post(f"/kb/chats/{cid}/messages", json={"content": "why voids?"})
+    assert r.status_code == 200
+    body = r.text
+    assert "tool_start" in body  # kb_search call streamed live
+    assert "tool_end" in body
+    assert "message_delta" in body  # answer streamed live
+    assert body.index("tool_start") < body.rindex("message_delta")  # tool before final answer

@@ -62,7 +62,10 @@ class AgentToolContext:
     # RCA → KB bridge: when set (by the API layer), the RCA agent's
     # `ask_knowledge_base` tool runs the KB agent via this callable and gets
     # back a synthesized, cited answer. Wraps the KB agent (grill Q "Option 1").
-    ask_kb: Callable[[str], Awaitable[str]] | None = None
+    # The 2nd arg is an optional sink (the RCA run's `on_exec_output`) the bridge
+    # relays the KB sub-agent's live progress to, so its searches/reasoning show
+    # as tool-log lines under the ask_knowledge_base call.
+    ask_kb: Callable[[str, OutputSink | None], Awaitable[str]] | None = None
 
     async def ensure_sandbox(self) -> SandboxHandle:
         assert self.sandbox is not None  # file/exec tools imply an RCA context

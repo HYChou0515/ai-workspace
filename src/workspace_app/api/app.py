@@ -36,7 +36,7 @@ from ..resources import (
     register_all,
 )
 from ..resources.kb import EMBED_DIM, Collection
-from ..sandbox.protocol import Sandbox, SandboxSpec
+from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from .activity import ActivityLog
 from .events import (
@@ -49,7 +49,7 @@ from .events import (
     ToolStart,
     to_sse,
 )
-from .kb_chat_routes import answer_question, register_kb_chat_routes
+from .kb_chat_routes import answer_question, kb_progress, register_kb_chat_routes
 from .kb_routes import register_kb_routes
 from .registry import InvestigationRegistry, InvestigationSession
 from .runner import AgentRunner
@@ -290,10 +290,12 @@ def create_app(
     kb_retriever = Retriever(spec, embedder=embedder, llm=kb_llm)
     register_kb_chat_routes(app, spec, runner, kb_retriever)
 
-    async def _ask_kb(question: str) -> str:
+    async def _ask_kb(question: str, emit: OutputSink | None = None) -> str:
         """RCA → KB bridge: run the KB agent over every collection and return
         its synthesized, cited answer. Wired onto each RCA turn's context so
-        the ask_knowledge_base tool can reach the KB agent."""
+        the ask_knowledge_base tool can reach the KB agent. When `emit` is given
+        (the RCA run's output sink), the KB agent's searches/reasoning are
+        relayed to it live as tool-log lines."""
         from specstar import QB
 
         coll_rm = spec.get_resource_manager(Collection)
@@ -301,7 +303,15 @@ def create_app(
             r.info.resource_id  # ty: ignore[unresolved-attribute]
             for r in coll_rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
         ]
-        return await answer_question(runner, kb_retriever, ids, question)
+
+        def relay(ev: AgentEvent) -> None:
+            if emit is None:
+                return
+            line = kb_progress(ev)
+            if line:
+                emit(line.encode())
+
+        return await answer_question(runner, kb_retriever, ids, question, on_event=relay)
 
     conv_rm = spec.get_resource_manager(Conversation)
 

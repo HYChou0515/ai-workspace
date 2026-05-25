@@ -129,9 +129,16 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
 
     from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
 
-    async def fake_ask(question: str) -> str:
+    received: dict[str, object] = {}
+
+    async def fake_ask(question: str, emit: object) -> str:
+        received["emit"] = emit
         return f"KB answer to: {question}"
 
-    ctx = RunContextWrapper(AgentToolContext(ask_kb=fake_ask))
+    def sink(b: bytes) -> None: ...
+
+    ctx = RunContextWrapper(AgentToolContext(ask_kb=fake_ask, on_exec_output=sink))
     out = await ask_knowledge_base_impl(ctx, "why did zone three drift?")
     assert out == "KB answer to: why did zone three drift?"
+    # the run's output sink is handed to the bridge so KB progress can stream
+    assert received["emit"] is sink

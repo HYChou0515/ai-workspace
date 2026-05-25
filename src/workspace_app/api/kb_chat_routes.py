@@ -13,7 +13,7 @@ reopening a thread shows the answer, its sources, and what the agent searched.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException, Response
@@ -31,13 +31,33 @@ from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolStart, to_s
 from .runner import AgentRunner
 
 
+def kb_progress(ev: AgentEvent) -> str | None:
+    """Render a KB sub-agent event as a one-line progress note for the parent
+    (RCA) stream, so the user sees the KB agent's searches and reasoning live
+    while `ask_knowledge_base` runs. ``None`` ⇒ nothing worth surfacing."""
+    if isinstance(ev, ToolStart):
+        query = ev.args.get("query")
+        return f"🔎 {ev.name}: {query}\n" if query else f"🔎 {ev.name}\n"
+    if isinstance(ev, MessageDelta) and ev.reasoning:
+        return ev.text
+    return None
+
+
 async def answer_question(
-    runner: AgentRunner, retriever: Retriever, collection_ids: list[str], question: str
+    runner: AgentRunner,
+    retriever: Retriever,
+    collection_ids: list[str],
+    question: str,
+    on_event: Callable[[AgentEvent], None] | None = None,
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
     `ask_knowledge_base` tool consults the KB — a synthesized, cited reply
-    rather than raw passages."""
+    rather than raw passages.
+
+    `on_event` (when given) is fired for every KB event as it happens, so a
+    caller can surface the sub-agent's intermediate work (e.g. relay it into the
+    parent stream); the return value is unchanged."""
     ctx = AgentToolContext(
         retriever=retriever,
         collection_ids=collection_ids,
@@ -45,6 +65,8 @@ async def answer_question(
     )
     parts: list[str] = []
     async for ev in runner.run(question, ctx):
+        if on_event is not None:
+            on_event(ev)
         if isinstance(ev, MessageDelta) and not ev.reasoning:
             parts.append(ev.text)
     answer = "".join(parts)
