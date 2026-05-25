@@ -212,6 +212,7 @@ def create_app(
     get_user_id: Callable[[], str] | None = None,
     users: UserDirectory | None = None,
     spa_dist: Path | None = None,
+    root_path: str = "",
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
 ) -> FastAPI:
@@ -254,7 +255,9 @@ def create_app(
             await kernels.shutdown_all()
             await registry.close_all()
 
-    app = FastAPI(title="RCA 3.0", lifespan=lifespan)
+    # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and
+    # any generated URLs respect a reverse-proxy sub-path mount.
+    app = FastAPI(title="RCA 3.0", lifespan=lifespan, root_path=root_path)
 
     register_notification_routes(app, spec, get_user_id)
 
