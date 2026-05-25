@@ -133,9 +133,7 @@ def test_store_then_index_lifecycle_sets_status(
     assert _chunks_of(spec, doc_id)  # chunks now exist
 
 
-def test_index_marks_doc_error_when_embedding_fails(
-    spec: SpecStar, chunker: FixedTokenChunker
-):
+def test_index_marks_doc_error_when_embedding_fails(spec: SpecStar, chunker: FixedTokenChunker):
     class _BoomEmbedder:
         dim = EMBED_DIM
 

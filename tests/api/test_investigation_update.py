@@ -15,7 +15,10 @@ def _client() -> TestClient:
     spec = SpecStar()
     spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
     app = create_app(
-        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=ScriptedAgentRunner([])
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
     )
     return TestClient(app)
 

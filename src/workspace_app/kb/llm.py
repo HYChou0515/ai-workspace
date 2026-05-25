@@ -31,7 +31,5 @@ class LitellmLlm:
     def complete(self, prompt: str) -> str:  # pragma: no cover — hits a live model
         import litellm
 
-        resp = litellm.completion(
-            model=self._model, messages=[{"role": "user", "content": prompt}]
-        )
+        resp = litellm.completion(model=self._model, messages=[{"role": "user", "content": prompt}])
         return resp.choices[0].message.content or ""

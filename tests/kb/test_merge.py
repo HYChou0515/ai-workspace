@@ -9,8 +9,14 @@ def _text_of(doc_id: str) -> str:
 
 def _c(chunk_id, doc, seq, start, end, score):
     return ScoredChunk(
-        chunk_id=chunk_id, document_id=doc, collection_id="c", filename=f"{doc}.md",
-        seq=seq, start=start, end=end, score=score,
+        chunk_id=chunk_id,
+        document_id=doc,
+        collection_id="c",
+        filename=f"{doc}.md",
+        seq=seq,
+        start=start,
+        end=end,
+        score=score,
     )
 
 

@@ -32,4 +32,3 @@ def test_resolves_parent_dirs_keeps_fragments_and_skips_anchors():
     # ../setup.md from guide/ → setup.md; #fragment preserved
     assert "[up](kb://doc/collection:c1/alice/setup.md#install)" in out
     assert "[here](#section)" in out  # pure anchor → untouched
-

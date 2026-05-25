@@ -39,8 +39,10 @@ def mmr(
     while remaining and len(selected) < limit:
         best = max(
             remaining,
-            key=lambda c: lambda_ * relevance[c]
-            - (1 - lambda_) * max((similarity(c, s) for s in selected), default=0.0),
+            key=lambda c: (
+                lambda_ * relevance[c]
+                - (1 - lambda_) * max((similarity(c, s) for s in selected), default=0.0)
+            ),
         )
         selected.append(best)
         remaining.remove(best)

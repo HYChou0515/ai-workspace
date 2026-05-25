@@ -22,11 +22,15 @@ def test_hybrid_search_surfaces_the_keyword_matching_document(
     cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
     ing.ingest(
-        collection_id=cid, user="u", filename="reflow.md",
+        collection_id=cid,
+        user="u",
+        filename="reflow.md",
         data=b"reflow oven temperature drifted in zone three causing solder voids",
     )
     ing.ingest(
-        collection_id=cid, user="u", filename="cats.md",
+        collection_id=cid,
+        user="u",
+        filename="cats.md",
         data=b"the cat sat quietly on the warm mat all afternoon",
     )
 
