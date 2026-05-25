@@ -14,8 +14,8 @@
 | 階段 | 內容 | 狀態 |
 |---|---|---|
 | **P1** | 地基:`Auth`/`UserDirectory` Protocol + `<UserChip>` + `Notification` + bell + status 通知 | ✅ 完成 |
-| **P2** | `CitationEvent` + 三種 cited 聚合(point 1) | ☐ 未開始 |
-| **P3** | chat 分享(唯讀)+ shared-with-me(point 2) | ☐ 未開始 |
+| **P2** | `CitationEvent` + 三種 cited 聚合(point 1) | ✅ 完成 |
+| **P3** | chat 分享(唯讀)+ shared-with-me(point 2) | ✅ 完成 |
 | **P4** | mention(人 @ 人 + agent `mention_user` 工具)(point 6) | ☐ 未開始 |
 | **P5** | FE KB 大改:collection/doc 頁 + home nav + 抽屜 manage/history(points 3/4/5) | ☐ 未開始 |
 | **P6** | `root_path` 小修 | ☐ 未開始 |
@@ -205,19 +205,19 @@ chunk,視為**歷史**(只在當前 index 世代內有意義)。doc/collection i
 - [x] FE:通知 bell 下拉(`useNotifications` poll + mark-all-read + 未讀紅點 + 點擊跳 link),
       取代原本 bell 的 activity 流。
 
-### P2 · 引用計數
-- [ ] `CitationEvent` resource + 註冊。
-- [ ] 記錄:KB chat persist(每個 `Citation` 一筆)。
-- [ ] 記錄:`answer_question(on_citations=…)` + `_ask_kb` 寫 RCA 來源事件。
-- [ ] 聚合 helper:`collection_cited` / `doc_cited` / `chunk_cited`。
-- [ ] 端點掛 cited:`GET /kb/collections`、`GET /kb/collections/{id}/documents`、chunk 級 cited。
+### P2 · 引用計數  ✅
+- [x] `CitationEvent` resource + 註冊。
+- [x] 記錄:KB chat persist(每個 `Citation` 一筆)。
+- [x] 記錄:`answer_question(on_citations=…)` + `_ask_kb` 寫 RCA 來源事件。
+- [x] 聚合 helper:`collection_cited` / `doc_cited` / `chunk_cited`。
+- [x] 端點掛 cited:`GET /kb/collections`、`GET /kb/collections/{id}/documents`、`GET /kb/documents/chunks?id=`。
 
-### P3 · chat 分享(唯讀)
-- [ ] `KbChat.shared_with`;`GET /kb/chats` 依目前使用者過濾(owner 或 ∈ shared_with)。
-- [ ] `POST /kb/chats/{id}/share`(owner-only)+ `DELETE …/share/{user_id}`。
-- [ ] **share producer**:分享時對新收件人發 `share` 通知。
-- [ ] 被分享者唯讀(只有 owner 能 `send_message`;後端擋非 owner 發言)。
-- [ ] FE:Chats 頁 My / Shared-with-me 兩區 + 分享動作(user picker)。
+### P3 · chat 分享(唯讀)  ✅
+- [x] `KbChat.shared_with`;`GET /kb/chats` 依目前使用者過濾(owner 或 ∈ shared_with)。
+- [x] `POST /kb/chats/{id}/share`(owner-only)+ `DELETE …/share/{user_id}`。
+- [x] **share producer**:分享時對新收件人發 `share` 通知。
+- [x] 被分享者唯讀(只有 owner 能 `send_message`;後端擋非 owner 發言)。
+- [x] FE:Chats 頁 My / Shared-with-me 兩區 + 分享動作(`UserPicker`)。
 
 ### P4 · mention(人 + agent)
 - [ ] `Message.mentions` + `role="mention"` 支援。
