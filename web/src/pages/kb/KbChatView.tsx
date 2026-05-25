@@ -4,9 +4,11 @@
  * for fast throwaway questions. Same chat core (KbChatPanel), page chrome.
  */
 
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { KbChatPanel } from "./KbChatPanel";
 
@@ -26,19 +28,13 @@ export function KbChatView({
   // the parent updates the chatId prop, but we must NOT swap threads under the
   // running stream. The parent remounts (via key) for genuine thread switches.
   const [mountChatId] = useState(chatId);
-  const [title, setTitle] = useState<string>("New chat");
 
-  useEffect(() => {
-    let on = true;
-    if (mountChatId == null) {
-      setTitle("New chat");
-      return;
-    }
-    client.getChat(mountChatId).then((c) => on && setTitle(c.title || "Chat"));
-    return () => {
-      on = false;
-    };
-  }, [mountChatId, client]);
+  const { data: chat } = useQuery({
+    queryKey: qk.kb.chat(mountChatId ?? "__new__"),
+    queryFn: () => client.getChat(mountChatId as string),
+    enabled: mountChatId != null,
+  });
+  const title = mountChatId == null ? "New chat" : chat?.title || "Chat";
 
   return (
     <div className="kb-chatview">

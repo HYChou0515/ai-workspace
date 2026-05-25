@@ -5,9 +5,11 @@
  * collection picker for a fresh thread + suggestion chips + the composer.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import { kbApi, type KbApi, type KbCitation, type KbCollection } from "../../api/kb";
+import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
 import { useKbChat } from "../../hooks/useKbChat";
@@ -24,23 +26,28 @@ export function KbChatPanel({
   onChatCreated?: (chatId: string) => void;
   client?: KbApi;
 }) {
-  const [collections, setCollections] = useState<KbCollection[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [suggestions, setSuggestions] = useState<string[]>([]);
   const [draft, setDraft] = useState("");
 
+  const { data: collections = [] } = useQuery({
+    queryKey: qk.kb.collections,
+    queryFn: () => client.listCollections(),
+  });
+  const { data: agentConfig } = useQuery({
+    queryKey: qk.kb.agent,
+    queryFn: () => client.getAgentConfig(),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const suggestions = agentConfig?.suggestions ?? [];
+
+  // Default: search every collection — seed the selection once they load.
+  const seededRef = useRef(false);
   useEffect(() => {
-    let on = true;
-    client.listCollections().then((cs) => {
-      if (!on) return;
-      setCollections(cs);
-      setSelected(new Set(cs.map((c) => c.resource_id))); // default: search all
-    });
-    client.getAgentConfig().then((cfg) => on && setSuggestions(cfg.suggestions));
-    return () => {
-      on = false;
-    };
-  }, [client]);
+    if (!seededRef.current && collections.length > 0) {
+      setSelected(new Set(collections.map((c) => c.resource_id)));
+      seededRef.current = true;
+    }
+  }, [collections]);
 
   const collectionIds = useMemo(() => [...selected], [selected]);
   const { log, send } = useKbChat({ collectionIds, chatId, client, onChatCreated });

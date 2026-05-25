@@ -6,13 +6,24 @@
  * in place, page pushes a route).
  */
 
-import { useEffect, useState } from "react";
-import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import ReactMarkdown, {
+  type Components,
+  type Options,
+  defaultUrlTransform,
+} from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
 import { parseKbDocHref } from "./kbLinks";
 import { rehypeHighlightSnippet } from "./rehypeHighlightSnippet";
+
+// Keep kb:// links intact (default sanitization would drop the unknown
+// scheme); everything else goes through the default.
+const urlTransform = (url: string) =>
+  url.startsWith("kb://") ? url : defaultUrlTransform(url);
 
 export function KbDocBody({
   documentId,
@@ -29,27 +40,54 @@ export function KbDocBody({
   onLoaded?: (doc: KbRenderedDoc) => void;
   client?: KbApi;
 }) {
-  const [doc, setDoc] = useState<KbRenderedDoc | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: doc, error: queryError } = useQuery({
+    queryKey: qk.kb.doc(documentId),
+    queryFn: () => client.renderDocument(documentId),
+  });
+  const error = queryError
+    ? queryError instanceof Error
+      ? queryError.message
+      : String(queryError)
+    : null;
 
+  // Notify the parent (chrome shows the doc name) once the render resolves.
   useEffect(() => {
-    let mounted = true;
-    setDoc(null);
-    setError(null);
-    client
-      .renderDocument(documentId)
-      .then((d) => {
-        if (!mounted) return;
-        setDoc(d);
-        onLoaded?.(d);
-      })
-      .catch((e) => mounted && setError(e instanceof Error ? e.message : String(e)));
-    return () => {
-      mounted = false;
-    };
+    if (doc) onLoaded?.(doc);
     // onLoaded is intentionally excluded — callers pass inline fns.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [documentId, client]);
+  }, [doc]);
+
+  // Memoize so the parent's onLoaded-driven re-render doesn't hand ReactMarkdown
+  // a fresh `a` component each time — that would remount the rendered links
+  // (and detach any node a click is mid-flight on).
+  const components = useMemo<Components>(
+    () => ({
+      a: ({ href, children }) => {
+        const target = href ? parseKbDocHref(href) : null;
+        if (target) {
+          return (
+            <button
+              type="button"
+              className="kb-doclink"
+              onClick={() => onNavigate(target)}
+            >
+              {children}
+            </button>
+          );
+        }
+        return (
+          <a href={href} target="_blank" rel="noreferrer">
+            {children}
+          </a>
+        );
+      },
+    }),
+    [onNavigate],
+  );
+  const rehypePlugins = useMemo<Options["rehypePlugins"]>(
+    () => (snippet ? [[rehypeHighlightSnippet, snippet]] : []),
+    [snippet],
+  );
 
   return (
     <>
@@ -64,27 +102,9 @@ export function KbDocBody({
         <article className="md-body">
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
-            rehypePlugins={snippet ? [[rehypeHighlightSnippet, snippet]] : []}
-            // Keep kb:// links intact (default sanitization would drop the
-            // unknown scheme); everything else goes through the default.
-            urlTransform={(url) => (url.startsWith("kb://") ? url : defaultUrlTransform(url))}
-            components={{
-              a: ({ href, children }) => {
-                const target = href ? parseKbDocHref(href) : null;
-                if (target) {
-                  return (
-                    <button type="button" className="kb-doclink" onClick={() => onNavigate(target)}>
-                      {children}
-                    </button>
-                  );
-                }
-                return (
-                  <a href={href} target="_blank" rel="noreferrer">
-                    {children}
-                  </a>
-                );
-              },
-            }}
+            rehypePlugins={rehypePlugins}
+            urlTransform={urlTransform}
+            components={components}
           >
             {doc.markdown}
           </ReactMarkdown>

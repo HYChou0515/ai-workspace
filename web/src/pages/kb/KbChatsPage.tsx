@@ -4,9 +4,11 @@
  * or delete. Used as the left pane of the Chats split in KbHome.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef } from "react";
 
-import { kbApi, type KbApi, type KbChatSummary } from "../../api/kb";
+import { kbApi, type KbApi } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 
 export function KbChatsPage({
@@ -23,20 +25,28 @@ export function KbChatsPage({
   onOpenChat?: (chatId: string) => void;
   onNewChat?: () => void;
 }) {
-  const [chats, setChats] = useState<KbChatSummary[]>([]);
+  const qc = useQueryClient();
+  const { data: chats = [], refetch } = useQuery({
+    queryKey: qk.kb.chats,
+    queryFn: () => client.listChats(),
+  });
 
-  const refresh = useCallback(async () => {
-    setChats(await client.listChats());
-  }, [client]);
-
+  // Parent bumps refreshSignal when a new chat is started → force a refetch
+  // (skip the first run; the query already fetches on mount).
+  const firstRun = useRef(true);
   useEffect(() => {
-    void refresh();
-  }, [refresh, refreshSignal]);
+    if (firstRun.current) {
+      firstRun.current = false;
+      return;
+    }
+    void refetch();
+  }, [refreshSignal, refetch]);
 
-  const remove = async (chatId: string) => {
-    await client.deleteChat(chatId);
-    await refresh();
-  };
+  const removeMut = useMutation({
+    mutationFn: (chatId: string) => client.deleteChat(chatId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
+  });
+  const remove = (chatId: string) => removeMut.mutate(chatId);
 
   return (
     <div className="kb-chats">

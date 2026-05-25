@@ -5,9 +5,11 @@
  * features (sync/owners/sharing/source types) are intentionally dropped.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 
-import { kbApi, type KbApi, type KbCollection, type KbDocument } from "../../api/kb";
+import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { docHref } from "./kbLinks";
 
@@ -18,12 +20,10 @@ export function KbCollectionsPage({
   client?: KbApi;
   onOpenDoc?: (documentId: string) => void;
 }) {
-  const [collections, setCollections] = useState<KbCollection[]>([]);
+  const qc = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [documents, setDocuments] = useState<KbDocument[]>([]);
   const [docQuery, setDocQuery] = useState("");
   const [newName, setNewName] = useState("");
-  const [busy, setBusy] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
 
@@ -38,66 +38,75 @@ export function KbCollectionsPage({
     }
   };
 
-  const refreshCollections = useCallback(async () => {
-    const cols = await client.listCollections();
-    setCollections(cols);
-    setSelectedId((cur) => cur ?? cols[0]?.resource_id ?? null);
-  }, [client]);
+  const { data: collections = [] } = useQuery({
+    queryKey: qk.kb.collections,
+    queryFn: () => client.listCollections(),
+  });
 
+  // Default to the first collection once the list loads.
   useEffect(() => {
-    void refreshCollections();
-  }, [refreshCollections]);
+    setSelectedId((cur) => cur ?? collections[0]?.resource_id ?? null);
+  }, [collections]);
+  // Reset the filter when switching collections.
+  useEffect(() => setDocQuery(""), [selectedId]);
 
-  useEffect(() => {
-    let mounted = true;
-    setDocQuery(""); // reset the filter when switching collections
-    if (selectedId == null) {
-      setDocuments([]);
-      return;
-    }
-    client.listDocuments(selectedId).then((d) => mounted && setDocuments(d));
-    return () => {
-      mounted = false;
-    };
-  }, [selectedId, client]);
+  const { data: documents = [] } = useQuery({
+    queryKey: qk.kb.documents(selectedId ?? "__none__"),
+    queryFn: () => client.listDocuments(selectedId as string),
+    enabled: selectedId != null,
+    // While any doc is still indexing (embedded in the background), re-poll so
+    // its chip flips to "ready".
+    refetchInterval: (query) => {
+      const data = query.state.data as KbDocument[] | undefined;
+      return data?.some((d) => d.status === "indexing") ? 1500 : false;
+    },
+  });
 
-  // While any doc is still indexing (embedded in the background), re-poll the
-  // list so its chip flips to "ready".
-  useEffect(() => {
-    if (selectedId == null || !documents.some((d) => d.status === "indexing")) return;
-    const t = setTimeout(async () => {
-      setDocuments(await client.listDocuments(selectedId));
-    }, 1500);
-    return () => clearTimeout(t);
-  }, [documents, selectedId, client]);
+  const createMut = useMutation({
+    mutationFn: (name: string) => client.createCollection(name),
+    onSuccess: (c) => {
+      void qc.invalidateQueries({ queryKey: qk.kb.collections });
+      setSelectedId(c.resource_id);
+    },
+  });
 
-  const createCollection = async () => {
+  const uploadMut = useMutation({
+    // Folder uploads keep each file's relative path (handled like an archive).
+    mutationFn: (vars: { files: File[]; asFolder: boolean }) =>
+      Promise.all(
+        vars.files.map((file) =>
+          client.uploadDocument(
+            selectedId as string,
+            file,
+            vars.asFolder ? file.webkitRelativePath : undefined,
+          ),
+        ),
+      ),
+    onSuccess: () => {
+      if (selectedId)
+        void qc.invalidateQueries({ queryKey: qk.kb.documents(selectedId) });
+    },
+  });
+
+  const busy = createMut.isPending || uploadMut.isPending;
+
+  const createCollection = () => {
     const name = newName.trim();
     if (!name || busy) return;
-    setBusy(true);
-    try {
-      const c = await client.createCollection(name);
-      setNewName("");
-      await refreshCollections();
-      setSelectedId(c.resource_id);
-    } finally {
-      setBusy(false);
-    }
+    setNewName("");
+    createMut.mutate(name);
   };
 
-  const upload = async (files: FileList | null, asFolder = false) => {
+  const upload = (files: FileList | null, asFolder = false) => {
     if (!files || !selectedId || busy) return;
-    setBusy(true);
-    try {
-      for (const file of Array.from(files)) {
-        // Folder uploads keep each file's relative path (handled like an archive).
-        await client.uploadDocument(selectedId, file, asFolder ? file.webkitRelativePath : undefined);
-      }
-      setDocuments(await client.listDocuments(selectedId));
-    } finally {
-      setBusy(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
+    uploadMut.mutate(
+      { files: Array.from(files), asFolder },
+      {
+        onSettled: () => {
+          if (fileRef.current) fileRef.current.value = "";
+        },
+      },
+    );
   };
 
   const selected = collections.find((c) => c.resource_id === selectedId) ?? null;
