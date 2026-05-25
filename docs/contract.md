@@ -158,9 +158,11 @@ class Collection(Struct):                 # → resource "collection"
     description: str = ""
 
 class SourceDoc(Struct):                  # → resource "source-doc"
-    # natural-key id = f"{collection_id}/{created_by}/{path}"
+    # id = encode_doc_id(collection_id, created_by, path): the natural key
+    # percent-encoded slash-free (specstar ids can't hold '/'). OPAQUE — never
+    # parsed; read path/collection/user from the record + created_by meta.
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
-    path: str                             # relative path; part of the id + cross-ref key
+    path: str                             # relative path within the upload
     content: Binary                       # original bytes; content.file_id = xxh3 (dedup);
                                           # content.content_type auto-sniffed via magic
     text: str | None = None               # derived/extracted text (None ⇒ decode content)
@@ -178,7 +180,7 @@ class DocChunk(Struct):                   # → resource "doc-chunk" (derived; c
 class Citation(Struct):                   # a resolved [n] marker in a KB answer
     marker: int                           # the [n]
     collection_id: str
-    document_id: str                      # SourceDoc id = {collection}/{user}/{path}
+    document_id: str                      # the opaque SourceDoc id (see encode_doc_id)
     filename: str                         # basename(path)
     start: int                            # merged span into canonical text
     end: int
@@ -335,17 +337,25 @@ fixtures inside the seeded template (`/data/*.csv`).
 | `GET`    | `/kb/collections`                        | list collections: `[{resource_id, name, description}]` | ✅ |
 | `POST`   | `/kb/collections/{id}/documents`         | multipart upload (`file`); stores fast + indexes in background → `{document_ids, status:"indexing"}` | ✅ |
 | `GET`    | `/kb/collections/{id}/documents`         | list docs: `[{resource_id, path, content_type, created_by, status}]` | ✅ |
-| `GET`    | `/kb/documents/{doc_id:path}`            | render a document → `{filename, collection_id, markdown}` (relative links rewritten to `kb://doc/{id}`) | ✅ |
+| `GET`    | `/kb/documents?id={doc_id}`              | render a document → `{filename, collection_id, markdown}` (relative links rewritten to `kb://doc/{id}`). `id` is the opaque SourceDoc id, query param so the slash-free token round-trips a URL | ✅ |
 | `POST`   | `/kb/chats`                              | create a thread: body `{title?, collection_ids}` → `{resource_id, title, collection_ids}` | ✅ |
 | `GET`    | `/kb/chats`                              | list threads: `[{resource_id, title, collection_ids, message_count}]` | ✅ |
 | `GET`    | `/kb/chats/{id}`                         | thread detail: `{resource_id, title, collection_ids, messages:[KbMessage…]}` (404 if missing) | ✅ |
 | `DELETE` | `/kb/chats/{id}`                         | delete a thread → 204 (hard delete) | ✅ |
 | `POST`   | `/kb/chats/{id}/messages`                | send a user message → SSE stream of `AgentEvent` (same union as RCA); persists the answer + `[n]` citations | ✅ |
+| `DELETE` | `/kb/chats/{id}/messages/current`        | interrupt the in-flight turn (RunCancelled goes to the old stream); 204 even when idle — mirrors the RCA endpoint | ✅ |
 
 Folder upload = the FE posts each file with its relative path as the multipart
 filename (one SourceDoc per file, same as unpacking an archive). Citations are
 **not** in the SSE stream — refetch `GET /kb/chats/{id}` on `done` to get the
 persisted assistant `KbMessage` with its resolved `[n]` `Citation`s.
+
+A SourceDoc `resource_id` is its natural key `{collection}/{user}/{path}`
+percent-encoded into one slash-free token (specstar ids can't contain `/`). It
+is **opaque** — the FE/backend never parse it; `path`/`collection`/`user` come
+from the record + `created_by` meta. The KB chat reuses the **same turn engine**
+as the RCA workspace (one cancellable in-flight turn per conversation), so its
+streaming + interrupt contract is identical.
 
 ---
 

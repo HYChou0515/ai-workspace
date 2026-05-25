@@ -53,7 +53,7 @@ React SPA (web/) ─► FastAPI app (api/) ─► OpenAI Agents SDK (api/litellm
                           │
                           ├─► KB chatbot (kb/ + api/kb_routes.py, api/kb_chat_routes.py)
                           │     - Ingestor: bytes → SourceDoc (status=indexing) → chunk + embed
-                          │       → DocChunk (slow step runs in a BackgroundTask)
+                          │       → DocChunk (store + slow index both offloaded via asyncio.to_thread)
                           │     - Embedder Protocol (kb/embedder.py): HashEmbedder (tests),
                           │       LitellmEmbedder (Ollama/hosted; raw vectors stored on DocChunk)
                           │     - Chunker Protocol (kb/chunker.py): FixedTokenChunker
@@ -72,10 +72,15 @@ Key conventions:
 
 - **Sandbox is created lazily** by the agent's `exec` tool on first use (grill-me Q10 "a2+" policy). Pure file operations go through FileStore and never spin one up.
 - **AgentRunner Protocol** is the swap point between scripted tests and live LLM. Tests use `ScriptedAgentRunner`; production uses `LitellmAgentRunner`. The **KB agent reuses the same runner** — `AgentToolContext` serves both flavours (RCA: sandbox/filestore/sync + file/exec tools; KB: retriever + collection_ids + `kb_search`, no sandbox), so RCA-only fields are optional.
+- **Chat turns run through one `ChatTurnEngine`** (`api/turns.py`) shared by RCA workspace + KB chat: per-conversation lock, one cancellable in-flight turn (new message cancels the prior one), the `_drive` pump (CancelledError → `RunCancelled`, other → `RunError`), the SSE `gen()` that reduces events into neutral `TurnMessage`s, and `cancel()`/`forget()`. Each surface only builds its `AgentToolContext` and passes an `on_complete` that maps `TurnMessage` → its model (`Message` / `KbMessage`). `InvestigationRegistry` owns only the **sandbox** lifecycle (RCA). Don't reimplement turn/cancel/SSE per surface — extend the engine.
 - **SSE event schema** (`api/events.py`) is mirrored in `web/src/events.ts`. Keep them in sync when adding event types. The KB chat streams the same events, and the FE renders both chats with the shared `web/src/components/AgentEntryView.tsx` (reasoning / tool cards / metrics).
-- **KB ingestion is async**: the upload endpoint calls `Ingestor.store` (fast — creates the `SourceDoc` as `status="indexing"`) and schedules `Ingestor.index` (chunk + embed) on a FastAPI `BackgroundTask`; the doc flips to `ready` / `error`. Citations are NOT in the SSE stream — the FE refetches the thread on `done` to get the persisted `[n]` → `Citation`.
+- **`ask_knowledge_base`** (RCA→KB bridge, non-streaming `answer_question`) relays the KB sub-agent's searches + reasoning into the RCA stream via `ctx.on_exec_output` (ToolLog) — `answer_question(on_event=…)` + `kb_progress`, so the RCA turn shows KB progress live instead of stalling.
+- **SourceDoc id is an opaque, slash-free token** (`kb/doc_id.encode_doc_id` = the natural key `{collection}/{user}/{path}` percent-encoded; specstar ids can't hold `/`). **Never parse it** — read `path`/`collection`/`user` from the record + `created_by` meta. `render_document` takes it as a query param (`GET /kb/documents?id=`); the FE treats it opaquely.
+- **No-config fallback**: when an investigation has no attached `AgentConfig`, the turn runs with the **first** config in the store (earliest created), not a bare default — `_resolve_agent_config`.
+- **KB ingestion is async + off the loop**: the upload endpoint runs `Ingestor.store` (fast — `SourceDoc` as `status="indexing"`) and schedules `Ingestor.index` (chunk + embed), **both via `asyncio.to_thread`** so the blocking magic-sniff / specstar I/O / embedding HTTP never sits on the event loop; the doc flips to `ready` / `error`. Citations are NOT in the SSE stream — the FE refetches the thread on `done` to get the persisted `[n]` → `Citation`.
 - **Embeddings are computed by us and stored raw** on `DocChunk` (`Vector`, cosine). `KB_EMBED_DIM` must match the embedder's output width; changing it requires re-indexing.
 - **specstar singleton vs instance**: always construct a fresh `SpecStar()` instance — never use the module-level `specstar.spec` singleton. This keeps tests isolated.
 - **`dict[str, Any]`** (not `dict[str, object]`) for specstar struct fields — `object` breaks JSON-schema generation. Narrow `resource.data` with `assert isinstance(...)` for `ty` (coverage-clean).
+- **FE data layer is TanStack Query**: GET-style reads go through `useQuery` (keys in `web/src/api/queryKeys.ts`, one client in `web/src/api/queryClient.ts`); writes are `useMutation` + `invalidateQueries`. SSE stays imperative (`useAgent`/`useKbChat`), but their initial hydration is a `useQuery`. Components/hooks under test need a provider — wrap with `web/src/test/queryWrapper.tsx` (`QueryWrap` / `renderWithQuery`). The signed-in user id is `api.getCurrentUser()` via `useCurrentUser()` (mocked until SSO), not a hardcoded constant.
 
 See the rationale and rejected alternatives in the conversation history under `/grill-me` (Q1-Q12).
