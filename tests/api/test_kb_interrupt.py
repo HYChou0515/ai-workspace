@@ -44,6 +44,8 @@ def _app(runner: _BlockingRunner):
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
         runner=runner,
+        # current user == chat owner ("u"), so the owner-only send is allowed.
+        get_user_id=lambda: "u",
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
     )

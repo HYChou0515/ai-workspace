@@ -32,6 +32,8 @@ function summarize(chat: KbChatDetail): KbChatSummary {
     title: chat.title,
     collection_ids: chat.collection_ids,
     message_count: chat.messages.length,
+    owner: chat.owner ?? "default-user",
+    shared_with: chat.shared_with ?? [],
   };
 }
 
@@ -98,6 +100,18 @@ export const mockKbApi: KbApi = {
   },
   async deleteChat(chatId) {
     chats.delete(chatId);
+  },
+  async shareChat(chatId, userIds) {
+    const chat = chats.get(chatId);
+    if (!chat) throw new Error(`chat not found: ${chatId}`);
+    const have = new Set(chat.shared_with ?? []);
+    for (const u of userIds) if (u !== (chat.owner ?? "default-user")) have.add(u);
+    chat.shared_with = [...have];
+  },
+  async unshareChat(chatId, userId) {
+    const chat = chats.get(chatId);
+    if (!chat) throw new Error(`chat not found: ${chatId}`);
+    chat.shared_with = (chat.shared_with ?? []).filter((u) => u !== userId);
   },
   async cancelMessage(_chatId) {
     // No server turn to cancel in the mock; the FE aborts the stream locally.

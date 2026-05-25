@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
+import msgspec
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -28,6 +29,7 @@ from ..kb.cited import record_citations
 from ..kb.retriever import Retriever
 from ..resources.kb import Citation, KbChat, KbMessage
 from .events import AgentEvent, MessageDelta, ToolStart
+from .notifications import notify
 from .runner import AgentRunner
 from .turns import ChatTurnEngine, TurnMessage
 
@@ -92,6 +94,10 @@ class _MsgBody(BaseModel):
     content: str
 
 
+class _ShareBody(BaseModel):
+    user_ids: list[str]
+
+
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
 
@@ -105,13 +111,24 @@ def register_kb_chat_routes(
 ) -> None:
     chat_rm = spec.get_resource_manager(KbChat)
 
-    def _load(chat_id: str) -> KbChat:
+    def _load_rev(chat_id: str) -> tuple[KbChat, str]:
+        """Return (chat, owner_id). 404 if missing. Owner = created_by meta."""
         try:
-            data = chat_rm.get(chat_id).data
+            rev = chat_rm.get(chat_id)
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        data = rev.data
         assert isinstance(data, KbChat)  # the KbChat manager yields KbChat
-        return data
+        return data, rev.info.created_by
+
+    def _load(chat_id: str) -> KbChat:
+        return _load_rev(chat_id)[0]
+
+    def _require_owner(chat_id: str) -> tuple[KbChat, str]:
+        chat, owner = _load_rev(chat_id)
+        if owner != get_user_id():
+            raise HTTPException(status_code=403, detail="only the owner can do that")
+        return chat, owner
 
     @app.get("/kb/agent")
     async def kb_agent_config() -> dict:
@@ -131,40 +148,88 @@ def register_kb_chat_routes(
 
     @app.get("/kb/chats")
     async def list_chats() -> list[dict]:
+        """Only the current user's chats: ones they own + ones shared with them."""
+        me = get_user_id()
         out: list[dict] = []
         for r in chat_rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
             data = r.data
             assert isinstance(data, KbChat)
+            owner = r.info.created_by  # ty: ignore[unresolved-attribute]
+            if owner != me and me not in data.shared_with:
+                continue
             out.append(
                 {
                     "resource_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
                     "title": data.title,
                     "collection_ids": data.collection_ids,
                     "message_count": len(data.messages),
+                    "owner": owner,
+                    "shared_with": data.shared_with,
                 }
             )
         return out
 
     @app.get("/kb/chats/{chat_id}")
     async def get_chat(chat_id: str) -> dict:
-        data = _load(chat_id)
+        data, owner = _load_rev(chat_id)
+        me = get_user_id()
+        if owner != me and me not in data.shared_with:
+            raise HTTPException(status_code=403, detail="not shared with you")
         return {
             "resource_id": chat_id,
             "title": data.title,
             "collection_ids": data.collection_ids,
             "messages": [_message_dict(m) for m in data.messages],
+            "owner": owner,
+            "shared_with": data.shared_with,
         }
 
     @app.delete("/kb/chats/{chat_id}", status_code=204)
     async def delete_chat(chat_id: str) -> Response:
-        _load(chat_id)  # 404 if missing
+        _require_owner(chat_id)
         chat_rm.permanently_delete(chat_id)
         engine.forget(chat_id)
         return Response(status_code=204)
 
+    @app.post("/kb/chats/{chat_id}/share", status_code=204)
+    async def share_chat(chat_id: str, body: _ShareBody) -> Response:
+        """Owner shares the thread read-only with users → they're added to
+        `shared_with` and each newly-added user gets a `share` notification."""
+        chat, _ = _require_owner(chat_id)
+        new = [u for u in body.user_ids if u not in chat.shared_with and u != get_user_id()]
+        if new:
+            chat_rm.update(
+                chat_id, msgspec.structs.replace(chat, shared_with=[*chat.shared_with, *new])
+            )
+            for uid in new:
+                notify(
+                    spec,
+                    recipient=uid,
+                    kind="share",
+                    title=f'Shared a chat: "{chat.title}"',
+                    link=f"/kb/chats/{chat_id}",
+                    actor=get_user_id(),
+                )
+        return Response(status_code=204)
+
+    @app.delete("/kb/chats/{chat_id}/share/{user_id}", status_code=204)
+    async def unshare_chat(chat_id: str, user_id: str) -> Response:
+        chat, _ = _require_owner(chat_id)
+        if user_id in chat.shared_with:
+            chat_rm.update(
+                chat_id,
+                msgspec.structs.replace(
+                    chat, shared_with=[u for u in chat.shared_with if u != user_id]
+                ),
+            )
+        return Response(status_code=204)
+
     @app.post("/kb/chats/{chat_id}/messages")
     async def send_message(chat_id: str, body: _MsgBody) -> StreamingResponse:
-        chat = _load(chat_id)
+        chat, owner = _load_rev(chat_id)
+        if owner != get_user_id():
+            # Shares are read-only — only the owner drives the thread.
+            raise HTTPException(status_code=403, detail="this chat is read-only for you")
         chat.messages.append(KbMessage(role="user", content=body.content, created_at=_now_ms()))
         chat_rm.update(chat_id, chat)
 

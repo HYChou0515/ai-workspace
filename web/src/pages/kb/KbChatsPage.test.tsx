@@ -10,12 +10,16 @@ const render = (ui: Parameters<typeof rtlRender>[0]) =>
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../../api";
 import { mockKbApi, _resetKbMock } from "../../api/kbMock";
 import { KbChatsPage } from "./KbChatsPage";
 
 describe("KbChatsPage", () => {
   beforeEach(() => _resetKbMock());
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
 
   it("lists chats and opens one", async () => {
     const onOpenChat = vi.fn();
@@ -42,5 +46,32 @@ describe("KbChatsPage", () => {
     render(<KbChatsPage client={mockKbApi} onNewChat={onNewChat} />);
     await userEvent.click(screen.getByRole("button", { name: /new chat/i }));
     expect(onNewChat).toHaveBeenCalled();
+  });
+
+  it("separates owned chats from ones shared with me (read-only)", async () => {
+    // current user is "default-user" (mock); this chat is owned by alice → shared.
+    vi.spyOn(api, "getUsers").mockResolvedValue([
+      { id: "alice", name: "Alice Chen", section: "Reflow", email: "", photo_url: null },
+    ]);
+    const client = {
+      ...mockKbApi,
+      listChats: async () => [
+        {
+          resource_id: "chat:s1",
+          title: "Alice's research",
+          collection_ids: [],
+          message_count: 3,
+          owner: "alice",
+          shared_with: ["default-user"],
+        },
+      ],
+    } as typeof mockKbApi;
+    render(<KbChatsPage client={client} />);
+
+    expect(await screen.findByText("Shared with me")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Alice's research/ })).toBeInTheDocument();
+    expect(await screen.findByText("Alice Chen")).toBeInTheDocument(); // owner resolved async
+    // a shared (non-owned) chat has no delete/share controls
+    expect(screen.queryByRole("button", { name: /Delete Alice's research/ })).toBeNull();
   });
 });

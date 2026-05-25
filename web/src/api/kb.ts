@@ -62,6 +62,8 @@ export type KbChatSummary = {
   title: string;
   collection_ids: string[];
   message_count: number;
+  owner?: string;
+  shared_with?: string[];
 };
 
 export type KbChatDetail = {
@@ -69,6 +71,8 @@ export type KbChatDetail = {
   title: string;
   collection_ids: string[];
   messages: KbChatMessage[];
+  owner?: string;
+  shared_with?: string[];
 };
 
 export type SendKbMessageArgs = {
@@ -99,6 +103,9 @@ export interface KbApi {
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
   getChat(chatId: string): Promise<KbChatDetail>;
   deleteChat(chatId: string): Promise<void>;
+  /** Owner-only: share a thread read-only with users (they get a notification). */
+  shareChat(chatId: string, userIds: string[]): Promise<void>;
+  unshareChat(chatId: string, userId: string): Promise<void>;
   /** Stream one chat turn. Citations are not in the stream — refetch the chat
    * on done to get the persisted assistant message with its [n] resolved. */
   streamMessage(args: SendKbMessageArgs): AsyncGenerator<AgentEvent>;
@@ -179,6 +186,25 @@ export const realKbApi: KbApi = {
     await ok(
       await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`, { method: "DELETE" }),
       "delete chat",
+    );
+  },
+  async shareChat(chatId, userIds) {
+    await ok(
+      await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}/share`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ user_ids: userIds }),
+      }),
+      "share chat",
+    );
+  },
+  async unshareChat(chatId, userId) {
+    await ok(
+      await apiFetch(
+        `/kb/chats/${encodeURIComponent(chatId)}/share/${encodeURIComponent(userId)}`,
+        { method: "DELETE" },
+      ),
+      "unshare chat",
     );
   },
   async *streamMessage(args) {

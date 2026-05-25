@@ -116,11 +116,16 @@ class KbMessage(Struct):
 
 class KbChat(Struct):  # → resource "kb-chat"
     """A persistent chat thread against one or more collections. created/updated
-    time come from specstar meta (``.info.updated_time`` → recency sort)."""
+    time come from specstar meta (``.info.updated_time`` → recency sort).
+
+    Private by default (owner = ``created_by`` meta). The owner can share it
+    read-only with other users via ``shared_with``; those users see it under
+    "Shared with me" and can read it, but only the owner can send."""
 
     title: str = "New chat"
     collection_ids: list[str] = field(default_factory=list)  # plain ids
     messages: list[KbMessage] = field(default_factory=list)
+    shared_with: list[str] = field(default_factory=list)  # user ids (read-only)
 
 
 class RetrievedPassage(Struct, frozen=True):
