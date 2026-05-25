@@ -19,6 +19,7 @@ from specstar.types import ResourceIDNotFoundError
 from ..agent.context import AgentToolContext
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..kb.chunker import Chunker, FixedTokenChunker
+from ..kb.cited import record_citations
 from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
 from ..kb.llm import Llm
@@ -35,7 +36,7 @@ from ..resources import (
     Status,
     register_all,
 )
-from ..resources.kb import EMBED_DIM, Collection
+from ..resources.kb import EMBED_DIM, Citation, Collection
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..users import MockUserDirectory, UserDirectory
@@ -332,14 +333,17 @@ def create_app(
     # One turn engine drives every chat surface (RCA workspace + KB chat): one
     # cancellable in-flight turn per conversation, SSE streaming, cancel hook.
     turn_engine = ChatTurnEngine(runner)
-    register_kb_chat_routes(app, spec, turn_engine, kb_retriever)
+    register_kb_chat_routes(app, spec, turn_engine, kb_retriever, get_user_id)
 
-    async def _ask_kb(question: str, emit: OutputSink | None = None) -> str:
+    async def _ask_kb(
+        question: str, emit: OutputSink | None = None, origin_id: str | None = None
+    ) -> str:
         """RCA → KB bridge: run the KB agent over every collection and return
         its synthesized, cited answer. Wired onto each RCA turn's context so
         the ask_knowledge_base tool can reach the KB agent. When `emit` is given
         (the RCA run's output sink), the KB agent's searches/reasoning are
-        relayed to it live as tool-log lines."""
+        relayed to it live as tool-log lines; `origin_id` is the calling
+        investigation, so its citations are logged like the KB chat's."""
         from specstar import QB
 
         coll_rm = spec.get_resource_manager(Collection)
@@ -355,7 +359,14 @@ def create_app(
             if line:
                 emit(line.encode())
 
-        return await answer_question(runner, kb_retriever, ids, question, on_event=relay)
+        def log_cites(cites: list[Citation]) -> None:
+            record_citations(
+                spec, cites, origin_kind="rca", origin_id=origin_id or "", cited_by=get_user_id()
+            )
+
+        return await answer_question(
+            runner, kb_retriever, ids, question, on_event=relay, on_citations=log_cites
+        )
 
     conv_rm = spec.get_resource_manager(Conversation)
 

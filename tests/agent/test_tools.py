@@ -131,8 +131,9 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
 
     received: dict[str, object] = {}
 
-    async def fake_ask(question: str, emit: object) -> str:
+    async def fake_ask(question: str, emit: object, origin_id: object) -> str:
         received["emit"] = emit
+        received["origin_id"] = origin_id
         return f"KB answer to: {question}"
 
     def sink(b: bytes) -> None: ...

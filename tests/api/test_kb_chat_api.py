@@ -82,7 +82,7 @@ class _DualRunner:
             yield RunDone()
         else:  # RCA turn — consult the KB as a tool
             assert ctx.ask_kb is not None
-            answer = await ctx.ask_kb(prompt, ctx.on_exec_output)
+            answer = await ctx.ask_kb(prompt, ctx.on_exec_output, ctx.investigation_id)
             yield MessageDelta(text=f"KB says: {answer}")
             yield RunDone()
 
@@ -289,7 +289,7 @@ class _StreamingDualRunner:
         else:  # RCA turn
             assert ctx.ask_kb is not None
             ctx.on_exec_output = lambda b: self.relayed.append(b.decode())
-            answer = await ctx.ask_kb(prompt, ctx.on_exec_output)
+            answer = await ctx.ask_kb(prompt, ctx.on_exec_output, ctx.investigation_id)
             yield MessageDelta(text=f"KB says: {answer}")
             yield RunDone()
 

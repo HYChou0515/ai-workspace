@@ -24,8 +24,9 @@ from specstar.types import ResourceIDNotFoundError
 from ..agent.context import AgentToolContext
 from ..kb.agent import default_kb_agent_config
 from ..kb.citations import parse_citations
+from ..kb.cited import record_citations
 from ..kb.retriever import Retriever
-from ..resources.kb import KbChat, KbMessage
+from ..resources.kb import Citation, KbChat, KbMessage
 from .events import AgentEvent, MessageDelta, ToolStart
 from .runner import AgentRunner
 from .turns import ChatTurnEngine, TurnMessage
@@ -49,6 +50,7 @@ async def answer_question(
     collection_ids: list[str],
     question: str,
     on_event: Callable[[AgentEvent], None] | None = None,
+    on_citations: Callable[[list[Citation]], None] | None = None,
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
@@ -57,7 +59,9 @@ async def answer_question(
 
     `on_event` (when given) is fired for every KB event as it happens, so a
     caller can surface the sub-agent's intermediate work (e.g. relay it into the
-    parent stream); the return value is unchanged."""
+    parent stream). `on_citations` (when given) receives the resolved citations
+    so the caller can log them (this path doesn't persist a KbMessage). The
+    return value is unchanged."""
     ctx = AgentToolContext(
         retriever=retriever,
         collection_ids=collection_ids,
@@ -71,6 +75,8 @@ async def answer_question(
             parts.append(ev.text)
     answer = "".join(parts)
     cites = parse_citations(answer, ctx.kb_passages)
+    if on_citations is not None:
+        on_citations(cites)
     if cites:
         footer = "; ".join(f"[{c.marker}] {c.filename}" for c in cites)
         answer = f"{answer}\n\nSources: {footer}"
@@ -91,7 +97,11 @@ def _now_ms() -> int:
 
 
 def register_kb_chat_routes(
-    app: FastAPI, spec: SpecStar, engine: ChatTurnEngine, retriever: Retriever
+    app: FastAPI,
+    spec: SpecStar,
+    engine: ChatTurnEngine,
+    retriever: Retriever,
+    get_user_id: Callable[[], str],
 ) -> None:
     chat_rm = spec.get_resource_manager(KbChat)
 
@@ -178,9 +188,17 @@ def register_kb_chat_routes(
                     tool_args=m.tool_args,
                     created_at=m.created_at,
                 )
-                # Resolve [n] on answers against the passages this turn searched.
+                # Resolve [n] on answers against the passages this turn searched,
+                # and log each as a CitationEvent (powers the cited counts).
                 if m.role == "assistant":
                     km.citations = parse_citations(m.content, ctx.kb_passages)
+                    record_citations(
+                        spec,
+                        km.citations,
+                        origin_kind="kb_chat",
+                        origin_id=chat_id,
+                        cited_by=get_user_id(),
+                    )
                 fresh.messages.append(km)
             chat_rm.update(chat_id, fresh)
 

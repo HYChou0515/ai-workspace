@@ -12,9 +12,10 @@ from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..kb.cited import chunk_cited, collection_cited, doc_cited
 from ..kb.ingest import Ingestor, normalize_text
 from ..kb.links import rewrite_md_links
-from ..resources.kb import Collection, SourceDoc
+from ..resources.kb import Collection, DocChunk, SourceDoc
 
 _DEFAULT_USER = "default-user"  # v1: no auth; uploads are attributed to this user
 
@@ -41,15 +42,18 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
     @app.get("/kb/collections")
     async def list_collections() -> list[dict]:
         rm = spec.get_resource_manager(Collection)
+        cited = collection_cited(spec)
         out: list[dict] = []
         for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
             data = r.data
             assert isinstance(data, Collection)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
             out.append(
                 {
-                    "resource_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                    "resource_id": rid,
                     "name": data.name,
                     "description": data.description,
+                    "cited": cited.get(rid, 0),
                 }
             )
         return out
@@ -79,17 +83,23 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
     @app.get("/kb/collections/{collection_id}/documents")
     async def list_documents(collection_id: str) -> list[dict]:
         rm = spec.get_resource_manager(SourceDoc)
+        chrm = spec.get_resource_manager(DocChunk)
+        cited = doc_cited(spec)
         out: list[dict] = []
         for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
             data = r.data
             assert isinstance(data, SourceDoc)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            chunks = chrm.count_resources((QB["source_doc_id"] == rid).build())
             out.append(
                 {
-                    "resource_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                    "resource_id": rid,
                     "path": data.path,
                     "content_type": data.content.content_type,
                     "created_by": r.info.created_by,  # ty: ignore[unresolved-attribute]
                     "status": data.status,
+                    "chunks": chunks,
+                    "cited": cited.get(rid, 0),
                 }
             )
         return out
@@ -126,3 +136,27 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
             "collection_id": doc.collection_id,
             "markdown": markdown,
         }
+
+    @app.get("/kb/documents/chunks")
+    async def list_doc_chunks(doc_id: str = Query(alias="id")) -> list[dict]:
+        """A document's indexed chunks + their cited counts — the chunks debug
+        view behind the doc preview's toggle."""
+        chrm = spec.get_resource_manager(DocChunk)
+        cited = chunk_cited(spec)
+        rows: list[dict] = []
+        for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
+            d = r.data
+            assert isinstance(d, DocChunk)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            rows.append(
+                {
+                    "chunk_id": rid,
+                    "seq": d.seq,
+                    "start": d.start,
+                    "end": d.end,
+                    "text": d.text,
+                    "cited": cited.get(rid, 0),
+                }
+            )
+        rows.sort(key=lambda x: x["seq"])
+        return rows

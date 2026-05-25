@@ -112,9 +112,10 @@ async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], ques
     """
     ask_kb = ctx.context.ask_kb
     assert ask_kb is not None  # the API layer wires this for RCA runs
-    # Hand the KB bridge this run's output sink so the KB agent's searches and
-    # reasoning stream live under this tool call (None until the runner sets it).
-    return await ask_kb(question, ctx.context.on_exec_output)
+    # Hand the KB bridge this run's output sink (so the KB agent's searches and
+    # reasoning stream live under this tool call) + this investigation's id (so
+    # its KB citations are logged against it).
+    return await ask_kb(question, ctx.context.on_exec_output, ctx.context.investigation_id)
 
 
 _IMPLS = {

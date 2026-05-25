@@ -1,6 +1,7 @@
 from specstar import SpecStar
 
 from .agent_config import AgentConfig
+from .citation_event import CitationEvent
 from .conversation import Conversation, Message
 from .investigation import Investigation, Severity, Status
 from .kb import Collection, DocChunk, KbChat, SourceDoc
@@ -8,6 +9,7 @@ from .notification import Notification
 
 __all__ = [
     "AgentConfig",
+    "CitationEvent",
     "Collection",
     "Conversation",
     "DocChunk",
@@ -31,3 +33,4 @@ def register_all(spec: SpecStar) -> None:
     spec.add_model(DocChunk)
     spec.add_model(KbChat)
     spec.add_model(Notification)
+    spec.add_model(CitationEvent)
