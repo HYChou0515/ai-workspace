@@ -13,7 +13,7 @@
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| **P1** | 地基:`Auth`/`UserDirectory` Protocol + `<UserChip>` + `Notification` + bell + status 通知 | ☐ 未開始 |
+| **P1** | 地基:`Auth`/`UserDirectory` Protocol + `<UserChip>` + `Notification` + bell + status 通知 | ✅ 完成 |
 | **P2** | `CitationEvent` + 三種 cited 聚合(point 1) | ☐ 未開始 |
 | **P3** | chat 分享(唯讀)+ shared-with-me(point 2) | ☐ 未開始 |
 | **P4** | mention(人 @ 人 + agent `mention_user` 工具)(point 6) | ☐ 未開始 |
@@ -193,15 +193,16 @@ chunk,視為**歷史**(只在當前 index 世代內有意義)。doc/collection i
 
 ## 7 · 分階段建置(每階段 TDD → gate → commit → 本表打勾)
 
-### P1 · 地基:身分 + 通知
-- [ ] `User` 值物件 + `UserDirectory` Protocol;mock 實作 + seed 假 user。
-- [ ] 注入 `get_user_id` + `UserDirectory` 進 `create_app`(mock 預設;測試可切換 current user)。
-- [ ] `GET /me`、`GET /users`。
-- [ ] `Notification` resource + 註冊。
-- [ ] `GET /notifications`、`POST /notifications/read-all`、`POST /notifications/{id}/read`。
-- [ ] **status producer**:investigation 狀態翻轉 → 通知 owner + members(驗證通知管線端到端)。
-- [ ] FE:`useUsers()` + `<UserChip>`;`useCurrentUser` → `GET /me`;裸 id 顯示處換成 `<UserChip>`。
-- [ ] FE:通知 bell 下拉(`useNotifications` poll + mark-all-read + 未讀紅點 + 點擊跳 link),
+### P1 · 地基:身分 + 通知  ✅
+- [x] `User` 值物件 + `UserDirectory` Protocol;mock 實作 + seed 假 user。
+- [x] 注入 `get_user_id` + `UserDirectory` 進 `create_app`(mock 預設;測試可切換 current user)。
+- [x] `GET /me`、`GET /users`。
+- [x] `Notification` resource + 註冊。
+- [x] `GET /notifications`、`POST /notifications/read-all`、`POST /notifications/{id}/read`。
+- [x] **status producer**:investigation 狀態翻轉 → 通知 owner + members(驗證通知管線端到端)。
+- [x] FE:`useUsers()` + `<UserChip>`;`useCurrentUser` → `GET /me`;footer 等顯示處換成 `<UserChip>`
+      (其餘裸 id 顯示處隨 P5 觸及時換)。
+- [x] FE:通知 bell 下拉(`useNotifications` poll + mark-all-read + 未讀紅點 + 點擊跳 link),
       取代原本 bell 的 activity 流。
 
 ### P2 · 引用計數
