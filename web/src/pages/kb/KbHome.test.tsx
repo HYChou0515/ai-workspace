@@ -36,6 +36,16 @@ describe("KbHome shell", () => {
     expect(screen.getByRole("button", { name: /new chat/i })).toBeInTheDocument();
   });
 
+  it("lands directly on the chats surface when ?tab=chats", async () => {
+    render(
+      <MemoryRouter initialEntries={["/kb?tab=chats"]}>
+        <KbHome client={mockKbApi} />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByRole("button", { name: /new chat/i })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("New collection name…")).not.toBeInTheDocument();
+  });
+
   it("opens the Ask-agent drawer from the top bar", async () => {
     renderShell();
     await userEvent.click(screen.getByRole("button", { name: /ask agent/i }));

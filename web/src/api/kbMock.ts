@@ -12,6 +12,7 @@ import type {
   KbChatMessage,
   KbChatSummary,
   KbCollection,
+  KbDocChunk,
   KbDocument,
   KbRenderedDoc,
   SendKbMessageArgs,
@@ -22,7 +23,28 @@ const nextId = (prefix: string) => `${prefix}-${(++seq).toString(36)}`;
 
 const collections = new Map<string, KbCollection>();
 const documents = new Map<string, KbDocument[]>();
+const docChunks = new Map<string, KbDocChunk[]>();
 const chats = new Map<string, KbChatDetail>();
+
+// Deterministic chunking for the mock: split into ~120-char windows so a small
+// upload yields at least one chunk. Cited counts stay 0 (the mock doesn't feed
+// citations back into chunks).
+function synthChunks(docId: string, body: string): KbDocChunk[] {
+  const size = 120;
+  const out: KbDocChunk[] = [];
+  for (let start = 0, i = 0; start < Math.max(body.length, 1); start += size, i++) {
+    const end = Math.min(start + size, body.length);
+    out.push({
+      chunk_id: `${docId}#${i}`,
+      seq: i,
+      start,
+      end,
+      text: body.slice(start, end) || body,
+      cited: 0,
+    });
+  }
+  return out;
+}
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -60,12 +82,16 @@ export const mockKbApi: KbApi = {
     const id = `${collectionId}/me/${docPath}`;
     const list = documents.get(collectionId) ?? [];
     if (!list.some((d) => d.resource_id === id)) {
+      const chunks = synthChunks(id, await file.text());
+      docChunks.set(id, chunks);
       list.push({
         resource_id: id,
         path: docPath,
         content_type: "text/markdown",
         created_by: "me",
         status: "ready",
+        chunks: chunks.length,
+        cited: 0,
       });
     }
     documents.set(collectionId, list);
@@ -78,6 +104,9 @@ export const mockKbApi: KbApi = {
       collection_id: documentId.split("/")[0] ?? "",
       markdown: `# ${filename}\n\nMock document body for **${documentId}**.`,
     };
+  },
+  async getDocChunks(documentId) {
+    return [...(docChunks.get(documentId) ?? [])].sort((a, b) => a.seq - b.seq);
   },
 
   async listChats() {
@@ -180,6 +209,7 @@ function blankUser(content: string): KbChatMessage {
 export const _resetKbMock = () => {
   collections.clear();
   documents.clear();
+  docChunks.clear();
   chats.clear();
   seq = 0;
 };

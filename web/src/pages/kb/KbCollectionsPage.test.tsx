@@ -57,6 +57,36 @@ describe("KbCollectionsPage", () => {
     expect(screen.getByRole("button", { name: /wirebond\.md/ })).toBeInTheDocument();
   });
 
+  it("shows each collection's cited count and per-document chunks + cited", async () => {
+    const client = {
+      listCollections: async () => [
+        { resource_id: "c1", name: "Reflow SOPs", description: "", cited: 7 },
+      ],
+      listDocuments: async () => [
+        {
+          resource_id: "c1/me/a.md",
+          path: "a.md",
+          content_type: "text/markdown",
+          created_by: "alice",
+          status: "ready",
+          chunks: 12,
+          cited: 4,
+        },
+      ],
+    } as unknown as Parameters<typeof KbCollectionsPage>[0]["client"];
+
+    render(<KbCollectionsPage client={client} />);
+
+    // the collection row surfaces its cited count
+    const colBtn = await screen.findByRole("button", { name: /Reflow SOPs/ });
+    expect(colBtn).toHaveTextContent("7");
+
+    // the document row surfaces its chunk count and cited count
+    const row = (await screen.findByRole("button", { name: /a\.md/ })).closest("li")!;
+    expect(row).toHaveTextContent("12 chunks");
+    expect(row).toHaveTextContent("4 cited");
+  });
+
   it("shows an indexing chip that flips to indexed by polling", async () => {
     // a client whose doc starts "indexing" then becomes "ready" on re-poll
     let status = "indexing";

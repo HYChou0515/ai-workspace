@@ -42,6 +42,7 @@ export type IconName =
   | "bug"
   | "flame"
   | "refresh"
+  | "quote"
   | "paperclip";
 
 export function Icon({
@@ -218,6 +219,12 @@ export function Icon({
     paperclip: (
       <path
         d="M16 7 L9 14 A3 3 0 0 0 13 18 L20 11 A5 5 0 0 0 13 4 L5 12 A7 7 0 0 0 15 22 L18 19"
+        {...sp}
+      />
+    ),
+    quote: (
+      <path
+        d="M7 7 H10 V12 Q10 15 7 16 M14 7 H17 V12 Q17 15 14 16"
         {...sp}
       />
     ),

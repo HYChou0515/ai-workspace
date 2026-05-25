@@ -7,7 +7,7 @@
  */
 
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { Icon } from "../../components/Icon";
@@ -24,7 +24,8 @@ type Selected = string | null | undefined;
 
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<Tab>("collections");
+  const [params] = useSearchParams();
+  const [tab, setTab] = useState<Tab>(params.get("tab") === "chats" ? "chats" : "collections");
   const [ask, setAsk] = useState(false);
   const [chatId, setChatId] = useState<Selected>(undefined);
   const [viewKey, setViewKey] = useState(0);
@@ -117,6 +118,10 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
         onManage={() => {
           setAsk(false);
           setTab("collections");
+        }}
+        onHistory={() => {
+          setAsk(false);
+          setTab("chats");
         }}
         onOpenCitation={openCite}
         client={client}

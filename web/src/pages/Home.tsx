@@ -99,6 +99,8 @@ export function Home() {
         }}
         onOpenTemplates={() => setTemplatesOpen(true)}
         onOpenInvestigation={openInvestigation}
+        onOpenKnowledge={() => navigate("/kb")}
+        onOpenChats={() => navigate("/kb?tab=chats")}
       />
       <HomeMain
         items={items}

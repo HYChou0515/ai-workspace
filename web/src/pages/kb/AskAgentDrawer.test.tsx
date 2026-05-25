@@ -51,6 +51,18 @@ describe("AskAgentDrawer (fast chat)", () => {
     );
   });
 
+  it("links to manage sources and chat history from the header", async () => {
+    const onManage = vi.fn();
+    const onHistory = vi.fn();
+    render(
+      <AskAgentDrawer open onClose={() => {}} onManage={onManage} onHistory={onHistory} client={mockKbApi} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /manage sources/i }));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    await userEvent.click(screen.getByRole("button", { name: /history/i }));
+    expect(onHistory).toHaveBeenCalledTimes(1);
+  });
+
   it("fires a config-driven suggestion as a question", async () => {
     render(<AskAgentDrawer open onClose={() => {}} client={mockKbApi} />);
     // suggestions come from the KB agent config, not hardcoded in the FE

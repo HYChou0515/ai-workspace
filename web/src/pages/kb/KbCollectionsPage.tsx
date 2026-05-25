@@ -143,6 +143,12 @@ export function KbCollectionsPage({
           >
             <Icon name="layers" size={15} color="var(--text-paper-d)" />
             <span className="kb-cols__name">{c.name}</span>
+            {(c.cited ?? 0) > 0 && (
+              <span className="kb-cols__cited" title={`Cited ${c.cited} times`}>
+                <Icon name="quote" size={10} color="var(--text-paper-d2)" />
+                {c.cited}
+              </span>
+            )}
           </button>
         ))}
       </section>
@@ -216,6 +222,16 @@ export function KbCollectionsPage({
                       <Icon name="file" size={14} color="var(--text-paper-d)" />
                       <span className="kb-docs__path">{d.path}</span>
                     </button>
+                    {typeof d.chunks === "number" && (
+                      <span className="kb-docs__metric" title="Indexed chunks">
+                        <Icon name="layers" size={11} color="var(--text-paper-d2)" />
+                        {d.chunks} chunks
+                      </span>
+                    )}
+                    <span className="kb-docs__metric" title="Times cited">
+                      <Icon name="quote" size={11} color="var(--text-paper-d2)" />
+                      {d.cited ?? 0} cited
+                    </span>
                     <span className="kb-docs__by" title="Added by">
                       <Icon name="user" size={11} color="var(--text-paper-d2)" />
                       {d.created_by}

@@ -35,6 +35,10 @@ export function AskAgentLauncher({ client = kbApi }: { client?: KbApi }) {
           setOpen(false);
           navigate("/kb");
         }}
+        onHistory={() => {
+          setOpen(false);
+          navigate("/kb?tab=chats");
+        }}
         onOpenCitation={(c: KbCitation) =>
           setViewer({ documentId: c.document_id, snippet: c.snippet })
         }

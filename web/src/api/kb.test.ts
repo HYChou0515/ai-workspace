@@ -32,6 +32,27 @@ describe("KB api (mock client)", () => {
     expect(docs.map((d) => d.path)).toEqual(["manuals/reflow/a.md"]);
   });
 
+  it("lists a document's chunks with cited counts", async () => {
+    const c = await kb.createCollection("kb");
+    const file = new File(["# guide\n\nbody"], "guide.md", { type: "text/markdown" });
+    const [docId] = await kb.uploadDocument(c.resource_id, file);
+    const chunks = await kb.getDocChunks(docId);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks[0]).toMatchObject({ seq: 0 });
+    expect(typeof chunks[0].cited).toBe("number");
+    // sorted by seq
+    expect(chunks.map((ch) => ch.seq)).toEqual([...chunks.map((ch) => ch.seq)].sort((a, b) => a - b));
+  });
+
+  it("reports indexed chunk count on a listed document", async () => {
+    const c = await kb.createCollection("kb");
+    const file = new File(["x"], "g.md", { type: "text/markdown" });
+    const [docId] = await kb.uploadDocument(c.resource_id, file);
+    const docs = await kb.listDocuments(c.resource_id);
+    const chunks = await kb.getDocChunks(docId);
+    expect(docs[0].chunks).toBe(chunks.length);
+  });
+
   it("creates a chat and lists it with a message count", async () => {
     const c = await kb.createCollection("kb");
     const chat = await kb.createChat("Reflow Q", [c.resource_id]);

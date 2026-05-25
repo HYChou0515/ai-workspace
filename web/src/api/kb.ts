@@ -16,6 +16,8 @@ export type KbCollection = {
   resource_id: string;
   name: string;
   description: string;
+  /** How many times this collection's docs have been cited (P2 analytics). */
+  cited?: number;
 };
 
 export type KbDocument = {
@@ -25,6 +27,18 @@ export type KbDocument = {
   created_by: string;
   /** Indexing lifecycle: "indexing" | "ready" | "error". */
   status: string;
+  /** Indexed chunk count + how many times this doc was cited. */
+  chunks?: number;
+  cited?: number;
+};
+
+export type KbDocChunk = {
+  chunk_id: string;
+  seq: number;
+  start: number;
+  end: number;
+  text: string;
+  cited: number;
 };
 
 /** A document rendered for the citation viewer: markdown with kb:// links. */
@@ -98,6 +112,8 @@ export interface KbApi {
   uploadDocument(collectionId: string, file: File, path?: string): Promise<string[]>;
   /** Render a source document to markdown (kb:// links) for the citation viewer. */
   renderDocument(documentId: string): Promise<KbRenderedDoc>;
+  /** A document's indexed chunks + their cited counts (the chunks debug view). */
+  getDocChunks(documentId: string): Promise<KbDocChunk[]>;
 
   listChats(): Promise<KbChatSummary[]>;
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
@@ -162,6 +178,10 @@ export const realKbApi: KbApi = {
     // it round-trips a URL untouched.
     const url = `/kb/documents?id=${encodeURIComponent(documentId)}`;
     return (await ok(await apiFetch(url), "render document")).json();
+  },
+  async getDocChunks(documentId) {
+    const url = `/kb/documents/chunks?id=${encodeURIComponent(documentId)}`;
+    return (await ok(await apiFetch(url), "list doc chunks")).json();
   },
 
   async listChats() {

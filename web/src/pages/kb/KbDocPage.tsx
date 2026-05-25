@@ -35,6 +35,7 @@ export function KbDocPage({ client = kbApi }: { client?: KbApi }) {
           snippet={snippet}
           onNavigate={(id) => navigate(docPath(id))}
           onLoaded={(d) => setFilename(d.filename)}
+          showChunks
           client={client}
         />
       </div>

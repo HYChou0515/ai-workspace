@@ -7,7 +7,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown, {
   type Components,
   type Options,
@@ -17,6 +17,7 @@ import remarkGfm from "remark-gfm";
 
 import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { Icon } from "../../components/Icon";
 import { parseKbDocHref } from "./kbLinks";
 import { rehypeHighlightSnippet } from "./rehypeHighlightSnippet";
 
@@ -30,6 +31,7 @@ export function KbDocBody({
   snippet,
   onNavigate,
   onLoaded,
+  showChunks = false,
   client = kbApi,
 }: {
   documentId: string;
@@ -38,11 +40,21 @@ export function KbDocBody({
   onNavigate: (targetId: string) => void;
   /** The rendered document finished loading (so chrome can show its name). */
   onLoaded?: (doc: KbRenderedDoc) => void;
+  /** Offer a File ⇄ Chunks toggle (the indexed-chunks debug view). */
+  showChunks?: boolean;
   client?: KbApi;
 }) {
+  const [view, setView] = useState<"file" | "chunks">("file");
   const { data: doc, error: queryError } = useQuery({
     queryKey: qk.kb.doc(documentId),
     queryFn: () => client.renderDocument(documentId),
+  });
+  // Fetch chunks eagerly when the toggle is offered so its label can show the
+  // count before the user switches views.
+  const { data: chunks = [] } = useQuery({
+    queryKey: qk.kb.docChunks(documentId),
+    queryFn: () => client.getDocChunks(documentId),
+    enabled: showChunks,
   });
   const error = queryError
     ? queryError instanceof Error
@@ -91,24 +103,67 @@ export function KbDocBody({
 
   return (
     <>
-      {snippet && (
+      {showChunks && (
+        <div className="kb-docview-tabs" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "file"}
+            className={`kb-docview-tab${view === "file" ? " is-active" : ""}`}
+            onClick={() => setView("file")}
+          >
+            <Icon name="file" size={13} /> File
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "chunks"}
+            className={`kb-docview-tab${view === "chunks" ? " is-active" : ""}`}
+            onClick={() => setView("chunks")}
+          >
+            <Icon name="layers" size={13} /> Chunks ({chunks.length})
+          </button>
+        </div>
+      )}
+      {snippet && view === "file" && (
         <div className="kb-docviewer__cited">
           <div className="kb-cites__label">Cited passage</div>
           <p>{snippet}</p>
         </div>
       )}
       {error && <div className="kb-drawer__error">{error}</div>}
-      {doc && (
-        <article className="md-body">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={rehypePlugins}
-            urlTransform={urlTransform}
-            components={components}
-          >
-            {doc.markdown}
-          </ReactMarkdown>
-        </article>
+      {view === "chunks" ? (
+        <div className="kb-chunks">
+          {chunks.length === 0 && <p className="kb-cols__empty">No indexed chunks.</p>}
+          {chunks.map((ch) => (
+            <div key={ch.chunk_id} className="kb-chunk">
+              <div className="kb-chunk__meta">
+                <span className="kb-chunk__seq">#{ch.seq}</span>
+                <span className="kb-chunk__range">
+                  {ch.start}–{ch.end}
+                </span>
+                <span className={`kb-chunk__cited${ch.cited > 0 ? " is-cited" : ""}`}>
+                  <Icon name="quote" size={11} color="currentColor" />
+                  {ch.cited} cited
+                </span>
+              </div>
+              <pre className="kb-chunk__text">{ch.text}</pre>
+            </div>
+          ))}
+        </div>
+      ) : (
+        doc && (
+          <article className="md-body">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={rehypePlugins}
+              urlTransform={urlTransform}
+              components={components}
+            >
+              {doc.markdown}
+            </ReactMarkdown>
+          </article>
+        )
       )}
     </>
   );

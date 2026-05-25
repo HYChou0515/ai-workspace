@@ -13,12 +13,16 @@ export function AskAgentDrawer({
   onClose,
   onOpenCitation,
   onManage,
+  onHistory,
   client = kbApi,
 }: {
   open: boolean;
   onClose: () => void;
   onOpenCitation?: (c: KbCitation) => void;
+  /** Jump to the KB collections page (manage sources). */
   onManage?: () => void;
+  /** Jump to the KB chats page (persistent conversation history). */
+  onHistory?: () => void;
   client?: KbApi;
 }) {
   if (!open) return null;
@@ -32,9 +36,15 @@ export function AskAgentDrawer({
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div className="kb-drawer__title">Ask the knowledge base</div>
-            <button type="button" className="kb-drawer__manage" onClick={onManage}>
-              manage sources
-            </button>
+            <div className="kb-drawer__links">
+              <button type="button" className="kb-drawer__manage" onClick={onManage}>
+                manage sources
+              </button>
+              <span className="kb-drawer__dot" aria-hidden>·</span>
+              <button type="button" className="kb-drawer__manage" onClick={onHistory}>
+                history
+              </button>
+            </div>
           </div>
           <button type="button" className="kb-iconbtn" aria-label="Close" onClick={onClose}>
             <Icon name="x" size={16} />

@@ -61,6 +61,15 @@
   font-weight: 600;
   color: var(--text-paper);
 }
+.kb-drawer__links {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.kb-drawer__dot {
+  color: var(--text-paper-d2);
+  font-size: var(--text-xs);
+}
 .kb-drawer__manage {
   border: none;
   background: none;
@@ -502,7 +511,8 @@
   cursor: pointer;
   text-align: left;
 }
-.kb-docs__by {
+.kb-docs__by,
+.kb-docs__metric {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -510,6 +520,14 @@
   font-size: var(--text-xs);
   color: var(--text-paper-d2);
   white-space: nowrap;
+}
+.kb-cols__cited {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d2);
 }
 .kb-docs__path {
   flex: 1;
@@ -942,4 +960,75 @@
   font-size: var(--text-xs);
   color: var(--text-paper-d2);
   padding-left: 28px;
+}
+
+/* ------------------------- Doc file ⇄ chunks view ------------------------- */
+
+.kb-docview-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--paper-3);
+}
+.kb-docview-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  font-family: var(--font-body);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.kb-docview-tab.is-active {
+  color: var(--text-paper);
+  border-bottom-color: var(--accent);
+}
+.kb-chunks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.kb-chunk {
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  overflow: hidden;
+}
+.kb-chunk__meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 12px;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--paper-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d2);
+}
+.kb-chunk__seq {
+  font-weight: 600;
+  color: var(--text-paper-d);
+}
+.kb-chunk__cited {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+}
+.kb-chunk__cited.is-cited {
+  color: var(--accent-h);
+}
+.kb-chunk__text {
+  margin: 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper);
 }

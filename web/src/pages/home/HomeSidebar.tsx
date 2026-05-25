@@ -4,6 +4,7 @@
  */
 
 import { formatInvestigationId, type Investigation } from "../../api/types";
+import { Icon, type IconName } from "../../components/Icon";
 import { RcaLockup } from "../../components/RcaMark";
 import { SettingsButton } from "../../components/SettingsButton";
 import { UserAvatar } from "../../components/UserChip";
@@ -38,6 +39,8 @@ export function HomeSidebar({
   onNewInvestigation,
   onOpenTemplates,
   onOpenInvestigation,
+  onOpenKnowledge,
+  onOpenChats,
 }: {
   items: Investigation[];
   currentUser: string;
@@ -50,6 +53,10 @@ export function HomeSidebar({
   onNewInvestigation: () => void;
   onOpenTemplates: () => void;
   onOpenInvestigation: (id: string) => void;
+  /** Jump to the KB collections surface (the global knowledge base). */
+  onOpenKnowledge: () => void;
+  /** Jump to the KB chat-history surface. */
+  onOpenChats: () => void;
 }) {
   const byStatus = countByStatus(items);
   const openTotal = byStatus.triaging + byStatus.awaiting_review;
@@ -152,6 +159,17 @@ export function HomeSidebar({
             );
           })}
         </ul>
+
+        <Section caps="Knowledge base">
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 2 }}>
+            <li>
+              <KbNavLink icon="layers" label="Knowledge" onClick={onOpenKnowledge} />
+            </li>
+            <li>
+              <KbNavLink icon="chat" label="Chat" onClick={onOpenChats} />
+            </li>
+          </ul>
+        </Section>
 
         {pinnedItems.length > 0 && (
           <Section caps="Pinned">
@@ -279,6 +297,44 @@ function Section({
       </div>
       {children}
     </div>
+  );
+}
+
+function KbNavLink({
+  icon,
+  label,
+  onClick,
+}: {
+  icon: IconName;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 10px",
+        borderRadius: 4,
+        background: "transparent",
+        color: "var(--text-paper)",
+        fontSize: "var(--text-body-sm)",
+        textAlign: "left",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.background = "var(--paper-2)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+      }}
+    >
+      <Icon name={icon} size={15} color="var(--text-paper-d)" />
+      {label}
+    </button>
   );
 }
 

@@ -7,14 +7,18 @@ import { QueryWrap } from "../../test/queryWrapper";
 // KB views read through TanStack Query — wrap every render with a client.
 const render = (ui: Parameters<typeof rtlRender>[0]) =>
   rtlRender(ui, { wrapper: QueryWrap });
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { KbApi, KbRenderedDoc } from "../../api/kb";
+import type { KbApi, KbDocChunk, KbRenderedDoc } from "../../api/kb";
 import { KbDocPage } from "./KbDocPage";
 
-function fakeClient(doc: KbRenderedDoc): KbApi {
-  return { renderDocument: async () => doc } as unknown as KbApi;
+function fakeClient(doc: KbRenderedDoc, chunks: KbDocChunk[] = []): KbApi {
+  return {
+    renderDocument: async () => doc,
+    getDocChunks: async () => chunks,
+  } as unknown as KbApi;
 }
 
 describe("KbDocPage", () => {
@@ -40,5 +44,34 @@ describe("KbDocPage", () => {
       const mark = container.querySelector("mark.kb-hl");
       expect(mark?.textContent).toBe("Zone three drifted under load");
     });
+  });
+
+  it("toggles from the file view to a chunks view with per-chunk cited counts", async () => {
+    const client = fakeClient(
+      {
+        filename: "reflow.md",
+        collection_id: "col-1",
+        markdown: "# Reflow\n\nbody text here",
+      },
+      [
+        { chunk_id: "col-1/u/reflow.md#0", seq: 0, start: 0, end: 8, text: "# Reflow", cited: 3 },
+        { chunk_id: "col-1/u/reflow.md#1", seq: 1, start: 9, end: 23, text: "body text here", cited: 0 },
+      ],
+    );
+    render(
+      <MemoryRouter initialEntries={["/kb/doc/col-1/u/reflow.md"]}>
+        <Routes>
+          <Route path="/kb/doc/*" element={<KbDocPage client={client} />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    // file view is shown first
+    await screen.findByText(/body text here/);
+
+    // toggle reports the chunk count and switches to the chunks list
+    await userEvent.click(screen.getByRole("tab", { name: /chunks \(2\)/i }));
+    const chunk0 = (await screen.findByText("# Reflow")).closest(".kb-chunk")!;
+    expect(chunk0).toHaveTextContent("3 cited");
+    expect(chunk0).toHaveTextContent("#0");
   });
 });

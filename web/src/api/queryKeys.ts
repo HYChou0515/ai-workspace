@@ -31,5 +31,6 @@ export const qk = {
     chat: (id: string) => ["kb", "chat", id] as const,
     agent: ["kb", "agent"] as const,
     doc: (id: string) => ["kb", "doc", id] as const,
+    docChunks: (id: string) => ["kb", "doc-chunks", id] as const,
   },
 } as const;
