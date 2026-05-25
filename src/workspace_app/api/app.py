@@ -305,24 +305,47 @@ def create_app(
 
     conv_rm = spec.get_resource_manager(Conversation)
 
+    def _first_agent_config() -> AgentConfig | None:
+        """The default agent (issue #2): the first config in the store, by
+        creation time. ``None`` only if the store has no configs at all."""
+        from specstar import QB
+
+        cfg_rm = spec.get_resource_manager(AgentConfig)
+        revs = list(cfg_rm.list_resources(QB.all()))  # ty: ignore[invalid-argument-type]
+        if not revs:
+            return None
+        first = min(revs, key=lambda r: r.info.created_time)
+        assert isinstance(first.data, AgentConfig)
+        return first.data
+
     def _resolve_agent_config(investigation_id: str) -> AgentConfig | None:
-        """The AgentConfig attached to this investigation, with the
-        investigation's template appendix composed onto its system prompt so
-        the agent is told about *this* template's starting files."""
+        """The AgentConfig that drives this investigation's turn: the one
+        attached to it, else the store's default (first config, issue #2). The
+        investigation's template appendix is composed onto the prompt so the
+        agent is told about *this* template's starting files."""
         inv_rm = spec.get_resource_manager(Investigation)
         try:
             inv = inv_rm.get(investigation_id).data
         except ResourceIDNotFoundError:
+            inv = None
+        is_inv = isinstance(inv, Investigation)
+        template = inv.template_profile if is_inv else "default"
+
+        cfg: AgentConfig | None = None
+        attached_id = inv.attached_agent_config_id if is_inv else None
+        if attached_id:
+            cfg_rm = spec.get_resource_manager(AgentConfig)
+            try:
+                attached = cfg_rm.get(attached_id).data
+            except ResourceIDNotFoundError:
+                attached = None
+            if isinstance(attached, AgentConfig):
+                cfg = attached
+        if cfg is None:  # no attached config (or it was deleted) → store default
+            cfg = _first_agent_config()
+        if cfg is None:  # empty store — let the runner use its own default
             return None
-        if not isinstance(inv, Investigation) or not inv.attached_agent_config_id:
-            return None
-        cfg_rm = spec.get_resource_manager(AgentConfig)
-        try:
-            cfg = cfg_rm.get(inv.attached_agent_config_id).data
-        except ResourceIDNotFoundError:
-            return None
-        assert isinstance(cfg, AgentConfig)  # the AgentConfig manager yields AgentConfig
-        composed = compose_system_prompt(cfg.system_prompt, inv.template_profile)
+        composed = compose_system_prompt(cfg.system_prompt, template)
         return msgspec.structs.replace(cfg, system_prompt=composed)
 
     def _conversation_for(investigation_id: str) -> tuple[str, Conversation]:

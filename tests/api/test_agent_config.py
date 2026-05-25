@@ -95,9 +95,9 @@ def test_attached_config_drives_the_turn():
     assert "/SOP.md" not in captured[0].system_prompt  # not the default template's
 
 
-def test_no_attached_config_leaves_turn_on_default():
-    """An investigation without an attached config gets ctx.agent_config
-    None — the runner falls back to its own default."""
+def test_no_attached_config_uses_first_store_config():
+    """An investigation without an attached config runs with the FIRST agent
+    config in the store (issue #2), not a bare runner default."""
     captured: list[AgentConfig | None] = []
 
     class _CapturingRunner:
@@ -117,6 +117,36 @@ def test_no_attached_config_leaves_turn_on_default():
     inv_id = client.post("/investigation", json={"title": "t", "owner": "u"}).json()["resource_id"]
     resp = client.post(f"/investigations/{inv_id}/messages", json={"content": "hi"})
     _ = resp.text
+    # The first seeded config is the local Qwen3 one.
+    assert captured and captured[0] is not None
+    assert captured[0].model == "ollama_chat/qwen3:14b"
+
+
+def test_empty_store_resolves_to_none():
+    """With NO agent configs in the store at all, resolution yields None and
+    the runner falls back to its own default (covers the empty-store guard)."""
+    captured: list[AgentConfig | None] = []
+
+    class _CapturingRunner:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            captured.append(ctx.agent_config)
+            yield RunDone()
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_CapturingRunner(),
+    )
+    client = TestClient(app)
+    cfg_rm = spec.get_resource_manager(AgentConfig)
+    for r in list(cfg_rm.list_resources(QB.all())):  # ty: ignore[invalid-argument-type]
+        cfg_rm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+    inv_id = client.post("/investigation", json={"title": "t", "owner": "u"}).json()["resource_id"]
+    resp = client.post(f"/investigations/{inv_id}/messages", json={"content": "hi"})
+    _ = resp.text
     assert captured == [None]
 
 
@@ -130,9 +160,9 @@ def test_seeding_is_idempotent(harness: Harness):
     assert rm.count_resources(QB.all()) == before  # ty: ignore[invalid-argument-type]
 
 
-def test_stale_attached_config_id_falls_back_to_default():
-    """If the attached config was deleted, the turn quietly falls back to
-    the runner default rather than 500-ing."""
+def test_stale_attached_config_id_falls_back_to_first_store_config():
+    """If the attached config was deleted, the turn quietly falls back to the
+    first config in the store (issue #2) rather than 500-ing or going bare."""
     captured: list[AgentConfig | None] = []
 
     class _CapturingRunner:
@@ -155,4 +185,5 @@ def test_stale_attached_config_id_falls_back_to_default():
     ).json()["resource_id"]
     resp = client.post(f"/investigations/{inv_id}/messages", json={"content": "hi"})
     _ = resp.text
-    assert captured == [None]
+    assert captured and captured[0] is not None
+    assert captured[0].model == "ollama_chat/qwen3:14b"
