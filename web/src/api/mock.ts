@@ -506,6 +506,21 @@ export const mockApi: ApiClient = {
     await delay(10);
     return "default-user";
   },
+  async getUsers() {
+    await delay(10);
+    return [
+      { id: "default-user", name: "You", section: "Process Eng", email: "", photo_url: null },
+      { id: "alice", name: "Alice Chen", section: "Reflow", email: "", photo_url: null },
+      { id: "bob", name: "Bob Liu", section: "SMT", email: "", photo_url: null },
+      { id: "carol", name: "Carol Kao", section: "Quality", email: "", photo_url: null },
+    ];
+  },
+  async getNotifications() {
+    await delay(10);
+    return [];
+  },
+  async markAllNotificationsRead() {},
+  async markNotificationRead() {},
 
   async listInvestigations() {
     await delay(40);

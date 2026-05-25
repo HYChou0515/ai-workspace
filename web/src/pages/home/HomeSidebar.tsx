@@ -6,6 +6,8 @@
 import { formatInvestigationId, type Investigation } from "../../api/types";
 import { RcaLockup } from "../../components/RcaMark";
 import { SettingsButton } from "../../components/SettingsButton";
+import { UserAvatar } from "../../components/UserChip";
+import { useUser } from "../../hooks/useUsers";
 import {
   type Filters,
   type HomeTab,
@@ -54,6 +56,7 @@ export function HomeSidebar({
   const myOpen = ownedByCount(items, currentUser);
   const watching = watchingCount(items, currentUser);
   const topics = topicCounts(items);
+  const me = useUser(currentUser);
 
   // Helper sets to enable a couple of synthetic sidebar items: pinned
   // (apply filter to just pinned ids) and recently viewed (top of recent).
@@ -246,13 +249,11 @@ export function HomeSidebar({
           gap: 10,
         }}
       >
-        <Avatar name={currentUser} />
+        <UserAvatar userId={currentUser} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: "var(--text-body-sm)", fontWeight: 500 }}>
-            {currentUser}
-          </div>
+          <div style={{ fontSize: "var(--text-body-sm)", fontWeight: 500 }}>{me.name}</div>
           <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
-            Process engineer
+            {me.section || "Process engineer"}
           </div>
         </div>
         <SettingsButton />
@@ -331,31 +332,3 @@ function SidebarLink({
   );
 }
 
-function Avatar({ name }: { name: string }) {
-  const initials =
-    name
-      .split(/[\s_-]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((s) => s[0]?.toUpperCase() ?? "")
-      .join("") || "?";
-  return (
-    <div
-      style={{
-        width: 28,
-        height: 28,
-        borderRadius: "50%",
-        background: "var(--paper-2)",
-        color: "var(--text-paper)",
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        fontWeight: 600,
-        fontSize: 12,
-        border: "1px solid var(--paper-3)",
-      }}
-    >
-      {initials}
-    </div>
-  );
-}

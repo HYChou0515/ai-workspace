@@ -8,6 +8,8 @@
  */
 export const qk = {
   currentUser: ["currentUser"] as const,
+  users: ["users"] as const,
+  notifications: ["notifications"] as const,
 
   investigations: ["investigations"] as const,
   investigation: (id: string) => ["investigation", id] as const,

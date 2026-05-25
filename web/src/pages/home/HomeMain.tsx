@@ -7,8 +7,8 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import type { ActivityEntry, Investigation, Severity, Status } from "../../api/types";
-import { useActivity } from "../../hooks/useResources";
+import type { Investigation, NotificationItem, Severity, Status } from "../../api/types";
+import { useNotifications } from "../../hooks/useNotifications";
 import {
   formatInvestigationId,
   isCritical,
@@ -398,26 +398,9 @@ function TopBar({
   );
 }
 
-const NOTIF_SEEN_KEY = "rca:notif-seen";
-
 function NotificationsBell() {
   const navigate = useNavigate();
-  const items = useActivity();
-  const [lastSeen, setLastSeen] = useState<string>(
-    () => localStorage.getItem(NOTIF_SEEN_KEY) ?? "",
-  );
-
-  const unread = items.filter((a) => a.ts > lastSeen).length;
-
-  const markSeen = () => {
-    const newest = items[0]?.ts ?? new Date().toISOString();
-    setLastSeen(newest);
-    try {
-      localStorage.setItem(NOTIF_SEEN_KEY, newest);
-    } catch {
-      /* ignore */
-    }
-  };
+  const { items, unread, markAllRead, markRead } = useNotifications();
 
   return (
     <Popover
@@ -425,11 +408,8 @@ function NotificationsBell() {
       trigger={({ onClick, open }) => (
         <button
           type="button"
-          onClick={() => {
-            if (!open) markSeen(); // mark read as the panel opens
-            onClick();
-          }}
-          title="Recent activity"
+          onClick={onClick}
+          title="Notifications"
           style={{
             height: 32,
             padding: "0 10px",
@@ -461,22 +441,38 @@ function NotificationsBell() {
       )}
     >
       {(close) => (
-        <div style={{ minWidth: 280, maxHeight: 360, overflowY: "auto", padding: "8px 4px" }}>
-          <div className="caps" style={{ padding: "4px 10px" }}>
-            Recent activity
+        <div style={{ minWidth: 300, maxHeight: 380, overflowY: "auto", padding: "8px 4px" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "4px 10px",
+            }}
+          >
+            <span className="caps">Notifications</span>
+            {unread > 0 && (
+              <button
+                type="button"
+                onClick={() => markAllRead()}
+                style={{ fontSize: 11, color: "var(--text-paper-d)" }}
+              >
+                Mark all read
+              </button>
+            )}
           </div>
           {items.length === 0 && (
             <div style={{ padding: "8px 10px", color: "var(--text-paper-d)", fontSize: 12 }}>
-              No activity yet.
+              No notifications.
             </div>
           )}
-          {items.map((a, i) => (
+          {items.map((n) => (
             <NotifLine
-              key={i}
-              entry={a}
+              key={n.resource_id}
+              n={n}
               onClick={() => {
-                const id = a.ref.investigation_id;
-                if (id) navigate(`/investigations/${id}`);
+                markRead(n.resource_id);
+                if (n.link) navigate(n.link);
                 close();
               }}
             />
@@ -487,8 +483,8 @@ function NotificationsBell() {
   );
 }
 
-function NotifLine({ entry, onClick }: { entry: ActivityEntry; onClick: () => void }) {
-  const when = relativeTime(entry.ts);
+function NotifLine({ n, onClick }: { n: NotificationItem; onClick: () => void }) {
+  const when = n.created_at ? relativeTime(new Date(n.created_at).toISOString()) : "";
   return (
     <button
       type="button"
@@ -496,27 +492,39 @@ function NotifLine({ entry, onClick }: { entry: ActivityEntry; onClick: () => vo
       style={{
         width: "100%",
         textAlign: "left",
-        padding: "6px 10px",
+        padding: "8px 10px",
         display: "flex",
         gap: 8,
         fontSize: 12,
         color: "var(--text-paper)",
-        background: "transparent",
+        background: n.read ? "transparent" : "var(--accent-soft)",
       }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--paper-2)")}
-      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+      onMouseLeave={(e) =>
+        (e.currentTarget.style.background = n.read ? "transparent" : "var(--accent-soft)")
+      }
     >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: n.read ? 400 : 600 }}>{n.title}</div>
+        {n.body && (
+          <div
+            style={{
+              color: "var(--text-paper-d)",
+              fontSize: 11,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {n.body}
+          </div>
+        )}
+      </div>
       <span
-        style={{
-          fontFamily: "var(--font-mono)",
-          color: "var(--text-paper-d2)",
-          width: 64,
-          flexShrink: 0,
-        }}
+        style={{ fontFamily: "var(--font-mono)", color: "var(--text-paper-d2)", flexShrink: 0 }}
       >
         {when}
       </span>
-      <span style={{ flex: 1 }}>{entry.text}</span>
     </button>
   );
 }

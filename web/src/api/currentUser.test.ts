@@ -8,14 +8,15 @@ describe("getCurrentUser", () => {
     expect(await mockApi.getCurrentUser()).toBe("default-user");
   });
 
-  it("real client resolves the mocked id without hitting the network", async () => {
-    // No /me endpoint yet — realApi returns a stub, so this must not fetch.
+  it("real client resolves the id from GET /me", async () => {
     const orig = globalThis.fetch;
-    globalThis.fetch = (() => {
-      throw new Error("getCurrentUser must not call fetch until SSO lands");
-    }) as typeof fetch;
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ id: "alice", name: "Alice Chen" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as typeof fetch;
     try {
-      expect(await realApi.getCurrentUser()).toBe("default-user");
+      expect(await realApi.getCurrentUser()).toBe("alice");
     } finally {
       globalThis.fetch = orig;
     }

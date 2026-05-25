@@ -160,11 +160,35 @@ export type ExecResult = {
   stderr: string;
 };
 
+export type User = {
+  id: string;
+  name: string;
+  section: string;
+  email: string;
+  photo_url: string | null;
+};
+
+export type NotificationItem = {
+  resource_id: string;
+  kind: string; // mention | share | status | …
+  title: string;
+  body: string;
+  link: string;
+  actor: string | null;
+  read: boolean;
+  created_at: number | null;
+};
+
 export interface ApiClient {
-  /** Id of the signed-in user. Mocked until an auth/SSO `/me` endpoint
-   * exists; the whole FE reads identity through this so only one method
-   * changes when real auth lands. */
+  /** Id of the signed-in user (`GET /me`). The whole FE reads identity through
+   * this; real auth swaps only the backend resolution. */
   getCurrentUser(): Promise<string>;
+  /** GET /users — the company directory (small; fetch once, filter on the FE). */
+  getUsers(): Promise<User[]>;
+  /** GET /notifications — the current user's notifications, newest first. */
+  getNotifications(): Promise<NotificationItem[]>;
+  markAllNotificationsRead(): Promise<void>;
+  markNotificationRead(id: string): Promise<void>;
   listInvestigations(): Promise<Investigation[]>;
   getInvestigation(id: string): Promise<Investigation>;
   createInvestigation(input: InvestigationInput): Promise<Investigation>;

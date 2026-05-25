@@ -29,9 +29,11 @@ import type {
   Investigation,
   InvestigationInput,
   NotebookRef,
+  NotificationItem,
   SearchOptions,
   SearchResult,
   SendMessageArgs,
+  User,
 } from "./types";
 
 type SpecstarRevisionInfo = {
@@ -125,10 +127,20 @@ function searchBody(opts: SearchOptions): Record<string, unknown> {
 
 export const realApi: ApiClient = {
   async getCurrentUser() {
-    // TODO: replace with a real auth/SSO call (e.g. GET /me) once the
-    // backend can identify the caller. Until then every owner/author
-    // defaults to this single tenant — matches the backend's DEFAULT_USER.
-    return "default-user";
+    const me = await json<{ id: string }>(await apiFetch("/me"));
+    return me.id;
+  },
+  async getUsers() {
+    return json<User[]>(await apiFetch("/users"));
+  },
+  async getNotifications() {
+    return json<NotificationItem[]>(await apiFetch("/notifications"));
+  },
+  async markAllNotificationsRead() {
+    await apiFetch("/notifications/read-all", { method: "POST" });
+  },
+  async markNotificationRead(id) {
+    await apiFetch(`/notifications/${encodeURIComponent(id)}/read`, { method: "POST" });
   },
 
   async listInvestigations() {

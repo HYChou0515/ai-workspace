@@ -4,6 +4,7 @@ from .agent_config import AgentConfig
 from .conversation import Conversation, Message
 from .investigation import Investigation, Severity, Status
 from .kb import Collection, DocChunk, KbChat, SourceDoc
+from .notification import Notification
 
 __all__ = [
     "AgentConfig",
@@ -13,6 +14,7 @@ __all__ = [
     "Investigation",
     "KbChat",
     "Message",
+    "Notification",
     "Severity",
     "SourceDoc",
     "Status",
@@ -28,3 +30,4 @@ def register_all(spec: SpecStar) -> None:
     spec.add_model(SourceDoc)
     spec.add_model(DocChunk)
     spec.add_model(KbChat)
+    spec.add_model(Notification)

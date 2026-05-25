@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -38,6 +38,7 @@ from ..resources import (
 from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
+from ..users import MockUserDirectory, UserDirectory
 from .activity import ActivityLog
 from .events import (
     AgentEvent,
@@ -46,6 +47,7 @@ from .events import (
 )
 from .kb_chat_routes import answer_question, kb_progress, register_kb_chat_routes
 from .kb_routes import register_kb_routes
+from .notifications import notify, register_notification_routes
 from .registry import InvestigationRegistry
 from .runner import AgentRunner
 from .search import InvalidQuery, compile_query, path_selected, search_text
@@ -201,10 +203,18 @@ def create_app(
     kb_embedder: Embedder | None = None,
     kb_chunker: Chunker | None = None,
     kb_llm: Llm | None = None,
+    get_user_id: Callable[[], str] | None = None,
+    users: UserDirectory | None = None,
     spa_dist: Path | None = None,
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
 ) -> FastAPI:
+    # Current-user seam: real deploys inject a reader of the auth middleware;
+    # the default is the single dev tenant. UserDirectory resolves ids → people.
+    if get_user_id is None:
+        get_user_id = lambda: "default-user"  # noqa: E731
+    if users is None:
+        users = MockUserDirectory()
     if spec is None:
         spec = SpecStar()
         spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
@@ -239,6 +249,19 @@ def create_app(
             await registry.close_all()
 
     app = FastAPI(title="RCA 3.0", lifespan=lifespan)
+
+    register_notification_routes(app, spec, get_user_id)
+
+    @app.get("/me")
+    async def get_me() -> dict:
+        """The signed-in user (resolved from the auth seam via the directory)."""
+        return users.get(get_user_id()).to_dict()
+
+    @app.get("/users")
+    async def list_users() -> list[dict]:
+        """The user directory — small enough to fetch whole and filter on the FE
+        (mention / share pickers)."""
+        return [u.to_dict() for u in users.all_users()]
 
     @app.get("/templates")
     async def get_templates() -> list[str]:
@@ -462,6 +485,17 @@ def create_app(
                 f"Closed “{current.title}” as {body.status}",
                 {"investigation_id": investigation_id},
             )
+            # Notify the owner + watchers (except whoever did it).
+            actor = get_user_id()
+            for uid in {current.owner, *current.members} - {actor}:
+                notify(
+                    spec,
+                    recipient=uid,
+                    kind="status",
+                    title=f"{current.title} → {body.status}",
+                    link=f"/investigations/{investigation_id}",
+                    actor=actor,
+                )
         else:
             # Pure close — leave the investigation status untouched, just
             # release its sandbox/kernels (the workspace shuts down).
