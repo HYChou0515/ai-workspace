@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@tanstack/react-query": "^5.100.14",
     "dompurify": "^3.4.5",
     "katex": "^0.17.0",
     "monaco-editor": "^0.55.1",

@@ -5,14 +5,17 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AppRoutes } from "./App";
+import { QueryWrap } from "./test/queryWrapper";
 
 afterEach(cleanup);
 
 function renderAt(path: string) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
-      <AppRoutes />
-    </MemoryRouter>,
+    <QueryWrap>
+      <MemoryRouter initialEntries={[path]}>
+        <AppRoutes />
+      </MemoryRouter>
+    </QueryWrap>,
   );
 }
 
