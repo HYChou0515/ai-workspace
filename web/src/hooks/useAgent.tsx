@@ -14,6 +14,7 @@ import {
   logFromMessages,
   reduceAgent,
 } from "../pages/investigation/agentLog";
+import { useCurrentUser } from "./useCurrentUser";
 
 /**
  * Single source of truth for the agent conversation per investigation.
@@ -32,6 +33,7 @@ type AgentState = {
 const AgentContext = createContext<AgentState | null>(null);
 
 export function useAgentInternal(investigationId: string): AgentState {
+  const currentUser = useCurrentUser();
   const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -68,7 +70,7 @@ export function useAgentInternal(investigationId: string): AgentState {
           {
             kind: "message",
             at: Date.now(),
-            message: { role: "user", author: "default-user", content: trimmed },
+            message: { role: "user", author: currentUser, content: trimmed },
           },
         ],
       }));
@@ -92,7 +94,7 @@ export function useAgentInternal(investigationId: string): AgentState {
         if (abortRef.current === controller) abortRef.current = null;
       }
     },
-    [investigationId],
+    [investigationId, currentUser],
   );
 
   const cancel = useCallback(() => {

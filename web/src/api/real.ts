@@ -124,6 +124,13 @@ function searchBody(opts: SearchOptions): Record<string, unknown> {
 }
 
 export const realApi: ApiClient = {
+  async getCurrentUser() {
+    // TODO: replace with a real auth/SSO call (e.g. GET /me) once the
+    // backend can identify the caller. Until then every owner/author
+    // defaults to this single tenant — matches the backend's DEFAULT_USER.
+    return "default-user";
+  },
+
   async listInvestigations() {
     const arr = await json<SpecstarEntry<InvestigationStruct>[]>(
       await apiFetch("/investigation"),

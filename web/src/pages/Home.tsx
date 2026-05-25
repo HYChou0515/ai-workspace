@@ -5,6 +5,7 @@ import { api } from "../api";
 import type { InvestigationInput } from "../api/types";
 import { NewInvestigationModal } from "../components/NewInvestigationModal";
 import { TemplatesModal } from "../components/TemplatesModal";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useInvestigations } from "../hooks/useInvestigations";
 import { usePersistentDeque, usePersistentSet } from "../hooks/usePersistentSet";
 import { HomeMain } from "./home/HomeMain";
@@ -17,9 +18,8 @@ import {
   type SortKey,
 } from "./home.helpers";
 
-const CURRENT_USER = "default-user";
-
 export function Home() {
+  const currentUser = useCurrentUser();
   const result = useInvestigations();
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<HomeTab>("all");
@@ -94,7 +94,7 @@ export function Home() {
     >
       <HomeSidebar
         items={items}
-        currentUser={CURRENT_USER}
+        currentUser={currentUser}
         activeTab={tab}
         onTab={setTab}
         pinned={new Set(pinned.values)}
@@ -110,7 +110,7 @@ export function Home() {
       />
       <HomeMain
         items={items}
-        currentUser={CURRENT_USER}
+        currentUser={currentUser}
         activeTab={tab}
         onTab={setTab}
         filters={filters}

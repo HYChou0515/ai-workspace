@@ -502,6 +502,11 @@ let callCounter = 1;
 let createCounter = 200;
 
 export const mockApi: ApiClient = {
+  async getCurrentUser() {
+    await delay(10);
+    return "default-user";
+  },
+
   async listInvestigations() {
     await delay(40);
     return investigations.map((i) => ({ ...i }));

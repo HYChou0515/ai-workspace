@@ -161,6 +161,10 @@ export type ExecResult = {
 };
 
 export interface ApiClient {
+  /** Id of the signed-in user. Mocked until an auth/SSO `/me` endpoint
+   * exists; the whole FE reads identity through this so only one method
+   * changes when real auth lands. */
+  getCurrentUser(): Promise<string>;
   listInvestigations(): Promise<Investigation[]>;
   getInvestigation(id: string): Promise<Investigation>;
   createInvestigation(input: InvestigationInput): Promise<Investigation>;
