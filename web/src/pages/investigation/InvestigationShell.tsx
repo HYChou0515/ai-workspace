@@ -27,6 +27,11 @@ import {
 } from "../../hooks/useEditorGroups";
 import { useThemeMode } from "../../hooks/theme";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
+import {
+  useAttachAgentConfig,
+  useCloseInvestigation,
+  useUpdateInvestigation,
+} from "../../hooks/useInvestigationMutations";
 import { formatMetrics } from "./agentLog";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
@@ -112,6 +117,8 @@ function ShellBody({
 }) {
   const [editOpen, setEditOpen] = useState(false);
   const dialog = useDialog();
+  const updateInvestigation = useUpdateInvestigation(investigation.resource_id);
+  const attachAgentConfig = useAttachAgentConfig(investigation.resource_id);
   // The initial open tabs mirror the design's six view-files (those that
   // exist).
   const designViews = useMemo(
@@ -156,11 +163,11 @@ function ShellBody({
   const selectAgentConfig = useCallback(
     (id: string | null) => {
       setAttachedConfigId(id); // optimistic
-      api.attachAgentConfig(investigation.resource_id, id).catch((e) => {
-        console.error("attachAgentConfig failed", e);
+      attachAgentConfig.mutate(id, {
+        onError: (e) => console.error("attachAgentConfig failed", e),
       });
     },
-    [investigation.resource_id],
+    [attachAgentConfig],
   );
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
@@ -310,13 +317,14 @@ function ShellBody({
           }}
           onClose={() => setEditOpen(false)}
           onSubmit={(input) => {
-            api
-              .updateInvestigation(investigation.resource_id, input)
-              .then(() => {
+            updateInvestigation.mutate(input, {
+              onSuccess: () => {
                 setEditOpen(false);
                 onInvestigationChanged?.();
-              })
-              .catch((e) => console.error("update investigation failed", e));
+              },
+              onError: (e) =>
+                console.error("update investigation failed", e),
+            });
           }}
         />
         <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
@@ -878,6 +886,7 @@ function CloseInvestigationButton({
   investigation: Investigation;
 }) {
   const navigate = useNavigate();
+  const closeInvestigation = useCloseInvestigation(investigation.resource_id);
   // "pure" = leave-as-is teardown (status untouched); the others flip status.
   const [pending, setPending] = useState<CloseStatus | "pure" | null>(null);
   const alreadyClosed = !isOpen(investigation.status);
@@ -886,7 +895,7 @@ function CloseInvestigationButton({
     if (pending) return;
     setPending(status ?? "pure");
     try {
-      await api.closeInvestigation(investigation.resource_id, status);
+      await closeInvestigation.mutateAsync(status);
       dismiss();
       navigate("/");
     } catch (e) {

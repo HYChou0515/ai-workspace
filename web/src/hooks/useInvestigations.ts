@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../api";
+import { qk } from "../api/queryKeys";
 import type { Investigation } from "../api/types";
 
 type State =
@@ -8,28 +9,20 @@ type State =
   | { kind: "ready"; items: Investigation[] }
   | { kind: "error"; error: Error };
 
+/**
+ * The investigation list, cached under `qk.investigations`. Mutations
+ * (create/update/close) invalidate this key so the list refreshes without a
+ * manual refetch. `refresh()` forces a refetch on demand.
+ */
 export function useInvestigations(): State & { refresh: () => void } {
-  const [state, setState] = useState<State>({ kind: "loading" });
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    let mounted = true;
-    setState({ kind: "loading" });
-    api
-      .listInvestigations()
-      .then((items) => {
-        if (mounted) setState({ kind: "ready", items });
-      })
-      .catch((e: unknown) => {
-        if (!mounted) return;
-        const error =
-          e instanceof Error ? e : new Error(String(e ?? "unknown error"));
-        setState({ kind: "error", error });
-      });
-    return () => {
-      mounted = false;
-    };
-  }, [tick]);
-
-  return { ...state, refresh: () => setTick((n) => n + 1) };
+  const q = useQuery({
+    queryKey: qk.investigations,
+    queryFn: () => api.listInvestigations(),
+  });
+  const refresh = () => {
+    void q.refetch();
+  };
+  if (q.isPending) return { kind: "loading", refresh };
+  if (q.isError) return { kind: "error", error: q.error, refresh };
+  return { kind: "ready", items: q.data, refresh };
 }

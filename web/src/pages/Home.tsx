@@ -6,6 +6,7 @@ import type { InvestigationInput } from "../api/types";
 import { NewInvestigationModal } from "../components/NewInvestigationModal";
 import { TemplatesModal } from "../components/TemplatesModal";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useCreateInvestigation } from "../hooks/useInvestigationMutations";
 import { useInvestigations } from "../hooks/useInvestigations";
 import { usePersistentDeque, usePersistentSet } from "../hooks/usePersistentSet";
 import { HomeMain } from "./home/HomeMain";
@@ -21,6 +22,7 @@ import {
 export function Home() {
   const currentUser = useCurrentUser();
   const result = useInvestigations();
+  const createInvestigation = useCreateInvestigation();
   const [searchParams] = useSearchParams();
   const [tab, setTab] = useState<HomeTab>("all");
   const [modalOpen, setModalOpen] = useState(false);
@@ -54,7 +56,7 @@ export function Home() {
 
   const handleCreate = async (input: InvestigationInput) => {
     try {
-      const created = await api.createInvestigation(input);
+      const created = await createInvestigation.mutateAsync(input);
       setModalOpen(false);
       recent.push(created.resource_id);
       navigate(`/investigations/${created.resource_id}`);
