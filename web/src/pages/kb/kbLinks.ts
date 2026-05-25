@@ -1,9 +1,9 @@
 /**
  * kb:// link resolution. The backend rewrites a document's relative markdown
- * links to stable `kb://doc/{collection}/{user}/{path}` URIs (nothing
- * route-shaped is stored). The FE resolves them LATE: in the doc viewer's
- * markdown, a kb:// link becomes in-app navigation to that document; anything
- * else stays a normal link.
+ * links to stable `kb://doc/{id}` URIs, where `{id}` is the opaque, slash-free
+ * SourceDoc id. The FE resolves them LATE: in the doc viewer's markdown, a
+ * kb:// link becomes in-app navigation to that document; anything else stays a
+ * normal link.
  */
 
 import { API_BASE } from "../../api/http";
@@ -23,15 +23,13 @@ export function parseKbDocHref(href: string): string | null {
 
 /**
  * The in-app ROUTE for a document's dedicated page (for react-router
- * `navigate`, which prepends the basename itself). The id is path-shaped
- * ({collection}/{user}/{path}); each segment is encoded but the slashes are
- * kept so the `/kb/doc/*` splat route reads it back. Optional cited passage
- * rides along as `?hl=` for highlighting.
+ * `navigate`, which prepends the basename itself). The id is an opaque,
+ * slash-free token — encode it as one segment; the `/kb/doc/*` splat route
+ * reads it back. Optional cited passage rides along as `?hl=` for highlighting.
  */
 export function docPath(documentId: string, snippet?: string): string {
-  const encoded = documentId.split("/").map(encodeURIComponent).join("/");
   const hl = snippet ? `?hl=${encodeURIComponent(snippet)}` : "";
-  return `/kb/doc/${encoded}${hl}`;
+  return `/kb/doc/${encodeURIComponent(documentId)}${hl}`;
 }
 
 /**

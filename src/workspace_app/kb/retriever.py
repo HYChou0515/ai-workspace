@@ -81,12 +81,14 @@ class Retriever:
             k=self._top_k * 3,
         )
 
+        # The display filename is the basename of the SourceDoc's stored path —
+        # the id is opaque and must not be parsed for it.
         scored = [
             ScoredChunk(
                 chunk_id=cid,
                 document_id=chunks[cid].source_doc_id,
                 collection_id=chunks[cid].collection_id,
-                filename=posixpath.basename(chunks[cid].source_doc_id),
+                filename=posixpath.basename(self._doc_path(chunks[cid].source_doc_id)),
                 seq=chunks[cid].seq,
                 start=chunks[cid].start,
                 end=chunks[cid].end,
@@ -127,6 +129,14 @@ class Retriever:
                 assert isinstance(data, DocChunk)
                 out[r.info.resource_id] = data  # ty: ignore[unresolved-attribute]
         return out
+
+    def _doc_path(self, doc_id: str) -> str:
+        """The SourceDoc's stored path (a record field) — for the display
+        filename. Never derived by parsing the opaque id."""
+        rm = self._spec.get_resource_manager(SourceDoc)
+        doc = rm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        return doc.path
 
     def _canonical_text(self, doc_id: str) -> str:
         rm = self._spec.get_resource_manager(SourceDoc)

@@ -7,11 +7,11 @@ magic), CRUD, audit meta (``.info``), revision history (recovery), and custom
 resource ids. Embedding is done by our swappable Embedder (query/doc instruction
 prefixes), stored RAW — specstar does no auto-encoding here.
 
-Identity: SourceDoc is created with a NATURAL-KEY resource id via
-``rm.using(resource_id=f"{collection_id}/{created_by}/{path}")`` so cross-user
-same-name uploads don't clobber, and re-uploading the same logical doc becomes a
-new revision (the old one stays recoverable). See the grill design for the full
-rationale.
+Identity: SourceDoc is created with a NATURAL-KEY resource id
+(``{collection_id}/{created_by}/{path}``) percent-encoded slash-free (specstar
+ids can't contain ``/``; see ``kb.doc_id``), so cross-user same-name uploads
+don't clobber, and re-uploading the same logical doc becomes a new revision (the
+old one stays recoverable). See the grill design for the full rationale.
 """
 
 from __future__ import annotations
@@ -40,8 +40,9 @@ class Collection(Struct):  # → resource "collection"
 
 
 class SourceDoc(Struct):  # → resource "source-doc"
-    """One ingested document. Created with a natural-key resource id
-    ``f"{collection_id}/{created_by}/{path}"``.
+    """One ingested document. Its resource id is the natural key
+    ``{collection_id}/{created_by}/{path}`` percent-encoded into a slash-free
+    token (specstar ids can't contain ``/``); see ``kb.doc_id``.
 
     - ``content`` — the original uploaded bytes. ``content.file_id`` is the
       content hash (dedup / no-op-on-reupload key); ``content.content_type`` is
@@ -90,7 +91,7 @@ class Citation(Struct):
 
     marker: int  # the [n] in the answer
     collection_id: str
-    document_id: str  # SourceDoc resource id = {collection}/{user}/{path}
+    document_id: str  # SourceDoc resource id (encoded natural key; see kb.doc_id)
     filename: str  # display name = basename(path)
     start: int  # merged span (min start) into canonical text
     end: int  # max end

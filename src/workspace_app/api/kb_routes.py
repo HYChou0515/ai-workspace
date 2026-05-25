@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import posixpath
 
-from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
@@ -94,18 +94,22 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
             )
         return out
 
-    @app.get("/kb/documents/{doc_id:path}")
-    async def render_document(doc_id: str) -> dict:
+    @app.get("/kb/documents")
+    async def render_document(doc_id: str = Query(alias="id")) -> dict:
+        # doc_id is the opaque SourceDoc id (query param so the slash-free token
+        # round-trips a URL untouched). path / collection / user come from the
+        # record + meta — the id is a handle, never parsed.
         rm = spec.get_resource_manager(SourceDoc)
         try:
-            doc = rm.get(doc_id).data
+            rev = rm.get(doc_id)
         except ResourceIDNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        doc = rev.data
         assert isinstance(doc, SourceDoc)
+        user = rev.info.created_by
         raw = rm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)  # restore_binary populates the blob bytes
         text = normalize_text(raw.decode("utf-8", errors="replace"))
-        _, user, path = doc_id.split("/", 2)
 
         def exists(rid: str) -> bool:
             try:
@@ -115,10 +119,10 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
             return True
 
         markdown = rewrite_md_links(
-            text, doc_path=path, collection_id=doc.collection_id, user=user, exists=exists
+            text, doc_path=doc.path, collection_id=doc.collection_id, user=user, exists=exists
         )
         return {
-            "filename": posixpath.basename(path),
+            "filename": posixpath.basename(doc.path),
             "collection_id": doc.collection_id,
             "markdown": markdown,
         }

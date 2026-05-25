@@ -19,6 +19,7 @@ from specstar.types import Binary, ResourceIDNotFoundError
 
 from ..resources.kb import DocChunk, SourceDoc
 from .chunker import Chunker
+from .doc_id import encode_doc_id
 from .embedder import Embedder
 
 # md sniffs as text/plain on libmagic; both accepted.
@@ -102,7 +103,9 @@ class Ingestor:
         return out
 
     def _store_file(self, collection_id: str, user: str, path: str, data: bytes) -> str | None:
-        doc_id = f"{collection_id}/{user}/{path}"
+        # specstar resource ids can't contain '/', so the natural key is
+        # percent-encoded into a slash-free, reversible id.
+        doc_id = encode_doc_id(collection_id, user, path)
         drm = self._spec.get_resource_manager(SourceDoc)
         try:
             existing = drm.get(doc_id).data

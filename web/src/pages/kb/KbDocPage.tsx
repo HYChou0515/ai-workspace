@@ -27,7 +27,7 @@ export function KbDocPage({ client = kbApi }: { client?: KbApi }) {
           <Icon name="chev_l" size={13} /> Knowledge base
         </button>
         <Icon name="file" size={15} color="var(--text-paper-d)" />
-        <span className="kb-docpage__name">{filename ?? documentId.split("/").pop()}</span>
+        <span className="kb-docpage__name">{filename ?? "Document"}</span>
       </header>
       <div className="kb-docpage__body">
         <KbDocBody

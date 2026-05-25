@@ -1,6 +1,7 @@
 from specstar import SpecStar
 
 from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.retriever import Retriever
@@ -36,7 +37,8 @@ def test_hybrid_search_surfaces_the_keyword_matching_document(
 
     passages = Retriever(spec, embedder=embedder).search("reflow temperature", [cid])
     assert passages, "expected at least one passage"
-    assert passages[0].document_id == f"{cid}/u/reflow.md"  # keyword-matching doc on top
+    # keyword-matching doc on top
+    assert passages[0].document_id == encode_doc_id(cid, "u", "reflow.md")
     assert "reflow" in passages[0].text
 
 
@@ -66,7 +68,8 @@ def test_multiquery_widens_recall_via_llm_variants(
     fake = _FakeLlm("gamma")
     passages = Retriever(spec, embedder=embedder, llm=fake).search("zzz nomatch", [cid])
     assert fake.prompts  # the multi-query step consulted the LLM
-    assert any(p.document_id == f"{cid}/u/g.md" for p in passages)  # surfaced via the variant
+    # surfaced via the variant
+    assert any(p.document_id == encode_doc_id(cid, "u", "g.md") for p in passages)
 
 
 def test_empty_llm_replies_fall_back_to_the_plain_query(
@@ -78,4 +81,4 @@ def test_empty_llm_replies_fall_back_to_the_plain_query(
         collection_id=cid, user="u", filename="reflow.md", data=b"reflow oven temperature drift"
     )
     passages = Retriever(spec, embedder=embedder, llm=_FakeLlm("   ")).search("reflow", [cid])
-    assert passages[0].document_id == f"{cid}/u/reflow.md"
+    assert passages[0].document_id == encode_doc_id(cid, "u", "reflow.md")

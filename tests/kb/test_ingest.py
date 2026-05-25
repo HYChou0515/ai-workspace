@@ -5,6 +5,7 @@ import zipfile
 from specstar import QB, SpecStar
 
 from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.resources.kb import EMBED_DIM, Collection, DocChunk, SourceDoc
@@ -28,7 +29,7 @@ def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
     data = b"# Guide\none two three four five"
     ids = ingestor.ingest(collection_id=cid, user="alice", filename="guide.md", data=data)
 
-    assert ids == [f"{cid}/alice/guide.md"]
+    assert ids == [encode_doc_id(cid, "alice", "guide.md")]
     doc = spec.get_resource_manager(SourceDoc).get(ids[0]).data
     assert doc.path == "guide.md"
     assert doc.collection_id == cid
@@ -83,8 +84,11 @@ def test_ingest_zip_unpacks_text_members_and_skips_others(
     ids = Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
         collection_id=cid, user="a", filename="docs.zip", data=buf.getvalue()
     )
-    assert set(ids) == {f"{cid}/a/docs/a.md", f"{cid}/a/docs/b.txt"}  # png skipped
-    a = spec.get_resource_manager(SourceDoc).get(f"{cid}/a/docs/a.md").data
+    assert set(ids) == {
+        encode_doc_id(cid, "a", "docs/a.md"),
+        encode_doc_id(cid, "a", "docs/b.txt"),
+    }  # png skipped
+    a = spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "a", "docs/a.md")).data
     assert a.path == "docs/a.md"  # archive-relative path preserved
 
 
@@ -104,7 +108,7 @@ def test_ingest_tar_gz_unpacks_text_members(
     ids = Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
         collection_id=cid, user="a", filename="notes.tar.gz", data=buf.getvalue()
     )
-    assert ids == [f"{cid}/a/notes/x.md"]
+    assert ids == [encode_doc_id(cid, "a", "notes/x.md")]
 
 
 def test_ingest_unsupported_single_file_is_skipped(

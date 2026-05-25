@@ -34,7 +34,7 @@ export function KbDocViewer({
       <aside className="kb-docviewer" role="dialog" aria-label="Document">
         <header className="kb-docviewer__head">
           <Icon name="file" size={16} color="var(--text-paper-d)" />
-          <span className="kb-docviewer__name">{filename ?? docId.split("/").pop()}</span>
+          <span className="kb-docviewer__name">{filename ?? "Document"}</span>
           <a
             className="kb-iconbtn"
             href={docHref(docId, snippet)}

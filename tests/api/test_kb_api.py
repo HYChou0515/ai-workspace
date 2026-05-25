@@ -9,6 +9,7 @@ from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
@@ -55,11 +56,13 @@ def test_upload_document_and_list():
     files = {"file": ("guide.md", b"# Guide\none two three", "text/markdown")}
     r = client.post(f"/kb/collections/{cid}/documents", files=files)
     assert r.status_code == 200
-    assert r.json()["document_ids"] == [f"{cid}/default-user/guide.md"]
+    guide_id = encode_doc_id(cid, "default-user", "guide.md")
+    assert r.json()["document_ids"] == [guide_id]
+    assert "/" not in guide_id  # specstar ids are slash-free
     assert r.json()["status"] == "indexing"  # embedding runs in the background
 
     docs = client.get(f"/kb/collections/{cid}/documents").json()
-    match = next(d for d in docs if d["resource_id"] == f"{cid}/default-user/guide.md")
+    match = next(d for d in docs if d["resource_id"] == guide_id)
     assert match["path"] == "guide.md"
     assert match["content_type"] in ("text/plain", "text/markdown")
     assert match["created_by"] == "default-user"  # specstar audit meta
@@ -73,7 +76,9 @@ def test_folder_upload_preserves_relative_path():
     cid = _new_collection(client)
     files = {"file": ("manuals/reflow/guide.md", b"# Guide\nzone three", "text/markdown")}
     r = client.post(f"/kb/collections/{cid}/documents", files=files)
-    assert r.json()["document_ids"] == [f"{cid}/default-user/manuals/reflow/guide.md"]
+    assert r.json()["document_ids"] == [
+        encode_doc_id(cid, "default-user", "manuals/reflow/guide.md")
+    ]
     docs = client.get(f"/kb/collections/{cid}/documents").json()
     assert any(d["path"] == "manuals/reflow/guide.md" for d in docs)
 
@@ -93,13 +98,17 @@ def test_render_document_rewrites_crossrefs_and_returns_markdown():
         files={"file": ("docs.zip", buf.getvalue(), "application/zip")},
     )
 
-    body = client.get(f"/kb/documents/{cid}/default-user/index.md").json()
+    body = client.get(
+        "/kb/documents", params={"id": encode_doc_id(cid, "default-user", "index.md")}
+    ).json()
     assert body["filename"] == "index.md"
-    assert f"kb://doc/{cid}/default-user/foo.md" in body["markdown"]  # existing sibling → rewritten
+    foo_id = encode_doc_id(cid, "default-user", "foo.md")
+    assert f"kb://doc/{foo_id}" in body["markdown"]  # existing sibling → rewritten
     assert "[Gone](./gone.md)" in body["markdown"]  # missing → left as-is
 
 
 def test_render_missing_document_404s():
     client = _client()
     cid = _new_collection(client)
-    assert client.get(f"/kb/documents/{cid}/default-user/nope.md").status_code == 404
+    missing = encode_doc_id(cid, "default-user", "nope.md")
+    assert client.get("/kb/documents", params={"id": missing}).status_code == 404

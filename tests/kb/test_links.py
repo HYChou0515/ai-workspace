@@ -1,10 +1,11 @@
+from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.links import rewrite_md_links
 
 CID, USER = "collection:c1", "alice"
 
 
 def _exists(*paths: str):
-    ids = {f"{CID}/{USER}/{p}" for p in paths}
+    ids = {encode_doc_id(CID, USER, p) for p in paths}
     return ids.__contains__
 
 
@@ -16,7 +17,7 @@ def test_rewrites_relative_links_to_existing_siblings_only():
         user=USER,
         exists=_exists("docs/foo.md", "docs/index.md"),
     )
-    assert "[Foo](kb://doc/collection:c1/alice/docs/foo.md)" in out  # sibling → kb:// id
+    assert f"[Foo](kb://doc/{encode_doc_id(CID, USER, 'docs/foo.md')})" in out  # sibling → kb:// id
     assert "[ext](https://x.com)" in out  # external untouched
     assert "[gone](./missing.md)" in out  # not in KB → left as-is
 
@@ -30,5 +31,5 @@ def test_resolves_parent_dirs_keeps_fragments_and_skips_anchors():
         exists=_exists("setup.md"),
     )
     # ../setup.md from guide/ → setup.md; #fragment preserved
-    assert "[up](kb://doc/collection:c1/alice/setup.md#install)" in out
+    assert f"[up](kb://doc/{encode_doc_id(CID, USER, 'setup.md')}#install)" in out
     assert "[here](#section)" in out  # pure anchor → untouched

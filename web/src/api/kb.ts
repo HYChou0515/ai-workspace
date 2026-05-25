@@ -148,10 +148,10 @@ export const realKbApi: KbApi = {
     return (await resp.json()).document_ids;
   },
   async renderDocument(documentId) {
-    // documentId is a path-shaped id ({collection}/{user}/{path}); the route is
-    // {doc_id:path}, so encode each segment but keep the slashes.
-    const encoded = documentId.split("/").map(encodeURIComponent).join("/");
-    return (await ok(await apiFetch(`/kb/documents/${encoded}`), "render document")).json();
+    // documentId is an opaque, slash-free token — pass it as a query param so
+    // it round-trips a URL untouched.
+    const url = `/kb/documents?id=${encodeURIComponent(documentId)}`;
+    return (await ok(await apiFetch(url), "render document")).json();
   },
 
   async listChats() {
