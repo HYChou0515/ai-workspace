@@ -24,7 +24,7 @@ from .bm25 import bm25_rank
 from .embedder import Embedder
 from .fusion import mmr, reciprocal_rank_fusion
 from .ingest import normalize_text
-from .llm import Llm
+from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
 from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
@@ -36,7 +36,7 @@ class Retriever:
         spec: SpecStar,
         *,
         embedder: Embedder,
-        llm: Llm | None = None,
+        llm: ILlm | None = None,
         candidates: int = 20,
         top_k: int = 5,
     ) -> None:
@@ -46,14 +46,24 @@ class Retriever:
         self._candidates = candidates
         self._top_k = top_k
 
-    def search(self, query: str, collection_ids: list[str]) -> list[RetrievedPassage]:
+    def search(
+        self, query: str, collection_ids: list[str], on_progress: OnChunk | None = None
+    ) -> list[RetrievedPassage]:
         chunks = self._load_chunks(collection_ids)  # {chunk_id: DocChunk}
         if not chunks:
             return []
 
+        def step(label: str) -> None:
+            if on_progress is not None:
+                on_progress(label, False)  # a step header (not model reasoning)
+
         # Multi-query: an LLM (when given) widens recall with alternative phrasings;
         # each variant contributes a dense + a sparse ranked list to the fusion.
-        queries = expand_queries(self._llm, query) if self._llm is not None else [query]
+        if self._llm is not None:
+            step("\n↻ expanding query\n")
+            queries = expand_queries(self._llm, query, on_progress=on_progress)
+        else:
+            queries = [query]
         corpus = [(cid, ch.text) for cid, ch in chunks.items()]
         ranked_lists: list[list[str]] = []
         for q in queries:
@@ -64,7 +74,8 @@ class Retriever:
         # HyDE: embed a hypothetical answer (as a pseudo-document) and add it as
         # one more dense probe, so we also match answer-shaped passages.
         if self._llm is not None:
-            hyde = hypothetical_document(self._llm, query)
+            step("\n↻ HyDE\n")
+            hyde = hypothetical_document(self._llm, query, on_progress=on_progress)
             if hyde:
                 hv = self._embedder.embed_documents([hyde])[0]
                 ranked_lists.append(self._dense_order(collection_ids, hv))
@@ -99,7 +110,8 @@ class Retriever:
         passages = merge_passages(scored, text_of=self._canonical_text)
         # Final LLM rerank over the merged passages (when an LLM is wired).
         if self._llm is not None:
-            passages = rerank_passages(self._llm, query, passages)
+            step("\n↻ rerank\n")
+            passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
         return passages[: self._top_k]
 
     def _dense_order(self, collection_ids: list[str], vec: list[float]) -> list[str]:

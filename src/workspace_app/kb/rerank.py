@@ -8,17 +8,22 @@ from __future__ import annotations
 import re
 
 from ..resources.kb import RetrievedPassage
-from .llm import Llm
+from .llm import ILlm, OnChunk
 
 _INT = re.compile(r"\d+")
 
 
 def rerank_passages(
-    llm: Llm, query: str, passages: list[RetrievedPassage]
+    llm: ILlm,
+    query: str,
+    passages: list[RetrievedPassage],
+    *,
+    on_progress: OnChunk | None = None,
 ) -> list[RetrievedPassage]:
     """Reorder `passages` by the model's relevance ranking. The model is shown
     the numbered passages and replies with the order (most relevant first);
-    passages it omits keep their original order at the end."""
+    passages it omits keep their original order at the end. Streams the model's
+    work to `on_progress`."""
     if not passages:
         return passages
     listing = "\n".join(f"[{i + 1}] {p.text}" for i, p in enumerate(passages))
@@ -29,7 +34,7 @@ def rerank_passages(
 
     order: list[int] = []
     seen: set[int] = set()
-    for m in _INT.finditer(llm.complete(prompt)):
+    for m in _INT.finditer(llm.collect(prompt, on_chunk=on_progress)):
         n = int(m.group())
         if 1 <= n <= len(passages) and n not in seen:
             seen.add(n)

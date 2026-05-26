@@ -1,15 +1,17 @@
-from workspace_app.kb.llm import LitellmLlm
+from collections.abc import Iterator
+
+from workspace_app.kb.llm import ILlm, LitellmLlm
 from workspace_app.kb.query import expand_queries
 
 
-class _FakeLlm:
+class _FakeLlm(ILlm):
     def __init__(self, reply: str) -> None:
         self._reply = reply
         self.prompts: list[str] = []
 
-    def complete(self, prompt: str) -> str:
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         self.prompts.append(prompt)
-        return self._reply
+        yield self._reply, False
 
 
 def test_expand_prepends_original_and_parses_variants():

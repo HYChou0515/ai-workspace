@@ -1,3 +1,5 @@
+from collections.abc import Iterator
+
 from agents import RunContextWrapper
 from specstar import SpecStar
 
@@ -6,8 +8,14 @@ from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
+from workspace_app.kb.llm import ILlm
 from workspace_app.kb.retriever import Retriever
 from workspace_app.resources.kb import Collection
+
+
+class _FakeLlm(ILlm):
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield "gamma", False
 
 
 def _kb_ctx(spec: SpecStar, embedder: HashEmbedder, collection_ids: list[str]):
@@ -50,6 +58,31 @@ async def test_kb_search_on_empty_returns_no_results_message(
 
     assert "no" in out.lower()  # tells the agent nothing matched
     assert ctx.context.kb_passages == []
+
+
+async def test_kb_search_streams_enhancement_thinking_to_the_run_sink(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # When the run wired an output sink, the retriever's enhancement-LLM work is
+    # streamed to it (so it shows live under the kb_search tool card) — issue #10.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid, user="u", filename="g.md", data=b"gamma delta epsilon"
+    )
+    captured: list[bytes] = []
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            retriever=Retriever(spec, embedder=embedder, llm=_FakeLlm()),
+            collection_ids=[cid],
+            on_exec_output=captured.append,
+        )
+    )
+
+    kb_search_impl(ctx, "gamma")
+
+    text = b"".join(captured).decode()
+    assert "↻ expanding query" in text  # step label streamed to the sink
+    assert "gamma" in text  # the model's streamed chunk
 
 
 async def test_kb_search_keeps_numbers_stable_across_calls(

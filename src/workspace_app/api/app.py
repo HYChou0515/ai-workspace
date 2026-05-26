@@ -24,7 +24,7 @@ from ..kb.chunker import Chunker, FixedTokenChunker
 from ..kb.cited import record_citations
 from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
-from ..kb.llm import Llm
+from ..kb.llm import ILlm
 from ..kb.retriever import Retriever
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
@@ -211,7 +211,7 @@ def create_app(
     runner: AgentRunner,
     kb_embedder: Embedder | None = None,
     kb_chunker: Chunker | None = None,
-    kb_llm: Llm | None = None,
+    kb_llm: ILlm | None = None,
     get_user_id: Callable[[], str] | None = None,
     users: UserDirectory | None = None,
     monitor: IMonitor | None = None,

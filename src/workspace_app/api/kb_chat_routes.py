@@ -28,7 +28,7 @@ from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
 from ..kb.retriever import Retriever
 from ..resources.kb import Citation, KbChat, KbMessage
-from .events import AgentEvent, MessageDelta, ToolStart
+from .events import AgentEvent, MessageDelta, ToolLog, ToolStart
 from .notifications import notify
 from .runner import AgentRunner
 from .turns import ChatTurnEngine, TurnMessage
@@ -41,6 +41,11 @@ def kb_progress(ev: AgentEvent) -> str | None:
     if isinstance(ev, ToolStart):
         query = ev.args.get("query")
         return f"🔎 {ev.name}: {query}\n" if query else f"🔎 {ev.name}\n"
+    if isinstance(ev, ToolLog):
+        # The kb_search tool's live output — e.g. the retriever's enhancement-LLM
+        # thinking (multi-query / HyDE / rerank) — relayed under the parent's
+        # ask_knowledge_base card (issue #10).
+        return ev.text
     if isinstance(ev, MessageDelta) and ev.reasoning:
         return ev.text
     return None

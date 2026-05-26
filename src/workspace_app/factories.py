@@ -26,7 +26,7 @@ from .filestore.protocol import FileStore
 from .filestore.specstar_impl import SpecstarFileStore
 from .kb.chunker import Chunker, FixedTokenChunker
 from .kb.embedder import Embedder, HashEmbedder, LitellmEmbedder
-from .kb.llm import LitellmLlm, Llm
+from .kb.llm import ILlm, LitellmLlm
 from .rca.agent import default_rca_agent_config
 from .resources.kb import EMBED_DIM
 from .sandbox.local_process import LocalProcessSandbox
@@ -165,5 +165,5 @@ def get_chunker(settings: Settings) -> Chunker:
     )
 
 
-def get_kb_llm(settings: Settings) -> Llm | None:
+def get_kb_llm(settings: Settings) -> ILlm | None:
     return LitellmLlm(settings.kb_llm_model) if settings.kb_llm_model else None

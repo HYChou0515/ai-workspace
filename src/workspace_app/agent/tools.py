@@ -121,8 +121,13 @@ def kb_search_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
     registry = ctx.context.kb_passages
     seen = {(p.document_id, p.start, p.end): i for i, p in enumerate(registry)}
 
+    # Stream the retriever's enhancement-LLM work (multi-query / HyDE / rerank)
+    # as this tool's live output, so its thinking shows in the chat (issue #10).
+    sink = ctx.context.on_exec_output
+    on_progress = (lambda text, _reasoning: sink(text.encode())) if sink is not None else None
+
     lines: list[str] = []
-    for passage in retriever.search(query, ctx.context.collection_ids):
+    for passage in retriever.search(query, ctx.context.collection_ids, on_progress):
         key = (passage.document_id, passage.start, passage.end)
         idx = seen.get(key)
         if idx is None:

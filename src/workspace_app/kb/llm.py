@@ -1,35 +1,60 @@
-"""Llm Protocol — a one-shot text completion, used by the retriever's
-multi-query / HyDE / rerank steps and (later) the KB agent. Swappable: tests
-inject a fake; production uses LiteLLM (local Ollama or hosted).
+"""ILlm — a **streaming** text completion. The retriever's multi-query / HyDE /
+rerank steps run through it, and because it always streams, their thinking can
+be surfaced live in the chat (issue #10). Swappable: tests inject a fake;
+production uses LiteLLM (local Ollama or hosted).
+
+There is deliberately NO non-streaming `complete()` — a one-shot call would
+hide the model's work and badly hurt observability. Callers that need the final
+text use `collect()`, which still streams under the hood.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+import abc
+from collections.abc import Callable, Iterator
+
+# Live-progress sink for streamed chunks: (text, is_reasoning).
+OnChunk = Callable[[str, bool], None]
 
 
-class Llm(Protocol):
-    """A one-shot text completion used by the retriever's multi-query / HyDE /
-    rerank steps (and available to the KB agent). Implement `complete` to swap
-    the model; inject via `create_app(kb_llm=...)` (omit to disable those
-    LLM-driven enhancements).
-    """
-
-    def complete(self, prompt: str) -> str:
-        """Return the model's completion for `prompt` as plain text (no
-        streaming). Should not raise for an empty/garbage result — return what
-        you have (callers parse defensively and fall back)."""
+class ILlm(abc.ABC):
+    @abc.abstractmethod
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        """Yield ``(text_chunk, is_reasoning)`` as the model produces them —
+        ``is_reasoning`` marks the model's thinking (e.g. qwen3 ``<think>``) vs
+        its actual output. Always streaming; the only primitive. Should not
+        raise for an empty/garbage result — yield what you have."""
         ...
 
+    def collect(self, prompt: str, on_chunk: OnChunk | None = None) -> str:
+        """Drain ``stream()``: forward every chunk to ``on_chunk`` (so the live
+        thinking can be surfaced) and return the joined **non-reasoning**
+        content for the caller to parse. Built on ``stream()`` — not a separate
+        non-streaming call."""
+        out: list[str] = []
+        for text, reasoning in self.stream(prompt):
+            if on_chunk is not None:
+                on_chunk(text, reasoning)
+            if not reasoning:
+                out.append(text)
+        return "".join(out)
 
-class LitellmLlm:
-    """Production Llm via LiteLLM (model string routes the provider)."""
+
+class LitellmLlm(ILlm):
+    """Production ILlm via LiteLLM (model string routes the provider)."""
 
     def __init__(self, model: str) -> None:
         self._model = model
 
-    def complete(self, prompt: str) -> str:  # pragma: no cover — hits a live model
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:  # pragma: no cover — live model
         import litellm
 
-        resp = litellm.completion(model=self._model, messages=[{"role": "user", "content": prompt}])
-        return resp.choices[0].message.content or ""
+        for chunk in litellm.completion(
+            model=self._model, messages=[{"role": "user", "content": prompt}], stream=True
+        ):
+            delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                yield reasoning, True
+            if delta.content:
+                yield delta.content, False

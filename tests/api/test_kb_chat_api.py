@@ -6,7 +6,7 @@ from specstar import SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
-from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, ToolEnd, ToolStart
+from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, ToolEnd, ToolLog, ToolStart
 from workspace_app.api.kb_chat_routes import answer_question
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
@@ -252,6 +252,8 @@ def test_kb_progress_surfaces_searches_and_reasoning_only():
     )
     assert kb_progress(ToolStart(call_id="b", name="kb_search", args={})) == "🔎 kb_search\n"
     assert kb_progress(MessageDelta(text="weighing it", reasoning=True)) == "weighing it"
+    # kb_search's live output (e.g. the retriever's enhancement-LLM thinking) is relayed too
+    assert kb_progress(ToolLog(call_id="a", text="↻ rerank\n")) == "↻ rerank\n"
     assert kb_progress(MessageDelta(text="the answer")) is None  # content isn't progress
     assert kb_progress(ToolEnd(call_id="a", output="x")) is None
     assert kb_progress(RunDone()) is None

@@ -1,15 +1,18 @@
+from collections.abc import Iterator
+
+from workspace_app.kb.llm import ILlm
 from workspace_app.kb.rerank import rerank_passages
 from workspace_app.resources.kb import RetrievedPassage
 
 
-class _FakeLlm:
+class _FakeLlm(ILlm):
     def __init__(self, reply: str) -> None:
         self._reply = reply
         self.prompts: list[str] = []
 
-    def complete(self, prompt: str) -> str:
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         self.prompts.append(prompt)
-        return self._reply
+        yield self._reply, False
 
 
 def _p(doc: str, text: str) -> RetrievedPassage:
