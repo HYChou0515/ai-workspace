@@ -40,10 +40,11 @@ describe("KbCollectionsPage", () => {
 
     // the new collection appears as a card in the grid
     const card = await screen.findByRole("button", { name: "Open Process SOPs" });
-    // opening it switches to the collection page (upload affordances appear)
+    // opening it switches to the collection page; Upload is a dropdown menu
     await userEvent.click(card);
-    expect(screen.getByRole("button", { name: "Upload" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Folder" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Upload" }));
+    expect(screen.getByRole("menuitem", { name: "Upload files" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "Upload folder" })).toBeInTheDocument();
   });
 
   it("uploads a document and lists it; clicking opens it", async () => {
@@ -105,10 +106,12 @@ describe("KbCollectionsPage", () => {
     expect(card).toHaveTextContent("cited 7×");
 
     await userEvent.click(card);
-    const row = (await screen.findByRole("button", { name: /a\.md/ })).closest("li")!;
-    expect(row).toHaveTextContent("12 chunks");
-    expect(row).toHaveTextContent("4 cited");
-    expect(row).toHaveTextContent("2 KB");
+    const row = (await screen.findByRole("button", { name: /a\.md/ })).closest(
+      ".kb-doctable__row",
+    )!;
+    expect(row).toHaveTextContent("12"); // chunks column
+    expect(row).toHaveTextContent("4"); // cited column
+    expect(row).toHaveTextContent("2 KB"); // size column
   });
 
   it("pins a collection (persisted), floating it to the top", async () => {
@@ -210,7 +213,7 @@ describe("KbCollectionsPage", () => {
     expect(updateCollection).toHaveBeenCalledWith("c1", { name: "Wirebond" });
   });
 
-  it("deletes the collection after confirmation, returning to the grid", async () => {
+  it("deletes the collection from the settings menu after confirmation", async () => {
     const deleteCollection = vi.fn(async () => {});
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
@@ -220,7 +223,9 @@ describe("KbCollectionsPage", () => {
     render(<KbCollectionsPage client={client} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
-    await userEvent.click(screen.getByRole("button", { name: "Delete collection" }));
+    // delete lives inside the settings menu, not exposed as a bare button
+    await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete collection" }));
     // confirm step — the destructive "Delete" button
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(deleteCollection).toHaveBeenCalledWith("c1");
@@ -228,7 +233,24 @@ describe("KbCollectionsPage", () => {
     expect(await screen.findByPlaceholderText("New collection name…")).toBeInTheDocument();
   });
 
-  it("shows an indexing chip that flips to indexed by polling", async () => {
+  it("re-indexes all documents from the settings menu", async () => {
+    const reindexCollection = vi.fn(async () => {});
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => [
+        { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "error", chunks: 0 },
+      ],
+      reindexCollection,
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Re-index all" }));
+    expect(reindexCollection).toHaveBeenCalledWith("c1");
+  });
+
+  it("shows an indexing chip that clears once the doc is indexed (polling)", async () => {
     let status = "indexing";
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
@@ -244,6 +266,9 @@ describe("KbCollectionsPage", () => {
     render(<KbCollectionsPage client={client} />);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     expect(await screen.findByText("indexing…")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("indexed")).toBeInTheDocument(), { timeout: 3000 });
+    // a ready doc shows no status badge (matches the design's clean table)
+    await waitFor(() => expect(screen.queryByText("indexing…")).not.toBeInTheDocument(), {
+      timeout: 3000,
+    });
   });
 });

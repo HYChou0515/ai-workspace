@@ -94,6 +94,27 @@ def test_upload_document_and_list():
     assert match["status"] == "ready"  # background index finished (TestClient runs it)
 
 
+def test_reindex_collection_rebuilds_all_docs():
+    client = _client()
+    cid = _new_collection(client)
+    for name in ("a.md", "b.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents",
+            files={"file": (name, b"# one two three four", "text/markdown")},
+        )
+
+    r = client.post(f"/kb/collections/{cid}/reindex")
+    assert r.status_code == 200
+    assert r.json()["reindexed"] == 2
+    assert r.json()["status"] == "indexing"
+
+    # background re-index ran (TestClient drains it) → docs ready, chunks rebuilt
+    docs = client.get(f"/kb/collections/{cid}/documents").json()
+    assert len(docs) == 2
+    assert all(d["status"] == "ready" for d in docs)
+    assert all(d["chunks"] > 0 for d in docs)
+
+
 def test_folder_upload_preserves_relative_path():
     # a folder upload sends each file with its relative path as the filename;
     # the doc id + path preserve that structure (handled like an archive member)

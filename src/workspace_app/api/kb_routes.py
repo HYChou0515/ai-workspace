@@ -8,6 +8,7 @@ import asyncio
 import posixpath
 from datetime import datetime
 
+import msgspec
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 from specstar import QB, SpecStar
@@ -47,6 +48,13 @@ class CollectionOut(BaseModel):
     size: int  # total bytes across the collection's documents
     updated_at: int  # epoch ms — the most recently updated doc (or the collection)
     owner: str  # created_by
+
+
+class ReindexOut(BaseModel):
+    """Result of scheduling a (re)index — how many docs were queued."""
+
+    reindexed: int
+    status: str = "indexing"
 
 
 def _ms(dt: datetime) -> int:
@@ -124,6 +132,23 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
         for doc_id in ids:
             background.add_task(_index_in_thread, ingestor, doc_id)
         return {"document_ids": ids, "status": "indexing"}
+
+    @app.post("/kb/collections/{collection_id}/reindex")
+    async def reindex_collection(collection_id: str, background: BackgroundTasks) -> ReindexOut:
+        # Re-chunk + re-embed every doc in the collection — the recovery path
+        # after fixing the embedder (e.g. a missing model). Flip each doc back to
+        # `indexing` synchronously (so the UI shows progress + polls), then run
+        # the blocking rebuild off the loop, same as upload.
+        rm = spec.get_resource_manager(SourceDoc)
+        count = 0
+        for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
+            doc = r.data
+            assert isinstance(doc, SourceDoc)
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            rm.update(rid, msgspec.structs.replace(doc, status="indexing"))
+            background.add_task(_index_in_thread, ingestor, rid)
+            count += 1
+        return ReindexOut(reindexed=count)
 
     @app.get("/kb/collections/{collection_id}/documents")
     async def list_documents(collection_id: str) -> list[dict]:

@@ -119,6 +119,9 @@ export interface KbApi {
   updateCollection(id: string, patch: { name?: string; icon?: string }): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
   deleteCollection(id: string): Promise<void>;
+  /** Re-chunk + re-embed every document in the collection (recovers `error`
+   * docs after an embedder fix). Each doc flips back to `indexing`. */
+  reindexCollection(id: string): Promise<void>;
   listDocuments(collectionId: string): Promise<KbDocument[]>;
   /** Multipart upload; returns the ingested document ids (one per archive
    * member). `path` overrides the stored filename — used for folder uploads to
@@ -187,6 +190,12 @@ export const realKbApi: KbApi = {
     await ok(
       await apiFetch(`/collection/${encodeURIComponent(id)}/permanently`, { method: "DELETE" }),
       "delete collection",
+    );
+  },
+  async reindexCollection(id) {
+    await ok(
+      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/reindex`, { method: "POST" }),
+      "reindex collection",
     );
   },
   async listDocuments(collectionId) {

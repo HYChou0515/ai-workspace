@@ -98,6 +98,13 @@ export const mockKbApi: KbApi = {
     collections.delete(id);
     documents.delete(id);
   },
+  async reindexCollection(id) {
+    const list = documents.get(id) ?? [];
+    documents.set(
+      id,
+      list.map((d) => ({ ...d, status: "ready" })),
+    );
+  },
   async listDocuments(collectionId) {
     return documents.get(collectionId) ?? [];
   },

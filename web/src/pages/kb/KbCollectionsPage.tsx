@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from "react";
 import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
+import { Popover } from "../../components/Popover";
 import { UserAvatar } from "../../components/UserChip";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { docHref } from "./kbLinks";
@@ -28,6 +29,15 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
   return `${Math.round(n / (1024 * 1024))} MB`;
+}
+
+/** Pick a row icon from the document's extension (we ingest md/txt today; the
+ * map leaves room for the richer kinds the design anticipates). */
+function kindIcon(path: string): IconName {
+  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+  if (ext === "csv" || ext === "tsv" || ext === "xlsx") return "filter";
+  if (ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif") return "eye";
+  return "file";
 }
 
 function fmtDate(ms: number): string {
@@ -100,6 +110,13 @@ export function KbCollectionsPage({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.kb.collections });
       setSelectedId(null);
+    },
+  });
+
+  const reindexAllMut = useMutation({
+    mutationFn: () => client.reindexCollection(selectedId as string),
+    onSuccess: () => {
+      if (selectedId) void qc.invalidateQueries({ queryKey: qk.kb.documents(selectedId) });
     },
   });
 
@@ -249,20 +266,66 @@ export function KbCollectionsPage({
           </div>
 
           <div className="kb-colpage__actions">
-            <button type="button" className="kb-btn kb-btn--primary" disabled={busy} onClick={() => fileRef.current?.click()}>
-              <Icon name="upload" size={13} /> Upload
-            </button>
-            <button type="button" className="kb-btn" disabled={busy} onClick={() => folderRef.current?.click()}>
-              <Icon name="folder" size={13} /> Folder
-            </button>
-            <button type="button" className="kb-btn" aria-label="Rename collection" onClick={() => { setNameDraft(selected.name); setEditingName(true); }}>
-              <Icon name="settings" size={13} />
-            </button>
-            <button type="button" className="kb-btn" aria-label="Delete collection" onClick={() => setConfirmDel((v) => !v)}>
-              <Icon name="x" size={13} />
-            </button>
+            <Popover
+              align="end"
+              trigger={({ onClick, open }) => (
+                <button
+                  type="button"
+                  className="kb-btn kb-btn--primary"
+                  disabled={busy}
+                  aria-haspopup="menu"
+                  aria-expanded={open}
+                  onClick={onClick}
+                >
+                  <Icon name="upload" size={13} /> Upload <Icon name="chev_d" size={11} />
+                </button>
+              )}
+            >
+              {(close) => (
+                <div className="kb-menu" role="menu">
+                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); fileRef.current?.click(); }}>
+                    <Icon name="file" size={14} color="var(--text-paper-d)" /> Upload files
+                  </button>
+                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); folderRef.current?.click(); }}>
+                    <Icon name="folder" size={14} color="var(--text-paper-d)" /> Upload folder
+                  </button>
+                </div>
+              )}
+            </Popover>
+
+            <Popover
+              align="end"
+              trigger={({ onClick, open }) => (
+                <button
+                  type="button"
+                  className="kb-btn"
+                  aria-label="Collection settings"
+                  aria-haspopup="menu"
+                  aria-expanded={open}
+                  onClick={onClick}
+                >
+                  <Icon name="settings" size={13} />
+                </button>
+              )}
+            >
+              {(close) => (
+                <div className="kb-menu" role="menu">
+                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setNameDraft(selected.name); setEditingName(true); }}>
+                    <Icon name="tag" size={14} color="var(--text-paper-d)" /> Rename
+                  </button>
+                  <button type="button" role="menuitem" className="kb-menu__item" disabled={documents.length === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
+                    <Icon name="refresh" size={14} color="var(--text-paper-d)" /> Re-index all
+                  </button>
+                  <div className="kb-menu__divider" />
+                  <button type="button" role="menuitem" className="kb-menu__item kb-menu__item--danger" onClick={() => { close(); setConfirmDel(true); }}>
+                    <Icon name="x" size={14} /> Delete collection
+                  </button>
+                </div>
+              )}
+            </Popover>
+
             {confirmDel && (
-              <div className="kb-colpage__confirm">
+              <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm delete collection">
                 <span>Delete “{selected.name}”?</span>
                 <button type="button" className="kb-btn kb-btn--danger" onClick={() => deleteMut.mutate()}>
                   Delete
@@ -296,45 +359,52 @@ export function KbCollectionsPage({
               {shownDocs.length === 0 ? (
                 <p className="kb-cols__empty">No documents match “{docQuery}”.</p>
               ) : (
-                <ul className="kb-docs__rows">
+                <div className="kb-doctable">
+                  <div className="kb-doctable__head">
+                    <span />
+                    <span className="kb-doctable__h">Name</span>
+                    <span className="kb-doctable__h">Uploaded by</span>
+                    <span className="kb-doctable__h">Updated</span>
+                    <span className="kb-doctable__h kb-doctable__num">Size</span>
+                    <span className="kb-doctable__h kb-doctable__num">Chunks</span>
+                    <span className="kb-doctable__h kb-doctable__num">Cited</span>
+                    <span />
+                  </div>
                   {shownDocs.map((d) => (
-                    <li key={d.resource_id} className="kb-docs__row">
-                      <button type="button" className="kb-docs__open" onClick={() => onOpenDoc?.(d.resource_id)}>
-                        <Icon name="file" size={14} color="var(--text-paper-d)" />
-                        <span className="kb-docs__path">{d.path}</span>
-                      </button>
-                      {typeof d.size === "number" && (
-                        <span className="kb-docs__metric" title="File size">{fmtBytes(d.size)}</span>
-                      )}
-                      {typeof d.chunks === "number" && (
-                        <span className="kb-docs__metric" title="Indexed chunks">
-                          <Icon name="layers" size={11} color="var(--text-paper-d2)" />
-                          {d.chunks} chunks
-                        </span>
-                      )}
-                      <span className="kb-docs__metric" title="Times cited">
-                        <Icon name="quote" size={11} color="var(--text-paper-d2)" />
-                        {d.cited ?? 0} cited
+                    <div key={d.resource_id} className="kb-doctable__row">
+                      <span className="kb-doctable__kind">
+                        <Icon name={kindIcon(d.path)} size={14} color="var(--ink-2)" />
                       </span>
-                      {typeof d.updated_at === "number" && (
-                        <span className="kb-docs__metric" title="Last updated">
-                          <Icon name="clock" size={11} color="var(--text-paper-d2)" />
-                          {fmtDate(d.updated_at)}
-                        </span>
-                      )}
-                      <span className="kb-docs__by" title="Added by">
-                        <Icon name="user" size={11} color="var(--text-paper-d2)" />
+                      <button type="button" className="kb-doctable__name" onClick={() => onOpenDoc?.(d.resource_id)}>
+                        {d.path}
+                      </button>
+                      <span className="kb-doctable__by" title="Added by">
+                        <UserAvatar userId={d.created_by} size={20} />
                         {d.created_by}
                       </span>
-                      <span className={`kb-status kb-status--${d.status}`}>
-                        {d.status === "indexing" ? "indexing…" : d.status === "error" ? "error" : "indexed"}
+                      <span className="kb-doctable__cell mono">
+                        {typeof d.updated_at === "number" ? fmtDate(d.updated_at) : "—"}
                       </span>
-                      <a className="kb-iconbtn" href={docHref(d.resource_id)} target="_blank" rel="noreferrer" title="Open in new tab" aria-label={`Open ${d.path} in new tab`}>
-                        <Icon name="arrow_u" size={14} />
-                      </a>
-                    </li>
+                      <span className="kb-doctable__cell mono kb-doctable__num">
+                        {typeof d.size === "number" ? fmtBytes(d.size) : "—"}
+                      </span>
+                      <span className="kb-doctable__cell mono kb-doctable__num">{d.chunks ?? "—"}</span>
+                      <span className={`kb-doctable__cell mono kb-doctable__num${(d.cited ?? 0) > 0 ? " is-hot" : ""}`}>
+                        {d.cited ?? 0}
+                      </span>
+                      <span className="kb-doctable__actions">
+                        {d.status !== "ready" && (
+                          <span className={`kb-status kb-status--${d.status}`}>
+                            {d.status === "indexing" ? "indexing…" : "error"}
+                          </span>
+                        )}
+                        <a className="kb-iconbtn" href={docHref(d.resource_id)} target="_blank" rel="noreferrer" title="Open in new tab" aria-label={`Open ${d.path} in new tab`}>
+                          <Icon name="arrow_u" size={13} />
+                        </a>
+                      </span>
+                    </div>
                   ))}
-                </ul>
+                </div>
               )}
             </>
           )}
