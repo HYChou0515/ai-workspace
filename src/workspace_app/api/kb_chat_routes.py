@@ -148,22 +148,25 @@ def register_kb_chat_routes(
 
     @app.get("/kb/chats")
     async def list_chats() -> list[dict]:
-        """Only the current user's chats: ones they own + ones shared with them."""
+        """Only the current user's chats: ones they own + ones shared with them.
+        Two indexed queries (owner = created_by meta; shared_with contains me),
+        merged + deduped — not a full scan."""
         me = get_user_id()
+        owned = chat_rm.list_resources((QB.created_by() == me).build())
+        shared = chat_rm.list_resources((QB["shared_with"].contains(me)).build())
+        # owned ∩ shared is empty by construction (the share endpoint forbids
+        # the owner being in their own shared_with), so concatenation is enough.
         out: list[dict] = []
-        for r in chat_rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+        for r in [*owned, *shared]:
             data = r.data
             assert isinstance(data, KbChat)
-            owner = r.info.created_by  # ty: ignore[unresolved-attribute]
-            if owner != me and me not in data.shared_with:
-                continue
             out.append(
                 {
                     "resource_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
                     "title": data.title,
                     "collection_ids": data.collection_ids,
                     "message_count": len(data.messages),
-                    "owner": owner,
+                    "owner": r.info.created_by,  # ty: ignore[unresolved-attribute]
                     "shared_with": data.shared_with,
                 }
             )

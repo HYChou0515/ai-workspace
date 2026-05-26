@@ -1,27 +1,33 @@
-"""IMonitor interface (issue #11) — the live telemetry sink.
+"""Monitor interface (issue #11) — the live telemetry sink.
 
-`IMonitor` is the abstract contract; concrete backends subclass it (in-memory
-today, a persistent/external one later) without callers changing. `sse` is a
-concrete template built on the abstract `subscribe`, so impls only provide
-`record` / `recent` / `subscribe`.
+`IMonitor` is the abstract contract; concrete backends subclass it (in-memory,
+specstar-persistent, …) without callers changing. The live fan-out
+(`subscribe` / `sse` / `_publish`) is shared template logic on the ABC, so a
+backend only implements `record` (persist) and `recent` (read back).
 """
 
 from __future__ import annotations
 
 import abc
+import contextlib
 import json
 from asyncio import Queue
 from collections.abc import AsyncIterator
-from contextlib import AbstractAsyncContextManager
 from typing import Any
 
 MonitorEvent = dict[str, Any]
 
 
 class IMonitor(abc.ABC):
+    def __init__(self) -> None:
+        # Live subscribers' queues — specstar/persistence doesn't push, so the
+        # real-time feed is always served from this in-memory fan-out.
+        self._subs: set[Queue[MonitorEvent]] = set()
+
     @abc.abstractmethod
     def record(self, event: MonitorEvent) -> None:
-        """Append a telemetry event and fan it out to live subscribers."""
+        """Store a telemetry event. Impls should also `self._publish(event)` so
+        live subscribers see it."""
         ...
 
     @abc.abstractmethod
@@ -32,11 +38,20 @@ class IMonitor(abc.ABC):
         investigation a trace was tagged with) and capped to the last `limit`."""
         ...
 
-    @abc.abstractmethod
-    def subscribe(self) -> AbstractAsyncContextManager[Queue[MonitorEvent]]:
-        """Async context manager yielding a queue every recorded event is pushed
-        onto, until the consumer leaves the context."""
-        ...
+    def _publish(self, event: MonitorEvent) -> None:
+        for q in self._subs:
+            q.put_nowait(event)
+
+    @contextlib.asynccontextmanager
+    async def subscribe(self) -> AsyncIterator[Queue[MonitorEvent]]:
+        """Live feed: yields a queue every recorded event is pushed onto, until
+        the consumer leaves the context."""
+        q: Queue[MonitorEvent] = Queue()
+        self._subs.add(q)
+        try:
+            yield q
+        finally:
+            self._subs.discard(q)
 
     async def sse(self, *, group_id: str | None = None) -> AsyncIterator[str]:
         """Server-sent-events of live telemetry — `data: <json>\\n\\n` per event,

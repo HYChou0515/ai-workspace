@@ -65,13 +65,12 @@ def register_notification_routes(
     rm = spec.get_resource_manager(Notification)
 
     def _mine(me: str) -> list[tuple[str, Notification]]:
-        # Linear scan + Python filter (same as _conversation_for) — specstar
-        # equality on a plain str field isn't indexed; fine at v1 scale.
+        # Indexed query by recipient (indexed in register_all) — not a scan.
         out: list[tuple[str, Notification]] = []
-        for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+        for r in rm.list_resources((QB["recipient"] == me).build()):
             d = r.data
-            if isinstance(d, Notification) and d.recipient == me:
-                out.append((r.info.resource_id, d))  # ty: ignore[unresolved-attribute]
+            assert isinstance(d, Notification)
+            out.append((r.info.resource_id, d))  # ty: ignore[unresolved-attribute]
         return out
 
     @app.get("/notifications")

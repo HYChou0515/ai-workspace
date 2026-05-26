@@ -28,6 +28,7 @@ from workspace_app.factories import (
     get_sandbox,
     get_spec,
 )
+from workspace_app.monitor import SpecstarMonitor
 
 
 def main() -> None:
@@ -41,6 +42,7 @@ def main() -> None:
         kb_embedder=get_embedder(settings),
         kb_chunker=get_chunker(settings),
         kb_llm=get_kb_llm(settings),
+        monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
         root_path=settings.root_path,
     )
     uvicorn.run(app, host=settings.host, port=settings.port)

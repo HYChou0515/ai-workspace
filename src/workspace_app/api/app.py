@@ -474,10 +474,12 @@ def create_app(
         from specstar import QB
 
         cfg_rm = spec.get_resource_manager(AgentConfig)
-        revs = list(cfg_rm.list_resources(QB.all()))  # ty: ignore[invalid-argument-type]
+        # Earliest config directly via the query (created_time is a meta sort
+        # key) — don't load every config to pick one.
+        revs = list(cfg_rm.list_resources(QB.all().sort("created_time").limit(1).build()))
         if not revs:
             return None
-        first = min(revs, key=lambda r: r.info.created_time)
+        first = revs[0]
         assert isinstance(first.data, AgentConfig)
         return first.data
 
@@ -512,16 +514,14 @@ def create_app(
         return msgspec.structs.replace(cfg, system_prompt=composed)
 
     def _conversation_for(investigation_id: str) -> tuple[str, Conversation]:
-        # Linear scan over all Conversation resources for this
-        # investigation. Acceptable at v1 scale; swap to indexed lookup
-        # when N grows.
+        # Indexed lookup by investigation_id (indexed in register_all) — not a
+        # full scan.
         from specstar import QB
 
-        for r in conv_rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+        for r in conv_rm.list_resources((QB["investigation_id"] == investigation_id).build()):
             data = r.data
             assert isinstance(data, Conversation)
-            if data.investigation_id == investigation_id:
-                return r.info.resource_id, data  # ty: ignore[unresolved-attribute]
+            return r.info.resource_id, data  # ty: ignore[unresolved-attribute]
         rev = conv_rm.create(Conversation(investigation_id=investigation_id))
         got = conv_rm.get(rev.resource_id).data
         assert isinstance(got, Conversation)

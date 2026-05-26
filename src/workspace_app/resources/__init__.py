@@ -27,10 +27,15 @@ __all__ = [
 def register_all(spec: SpecStar) -> None:
     spec.add_model(AgentConfig)
     spec.add_model(Investigation)
-    spec.add_model(Conversation)
+    # investigation_id indexed so the per-investigation conversation lookup is a
+    # query, not a full scan.
+    spec.add_model(Conversation, indexed_fields=["investigation_id"])
     spec.add_model(Collection)
     spec.add_model(SourceDoc)
     spec.add_model(DocChunk)
-    spec.add_model(KbChat)
-    spec.add_model(Notification)
+    # shared_with indexed so "chats shared with me" is a contains-query (owner
+    # filtering uses the built-in created_by meta index).
+    spec.add_model(KbChat, indexed_fields=["shared_with"])
+    # recipient indexed so "my notifications" is a query, not a full scan.
+    spec.add_model(Notification, indexed_fields=["recipient"])
     spec.add_model(CitationEvent)
