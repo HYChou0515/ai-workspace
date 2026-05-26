@@ -68,8 +68,9 @@ describe("KbChatsPage", () => {
     } as typeof mockKbApi;
     render(<KbChatsPage client={client} />);
 
-    expect(await screen.findByText("Shared with me")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Alice's research/ })).toBeInTheDocument();
+    // the open button starts with the title (the pin button is "Pin <title>")
+    expect(await screen.findByRole("button", { name: /^Alice's research/ })).toBeInTheDocument();
+    expect(screen.getByText("Shared with me")).toBeInTheDocument(); // the tab
     expect(await screen.findByText("Alice Chen")).toBeInTheDocument(); // owner resolved async
     // a shared (non-owned) chat has no delete/share controls
     expect(screen.queryByRole("button", { name: /Delete Alice's research/ })).toBeNull();

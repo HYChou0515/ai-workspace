@@ -1342,7 +1342,32 @@
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 14px;
+}
+.kb-chats__heading {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--text-display-sm);
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--text-paper);
+}
+.kb-chats__sub {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  color: var(--text-paper-d);
+}
+.kb-tabs--compact {
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.kb-tabs--compact .kb-tab {
+  padding: 6px 0;
+  font-size: var(--text-body-sm);
+}
+.kb-iconbtn.is-pinned {
+  color: var(--accent);
 }
 .kb-chats__head > div {
   flex: 1;
@@ -1476,24 +1501,57 @@
 }
 .kb-chatview__head {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  align-items: flex-start;
+  gap: 10px;
   padding: 14px 22px;
   border-bottom: 1px solid var(--paper-3);
 }
 .kb-chatview__mark {
   width: 24px;
   height: 24px;
+  flex-shrink: 0;
+  margin-top: 2px;
   border-radius: var(--radius-chip);
-  background: var(--ink);
+  background: var(--ink-3);
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
+.kb-chatview__titles {
+  flex: 1;
+  min-width: 0;
+}
+.kb-chatview__chips {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 4px;
+}
 .kb-chatview__title {
-  font-size: var(--text-body);
-  font-weight: 600;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-body-lg, 18px);
+  letter-spacing: -0.01em;
   color: var(--text-paper);
+}
+.kb-chatview__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+.kb-chatview__by {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.kb-chatview__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
 /* ------------------------- Chats split (list + view) ------------------------- */

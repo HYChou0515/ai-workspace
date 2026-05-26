@@ -1,11 +1,11 @@
 /**
  * KB chat history list — the threads you've had with the knowledge base.
  * Select one to open it (full-page KbChatView, not a drawer), start a new one,
- * or delete. Used as the left pane of the Chats split in KbHome.
+ * pin, share, or delete. Used as the left pane of the Chats split in KbHome.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbChatSummary } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
@@ -14,6 +14,9 @@ import { Popover } from "../../components/Popover";
 import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { usePersistentSet } from "../../hooks/usePersistentSet";
+
+type Tab = "all" | "pinned" | "shared";
 
 export function KbChatsPage({
   client = kbApi,
@@ -47,6 +50,9 @@ export function KbChatsPage({
   }, [refreshSignal, refetch]);
 
   const me = useCurrentUser();
+  const pinned = usePersistentSet("kb:pinned-chats");
+  const [tab, setTab] = useState<Tab>("all");
+
   const removeMut = useMutation({
     mutationFn: (chatId: string) => client.deleteChat(chatId),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
@@ -57,73 +63,106 @@ export function KbChatsPage({
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
   });
 
-  const mine = chats.filter((c) => (c.owner ?? me) === me);
-  const shared = chats.filter((c) => c.owner && c.owner !== me);
+  const isMine = (c: KbChatSummary) => (c.owner ?? me) === me;
+  const sharedCount = chats.filter((c) => !isMine(c)).length;
+  const pinnedCount = chats.filter((c) => pinned.has(c.resource_id)).length;
 
-  const row = (c: KbChatSummary, owned: boolean) => (
-    <li key={c.resource_id} className="kb-chats__row">
-      <button
-        type="button"
-        className={`kb-chats__open${c.resource_id === selectedId ? " is-active" : ""}`}
-        onClick={() => onOpenChat?.(c.resource_id)}
-      >
-        <Icon name="chat" size={15} color="var(--text-paper-d)" />
-        <span className="kb-chats__title">{c.title}</span>
-        {owned ? (
-          <span className="kb-chats__meta">{c.message_count} msgs</span>
-        ) : (
-          c.owner && <UserChip userId={c.owner} size={18} />
-        )}
-      </button>
-      {owned && (
-        <>
-          <Popover
-            align="end"
-            trigger={({ onClick }) => (
-              <button type="button" className="kb-iconbtn" aria-label={`Share ${c.title}`} onClick={onClick}>
-                <Icon name="user" size={14} />
-              </button>
-            )}
-          >
-            {() => (
-              <div style={{ padding: 8 }}>
-                <div className="caps" style={{ padding: "0 4px 6px" }}>
-                  Share read-only
+  const shown = chats
+    .filter((c) => {
+      if (tab === "pinned") return pinned.has(c.resource_id);
+      if (tab === "shared") return !isMine(c);
+      return true;
+    })
+    .sort(
+      (a, b) =>
+        Number(pinned.has(b.resource_id)) - Number(pinned.has(a.resource_id)) ||
+        a.title.localeCompare(b.title),
+    );
+
+  const tabs: [Tab, string, number][] = [
+    ["all", "All", chats.length],
+    ["pinned", "Pinned", pinnedCount],
+    ["shared", "Shared with me", sharedCount],
+  ];
+
+  const row = (c: KbChatSummary) => {
+    const owned = isMine(c);
+    const isPinned = pinned.has(c.resource_id);
+    return (
+      <li key={c.resource_id} className="kb-chats__row">
+        <button
+          type="button"
+          className={`kb-chats__open${c.resource_id === selectedId ? " is-active" : ""}`}
+          onClick={() => onOpenChat?.(c.resource_id)}
+        >
+          <Icon name="chat" size={15} color="var(--text-paper-d)" />
+          <span className="kb-chats__title">{c.title}</span>
+          {owned ? (
+            <span className="kb-chats__meta">{c.message_count} msgs</span>
+          ) : (
+            c.owner && <UserChip userId={c.owner} size={18} />
+          )}
+        </button>
+        <button
+          type="button"
+          className={`kb-iconbtn${isPinned ? " is-pinned" : ""}`}
+          aria-label={`${isPinned ? "Unpin" : "Pin"} ${c.title}`}
+          aria-pressed={isPinned}
+          onClick={() => pinned.toggle(c.resource_id)}
+        >
+          <Icon name="pin" size={14} />
+        </button>
+        {owned && (
+          <>
+            <Popover
+              align="end"
+              trigger={({ onClick }) => (
+                <button type="button" className="kb-iconbtn" aria-label={`Share ${c.title}`} onClick={onClick}>
+                  <Icon name="users" size={14} />
+                </button>
+              )}
+            >
+              {() => (
+                <div style={{ padding: 8 }}>
+                  <div className="caps" style={{ padding: "0 4px 6px" }}>
+                    Share read-only
+                  </div>
+                  <UserPicker
+                    selected={c.shared_with ?? []}
+                    exclude={[me]}
+                    onToggle={(userId) =>
+                      shareMut.mutate({
+                        chatId: c.resource_id,
+                        userId,
+                        on: !(c.shared_with ?? []).includes(userId),
+                      })
+                    }
+                  />
                 </div>
-                <UserPicker
-                  selected={c.shared_with ?? []}
-                  exclude={[me]}
-                  onToggle={(userId) =>
-                    shareMut.mutate({
-                      chatId: c.resource_id,
-                      userId,
-                      on: !(c.shared_with ?? []).includes(userId),
-                    })
-                  }
-                />
-              </div>
-            )}
-          </Popover>
-          <button
-            type="button"
-            className="kb-iconbtn"
-            aria-label={`Delete ${c.title}`}
-            onClick={() => removeMut.mutate(c.resource_id)}
-          >
-            <Icon name="x" size={14} />
-          </button>
-        </>
-      )}
-    </li>
-  );
+              )}
+            </Popover>
+            <button
+              type="button"
+              className="kb-iconbtn"
+              aria-label={`Delete ${c.title}`}
+              onClick={() => removeMut.mutate(c.resource_id)}
+            >
+              <Icon name="x" size={14} />
+            </button>
+          </>
+        )}
+      </li>
+    );
+  };
 
   return (
     <div className="kb-chats">
       <header className="kb-chats__head">
         <div>
-          <h2 className="kb-docs__title">Conversations</h2>
-          <p className="kb-docs__sub">
-            {mine.length} {mine.length === 1 ? "chat" : "chats"}
+          <h2 className="kb-chats__heading">Conversations</h2>
+          <p className="kb-chats__sub">
+            {chats.length} {chats.length === 1 ? "chat" : "chats"}
+            {sharedCount === 0 ? " · private to you" : ` · ${sharedCount} shared with you`}
           </p>
         </div>
         <button type="button" className="kb-btn kb-btn--primary" onClick={onNewChat}>
@@ -131,20 +170,26 @@ export function KbChatsPage({
         </button>
       </header>
 
+      <div className="kb-tabs kb-tabs--compact">
+        {tabs.map(([id, label, count]) => (
+          <button
+            key={id}
+            type="button"
+            className={`kb-tab${tab === id ? " is-active" : ""}`}
+            aria-pressed={tab === id}
+            onClick={() => setTab(id)}
+          >
+            {label} <span className="kb-tab__count">{count}</span>
+          </button>
+        ))}
+      </div>
+
       {chats.length === 0 ? (
         <p className="kb-cols__empty">No conversations yet — ask the agent something.</p>
+      ) : shown.length === 0 ? (
+        <p className="kb-cols__empty">No conversations in this view.</p>
       ) : (
-        <>
-          <ul className="kb-chats__rows">{mine.map((c) => row(c, true))}</ul>
-          {shared.length > 0 && (
-            <>
-              <div className="caps" style={{ padding: "12px 14px 4px" }}>
-                Shared with me
-              </div>
-              <ul className="kb-chats__rows">{shared.map((c) => row(c, false))}</ul>
-            </>
-          )}
-        </>
+        <ul className="kb-chats__rows">{shown.map(row)}</ul>
       )}
     </div>
   );
