@@ -224,7 +224,13 @@ def create_app(
         users = MockUserDirectory()
     if spec is None:
         spec = SpecStar()
-        spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+        spec.configure(default_now=lambda: datetime.now(UTC))
+    # Single-source the current user: specstar stamps created_by with the SAME
+    # get_user_id the access layer checks against, so a request's owner can't
+    # diverge from who we think they are. (A caller-configured static
+    # default_user is deliberately overridden; the clock is left untouched —
+    # must precede register_all.)
+    spec.configure(default_user=get_user_id)
     register_all(spec)
 
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
