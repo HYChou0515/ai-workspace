@@ -35,8 +35,10 @@ describe("KbCollectionsPage", () => {
 
   it("creates a collection card; opening it shows the upload affordances", async () => {
     render(<KbCollectionsPage client={mockKbApi} />);
-    await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Process SOPs");
+    // "New collection" opens a modal; name is entered there, then created
     await userEvent.click(screen.getByRole("button", { name: /new collection/i }));
+    await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Process SOPs");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
     // the new collection appears as a card in the grid
     const card = await screen.findByRole("button", { name: "Open Process SOPs" });
@@ -230,7 +232,25 @@ describe("KbCollectionsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(deleteCollection).toHaveBeenCalledWith("c1");
     // returns to the grid landing
-    expect(await screen.findByPlaceholderText("New collection name…")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /new collection/i })).toBeInTheDocument();
+  });
+
+  it("creates a collection with a description through the modal", async () => {
+    const createCollection = vi.fn(async (name: string, description?: string) =>
+      col({ resource_id: "c9", name, description }),
+    );
+    const client = {
+      listCollections: async () => [],
+      listDocuments: async () => [],
+      createCollection,
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /new collection/i }));
+    await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Reflow SOPs");
+    await userEvent.type(screen.getByPlaceholderText(/what lives in this collection/i), "zone notes");
+    await userEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(createCollection).toHaveBeenCalledWith("Reflow SOPs", "zone notes");
   });
 
   it("re-indexes all documents from the settings menu", async () => {

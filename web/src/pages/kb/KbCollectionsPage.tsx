@@ -19,6 +19,7 @@ import { UserAvatar } from "../../components/UserChip";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { kindIcon } from "./docKind";
 import { docHref } from "./kbLinks";
+import { NewCollectionModal } from "./NewCollectionModal";
 
 const ICON_OPTIONS: IconName[] = [
   "layers", "file", "folder", "flame", "bug", "check",
@@ -46,7 +47,7 @@ export function KbCollectionsPage({
   const qc = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docQuery, setDocQuery] = useState("");
-  const [newName, setNewName] = useState("");
+  const [newOpen, setNewOpen] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -87,7 +88,8 @@ export function KbCollectionsPage({
   });
 
   const createMut = useMutation({
-    mutationFn: (name: string) => client.createCollection(name),
+    mutationFn: (v: { name: string; description: string }) =>
+      client.createCollection(v.name, v.description),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });
 
@@ -129,14 +131,7 @@ export function KbCollectionsPage({
     },
   });
 
-  const busy = createMut.isPending || uploadMut.isPending;
-
-  const createCollection = () => {
-    const name = newName.trim();
-    if (!name || busy) return;
-    setNewName("");
-    createMut.mutate(name);
-  };
+  const busy = uploadMut.isPending;
 
   const upload = (files: FileList | null, asFolder = false) => {
     if (!files || !selectedId || busy) return;
@@ -365,7 +360,7 @@ export function KbCollectionsPage({
                   {shownDocs.map((d) => (
                     <div key={d.resource_id} className="kb-doctable__row">
                       <span className="kb-doctable__kind">
-                        <Icon name={kindIcon(d.path)} size={14} color="var(--ink-2)" />
+                        <Icon name={kindIcon(d.path)} size={14} color="var(--text-paper-d)" />
                       </span>
                       <button type="button" className="kb-doctable__name" onClick={() => onOpenDoc?.(d.resource_id)}>
                         {d.path}
@@ -421,18 +416,20 @@ export function KbCollectionsPage({
         </div>
       </div>
 
-      <div className="kb-cols__create">
-        <input
-          className="kb-input"
-          placeholder="New collection name…"
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && createCollection()}
-        />
-        <button type="button" className="kb-btn kb-btn--primary" disabled={busy || !newName.trim()} onClick={createCollection}>
+      <div className="kb-cols__actions">
+        <button type="button" className="kb-btn kb-btn--primary" onClick={() => setNewOpen(true)}>
           <Icon name="plus" size={13} /> New collection
         </button>
       </div>
+
+      <NewCollectionModal
+        open={newOpen}
+        busy={createMut.isPending}
+        onClose={() => setNewOpen(false)}
+        onCreate={(name, description) =>
+          createMut.mutate({ name, description }, { onSuccess: () => setNewOpen(false) })
+        }
+      />
 
       {collections.length === 0 ? (
         <p className="kb-cols__empty">No collections yet — create one to start adding documents.</p>

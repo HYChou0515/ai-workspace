@@ -28,8 +28,8 @@ describe("KbHome shell", () => {
 
   it("shows the collections surface by default and switches to chats", async () => {
     renderShell();
-    // collections surface (the create input) is visible first
-    expect(screen.getByPlaceholderText("New collection name…")).toBeInTheDocument();
+    // collections surface (the "New collection" action) is visible first
+    expect(screen.getByRole("button", { name: /new collection/i })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
     // the chats surface is up — its New-chat action is unique to it
@@ -43,7 +43,7 @@ describe("KbHome shell", () => {
       </MemoryRouter>,
     );
     expect(await screen.findByRole("button", { name: /new chat/i })).toBeInTheDocument();
-    expect(screen.queryByPlaceholderText("New collection name…")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /new collection/i })).not.toBeInTheDocument();
   });
 
   it("opens the Ask-agent drawer from the top bar", async () => {

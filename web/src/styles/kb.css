@@ -457,6 +457,85 @@
   color: var(--text-paper);
   outline: none;
 }
+
+.kb-cols__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+
+/* New-collection modal */
+.kb-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(20, 22, 28, 0.55);
+  backdrop-filter: blur(4px);
+  animation: kb-fade 160ms ease;
+}
+.kb-modal__card {
+  width: min(520px, 92vw);
+  background: var(--paper);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-modal, 12px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(20, 22, 28, 0.3);
+}
+.kb-modal__head {
+  padding: 20px 24px 12px;
+  border-bottom: 1px solid var(--paper-3);
+}
+.kb-modal__title {
+  margin: 4px 0 0;
+  font-family: var(--font-display);
+  font-size: var(--text-display-sm);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--text-paper);
+}
+.kb-modal__body {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.kb-modal__foot {
+  padding: 12px 24px;
+  border-top: 1px solid var(--paper-3);
+  background: var(--paper-2);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-bottom-left-radius: var(--radius-modal, 12px);
+  border-bottom-right-radius: var(--radius-modal, 12px);
+}
+.kb-field {
+  display: block;
+}
+.kb-field__label {
+  display: block;
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-paper);
+}
+.kb-field__req {
+  color: var(--accent);
+}
+.kb-field .kb-input {
+  width: 100%;
+  flex: none;
+}
+.kb-textarea {
+  height: auto;
+  padding: 8px 10px;
+  resize: vertical;
+  line-height: var(--leading-body-sm, 1.5);
+}
 .kb-input:focus {
   border-color: var(--accent);
 }
@@ -762,7 +841,7 @@
   width: 18px;
   height: 18px;
   border-radius: 9px;
-  background: var(--ink);
+  background: var(--accent);
   border: 2px solid var(--paper);
   display: flex;
   align-items: center;
@@ -993,7 +1072,7 @@
   padding: 0;
   font-size: var(--text-body-sm);
   font-weight: 500;
-  color: var(--ink);
+  color: var(--text-paper);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;

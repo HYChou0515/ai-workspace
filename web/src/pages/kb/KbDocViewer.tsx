@@ -82,7 +82,7 @@ export function KbDocViewer({
       <aside className="kb-docviewer" role="dialog" aria-label="Document">
         <header className="kb-docviewer__head">
           <div className="kb-docviewer__icon">
-            <Icon name={kindIcon(doc?.filename ?? docId)} size={18} color="var(--ink-2)" />
+            <Icon name={kindIcon(doc?.filename ?? docId)} size={18} color="var(--text-paper-d)" />
           </div>
           <div className="kb-docviewer__titles">
             {collectionName && <div className="kb-docviewer__eyebrow">{collectionName}</div>}
