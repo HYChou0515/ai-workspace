@@ -12,6 +12,7 @@ import { useNotifications } from "../../hooks/useNotifications";
 import {
   formatInvestigationId,
   isCritical,
+  isOpen,
   relativeTime,
   summarize,
 } from "../../api/types";
@@ -84,6 +85,7 @@ export function HomeMain({
 }) {
   const open = openCount(items);
   const critical = criticalCount(items);
+  const openP1 = items.filter((i) => isOpen(i.status) && i.severity === "P1").length;
   const byStatus = countByStatus(items);
   const owners = ownersOf(items);
   const topics = topicsOf(items);
@@ -145,14 +147,14 @@ export function HomeMain({
               fontSize: "var(--text-body)",
             }}
           >
-            Investigations across all production lines, owners, and topics.
+            All investigations are visible to the org. Pin the ones you own.
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 24, flexShrink: 0 }}>
-          <Metric label="Open" value={String(open)} sub="across all lines" />
+          <Metric label="Open · P1" value={String(openP1)} sub="open, severity P1" />
           <Metric label="Critical" value={String(critical)} sub="P0 + P1, open" />
-          <Metric label="Pinned" value={String(pinned.size)} sub="across all lines" />
+          <Metric label="Pinned" value={String(pinned.size)} sub="you follow" />
         </div>
       </header>
 
