@@ -124,6 +124,29 @@ async def test_walk_lists_uploaded_files(sandbox: DockerSandbox):
     entries = await sandbox.walk(h, "/")
     by_path = {e.path: e.size for e in entries}
     assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
+    assert all(e.version for e in entries)  # mtime-size stamp populated
+
+
+async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: DockerSandbox):
+    h = await sandbox.create(SandboxSpec(image=_IMAGE))
+    await sandbox.upload(h, b"x", "/src/a.txt")
+    assert await sandbox.exists(h, "/src/a.txt") is True
+    assert await sandbox.exists(h, "/missing") is False
+
+    await sandbox.mkdir(h, "/d/e")
+    await sandbox.rename(h, "/src", "/dst")
+    assert {e.path for e in await sandbox.walk(h, "/")} == {"/dst/a.txt"}
+
+    await sandbox.delete(h, "/dst/a.txt")
+    assert await sandbox.exists(h, "/dst/a.txt") is False
+    with pytest.raises(FileNotFoundError):
+        await sandbox.delete(h, "/dst/a.txt")
+
+    await sandbox.rmdir(h, "/d")
+    with pytest.raises(FileNotFoundError):
+        await sandbox.rmdir(h, "/d")
+    with pytest.raises(FileNotFoundError):
+        await sandbox.rename(h, "/nope", "/x")
 
 
 def test_parse_find_output_skips_blank_lines():

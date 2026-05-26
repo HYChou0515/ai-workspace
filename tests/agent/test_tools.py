@@ -10,6 +10,18 @@ from workspace_app.agent import (
     read_file_impl,
     write_file_impl,
 )
+from workspace_app.files import WorkspaceFiles
+from workspace_app.filestore.memory import MemoryFileStore
+
+
+async def test_file_tools_use_injected_files_facade():
+    """When the caller injects a WorkspaceFiles facade, the file tools go
+    through it (covers the non-fallback branch of _workspace)."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", files=files))
+    await write_file_impl(ctx, "/a.txt", "hello")
+    assert await read_file_impl(ctx, "/a.txt") == "hello"
+    assert await exists_impl(ctx, "/a.txt") is True
 
 
 async def test_exec_lazy_creates_sandbox_on_first_call(

@@ -4,6 +4,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from ..files import WorkspaceFiles
 from ..filestore.protocol import FileStore
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
@@ -44,6 +45,10 @@ class AgentToolContext:
     investigation_id: str | None = None
     sandbox: Sandbox | None = None
     filestore: FileStore | None = None
+    # The file-access chokepoint the file tools go through. When unset, the
+    # tools wrap `filestore` in a fresh facade (transitional — P2 makes this the
+    # liveness-routing instance the API layer injects).
+    files: WorkspaceFiles | None = None
     sync: SandboxSync | None = None
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
     handle: SandboxHandle | None = None

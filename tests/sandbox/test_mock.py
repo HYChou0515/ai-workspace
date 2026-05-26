@@ -121,3 +121,59 @@ async def test_walk_with_non_root_prefix_filters_results():
     await sandbox.upload(h, b"b", "/elsewhere/b.txt")
     entries = await sandbox.walk(h, "/inside")
     assert [e.path for e in entries] == ["/inside/a.txt"]
+
+
+async def test_walk_version_changes_iff_content_changes():
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"hello", "/a.txt")
+    v1 = (await sandbox.walk(h, "/"))[0].version
+    assert v1  # non-empty
+    await sandbox.upload(h, b"hello", "/a.txt")  # same bytes
+    assert (await sandbox.walk(h, "/"))[0].version == v1
+    await sandbox.upload(h, b"changed", "/a.txt")
+    assert (await sandbox.walk(h, "/"))[0].version != v1
+
+
+async def test_exists_and_delete():
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x", "/a.txt")
+    assert await sandbox.exists(h, "/a.txt") is True
+    assert await sandbox.exists(h, "/missing") is False
+    await sandbox.delete(h, "/a.txt")
+    assert await sandbox.exists(h, "/a.txt") is False
+    with pytest.raises(FileNotFoundError):
+        await sandbox.delete(h, "/a.txt")
+
+
+async def test_mkdir_noop_and_rmdir_removes_subtree():
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mkdir(h, "/d/e")  # validates handle; empty dir unobservable
+    await sandbox.upload(h, b"x", "/d/e/f.txt")
+    await sandbox.rmdir(h, "/d")  # removes everything under /d
+    assert await sandbox.exists(h, "/d/e/f.txt") is False
+    with pytest.raises(FileNotFoundError):
+        await sandbox.rmdir(h, "/d")  # nothing left under /d
+
+
+async def test_rename_single_file():
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x", "/a.txt")
+    await sandbox.rename(h, "/a.txt", "/b.txt")
+    assert await sandbox.exists(h, "/a.txt") is False
+    assert await sandbox.download(h, "/b.txt") == b"x"
+
+
+async def test_rename_file_and_subtree():
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x", "/src/a.txt")
+    await sandbox.upload(h, b"y", "/src/sub/b.txt")
+    await sandbox.rename(h, "/src", "/dst")
+    paths = {e.path for e in await sandbox.walk(h, "/")}
+    assert paths == {"/dst/a.txt", "/dst/sub/b.txt"}
+    with pytest.raises(FileNotFoundError):
+        await sandbox.rename(h, "/nope", "/x")

@@ -216,6 +216,37 @@ class LocalProcessSandbox:
         target = self._resolve(cwd, remote_path)
         return await asyncio.to_thread(target.read_bytes)
 
+    async def exists(self, handle: SandboxHandle, path: str) -> bool:
+        cwd = self._require(handle)
+        return await asyncio.to_thread(self._resolve(cwd, path).is_file)
+
+    async def delete(self, handle: SandboxHandle, path: str) -> None:
+        cwd = self._require(handle)
+        target = self._resolve(cwd, path)
+        if not await asyncio.to_thread(target.is_file):
+            raise FileNotFoundError(path)
+        await asyncio.to_thread(target.unlink)
+
+    async def mkdir(self, handle: SandboxHandle, path: str) -> None:
+        cwd = self._require(handle)
+        target = self._resolve(cwd, path)
+        await asyncio.to_thread(lambda: target.mkdir(parents=True, exist_ok=True))
+
+    async def rmdir(self, handle: SandboxHandle, path: str) -> None:
+        cwd = self._require(handle)
+        target = self._resolve(cwd, path)
+        if not await asyncio.to_thread(target.is_dir):
+            raise FileNotFoundError(path)
+        await asyncio.to_thread(shutil.rmtree, target)
+
+    async def rename(self, handle: SandboxHandle, src: str, dst: str) -> None:
+        cwd = self._require(handle)
+        s, d = self._resolve(cwd, src), self._resolve(cwd, dst)
+        if not await asyncio.to_thread(s.exists):
+            raise FileNotFoundError(src)
+        await asyncio.to_thread(lambda: d.parent.mkdir(parents=True, exist_ok=True))
+        await asyncio.to_thread(s.rename, d)
+
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
         self._require(handle)
         return ("127.0.0.1", container_port)
@@ -233,7 +264,9 @@ class LocalProcessSandbox:
                 continue
             rel = p.relative_to(cwd).as_posix()
             stat = p.stat()
-            entries.append(FileEntry(path=f"/{rel}", size=stat.st_size, mtime=stat.st_mtime))
+            # mtime(ns)+size — cheap, no read; ns granularity avoids same-second collisions.
+            version = f"{stat.st_mtime_ns}-{stat.st_size}"
+            entries.append(FileEntry(path=f"/{rel}", size=stat.st_size, version=version))
         return entries
 
     @staticmethod

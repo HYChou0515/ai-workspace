@@ -17,6 +17,7 @@ from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..agent.context import AgentToolContext
+from ..files import WorkspaceFiles
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..kb.chunker import Chunker, FixedTokenChunker
 from ..kb.cited import record_citations
@@ -234,6 +235,9 @@ def create_app(
     register_all(spec)
 
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
+    # The single chokepoint for workspace file ops (agent tools + file routes).
+    # P1: delegates to filestore (behaviour unchanged); P2 routes by liveness.
+    files = WorkspaceFiles(filestore)
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
     kernels = KernelService()
     activity = ActivityLog()
@@ -498,6 +502,7 @@ def create_app(
             investigation_id=investigation_id,
             sandbox=sandbox,
             filestore=filestore,
+            files=files,
             sync=sync,
             sandbox_spec=SandboxSpec(),
             handle=session.handle,
@@ -600,17 +605,17 @@ def create_app(
 
     @app.get("/investigations/{investigation_id}/files")
     async def list_files(investigation_id: str, prefix: str = "") -> list[dict]:
-        paths = await filestore.ls(investigation_id, prefix)
+        paths = await files.ls(investigation_id, prefix)
         out: list[dict] = []
         for p in sorted(paths):
-            data = await filestore.read(investigation_id, p)
+            data = await files.read(investigation_id, p)
             out.append({"path": p, "size": len(data)})
         return out
 
     @app.get("/investigations/{investigation_id}/dirs")
     async def list_dirs(investigation_id: str) -> list[str]:
         """Directory paths (incl. empty ones) for the file tree."""
-        return sorted(await filestore.listdir(investigation_id))
+        return sorted(await files.listdir(investigation_id))
 
     @app.put(
         "/investigations/{investigation_id}/files/{path:path}",
@@ -619,7 +624,7 @@ def create_app(
     async def write_file(investigation_id: str, path: str, request: Request) -> Response:
         body = await request.body()
         norm = "/" + path.lstrip("/")
-        await filestore.write(investigation_id, norm, body)
+        await files.write(investigation_id, norm, body)
         activity.record(
             "file_written",
             f"Wrote {norm}",
@@ -637,7 +642,7 @@ def create_app(
     async def make_dir(investigation_id: str, body: _MkdirBody) -> Response:
         norm = "/" + body.path.strip("/")
         try:
-            await filestore.mkdir(investigation_id, norm)
+            await files.mkdir(investigation_id, norm)
         except FileExists as exc:
             raise HTTPException(status_code=409, detail=f"file exists at {norm}") from exc
         activity.record(
@@ -652,33 +657,31 @@ def create_app(
         on missing source / occupied target / moving a dir into itself."""
         if dst == src or dst.startswith(src + "/"):
             raise HTTPException(status_code=400, detail="cannot move a path into itself")
-        if await filestore.is_dir(investigation_id, src):
-            occupied = await filestore.exists(investigation_id, dst) or await filestore.is_dir(
+        if await files.is_dir(investigation_id, src):
+            occupied = await files.exists(investigation_id, dst) or await files.is_dir(
                 investigation_id, dst
             )
             if occupied:
                 raise HTTPException(status_code=409, detail=f"target exists: {dst}")
             under = src + "/"
-            for p in sorted(await filestore.ls(investigation_id, under)):
-                data = await filestore.read(investigation_id, p)
-                await filestore.write(investigation_id, dst + p[len(src) :], data)
-            await filestore.mkdir(investigation_id, dst)
-            for d in await filestore.listdir(investigation_id, under):
-                await filestore.mkdir(investigation_id, dst + d[len(src) :])
+            for p in sorted(await files.ls(investigation_id, under)):
+                data = await files.read(investigation_id, p)
+                await files.write(investigation_id, dst + p[len(src) :], data)
+            await files.mkdir(investigation_id, dst)
+            for d in await files.listdir(investigation_id, under):
+                await files.mkdir(investigation_id, dst + d[len(src) :])
             if not copy:
-                await filestore.rmdir(investigation_id, src)
+                await files.rmdir(investigation_id, src)
             return
         try:
-            data = await filestore.read(investigation_id, src)
+            data = await files.read(investigation_id, src)
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        if await filestore.exists(investigation_id, dst) or await filestore.is_dir(
-            investigation_id, dst
-        ):
+        if await files.exists(investigation_id, dst) or await files.is_dir(investigation_id, dst):
             raise HTTPException(status_code=409, detail=f"target exists: {dst}")
-        await filestore.write(investigation_id, dst, data)
+        await files.write(investigation_id, dst, data)
         if not copy:
-            await filestore.delete(investigation_id, src)
+            await files.delete(investigation_id, src)
 
     @app.post(
         "/investigations/{investigation_id}/files/move",
@@ -722,12 +725,12 @@ def create_app(
             )
         except InvalidQuery as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        paths = sorted(await filestore.ls(investigation_id))
+        paths = sorted(await files.ls(investigation_id))
         results: list[tuple[str, bytes, list]] = []
         for p in paths:
             if not path_selected(p, body.include, body.exclude):
                 continue
-            data = await filestore.read(investigation_id, p)
+            data = await files.read(investigation_id, p)
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError:
@@ -762,7 +765,7 @@ def create_app(
         for p, data, _matches in results:
             text = data.decode("utf-8")
             new_text, n = pattern.subn(body.replacement, text)
-            await filestore.write(investigation_id, p, new_text.encode("utf-8"))
+            await files.write(investigation_id, p, new_text.encode("utf-8"))
             replaced += n
             activity.record(
                 "file_written",
@@ -777,8 +780,8 @@ def create_app(
     )
     async def delete_file(investigation_id: str, path: str) -> Response:
         norm = "/" + path.lstrip("/")
-        if await filestore.is_dir(investigation_id, norm):
-            await filestore.rmdir(investigation_id, norm)
+        if await files.is_dir(investigation_id, norm):
+            await files.rmdir(investigation_id, norm)
             activity.record(
                 "dir_deleted",
                 f"Deleted folder {norm}",
@@ -786,7 +789,7 @@ def create_app(
             )
             return Response(status_code=status.HTTP_204_NO_CONTENT)
         try:
-            await filestore.delete(investigation_id, norm)
+            await files.delete(investigation_id, norm)
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         activity.record(
@@ -799,7 +802,7 @@ def create_app(
     @app.get("/investigations/{investigation_id}/files/{path:path}")
     async def read_file(investigation_id: str, path: str) -> Response:
         try:
-            data = await filestore.read(investigation_id, "/" + path.lstrip("/"))
+            data = await files.read(investigation_id, "/" + path.lstrip("/"))
         except FileNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         # Best-effort text/plain when valid UTF-8; otherwise octet-stream.

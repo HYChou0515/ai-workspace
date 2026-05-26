@@ -83,13 +83,19 @@ class FileEntry:
     """One regular file inside the sandbox, returned by `Sandbox.walk`.
 
     `path` is workspace-root-relative and starts with "/", so it round-trips
-    with FileStore keys without further normalization. `mtime` is the file's
-    last-modified epoch seconds when the adapter has it; 0 if unknown
-    (e.g. MockSandbox)."""
+    with FileStore keys without further normalization.
+
+    `version` is an **opaque** change-stamp the backend computes however it can
+    afford — a content hash, an `mtime:size` pair, a write counter — and the
+    only contract is: *it differs iff the file's content may have changed.* The
+    mirror diffs `version` against what it last snapshotted to decide which
+    files to re-copy (so cheap backends stay cheap, and a backend with nothing
+    better can fall back to a content hash). It also doubles as the
+    compare-and-swap token for `write_file`. Never parse it."""
 
     path: str
     size: int
-    mtime: float = 0.0
+    version: str = ""
 
 
 class Sandbox(Protocol):
@@ -141,6 +147,32 @@ class Sandbox(Protocol):
         with `/`-rooted paths. Directories and symlinks are excluded (only real
         files round-trip to the FileStore). `root` is workspace-root-relative;
         "/" walks the whole workspace."""
+        ...
+
+    async def exists(self, handle: SandboxHandle, path: str) -> bool:
+        """True if a **regular file** exists at `path` (directories report
+        False — mirror FileStore.exists)."""
+        ...
+
+    async def delete(self, handle: SandboxHandle, path: str) -> None:
+        """Delete the regular file at `path`. Raise `FileNotFoundError` if it
+        does not exist. Parent directories are left intact."""
+        ...
+
+    async def mkdir(self, handle: SandboxHandle, path: str) -> None:
+        """Create the directory at `path` and any missing ancestors. Idempotent
+        for an existing directory."""
+        ...
+
+    async def rmdir(self, handle: SandboxHandle, path: str) -> None:
+        """Remove the directory at `path` and everything beneath it. Raise
+        `FileNotFoundError` if it does not exist."""
+        ...
+
+    async def rename(self, handle: SandboxHandle, src: str, dst: str) -> None:
+        """Move/rename `src` to `dst` (file or directory), creating `dst`'s
+        parent directories as needed. Raise `FileNotFoundError` if `src` is
+        absent."""
         ...
 
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:

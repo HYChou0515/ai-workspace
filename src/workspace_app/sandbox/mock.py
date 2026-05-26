@@ -1,3 +1,4 @@
+import hashlib
 import uuid
 
 from .protocol import (
@@ -8,6 +9,12 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
 )
+
+
+def _version(data: bytes) -> str:
+    """Content hash — exact for the in-memory store, stateless, and changes
+    iff the bytes change (so a same-content re-upload doesn't churn)."""
+    return hashlib.sha256(data).hexdigest()[:16]
 
 
 class MockSandbox:
@@ -91,6 +98,46 @@ class MockSandbox:
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         fs = self._require(handle)
         prefix = root if root.endswith("/") else root + "/"
-        if root == "/" or root == "":
-            return [FileEntry(path=p, size=len(d)) for p, d in fs.items()]
-        return [FileEntry(path=p, size=len(d)) for p, d in fs.items() if p.startswith(prefix)]
+        if root in ("/", ""):
+            items = list(fs.items())
+        else:
+            items = [(p, d) for p, d in fs.items() if p.startswith(prefix)]
+        return [FileEntry(path=p, size=len(d), version=_version(d)) for p, d in items]
+
+    async def exists(self, handle: SandboxHandle, path: str) -> bool:
+        return path in self._require(handle)
+
+    async def delete(self, handle: SandboxHandle, path: str) -> None:
+        fs = self._require(handle)
+        if path not in fs:
+            raise FileNotFoundError(path)
+        del fs[path]
+
+    async def mkdir(self, handle: SandboxHandle, path: str) -> None:
+        # The flat store has only implicit dirs (via file paths) and the Sandbox
+        # Protocol exposes no is_dir/listdir, so an empty dir is unobservable —
+        # validate the handle and no-op. Real backends create it for real.
+        self._require(handle)
+
+    async def rmdir(self, handle: SandboxHandle, path: str) -> None:
+        fs = self._require(handle)
+        base = path.rstrip("/")
+        prefix = base + "/"
+        victims = [p for p in fs if p == base or p.startswith(prefix)]
+        if not victims:
+            raise FileNotFoundError(path)
+        for p in victims:
+            del fs[p]
+
+    async def rename(self, handle: SandboxHandle, src: str, dst: str) -> None:
+        fs = self._require(handle)
+        s, d = src.rstrip("/"), dst.rstrip("/")
+        if s in fs:  # single file
+            fs[d] = fs.pop(s)
+            return
+        prefix = s + "/"
+        moved = [p for p in fs if p.startswith(prefix)]
+        if not moved:
+            raise FileNotFoundError(src)
+        for p in moved:
+            fs[d + p[len(s) :]] = fs.pop(p)

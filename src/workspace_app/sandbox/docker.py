@@ -129,6 +129,42 @@ class DockerSandbox:
         data = b"".join(stream)
         return _extract_single_file_from_tar(data, target.name)
 
+    def _target(self, remote_path: str) -> str:
+        return str(PurePosixPath(_WORKDIR) / remote_path.lstrip("/"))
+
+    async def exists(self, handle: SandboxHandle, path: str) -> bool:
+        container = self._require(handle)
+        r = await asyncio.to_thread(container.exec_run, ["test", "-f", self._target(path)])
+        return r.exit_code == 0
+
+    async def delete(self, handle: SandboxHandle, path: str) -> None:
+        if not await self.exists(handle, path):
+            raise FileNotFoundError(path)
+        container = self._require(handle)
+        await asyncio.to_thread(container.exec_run, ["rm", "-f", self._target(path)])
+
+    async def mkdir(self, handle: SandboxHandle, path: str) -> None:
+        container = self._require(handle)
+        await asyncio.to_thread(container.exec_run, ["mkdir", "-p", self._target(path)])
+
+    async def rmdir(self, handle: SandboxHandle, path: str) -> None:
+        container = self._require(handle)
+        target = self._target(path)
+        r = await asyncio.to_thread(container.exec_run, ["test", "-d", target])
+        if r.exit_code != 0:
+            raise FileNotFoundError(path)
+        await asyncio.to_thread(container.exec_run, ["rm", "-rf", target])
+
+    async def rename(self, handle: SandboxHandle, src: str, dst: str) -> None:
+        container = self._require(handle)
+        s, d = self._target(src), self._target(dst)
+        r = await asyncio.to_thread(container.exec_run, ["test", "-e", s])
+        if r.exit_code != 0:
+            raise FileNotFoundError(src)
+        parent = str(PurePosixPath(d).parent)
+        script = f"mkdir -p {parent} && mv {s} {d}"
+        await asyncio.to_thread(container.exec_run, ["sh", "-c", script])
+
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
         container = self._require(handle)
         await asyncio.to_thread(container.reload)
@@ -200,5 +236,5 @@ def _parse_find_output(output: bytes, base: str):
         yield FileEntry(
             path="/" + rel,
             size=int(size_b),
-            mtime=float(mtime_b),
+            version=f"{mtime_b.decode()}-{size_b.decode()}",
         )

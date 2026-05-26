@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from agents import FunctionTool, RunContextWrapper, function_tool
 
-from ..filestore.protocol import FileNotFound, FileStore
+from ..files import WorkspaceFiles
+from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
 
@@ -13,11 +14,16 @@ def _format_exec(r: ExecResult) -> str:
     return f"exit_code={r.exit_code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
 
 
-def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[FileStore, str]:
-    """The (filestore, investigation_id) the RCA file tools require."""
-    fs, inv = ctx.context.filestore, ctx.context.investigation_id
-    assert fs is not None and inv is not None  # file tools imply an RCA context
-    return fs, inv
+def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[WorkspaceFiles, str]:
+    """The (file facade, investigation_id) the RCA file tools require. When the
+    caller didn't inject a facade, wrap the bare filestore (transitional)."""
+    inv = ctx.context.investigation_id
+    files = ctx.context.files
+    if files is None:
+        assert ctx.context.filestore is not None  # file tools imply an RCA context
+        files = WorkspaceFiles(ctx.context.filestore)
+    assert inv is not None
+    return files, inv
 
 
 async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) -> str:

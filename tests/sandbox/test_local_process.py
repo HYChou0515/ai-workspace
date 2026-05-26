@@ -108,8 +108,8 @@ async def test_walk_returns_files_relative_to_root(sandbox: LocalProcessSandbox)
     entries = await sandbox.walk(h, "/")
     by_path = {e.path: e.size for e in entries}
     assert by_path == {"/a.txt": 5, "/sub/b.txt": 7}
-    # mtime is populated for real-FS impls.
-    assert all(e.mtime > 0 for e in entries)
+    # version is populated for real-FS impls (mtime+size stamp).
+    assert all(e.version for e in entries)
 
 
 async def test_walk_excludes_directories(sandbox: LocalProcessSandbox):
@@ -117,6 +117,28 @@ async def test_walk_excludes_directories(sandbox: LocalProcessSandbox):
     await sandbox.upload(h, b"x", "/a/b/c.txt")
     entries = await sandbox.walk(h, "/")
     assert [e.path for e in entries] == ["/a/b/c.txt"]
+
+
+async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: LocalProcessSandbox):
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"x", "/src/a.txt")
+    assert await sandbox.exists(h, "/src/a.txt") is True
+    assert await sandbox.exists(h, "/missing") is False
+
+    await sandbox.mkdir(h, "/d/e")  # empty dir, ancestors created
+    await sandbox.rename(h, "/src", "/dst")
+    assert {e.path for e in await sandbox.walk(h, "/")} == {"/dst/a.txt"}
+
+    await sandbox.delete(h, "/dst/a.txt")
+    assert await sandbox.exists(h, "/dst/a.txt") is False
+    with pytest.raises(FileNotFoundError):
+        await sandbox.delete(h, "/dst/a.txt")
+
+    await sandbox.rmdir(h, "/d")
+    with pytest.raises(FileNotFoundError):
+        await sandbox.rmdir(h, "/d")
+    with pytest.raises(FileNotFoundError):
+        await sandbox.rename(h, "/nope", "/x")
 
 
 # ---------------- Live output streaming (on_output) ----------------
