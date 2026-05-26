@@ -16,6 +16,7 @@ import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
 import { UserAvatar } from "../../components/UserChip";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { kindIcon } from "./docKind";
 import { docHref } from "./kbLinks";
@@ -37,6 +38,15 @@ function fmtDate(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+/** Compact count for the token estimate (≈ bytes/4): 12_400_000 → "12.4 M". */
+function fmtCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} M`;
+  if (n >= 1_000) return `${Math.round(n / 1_000)} K`;
+  return String(n);
+}
+
+type Tab = "all" | "mine" | "pinned";
+
 export function KbCollectionsPage({
   client = kbApi,
   onOpenDoc,
@@ -45,12 +55,18 @@ export function KbCollectionsPage({
   onOpenDoc?: (documentId: string) => void;
 }) {
   const qc = useQueryClient();
+  const me = useCurrentUser();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [docQuery, setDocQuery] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+  const [tab, setTab] = useState<Tab>("all");
+  const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
+  const [colQuery, setColQuery] = useState("");
   const [iconOpen, setIconOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [descDraft, setDescDraft] = useState("");
   const [confirmDel, setConfirmDel] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
@@ -74,6 +90,7 @@ export function KbCollectionsPage({
     setDocQuery("");
     setIconOpen(false);
     setEditingName(false);
+    setEditingDesc(false);
     setConfirmDel(false);
   }, [selectedId]);
 
@@ -94,7 +111,7 @@ export function KbCollectionsPage({
   });
 
   const updateMut = useMutation({
-    mutationFn: (patch: { name?: string; icon?: string }) =>
+    mutationFn: (patch: { name?: string; icon?: string; description?: string }) =>
       client.updateCollection(selectedId as string, patch),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });
@@ -151,6 +168,22 @@ export function KbCollectionsPage({
       Number(pinned.has(b.resource_id)) - Number(pinned.has(a.resource_id)) ||
       a.name.localeCompare(b.name),
   );
+  // Library-wide aggregates for the landing header.
+  const totalDocs = collections.reduce((s, c) => s + c.doc_count, 0);
+  const totalSize = collections.reduce((s, c) => s + c.size, 0);
+  const mineCount = collections.filter((c) => c.owner === me).length;
+  const sharedCount = collections.length - mineCount;
+  const pinnedCount = collections.filter((c) => pinned.has(c.resource_id)).length;
+  const owners = [...new Set(collections.map((c) => c.owner))].sort();
+  // Tab + owner + name filters compose over the pinned-first sorted list.
+  const cq = colQuery.trim().toLowerCase();
+  const shownCols = sorted.filter((c) => {
+    if (tab === "mine" && c.owner !== me) return false;
+    if (tab === "pinned" && !pinned.has(c.resource_id)) return false;
+    if (ownerFilter && c.owner !== ownerFilter) return false;
+    if (cq && !c.name.toLowerCase().includes(cq)) return false;
+    return true;
+  });
   const q = docQuery.trim().toLowerCase();
   const shownDocs = q ? documents.filter((d) => d.path.toLowerCase().includes(q)) : documents;
 
@@ -162,6 +195,11 @@ export function KbCollectionsPage({
       const name = nameDraft.trim();
       setEditingName(false);
       if (name && name !== selected.name) updateMut.mutate({ name });
+    };
+    const commitDesc = () => {
+      const description = descDraft.trim();
+      setEditingDesc(false);
+      if (description !== selected.description) updateMut.mutate({ description });
     };
     const stats: [string, string, boolean?][] = [
       ["Documents", String(selected.doc_count)],
@@ -248,38 +286,37 @@ export function KbCollectionsPage({
                   {selected.name}
                 </h1>
               )}
-              <p className="kb-colpage__desc">{selected.description}</p>
+              {editingDesc ? (
+                <textarea
+                  className="kb-colpage__descedit"
+                  // biome-ignore lint/a11y/noAutofocus: description editor should grab focus
+                  autoFocus
+                  rows={2}
+                  value={descDraft}
+                  placeholder="Add a description…"
+                  onChange={(e) => setDescDraft(e.target.value)}
+                  onBlur={commitDesc}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) commitDesc();
+                    if (e.key === "Escape") setEditingDesc(false);
+                  }}
+                />
+              ) : (
+                <p
+                  className={`kb-colpage__desc${selected.description ? "" : " is-empty"}`}
+                  title="Click to edit"
+                  onClick={() => {
+                    setDescDraft(selected.description);
+                    setEditingDesc(true);
+                  }}
+                >
+                  {selected.description || "Add a description…"}
+                </p>
+              )}
             </div>
           </div>
 
           <div className="kb-colpage__actions">
-            <Popover
-              align="end"
-              trigger={({ onClick, open }) => (
-                <button
-                  type="button"
-                  className="kb-btn kb-btn--primary"
-                  disabled={busy}
-                  aria-haspopup="menu"
-                  aria-expanded={open}
-                  onClick={onClick}
-                >
-                  <Icon name="upload" size={13} /> Upload <Icon name="chev_d" size={11} />
-                </button>
-              )}
-            >
-              {(close) => (
-                <div className="kb-menu" role="menu">
-                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); fileRef.current?.click(); }}>
-                    <Icon name="file" size={14} color="var(--text-paper-d)" /> Upload files
-                  </button>
-                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); folderRef.current?.click(); }}>
-                    <Icon name="folder" size={14} color="var(--text-paper-d)" /> Upload folder
-                  </button>
-                </div>
-              )}
-            </Popover>
-
             <Popover
               align="end"
               trigger={({ onClick, open }) => (
@@ -306,6 +343,33 @@ export function KbCollectionsPage({
                   <div className="kb-menu__divider" />
                   <button type="button" role="menuitem" className="kb-menu__item kb-menu__item--danger" onClick={() => { close(); setConfirmDel(true); }}>
                     <Icon name="x" size={14} /> Delete collection
+                  </button>
+                </div>
+              )}
+            </Popover>
+
+            <Popover
+              align="end"
+              trigger={({ onClick, open }) => (
+                <button
+                  type="button"
+                  className="kb-btn kb-btn--primary"
+                  disabled={busy}
+                  aria-haspopup="menu"
+                  aria-expanded={open}
+                  onClick={onClick}
+                >
+                  <Icon name="upload" size={13} /> Upload <Icon name="chev_d" size={11} />
+                </button>
+              )}
+            >
+              {(close) => (
+                <div className="kb-menu" role="menu">
+                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); fileRef.current?.click(); }}>
+                    <Icon name="file" size={14} color="var(--text-paper-d)" /> Upload files
+                  </button>
+                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); folderRef.current?.click(); }}>
+                    <Icon name="folder" size={14} color="var(--text-paper-d)" /> Upload folder
                   </button>
                 </div>
               )}
@@ -401,22 +465,93 @@ export function KbCollectionsPage({
   }
 
   // ---- collection grid (landing) ----
+  const tabs: [Tab, string, number][] = [
+    ["all", "All", collections.length],
+    ["mine", "Mine", mineCount],
+    ["pinned", "Pinned", pinnedCount],
+  ];
   return (
     <section className="kb-grid-page" aria-label="Collections">
-      <div className="kb-kpis">
-        <div className="kb-kpi">
-          <span className="kb-kpi__value">{collections.length}</span>
-          <span className="kb-kpi__label">Collections</span>
+      <header className="kb-libhead">
+        <div className="kb-libhead__intro">
+          <div className="caps">Knowledge base</div>
+          <h1 className="kb-libhead__title">
+            {collections.length} collections <span className="kb-libhead__dot">·</span> {totalDocs}{" "}
+            documents
+          </h1>
+          <p className="kb-libhead__lead">
+            Collections are the unit of search. Pick which to use as context when chatting.
+          </p>
         </div>
-        <div className="kb-kpi">
-          <span className="kb-kpi__value kb-kpi__value--text" title={mostCited?.name}>
-            {mostCited && mostCited.cited > 0 ? mostCited.name : "—"}
-          </span>
-          <span className="kb-kpi__label">Most cited</span>
+        <div className="kb-libhead__metrics">
+          <div className="kb-metric">
+            <span className="kb-metric__label">My collections</span>
+            <span className="kb-metric__value">{mineCount}</span>
+            <span className="kb-metric__sub">plus {sharedCount} shared</span>
+          </div>
+          <div className="kb-metric">
+            <span className="kb-metric__label">Total size</span>
+            <span className="kb-metric__value">{fmtBytes(totalSize)}</span>
+            <span className="kb-metric__sub">≈ {fmtCount(Math.round(totalSize / 4))} tokens</span>
+          </div>
+          <div className="kb-metric">
+            <span className="kb-metric__label">Most cited</span>
+            <span className="kb-metric__value" title={mostCited?.name}>
+              {mostCited && mostCited.cited > 0 ? mostCited.name : "—"}
+            </span>
+            <span className="kb-metric__sub">
+              {mostCited && mostCited.cited > 0 ? `${mostCited.cited} citations` : "no citations yet"}
+            </span>
+          </div>
         </div>
+      </header>
+
+      <div className="kb-tabs">
+        {tabs.map(([id, label, count]) => (
+          <button
+            key={id}
+            type="button"
+            className={`kb-tab${tab === id ? " is-active" : ""}`}
+            aria-pressed={tab === id}
+            onClick={() => setTab(id)}
+          >
+            {label} <span className="kb-tab__count">{count}</span>
+          </button>
+        ))}
       </div>
 
       <div className="kb-cols__actions">
+        <label className="kb-docsearch kb-docsearch--inline">
+          <Icon name="search" size={14} color="var(--text-paper-d)" />
+          <input
+            type="search"
+            placeholder="Filter collections…"
+            value={colQuery}
+            onChange={(e) => setColQuery(e.target.value)}
+          />
+        </label>
+        <Popover
+          align="start"
+          trigger={({ onClick, open }) => (
+            <button type="button" className="kb-btn" aria-haspopup="menu" aria-expanded={open} onClick={onClick}>
+              <Icon name="user" size={13} /> Owner · {ownerFilter ?? "any"} <Icon name="chev_d" size={11} />
+            </button>
+          )}
+        >
+          {(close) => (
+            <div className="kb-menu" role="menu">
+              <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setOwnerFilter(null); }}>
+                Any owner
+              </button>
+              {owners.map((o) => (
+                <button key={o} type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setOwnerFilter(o); }}>
+                  {o}
+                </button>
+              ))}
+            </div>
+          )}
+        </Popover>
+        <span style={{ flex: 1 }} />
         <button type="button" className="kb-btn kb-btn--primary" onClick={() => setNewOpen(true)}>
           <Icon name="plus" size={13} /> New collection
         </button>
@@ -433,9 +568,11 @@ export function KbCollectionsPage({
 
       {collections.length === 0 ? (
         <p className="kb-cols__empty">No collections yet — create one to start adding documents.</p>
+      ) : shownCols.length === 0 ? (
+        <p className="kb-cols__empty">No collections match the current filters.</p>
       ) : (
         <div className="kb-grid">
-          {sorted.map((c) => (
+          {shownCols.map((c) => (
             <div key={c.resource_id} className="kb-card-wrap">
               <button type="button" className="kb-card" aria-label={`Open ${c.name}`} onClick={() => setSelectedId(c.resource_id)}>
                 <div className="kb-card__icon">

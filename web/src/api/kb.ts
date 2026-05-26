@@ -125,8 +125,12 @@ export interface KbApi {
   getAgentConfig(): Promise<KbAgentConfig>;
   listCollections(): Promise<KbCollection[]>;
   createCollection(name: string, description?: string): Promise<KbCollection>;
-  /** Rename / change icon — via specstar's native PATCH /collection/{id}. */
-  updateCollection(id: string, patch: { name?: string; icon?: string }): Promise<void>;
+  /** Rename / change icon / edit description — via specstar's native
+   * PATCH /collection/{id} (partial update). */
+  updateCollection(
+    id: string,
+    patch: { name?: string; icon?: string; description?: string },
+  ): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
   deleteCollection(id: string): Promise<void>;
   /** Re-chunk + re-embed every document in the collection (recovers `error`

@@ -137,11 +137,11 @@ describe("KbCollectionsPage", () => {
     expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual(["Open Zeta", "Open Alpha"]);
   });
 
-  it("summarizes the library with a KPI strip (count + most-cited)", async () => {
+  it("summarizes the library in the header (count line + most-cited metric)", async () => {
     const client = {
       listCollections: async () => [
-        col({ resource_id: "c1", name: "Reflow SOPs", cited: 3 }),
-        col({ resource_id: "c2", name: "Wirebond SOPs", cited: 9 }),
+        col({ resource_id: "c1", name: "Reflow SOPs", cited: 3, doc_count: 4 }),
+        col({ resource_id: "c2", name: "Wirebond SOPs", cited: 9, doc_count: 6 }),
       ],
       listDocuments: async () => [],
     } as unknown as Client;
@@ -149,10 +149,33 @@ describe("KbCollectionsPage", () => {
     render(<KbCollectionsPage client={client} />);
 
     await screen.findByRole("button", { name: "Open Wirebond SOPs" });
-    const collectionsKpi = screen.getByText(/^Collections$/i).closest(".kb-kpi")!;
-    expect(collectionsKpi).toHaveTextContent("2");
-    const citedKpi = screen.getByText(/^Most cited$/i).closest(".kb-kpi")!;
-    expect(citedKpi).toHaveTextContent("Wirebond SOPs");
+    // header count line: "2 collections · 10 documents"
+    const title = document.querySelector(".kb-libhead__title")!;
+    expect(title).toHaveTextContent("2 collections");
+    expect(title).toHaveTextContent("10 documents");
+    // most-cited metric names the top collection
+    const citedMetric = screen.getByText(/^Most cited$/i).closest(".kb-metric")!;
+    expect(citedMetric).toHaveTextContent("Wirebond SOPs");
+  });
+
+  it("filters the grid by the All / Mine / Pinned tabs", async () => {
+    // useCurrentUser() resolves to the mock's "default-user" → that's "Mine".
+    const client = {
+      listCollections: async () => [
+        col({ resource_id: "c1", name: "Mine SOPs", owner: "default-user" }),
+        col({ resource_id: "c2", name: "Theirs SOPs", owner: "alice" }),
+      ],
+      listDocuments: async () => [],
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await screen.findByRole("button", { name: "Open Mine SOPs" });
+    expect(screen.getByRole("button", { name: "Open Theirs SOPs" })).toBeInTheDocument();
+
+    // "Mine" tab keeps only collections owned by the current user
+    await userEvent.click(screen.getByRole("button", { name: /^Mine/ }));
+    expect(screen.getByRole("button", { name: "Open Mine SOPs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Theirs SOPs" })).not.toBeInTheDocument();
   });
 
   it("open page shows a stats banner (docs/size/chunks/cited/owner/updated)", async () => {
