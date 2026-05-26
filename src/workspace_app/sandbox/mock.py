@@ -93,6 +93,8 @@ class MockSandbox:
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         fs = self._require(handle)
+        if remote_path not in fs:
+            raise FileNotFoundError(remote_path)
         return fs[remote_path]
 
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:

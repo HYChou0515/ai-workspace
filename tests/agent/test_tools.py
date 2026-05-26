@@ -24,12 +24,70 @@ async def test_file_tools_use_injected_files_facade():
     assert await exists_impl(ctx, "/a.txt") is True
 
 
+async def test_fallbacks_when_no_facade_and_no_ensure_via():
+    """No injected facade → file tools wrap the bare filestore; no
+    ensure_sandbox_via → exec creates the sandbox directly."""
+    from workspace_app.sandbox.mock import MockSandbox
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1", sandbox=MockSandbox(), filestore=MemoryFileStore()
+        )
+    )
+    await write_file_impl(ctx, "/a.txt", "hi")  # _workspace fallback (files is None)
+    assert await read_file_impl(ctx, "/a.txt") == "hi"
+    assert ctx.context.handle is None
+    await exec_impl(ctx, ["echo", "x"])  # ensure_sandbox direct-create branch
+    assert ctx.context.handle is not None
+
+
 async def test_exec_lazy_creates_sandbox_on_first_call(
     ctx: RunContextWrapper[AgentToolContext],
 ):
     assert ctx.context.handle is None
     await exec_impl(ctx, ["echo", "hi"])
     assert ctx.context.handle is not None
+
+
+async def test_no_drift_between_file_tools_and_exec():
+    """P2 regression: with a liveness-routing facade, the agent's file tools and
+    exec share ONE view — cold writes survive the wake, and files the shell
+    creates are visible to read_file/ls (the bug the redesign fixes)."""
+    from workspace_app.sandbox.mock import MockSandbox
+    from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+
+    fs = MemoryFileStore()
+    sandbox = MockSandbox()
+    handle: dict[str, SandboxHandle] = {}
+    files = WorkspaceFiles(fs, sandbox, lambda ws: handle.get(ws))
+
+    async def wake() -> SandboxHandle:  # mimic registry.ensure_handle: create + restore snapshot
+        h = await sandbox.create(SandboxSpec())
+        for p in await fs.ls("inv-1"):
+            await sandbox.upload(h, await fs.read("inv-1", p), p)
+        handle["inv-1"] = h
+        return h
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1", sandbox=sandbox, files=files, ensure_sandbox_via=wake
+        )
+    )
+
+    # (a) write while cold → lands in the snapshot; exec wakes (restores) → shell sees it
+    await write_file_impl(ctx, "/x.txt", "hello")
+    assert await fs.exists("inv-1", "/x.txt") is True
+    assert "hello" in await exec_impl(ctx, ["cat", "/x.txt"])
+
+    # (b) warm: a tool write goes to the sandbox, NOT the snapshot
+    await write_file_impl(ctx, "/y.txt", "world")
+    assert await fs.exists("inv-1", "/y.txt") is False
+    assert await read_file_impl(ctx, "/y.txt") == "world"
+
+    # (c) THE fix: a file the shell created in the sandbox is visible to read_file/ls
+    await sandbox.upload(handle["inv-1"], b"from-shell", "/z.txt")  # simulate exec output
+    assert await read_file_impl(ctx, "/z.txt") == "from-shell"
+    assert "/z.txt" in await ls_impl(ctx)
 
 
 async def test_exec_returns_formatted_output(ctx: RunContextWrapper[AgentToolContext]):

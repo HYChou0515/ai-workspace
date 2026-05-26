@@ -27,13 +27,13 @@ def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[WorkspaceFiles
 
 
 async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) -> str:
-    """Run a shell command inside the workspace sandbox."""
-    assert ctx.context.sync is not None and ctx.context.sandbox is not None
-    _, inv = _workspace(ctx)
+    """Run a shell command inside the workspace sandbox. This is the only thing
+    that wakes a cold sandbox: ensure_sandbox creates it and restores the
+    snapshot into it, so any file writes the agent made while cold are present;
+    from here on the sandbox IS the source of truth and the file tools route to
+    it directly (no flush needed)."""
+    assert ctx.context.sandbox is not None
     handle = await ctx.context.ensure_sandbox()
-    # Flush any FileStore writes the agent made via write_file/delete_file
-    # so the shell command sees the same view of the workspace.
-    await ctx.context.sync.flush(inv, handle)
     # Stream stdout live (when the runner wired a sink) so a long-running
     # command's output shows up in run history as it happens.
     result = await ctx.context.sandbox.exec(handle, cmd, on_output=ctx.context.on_exec_output)

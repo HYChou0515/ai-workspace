@@ -59,6 +59,13 @@ class InvestigationRegistry:
             )
         return self._sessions[investigation_id]
 
+    def peek_handle(self, investigation_id: str) -> SandboxHandle | None:
+        """The live sandbox handle for this investigation, or None when it's
+        cold — WITHOUT creating one. WorkspaceFiles reads this to decide whether
+        a file op routes to the sandbox (warm) or the FileStore snapshot."""
+        s = self._sessions.get(investigation_id)
+        return s.handle if s is not None else None
+
     async def ensure_handle(self, session: InvestigationSession) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
         # this, N parallel POSTs to the same investigation would each spin

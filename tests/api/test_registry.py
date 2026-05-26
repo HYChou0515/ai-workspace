@@ -34,6 +34,15 @@ async def test_same_investigation_id_returns_same_session_instance():
     assert a is b
 
 
+async def test_peek_handle_is_none_until_ensured_then_returns_it():
+    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
+    assert registry.peek_handle("ws-1") is None  # no session yet
+    session = await registry.session("ws-1")
+    assert registry.peek_handle("ws-1") is None  # session exists, still cold
+    handle = await registry.ensure_handle(session)
+    assert registry.peek_handle("ws-1") is handle  # warm
+
+
 async def test_different_investigation_ids_return_distinct_sessions():
     registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
     a = await registry.session("ws-1")

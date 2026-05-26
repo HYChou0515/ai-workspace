@@ -235,10 +235,12 @@ def create_app(
     register_all(spec)
 
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
-    # The single chokepoint for workspace file ops (agent tools + file routes).
-    # P1: delegates to filestore (behaviour unchanged); P2 routes by liveness.
-    files = WorkspaceFiles(filestore)
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    # The single chokepoint for workspace file ops (agent tools + file routes):
+    # routes to the live sandbox (single source of truth) when one is up for the
+    # investigation, else to the FileStore snapshot. registry.peek_handle reads
+    # liveness without waking — only exec wakes a cold sandbox.
+    files = WorkspaceFiles(filestore, sandbox, registry.peek_handle)
     kernels = KernelService()
     activity = ActivityLog()
 
