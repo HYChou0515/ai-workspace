@@ -15,7 +15,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
-from agents import Agent, Runner
+from agents import Agent, RunConfig, Runner
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 
@@ -308,7 +308,12 @@ class LitellmAgentRunner:
         done = object()
         ctx.on_exec_output = lambda b: queue.put_nowait(ToolLog(text=b.decode("utf-8", "replace")))
 
-        streamed = Runner.run_streamed(agent, input=prompt, context=ctx, max_turns=self._max_turns)
+        # Tag the SDK trace with the investigation id (group_id) so the live
+        # monitor can attribute every span to the run that produced it.
+        run_config = RunConfig(workflow_name="RCA turn", group_id=ctx.investigation_id)
+        streamed = Runner.run_streamed(
+            agent, input=prompt, context=ctx, max_turns=self._max_turns, run_config=run_config
+        )
 
         async def produce() -> None:
             try:

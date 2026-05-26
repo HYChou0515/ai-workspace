@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Literal
 
 import msgspec
+from agents.tracing import set_trace_processors
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +27,7 @@ from ..kb.ingest import Ingestor
 from ..kb.llm import Llm
 from ..kb.retriever import Retriever
 from ..kernels import KernelService
+from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..rca.prompts import load_system_prompt
 from ..rca.templates import compose_system_prompt, list_profiles, seed_investigation
 from ..resources import (
@@ -212,6 +214,7 @@ def create_app(
     kb_llm: Llm | None = None,
     get_user_id: Callable[[], str] | None = None,
     users: UserDirectory | None = None,
+    monitor: IMonitor | None = None,
     spa_dist: Path | None = None,
     root_path: str = "",
     idle_timeout: timedelta = timedelta(hours=8),
@@ -244,6 +247,12 @@ def create_app(
     files = WorkspaceFiles(filestore, sandbox, registry.peek_handle)
     kernels = KernelService()
     activity = ActivityLog()
+    # Live telemetry monitor, fed by the OpenAI Agents SDK's own tracing — every
+    # run's LLM generations (with token usage), tool calls and agent steps flow
+    # through MonitorProcessor in real time (issue #11). Registering replaces
+    # the SDK's default (OpenAI-backend) exporter, which we don't use locally.
+    monitor = monitor if monitor is not None else InMemoryMonitor()
+    set_trace_processors([MonitorProcessor(monitor)])
 
     async def _idle_killer() -> None:
         """Periodically reap sandboxes whose last_active is past the
@@ -307,6 +316,17 @@ def create_app(
     async def get_activity() -> list[dict]:
         """Recent activity feed (newest first) for the notifications popover."""
         return activity.entries()
+
+    @app.get("/monitor")
+    async def get_monitor(limit: int | None = None, group_id: str | None = None) -> list[dict]:
+        """Recent LLM/agent telemetry events (from the SDK trace stream),
+        optionally scoped to one investigation via `group_id`."""
+        return monitor.recent(limit=limit, group_id=group_id)
+
+    @app.get("/monitor/stream")
+    async def stream_monitor(group_id: str | None = None) -> StreamingResponse:
+        """Live SSE feed of telemetry events as the SDK emits them."""
+        return StreamingResponse(monitor.sse(group_id=group_id), media_type="text/event-stream")
 
     # Register custom POST /investigation BEFORE spec.apply — FastAPI's
     # route matcher uses first-registered-wins, so our seeded-create
