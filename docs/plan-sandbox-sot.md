@@ -11,7 +11,7 @@
 | **P1** | 地基:`WorkspaceFiles` facade + Sandbox Protocol 補檔案操作 + `version`;facade 暫背 FileStore(行為不變) | ✅ 完成 |
 | **P2** | facade 改「熱→sandbox、冷→快照」路由;`exec`-only 喚醒;agent 檔案工具吃 facade(**落差問題在此解決**) | ✅ 完成 |
 | **P3** | 鏡像改 PULL(`walk`+`version`、含刪除)+ ≤5s 節流 + refresh/turn-end flush;砍掉舊的 `dirty`/`flush` | ✅ 完成 |
-| **P4** | `edit_file` + `write_file(expected_version)` + CAS(衝突回現況);human last-writer-wins | ☐ 未開始 |
+| **P4** | `edit_file` + `write_file` CAS(內容式;衝突回現況);human last-writer-wins | ✅ 完成 |
 
 延後項:**bulk archive 傳輸**(`upload_archive`/`download_archive`)記在 GitHub **issue #12**,實測會痛再做。
 
@@ -89,9 +89,9 @@
 
 ## 6 · 寫入工具(P4)
 
-- `edit_file(path, old_string, new_string)`:facade 讀當下 SoT、驗 `old_string` 唯一出現、取代、寫回(per-path lock 原子)。對不上 → 回現況內容讓 agent 重試。
-- `write_file(path, content, expected_version)`:`expected_version` 給定則 CAS;新檔用「不存在」哨兵。衝突回現況 + 新 version。
-- 舊的 `write_file(path, content)` 盲寫移除。
+- `edit_file(path, old_string, new_string)`:facade 讀當下 SoT、驗 `old_string` 唯一出現、取代、寫回(per-path lock 原子)。對不上(找不到 / 多重 / 檔案被改過)→ 回現況內容讓 agent 重讀重試。整檔重寫 = `old_string` 給整個現有內容。
+- `write_file(path, content)`:**create-only**——已存在就拒絕並回現況(要改用 `edit_file`)。舊的盲寫 `write_file` 行為移除。
+- **實作調整(對 Q7 的修正,誠實記錄)**:原訂 `write_file(expected_version)` 用不透明 `version` 做 CAS。實作時發現 **agent 無法預測 / 取得那個 opaque version**(Local/Docker 是 mtime-size,不是內容雜湊;cold 時 FileStore 根本沒 version),把它餵給 LLM 很彆扭。改用 **內容式 CAS**:`edit_file` 的 `old_string` 就是「預期的現況」,整檔重寫用整檔當 `old_string`。warm/cold 一致、LLM 友善、同樣達成「禁止閉眼寫 + 接住並行修改」。`write_file` 退化成 create-only(最強的「不覆蓋」)。若日後想要 version-CAS,需先把 version 透過 `read_file` 之類回給 agent。
 
 ---
 
@@ -116,11 +116,12 @@
 - [x] sweeper 行為以測試固定(熱 session 的 shell 檔被鏡像進快照)。
 - [~] **人類讀改走便宜快照 + refresh 重讀**:延後。目前人類 API 與 agent 共用 liveness facade(讀活 sandbox,正確但較貴);快照鏡像已就緒,切換成「人類讀快照」只是改路由,記為後續 — GitHub issue #13。
 
-### P4 · expected / CAS 寫入工具
-- [ ] `edit_file(old_string,new_string)`:唯一匹配才改、衝突回現況。
-- [ ] `write_file(path,content,expected_version)`:CAS、新檔哨兵、衝突回現況+新 version;移除盲寫。
-- [ ] CAS 在 facade per-path lock 內原子;人類寫 last-writer-wins(不帶 expected)。
-- [ ] agent-vs-人類並行編輯的回歸測試(agent 帶舊 expected → 拒絕 → 重讀 → 成功)。
+### P4 · CAS 寫入工具  ✅
+- [x] `edit_file(old_string,new_string)`:唯一匹配才改、衝突回現況(整檔重寫 = 整檔當 old_string)。
+- [x] `write_file(path,content)`:create-only、已存在回現況;移除盲寫。
+- [x] CAS 在 facade per-(ws,path) `asyncio.Lock` 內原子;人類寫(API PUT)last-writer-wins(不帶 expected)。
+- [x] agent-vs-人類並行編輯回歸測試:人類改檔 → agent 帶舊 `old_string` → 拒絕回現況 → 重讀重試 → 成功。
+- 註:原 `expected_version`(不透明 version)改為**內容式 CAS**,理由見 §6。
 
 ---
 

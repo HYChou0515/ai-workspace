@@ -4,6 +4,7 @@ from workspace_app.agent import (
     AgentToolContext,
     build_tools,
     delete_file_impl,
+    edit_file_impl,
     exec_impl,
     exists_impl,
     ls_impl,
@@ -12,6 +13,43 @@ from workspace_app.agent import (
 )
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
+
+
+async def test_write_file_is_create_only_and_edit_file_modifies():
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", files=files))
+
+    assert "wrote" in await write_file_impl(ctx, "/a.txt", "hello world")
+    # write_file won't clobber an existing file — it reports the conflict + content
+    again = await write_file_impl(ctx, "/a.txt", "nope")
+    assert "already exists" in again and "hello world" in again
+    assert await read_file_impl(ctx, "/a.txt") == "hello world"
+
+    # edit_file replaces a unique match
+    assert "edited" in await edit_file_impl(ctx, "/a.txt", "world", "there")
+    assert await read_file_impl(ctx, "/a.txt") == "hello there"
+
+    # a stale/absent old_string is rejected, returning the current content
+    miss = await edit_file_impl(ctx, "/a.txt", "world", "X")
+    assert "could not apply" in miss and "hello there" in miss
+
+
+async def test_edit_file_catches_a_concurrent_human_change():
+    """The agent read a file, a human edited it, then the agent's edit (built on
+    the stale text) is rejected — it re-reads and succeeds. CAS in action."""
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", files=files))
+    await write_file_impl(ctx, "/n.txt", "value = 1")
+
+    # human edits it out-of-band (last-writer-wins, no expected)
+    await files.write("inv-1", "/n.txt", b"value = 2")
+
+    # agent tries to edit based on what it thought was there → rejected
+    rejected = await edit_file_impl(ctx, "/n.txt", "value = 1", "value = 99")
+    assert "could not apply" in rejected and "value = 2" in rejected
+    # agent re-bases on the current content → succeeds
+    assert "edited" in await edit_file_impl(ctx, "/n.txt", "value = 2", "value = 99")
+    assert await read_file_impl(ctx, "/n.txt") == "value = 99"
 
 
 async def test_file_tools_use_injected_files_facade():
@@ -180,6 +218,7 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "exec",
         "read_file",
         "write_file",
+        "edit_file",
         "ls",
         "exists",
         "delete_file",

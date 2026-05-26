@@ -103,6 +103,36 @@ async def test_warm_is_dir_and_listdir_derived_from_walk():
     assert set(await files.listdir(WS)) == {"/d", "/d/sub"}
 
 
+# ---------------- P4: compare-and-swap writes ----------------
+
+
+async def test_create_is_create_only():
+    f = await _files()
+    assert await f.create(WS, "/a.txt", b"first") is None  # created
+    # second create conflicts and returns the current bytes (no clobber)
+    assert await f.create(WS, "/a.txt", b"second") == b"first"
+    assert await f.read(WS, "/a.txt") == b"first"
+
+
+async def test_edit_replaces_unique_match():
+    f = await _files()
+    await f.write(WS, "/a.txt", b"hello world")
+    assert await f.edit(WS, "/a.txt", "world", "there") is None
+    assert await f.read(WS, "/a.txt") == b"hello there"
+
+
+async def test_edit_conflict_returns_current_when_text_absent_or_ambiguous():
+    f = await _files()
+    await f.write(WS, "/a.txt", b"a a")
+    # ambiguous (two matches) → conflict, returns current text unchanged
+    assert await f.edit(WS, "/a.txt", "a", "b") == "a a"
+    assert await f.read(WS, "/a.txt") == b"a a"
+    # absent text → conflict
+    assert await f.edit(WS, "/a.txt", "zzz", "b") == "a a"
+    # missing file → conflict with empty base
+    assert await f.edit(WS, "/missing", "x", "y") == ""
+
+
 async def test_warm_mkdir_and_rmdir():
     files, fs, sb, handle = await _wired()
     handle["h"] = await sb.create(SandboxSpec())

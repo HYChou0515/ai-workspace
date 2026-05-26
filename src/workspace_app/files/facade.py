@@ -13,6 +13,8 @@ plain FileStore pass-through — handy for tests + the transitional fallback.
 
 from __future__ import annotations
 
+import asyncio
+from collections import defaultdict
 from collections.abc import Callable
 
 from ..filestore.protocol import FileNotFound, FileStore
@@ -29,6 +31,9 @@ class WorkspaceFiles:
         self._fs = filestore
         self._sb = sandbox
         self._handle_for = handle_for
+        # Per-(workspace, path) lock so a compare-and-swap (read → check →
+        # write) is atomic against other writers going through this facade.
+        self._locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 
     def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
         """The live sandbox for this workspace, or None when it's cold."""
@@ -118,3 +123,32 @@ class WorkspaceFiles:
                     dirs.add("/" + "/".join(parts[:i]))
             return sorted(dirs)
         return await self._fs.listdir(workspace_id, prefix)
+
+    # ---- compare-and-swap writes (the agent must declare its expectation) ----
+
+    async def create(self, workspace_id: str, path: str, data: bytes) -> bytes | None:
+        """Create-only write: succeed (return None) if `path` doesn't exist;
+        otherwise don't clobber — return the current bytes so the caller can
+        decide. Atomic under the per-path lock."""
+        async with self._locks[(workspace_id, path)]:
+            if await self.exists(workspace_id, path):
+                return await self.read(workspace_id, path)
+            await self.write(workspace_id, path, data)
+            return None
+
+    async def edit(self, workspace_id: str, path: str, old: str, new: str) -> str | None:
+        """Replace the **unique** occurrence of `old` with `new`. Succeed
+        (return None) only when `old` appears exactly once; otherwise it's a
+        conflict (missing file, text not found, or ambiguous) and the current
+        text is returned so the caller can re-base. Atomic under the per-path
+        lock — so a concurrent change makes `old` stop matching and the edit is
+        rejected rather than blindly applied."""
+        async with self._locks[(workspace_id, path)]:
+            try:
+                current = (await self.read(workspace_id, path)).decode("utf-8", errors="replace")
+            except FileNotFound:
+                return ""
+            if current.count(old) != 1:
+                return current
+            await self.write(workspace_id, path, current.replace(old, new, 1).encode("utf-8"))
+            return None

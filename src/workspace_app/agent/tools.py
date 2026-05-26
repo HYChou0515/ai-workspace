@@ -51,10 +51,38 @@ async def read_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str) ->
 
 
 async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, content: str) -> str:
-    """Write a file to the workspace file store."""
+    """Create a NEW file. This never overwrites: if the file already exists it
+    is rejected and the current content is returned — use `edit_file` to change
+    an existing file (so you always state what you expect to replace). This is
+    what stops blind writes."""
     fs, inv = _workspace(ctx)
-    await fs.write(inv, path, content.encode("utf-8"))
-    return f"wrote {len(content)} bytes to {path}"
+    current = await fs.create(inv, path, content.encode("utf-8"))
+    if current is None:
+        return f"wrote {len(content)} bytes to {path}"
+    return (
+        f"error: {path} already exists — use edit_file to modify it (or delete "
+        f"it first). Current content:\n{current.decode('utf-8', errors='replace')}"
+    )
+
+
+async def edit_file_impl(
+    ctx: RunContextWrapper[AgentToolContext], path: str, old_string: str, new_string: str
+) -> str:
+    """Edit an existing file by replacing `old_string` with `new_string`.
+    `old_string` must match the current file content **exactly and uniquely**
+    (include enough surrounding context). If it isn't found or matches more than
+    once — including because someone else changed the file since you read it —
+    the edit is rejected and the current content is returned, so re-read it and
+    try again. To rewrite a whole file, pass its entire current content as
+    `old_string`."""
+    fs, inv = _workspace(ctx)
+    current = await fs.edit(inv, path, old_string, new_string)
+    if current is None:
+        return f"edited {path}"
+    return (
+        f"error: could not apply the edit to {path} — `old_string` was not found "
+        f"exactly once (the file may have changed). Current content:\n{current}"
+    )
 
 
 async def ls_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> list[str]:
@@ -144,6 +172,7 @@ _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
     "write_file": write_file_impl,
+    "edit_file": edit_file_impl,
     "ls": ls_impl,
     "exists": exists_impl,
     "delete_file": delete_file_impl,
@@ -160,6 +189,7 @@ _WORKSPACE_TOOLS = [
     "exec",
     "read_file",
     "write_file",
+    "edit_file",
     "ls",
     "exists",
     "delete_file",
