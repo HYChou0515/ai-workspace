@@ -8,7 +8,7 @@
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| **P1** | 地基:`WorkspaceFiles` facade + Sandbox Protocol 補檔案操作 + `version`;facade 暫背 FileStore(行為不變) | ☐ 未開始 |
+| **P1** | 地基:`WorkspaceFiles` facade + Sandbox Protocol 補檔案操作 + `version`;facade 暫背 FileStore(行為不變) | ✅ 完成 |
 | **P2** | facade 改「熱→sandbox、冷→快照」路由;`exec`-only 喚醒;agent 檔案工具吃 facade(**落差問題在此解決**) | ☐ 未開始 |
 | **P3** | 鏡像改 PULL(`walk`+`version`、含刪除)+ ≤5s 節流 + refresh/turn-end flush;砍掉舊的 `dirty`/`flush` | ☐ 未開始 |
 | **P4** | `edit_file` + `write_file(expected_version)` + CAS(衝突回現況);human last-writer-wins | ☐ 未開始 |
@@ -97,11 +97,11 @@
 
 ## 7 · 分階段建置(每階段 TDD → gate → commit → 本表打勾)
 
-### P1 · 地基(facade + Protocol 檔案操作 + version),行為不變
-- [ ] `FileEntry.version: str` 取代 `mtime`;`walk` 回 `version`。
-- [ ] Sandbox Protocol 新增 `delete`/`exists`/`mkdir`/`rmdir`/`rename`;MockSandbox + LocalProcessSandbox + DockerSandbox 各自實作 + `version`(Mock=counter、Local=mtime+size/hash)。
-- [ ] `WorkspaceFiles` facade:此階段**仍背 FileStore**(行為與今日一致),只是把散落的 filestore 呼叫集中到 facade。
-- [ ] 既有測試全綠(純加地基,無行為改變)。
+### P1 · 地基(facade + Protocol 檔案操作 + version),行為不變  ✅
+- [x] `FileEntry.version: str` 取代 `mtime`;`walk` 回 `version`。
+- [x] Sandbox Protocol 新增 `delete`/`exists`/`mkdir`/`rmdir`/`rename`;MockSandbox + LocalProcessSandbox + DockerSandbox 各自實作 + `version`(Mock=content hash、Local=mtime_ns-size、Docker=find mtime-size)。
+- [x] `WorkspaceFiles` facade:此階段**仍背 FileStore**(行為與今日一致),agent 工具 + API 檔案路由集中走 facade。
+- [x] 既有測試全綠(468 passed,100% coverage)。
 
 ### P2 · 翻轉 SoT(facade 路由 + exec-only 喚醒)
 - [ ] facade 改「sandbox 熱→sandbox、冷→快照」路由(讀/寫)。
