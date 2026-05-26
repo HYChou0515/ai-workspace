@@ -4,6 +4,17 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { queryClient } from "./api/queryClient";
 import { initTheme } from "./hooks/theme";
+// Self-hosted fonts (Fontsource) — bundled into dist, no runtime CDN. The
+// family names match the --font-* tokens in tokens.css (Inter Tight / Inter /
+// JetBrains Mono), at the weights the UI actually uses.
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/inter-tight/700.css";
+import "@fontsource/inter-tight/800.css";
+import "@fontsource/jetbrains-mono/400.css";
+import "@fontsource/jetbrains-mono/500.css";
+import "@fontsource/jetbrains-mono/600.css";
 import "katex/dist/katex.min.css";
 import "./styles/tokens.css";
 import "./styles/base.css";
