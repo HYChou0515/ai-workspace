@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+from datetime import datetime
 
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
@@ -30,33 +31,77 @@ async def _index_in_thread(ingestor: Ingestor, doc_id: str) -> None:
 class _CollectionBody(BaseModel):
     name: str
     description: str = ""
+    icon: str = "layers"
+
+
+class CollectionOut(BaseModel):
+    """A collection as the card grid needs it — its own fields plus aggregates
+    derived from its documents (count / total bytes / latest update)."""
+
+    resource_id: str
+    name: str
+    description: str
+    icon: str
+    cited: int
+    doc_count: int
+    size: int  # total bytes across the collection's documents
+    updated_at: int  # epoch ms — the most recently updated doc (or the collection)
+    owner: str  # created_by
+
+
+def _ms(dt: datetime) -> int:
+    return int(dt.timestamp() * 1000)
 
 
 def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None:
+    def _collection_out(r, cited: dict[str, int]) -> CollectionOut:
+        data = r.data
+        assert isinstance(data, Collection)
+        rid = r.info.resource_id
+        doc_rm = spec.get_resource_manager(SourceDoc)
+        count = 0
+        size = 0
+        updated = _ms(r.info.updated_time)
+        for d in doc_rm.list_resources((QB["collection_id"] == rid).build()):
+            sd = d.data
+            assert isinstance(sd, SourceDoc)
+            assert isinstance(sd.content.size, int)
+            size += sd.content.size
+            count += 1
+            updated = max(updated, _ms(d.info.updated_time))  # ty: ignore[unresolved-attribute]
+        return CollectionOut(
+            resource_id=rid,
+            name=data.name,
+            description=data.description,
+            icon=data.icon,
+            cited=cited.get(rid, 0),
+            doc_count=count,
+            size=size,
+            updated_at=updated,
+            owner=r.info.created_by,
+        )
+
     @app.post("/kb/collections")
-    async def create_collection(body: _CollectionBody) -> dict:
+    async def create_collection(body: _CollectionBody) -> CollectionOut:
         rm = spec.get_resource_manager(Collection)
-        rev = rm.create(Collection(name=body.name, description=body.description))
-        return {"resource_id": rev.resource_id, "name": body.name, "description": body.description}
+        rev = rm.create(Collection(name=body.name, description=body.description, icon=body.icon))
+        return CollectionOut(
+            resource_id=rev.resource_id,
+            name=body.name,
+            description=body.description,
+            icon=body.icon,
+            cited=0,
+            doc_count=0,
+            size=0,
+            updated_at=_ms(rev.updated_time),
+            owner=rev.created_by,
+        )
 
     @app.get("/kb/collections")
-    async def list_collections() -> list[dict]:
+    async def list_collections() -> list[CollectionOut]:
         rm = spec.get_resource_manager(Collection)
         cited = collection_cited(spec)
-        out: list[dict] = []
-        for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
-            data = r.data
-            assert isinstance(data, Collection)
-            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            out.append(
-                {
-                    "resource_id": rid,
-                    "name": data.name,
-                    "description": data.description,
-                    "cited": cited.get(rid, 0),
-                }
-            )
-        return out
+        return [_collection_out(r, cited) for r in rm.list_resources(QB.all())]  # ty: ignore[invalid-argument-type]
 
     @app.post("/kb/collections/{collection_id}/documents")
     async def upload_document(

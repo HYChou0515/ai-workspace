@@ -37,13 +37,38 @@ def _client() -> TestClient:
 
 def test_create_and_list_collections():
     client = _client()
-    cid = client.post("/kb/collections", json={"name": "HR", "description": "policies"}).json()[
-        "resource_id"
-    ]
+    created = client.post(
+        "/kb/collections", json={"name": "HR", "description": "policies", "icon": "bug"}
+    ).json()
+    cid = created["resource_id"]
+    # create returns the full card shape (empty aggregates for a fresh collection)
+    assert created["icon"] == "bug"
+    assert created["doc_count"] == 0 and created["size"] == 0 and created["cited"] == 0
+    assert created["owner"] and created["updated_at"] > 0
+
     listed = client.get("/kb/collections").json()
     match = next(c for c in listed if c["resource_id"] == cid)
     assert match["name"] == "HR"
     assert match["description"] == "policies"
+    assert match["icon"] == "bug"
+    assert {"doc_count", "size", "updated_at", "owner"} <= match.keys()
+
+
+def test_collection_card_aggregates_docs_size_and_updated():
+    client = _client()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", b"hello", "text/markdown")},
+    )
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("b.md", b"worldwide", "text/markdown")},
+    )
+    card = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert card["doc_count"] == 2
+    assert card["size"] == len(b"hello") + len(b"worldwide")  # summed bytes
+    assert card["updated_at"] > 0
 
 
 def _new_collection(client: TestClient) -> str:

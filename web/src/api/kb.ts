@@ -16,8 +16,15 @@ export type KbCollection = {
   resource_id: string;
   name: string;
   description: string;
+  /** Icon name (Icon set) for the collection card. */
+  icon: string;
   /** How many times this collection's docs have been cited (P2 analytics). */
-  cited?: number;
+  cited: number;
+  /** Card aggregates derived from the collection's documents. */
+  doc_count: number;
+  size: number; // total bytes
+  updated_at: number; // epoch ms
+  owner: string; // created_by
 };
 
 export type KbDocument = {

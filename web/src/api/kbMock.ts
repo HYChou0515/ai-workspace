@@ -67,10 +67,26 @@ export const mockKbApi: KbApi = {
     };
   },
   async listCollections() {
-    return [...collections.values()];
+    // Recompute the card aggregates from the collection's documents.
+    return [...collections.values()].map((c) => {
+      const docs = documents.get(c.resource_id) ?? [];
+      const size = docs.reduce((s, d) => s + (d.size ?? 0), 0);
+      const updated = docs.reduce((m, d) => Math.max(m, d.updated_at ?? 0), c.updated_at);
+      return { ...c, doc_count: docs.length, size, updated_at: updated };
+    });
   },
   async createCollection(name, description = "") {
-    const c: KbCollection = { resource_id: nextId("col"), name, description };
+    const c: KbCollection = {
+      resource_id: nextId("col"),
+      name,
+      description,
+      icon: "layers",
+      cited: 0,
+      doc_count: 0,
+      size: 0,
+      updated_at: Date.now(),
+      owner: "me",
+    };
     collections.set(c.resource_id, c);
     return c;
   },

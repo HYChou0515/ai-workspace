@@ -37,6 +37,7 @@ class Collection(Struct):  # → resource "collection"
 
     name: str
     description: str = ""
+    icon: str = "layers"  # icon name (FE Icon set) for the collection card
 
 
 class SourceDoc(Struct):  # → resource "source-doc"
