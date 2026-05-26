@@ -10,7 +10,7 @@
 |---|---|---|
 | **P1** | 地基:`WorkspaceFiles` facade + Sandbox Protocol 補檔案操作 + `version`;facade 暫背 FileStore(行為不變) | ✅ 完成 |
 | **P2** | facade 改「熱→sandbox、冷→快照」路由;`exec`-only 喚醒;agent 檔案工具吃 facade(**落差問題在此解決**) | ✅ 完成 |
-| **P3** | 鏡像改 PULL(`walk`+`version`、含刪除)+ ≤5s 節流 + refresh/turn-end flush;砍掉舊的 `dirty`/`flush` | ☐ 未開始 |
+| **P3** | 鏡像改 PULL(`walk`+`version`、含刪除)+ ≤5s 節流 + refresh/turn-end flush;砍掉舊的 `dirty`/`flush` | ✅ 完成 |
 | **P4** | `edit_file` + `write_file(expected_version)` + CAS(衝突回現況);human last-writer-wins | ☐ 未開始 |
 
 延後項:**bulk archive 傳輸**(`upload_archive`/`download_archive`)記在 GitHub **issue #12**,實測會痛再做。
@@ -109,11 +109,12 @@
 - [x] 落差回歸測試:冷寫 `write_file` 經喚醒後 `exec` 看得到;`exec`/shell 建的檔 `read_file`/`ls` 看得到。
 - [~] P2 先讓所有呼叫端(agent + 人類 API 路由)都走同一個 liveness facade(全體一致、修掉雙向落差);「人類讀改走便宜快照 + ≤5s」留到 P3 的節流鏡像一起做。
 
-### P3 · 鏡像 PULL + 節流
-- [ ] `reverse` 改 PULL 完整鏡像(`walk`+`version` diff、**含刪除**);砍掉 `flush`/`dirty_paths`/`clear_dirty`。
-- [ ] ≤5s 節流器(per-workspace,合併 agent 寫)+ 強制 flush 入口。
-- [ ] `refresh` 端點(flush 待鏡像 + 回最新樹);turn 結束 / idle-kill / close 都 flush。
-- [ ] 崩潰丟 ≤5s 的行為以測試固定(節流視窗內的寫沒鏡像、視窗後有)。
+### P3 · 鏡像 PULL + 節流  ✅
+- [x] `reverse` → `mirror`:PULL 完整鏡像(`walk`+`version` diff、**含刪除**、seed on restore);砍掉 `flush`/`dirty_paths`/`clear_dirty`(FileStore + SandboxSync)。
+- [x] ≤5s 節流:背景 `_mirror_sweeper` 每 `mirror_interval` 對所有**熱** session 做 version-diff 鏡像(合併 agent 寫,且**抓得到 shell 寫的檔**——比 dirty-flag 健壯)。
+- [x] `POST /investigations/{id}/files/refresh`(強制 flush);terminal-exec / idle-kill / close 都走 `registry.flush`/`mirror`。
+- [x] sweeper 行為以測試固定(熱 session 的 shell 檔被鏡像進快照)。
+- [~] **人類讀改走便宜快照 + refresh 重讀**:延後。目前人類 API 與 agent 共用 liveness facade(讀活 sandbox,正確但較貴);快照鏡像已就緒,切換成「人類讀快照」只是改路由,記為後續 — GitHub issue #13。
 
 ### P4 · expected / CAS 寫入工具
 - [ ] `edit_file(old_string,new_string)`:唯一匹配才改、衝突回現況。
