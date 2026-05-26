@@ -68,7 +68,11 @@ class Settings:
 
     # KB embedder ("" → offline HashEmbedder). dim is EMBED_DIM (import-time;
     # the DocChunk Vector width), never a separate knob — they must agree.
-    kb_embed_model: str = "ollama/qwen3-embedding"
+    # Default is bge-m3 (1024-dim, == EMBED_DIM): a strong multilingual embedder
+    # that's commonly pulled. To use another model `ollama pull` it first and set
+    # KB_EMBED_MODEL (+ KB_EMBED_DIM to its width) — a missing model 404s and the
+    # doc lands in `error`.
+    kb_embed_model: str = "ollama/bge-m3"
     kb_query_prefix: str = ""
     kb_doc_prefix: str = ""
 

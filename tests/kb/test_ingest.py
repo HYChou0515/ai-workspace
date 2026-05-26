@@ -1,4 +1,5 @@
 import io
+import logging
 import tarfile
 import zipfile
 
@@ -137,7 +138,9 @@ def test_store_then_index_lifecycle_sets_status(
     assert _chunks_of(spec, doc_id)  # chunks now exist
 
 
-def test_index_marks_doc_error_when_embedding_fails(spec: SpecStar, chunker: FixedTokenChunker):
+def test_index_marks_doc_error_when_embedding_fails(
+    spec: SpecStar, chunker: FixedTokenChunker, caplog
+):
     class _BoomEmbedder:
         dim = EMBED_DIM
 
@@ -150,5 +153,9 @@ def test_index_marks_doc_error_when_embedding_fails(spec: SpecStar, chunker: Fix
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=_BoomEmbedder())
     [doc_id] = ing.store(collection_id=cid, user="u", filename="a.md", data=b"hello world")
-    ing.index(doc_id)  # embedding fails → recorded as error, not raised
+    with caplog.at_level(logging.ERROR):
+        ing.index(doc_id)  # embedding fails → recorded as error, not raised
     assert spec.get_resource_manager(SourceDoc).get(doc_id).data.status == "error"
+    # the swallowed cause must be visible in the logs, not silently lost
+    assert doc_id in caplog.text
+    assert "model down" in caplog.text

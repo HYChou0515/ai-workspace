@@ -8,6 +8,7 @@ DocChunks. Archives (zip/tar) are unpacked and each md/txt member ingested.
 from __future__ import annotations
 
 import io
+import logging
 import tarfile
 import zipfile
 
@@ -21,6 +22,8 @@ from ..resources.kb import DocChunk, SourceDoc
 from .chunker import Chunker
 from .doc_id import encode_doc_id
 from .embedder import Embedder
+
+logger = logging.getLogger(__name__)
 
 # md sniffs as text/plain on libmagic; both accepted.
 _TEXT_MIMES = {"text/plain", "text/markdown"}
@@ -83,6 +86,10 @@ class Ingestor:
             status = "ready"
         except Exception:  # noqa: BLE001 — surface failure as doc status, don't crash the worker
             status = "error"
+            # Don't lose the cause: the status flip alone is opaque (a missing
+            # embedding model, a dim mismatch, …). Log the traceback so it's
+            # visible in the server logs instead of a silent "error" badge.
+            logger.exception("indexing failed for %s", doc_id)
         drm.update(doc_id, msgspec.structs.replace(doc, status=status))
 
     @staticmethod
