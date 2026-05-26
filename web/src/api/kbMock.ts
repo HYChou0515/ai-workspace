@@ -133,14 +133,42 @@ export const mockKbApi: KbApi = {
   },
   async renderDocument(documentId): Promise<KbRenderedDoc> {
     const filename = documentId.split("/").pop() ?? documentId;
+    const collection_id = documentId.split("/")[0] ?? "";
+    const doc = (documents.get(collection_id) ?? []).find((d) => d.resource_id === documentId);
+    const chunks = docChunks.get(documentId) ?? [];
     return {
+      document_id: documentId,
       filename,
-      collection_id: documentId.split("/")[0] ?? "",
+      collection_id,
       markdown: `# ${filename}\n\nMock document body for **${documentId}**.`,
+      file_id: `blob-${documentId}`,
+      content_type: doc?.content_type ?? "text/markdown",
+      size: doc?.size ?? 0,
+      chunks: doc?.chunks ?? chunks.length,
+      cited: doc?.cited ?? 0,
+      created_by: doc?.created_by ?? "me",
+      updated_at: doc?.updated_at ?? Date.now(),
+      status: doc?.status ?? "ready",
     };
   },
   async getDocChunks(documentId) {
     return [...(docChunks.get(documentId) ?? [])].sort((a, b) => a.seq - b.seq);
+  },
+  async reindexDocument(documentId) {
+    const collectionId = documentId.split("/")[0] ?? "";
+    const list = documents.get(collectionId) ?? [];
+    documents.set(
+      collectionId,
+      list.map((d) => (d.resource_id === documentId ? { ...d, status: "ready" } : d)),
+    );
+  },
+  async deleteDocument(documentId) {
+    const collectionId = documentId.split("/")[0] ?? "";
+    documents.set(
+      collectionId,
+      (documents.get(collectionId) ?? []).filter((d) => d.resource_id !== documentId),
+    );
+    docChunks.delete(documentId);
   },
 
   async listChats() {

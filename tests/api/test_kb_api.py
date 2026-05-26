@@ -158,3 +158,58 @@ def test_render_missing_document_404s():
     cid = _new_collection(client)
     missing = encode_doc_id(cid, "default-user", "nope.md")
     assert client.get("/kb/documents", params={"id": missing}).status_code == 404
+
+
+def test_render_document_carries_metadata_for_the_drawer():
+    client = _client()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("guide.md", b"# Guide\none two three four", "text/markdown")},
+    )
+    doc_id = encode_doc_id(cid, "default-user", "guide.md")
+    body = client.get("/kb/documents", params={"id": doc_id}).json()
+    # the drawer header (meta strip) + download + actions need these
+    assert body["document_id"] == doc_id
+    assert body["file_id"]  # blob hash → GET /blobs/{file_id}
+    assert body["content_type"] in ("text/plain", "text/markdown")
+    assert body["size"] > 0
+    assert body["chunks"] > 0
+    assert body["cited"] == 0
+    assert body["created_by"] == "default-user"
+    assert body["status"] == "ready"
+    assert body["updated_at"] > 0
+
+
+def test_reindex_single_document():
+    client = _client()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("guide.md", b"# Guide\none two three four", "text/markdown")},
+    )
+    doc_id = encode_doc_id(cid, "default-user", "guide.md")
+    r = client.post("/kb/documents/reindex", params={"id": doc_id})
+    assert r.status_code == 200
+    assert r.json()["reindexed"] == 1
+    docs = client.get(f"/kb/collections/{cid}/documents").json()
+    match = next(d for d in docs if d["resource_id"] == doc_id)
+    assert match["status"] == "ready" and match["chunks"] > 0
+
+
+def test_delete_document_removes_doc_and_its_chunks():
+    client = _client()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("guide.md", b"# Guide\none two three four", "text/markdown")},
+    )
+    doc_id = encode_doc_id(cid, "default-user", "guide.md")
+    assert client.get("/kb/documents/chunks", params={"id": doc_id}).json()  # chunks exist
+
+    r = client.delete("/kb/documents", params={"id": doc_id})
+    assert r.status_code == 200
+
+    assert client.get(f"/kb/collections/{cid}/documents").json() == []  # doc gone
+    assert client.get("/kb/documents", params={"id": doc_id}).status_code == 404
+    assert client.get("/kb/documents/chunks", params={"id": doc_id}).json() == []  # cascade

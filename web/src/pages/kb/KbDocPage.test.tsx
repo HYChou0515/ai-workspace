@@ -14,6 +14,24 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { KbApi, KbDocChunk, KbRenderedDoc } from "../../api/kb";
 import { KbDocPage } from "./KbDocPage";
 
+function mkDoc(
+  over: Partial<KbRenderedDoc> & Pick<KbRenderedDoc, "filename" | "markdown">,
+): KbRenderedDoc {
+  return {
+    document_id: "col-1/u/doc.md",
+    collection_id: "col-1",
+    file_id: "blob-1",
+    content_type: "text/markdown",
+    size: 1024,
+    chunks: 2,
+    cited: 0,
+    created_by: "u",
+    updated_at: Date.UTC(2026, 4, 20),
+    status: "ready",
+    ...over,
+  };
+}
+
 function fakeClient(doc: KbRenderedDoc, chunks: KbDocChunk[] = []): KbApi {
   return {
     renderDocument: async () => doc,
@@ -25,11 +43,9 @@ describe("KbDocPage", () => {
   afterEach(cleanup);
 
   it("renders the document named by the splat route param + highlights ?hl", async () => {
-    const client = fakeClient({
-      filename: "reflow.md",
-      collection_id: "col-1",
-      markdown: "# Reflow\n\nZone three drifted under load.",
-    });
+    const client = fakeClient(
+      mkDoc({ filename: "reflow.md", markdown: "# Reflow\n\nZone three drifted under load." }),
+    );
     const { container } = render(
       <MemoryRouter initialEntries={["/kb/doc/col-1/u/reflow.md?hl=Zone%20three%20drifted%20under%20load"]}>
         <Routes>
@@ -48,11 +64,7 @@ describe("KbDocPage", () => {
 
   it("toggles from the file view to a chunks view with per-chunk cited counts", async () => {
     const client = fakeClient(
-      {
-        filename: "reflow.md",
-        collection_id: "col-1",
-        markdown: "# Reflow\n\nbody text here",
-      },
+      mkDoc({ filename: "reflow.md", markdown: "# Reflow\n\nbody text here" }),
       [
         { chunk_id: "col-1/u/reflow.md#0", seq: 0, start: 0, end: 8, text: "# Reflow", cited: 3 },
         { chunk_id: "col-1/u/reflow.md#1", seq: 1, start: 9, end: 23, text: "body text here", cited: 0 },

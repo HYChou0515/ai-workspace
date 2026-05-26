@@ -17,6 +17,7 @@ import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
 import { UserAvatar } from "../../components/UserChip";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { kindIcon } from "./docKind";
 import { docHref } from "./kbLinks";
 
 const ICON_OPTIONS: IconName[] = [
@@ -29,15 +30,6 @@ function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
   return `${Math.round(n / (1024 * 1024))} MB`;
-}
-
-/** Pick a row icon from the document's extension (we ingest md/txt today; the
- * map leaves room for the richer kinds the design anticipates). */
-function kindIcon(path: string): IconName {
-  const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
-  if (ext === "csv" || ext === "tsv" || ext === "xlsx") return "filter";
-  if (ext === "png" || ext === "jpg" || ext === "jpeg" || ext === "gif") return "eye";
-  return "file";
 }
 
 function fmtDate(ms: number): string {

@@ -40,3 +40,11 @@ export function docPath(documentId: string, snippet?: string): string {
 export function docHref(documentId: string, snippet?: string): string {
   return API_BASE + docPath(documentId, snippet);
 }
+
+/**
+ * The download HREF for a document's ORIGINAL bytes — specstar serves the blob
+ * at `GET /blobs/{file_id}` (file_id = the content hash on the SourceDoc).
+ */
+export function blobHref(fileId: string): string {
+  return `${API_BASE}/blobs/${encodeURIComponent(fileId)}`;
+}

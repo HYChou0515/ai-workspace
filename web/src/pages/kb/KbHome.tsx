@@ -6,10 +6,12 @@
  * open the doc viewer overlay.
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { AskAgentDrawer } from "./AskAgentDrawer";
 import { KbChatsPage } from "./KbChatsPage";
@@ -24,6 +26,7 @@ type Selected = string | null | undefined;
 
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [params] = useSearchParams();
   const [tab, setTab] = useState<Tab>(params.get("tab") === "chats" ? "chats" : "collections");
   const [ask, setAsk] = useState(false);
@@ -132,6 +135,7 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
           documentId={viewer.documentId}
           snippet={viewer.snippet}
           onClose={() => setViewer(null)}
+          onChanged={() => void qc.invalidateQueries({ queryKey: qk.kb.all })}
           client={client}
         />
       )}

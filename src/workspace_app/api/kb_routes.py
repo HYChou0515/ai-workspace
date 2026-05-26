@@ -57,6 +57,29 @@ class ReindexOut(BaseModel):
     status: str = "indexing"
 
 
+class RenderedDoc(BaseModel):
+    """A source document rendered for the viewer drawer: the markdown body plus
+    the metadata its header (meta strip) + actions (download / re-index / remove)
+    need. `file_id` is the blob hash → download via specstar's GET /blobs/{id}."""
+
+    document_id: str
+    filename: str
+    collection_id: str
+    markdown: str
+    file_id: str
+    content_type: str
+    size: int
+    chunks: int
+    cited: int
+    created_by: str
+    updated_at: int  # epoch ms
+    status: str
+
+
+class DocDeletedOut(BaseModel):
+    deleted: str  # the removed document id
+
+
 def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
@@ -182,7 +205,7 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
         return out
 
     @app.get("/kb/documents")
-    async def render_document(doc_id: str = Query(alias="id")) -> dict:
+    async def render_document(doc_id: str = Query(alias="id")) -> RenderedDoc:
         # doc_id is the opaque SourceDoc id (query param so the slash-free token
         # round-trips a URL untouched). path / collection / user come from the
         # record + meta — the id is a handle, never parsed.
@@ -208,11 +231,53 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
         markdown = rewrite_md_links(
             text, doc_path=doc.path, collection_id=doc.collection_id, user=user, exists=exists
         )
-        return {
-            "filename": posixpath.basename(doc.path),
-            "collection_id": doc.collection_id,
-            "markdown": markdown,
-        }
+        chrm = spec.get_resource_manager(DocChunk)
+        assert isinstance(doc.content.size, int)
+        assert isinstance(doc.content.file_id, str)
+        return RenderedDoc(
+            document_id=doc_id,
+            filename=posixpath.basename(doc.path),
+            collection_id=doc.collection_id,
+            markdown=markdown,
+            file_id=doc.content.file_id,
+            content_type=doc.content.content_type or "application/octet-stream",
+            size=doc.content.size,
+            chunks=chrm.count_resources((QB["source_doc_id"] == doc_id).build()),
+            cited=doc_cited(spec).get(doc_id, 0),
+            created_by=user,
+            updated_at=_ms(rev.info.updated_time),
+            status=doc.status,
+        )
+
+    @app.post("/kb/documents/reindex")
+    async def reindex_document(
+        background: BackgroundTasks, doc_id: str = Query(alias="id")
+    ) -> ReindexOut:
+        rm = spec.get_resource_manager(SourceDoc)
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        assert isinstance(doc, SourceDoc)
+        rm.update(doc_id, msgspec.structs.replace(doc, status="indexing"))
+        background.add_task(_index_in_thread, ingestor, doc_id)
+        return ReindexOut(reindexed=1)
+
+    @app.delete("/kb/documents")
+    async def delete_document(doc_id: str = Query(alias="id")) -> DocDeletedOut:
+        # Cascade: chunks are derived from the doc; specstar's native delete
+        # wouldn't drop them, so they'd linger in vector search. Remove the
+        # chunks first, then the doc itself (hard delete — current-only data).
+        rm = spec.get_resource_manager(SourceDoc)
+        try:
+            rm.get(doc_id)
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        chrm = spec.get_resource_manager(DocChunk)
+        for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
+            chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+        rm.permanently_delete(doc_id)
+        return DocDeletedOut(deleted=doc_id)
 
     @app.get("/kb/documents/chunks")
     async def list_doc_chunks(doc_id: str = Query(alias="id")) -> list[dict]:

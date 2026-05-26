@@ -51,11 +51,21 @@ export type KbDocChunk = {
   cited: number;
 };
 
-/** A document rendered for the citation viewer: markdown with kb:// links. */
+/** A document rendered for the viewer drawer: markdown (kb:// links) plus the
+ * metadata its header + actions need. `file_id` → download via GET /blobs/{id}. */
 export type KbRenderedDoc = {
+  document_id: string;
   filename: string;
   collection_id: string;
   markdown: string;
+  file_id: string;
+  content_type: string;
+  size: number;
+  chunks: number;
+  cited: number;
+  created_by: string;
+  updated_at: number; // epoch ms
+  status: string;
 };
 
 /** A resolved [n] marker — points at a span of a source document. */
@@ -131,6 +141,10 @@ export interface KbApi {
   renderDocument(documentId: string): Promise<KbRenderedDoc>;
   /** A document's indexed chunks + their cited counts (the chunks debug view). */
   getDocChunks(documentId: string): Promise<KbDocChunk[]>;
+  /** Re-chunk + re-embed a single document (flips it back to `indexing`). */
+  reindexDocument(documentId: string): Promise<void>;
+  /** Remove a document and its chunks (cascade) — DELETE /kb/documents?id=. */
+  deleteDocument(documentId: string): Promise<void>;
 
   listChats(): Promise<KbChatSummary[]>;
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
@@ -223,6 +237,20 @@ export const realKbApi: KbApi = {
   async getDocChunks(documentId) {
     const url = `/kb/documents/chunks?id=${encodeURIComponent(documentId)}`;
     return (await ok(await apiFetch(url), "list doc chunks")).json();
+  },
+  async reindexDocument(documentId) {
+    await ok(
+      await apiFetch(`/kb/documents/reindex?id=${encodeURIComponent(documentId)}`, {
+        method: "POST",
+      }),
+      "reindex document",
+    );
+  },
+  async deleteDocument(documentId) {
+    await ok(
+      await apiFetch(`/kb/documents?id=${encodeURIComponent(documentId)}`, { method: "DELETE" }),
+      "delete document",
+    );
   },
 
   async listChats() {
