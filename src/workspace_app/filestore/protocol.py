@@ -27,8 +27,7 @@ class FileStore(Protocol):
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         """Write `data` to `path`, overwriting any existing file and
-        auto-creating ancestor directories. Marks `path` dirty (see
-        `dirty_paths`)."""
+        auto-creating ancestor directories."""
         ...
 
     async def read(self, workspace_id: str, path: str) -> bytes:
@@ -73,15 +72,4 @@ class FileStore(Protocol):
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
         """List directory paths (including empty ones), optionally under
         `prefix` — used to build the file tree."""
-        ...
-
-    # Dirty-path tracking — drives SandboxSync.flush before each exec, so
-    # the sandbox sees the latest FileStore writes the agent just made.
-    def dirty_paths(self, workspace_id: str) -> set[str]:
-        """The set of paths written/deleted since the last `clear_dirty` —
-        SandboxSync pushes exactly these into the sandbox before each `exec`."""
-        ...
-
-    def clear_dirty(self, workspace_id: str) -> None:
-        """Reset the dirty set (called after SandboxSync has flushed it)."""
         ...

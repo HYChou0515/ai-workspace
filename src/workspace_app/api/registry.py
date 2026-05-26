@@ -28,7 +28,7 @@ class _SyncHook(Protocol):
     'investigation'."""
 
     async def restore(self, workspace_id: str, handle: SandboxHandle) -> int: ...
-    async def reverse(self, workspace_id: str, handle: SandboxHandle) -> int: ...
+    async def mirror(self, workspace_id: str, handle: SandboxHandle) -> int: ...
 
 
 def _utcnow() -> datetime:
@@ -81,6 +81,29 @@ class InvestigationRegistry:
             session.last_active = _utcnow()
         return session.handle
 
+    async def flush(self, investigation_id: str) -> None:
+        """Mirror this investigation's live sandbox to the snapshot right now
+        (explicit refresh / turn-end). No-op when cold."""
+        s = self._sessions.get(investigation_id)
+        if s is None or s.handle is None or self.sync is None:
+            return
+        await self.sync.mirror(investigation_id, s.handle)
+
+    async def mirror_warm(self) -> list[str]:
+        """Throttle sweep: mirror every warm session to the snapshot via a
+        version-diff (cheap when nothing changed — only changed files are
+        downloaded). Run periodically (≤window) so a crash loses at most a
+        window of work, and so files the shell created — which the file tools
+        never see — still get persisted."""
+        mirrored: list[str] = []
+        for inv_id in list(self._sessions):
+            s = self._sessions.get(inv_id)
+            if s is None or s.handle is None or self.sync is None:
+                continue
+            await self.sync.mirror(inv_id, s.handle)
+            mirrored.append(inv_id)
+        return mirrored
+
     async def kill_idle(self, threshold: timedelta) -> list[str]:
         cutoff = _utcnow() - threshold
         killed: list[str] = []
@@ -90,7 +113,7 @@ class InvestigationRegistry:
                 continue
             if s.handle is not None:
                 if self.sync is not None:
-                    await self.sync.reverse(inv_id, s.handle)
+                    await self.sync.mirror(inv_id, s.handle)
                 await self.sandbox.kill(s.handle)
             del self._sessions[inv_id]
             killed.append(inv_id)
@@ -101,7 +124,7 @@ class InvestigationRegistry:
             s = self._sessions.pop(inv_id)
             if s.handle is not None:
                 if self.sync is not None:
-                    await self.sync.reverse(inv_id, s.handle)
+                    await self.sync.mirror(inv_id, s.handle)
                 await self.sandbox.kill(s.handle)
 
     async def close_session(self, investigation_id: str) -> None:
@@ -113,5 +136,5 @@ class InvestigationRegistry:
             return
         if s.handle is not None:
             if self.sync is not None:
-                await self.sync.reverse(investigation_id, s.handle)
+                await self.sync.mirror(investigation_id, s.handle)
             await self.sandbox.kill(s.handle)

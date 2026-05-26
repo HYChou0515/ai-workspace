@@ -7,6 +7,13 @@ from __future__ import annotations
 from .conftest import Harness
 
 
+def test_refresh_files_is_ok_when_cold(harness: Harness):
+    # No sandbox up for this investigation → flush is a no-op, endpoint still OK.
+    resp = harness.client.post("/investigations/ws-r/files/refresh")
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
 async def test_delete_file_removes_it(harness: Harness):
     harness.client.put("/investigations/ws-d/files/a.txt", content=b"bye")
     resp = harness.client.delete("/investigations/ws-d/files/a.txt")

@@ -23,14 +23,12 @@ class MemoryFileStore:
     def __init__(self) -> None:
         self._files: dict[str, dict[str, bytes]] = defaultdict(dict)
         self._dirs: dict[str, set[str]] = defaultdict(set)
-        self._dirty: dict[str, set[str]] = defaultdict(set)
         self._lock = asyncio.Lock()
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         async with self._lock:
             self._files[workspace_id][path] = data
             self._dirs[workspace_id].update(dir_ancestors(path))
-            self._dirty[workspace_id].add(path)
 
     async def read(self, workspace_id: str, path: str) -> bytes:
         async with self._lock:
@@ -79,9 +77,3 @@ class MemoryFileStore:
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
         async with self._lock:
             return [d for d in self._dirs.get(workspace_id, set()) if d.startswith(prefix)]
-
-    def dirty_paths(self, workspace_id: str) -> set[str]:
-        return set(self._dirty.get(workspace_id, set()))
-
-    def clear_dirty(self, workspace_id: str) -> None:
-        self._dirty.pop(workspace_id, None)

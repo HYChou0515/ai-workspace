@@ -56,7 +56,25 @@ class _ExecRunner:
         yield RunDone()
 
 
-def _make_components(*, idle_timeout: timedelta, idle_check_interval: timedelta):
+class _ShellWritingRunner:
+    """Wakes the sandbox and writes a file directly into it (as a shell
+    command would) — bypassing the file tools, so only the mirror can
+    surface it in the snapshot."""
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        h = await ctx.ensure_sandbox()
+        assert ctx.sandbox is not None
+        await ctx.sandbox.upload(h, b"shell-made", "/out.txt")
+        yield RunDone()
+
+
+def _make_components(
+    *,
+    idle_timeout: timedelta,
+    idle_check_interval: timedelta,
+    mirror_interval: timedelta = timedelta(seconds=60),
+    runner=None,
+):
     spec = SpecStar()
     spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
     sandbox = _CountingSandbox()
@@ -65,11 +83,12 @@ def _make_components(*, idle_timeout: timedelta, idle_check_interval: timedelta)
         spec=spec,
         sandbox=sandbox,
         filestore=filestore,
-        runner=_ExecRunner(),
+        runner=runner or _ExecRunner(),
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,
+        mirror_interval=mirror_interval,
     )
-    return app, sandbox
+    return app, sandbox, filestore
 
 
 @asynccontextmanager
@@ -86,7 +105,7 @@ async def _running_app(app):
 async def test_idle_killer_reaps_session_past_threshold():
     """End-to-end: POST creates a session+sandbox. After idle_timeout
     elapses with no further activity, the next sweep kills it."""
-    app, sandbox = _make_components(
+    app, sandbox, _ = _make_components(
         idle_timeout=timedelta(seconds=0.1),
         idle_check_interval=timedelta(seconds=0.05),
     )
@@ -103,7 +122,7 @@ async def test_idle_killer_reaps_session_past_threshold():
 
 
 async def test_active_session_within_threshold_is_not_reaped():
-    app, sandbox = _make_components(
+    app, sandbox, _ = _make_components(
         idle_timeout=timedelta(seconds=2),
         idle_check_interval=timedelta(seconds=0.05),
     )
@@ -120,7 +139,7 @@ async def test_active_session_within_threshold_is_not_reaped():
 async def test_shutdown_close_all_kills_alive_sessions():
     """When the app's lifespan exits, the idle-killer is cancelled and
     registry.close_all() releases anything still in-flight."""
-    app, sandbox = _make_components(
+    app, sandbox, _ = _make_components(
         idle_timeout=timedelta(seconds=60),
         idle_check_interval=timedelta(seconds=60),
     )
@@ -131,6 +150,27 @@ async def test_shutdown_close_all_kills_alive_sessions():
         assert sandbox.kill_calls == 0  # nothing reaped yet
     # Lifespan exit happens here.
     assert sandbox.kill_calls == 2
+
+
+async def test_mirror_sweeper_persists_warm_sandbox_to_snapshot():
+    """The throttle sweep mirrors a warm sandbox to the snapshot every
+    mirror_interval — surfacing even files the shell wrote (which the file
+    tools never touched) in the durable FileStore."""
+    app, _sandbox, filestore = _make_components(
+        idle_timeout=timedelta(seconds=60),
+        idle_check_interval=timedelta(seconds=60),
+        mirror_interval=timedelta(seconds=0.05),
+        runner=_ShellWritingRunner(),
+    )
+    async with _running_app(app) as client:
+        await client.post("/investigations/ws/messages", json={"content": "go"})
+        # the shell-written file is NOT in the snapshot yet (no mirror ran)…
+        for _ in range(40):
+            await asyncio.sleep(0.05)
+            if await filestore.exists("ws", "/out.txt"):
+                break
+    # …a sweep tick mirrored it into the snapshot.
+    assert await filestore.read("ws", "/out.txt") == b"shell-made"
 
 
 async def test_default_idle_timeout_matches_rca_pivot():

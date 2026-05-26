@@ -63,30 +63,11 @@ async def test_delete_in_unknown_workspace_raises(fs: MemoryFileStore):
         await fs.delete("never-existed", "/nope")
 
 
-async def test_dirty_paths_accumulate(fs: MemoryFileStore):
-    await fs.write("ws-1", "/a", b"a")
-    await fs.write("ws-1", "/b", b"b")
-    assert fs.dirty_paths("ws-1") == {"/a", "/b"}
-
-
-async def test_clear_dirty_resets(fs: MemoryFileStore):
-    await fs.write("ws-1", "/a", b"a")
-    fs.clear_dirty("ws-1")
-    assert fs.dirty_paths("ws-1") == set()
-
-
-async def test_clear_dirty_on_unknown_workspace_is_noop(fs: MemoryFileStore):
-    fs.clear_dirty("never-existed")
-    assert fs.dirty_paths("never-existed") == set()
-
-
 async def test_workspaces_are_isolated(fs: MemoryFileStore):
     await fs.write("ws-1", "/a", b"first")
     await fs.write("ws-2", "/a", b"second")
     assert await fs.read("ws-1", "/a") == b"first"
     assert await fs.read("ws-2", "/a") == b"second"
-    assert fs.dirty_paths("ws-1") == {"/a"}
-    assert fs.dirty_paths("ws-2") == {"/a"}
 
 
 async def test_read_in_unknown_workspace_raises(fs: MemoryFileStore):

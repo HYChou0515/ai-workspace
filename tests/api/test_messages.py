@@ -308,11 +308,6 @@ def test_create_app_works_without_explicit_spec():
         async def listdir(self, *a, **k):
             return []
 
-        def dirty_paths(self, *a, **k):
-            return set()
-
-        def clear_dirty(self, *a, **k): ...
-
     app = create_app(
         sandbox=MockSandbox(),
         filestore=_FS(),

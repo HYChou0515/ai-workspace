@@ -20,17 +20,9 @@ class SpecstarFileStore:
         spec.add_model(_WorkspaceFiles)
         self._rm = spec.get_resource_manager(_WorkspaceFiles)
         self._ids: dict[str, str] = {}
-        self._dirty: dict[str, set[str]] = {}
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         await asyncio.to_thread(self._write_sync, workspace_id, path, data)
-        self._dirty.setdefault(workspace_id, set()).add(path)
-
-    def dirty_paths(self, workspace_id: str) -> set[str]:
-        return set(self._dirty.get(workspace_id, set()))
-
-    def clear_dirty(self, workspace_id: str) -> None:
-        self._dirty.pop(workspace_id, None)
 
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await asyncio.to_thread(self._read_sync, workspace_id, path)

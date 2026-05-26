@@ -22,12 +22,12 @@ class AgentToolContext:
     Two flavours share this context so they can share `LitellmAgentRunner`:
 
     - The **RCA workspace** agent sets `investigation_id` + `sandbox` +
-      `filestore` + `sync` and gets the file/exec tools. Sandbox is created
-      lazily on first `exec` call (Q10 a2+ policy): pure file ops never spin one
-      up, so a chat that doesn't run shell commands stays free. `sync` bridges
-      FileStore (durable, the agent's file tools target it) and Sandbox
-      (ephemeral, exec runs there): exec_impl calls sync.flush before each shell
-      so the sandbox sees writes the agent just made.
+      `files` and gets the file/exec tools. The sandbox is woken lazily on the
+      first `exec`; the `files` facade routes file ops to the live sandbox (the
+      source of truth) when it's warm and to the FileStore snapshot when cold,
+      so the agent's file tools and its shell always see one view. `restore` on
+      wake brings in any cold writes; a throttled mirror persists warm writes
+      back to the snapshot.
 
     - The **KB** agent sets `retriever` + `collection_ids` and gets only the
       `kb_search` tool — no sandbox, no file store. Each `kb_search` appends to

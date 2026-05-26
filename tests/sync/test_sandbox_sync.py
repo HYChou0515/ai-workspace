@@ -43,67 +43,61 @@ async def test_restore_on_empty_workspace_is_a_noop(fs: SpecstarFileStore, sandb
     assert await sync.restore("never", h) == 0
 
 
-# ---- flush ----
-
-
-async def test_flush_uploads_dirty_paths_and_clears(fs: SpecstarFileStore, sandbox: MockSandbox):
+async def test_restore_seeds_versions_so_first_mirror_is_noop(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    await fs.write("ws", "/a.txt", b"A")
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)
-    await fs.write("ws", "/notes.txt", b"first")
-    assert fs.dirty_paths("ws") == {"/notes.txt"}
-
-    n = await sync.flush("ws", h)
-    assert n == 1
-    assert await sandbox.download(h, "/notes.txt") == b"first"
-    assert fs.dirty_paths("ws") == set()
+    await sync.restore("ws", h)
+    # Nothing changed in the sandbox since the restore → mirror is a no-op.
+    assert await sync.mirror("ws", h) == 0
 
 
-async def test_flush_with_no_dirty_paths_is_noop(fs: SpecstarFileStore, sandbox: MockSandbox):
-    h = await sandbox.create(SandboxSpec())
-    sync = SandboxSync(filestore=fs, sandbox=sandbox)
-    assert await sync.flush("ws", h) == 0
+# ---- mirror (PULL, version-diff, deletion-aware) ----
 
 
-# ---- reverse ----
-
-
-async def test_reverse_downloads_new_sandbox_files_into_filestore(
+async def test_mirror_copies_new_sandbox_files_into_snapshot(
     fs: SpecstarFileStore, sandbox: MockSandbox
 ):
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)
-    # Simulate the agent's shell writing files inside the sandbox.
-    await sandbox.upload(h, b"shell out", "/build/out.txt")
+    await sandbox.upload(h, b"shell out", "/build/out.txt")  # shell-created file
 
-    n = await sync.reverse("ws", h)
+    n = await sync.mirror("ws", h)
     assert n == 1
     assert await fs.read("ws", "/build/out.txt") == b"shell out"
-    # Reverse-sync's own writes shouldn't leave dirty marks behind.
-    assert fs.dirty_paths("ws") == set()
 
 
-async def test_reverse_skips_unchanged_files(fs: SpecstarFileStore, sandbox: MockSandbox):
+async def test_mirror_skips_unchanged_via_version(fs: SpecstarFileStore, sandbox: MockSandbox):
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)
-    # Same content on both sides.
-    await fs.write("ws", "/same.txt", b"same")
-    await sandbox.upload(h, b"same", "/same.txt")
-    fs.clear_dirty("ws")
-
-    n = await sync.reverse("ws", h)
-    assert n == 0
+    await sandbox.upload(h, b"same", "/x.txt")
+    assert await sync.mirror("ws", h) == 1  # first copy
+    assert await sync.mirror("ws", h) == 0  # version unchanged → skipped
 
 
-async def test_reverse_updates_changed_files(fs: SpecstarFileStore, sandbox: MockSandbox):
+async def test_mirror_updates_changed_files(fs: SpecstarFileStore, sandbox: MockSandbox):
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)
-    await fs.write("ws", "/x.txt", b"old")
-    await sandbox.upload(h, b"new", "/x.txt")
-    fs.clear_dirty("ws")
-
-    n = await sync.reverse("ws", h)
-    assert n == 1
+    await sandbox.upload(h, b"old", "/x.txt")
+    await sync.mirror("ws", h)
+    await sandbox.upload(h, b"new", "/x.txt")  # content (version) changed
+    assert await sync.mirror("ws", h) == 1
     assert await fs.read("ws", "/x.txt") == b"new"
+
+
+async def test_mirror_propagates_deletions(fs: SpecstarFileStore, sandbox: MockSandbox):
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sandbox.upload(h, b"x", "/gone.txt")
+    await sync.mirror("ws", h)
+    assert await fs.exists("ws", "/gone.txt") is True
+
+    await sandbox.delete(h, "/gone.txt")  # removed in the sandbox
+    n = await sync.mirror("ws", h)
+    assert n == 1  # one deletion
+    assert await fs.exists("ws", "/gone.txt") is False
 
 
 # ---- ignore list ----
@@ -146,12 +140,12 @@ def test_ignore_literal_segment_pattern():
     assert should_ignore("/not-a-secret", ["secret"], size=10) is False
 
 
-async def test_reverse_skips_ignored_paths(fs: SpecstarFileStore, sandbox: MockSandbox):
+async def test_mirror_skips_ignored_paths(fs: SpecstarFileStore, sandbox: MockSandbox):
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)
     await sandbox.upload(h, b"x", "/src/main.py")
     await sandbox.upload(h, b"y", "/__pycache__/main.cpython-312.pyc")
     await sandbox.upload(h, b"z", "/.venv/bin/python")
 
-    await sync.reverse("ws", h)
+    await sync.mirror("ws", h)
     assert await fs.ls("ws") == ["/src/main.py"]

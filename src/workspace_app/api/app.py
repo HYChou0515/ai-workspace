@@ -216,6 +216,7 @@ def create_app(
     root_path: str = "",
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
+    mirror_interval: timedelta = timedelta(seconds=5),
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -255,15 +256,28 @@ def create_app(
         except asyncio.CancelledError:
             return
 
+    async def _mirror_sweeper() -> None:
+        """Throttle: every ~mirror_interval, persist any warm sandbox the agent
+        wrote to since the last sweep into the FileStore snapshot. Coalesces a
+        burst of agent writes into one mirror; a crash loses at most a window."""
+        try:
+            while True:
+                await asyncio.sleep(mirror_interval.total_seconds())
+                await registry.mirror_warm()
+        except asyncio.CancelledError:
+            return
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        killer = asyncio.create_task(_idle_killer())
+        bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
         try:
             yield
         finally:
-            killer.cancel()
-            with contextlib.suppress(BaseException):
-                await killer
+            for t in bg:
+                t.cancel()
+            for t in bg:
+                with contextlib.suppress(BaseException):
+                    await t
             await kernels.shutdown_all()
             await registry.close_all()
 
@@ -619,6 +633,13 @@ def create_app(
         """Directory paths (incl. empty ones) for the file tree."""
         return sorted(await files.listdir(investigation_id))
 
+    @app.post("/investigations/{investigation_id}/files/refresh")
+    async def refresh_files(investigation_id: str) -> dict:
+        """Force-mirror the live sandbox to the snapshot now (don't wait for the
+        ≤window throttle sweep) — the explicit 'refresh' action. No-op cold."""
+        await registry.flush(investigation_id)
+        return {"ok": True}
+
     @app.put(
         "/investigations/{investigation_id}/files/{path:path}",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -864,11 +885,11 @@ def create_app(
         session = await registry.session(investigation_id)
         handle = await registry.ensure_handle(session)
         result = await sandbox.exec(handle, body.cmd)
-        # Best-effort sync any new files back so the sidebar can pick
-        # them up on next refresh. Stale handle (kernel killed during
-        # the call) is swallowed — the user can re-run.
+        # The sandbox is the source of truth, so the file routes already see any
+        # files the command created; mirror them to the snapshot now for
+        # durability. Stale handle (killed mid-call) is swallowed — re-run.
         with contextlib.suppress(Exception):
-            await sync.reverse(investigation_id, handle)
+            await registry.flush(investigation_id)
         return {
             "exit_code": result.exit_code,
             "stdout": result.stdout.decode("utf-8", errors="replace"),

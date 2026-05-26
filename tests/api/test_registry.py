@@ -169,12 +169,8 @@ class _RecordingSync:
         self.calls.append(("restore", workspace_id))
         return 0
 
-    async def flush(self, workspace_id, handle):
-        self.calls.append(("flush", workspace_id))
-        return 0
-
-    async def reverse(self, workspace_id, handle):
-        self.calls.append(("reverse", workspace_id))
+    async def mirror(self, workspace_id, handle):
+        self.calls.append(("mirror", workspace_id))
         return 0
 
 
@@ -199,7 +195,7 @@ async def test_ensure_handle_skips_restore_when_handle_already_alive():
     assert [c for c in sync.calls if c[0] == "restore"] == [("restore", "ws-1")]
 
 
-async def test_kill_idle_calls_reverse_before_sandbox_kill():
+async def test_kill_idle_calls_mirror_before_sandbox_kill():
     from datetime import UTC, datetime, timedelta
 
     events: list[str] = []
@@ -210,9 +206,9 @@ async def test_kill_idle_calls_reverse_before_sandbox_kill():
             await super().kill(handle)
 
     class _RecordingSyncWithLog(_RecordingSync):
-        async def reverse(self, workspace_id, handle):
-            events.append("sync.reverse")
-            return await super().reverse(workspace_id, handle)
+        async def mirror(self, workspace_id, handle):
+            events.append("sync.mirror")
+            return await super().mirror(workspace_id, handle)
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
@@ -222,10 +218,10 @@ async def test_kill_idle_calls_reverse_before_sandbox_kill():
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
 
     await registry.kill_idle(threshold=timedelta(minutes=15))
-    assert events == ["sync.reverse", "sandbox.kill"]
+    assert events == ["sync.mirror", "sandbox.kill"]
 
 
-async def test_kill_idle_does_not_reverse_for_handleless_sessions():
+async def test_kill_idle_does_not_mirror_for_handleless_sessions():
     from datetime import UTC, datetime, timedelta
 
     sandbox = _CountingSandbox()
@@ -235,10 +231,10 @@ async def test_kill_idle_does_not_reverse_for_handleless_sessions():
     s.last_active = datetime.now(UTC) - timedelta(minutes=30)
 
     await registry.kill_idle(threshold=timedelta(minutes=15))
-    assert sync.calls == []  # no handle, nothing to reverse
+    assert sync.calls == []  # no handle, nothing to mirror
 
 
-async def test_close_all_reverses_before_killing_each():
+async def test_close_all_mirrors_before_killing_each():
     events: list[str] = []
 
     class _RecordingSandbox(_CountingSandbox):
@@ -247,9 +243,9 @@ async def test_close_all_reverses_before_killing_each():
             await super().kill(handle)
 
     class _RecordingSyncWithLog(_RecordingSync):
-        async def reverse(self, workspace_id, handle):
-            events.append(f"reverse:{workspace_id}")
-            return await super().reverse(workspace_id, handle)
+        async def mirror(self, workspace_id, handle):
+            events.append(f"mirror:{workspace_id}")
+            return await super().mirror(workspace_id, handle)
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
@@ -260,25 +256,25 @@ async def test_close_all_reverses_before_killing_each():
     await registry.ensure_handle(s2)
 
     await registry.close_all()
-    # Each workspace's reverse precedes that workspace's kill.
-    reverse_idx_1 = events.index("reverse:ws-1")
+    # Each workspace's mirror precedes that workspace's kill.
+    mirror_idx_1 = events.index("mirror:ws-1")
     kill_idx_1 = next(
         i for i, e in enumerate(events) if e.startswith("kill:") and s1.handle and s1.handle.id in e
     )
-    reverse_idx_2 = events.index("reverse:ws-2")
+    mirror_idx_2 = events.index("mirror:ws-2")
     kill_idx_2 = next(
         i for i, e in enumerate(events) if e.startswith("kill:") and s2.handle and s2.handle.id in e
     )
-    assert reverse_idx_1 < kill_idx_1
-    assert reverse_idx_2 < kill_idx_2
+    assert mirror_idx_1 < kill_idx_1
+    assert mirror_idx_2 < kill_idx_2
 
 
 # ---- close_session (manual close) ----
 
 
-async def test_close_session_reverses_then_kills_then_evicts():
+async def test_close_session_mirrors_then_kills_then_evicts():
     """Manual close — used by POST /investigations/{id}/close — runs
-    reverse-sync, kills the sandbox handle, and removes the session
+    mirror-sync, kills the sandbox handle, and removes the session
     from the registry."""
     events: list[str] = []
 
@@ -288,9 +284,9 @@ async def test_close_session_reverses_then_kills_then_evicts():
             await super().kill(handle)
 
     class _RecordingSyncWithLog(_RecordingSync):
-        async def reverse(self, workspace_id, handle):
-            events.append("sync.reverse")
-            return await super().reverse(workspace_id, handle)
+        async def mirror(self, workspace_id, handle):
+            events.append("sync.mirror")
+            return await super().mirror(workspace_id, handle)
 
     sandbox = _RecordingSandbox()
     sync = _RecordingSyncWithLog()
@@ -299,7 +295,7 @@ async def test_close_session_reverses_then_kills_then_evicts():
     await registry.ensure_handle(s)
 
     await registry.close_session("ws-1")
-    assert events == ["sync.reverse", "sandbox.kill"]
+    assert events == ["sync.mirror", "sandbox.kill"]
     new = await registry.session("ws-1")
     assert new is not s
 
@@ -311,9 +307,9 @@ async def test_close_session_is_noop_for_unknown_workspace():
     assert sandbox.kill_calls == 0
 
 
-async def test_close_session_skips_reverse_when_no_handle():
+async def test_close_session_skips_mirror_when_no_handle():
     """Session was created but ensure_handle never called — no handle
-    to kill, no sync.reverse to run, but the session still gets evicted."""
+    to kill, no sync.mirror to run, but the session still gets evicted."""
     sandbox = _CountingSandbox()
     sync = _RecordingSync()
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
@@ -327,10 +323,40 @@ async def test_close_session_skips_reverse_when_no_handle():
 
 async def test_close_session_without_sync_just_kills_handle():
     """When the registry was constructed without a sync hook, close_session
-    still kills the handle — it just skips the reverse-sync step."""
+    still kills the handle — it just skips the mirror-sync step."""
     sandbox = _CountingSandbox()
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
     s = await registry.session("ws-1")
     await registry.ensure_handle(s)
     await registry.close_session("ws-1")
     assert sandbox.kill_calls == 1
+
+
+# ---- throttled mirror (P3) ----
+
+
+async def test_flush_mirrors_a_warm_session_and_is_noop_when_cold():
+    sandbox = _CountingSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    await registry.flush("ws-1")  # no session → no-op
+    s = await registry.session("ws-1")
+    await registry.flush("ws-1")  # cold session → no-op
+    assert sync.calls == []
+    await registry.ensure_handle(s)
+    sync.calls.clear()
+    await registry.flush("ws-1")  # warm → mirror
+    assert sync.calls == [("mirror", "ws-1")]
+
+
+async def test_mirror_warm_mirrors_only_warm_sessions():
+    sandbox = _CountingSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    warm = await registry.session("ws-warm")
+    await registry.ensure_handle(warm)
+    await registry.session("ws-cold")  # no handle
+    sync.calls.clear()
+    mirrored = await registry.mirror_warm()
+    assert mirrored == ["ws-warm"]
+    assert sync.calls == [("mirror", "ws-warm")]
