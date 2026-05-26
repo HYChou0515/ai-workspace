@@ -113,33 +113,43 @@ export function HomeMain({
     <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
       <TopBar query={filters.query} onQuery={setQuery} />
 
-      <header style={{ padding: 28 }}>
-        <div className="caps">Investigations</div>
-        <h1
-          style={{
-            margin: "6px 0 0",
-            fontFamily: "var(--font-display)",
-            fontSize: "var(--text-display-lg)",
-            lineHeight: "var(--leading-display-lg)",
-            fontWeight: 800,
-            letterSpacing: "-0.025em",
-          }}
-        >
-          <span>{open}</span> open
-          <span style={{ color: "var(--text-paper-d)", fontWeight: 700 }}> · </span>
-          <span style={{ color: "var(--accent)" }}>{critical}</span> critical
-        </h1>
-        <div
-          style={{
-            marginTop: 4,
-            color: "var(--text-paper-d)",
-            fontSize: "var(--text-body)",
-          }}
-        >
-          Investigations across all production lines, owners, and topics.
+      <header
+        style={{
+          padding: 28,
+          display: "flex",
+          alignItems: "flex-end",
+          justifyContent: "space-between",
+          gap: 24,
+        }}
+      >
+        <div>
+          <div className="caps">Investigations</div>
+          <h1
+            style={{
+              margin: "6px 0 0",
+              fontFamily: "var(--font-display)",
+              fontSize: "var(--text-display-lg)",
+              lineHeight: "var(--leading-display-lg)",
+              fontWeight: 800,
+              letterSpacing: "-0.025em",
+            }}
+          >
+            <span>{open}</span> open
+            <span style={{ color: "var(--text-paper-d)", fontWeight: 700 }}> · </span>
+            <span style={{ color: "var(--accent)" }}>{critical}</span> critical
+          </h1>
+          <div
+            style={{
+              marginTop: 4,
+              color: "var(--text-paper-d)",
+              fontSize: "var(--text-body)",
+            }}
+          >
+            Investigations across all production lines, owners, and topics.
+          </div>
         </div>
 
-        <div style={{ display: "flex", gap: 24, marginTop: 18 }}>
+        <div style={{ display: "flex", gap: 24, flexShrink: 0 }}>
           <Metric label="Open" value={String(open)} sub="across all lines" />
           <Metric label="Critical" value={String(critical)} sub="P0 + P1, open" />
           <Metric label="Pinned" value={String(pinned.size)} sub="across all lines" />
