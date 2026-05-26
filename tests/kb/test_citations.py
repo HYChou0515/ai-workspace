@@ -43,3 +43,15 @@ def test_out_of_range_and_zero_markers_ignored():
 
 def test_no_markers_yields_no_citations():
     assert parse_citations("a plain answer with no brackets", []) == []
+
+
+def test_full_width_and_cjk_bracket_markers_resolve():
+    # A Chinese-writing model (Qwen) emits full-width / CJK brackets, not ASCII.
+    passages = [_passage("c1/u/ch10.md", "FEOL summary", ["ch10#0"])]
+    for answer in (
+        "你會獲得以下內容 ［1］：",  # full-width brackets U+FF3B/FF3D
+        "你會獲得以下內容 【1】。",  # CJK brackets U+3010/3011
+        "你會獲得以下內容 [１]：",  # ASCII brackets, full-width digit
+    ):
+        cites = parse_citations(answer, passages)
+        assert [c.marker for c in cites] == [1], answer

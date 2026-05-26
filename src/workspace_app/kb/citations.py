@@ -9,7 +9,10 @@ import re
 
 from ..resources.kb import Citation, RetrievedPassage
 
-_MARKER = re.compile(r"\[(\d+)\]")
+# Markers may use ASCII "[1]", full-width "［1］" (U+FF3B/FF3D), or CJK "【1】"
+# (U+3010/3011) — a model writing Chinese (Qwen) emits the wide forms. `\d`
+# already matches full-width digits, and int() parses them.
+_MARKER = re.compile(r"[\[［【]\s*(\d+)\s*[\]］】]")
 
 
 def parse_citations(answer: str, passages: list[RetrievedPassage]) -> list[Citation]:
