@@ -213,3 +213,17 @@ def test_delete_document_removes_doc_and_its_chunks():
     assert client.get(f"/kb/collections/{cid}/documents").json() == []  # doc gone
     assert client.get("/kb/documents", params={"id": doc_id}).status_code == 404
     assert client.get("/kb/documents/chunks", params={"id": doc_id}).json() == []  # cascade
+
+
+def test_reindex_missing_document_404s():
+    client = _client()
+    cid = _new_collection(client)
+    missing = encode_doc_id(cid, "default-user", "nope.md")
+    assert client.post("/kb/documents/reindex", params={"id": missing}).status_code == 404
+
+
+def test_delete_missing_document_404s():
+    client = _client()
+    cid = _new_collection(client)
+    missing = encode_doc_id(cid, "default-user", "nope.md")
+    assert client.delete("/kb/documents", params={"id": missing}).status_code == 404
