@@ -115,6 +115,10 @@ export interface KbApi {
   getAgentConfig(): Promise<KbAgentConfig>;
   listCollections(): Promise<KbCollection[]>;
   createCollection(name: string, description?: string): Promise<KbCollection>;
+  /** Rename / change icon — via specstar's native PATCH /collection/{id}. */
+  updateCollection(id: string, patch: { name?: string; icon?: string }): Promise<void>;
+  /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
+  deleteCollection(id: string): Promise<void>;
   listDocuments(collectionId: string): Promise<KbDocument[]>;
   /** Multipart upload; returns the ingested document ids (one per archive
    * member). `path` overrides the stored filename — used for folder uploads to
@@ -166,6 +170,24 @@ export const realKbApi: KbApi = {
       "create collection",
     );
     return resp.json();
+  },
+  async updateCollection(id, patch) {
+    // specstar's native resource CRUD — PATCH a partial onto the Collection.
+    await ok(
+      await apiFetch(`/collection/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: jsonHeaders,
+        body: JSON.stringify(patch),
+      }),
+      "update collection",
+    );
+  },
+  async deleteCollection(id) {
+    // native hard delete (soft delete would still show under list's QB.all()).
+    await ok(
+      await apiFetch(`/collection/${encodeURIComponent(id)}/permanently`, { method: "DELETE" }),
+      "delete collection",
+    );
   },
   async listDocuments(collectionId) {
     const resp = await apiFetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`);

@@ -90,6 +90,14 @@ export const mockKbApi: KbApi = {
     collections.set(c.resource_id, c);
     return c;
   },
+  async updateCollection(id, patch) {
+    const c = collections.get(id);
+    if (c) collections.set(id, { ...c, ...patch });
+  },
+  async deleteCollection(id) {
+    collections.delete(id);
+    documents.delete(id);
+  },
   async listDocuments(collectionId) {
     return documents.get(collectionId) ?? [];
   },

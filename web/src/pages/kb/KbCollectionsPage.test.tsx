@@ -40,10 +40,10 @@ describe("KbCollectionsPage", () => {
 
     // the new collection appears as a card in the grid
     const card = await screen.findByRole("button", { name: "Open Process SOPs" });
-    // opening it switches to the documents view (upload affordances appear)
+    // opening it switches to the collection page (upload affordances appear)
     await userEvent.click(card);
     expect(screen.getByRole("button", { name: "Upload" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Upload folder" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Folder" })).toBeInTheDocument();
   });
 
   it("uploads a document and lists it; clicking opens it", async () => {
@@ -55,7 +55,7 @@ describe("KbCollectionsPage", () => {
 
     const file = new File(["# guide"], "guide.md", { type: "text/markdown" });
     await userEvent.upload(
-      screen.getByLabelText("Documents").querySelector("input[type=file]")!,
+      screen.getByLabelText("Collection").querySelector("input[type=file]")!,
       file,
     );
 
@@ -72,7 +72,7 @@ describe("KbCollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await screen.findByRole("button", { name: /reflow\.md/ });
-    await userEvent.type(screen.getByPlaceholderText("Filter documents by name…"), "wire");
+    await userEvent.type(screen.getByPlaceholderText("Search in this collection…"), "wire");
     expect(screen.queryByRole("button", { name: /reflow\.md/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /wirebond\.md/ })).toBeInTheDocument();
   });
@@ -148,6 +148,84 @@ describe("KbCollectionsPage", () => {
     expect(collectionsKpi).toHaveTextContent("2");
     const citedKpi = screen.getByText(/^Most cited$/i).closest(".kb-kpi")!;
     expect(citedKpi).toHaveTextContent("Wirebond SOPs");
+  });
+
+  it("open page shows a stats banner (docs/size/chunks/cited/owner/updated)", async () => {
+    const client = {
+      listCollections: async () => [
+        col({
+          resource_id: "c1",
+          name: "Reflow SOPs",
+          cited: 5,
+          doc_count: 2,
+          size: 3072,
+          owner: "alice",
+          updated_at: Date.UTC(2026, 4, 20),
+        }),
+      ],
+      listDocuments: async () => [
+        { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "ready", chunks: 8 },
+        { resource_id: "c1/me/b.md", path: "b.md", content_type: "text/markdown", created_by: "me", status: "ready", chunks: 4 },
+      ],
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open Reflow SOPs" }));
+    const banner = (await screen.findByText("Documents")).closest(".kb-colpage__stats")!;
+    expect(banner.querySelector(".kb-stat")).toHaveTextContent("2"); // doc_count
+    expect(banner).toHaveTextContent("12"); // chunks total = 8 + 4
+    expect(banner).toHaveTextContent("5×"); // cited
+    expect(banner).toHaveTextContent("alice"); // owner
+  });
+
+  it("picks an icon → updates the collection via native CRUD", async () => {
+    const updateCollection = vi.fn(async () => {});
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", icon: "layers" })],
+      listDocuments: async () => [],
+      updateCollection,
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("button", { name: "Change icon" }));
+    await userEvent.click(screen.getByRole("button", { name: "Icon flame" }));
+    expect(updateCollection).toHaveBeenCalledWith("c1", { icon: "flame" });
+  });
+
+  it("renames the collection via the inline title editor", async () => {
+    const updateCollection = vi.fn(async () => {});
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => [],
+      updateCollection,
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("heading", { name: "kb" }));
+    const input = screen.getByDisplayValue("kb");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Wirebond{Enter}");
+    expect(updateCollection).toHaveBeenCalledWith("c1", { name: "Wirebond" });
+  });
+
+  it("deletes the collection after confirmation, returning to the grid", async () => {
+    const deleteCollection = vi.fn(async () => {});
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => [],
+      deleteCollection,
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete collection" }));
+    // confirm step — the destructive "Delete" button
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(deleteCollection).toHaveBeenCalledWith("c1");
+    // returns to the grid landing
+    expect(await screen.findByPlaceholderText("New collection name…")).toBeInTheDocument();
   });
 
   it("shows an indexing chip that flips to indexed by polling", async () => {
