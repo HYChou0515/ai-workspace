@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -532,6 +533,45 @@ def create_app(
         got = conv_rm.get(rev.resource_id).data
         assert isinstance(got, Conversation)
         return rev.resource_id, got
+
+    @app.get("/investigations/{investigation_id}/export")
+    async def export_investigation(investigation_id: str) -> Response:
+        """Download the investigation's full conversation as JSON — every message
+        with its reasoning, tool calls (name/args/output), citations, metrics and
+        timestamps, plus the case metadata. Read-only (won't create a
+        conversation) and curl-friendly, so it doubles as a debug dump."""
+        from specstar import QB
+
+        inv_rm = spec.get_resource_manager(Investigation)
+        meta: dict[str, object] = {"id": investigation_id}
+        try:
+            inv = inv_rm.get(investigation_id).data
+        except ResourceIDNotFoundError:
+            inv = None
+        if isinstance(inv, Investigation):
+            meta = {
+                "id": investigation_id,
+                "title": inv.title,
+                "owner": inv.owner,
+                "severity": inv.severity.value,
+                "status": inv.status.value,
+                "product": inv.product,
+                "topics": list(inv.topics),
+            }
+
+        messages: list = []
+        for r in conv_rm.list_resources((QB["investigation_id"] == investigation_id).build()):
+            assert isinstance(r.data, Conversation)
+            messages = msgspec.to_builtins(r.data.messages)
+            break
+
+        payload = {"investigation": meta, "exported_at": _now_ms(), "messages": messages}
+        filename = f"investigation-{investigation_id}.json"
+        return Response(
+            content=json.dumps(payload, indent=2, ensure_ascii=False),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
 
     @app.post("/investigations/{investigation_id}/messages")
     async def send_message(investigation_id: str, body: _MessageBody) -> StreamingResponse:

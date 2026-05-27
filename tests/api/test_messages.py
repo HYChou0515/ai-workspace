@@ -70,6 +70,30 @@ def _parse_sse(body: str) -> list[dict]:
     return events
 
 
+def test_export_returns_the_full_conversation_as_a_json_download(harness: Harness):
+    harness.client.post("/investigations/ws-1/messages", json={"content": "hello"})
+
+    r = harness.client.get("/investigations/ws-1/export")
+    assert r.status_code == 200
+    cd = r.headers["content-disposition"]
+    assert "attachment" in cd and "ws-1" in cd  # downloads with a stamped filename
+
+    data = r.json()
+    assert data["investigation"]["id"] == "ws-1"
+    assert isinstance(data["exported_at"], int)
+    roles = [m["role"] for m in data["messages"]]
+    assert roles[0] == "user"
+    # full agent detail is in the export: the tool call + the assistant answer
+    assert any(m["role"] == "tool" for m in data["messages"])
+    assert any(m["role"] == "assistant" and m["content"] for m in data["messages"])
+
+
+def test_export_unknown_investigation_is_empty_not_an_error(harness: Harness):
+    r = harness.client.get("/investigations/never-touched/export")
+    assert r.status_code == 200
+    assert r.json()["messages"] == []  # read-only: doesn't create a conversation
+
+
 def test_post_message_returns_sse_stream(harness: Harness):
     response = harness.client.post("/investigations/ws-1/messages", json={"content": "hello"})
     assert response.status_code == 200

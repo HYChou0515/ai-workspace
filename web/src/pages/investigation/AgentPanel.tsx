@@ -7,6 +7,7 @@
 import { useRef, useState } from "react";
 
 import { api } from "../../api";
+import { API_BASE } from "../../api/http";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
@@ -130,7 +131,7 @@ export function AgentPanel({
         minHeight: 0,
       }}
     >
-      <AgentHeader streaming={log.streaming} />
+      <AgentHeader streaming={log.streaming} investigationId={investigationId} />
       <ProgressBar streaming={log.streaming} />
 
       <div
@@ -384,7 +385,7 @@ export function AgentPanel({
   );
 }
 
-function AgentHeader({ streaming }: { streaming: boolean }) {
+function AgentHeader({ streaming, investigationId }: { streaming: boolean; investigationId: string }) {
   return (
     <header
       style={{
@@ -402,6 +403,15 @@ function AgentHeader({ streaming }: { streaming: boolean }) {
           {streaming ? "investigating · live" : "ready"}
         </div>
       </div>
+      <a
+        href={`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/export`}
+        download
+        title="Export the full conversation as JSON"
+        aria-label="Export conversation"
+        style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--text-paper-d)", fontSize: 11 }}
+      >
+        <Icon name="download" size={13} /> Export
+      </a>
       <span
         style={{
           display: "inline-flex",
