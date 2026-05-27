@@ -61,11 +61,11 @@ class ToolDef:
     # param names that map to positional argv (in order); everything else in the
     # schema becomes a `--flag` (or bare `--flag` for booleans).
     positional: list[str] = field(default_factory=list)
-    # A prebuilt, RELOCATABLE package on the host (e.g. `uv venv --relocatable` +
-    # the installed tool). At provision time it's copied INTO the sandbox at
-    # `install_dir` (tar → upload → untar), so the sandbox needs no uv / network
-    # / build step — `invoke` then runs the copied venv binary directly. Works
-    # inside the chroot jail / a container.
+    # A prebuilt, self-contained package on the host. At provision time it's
+    # copied INTO the sandbox at `install_dir` (tar → upload → untar), so the
+    # sandbox needs no uv / network / build step — `invoke` then runs an
+    # entrypoint from the copied package (e.g. a launcher that starts a bundled
+    # python). See `rca/sample_tools.py` + `scripts/prebuild_tools.py`.
     prebuilt: str | None = None
     install_dir: str | None = None  # sandbox dest; defaults to /opt/tools/<name>
 

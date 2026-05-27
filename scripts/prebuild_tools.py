@@ -1,18 +1,23 @@
-"""Prebuild the sample provisioned tools into relocatable venv packages.
+"""Prebuild the sample provisioned tools into SELF-CONTAINED packages.
 
-    uv run python scripts/prebuild_tools.py [--python X.Y | /path/to/python]
+    uv run python scripts/prebuild_tools.py
 
-For each tool in `workspace_app.rca.sample_tools.SOURCES` this builds a
-`uv venv --relocatable` under `RCA_TOOLS_DIR/<tool>/.venv` and installs the
-tool into it. At runtime the app copies the whole package into the sandbox and
-runs its venv binary — no uv / network / build step in the sandbox.
+For each tool in `workspace_app.rca.sample_tools.SOURCES` this builds, under
+`RCA_TOOLS_DIR/<tool>/`:
+  - `.venv/`   a `uv venv --relocatable` with the tool installed,
+  - `python/`  a copy of the (standalone, portable) python the venv used,
+  - `launch`   a tiny launcher.
 
-Pick the base python to match the SANDBOX, not your shell (a relocatable venv
-still resolves its base python by path):
-  - production LocalProcessSandbox in a py3.12 pod → `--python 3.12` (the pod's
-    /usr/bin/python is overlaid into the jail);
-  - local dev where the box's system python is too old → omit --python (uv's
-    managed python) and run the app with SANDBOX_ISOLATE=false.
+At runtime the app copies the whole package into the sandbox and runs `launch`.
+The package is fully self-contained — it brings its own python — so it runs in
+the sandbox's userns chroot jail regardless of the host/pod python (you do NOT
+need SANDBOX_ISOLATE=false, and you do NOT have to match the jail's python).
+
+Why the launcher (not just `.venv/bin/<tool>`): inside the userns jail the
+process is AT_SECURE, so glibc's loader ignores `$ORIGIN`/RPATH/LD_LIBRARY_PATH
+and can't find the bundled libpython when python is started implicitly. The
+launcher invokes the bundled python through the *explicit* dynamic loader (which
+is not AT_SECURE) with the venv's site-packages on PYTHONPATH.
 
 Then run the app normally:  uv run python -m workspace_app
 and pick the `tool-demo` template in a new investigation.
@@ -20,29 +25,45 @@ and pick the `tool-demo` template in a new investigation.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
-import sys
+from pathlib import Path
 
 from workspace_app.rca.sample_tools import PREBUILT_DIR, SOURCES
 
+# x86-64 / arm64 system loader; the launcher picks whichever exists in the jail.
+_LAUNCH = """\
+#!/bin/sh
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
+ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
+exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
+"""
 
-def build_one(name: str, source, python: str | None) -> None:
+
+def build_one(name: str, source: Path) -> None:
     dst = PREBUILT_DIR / name
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.mkdir(parents=True)
     venv = dst / ".venv"
-    dst.mkdir(parents=True, exist_ok=True)
-    py = ["--python", python] if python else []
-    subprocess.run(["uv", "venv", "--relocatable", *py, str(venv)], check=True)
+    subprocess.run(["uv", "venv", "--relocatable", str(venv)], check=True)
     subprocess.run(["uv", "pip", "install", "--python", str(venv), str(source)], check=True)
-    print(f"  built {name} -> {dst}")
+    # Bundle the (portable) python the venv was built against, and derive its X.Y.
+    real = (venv / "bin" / "python").resolve()  # .../cpython-X.Y.Z/bin/pythonX.Y
+    ver = real.name.removeprefix("python")  # "3.13"
+    shutil.copytree(real.parent.parent, dst / "python", symlinks=True)
+    launch = dst / "launch"
+    launch.write_text(_LAUNCH.format(ver=ver, tool=name))
+    launch.chmod(0o755)
+    print(f"  built {name} -> {dst}  (bundled python {ver})")
 
 
 def main() -> None:
-    python = sys.argv[1].removeprefix("--python").strip() or None if len(sys.argv) > 1 else None
-    print(f"Prebuilding into {PREBUILT_DIR} (base python: {python or 'uv-managed'})")
+    print(f"Prebuilding self-contained tool packages into {PREBUILT_DIR}")
     for name, source in SOURCES.items():
         if not source.is_dir():
             raise SystemExit(f"source repo missing: {source}")
-        build_one(name, source, python)
+        build_one(name, source)
     print("Done. Run `uv run python -m workspace_app` and pick the 'tool-demo' template.")
 
 

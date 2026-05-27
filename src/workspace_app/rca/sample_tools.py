@@ -5,18 +5,13 @@ These wire the two examples under `sample-tools/` into the app so the
 out of the box. A real deployment replaces this list with its own `ToolDef`s
 and a template that allows them — nothing here is special-cased.
 
-Each tool ships into the sandbox as a PREBUILT, relocatable venv built by
-`scripts/prebuild_tools.py`: provisioning just copies the package in and
-`invoke` runs its venv binary, so the sandbox needs no uv / network / build
-step (see `agent/provision.py`).
-
-Base-python caveat: a relocatable venv still resolves its base python by path,
-so build the venv against the python the SANDBOX will have —
-  - production (LocalProcessSandbox in a py3.12 pod): the pod's
-    `/usr/bin/python` is overlaid into the jail → build against it, isolate on;
-  - this dev box has only python 3.9 (the tools need >=3.10) and uv's python
-    isn't in the jail → run with `SANDBOX_ISOLATE=false` so the host's python
-    is reachable (no chroot).
+Each tool ships into the sandbox as a PREBUILT, SELF-CONTAINED package built by
+`scripts/prebuild_tools.py` (a relocatable venv + a bundled copy of its python +
+a `launch` script). Provisioning copies the package in and `invoke` runs
+`launch`; the sandbox needs no uv / network / build step and no python of its
+own. It runs in the userns chroot jail regardless of the host/pod python — so
+no `SANDBOX_ISOLATE=false` and no matching the jail's python (see
+`agent/provision.py` and the prebuild script for the AT_SECURE loader detail).
 """
 
 from __future__ import annotations
@@ -42,7 +37,7 @@ def _tool(
         description=description,
         prebuilt=str(PREBUILT_DIR / name),
         install_dir=f"tools/{name}",  # workspace-relative: same in jail + unjailed
-        invoke=[f"tools/{name}/.venv/bin/{name}"],
+        invoke=[f"tools/{name}/launch"],  # self-contained launcher (bundled python)
         positional=positional,
         params_json_schema={"type": "object", "properties": properties},
     )
@@ -79,8 +74,8 @@ SOURCES = {
 }
 
 
-def available_sample_tools() -> list[ToolDef]:
-    """SAMPLE_TOOLS whose prebuilt package actually exists — so the normal entry
-    only advertises a tool the sandbox can really install. Run
-    `scripts/prebuild_tools.py` to build them."""
-    return [t for t in SAMPLE_TOOLS if t.prebuilt and Path(t.prebuilt).is_dir()]
+def available_sample_tools(tools: list[ToolDef] | None = None) -> list[ToolDef]:
+    """`tools` (default SAMPLE_TOOLS) filtered to those whose prebuilt package
+    actually exists — so the normal entry only advertises a tool the sandbox can
+    really install. Run `scripts/prebuild_tools.py` to build them."""
+    return [t for t in (tools or SAMPLE_TOOLS) if t.prebuilt and Path(t.prebuilt).is_dir()]

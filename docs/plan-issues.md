@@ -105,13 +105,22 @@ package). `provision_tools` runs on `ensure_sandbox` for the config's
 `FunctionTool` so the agent calls it with structured params (not improvised
 `exec`).
 
-**Install model — prebuilt relocatable venv (chosen):** a tool is prebuilt once
-on the host as a `uv venv --relocatable` + the installed CLI
-(`scripts/prebuild_tools.py`), then at provision time the whole package is
-`tar`→`upload`→extracted into the sandbox (`--no-same-owner`, since we're
-mapped-root in the userns jail). The sandbox needs **no uv / network / build
-step**; `invoke` runs the copied venv binary. Verified end-to-end: extract works
-in the real chroot jail; provision+invoke chain works via `ensure_sandbox`.
+**Install model — prebuilt SELF-CONTAINED package (chosen):** a tool is prebuilt
+once on the host (`scripts/prebuild_tools.py`) as a `uv venv --relocatable` + the
+installed CLI **+ a bundled copy of its python** + a `launch` script; at
+provision time the whole package is `tar`→`upload`→extracted into the sandbox
+(`--no-same-owner`, since we're mapped-root in the userns jail). The sandbox
+needs **no uv / network / build step and no python of its own**. Verified
+end-to-end: both sample tools run via `ensure_sandbox` in the **default
+isolate=true chroot jail** (exit 0) — no SANDBOX_ISOLATE=false, no matching the
+jail's python.
+
+**Why a `launch` script (the hard part):** inside the userns jail the process is
+**AT_SECURE**, so glibc's loader ignores `$ORIGIN`/RPATH/LD_LIBRARY_PATH and the
+implicitly-started interpreter can't find the bundled `libpython`. `launch`
+starts the bundled python through the **explicit dynamic loader** (not
+AT_SECURE) with the venv's site-packages on `PYTHONPATH`. (Repointing venv
+symlinks / bundling alone fails with `undefined symbol: Py_BytesMain`.)
 
 **Wiring (no launcher):** `ToolDef`s stay deploy-level code
 (`rca/sample_tools.py`), passed to `create_app(tool_defs=...)` by `__main__`
@@ -121,22 +130,13 @@ resolution = attached → template config → store default), so selecting the
 `tool-demo` template — not a launcher — lists the tools in `allowed_tools` and
 turns them on.
 
-**Base-python caveat (important):** a relocatable venv still resolves its base
-python *by path*, so build the venv against the python the SANDBOX has:
-- production LocalProcessSandbox in a py3.12 pod → `prebuild_tools.py --python
-  3.12` (the pod's `/usr/bin/python` is overlaid into the jail), isolate on;
-- the dev box here has only system python 3.9 (tools need ≥3.10) and uv's python
-  isn't in the jail → run with `SANDBOX_ISOLATE=false` (host python reachable).
-Bundling a portable python *into* the package was tried and rejected: the
-standalone `libpython` fails to resolve inside the chroot (linker symbol error).
+**Test flow:** `uv run python scripts/prebuild_tools.py` (one-time; builds the
+self-contained packages, ~200 MB each) then `uv run python -m workspace_app` →
+new investigation → `tool-demo` template. No env vars.
 
-**Local test flow:** `uv run python scripts/prebuild_tools.py` then
-`SANDBOX_ISOLATE=false uv run python -m workspace_app` → new investigation →
-`tool-demo` template.
-
-**Follow-ups:** provisioning cache (re-copying a big venv per cold sandbox is
-slow), private-repo secrets, and confirming the production base-python /
-sandbox-image choice.
+**Follow-ups:** the packages are big (each bundles its own python) and re-copied
+per cold sandbox — share one python bundle / cache the copy; private-repo
+secrets for real (non-sample) tools.
 
 ---
 
