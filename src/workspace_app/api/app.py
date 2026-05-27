@@ -55,7 +55,7 @@ from .notifications import notify, register_notification_routes
 from .registry import InvestigationRegistry
 from .runner import AgentRunner
 from .search import InvalidQuery, compile_query, path_selected, search_text
-from .turns import ChatTurnEngine, TurnMessage
+from .turns import ChatTurnEngine, TurnMessage, history_items
 
 
 def _to_rca_message(m: TurnMessage) -> Message:
@@ -223,6 +223,7 @@ def create_app(
     mirror_interval: timedelta = timedelta(seconds=5),
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
+    history_max_messages: int = 40,
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -390,7 +391,9 @@ def create_app(
     # One turn engine drives every chat surface (RCA workspace + KB chat): one
     # cancellable in-flight turn per conversation, SSE streaming, cancel hook.
     turn_engine = ChatTurnEngine(runner)
-    register_kb_chat_routes(app, spec, turn_engine, kb_retriever, get_user_id)
+    register_kb_chat_routes(
+        app, spec, turn_engine, kb_retriever, get_user_id, history_max_messages
+    )
 
     async def _ask_kb(
         question: str, emit: OutputSink | None = None, origin_id: str | None = None
@@ -558,6 +561,8 @@ def create_app(
             # read_file truncation caps (deploy config).
             read_file_max_lines=read_file_max_lines,
             read_file_max_chars=read_file_max_chars,
+            # Cross-turn memory: prior dialogue (excludes the user msg just added).
+            history=history_items(conv.messages[:-1], max_messages=history_max_messages),
         )
 
         def persist(produced: list[TurnMessage]) -> None:

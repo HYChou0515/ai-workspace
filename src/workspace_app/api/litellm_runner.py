@@ -41,6 +41,15 @@ def _approx_tokens(chars: int) -> int:
     return round(chars / 4)
 
 
+def _build_input(history: list[dict[str, str]], prompt: str) -> str | list[dict[str, str]]:
+    """The SDK `input` for this turn: a plain string when there's no history,
+    else the prior dialogue items followed by this turn's user message — so the
+    agent has cross-turn memory (#17)."""
+    if not history:
+        return prompt
+    return [*history, {"role": "user", "content": prompt}]
+
+
 def _delta_channel(event_type: str) -> Literal["content", "reasoning", "ignore"]:
     """Classify a raw Responses ``*.delta`` event by its type. FIVE event
     types carry a ``.delta`` string on the LiteLLM/Qwen path, so routing by
@@ -312,7 +321,11 @@ class LitellmAgentRunner:
         # monitor can attribute every span to the run that produced it.
         run_config = RunConfig(workflow_name="RCA turn", group_id=ctx.investigation_id)
         streamed = Runner.run_streamed(
-            agent, input=prompt, context=ctx, max_turns=self._max_turns, run_config=run_config
+            agent,
+            input=_build_input(ctx.history, prompt),  # ty: ignore[invalid-argument-type]
+            context=ctx,
+            max_turns=self._max_turns,
+            run_config=run_config,
         )
 
         async def produce() -> None:

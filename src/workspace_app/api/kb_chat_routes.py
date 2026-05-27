@@ -31,7 +31,7 @@ from ..resources.kb import Citation, KbChat, KbMessage
 from .events import AgentEvent, MessageDelta, ToolLog, ToolStart
 from .notifications import notify
 from .runner import AgentRunner
-from .turns import ChatTurnEngine, TurnMessage
+from .turns import ChatTurnEngine, TurnMessage, history_items
 
 
 def kb_progress(ev: AgentEvent) -> str | None:
@@ -113,6 +113,7 @@ def register_kb_chat_routes(
     engine: ChatTurnEngine,
     retriever: Retriever,
     get_user_id: Callable[[], str],
+    history_max_messages: int = 40,
 ) -> None:
     chat_rm = spec.get_resource_manager(KbChat)
 
@@ -245,6 +246,8 @@ def register_kb_chat_routes(
             retriever=retriever,
             collection_ids=chat.collection_ids,
             agent_config=default_kb_agent_config(),
+            # Cross-turn memory: prior dialogue (excludes the user msg just added).
+            history=history_items(chat.messages[:-1], max_messages=history_max_messages),
         )
 
         def persist(produced: list[TurnMessage]) -> None:

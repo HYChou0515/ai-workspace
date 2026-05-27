@@ -94,6 +94,36 @@ def test_send_message_persists_final_token_metrics():
     assert answer["metrics"] == {"prompt_tokens": 42, "completion_tokens": 7, "elapsed_ms": 1234}
 
 
+class _HistoryRecordingRunner:
+    """Records the history the engine handed it, and answers deterministically."""
+
+    def __init__(self) -> None:
+        self.seen_history: list[list[dict[str, str]]] = []
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.seen_history.append(list(ctx.history))
+        yield MessageDelta(text=f"answer to {prompt}")
+        yield RunDone()
+
+
+def test_agent_sees_prior_turns_as_history():
+    runner = _HistoryRecordingRunner()
+    client = _client(runner)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()[
+        "resource_id"
+    ]
+
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q1"})
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q2"})
+
+    # turn 1 had no history; turn 2 replays turn 1's user + assistant dialogue
+    assert runner.seen_history[0] == []
+    assert runner.seen_history[1] == [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "answer to q1"},
+    ]
+
+
 class _OrphanToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield ToolEnd(call_id="ghost", output="stray output")

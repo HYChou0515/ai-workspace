@@ -64,6 +64,10 @@ class AgentToolContext:
     # offset/limit. Defaults sized for a large-context model.
     read_file_max_lines: int = 2000
     read_file_max_chars: int = 200_000
+    # Prior-turn dialogue as SDK input items ({role, content}) for cross-turn
+    # memory (#17). Set per-turn by the API layer from the persisted thread; the
+    # runner prepends it to this turn's message. Empty for a fresh thread.
+    history: list[dict[str, str]] = field(default_factory=list)
 
     # KB agent (kb_search tool).
     retriever: Retriever | None = None

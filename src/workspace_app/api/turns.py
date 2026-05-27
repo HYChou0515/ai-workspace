@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -39,6 +39,20 @@ from .runner import AgentRunner
 
 def _now_ms() -> int:
     return int(datetime.now(UTC).timestamp() * 1000)
+
+
+def history_items(messages: Iterable[Any], *, max_messages: int) -> list[dict[str, str]]:
+    """Map persisted messages → SDK input items for cross-turn memory: the
+    user/assistant **dialogue** only (tool plumbing + reasoning excluded; the
+    durable workspace + answer summaries carry the rest), windowed to the last
+    `max_messages`. Duck-typed on `.role`/`.content` so RCA `Message` and
+    `KbMessage` both fit."""
+    items = [
+        {"role": m.role, "content": m.content}
+        for m in messages
+        if m.role in ("user", "assistant") and m.content
+    ]
+    return items[-max_messages:] if max_messages else items
 
 
 @dataclass

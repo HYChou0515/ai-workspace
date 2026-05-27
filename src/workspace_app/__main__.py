@@ -46,6 +46,7 @@ def main() -> None:
         root_path=settings.root_path,
         read_file_max_lines=settings.read_file_max_lines,
         read_file_max_chars=settings.read_file_max_chars,
+        history_max_messages=settings.history_max_messages,
     )
     uvicorn.run(app, host=settings.host, port=settings.port)
 

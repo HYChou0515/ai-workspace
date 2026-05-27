@@ -72,6 +72,10 @@ class Settings:
     read_file_max_lines: int = 2000
     read_file_max_chars: int = 200_000
 
+    # Cross-turn memory: how many prior user/assistant messages to replay as the
+    # agent's input each turn (windowed; generous for a large-context model).
+    history_max_messages: int = 40
+
     # KB embedder ("" → offline HashEmbedder). dim is EMBED_DIM (import-time;
     # the DocChunk Vector width), never a separate knob — they must agree.
     # Default is bge-m3 (1024-dim, == EMBED_DIM): a strong multilingual embedder
@@ -114,6 +118,7 @@ class Settings:
             runner_max_turns=int(e.get("RUNNER_MAX_TURNS", str(d.runner_max_turns))),
             read_file_max_lines=int(e.get("READ_FILE_MAX_LINES", str(d.read_file_max_lines))),
             read_file_max_chars=int(e.get("READ_FILE_MAX_CHARS", str(d.read_file_max_chars))),
+            history_max_messages=int(e.get("HISTORY_MAX_MESSAGES", str(d.history_max_messages))),
             kb_embed_model=e.get("KB_EMBED_MODEL", d.kb_embed_model),
             kb_query_prefix=e.get("KB_QUERY_PREFIX", d.kb_query_prefix),
             kb_doc_prefix=e.get("KB_DOC_PREFIX", d.kb_doc_prefix),

@@ -11,7 +11,7 @@ own commit. Tick a box when it lands.
 |---|-------|--------|
 | 20 | read_file blows the context window | ✅ done (1599ec0) |
 | 15 | embed service timeout | ✅ done (1b8a538) |
-| 22 | persist token metrics (BE half) | ☐ todo |
+| 22 | persist token metrics (BE half) | ✅ done (1057171) |
 | 17 | agent has no cross-turn memory | ☐ todo |
 | 21 | sandbox tool provisioning (wiring) | ☐ todo — mechanism done, not wired |
 | 16 | multi-pod in-memory state | ⏸ parked |
