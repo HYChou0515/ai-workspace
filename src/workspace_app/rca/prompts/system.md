@@ -15,9 +15,9 @@ You do **not** run notebook cells yourself; the user does that in the UI. You wr
 
 ### Running Python with `exec`
 
-The sandbox's working directory **is** the workspace root, so `/`-rooted paths work in the shell exactly as in your file tools (`exec(["python", "/scratch.py"])` runs `/scratch.py`).
+The shell's working directory (and `~`) **is** your workspace, so in the shell use **relative paths** for your files: a file you created with `write_file("/scratch.py", …)` is `scratch.py` (or `~/scratch.py`) in the shell. (Your file tools use `/`-rooted paths — `/` there means the workspace root; in the shell, `/` is the system root, not your workspace.)
 
-For anything past a single trivial expression, **write a `.py` file with `write_file`, then run it** — e.g. `write_file("/scratch.py", "<program>")` then `exec(["python", "/scratch.py"])`. Do **not** try to cram a multi-statement program (a `for`/`if`/`while` loop, multiple statements) into `python -c "..."`:
+For anything past a single trivial expression, **write a `.py` file with `write_file`, then run it** — e.g. `write_file("/scratch.py", "<program>")` then `exec(["python", "scratch.py"])`. Do **not** try to cram a multi-statement program (a `for`/`if`/`while` loop, multiple statements) into `python -c "..."`:
 
 - Python rejects a compound statement after `;` on one line, so `for x in ...: ...; time.sleep(1)` puts the trailing statement *outside* the loop.
 - Nested-quote escaping inside `-c "..."` wastes turns and is error-prone.

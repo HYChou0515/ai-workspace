@@ -36,8 +36,11 @@ def _tool(
         name=name,
         description=description,
         prebuilt=str(PREBUILT_DIR / name),
-        install_dir=f"tools/{name}",  # workspace-relative: same in jail + unjailed
-        invoke=[f"tools/{name}/launch"],  # self-contained launcher (bundled python)
+        # The infra area (`../`, a sibling of the workspace): tools live OUTSIDE
+        # the workspace so they're never walked/synced/shown. `../.tools/<n>`
+        # resolves the same jailed (cwd=/root → /.tools) and unjailed.
+        install_dir=f"../.tools/{name}",
+        invoke=[f"../.tools/{name}/launch"],  # self-contained launcher (bundled python)
         positional=positional,
         params_json_schema={"type": "object", "properties": properties},
     )

@@ -12,8 +12,9 @@ def test_sample_tools_are_prebuilt_copy_defs():
     for t in SAMPLE_TOOLS:
         # prebuilt-copy form: a prebuilt package + a workspace-relative install
         # dir, and invoke runs the copied venv binary (no uv at runtime).
-        assert t.prebuilt and t.install_dir == f"tools/{t.name}"
-        assert t.invoke == [f"tools/{t.name}/launch"]  # self-contained launcher
+        # tools install OUTSIDE the workspace (the infra area, via ../)
+        assert t.prebuilt and t.install_dir == f"../.tools/{t.name}"
+        assert t.invoke == [f"../.tools/{t.name}/launch"]  # self-contained launcher
         assert t.name in SOURCES
     # the dataset name is an enum so the model can't invent a bad argument
     assert by_name["data-fetch"].params_json_schema["properties"]["name"]["enum"]

@@ -5,15 +5,16 @@ or devcontainer). When unprivileged user namespaces are available (the
 common case on modern Linux), `exec` runs each command inside a user+mount
 namespace chrooted onto the sandbox directory, so that:
 
-  * the workspace root is `/` — the agent's `/`-rooted file paths (the
-    write_file/read_file convention) resolve the same way in the shell as
-    they do via the FileStore tools; `python /script.py` just works.
+  * the user **workspace is `/root`** — the agent's cwd and `$HOME` (`~`). File
+    ops + `walk` are scoped here. The sandbox root (the chroot `/`) is the
+    **infra area**: system overlays + provisioned tools live there, OUTSIDE the
+    workspace, so they're never walked, synced, or shown in the file tree.
   * the host filesystem is not reachable, and system dirs (`/usr`, `/etc`)
     are bind-mounted read-only so the agent can't tamper with the host.
 
 Where user namespaces are unavailable it transparently falls back to a plain
-subprocess in the sandbox directory (no isolation, absolute `/` paths hit the
-real root) — set `isolate=False` to force this.
+subprocess in the workspace subdir (no isolation) — set `isolate=False` to
+force this.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ from .protocol import (
 # the resulting /dev files are cleaned up by `exec` afterwards.
 _JAIL_BOOTSTRAP = r"""
 ROOT="$1"; shift
-mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp"
+mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root"
 mount --bind /usr "$ROOT/usr"; mount -o remount,bind,ro "$ROOT/usr"
 mount --bind /etc "$ROOT/etc"; mount -o remount,bind,ro "$ROOT/etc"
 for l in bin sbin lib lib64; do
@@ -63,7 +64,9 @@ done
 mkdir -p "$ROOT/tmp/.jailbin"
 [ -e /usr/bin/python3 ] && ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python"
 export PATH="/tmp/.jailbin:/usr/bin:/bin:/usr/sbin:/sbin"
-exec /usr/sbin/chroot "$ROOT" "$@"
+# The workspace is /root (the agent's ~/cwd); the sandbox root holds infra
+# (system overlays, provisioned tools) that the workspace walk never sees.
+exec /usr/sbin/chroot "$ROOT" /bin/sh -ec 'cd /root; export HOME=/root; exec "$@"' sh "$@"
 """
 
 
@@ -102,6 +105,11 @@ def _userns_supported() -> bool:
     return proc.returncode == 0
 
 
+# The user workspace is this subdir of the sandbox root (the agent's ~/cwd).
+# MUST match the `/root` the jail bootstrap cds into.
+_WORKSPACE = "root"
+
+
 class LocalProcessSandbox:
     def __init__(
         self,
@@ -121,15 +129,24 @@ class LocalProcessSandbox:
         self._isolate = _userns_supported() if isolate is None else isolate
 
     def _require(self, handle: SandboxHandle) -> Path:
+        """The sandbox root — the chroot root / infra area (system overlays,
+        provisioned tools). The user workspace is the `_workspace` subdir."""
         path = self._dirs.get(handle.id)
         if path is None:
             raise SandboxNotFound(handle.id)
         return path
 
+    def _workspace(self, handle: SandboxHandle) -> Path:
+        """The user workspace — a subdir of the sandbox root (the agent's
+        `~`/cwd). File ops + walk are scoped here, so tools/caches living in the
+        sandbox root (the infra area, outside this) are never seen or synced."""
+        return self._require(handle) / _WORKSPACE
+
     async def create(self, spec: SandboxSpec) -> SandboxHandle:
         handle = SandboxHandle(id=str(uuid.uuid4()))
         path = self._root / handle.id
-        path.mkdir(parents=True, exist_ok=False)
+        # Create the workspace subdir (and its parent, the sandbox/infra root).
+        (path / _WORKSPACE).mkdir(parents=True, exist_ok=False)
         self._dirs[handle.id] = path
         return handle
 
@@ -144,11 +161,22 @@ class LocalProcessSandbox:
         cmd: list[str],
         on_output: OutputSink | None = None,
     ) -> ExecResult:
-        cwd = self._require(handle)
-        argv = _jail_argv(str(cwd), cmd) if self._isolate else cmd
+        root = self._require(handle)
+        ws = root / _WORKSPACE
+        env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+        if self._isolate:
+            # chroot onto the sandbox root; the bootstrap cds into /root + sets
+            # HOME. The subprocess cwd is the root (the unshare wrapper runs there).
+            argv = _jail_argv(str(root), cmd)
+            sub_cwd = root
+        else:
+            # No chroot: run directly in the workspace subdir, HOME → workspace.
+            argv = cmd
+            sub_cwd = ws
+            env["HOME"] = str(ws)
         proc = await asyncio.create_subprocess_exec(
             *argv,
-            cwd=cwd,
+            cwd=sub_cwd,
             # /dev/null stdin: a program reading input gets EOF instead of
             # blocking on a terminal it doesn't have.
             stdin=asyncio.subprocess.DEVNULL,
@@ -156,7 +184,7 @@ class LocalProcessSandbox:
             stderr=asyncio.subprocess.PIPE,
             # Unbuffer Python so a long-running script's prints stream live to
             # on_output rather than sitting in a pipe buffer until it exits.
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env=env,
         )
         # stdout/stderr are PIPE above, so the StreamReaders are always present.
         assert proc.stdout is not None and proc.stderr is not None
@@ -192,10 +220,11 @@ class LocalProcessSandbox:
             with contextlib.suppress(BaseException):
                 await proc.wait()
         finally:
-            # The jail leaves /dev device-node files behind (bind targets);
-            # drop them so they don't reverse-sync into the workspace.
+            # The jail leaves /dev device-node files behind (bind targets) at
+            # the sandbox root; drop them. (They're outside the workspace now,
+            # so they wouldn't reverse-sync anyway — belt and suspenders.)
             if self._isolate:
-                await asyncio.to_thread(shutil.rmtree, cwd / "dev", ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, root / "dev", ignore_errors=True)
 
         stdout = b"".join(out_buf)
         if timed_out:
@@ -209,41 +238,41 @@ class LocalProcessSandbox:
         )
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         target = self._resolve(cwd, remote_path)
         target.parent.mkdir(parents=True, exist_ok=True)
         await asyncio.to_thread(target.write_bytes, data)
 
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         target = self._resolve(cwd, remote_path)
         return await asyncio.to_thread(target.read_bytes)
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         return await asyncio.to_thread(self._resolve(cwd, path).is_file)
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         target = self._resolve(cwd, path)
         if not await asyncio.to_thread(target.is_file):
             raise FileNotFoundError(path)
         await asyncio.to_thread(target.unlink)
 
     async def mkdir(self, handle: SandboxHandle, path: str) -> None:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         target = self._resolve(cwd, path)
         await asyncio.to_thread(lambda: target.mkdir(parents=True, exist_ok=True))
 
     async def rmdir(self, handle: SandboxHandle, path: str) -> None:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         target = self._resolve(cwd, path)
         if not await asyncio.to_thread(target.is_dir):
             raise FileNotFoundError(path)
         await asyncio.to_thread(shutil.rmtree, target)
 
     async def rename(self, handle: SandboxHandle, src: str, dst: str) -> None:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         s, d = self._resolve(cwd, src), self._resolve(cwd, dst)
         if not await asyncio.to_thread(s.exists):
             raise FileNotFoundError(src)
@@ -255,7 +284,7 @@ class LocalProcessSandbox:
         return ("127.0.0.1", container_port)
 
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
-        cwd = self._require(handle)
+        cwd = self._workspace(handle)
         base = self._resolve(cwd, root) if root.strip("/") else cwd
         return await asyncio.to_thread(self._walk_sync, cwd, base)
 

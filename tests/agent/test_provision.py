@@ -144,13 +144,15 @@ async def test_provision_copies_prebuilt_package_into_sandbox(tmp_path):
     )
     sb = _Recording()
     await provision_tools(sb, SandboxHandle(id="s1"), [tool])  # ty: ignore[invalid-argument-type]
-    # the package is shipped in as one workspace-relative archive upload …
-    assert sb.uploads and sb.uploads[0][0] == ".provision-x.tar.gz"
+    # the package is shipped in as one archive upload, sitting next to dest …
+    assert sb.uploads and sb.uploads[0][0] == "tools/x.provision.tar.gz"
     assert sb.uploads[0][1] > 0
-    # … then extracted into install_dir (mkdir + tar in one shell step),
-    # with --no-same-owner so it works as mapped-root inside the userns jail.
+    # … then extracted into install_dir (mkdir + tar in one shell step), with
+    # --no-same-owner (mapped-root in the userns jail), and the archive removed.
     extract = next(c for c in sb.calls if "tar xzf" in " ".join(c))
-    assert "tar xzf .provision-x.tar.gz -C tools/x --no-same-owner" in " ".join(extract)
+    cmd = " ".join(extract)
+    assert "tar xzf tools/x.provision.tar.gz -C tools/x --no-same-owner" in cmd
+    assert "rm -f tools/x.provision.tar.gz" in cmd
 
 
 async def test_provision_raises_when_prebuilt_extract_fails(tmp_path):
@@ -160,7 +162,8 @@ async def test_provision_raises_when_prebuilt_extract_fails(tmp_path):
     extract = (
         "sh",
         "-c",
-        "mkdir -p tools/x && tar xzf .provision-x.tar.gz -C tools/x --no-same-owner",
+        "mkdir -p tools/x && tar xzf tools/x.provision.tar.gz -C tools/x "
+        "--no-same-owner && rm -f tools/x.provision.tar.gz",
     )
     sb = _Recording({extract: ExecResult(exit_code=2, stdout=b"corrupt archive")})
     with pytest.raises(ProvisionError) as exc:

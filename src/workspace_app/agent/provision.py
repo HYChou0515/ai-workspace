@@ -106,18 +106,19 @@ async def provision_tools(
     then run its `setup`. Raises `ProvisionError` on the first non-zero exit."""
     for tool in tools:
         if tool.prebuilt:
-            dest = tool.install_dir or f"/opt/tools/{tool.name}"
-            # workspace-root-relative (upload is too) so it resolves the same in
-            # the chroot jail (root=/) and unjailed (cwd=workspace dir).
-            archive = f".provision-{tool.name}.tar.gz"
+            # Default to the infra area (a sibling of the workspace, reached via
+            # `..`): tools land OUTSIDE the walked/synced workspace. The archive
+            # sits next to dest (also infra) and is removed after extraction.
+            dest = tool.install_dir or f"../.tools/{tool.name}"
+            archive = f"{dest}.provision.tar.gz"
             await sandbox.upload(handle, _tar_tree(Path(tool.prebuilt)), archive)
             # --no-same-owner: inside the userns jail we run as mapped-root, so
             # restoring the host uid/gid would fail (`chown … Invalid argument`).
             # Keep file modes (exec bits) but don't chown.
-            extract = await sandbox.exec(
-                handle,
-                ["sh", "-c", f"mkdir -p {dest} && tar xzf {archive} -C {dest} --no-same-owner"],
+            script = (
+                f"mkdir -p {dest} && tar xzf {archive} -C {dest} --no-same-owner && rm -f {archive}"
             )
+            extract = await sandbox.exec(handle, ["sh", "-c", script])
             if extract.exit_code != 0:
                 raise ProvisionError(tool.name, ["tar", "-C", dest], extract)
         for cmd in tool.setup:

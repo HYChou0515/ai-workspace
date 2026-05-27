@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from workspace_app.sandbox.local_process import LocalProcessSandbox
@@ -141,6 +143,28 @@ async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: LocalProcessSa
         await sandbox.rename(h, "/nope", "/x")
 
 
+# ---------------- Workspace boundary (~ vs infra) ----------------
+
+
+async def test_workspace_is_a_subdir_so_infra_siblings_are_invisible(tmp_path):
+    """The user's workspace is a SUBDIRECTORY of the sandbox dir (the agent's
+    `~`/cwd). exec runs there, so an exec writing to the parent (the sandbox's
+    infra area, where tools/caches live) is reachable but NOT part of the
+    workspace — invisible to walk and never reverse-synced."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = await sb.create(SandboxSpec())
+    pwd = (await sb.exec(h, ["pwd"])).stdout.decode().strip()
+    assert Path(pwd).parent == (tmp_path / h.id)  # workspace is a child of the sandbox dir
+    # a file in the sandbox dir (infra, sibling of the workspace) is reachable by
+    # exec but is not part of the walked/synced workspace
+    await sb.exec(h, ["sh", "-c", "echo infra > ../infra.txt"])
+    assert (tmp_path / h.id / "infra.txt").exists()
+    assert all("infra" not in e.path for e in await sb.walk(h, "/"))
+    # while a normal (cwd-relative) output lands in the workspace and IS visible
+    await sb.exec(h, ["sh", "-c", "echo out > made.txt"])
+    assert "/made.txt" in {e.path for e in await sb.walk(h, "/")}
+
+
 # ---------------- Live output streaming (on_output) ----------------
 
 
@@ -227,27 +251,30 @@ def test_userns_unsupported_when_unshare_unavailable(monkeypatch):
 
 
 @_needs_userns
-async def test_isolated_exec_resolves_absolute_workspace_path(tmp_path):
-    """The agent's /-rooted paths (write_file convention) resolve inside the
-    jail: a file uploaded at /data.csv is readable via an absolute path."""
+async def test_isolated_exec_workspace_is_cwd_and_home(tmp_path):
+    """The workspace is the agent's cwd and $HOME (~): a file uploaded at
+    /data.csv is read via a cwd-relative path and via ~ — not via the jail's
+    `/` (which is now the infra root, not the workspace)."""
     sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
     h = await sb.create(SandboxSpec())
     await sb.upload(h, b"voids=42\n", "/data.csv")
-    r = await sb.exec(h, ["cat", "/data.csv"])
-    assert r.exit_code == 0
-    assert "voids=42" in r.stdout.decode()
+    rel = await sb.exec(h, ["cat", "data.csv"])  # cwd = workspace
+    assert rel.exit_code == 0 and "voids=42" in rel.stdout.decode()
+    home = await sb.exec(h, ["sh", "-c", "cat ~/data.csv"])  # ~ = workspace
+    assert home.exit_code == 0 and "voids=42" in home.stdout.decode()
 
 
 @_needs_userns
-async def test_isolated_exec_roots_at_sandbox_and_hides_host(tmp_path):
-    """`/` inside the jail IS the sandbox (lists workspace files), and the
-    host root is not visible."""
+async def test_isolated_exec_workspace_lists_user_files_and_hides_host(tmp_path):
+    """The workspace (cwd) lists the user's files; the jail's `/` is the infra
+    root (system mounts), and the host filesystem is not reachable."""
     sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
     h = await sb.create(SandboxSpec())
     await sb.upload(h, b"x", "/note.md")
-    listing = (await sb.exec(h, ["ls", "/"])).stdout.decode().split()
-    assert "note.md" in listing
-    assert "home" not in listing  # host /home is not reachable
+    here = (await sb.exec(h, ["ls", "."])).stdout.decode().split()  # cwd = workspace
+    assert here == ["note.md"]  # only the user's file, no infra
+    root = (await sb.exec(h, ["ls", "/"])).stdout.decode().split()  # infra root
+    assert "home" not in root  # host /home is not reachable
 
 
 @_needs_userns
