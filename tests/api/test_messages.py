@@ -123,6 +123,50 @@ def test_export_unknown_investigation_is_empty_not_an_error(harness: Harness):
     assert r.json()["messages"] == []  # read-only: doesn't create a conversation
 
 
+def test_export_carries_investigation_metadata_when_the_resource_exists():
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+    )
+    client = TestClient(app)
+    inv_id = client.post(
+        "/investigation",
+        json={"title": "Reflow voids", "owner": "alice", "severity": "P1", "product": "PanelX"},
+    ).json()["resource_id"]
+
+    meta = client.get(f"/investigations/{inv_id}/export").json()["investigation"]
+    assert meta["title"] == "Reflow voids" and meta["owner"] == "alice"
+    assert meta["severity"] == "P1" and meta["product"] == "PanelX"
+
+
+def test_agent_metrics_without_an_assistant_message_attaches_to_nothing():
+    from workspace_app.api import AgentMetrics, ToolEnd
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    runner = ScriptedAgentRunner(
+        [
+            ToolEnd(call_id="t", output="o"),  # a tool message, but no assistant answer
+            AgentMetrics(phase="final", prompt_tokens=1, completion_tokens=2, elapsed_ms=3),
+            RunDone(),
+        ]
+    )
+    app = create_app(spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=runner)
+    TestClient(app).post("/investigations/ws-m/messages", json={"content": "q"})
+    rm = spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.investigation_id == "ws-m"
+    )
+    tool = next(m for m in conv.messages if m.role == "tool")
+    assert tool.metrics is None  # metrics never pin onto a non-assistant message
+
+
 def test_post_message_returns_sse_stream(harness: Harness):
     response = harness.client.post("/investigations/ws-1/messages", json={"content": "hello"})
     assert response.status_code == 200

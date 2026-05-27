@@ -92,12 +92,15 @@ def test_agent_for_adds_allowed_provisioned_tools():
 
 
 def test_agent_for_threads_base_url_and_api_key_to_the_model():
+    from agents.extensions.models.litellm_model import LitellmModel
+
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 
     agent = _agent_for(AgentConfig(name="a"), base_url="https://hosted/v1", api_key="sk-1")
-    assert agent.model.base_url == "https://hosted/v1"  # ty: ignore[possibly-unbound-attribute]
-    assert agent.model.api_key == "sk-1"  # ty: ignore[possibly-unbound-attribute]
+    assert isinstance(agent.model, LitellmModel)
+    assert agent.model.base_url == "https://hosted/v1"
+    assert agent.model.api_key == "sk-1"
 
 
 def test_build_argv_positional_then_flags_then_bools():
@@ -117,6 +120,8 @@ def test_build_argv_positional_then_flags_then_bools():
         "data-fetch",
         "sensor-telemetry",
     ]
+    # an absent positional (name) is skipped entirely
+    assert build_argv(_DEF, {"json": True}) == ["uv", "run", "data-fetch", "--json"]
 
 
 async def test_provision_runs_each_setup_step():
@@ -146,6 +151,34 @@ async def test_provision_copies_prebuilt_package_into_sandbox(tmp_path):
     # with --no-same-owner so it works as mapped-root inside the userns jail.
     extract = next(c for c in sb.calls if "tar xzf" in " ".join(c))
     assert "tar xzf .provision-x.tar.gz -C tools/x --no-same-owner" in " ".join(extract)
+
+
+async def test_provision_raises_when_prebuilt_extract_fails(tmp_path):
+    pkg = tmp_path / "pkg"
+    (pkg / ".venv").mkdir(parents=True)
+    tool = ToolDef(name="x", description="", invoke=["x"], prebuilt=str(pkg), install_dir="tools/x")
+    extract = (
+        "sh",
+        "-c",
+        "mkdir -p tools/x && tar xzf .provision-x.tar.gz -C tools/x --no-same-owner",
+    )
+    sb = _Recording({extract: ExecResult(exit_code=2, stdout=b"corrupt archive")})
+    with pytest.raises(ProvisionError) as exc:
+        await provision_tools(sb, SandboxHandle(id="s1"), [tool])  # ty: ignore[invalid-argument-type]
+    assert exc.value.tool == "x"
+
+
+async def test_ensure_sandbox_skips_provision_when_no_allowed_tool_matches():
+    from workspace_app.resources.agent_config import AgentConfig
+
+    sb = _Recording()
+    ctx = AgentToolContext(
+        sandbox=sb,  # ty: ignore[invalid-argument-type]
+        agent_config=AgentConfig(name="a", allowed_tools=["something-else"]),
+        tool_defs=[ToolDef(name="t1", description="", invoke=["run"], setup=[["echo", "x"]])],
+    )
+    await ctx.ensure_sandbox()
+    assert ["echo", "x"] not in sb.calls  # t1 not allowed → nothing provisioned
 
 
 async def test_provision_raises_on_nonzero_exit():
