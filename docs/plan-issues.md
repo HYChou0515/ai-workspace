@@ -13,7 +13,7 @@ own commit. Tick a box when it lands.
 | 15 | embed service timeout | ✅ done (1b8a538) |
 | 22 | persist token metrics (BE half) | ✅ done (1057171) |
 | 17 | agent has no cross-turn memory | ✅ done (91df4a0) |
-| 21 | sandbox tool provisioning (wiring) | ☐ todo — mechanism done, not wired |
+| 21 | sandbox tool provisioning (wiring) | ✅ done (8f52e5b) — caching/secrets follow-up |
 | 16 | multi-pod in-memory state | ⏸ parked |
 
 ---
