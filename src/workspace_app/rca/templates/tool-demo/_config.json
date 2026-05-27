@@ -1,0 +1,20 @@
+{
+  "name": "Tool demo · Qwen3 (local)",
+  "model": "ollama_chat/qwen3:14b",
+  "suggestions": [
+    "Fetch the alloy-batches dataset (500 rows), then summarise its columns.",
+    "List the workspace files.",
+    "Summarise the columns of the CSV you just fetched."
+  ],
+  "allowed_tools": [
+    "exec",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "ls",
+    "exists",
+    "delete_file",
+    "data-fetch",
+    "csv-column-summary"
+  ]
+}

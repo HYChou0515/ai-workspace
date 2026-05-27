@@ -38,6 +38,35 @@ def test_reasoning_delta_persists_to_reasoning_channel():
     assert assistant.reasoning == "weighing the options"
 
 
+def test_template_config_drives_the_turn_so_its_tools_are_allowed():
+    """Creating an investigation from a profile that ships a `_config.json`
+    (tool-demo) makes that config — and its allowed_tools — drive the turn,
+    with no attached config and no launcher widening the store default."""
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    captured: dict[str, object] = {}
+
+    class _Capture:
+        async def run(self, prompt, ctx):
+            captured["allowed"] = ctx.agent_config.allowed_tools if ctx.agent_config else None
+            yield RunDone()
+
+    app = create_app(
+        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=_Capture()
+    )
+    client = TestClient(app)
+    inv_id = client.post(
+        "/investigation",
+        json={"title": "t", "owner": "alice", "template_profile": "tool-demo"},
+    ).json()["resource_id"]
+    client.post(f"/investigations/{inv_id}/messages", json={"content": "q"})
+
+    allowed = captured["allowed"]
+    assert isinstance(allowed, list)
+    assert "data-fetch" in allowed
+    assert "csv-column-summary" in allowed
+
+
 def test_tool_end_without_a_matching_start_persists_with_null_name_args():
     """Defensive: a ToolEnd with no preceding ToolStart still persists (name +
     args null), rather than crashing the turn."""

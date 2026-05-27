@@ -23,8 +23,10 @@ from importlib import resources
 from pathlib import PurePosixPath
 from string import Template
 
+import msgspec
+
 from ...filestore.protocol import FileStore
-from ...resources import Investigation
+from ...resources import AgentConfig, Investigation
 
 _TEMPLATES_PKG = "workspace_app.rca.templates"
 _TPL_SUFFIX = ".tpl"
@@ -33,6 +35,11 @@ _NON_PROFILE = {"__pycache__"}
 # so the agent prompt stays accurate when the template is swapped. It is prompt
 # metadata, not a workspace file, so seeding skips it.
 _PROMPT_FILE = "_prompt.md"
+# Per-profile AgentConfig (model / allowed_tools / suggestions) as data. A
+# template that needs provisioned tools ships this naming them in allowed_tools,
+# so selecting the template — not a launcher — turns its tools on. Prompt
+# metadata, not a workspace file, so seeding skips it.
+_CONFIG_FILE = "_config.json"
 
 
 def load_template_appendix(profile: str) -> str:
@@ -42,6 +49,18 @@ def load_template_appendix(profile: str) -> str:
         return (resources.files(_TEMPLATES_PKG) / profile / _PROMPT_FILE).read_text("utf-8")
     except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
         return ""
+
+
+def load_template_config(profile: str) -> AgentConfig | None:
+    """The profile's declared `AgentConfig` (`_config.json`), or None if it has
+    none / the profile doesn't exist. A template ships this to name the tools it
+    needs in `allowed_tools`; `system_prompt` is normally left empty so the
+    resolver fills the base prompt + this profile's appendix."""
+    try:
+        raw = (resources.files(_TEMPLATES_PKG) / profile / _CONFIG_FILE).read_bytes()
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
+        return None
+    return msgspec.json.decode(raw, type=AgentConfig)
 
 
 def compose_system_prompt(base: str, profile: str) -> str:
@@ -116,7 +135,9 @@ def _walk(node, prefix: PurePosixPath | None = None) -> list[PurePosixPath]:
     out: list[PurePosixPath] = []
     for child in node.iterdir():
         name = child.name
-        if name in ("__init__.py", "__pycache__", _PROMPT_FILE) or name.endswith(".pyc"):
+        if name in ("__init__.py", "__pycache__", _PROMPT_FILE, _CONFIG_FILE) or name.endswith(
+            ".pyc"
+        ):
             continue
         here = prefix / name
         if child.is_dir():

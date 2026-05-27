@@ -31,7 +31,12 @@ from ..kb.retriever import Retriever
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..rca.prompts import load_system_prompt
-from ..rca.templates import compose_system_prompt, list_profiles, seed_investigation
+from ..rca.templates import (
+    compose_system_prompt,
+    list_profiles,
+    load_template_config,
+    seed_investigation,
+)
 from ..resources import (
     AgentConfig,
     Conversation,
@@ -513,11 +518,16 @@ def create_app(
                 attached = None
             if isinstance(attached, AgentConfig):
                 cfg = attached
-        if cfg is None:  # no attached config (or it was deleted) → store default
+        if cfg is None:  # no attached config → the template's own config, if any
+            cfg = load_template_config(template)
+        if cfg is None:  # else the store default (issue #2)
             cfg = _first_agent_config()
         if cfg is None:  # empty store — let the runner use its own default
             return None
-        composed = compose_system_prompt(cfg.system_prompt, template)
+        # A template config normally ships no system_prompt; fall back to the
+        # base so composing the appendix keeps the app-level conventions.
+        base = cfg.system_prompt or load_system_prompt()
+        composed = compose_system_prompt(base, template)
         return msgspec.structs.replace(cfg, system_prompt=composed)
 
     def _conversation_for(investigation_id: str) -> tuple[str, Conversation]:

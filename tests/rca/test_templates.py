@@ -8,9 +8,24 @@ from workspace_app.rca.templates import (
     compose_system_prompt,
     list_profiles,
     load_template_appendix,
+    load_template_config,
     seed_investigation,
 )
 from workspace_app.resources import Investigation, Severity, Status
+
+
+def test_template_without_config_returns_none():
+    # A profile that ships no _config.json drives the agent with the store default.
+    assert load_template_config("methodology") is None
+
+
+def test_tool_demo_template_ships_a_config_allowing_its_tools():
+    cfg = load_template_config("tool-demo")
+    assert cfg is not None
+    # Picking this template is what makes its provisioned tools available —
+    # no launcher widening the default config.
+    assert "data-fetch" in cfg.allowed_tools
+    assert "csv-column-summary" in cfg.allowed_tools
 
 
 @pytest.fixture
