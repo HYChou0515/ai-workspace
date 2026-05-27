@@ -125,8 +125,13 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    df = synthesize(args.name, rows=max(1, args.rows), seed=args.seed)
+    rows = max(1, args.rows)
+    # Progress on stderr — the sandbox relays stderr live, so a long fetch shows
+    # in the chat as it runs instead of a silent wait (issue #23).
+    print(f"synthesizing '{args.name}' ({rows} rows) …", file=sys.stderr, flush=True)
+    df = synthesize(args.name, rows=rows, seed=args.seed)
     out = args.out or f"{args.name}.csv"
+    print(f"writing {df.shape[0]} rows × {df.shape[1]} cols → {out} …", file=sys.stderr, flush=True)
     df.to_csv(out, index=False)
     result = Result(name=args.name, path=out, rows=df.shape[0], columns=df.shape[1])
 

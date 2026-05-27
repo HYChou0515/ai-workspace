@@ -156,6 +156,20 @@ async def test_exec_streams_lines_to_on_output(tmp_path):
     assert r.stdout == b"a\nb\n"
 
 
+async def test_exec_streams_stderr_to_on_output_too(tmp_path):
+    """A still-running tool's stderr (progress bars / warnings / logs) streams
+    live to on_output as well, not only at the end (issue #23). stdout + stderr
+    share the one live sink; the result still separates them."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = await sb.create(SandboxSpec())
+    chunks: list[bytes] = []
+    r = await sb.exec(h, ["sh", "-c", "echo out; echo err 1>&2"], on_output=chunks.append)
+    assert r.exit_code == 0
+    live = b"".join(chunks)
+    assert b"out\n" in live and b"err\n" in live  # both reached the live sink
+    assert r.stdout == b"out\n" and r.stderr == b"err\n"  # result still separated
+
+
 async def test_exec_streaming_timeout_preserves_partial_stdout(tmp_path):
     """A long/looping command that times out keeps whatever it printed before
     the kill — both streamed and in the result (fixes the discard-on-timeout

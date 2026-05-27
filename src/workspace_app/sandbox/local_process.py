@@ -174,7 +174,10 @@ class LocalProcessSandbox:
 
         readers = asyncio.gather(
             _pump(proc.stdout, out_buf, on_output),
-            _pump(proc.stderr, err_buf, None),
+            # stderr streams to the same live sink (issue #23) — progress bars /
+            # warnings / logs a tool writes to stderr show up live, not just at
+            # the end. The result still keeps stdout/stderr separate.
+            _pump(proc.stderr, err_buf, on_output),
         )
         timed_out = False
         try:
