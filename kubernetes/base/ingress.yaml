@@ -6,6 +6,19 @@ metadata:
     # Root deploy by default. For a sub-path deploy the overlay rewrites the
     # prefix away so the backend sees "/" (see overlays/production).
     nginx.ingress.kubernetes.io/rewrite-target: /
+    # Per-INVESTIGATION sticky routing (#16): the in-pod runtime (sandbox /
+    # kernel / in-flight turn) lives on one pod, and an investigation is shared
+    # across its users — so every request for the same investigation/chat must
+    # hit the same pod. Hash the upstream by the id extracted from the path
+    # (fallback $host for non-investigation routes). NOT cookie/per-user
+    # affinity, which would split a shared investigation across pods.
+    # Requires the controller's allow-snippet-annotations=true.
+    nginx.ingress.kubernetes.io/upstream-hash-by: "$rca_ws_key"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      set $rca_ws_key $host;
+      if ($uri ~ ^/(?:investigations|kb/chats)/([^/]+)) {
+        set $rca_ws_key $1;
+      }
 spec:
   ingressClassName: nginx
   rules:

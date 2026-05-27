@@ -175,9 +175,19 @@ users); it is NOT single-replica. The pod-local set (verified by reading each):
 NOT bugs: `SandboxSync._versions` (re-mirror at worst), `MonitorProcessor._groups`
 (a trace is wholly on one pod). Dev/test: MockSandbox, MemoryFileStore.
 
-**Deployment requirement:** k8s Service `sessionAffinity` / ingress affinity by
-the workspace id, OR externalize the sandbox runtime into a remote sandbox
-service (stateless pods — a bigger change, deferred; path B).
+**Deployment (done, path A):** `kubernetes/base` now —
+- `pvc.yaml`: `ReadWriteOnce` → **`ReadWriteMany`** (every replica mounts the
+  shared specstar store; needs an RWX storageClass — set per cluster).
+- `deployment.yaml`: **`replicas: 3` + `RollingUpdate`** (was 1 + Recreate).
+- `ingress.yaml`: **per-investigation** consistent-hash affinity —
+  `upstream-hash-by: $rca_ws_key`, where a `configuration-snippet` sets
+  `$rca_ws_key` to the id captured from `/investigations/<id>` or
+  `/kb/chats/<id>` (else `$host`). Per-investigation, NOT per-user (a shared
+  investigation must not split across pods). Needs the controller's
+  `allow-snippet-annotations=true`; validate on the cluster.
+
+(specstar confirmed multi-writer-safe. Path B — externalize the sandbox runtime
+into a stateless remote sandbox service — remains the bigger future option.)
 
 ## Parked
 

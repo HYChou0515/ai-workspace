@@ -3,9 +3,14 @@ kind: PersistentVolumeClaim
 metadata:
   name: rca-data
 spec:
+  # ReadWriteMany so every replica mounts the shared specstar store (#16:
+  # multi-pod). Requires an RWX-capable storageClass (NFS / CephFS / EFS /
+  # Filestore); set it per-overlay/cluster below. (specstar is multi-writer-safe;
+  # per-investigation sticky routing — see the Ingress — keeps a workspace's
+  # writes on one pod.)
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   resources:
     requests:
       storage: 5Gi
-  # storageClassName: ""   # set per-overlay/cluster if not using the default
+  # storageClassName: ""   # MUST be an RWX class for multi-replica (e.g. nfs, efs)

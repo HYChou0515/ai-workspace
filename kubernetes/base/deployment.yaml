@@ -3,12 +3,12 @@ kind: Deployment
 metadata:
   name: rca-app
 spec:
-  # Single replica: the app holds per-pod state (in-pod sandbox + the data on a
-  # ReadWriteOnce PVC), so it does not horizontally scale as-is. Use Recreate so
-  # the new pod can take the RWO volume before the old one releases it.
-  replicas: 1
+  # Multi-replica (#16): the specstar data is shared on an RWX PVC, and the
+  # in-pod runtime (sandbox / kernel / in-flight turn) is kept consistent by
+  # per-investigation sticky routing at the Ingress. Scale this for more users.
+  replicas: 3
   strategy:
-    type: Recreate
+    type: RollingUpdate
   selector:
     matchLabels:
       app: rca-app
