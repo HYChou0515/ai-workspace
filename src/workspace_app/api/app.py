@@ -393,9 +393,7 @@ def create_app(
     # One turn engine drives every chat surface (RCA workspace + KB chat): one
     # cancellable in-flight turn per conversation, SSE streaming, cancel hook.
     turn_engine = ChatTurnEngine(runner)
-    register_kb_chat_routes(
-        app, spec, turn_engine, kb_retriever, get_user_id, history_max_messages
-    )
+    register_kb_chat_routes(app, spec, turn_engine, kb_retriever, get_user_id, history_max_messages)
 
     async def _ask_kb(
         question: str, emit: OutputSink | None = None, origin_id: str | None = None

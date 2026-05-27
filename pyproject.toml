@@ -50,9 +50,12 @@ exclude_also = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# sample-tools/* are standalone example projects (own pyproject + venv); they're
+# linted/typed on their own, not as part of this package.
+extend-exclude = ["sample-tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ty.src]
-exclude = ["src/workspace_app/rca/templates/*/**"]
+exclude = ["src/workspace_app/rca/templates/*/**", "sample-tools/**"]

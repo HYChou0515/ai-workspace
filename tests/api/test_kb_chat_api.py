@@ -75,17 +75,13 @@ class _ToolRunner:
 class _MetricsRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield MessageDelta(text="Answer.")
-        yield AgentMetrics(
-            phase="final", prompt_tokens=42, completion_tokens=7, elapsed_ms=1234
-        )
+        yield AgentMetrics(phase="final", prompt_tokens=42, completion_tokens=7, elapsed_ms=1234)
         yield RunDone()
 
 
 def test_send_message_persists_final_token_metrics():
     client = _client(_MetricsRunner())
-    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()[
-        "resource_id"
-    ]
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
     client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
 
     answer = client.get(f"/kb/chats/{cid}").json()["messages"][-1]
@@ -109,9 +105,7 @@ class _HistoryRecordingRunner:
 def test_agent_sees_prior_turns_as_history():
     runner = _HistoryRecordingRunner()
     client = _client(runner)
-    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()[
-        "resource_id"
-    ]
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
 
     client.post(f"/kb/chats/{cid}/messages", json={"content": "q1"})
     client.post(f"/kb/chats/{cid}/messages", json={"content": "q2"})

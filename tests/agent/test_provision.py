@@ -108,14 +108,14 @@ def test_build_argv_positional_then_flags_then_bools():
 
 async def test_provision_runs_each_setup_step():
     sb = _Recording()
-    await provision_tools(sb, SandboxHandle(id="s1"), [_DEF])
+    await provision_tools(sb, SandboxHandle(id="s1"), [_DEF])  # ty: ignore[invalid-argument-type]
     assert sb.calls == [["uv", "sync"]]
 
 
 async def test_provision_raises_on_nonzero_exit():
     sb = _Recording({("uv", "sync"): ExecResult(exit_code=1, stdout=b"boom")})
     with pytest.raises(ProvisionError) as exc:
-        await provision_tools(sb, SandboxHandle(id="s1"), [_DEF])
+        await provision_tools(sb, SandboxHandle(id="s1"), [_DEF])  # ty: ignore[invalid-argument-type]
     assert exc.value.tool == "data-fetch"
 
 
@@ -127,7 +127,7 @@ async def test_provisioned_tool_execs_invoke_argv_in_sandbox():
     assert tool.params_json_schema["properties"]["name"]["enum"]  # enum reaches the model
 
     args = json.dumps({"name": "alloy-batches", "rows": 5})
-    out = await tool.on_invoke_tool(RunContextWrapper(actx), args)
+    out = await tool.on_invoke_tool(RunContextWrapper(actx), args)  # ty: ignore[invalid-argument-type]
     assert sb.calls[-1] == ["uv", "run", "data-fetch", "alloy-batches", "--rows", "5"]
     assert "ok" in out
 
@@ -164,18 +164,16 @@ async def test_two_tools_provision_and_chain_in_a_real_sandbox(tmp_path: Path):
     handle = await sandbox.create(SandboxSpec())
     try:
         await provision_tools(sandbox, handle, [fetch, summarise])
-        actx = AgentToolContext(sandbox=sandbox, handle=handle)  # ty: ignore[invalid-argument-type]
+        actx = AgentToolContext(sandbox=sandbox, handle=handle)
         tools = {t.name: t for t in build_provisioned_tools([fetch, summarise])}
         ctx = RunContextWrapper(actx)
 
-        fetched = await tools["data-fetch"].on_invoke_tool(
-            ctx, json.dumps({"name": "alloy-batches", "rows": 60})
-        )
+        fetch_args = json.dumps({"name": "alloy-batches", "rows": 60})
+        fetched = await tools["data-fetch"].on_invoke_tool(ctx, fetch_args)  # ty: ignore[invalid-argument-type]
         assert "60 rows" in fetched
 
-        summarised = await tools["csv-column-summary"].on_invoke_tool(
-            ctx, json.dumps({"csv": "alloy-batches.csv"})
-        )
+        sum_args = json.dumps({"csv": "alloy-batches.csv"})
+        summarised = await tools["csv-column-summary"].on_invoke_tool(ctx, sum_args)  # ty: ignore[invalid-argument-type]
         assert "60 rows" in summarised and "columns" in summarised
     finally:
         await sandbox.kill(handle)
