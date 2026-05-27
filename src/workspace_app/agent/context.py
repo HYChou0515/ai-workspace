@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from ..kb.retriever import Retriever
     from ..resources import AgentConfig
     from ..resources.kb import RetrievedPassage
+    from .provision import ToolDef
 
 
 @dataclass
@@ -68,6 +69,11 @@ class AgentToolContext:
     # memory (#17). Set per-turn by the API layer from the persisted thread; the
     # runner prepends it to this turn's message. Empty for a fresh thread.
     history: list[dict[str, str]] = field(default_factory=list)
+    # Deploy-level registry of provisionable tools (#21). When the sandbox is
+    # created, the ones named in agent_config.allowed_tools are installed into
+    # it (setup); the runner also exposes them as function tools. Set by the API
+    # layer from create_app config.
+    tool_defs: list[ToolDef] = field(default_factory=list)
 
     # KB agent (kb_search tool).
     retriever: Retriever | None = None
@@ -93,4 +99,14 @@ class AgentToolContext:
                 self.handle = await self.ensure_sandbox_via()
             else:
                 self.handle = await self.sandbox.create(self.sandbox_spec)
+            # Eagerly install the allowed provisioned tools into the fresh
+            # sandbox (after any snapshot restore the ensure-hook did), so the
+            # agent can call them. Runs once per sandbox (handle was None).
+            if self.tool_defs and self.agent_config is not None:
+                from .provision import provision_tools
+
+                allowed = set(self.agent_config.allowed_tools or [])
+                todo = [d for d in self.tool_defs if d.name in allowed]
+                if todo:
+                    await provision_tools(self.sandbox, self.handle, todo)
         return self.handle

@@ -20,6 +20,7 @@ from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 
 from ..agent.context import AgentToolContext
+from ..agent.provision import ToolDef, build_provisioned_tools
 from ..agent.tools import build_tools
 from ..resources import AgentConfig
 from .events import (
@@ -148,16 +149,25 @@ def _final_tokens(
 
 
 def _agent_for(
-    config: AgentConfig, extra_instructions: str | None = None
+    config: AgentConfig,
+    tool_defs: list[ToolDef] | None = None,
+    extra_instructions: str | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
         base = f"{base}\n\n{extra_instructions}".strip()
+    tools = list(build_tools(config.allowed_tools or None))
+    # Add the provisioned tools the agent is allowed (installed into the sandbox
+    # by ctx.ensure_sandbox). build_tools already skipped these unknown names.
+    allowed = set(config.allowed_tools or [])
+    provisioned = [d for d in (tool_defs or []) if d.name in allowed]
+    if provisioned:
+        tools.extend(build_provisioned_tools(provisioned))
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
         model=LitellmModel(model=config.model),
-        tools=list(build_tools(config.allowed_tools or None)),
+        tools=tools,  # ty: ignore[invalid-argument-type]  # list[FunctionTool] ⊂ list[Tool]
     )
 
 
@@ -302,7 +312,9 @@ class LitellmAgentRunner:
     async def _run_once(  # pragma: no cover — exercised only by the live Ollama test
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
-        agent = _agent_for(ctx.agent_config or self._config, extra_instructions=feedback)
+        agent = _agent_for(
+            ctx.agent_config or self._config, ctx.tool_defs, extra_instructions=feedback
+        )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
 

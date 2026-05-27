@@ -56,6 +56,37 @@ class _Recording:
         return None
 
 
+async def test_ensure_sandbox_provisions_only_allowed_tools():
+    from workspace_app.resources.agent_config import AgentConfig
+
+    sb = _Recording()
+    ctx = AgentToolContext(
+        sandbox=sb,  # ty: ignore[invalid-argument-type]
+        agent_config=AgentConfig(name="a", allowed_tools=["t1"]),
+        tool_defs=[
+            ToolDef(name="t1", description="", invoke=["run-t1"], setup=[["echo", "install-t1"]]),
+            ToolDef(name="t2", description="", invoke=["run-t2"], setup=[["echo", "install-t2"]]),
+        ],
+    )
+    await ctx.ensure_sandbox()
+    assert ["echo", "install-t1"] in sb.calls  # allowed → installed
+    assert ["echo", "install-t2"] not in sb.calls  # not in allowed_tools → skipped
+
+
+def test_agent_for_adds_allowed_provisioned_tools():
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources.agent_config import AgentConfig
+
+    agent = _agent_for(
+        AgentConfig(name="a", allowed_tools=["exec", "t1"]),
+        tool_defs=[ToolDef(name="t1", description="d", invoke=["run-t1"])],
+    )
+    names = {t.name for t in agent.tools}
+    assert "t1" in names  # provisioned tool the agent can call
+    assert "exec" in names  # built-in still there
+    assert "data-fetch" not in names  # an un-allowed def is absent
+
+
 def test_build_argv_positional_then_flags_then_bools():
     assert build_argv(_DEF, {"name": "alloy-batches", "rows": 60, "json": True}) == [
         "uv",
