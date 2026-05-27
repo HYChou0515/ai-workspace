@@ -117,7 +117,18 @@ function MessageBlock({
           </span>
           <span>{message.author ?? "user"}</span>
         </div>
-        <div style={{ marginLeft: 28, marginTop: 4, fontSize: 13, color: "var(--text-paper)" }}>
+        <div
+          style={{
+            marginLeft: 28,
+            marginTop: 4,
+            fontSize: 13,
+            color: "var(--text-paper)",
+            // Preserve the user's newlines/spacing (issue #18) — their message is
+            // plain text, not markdown, so render it verbatim.
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-word",
+          }}
+        >
           {message.content}
         </div>
       </div>
