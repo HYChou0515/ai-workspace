@@ -9,6 +9,7 @@ import { encodeText } from "../api/encoding";
 import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { imageMime, pickRenderer } from "../pages/investigation/renderer";
+import { CsvRenderer } from "./CsvRenderer";
 import { FishboneRenderer } from "./fishbone/FishboneRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
@@ -33,6 +34,7 @@ export function FileView({
     case "fishbone":
       return <FishboneRenderer investigationId={investigationId} path={path} />;
     case "csv":
+      return <CsvRenderer investigationId={investigationId} path={path} />;
     case "json":
     case "text":
       return <TextRenderer investigationId={investigationId} path={path} />;
