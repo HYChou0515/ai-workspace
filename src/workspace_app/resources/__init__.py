@@ -31,8 +31,13 @@ def register_all(spec: SpecStar) -> None:
     # query, not a full scan.
     spec.add_model(Conversation, indexed_fields=["investigation_id"])
     spec.add_model(Collection)
-    spec.add_model(SourceDoc)
-    spec.add_model(DocChunk)
+    # collection_id indexed so listing a collection's documents is a query, not
+    # a full scan (issue #14: ~100 docs hung).
+    spec.add_model(SourceDoc, indexed_fields=["collection_id"])
+    # source_doc_id + collection_id indexed so counting a doc's chunks (and the
+    # retriever's per-collection lookup) is a query — a non-indexed filter would
+    # load + deserialize every chunk's embedding Vector, which is the hang.
+    spec.add_model(DocChunk, indexed_fields=["source_doc_id", "collection_id"])
     # shared_with indexed so "chats shared with me" is a contains-query (owner
     # filtering uses the built-in created_by meta index).
     spec.add_model(KbChat, indexed_fields=["shared_with"])
