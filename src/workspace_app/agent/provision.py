@@ -111,8 +111,12 @@ async def provision_tools(
             # the chroot jail (root=/) and unjailed (cwd=workspace dir).
             archive = f".provision-{tool.name}.tar.gz"
             await sandbox.upload(handle, _tar_tree(Path(tool.prebuilt)), archive)
+            # --no-same-owner: inside the userns jail we run as mapped-root, so
+            # restoring the host uid/gid would fail (`chown … Invalid argument`).
+            # Keep file modes (exec bits) but don't chown.
             extract = await sandbox.exec(
-                handle, ["sh", "-c", f"mkdir -p {dest} && tar xzf {archive} -C {dest}"]
+                handle,
+                ["sh", "-c", f"mkdir -p {dest} && tar xzf {archive} -C {dest} --no-same-owner"],
             )
             if extract.exit_code != 0:
                 raise ProvisionError(tool.name, ["tar", "-C", dest], extract)

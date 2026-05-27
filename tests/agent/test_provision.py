@@ -133,8 +133,10 @@ async def test_provision_copies_prebuilt_package_into_sandbox(tmp_path):
     # the package is shipped in as one workspace-relative archive upload …
     assert sb.uploads and sb.uploads[0][0] == ".provision-x.tar.gz"
     assert sb.uploads[0][1] > 0
-    # … then extracted into install_dir (mkdir + tar in one shell step).
-    assert any("tar xzf .provision-x.tar.gz -C tools/x" in " ".join(c) for c in sb.calls)
+    # … then extracted into install_dir (mkdir + tar in one shell step),
+    # with --no-same-owner so it works as mapped-root inside the userns jail.
+    extract = next(c for c in sb.calls if "tar xzf" in " ".join(c))
+    assert "tar xzf .provision-x.tar.gz -C tools/x --no-same-owner" in " ".join(extract)
 
 
 async def test_provision_raises_on_nonzero_exit():
