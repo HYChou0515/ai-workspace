@@ -2,25 +2,29 @@ from workspace_app.agent.provision import ToolDef
 from workspace_app.rca.sample_tools import (
     SAMPLE_TOOLS,
     SOURCES,
-    available_sample_tools,
 )
 
 
-def test_sample_tools_are_prebuilt_copy_defs():
+def test_sample_tools_run_from_the_mounted_infra_dir():
     by_name = {t.name: t for t in SAMPLE_TOOLS}
     assert set(by_name) == {"data-fetch", "csv-column-summary"}
     for t in SAMPLE_TOOLS:
-        # prebuilt-copy form: a prebuilt package + a workspace-relative install
-        # dir, and invoke runs the copied venv binary (no uv at runtime).
-        # tools install OUTSIDE the workspace (the infra area, via ../)
-        assert t.prebuilt and t.install_dir == f"../.tools/{t.name}"
-        assert t.invoke == [f"../.tools/{t.name}/launch"]  # self-contained launcher
+        # No prebuilt-copy: the sandbox mounts the tools at /.tools (../ from the
+        # workspace), and invoke runs the self-contained launcher there.
+        assert t.prebuilt is None
+        assert t.invoke == [f"../.tools/{t.name}/launch"]
         assert t.name in SOURCES
     # the dataset name is an enum so the model can't invent a bad argument
     assert by_name["data-fetch"].params_json_schema["properties"]["name"]["enum"]
 
 
-def test_available_returns_only_tools_with_a_built_package(tmp_path):
-    built = ToolDef(name="a", description="", invoke=["x"], prebuilt=str(tmp_path))
-    missing = ToolDef(name="b", description="", invoke=["x"], prebuilt=str(tmp_path / "nope"))
-    assert available_sample_tools([built, missing]) == [built]
+def test_available_returns_only_tools_with_a_built_package(tmp_path, monkeypatch):
+    import workspace_app.rca.sample_tools as st
+
+    monkeypatch.setattr(st, "PREBUILT_DIR", tmp_path)
+    (tmp_path / "a").mkdir()  # 'a' is built; 'b' is not
+    a, b = (
+        ToolDef(name="a", description="", invoke=["x"]),
+        ToolDef(name="b", description="", invoke=["x"]),
+    )
+    assert st.available_sample_tools([a, b]) == [a]

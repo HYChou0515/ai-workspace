@@ -154,7 +154,7 @@ def get_spec(settings: Settings) -> SpecStar:
     return spec
 
 
-def get_sandbox(settings: Settings) -> Sandbox:
+def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
     match settings.sandbox_kind:
         case "mock":
             return MockSandbox()
@@ -163,6 +163,8 @@ def get_sandbox(settings: Settings) -> Sandbox:
                 root_dir=Path(settings.sandbox_root) if settings.sandbox_root else None,
                 exec_timeout=settings.exec_timeout,
                 isolate=settings.sandbox_isolate,
+                # Shared prebuilt provisioned tools, mounted read-only at /.tools.
+                tools_dir=tools_dir,
             )
         case "docker":
             from .sandbox.docker import DockerSandbox

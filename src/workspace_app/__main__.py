@@ -31,7 +31,7 @@ from workspace_app.factories import (
     get_spec,
 )
 from workspace_app.monitor import SpecstarMonitor
-from workspace_app.rca.sample_tools import available_sample_tools
+from workspace_app.rca.sample_tools import PREBUILT_DIR, available_sample_tools
 
 
 def main() -> None:
@@ -42,9 +42,12 @@ def main() -> None:
     # this for its own ToolDefs. They're gated per-investigation by the agent
     # config's allowed_tools, so the tool-demo template is what turns them on.
     tool_defs = available_sample_tools()
+    # The sandbox mounts the prebuilt dir read-only at /.tools (outside the
+    # workspace) — no per-sandbox copy. Only point at it once it's built.
+    tools_dir = PREBUILT_DIR if tool_defs else None
     app = create_app(
         spec=spec,
-        sandbox=get_sandbox(settings),
+        sandbox=get_sandbox(settings, tools_dir=tools_dir),
         filestore=get_filestore(settings, spec),
         runner=get_runner(settings),
         kb_embedder=get_embedder(settings),

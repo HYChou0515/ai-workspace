@@ -277,6 +277,41 @@ async def test_isolated_exec_workspace_lists_user_files_and_hides_host(tmp_path)
     assert "home" not in root  # host /home is not reachable
 
 
+def _fake_tool_dir(base):
+    d = base / "prebuilt" / "mytool"
+    d.mkdir(parents=True)
+    (d / "run").write_text("#!/bin/sh\necho TOOL-OK\n")
+    (d / "run").chmod(0o755)
+    return base / "prebuilt"
+
+
+@_needs_userns
+async def test_isolated_tools_dir_is_mounted_read_only_outside_workspace(tmp_path):
+    """A shared tools dir is bind-mounted read-only at /.tools (outside the
+    workspace): runnable, not writable, and invisible to walk/sync."""
+    tools = _fake_tool_dir(tmp_path)
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    run = await sb.exec(h, ["/.tools/mytool/run"])  # reachable + runnable
+    assert run.exit_code == 0 and "TOOL-OK" in run.stdout.decode()
+    ro = await sb.exec(h, ["sh", "-c", "echo x > /.tools/mytool/hack; echo rc=$?"])
+    assert "rc=0" not in ro.stdout.decode()  # read-only → write fails
+    await sb.upload(h, b"u", "/note.md")
+    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # tools invisible
+
+
+async def test_unjailed_tools_dir_is_symlinked_outside_workspace(tmp_path):
+    """Unjailed: the tools dir is exposed via a symlink, reached from the
+    workspace as ../.tools, and still invisible to walk."""
+    tools = _fake_tool_dir(tmp_path)
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    run = await sb.exec(h, ["../.tools/mytool/run"])  # relative from cwd=workspace
+    assert run.exit_code == 0 and "TOOL-OK" in run.stdout.decode()
+    await sb.upload(h, b"u", "/note.md")
+    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # tools invisible
+
+
 @_needs_userns
 async def test_isolated_exec_cleans_up_dev_scaffolding(tmp_path):
     """The jail's /dev device-node files must not leak back into the

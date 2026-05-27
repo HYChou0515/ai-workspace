@@ -49,6 +49,12 @@ ROOT="$1"; shift
 mkdir -p "$ROOT/usr" "$ROOT/proc" "$ROOT/dev" "$ROOT/etc" "$ROOT/tmp" "$ROOT/root"
 mount --bind /usr "$ROOT/usr"; mount -o remount,bind,ro "$ROOT/usr"
 mount --bind /etc "$ROOT/etc"; mount -o remount,bind,ro "$ROOT/etc"
+# Provisioned tools: a shared host dir bind-mounted read-only at /.tools (a
+# sibling of /root, so it's outside the workspace and never walked/synced).
+if [ -n "$SANDBOX_TOOLS_DIR" ]; then
+  mkdir -p "$ROOT/.tools"
+  mount --bind "$SANDBOX_TOOLS_DIR" "$ROOT/.tools"; mount -o remount,bind,ro "$ROOT/.tools"
+fi
 for l in bin sbin lib lib64; do
   [ -L "$ROOT/$l" ] || [ -e "$ROOT/$l" ] || ln -s "usr/$l" "$ROOT/$l"
 done
@@ -108,6 +114,9 @@ def _userns_supported() -> bool:
 # The user workspace is this subdir of the sandbox root (the agent's ~/cwd).
 # MUST match the `/root` the jail bootstrap cds into.
 _WORKSPACE = "root"
+# Provisioned tools are made available here (a sibling of the workspace, so
+# they're outside what walk/sync see). MUST match the jail bootstrap's mount.
+_TOOLS = ".tools"
 
 
 class LocalProcessSandbox:
@@ -117,9 +126,14 @@ class LocalProcessSandbox:
         root_dir: Path | None = None,
         exec_timeout: float = 60.0,
         isolate: bool | None = None,
+        tools_dir: Path | None = None,
     ) -> None:
         self._root = root_dir or Path(tempfile.gettempdir()) / "workspace-app-sandbox"
         self._root.mkdir(parents=True, exist_ok=True)
+        # Shared, prebuilt provisioned-tools dir, made available at /.tools
+        # (outside the workspace): read-only bind-mount when jailed, symlink when
+        # not. One shared dir for all sandboxes — no per-sandbox copy.
+        self._tools_dir = tools_dir
         self._dirs: dict[str, Path] = {}
         # Hard cap on a single command — a hung/interactive program (vim,
         # top) is killed rather than blocking the request forever.
@@ -147,6 +161,10 @@ class LocalProcessSandbox:
         path = self._root / handle.id
         # Create the workspace subdir (and its parent, the sandbox/infra root).
         (path / _WORKSPACE).mkdir(parents=True, exist_ok=False)
+        # Unjailed: expose the shared tools dir via a symlink (jailed uses a
+        # read-only bind-mount, set up per-exec in the bootstrap instead).
+        if self._tools_dir is not None and not self._isolate:
+            (path / _TOOLS).symlink_to(self._tools_dir)
         self._dirs[handle.id] = path
         return handle
 
@@ -169,6 +187,10 @@ class LocalProcessSandbox:
             # HOME. The subprocess cwd is the root (the unshare wrapper runs there).
             argv = _jail_argv(str(root), cmd)
             sub_cwd = root
+            # The bootstrap read-only bind-mounts this at /.tools (outside the
+            # workspace) when set.
+            if self._tools_dir is not None:
+                env["SANDBOX_TOOLS_DIR"] = str(self._tools_dir)
         else:
             # No chroot: run directly in the workspace subdir, HOME → workspace.
             argv = cmd

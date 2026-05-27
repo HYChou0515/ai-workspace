@@ -105,15 +105,25 @@ package). `provision_tools` runs on `ensure_sandbox` for the config's
 `FunctionTool` so the agent calls it with structured params (not improvised
 `exec`).
 
-**Install model — prebuilt SELF-CONTAINED package (chosen):** a tool is prebuilt
-once on the host (`scripts/prebuild_tools.py`) as a `uv venv --relocatable` + the
-installed CLI **+ a bundled copy of its python** + a `launch` script; at
-provision time the whole package is `tar`→`upload`→extracted into the sandbox
-(`--no-same-owner`, since we're mapped-root in the userns jail). The sandbox
-needs **no uv / network / build step and no python of its own**. Verified
-end-to-end: both sample tools run via `ensure_sandbox` in the **default
-isolate=true chroot jail** (exit 0) — no SANDBOX_ISOLATE=false, no matching the
-jail's python.
+**Install model — prebuilt SELF-CONTAINED package, mounted read-only (chosen):**
+a tool is prebuilt once on the host (`scripts/prebuild_tools.py`) as a
+`uv venv --relocatable` + the installed CLI **+ a bundled copy of its python** +
+a `launch` script. The sandbox makes the shared prebuilt dir available at
+**`/.tools` (read-only)** — a bind-mount when jailed, a symlink when not —
+**outside the workspace** and with **no per-sandbox copy**. The sandbox needs no
+uv / network / build step and no python of its own. Verified end-to-end in the
+default isolate=true jail: both tools run (exit 0), `/.tools` is read-only
+(write → rc≠0), and `walk` (the synced/visible workspace) shows only the user's
+files. (`ToolDef.prebuilt` still exists as a copy fallback for backends that
+can't mount; the sample tools leave it unset.)
+
+**Workspace boundary:** the user workspace is `/root` (the agent's cwd/`~`);
+the sandbox root is the infra area (system overlays + `/.tools`). `walk` /
+upload / download / reverse-sync are scoped to the workspace, so tools + caches
+(`HOME`/`XDG_CACHE_HOME` → `/tmp`) never leak into the file tree or specstar.
+Portable: the `~` boundary needs only `exec`/`upload` (any backend incl.
+gVisor); the read-only mount is a per-backend safety layer (image-bake for
+Docker/gVisor).
 
 **Why a `launch` script (the hard part):** inside the userns jail the process is
 **AT_SECURE**, so glibc's loader ignores `$ORIGIN`/RPATH/LD_LIBRARY_PATH and the

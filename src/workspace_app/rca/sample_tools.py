@@ -35,11 +35,10 @@ def _tool(
     return ToolDef(
         name=name,
         description=description,
-        prebuilt=str(PREBUILT_DIR / name),
-        # The infra area (`../`, a sibling of the workspace): tools live OUTSIDE
-        # the workspace so they're never walked/synced/shown. `../.tools/<n>`
-        # resolves the same jailed (cwd=/root → /.tools) and unjailed.
-        install_dir=f"../.tools/{name}",
+        # No `prebuilt` → provisioning does NOT copy; the sandbox delivers the
+        # tools read-only at /.tools (a sibling of the workspace, so they're
+        # never walked/synced/shown). `../.tools/<n>` resolves the same jailed
+        # (cwd=/root → /.tools mount) and unjailed (→ the .tools symlink).
         invoke=[f"../.tools/{name}/launch"],  # self-contained launcher (bundled python)
         positional=positional,
         params_json_schema={"type": "object", "properties": properties},
@@ -87,6 +86,6 @@ SOURCES = {
 
 def available_sample_tools(tools: list[ToolDef] | None = None) -> list[ToolDef]:
     """`tools` (default SAMPLE_TOOLS) filtered to those whose prebuilt package
-    actually exists — so the normal entry only advertises a tool the sandbox can
-    really install. Run `scripts/prebuild_tools.py` to build them."""
-    return [t for t in (tools or SAMPLE_TOOLS) if t.prebuilt and Path(t.prebuilt).is_dir()]
+    exists under PREBUILT_DIR — so the normal entry only advertises a tool the
+    sandbox can actually mount. Run `scripts/prebuild_tools.py` to build them."""
+    return [t for t in (tools or SAMPLE_TOOLS) if (PREBUILT_DIR / t.name).is_dir()]
