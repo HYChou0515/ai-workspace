@@ -60,9 +60,17 @@ DATA_FETCH = _tool(
 
 CSV_SUMMARY = _tool(
     "csv-column-summary",
-    "Summarise each column of a CSV in the workspace: dtype, count, nulls, stats.",
+    "Summarise each column of a CSV in the workspace: dtype, count, nulls, stats. "
+    "With plot=true it also writes <name>.distributions.png (per-column histograms/"
+    "bars) and <name>.correlations.png (numeric correlation heatmap) next to the CSV.",
     ["csv"],
-    {"csv": {"type": "string", "description": "path to the CSV in the workspace"}},
+    {
+        "csv": {"type": "string", "description": "path to the CSV in the workspace"},
+        "plot": {
+            "type": "boolean",
+            "description": "also write distribution + correlation PNGs into the workspace",
+        },
+    },
 )
 
 SAMPLE_TOOLS = [DATA_FETCH, CSV_SUMMARY]

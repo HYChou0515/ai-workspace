@@ -2,6 +2,7 @@
 
     csv-column-summary data.csv            # human-readable table
     csv-column-summary data.csv --json     # machine-readable (for the agent)
+    csv-column-summary data.csv --plot      # + write distribution/correlation PNGs
 
 Exit code 0 on success, 2 on a usage / file error — so the calling agent can
 tell "the tool failed" from "the file had no columns".
@@ -11,11 +12,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+
+def _progress(msg: str) -> None:
+    """A live progress line on stderr — the sandbox relays stderr live so it
+    shows in the chat while the tool runs, and stdout stays clean for --json."""
+    print(msg, file=sys.stderr, flush=True)
 
 
 @dataclass
@@ -85,6 +94,60 @@ def _render_text(df: pd.DataFrame, cols: list[ColumnSummary]) -> str:
     return "\n".join(lines)
 
 
+def plot(df: pd.DataFrame, csv_path: str) -> list[str]:
+    """Write two PNGs next to the CSV and return their paths:
+    `<name>.distributions.png` (a grid: histogram per numeric column, top-10
+    bar per categorical) and, when there are ≥2 numeric columns,
+    `<name>.correlations.png` (a Pearson correlation heatmap). Uses the headless
+    Agg backend so it works in the sandbox with no display."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    stem = Path(csv_path).with_suffix("")
+    written: list[str] = []
+
+    cols = list(df.columns)
+    ncols = min(4, len(cols)) or 1
+    nrows = max(1, math.ceil(len(cols) / ncols))
+    fig, raw_axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows))
+    axes = np.atleast_1d(raw_axes).ravel()
+    for ax, col in zip(axes, cols):
+        s = df[col]
+        if pd.api.types.is_numeric_dtype(s):
+            ax.hist(s.dropna(), bins=30)
+        else:
+            top = s.value_counts(dropna=True).head(10)
+            ax.bar([str(k) for k in top.index], list(top.values))
+            ax.tick_params(axis="x", rotation=45, labelsize=7)
+        ax.set_title(str(col), fontsize=9)
+    for ax in axes[len(cols) :]:
+        ax.axis("off")
+    fig.tight_layout()
+    dist = f"{stem}.distributions.png"
+    fig.savefig(dist, dpi=90)
+    plt.close(fig)
+    written.append(dist)
+
+    num = df.select_dtypes(include="number")
+    if num.shape[1] >= 2:
+        corr = num.corr()
+        n = len(corr)
+        fig, ax = plt.subplots(figsize=(0.6 * n + 2, 0.6 * n + 2))
+        im = ax.imshow(corr.values, vmin=-1, vmax=1, cmap="coolwarm")
+        ax.set_xticks(range(n), labels=list(corr.columns), rotation=90, fontsize=7)
+        ax.set_yticks(range(n), labels=list(corr.columns), fontsize=7)
+        fig.colorbar(im, ax=ax, fraction=0.046)
+        fig.tight_layout()
+        heat = f"{stem}.correlations.png"
+        fig.savefig(heat, dpi=90)
+        plt.close(fig)
+        written.append(heat)
+    return written
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="csv-column-summary",
@@ -92,8 +155,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("csv", help="path to the CSV file")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
+    parser.add_argument(
+        "--plot", action="store_true", help="also write distribution/correlation PNGs"
+    )
     args = parser.parse_args(argv)
 
+    _progress(f"reading {args.csv} …")
     try:
         df = pd.read_csv(args.csv)
     except FileNotFoundError:
@@ -103,11 +170,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: could not read CSV: {exc}", file=sys.stderr)
         return 2
 
+    _progress(f"summarising {len(df.columns)} columns over {len(df)} rows …")
     cols = summarize(df)
+
+    plots: list[str] = []
+    if args.plot:
+        _progress("plotting distributions + correlations …")
+        plots = plot(df, args.csv)
+        for p in plots:
+            _progress(f"  wrote {p}")
+
     if args.json:
-        print(json.dumps({"rows": len(df), "columns": [asdict(c) for c in cols]}, indent=2))
+        payload = {"rows": len(df), "columns": [asdict(c) for c in cols], "plots": plots}
+        print(json.dumps(payload, indent=2))
     else:
-        print(_render_text(df, cols))
+        text = _render_text(df, cols)
+        if plots:
+            text += "\n\nplots:\n" + "\n".join(f"  {p}" for p in plots)
+        print(text)
     return 0
 
 

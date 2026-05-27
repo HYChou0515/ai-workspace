@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from csv_column_summary.cli import main, summarize
+from csv_column_summary.cli import main, plot, summarize
 
 
 def test_summarize_numeric_and_categorical():
@@ -37,3 +37,30 @@ def test_cli_json_output(tmp_path: Path, capsys):
 def test_cli_missing_file_is_usage_error(capsys):
     assert main(["/no/such.csv"]) == 2
     assert "not found" in capsys.readouterr().err
+
+
+def test_plot_writes_distribution_and_correlation_pngs(tmp_path: Path):
+    csv = tmp_path / "d.csv"
+    csv.write_text("x,y,label\n1,2,a\n2,4,b\n3,6,a\n4,8,b\n")
+    df = pd.read_csv(csv)
+    written = plot(df, str(csv))
+    dist = tmp_path / "d.distributions.png"
+    corr = tmp_path / "d.correlations.png"
+    assert dist.exists() and dist.stat().st_size > 0  # always a distributions grid
+    assert corr.exists()  # 2 numeric columns → a correlation heatmap
+    assert {str(dist), str(corr)} == set(written)
+
+
+def test_plot_skips_heatmap_with_fewer_than_two_numeric_columns(tmp_path: Path):
+    csv = tmp_path / "one.csv"
+    csv.write_text("x,label\n1,a\n2,b\n")
+    written = plot(pd.read_csv(csv), str(csv))
+    assert written == [str(tmp_path / "one.distributions.png")]  # no heatmap
+
+
+def test_cli_plot_lists_png_paths_in_output(tmp_path: Path, capsys):
+    csv = tmp_path / "d.csv"
+    csv.write_text("x,y\n1,2\n2,4\n3,6\n")
+    rc = main([str(csv), "--plot"])
+    assert rc == 0
+    assert "distributions.png" in capsys.readouterr().out  # paths reach the agent
