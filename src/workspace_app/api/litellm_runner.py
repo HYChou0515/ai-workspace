@@ -152,6 +152,8 @@ def _agent_for(
     config: AgentConfig,
     tool_defs: list[ToolDef] | None = None,
     extra_instructions: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
@@ -166,7 +168,7 @@ def _agent_for(
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
-        model=LitellmModel(model=config.model),
+        model=LitellmModel(model=config.model, base_url=base_url, api_key=api_key),
         tools=tools,  # ty: ignore[invalid-argument-type]  # list[FunctionTool] ⊂ list[Tool]
     )
 
@@ -277,10 +279,16 @@ class LitellmAgentRunner:
         config: AgentConfig | None = None,
         max_retries: int = 2,
         max_turns: int = 10,
+        base_url: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         self._config = config or AgentConfig(name="workspace-agent")
         self._max_retries = max_retries
         self._max_turns = max_turns
+        # Chat LLM endpoint (global; see factories.Settings). None → LiteLLM's
+        # own provider env / Ollama defaults.
+        self._base_url = base_url
+        self._api_key = api_key
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         feedback: str | None = None
@@ -313,7 +321,11 @@ class LitellmAgentRunner:
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
         agent = _agent_for(
-            ctx.agent_config or self._config, ctx.tool_defs, extra_instructions=feedback
+            ctx.agent_config or self._config,
+            ctx.tool_defs,
+            extra_instructions=feedback,
+            base_url=self._base_url,
+            api_key=self._api_key,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))

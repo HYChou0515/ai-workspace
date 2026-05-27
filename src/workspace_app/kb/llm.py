@@ -43,14 +43,20 @@ class ILlm(abc.ABC):
 class LitellmLlm(ILlm):
     """Production ILlm via LiteLLM (model string routes the provider)."""
 
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, base_url: str | None = None, api_key: str | None = None) -> None:
         self._model = model
+        self._base_url = base_url
+        self._api_key = api_key
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:  # pragma: no cover — live model
         import litellm
 
         for chunk in litellm.completion(
-            model=self._model, messages=[{"role": "user", "content": prompt}], stream=True
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=True,
+            api_base=self._base_url,
+            api_key=self._api_key,
         ):
             delta = chunk.choices[0].delta
             reasoning = getattr(delta, "reasoning_content", None)

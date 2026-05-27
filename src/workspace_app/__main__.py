@@ -10,6 +10,8 @@ Common env vars (all optional; see `factories.Settings` for the full list):
   SANDBOX_KIND=local|docker|mock      FILESTORE_KIND=memory|specstar
   KB_EMBED_MODEL=ollama/bge-m3        KB_EMBED_DIM=1024
   KB_LLM_MODEL=ollama_chat/qwen3:14b  ("" disables multi-query/HyDE/rerank)
+  LLM_BASE_URL / LLM_API_KEY          (chat: RCA agent + KB chat; "" → LiteLLM defaults)
+  KB_EMBED_BASE_URL / KB_EMBED_API_KEY  (embedder endpoint; separate from chat)
   APP_HOST / APP_PORT
 """
 

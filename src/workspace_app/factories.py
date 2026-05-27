@@ -66,6 +66,15 @@ class Settings:
     runner_max_retries: int = 2
     runner_max_turns: int = 10
 
+    # Chat LLM endpoint, shared by the RCA agent runner + the KB chat llm. Empty
+    # → None → LiteLLM's own provider env / Ollama defaults (unchanged). The
+    # model string's provider prefix still picks the provider; base_url just
+    # overrides its host (e.g. `openai/<model>` + a hosted OpenAI-compatible
+    # endpoint). The embedder has its OWN pair below — they don't share, so chat
+    # can go hosted while embeddings stay on local Ollama.
+    llm_base_url: str = ""
+    llm_api_key: str = ""
+
     # read_file caps — a read past either is truncated with a notice (the agent
     # pages with offset/limit). Defaults sized for a large-context model; tighten
     # for a small local model. chars ≈ tokens × 4.
@@ -90,6 +99,10 @@ class Settings:
     kb_embed_timeout: float = 60.0
     kb_embed_num_retries: int = 2
     kb_embed_batch_size: int = 64
+    # Embedder endpoint (separate from the chat LLM above). Empty → None →
+    # current Ollama/env behavior.
+    kb_embed_base_url: str = ""
+    kb_embed_api_key: str = ""
 
     # KB chunker
     kb_chunk_max_tokens: int = 256
@@ -116,6 +129,8 @@ class Settings:
             filestore_kind=e.get("FILESTORE_KIND", d.filestore_kind),
             runner_max_retries=int(e.get("RUNNER_MAX_RETRIES", str(d.runner_max_retries))),
             runner_max_turns=int(e.get("RUNNER_MAX_TURNS", str(d.runner_max_turns))),
+            llm_base_url=e.get("LLM_BASE_URL", d.llm_base_url),
+            llm_api_key=e.get("LLM_API_KEY", d.llm_api_key),
             read_file_max_lines=int(e.get("READ_FILE_MAX_LINES", str(d.read_file_max_lines))),
             read_file_max_chars=int(e.get("READ_FILE_MAX_CHARS", str(d.read_file_max_chars))),
             history_max_messages=int(e.get("HISTORY_MAX_MESSAGES", str(d.history_max_messages))),
@@ -125,6 +140,8 @@ class Settings:
             kb_embed_timeout=float(e.get("KB_EMBED_TIMEOUT", str(d.kb_embed_timeout))),
             kb_embed_num_retries=int(e.get("KB_EMBED_NUM_RETRIES", str(d.kb_embed_num_retries))),
             kb_embed_batch_size=int(e.get("KB_EMBED_BATCH_SIZE", str(d.kb_embed_batch_size))),
+            kb_embed_base_url=e.get("KB_EMBED_BASE_URL", d.kb_embed_base_url),
+            kb_embed_api_key=e.get("KB_EMBED_API_KEY", d.kb_embed_api_key),
             kb_chunk_max_tokens=int(e.get("KB_CHUNK_MAX_TOKENS", str(d.kb_chunk_max_tokens))),
             kb_chunk_overlap=int(e.get("KB_CHUNK_OVERLAP", str(d.kb_chunk_overlap))),
             kb_llm_model=e.get("KB_LLM_MODEL", d.kb_llm_model),
@@ -170,6 +187,8 @@ def get_runner(settings: Settings) -> AgentRunner:
         default_rca_agent_config(),
         max_retries=settings.runner_max_retries,
         max_turns=settings.runner_max_turns,
+        base_url=settings.llm_base_url or None,
+        api_key=settings.llm_api_key or None,
     )
 
 
@@ -183,6 +202,8 @@ def get_embedder(settings: Settings) -> Embedder:
             timeout=settings.kb_embed_timeout,
             num_retries=settings.kb_embed_num_retries,
             batch_size=settings.kb_embed_batch_size,
+            base_url=settings.kb_embed_base_url or None,
+            api_key=settings.kb_embed_api_key or None,
         )
     return HashEmbedder(dim=EMBED_DIM)
 
@@ -194,4 +215,10 @@ def get_chunker(settings: Settings) -> Chunker:
 
 
 def get_kb_llm(settings: Settings) -> ILlm | None:
-    return LitellmLlm(settings.kb_llm_model) if settings.kb_llm_model else None
+    if not settings.kb_llm_model:
+        return None
+    return LitellmLlm(
+        settings.kb_llm_model,
+        base_url=settings.llm_base_url or None,
+        api_key=settings.llm_api_key or None,
+    )

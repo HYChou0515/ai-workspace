@@ -91,6 +91,15 @@ def test_agent_for_adds_allowed_provisioned_tools():
     assert "data-fetch" not in names  # an un-allowed def is absent
 
 
+def test_agent_for_threads_base_url_and_api_key_to_the_model():
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources.agent_config import AgentConfig
+
+    agent = _agent_for(AgentConfig(name="a"), base_url="https://hosted/v1", api_key="sk-1")
+    assert agent.model.base_url == "https://hosted/v1"  # ty: ignore[possibly-unbound-attribute]
+    assert agent.model.api_key == "sk-1"  # ty: ignore[possibly-unbound-attribute]
+
+
 def test_build_argv_positional_then_flags_then_bools():
     assert build_argv(_DEF, {"name": "alloy-batches", "rows": 60, "json": True}) == [
         "uv",

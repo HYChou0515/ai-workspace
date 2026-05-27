@@ -106,6 +106,8 @@ class LitellmEmbedder(_PrefixedEmbedder):
         timeout: float = 60.0,
         num_retries: int = 2,
         batch_size: int = 64,
+        base_url: str | None = None,
+        api_key: str | None = None,
     ) -> None:
         super().__init__(query_prefix=query_prefix, doc_prefix=doc_prefix)
         self._model = model
@@ -113,6 +115,9 @@ class LitellmEmbedder(_PrefixedEmbedder):
         self._timeout = timeout
         self._num_retries = num_retries
         self._batch_size = batch_size
+        # Embedder endpoint (separate from the chat LLM). None → Ollama/env.
+        self._base_url = base_url
+        self._api_key = api_key
 
     @property
     def dim(self) -> int:
@@ -135,5 +140,7 @@ class LitellmEmbedder(_PrefixedEmbedder):
             input=texts,
             timeout=self._timeout,
             num_retries=self._num_retries,
+            api_base=self._base_url,
+            api_key=self._api_key,
         )
         return [item["embedding"] for item in resp.data]
