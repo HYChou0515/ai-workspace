@@ -1,35 +1,35 @@
 # data-fetch
 
 An **example analysis tool** for the RCA sandbox's tool-provisioning mechanism:
-it downloads a **named** dataset into the workspace (streaming).
+it materialises a **named** dataset into the workspace as CSV.
 
-## Why a name, not a URL
+## What it does
 
-The agent **never supplies a URL** — it picks a `name` from a configured
-catalog (`name → url`). The URLs live in config, not in the model's output, so a
-wrong / hallucinated URL is impossible; the worst the model can do is name a
-dataset that doesn't exist, which fails cleanly. When this is wired as a sandbox
-tool, the `name` parameter is exposed to the agent as an **enum** of the catalog
-keys.
+The agent never supplies a URL or a schema — it picks a `name` from a fixed
+catalog. Each name maps to a bundled **scikit-learn** dataset that the tool
+**augments** (bootstrap-resample + per-column jitter + synthetic
+id/categorical/datetime/label columns) into a large, mixed-dtype table —
+**25k rows × 20+ columns by default** — disguised as a domain dataset.
 
-Configure the catalog per deployment via `DATA_FETCH_CATALOG` — inline JSON or a
-path to a JSON file:
+- **Fully offline** — generates from bundled sklearn data; no network, no
+  LLM-supplied URL (the model can only pick a name from the catalog, exposed to
+  it as an enum).
+- Carries its **own heavy deps (scikit-learn / pandas / numpy)** in its **own
+  repo**, installed into the sandbox at provision time — the host app never
+  inherits them.
 
-```bash
-export DATA_FETCH_CATALOG='{"reflow-incidents":"https://intranet/data/reflow.csv"}'
-```
-
-It carries its **own dependency (`httpx`)** in its **own repo**, installed into
-the sandbox at provision time — the host app never gains an HTTP client.
+Catalog (`--list`): `sensor-telemetry` (breast_cancer→36 cols), `alloy-batches`
+(wine→24), `process-readings` (diabetes→24), `panel-inspection` (digits→26).
 
 ## Run it standalone (uv)
 
 ```bash
 uv sync
-uv run data-fetch --list                     # available dataset names
-uv run data-fetch reflow-incidents           # download into the cwd (= workspace)
-uv run data-fetch reflow-incidents --json
-uv run pytest                                 # tests (offline, mocked transport)
+uv run data-fetch --list
+uv run data-fetch sensor-telemetry                       # → sensor-telemetry.csv (25000 × 36)
+uv run data-fetch alloy-batches --rows 50000 --out /data/alloy.csv
+uv run data-fetch sensor-telemetry --json
+uv run pytest                                            # 9 tests
 ```
 
 ## How the sandbox provisions it (the pattern)
@@ -45,11 +45,9 @@ invoke:                      # what the agent's tool call executes (args appende
   - --project
   - /opt/tools/data-fetch
   - data-fetch
-env:                         # the catalog is config, injected into the sandbox:
-  DATA_FETCH_CATALOG: '{"reflow-incidents":"https://intranet/data/reflow.csv"}'
 ```
 
-The agent sees a clean `data-fetch(name: enum, out?: str)` tool; under the hood
-it's `exec` of the `invoke` command in the sandbox, and the file lands in the
-workspace (the sandbox cwd). Pair it with `csv-column-summary` for a two-step
-agent flow: fetch a named dataset, then summarise its columns.
+The agent sees a clean `data-fetch(name: enum, rows?: int, out?: str)` tool;
+under the hood it's `exec` of `invoke` in the sandbox, and the CSV lands in the
+workspace (the sandbox cwd). Pair it with **csv-column-summary** for a two-step
+flow: materialise a named dataset, then summarise its columns.

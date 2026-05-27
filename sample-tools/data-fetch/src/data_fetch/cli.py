@@ -1,115 +1,115 @@
-"""CLI: download a *named* dataset into the workspace.
+"""CLI: materialise a *named* dataset into the workspace as CSV.
 
-The agent never supplies a URL — it picks a NAME from a configured catalog
-(name → URL). A wrong/hallucinated URL is therefore impossible; the worst the
-model can do is name a dataset that doesn't exist, which fails cleanly.
+The agent never supplies a URL or a schema — it picks a NAME from a fixed
+catalog. Each name maps to a bundled scikit-learn dataset that we augment
+(bootstrap-resample + jitter + synthetic id / categorical / datetime columns)
+into a large, mixed-dtype table disguised as a domain dataset. Fully offline.
 
-    data-fetch --list                 # show available dataset names
-    data-fetch reflow-incidents       # download that dataset into the workspace
-    data-fetch reflow-incidents --json
+    data-fetch --list                       # available dataset names
+    data-fetch sensor-telemetry             # → sensor-telemetry.csv (25k+ rows, 20+ cols)
+    data-fetch alloy-batches --rows 50000 --out /data/alloy.csv
+    data-fetch sensor-telemetry --json
 
-The catalog defaults to a small built-in map; override it per deployment with
-DATA_FETCH_CATALOG = inline JSON  *or*  a path to a JSON file ({name: url}).
-Exit 0 on success, 2 on a usage / download error.
+Exit 0 on success, 2 on a usage error (unknown name).
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import asdict, dataclass
-from pathlib import Path
-from urllib.parse import urlsplit
 
-import httpx
+import numpy as np
+import pandas as pd
+from sklearn import datasets as skd
 
-# Example catalog — real deployments override via DATA_FETCH_CATALOG. The point:
-# the URLs live HERE (config), not in the model's output.
-_DEFAULT_CATALOG: dict[str, str] = {
-    "reflow-incidents": "https://example.invalid/data/reflow-incidents.csv",
-    "void-rate-baseline": "https://example.invalid/data/void-rate-baseline.csv",
+# name → (bundled sklearn loader, column-name prefix, optional base-col cap).
+# The URLs/schemas live HERE, not in the model's output; the agent picks a name.
+_CATALOG: dict[str, dict] = {
+    "sensor-telemetry": {"base": "breast_cancer", "prefix": "sensor"},
+    "alloy-batches": {"base": "wine", "prefix": "alloy"},
+    "process-readings": {"base": "diabetes", "prefix": "reading"},
+    "panel-inspection": {"base": "digits", "prefix": "pixel", "max_base_cols": 20},
 }
 
+_LOADERS = {
+    "breast_cancer": skd.load_breast_cancer,
+    "wine": skd.load_wine,
+    "diabetes": skd.load_diabetes,
+    "digits": skd.load_digits,
+}
 
-def load_catalog() -> dict[str, str]:
-    raw = os.environ.get("DATA_FETCH_CATALOG")
-    if not raw:
-        return dict(_DEFAULT_CATALOG)
-    text = Path(raw).read_text() if Path(raw).exists() else raw
-    data = json.loads(text)
-    return {str(k): str(v) for k, v in data.items()}
+_MIN_NUMERIC_COLS = 18  # + 6 synthetic (id/line/shift/operator/timestamp/label) ⇒ 20+ total
 
 
 @dataclass
 class Result:
     name: str
-    url: str
     path: str
-    bytes: int
-    content_type: str
-    status: int
+    rows: int
+    columns: int
 
 
-def _default_out(name: str, url: str) -> str:
-    # Filename from the URL path, falling back to the dataset name.
-    return Path(urlsplit(url).path).name or name
-
-
-def download(
-    name: str,
-    catalog: dict[str, str],
-    out: str | None = None,
-    *,
-    timeout: float = 30.0,
-    client: httpx.Client | None = None,
-) -> Result:
-    """Stream the named dataset to `out` (default: filename from the URL).
-    Raises KeyError for an unknown name, httpx.HTTPError on a transport/HTTP
-    failure. Streaming keeps a large download off the heap."""
-    if name not in catalog:
+def synthesize(name: str, *, rows: int = 25_000, seed: int = 0) -> pd.DataFrame:
+    """Augment the catalog's base sklearn dataset into a `rows`×(20+) frame.
+    Deterministic for a given (name, rows, seed)."""
+    if name not in _CATALOG:
         raise KeyError(name)
-    url = catalog[name]
-    out_path = Path(out or _default_out(name, url))
-    if out_path.parent != Path(""):
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+    spec = _CATALOG[name]
+    rng = np.random.default_rng(seed)
 
-    owns = client is None
-    client = client or httpx.Client(timeout=timeout, follow_redirects=True)
-    try:
-        size = 0
-        with client.stream("GET", url) as resp:
-            resp.raise_for_status()
-            content_type = resp.headers.get("content-type", "")
-            status = resp.status_code
-            with out_path.open("wb") as f:
-                for chunk in resp.iter_bytes():
-                    f.write(chunk)
-                    size += len(chunk)
-    finally:
-        if owns:
-            client.close()
-    return Result(name, url, str(out_path), size, content_type, status)
+    ds = _LOADERS[spec["base"]]()
+    base = np.asarray(ds.data, dtype=float)
+    cap = spec.get("max_base_cols")
+    if cap:
+        base = base[:, :cap]
+    target = np.asarray(ds.target)
+    n_base, n_feat = base.shape
+
+    # Bootstrap-resample to `rows`, then jitter each column by ~5% of its std so
+    # the rows aren't bare duplicates.
+    idx = rng.integers(0, n_base, size=rows)
+    x = base[idx].astype(float)
+    std = base.std(axis=0)
+    std[std == 0] = 1.0
+    x += rng.normal(0.0, 0.05, x.shape) * std
+
+    prefix = spec["prefix"]
+    df = pd.DataFrame({f"{prefix}_{i:02d}": x[:, i] for i in range(n_feat)})
+
+    # Top up numeric columns with engineered ratios until we have enough.
+    while df.shape[1] < _MIN_NUMERIC_COLS:
+        a, b = rng.integers(0, n_feat, size=2)
+        df[f"{prefix}_d{df.shape[1]:02d}"] = x[:, a] / (np.abs(x[:, b]) + 1e-6)
+
+    # Synthetic non-numeric columns → mixed dtypes (id / categorical / datetime / label).
+    df.insert(0, "record_id", [f"R{seed:02d}-{n:07d}" for n in range(rows)])
+    df["line"] = rng.choice(["L1", "L2", "L3", "L4"], size=rows)
+    df["shift"] = rng.choice(["day", "swing", "night"], size=rows)
+    df["operator"] = rng.choice([f"op{n:02d}" for n in range(12)], size=rows)
+    start = np.datetime64("2025-01-01T00:00:00")
+    df["timestamp"] = start + rng.integers(0, 120 * 24 * 3600, size=rows).astype("timedelta64[s]")
+    df["label"] = target[idx]
+
+    return df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="data-fetch",
-        description="Download a named dataset (from the configured catalog) into the workspace.",
+        description="Materialise a named (sklearn-augmented) dataset into the workspace as CSV.",
     )
     parser.add_argument("name", nargs="?", help="dataset name (see --list)")
-    parser.add_argument("--out", help="output path (default: filename from the source URL)")
+    parser.add_argument("--out", help="output CSV path (default: <name>.csv)")
+    parser.add_argument("--rows", type=int, default=25_000, help="row count (default 25000)")
+    parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--list", action="store_true", help="list available dataset names")
     parser.add_argument("--json", action="store_true", help="emit JSON")
-    parser.add_argument("--timeout", type=float, default=30.0)
     args = parser.parse_args(argv)
 
-    catalog = load_catalog()
-
-    # No name (or --list) → enumerate what the agent may pick.
     if args.list or not args.name:
-        names = sorted(catalog)
+        names = sorted(_CATALOG)
         if args.json:
             print(json.dumps({"datasets": names}, indent=2))
         else:
@@ -118,26 +118,22 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  - {n}")
         return 0
 
-    if args.name not in catalog:
+    if args.name not in _CATALOG:
         print(
-            f"error: unknown dataset {args.name!r}. available: {', '.join(sorted(catalog))}",
+            f"error: unknown dataset {args.name!r}. available: {', '.join(sorted(_CATALOG))}",
             file=sys.stderr,
         )
         return 2
 
-    try:
-        result = download(args.name, catalog, args.out, timeout=args.timeout)
-    except httpx.HTTPError as exc:
-        print(f"error: download failed: {exc}", file=sys.stderr)
-        return 2
+    df = synthesize(args.name, rows=max(1, args.rows), seed=args.seed)
+    out = args.out or f"{args.name}.csv"
+    df.to_csv(out, index=False)
+    result = Result(name=args.name, path=out, rows=df.shape[0], columns=df.shape[1])
 
     if args.json:
         print(json.dumps(asdict(result), indent=2))
     else:
-        print(
-            f"downloaded {result.name} → {result.path} "
-            f"({result.bytes} bytes, {result.content_type})"
-        )
+        print(f"wrote {result.path} — {result.rows} rows × {result.columns} columns")
     return 0
 
 

@@ -1,45 +1,51 @@
 import json
 from pathlib import Path
 
-import httpx
+import pandas as pd
+import pytest
 
-from data_fetch.cli import download, load_catalog, main
-
-
-def _client(body: bytes = b"a,b\n1,2\n", content_type: str = "text/csv", status: int = 200):
-    """An httpx client wired to a mock transport — no real network."""
-    return httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(
-        status, headers={"content-type": content_type}, content=body
-    )))
+from data_fetch.cli import _CATALOG, main, synthesize
 
 
-def test_download_streams_named_dataset_to_file(tmp_path: Path):
-    out = tmp_path / "x.csv"
-    catalog = {"ds": "https://example.invalid/ds.csv"}
-    r = download("ds", catalog, str(out), client=_client(b"hello world"))
-    assert out.read_bytes() == b"hello world"
-    assert r.name == "ds" and r.bytes == 11 and r.content_type == "text/csv" and r.status == 200
+@pytest.mark.parametrize("name", sorted(_CATALOG))
+def test_every_dataset_is_large_and_wide_and_mixed(name: str):
+    # Small row count for test speed; shape/columns rule is what matters.
+    df = synthesize(name, rows=200, seed=1)
+    assert df.shape[0] == 200
+    assert df.shape[1] >= 20  # the "20+ columns" guarantee
+    # mixed dtypes: id + categorical + datetime + numeric
+    assert {"record_id", "line", "shift", "operator", "timestamp", "label"} <= set(df.columns)
+    assert pd.api.types.is_datetime64_any_dtype(df["timestamp"])
+    assert df.select_dtypes("number").shape[1] >= 18  # plenty of numeric cols
 
 
-def test_download_rejects_unknown_name(tmp_path: Path):
-    try:
-        download("nope", {"ds": "https://x/y"}, str(tmp_path / "o"), client=_client())
-    except KeyError:
-        return
-    raise AssertionError("expected KeyError for an unknown dataset name")
+def test_deterministic_for_same_seed():
+    a = synthesize("alloy-batches", rows=100, seed=7)
+    b = synthesize("alloy-batches", rows=100, seed=7)
+    assert a.equals(b)
 
 
-def test_main_unknown_dataset_is_usage_error_without_network(capsys):
-    # Uses the built-in catalog; an unknown name fails BEFORE any download.
+def test_unknown_name_raises():
+    with pytest.raises(KeyError):
+        synthesize("nope", rows=10)
+
+
+def test_main_writes_csv(tmp_path: Path, capsys):
+    out = tmp_path / "ds.csv"
+    rc = main(["sensor-telemetry", "--rows", "150", "--out", str(out), "--json"])
+    assert rc == 0
+    meta = json.loads(capsys.readouterr().out)
+    assert meta["rows"] == 150 and meta["columns"] >= 20
+    # the CSV round-trips at the reported shape
+    back = pd.read_csv(out)
+    assert back.shape == (150, meta["columns"])
+
+
+def test_main_unknown_is_usage_error(capsys):
     assert main(["definitely-not-a-dataset"]) == 2
     assert "unknown dataset" in capsys.readouterr().err
 
 
 def test_main_list(capsys):
     assert main(["--list", "--json"]) == 0
-    assert "datasets" in json.loads(capsys.readouterr().out)
-
-
-def test_env_catalog_override(monkeypatch):
-    monkeypatch.setenv("DATA_FETCH_CATALOG", json.dumps({"only": "https://x/y.csv"}))
-    assert load_catalog() == {"only": "https://x/y.csv"}
+    assert sorted(json.loads(capsys.readouterr().out)["datasets"]) == sorted(_CATALOG)
