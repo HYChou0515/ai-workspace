@@ -29,11 +29,17 @@ from workspace_app.factories import (
     get_spec,
 )
 from workspace_app.monitor import SpecstarMonitor
+from workspace_app.rca.sample_tools import available_sample_tools
 
 
 def main() -> None:
     settings = Settings.from_env()
     spec = get_spec(settings)
+    # Deploy-level provisioned tools. Only those whose prebuilt package exists
+    # are advertised (run `scripts/prebuild_tools.py`); a real deployment swaps
+    # this for its own ToolDefs. They're gated per-investigation by the agent
+    # config's allowed_tools, so the tool-demo template is what turns them on.
+    tool_defs = available_sample_tools()
     app = create_app(
         spec=spec,
         sandbox=get_sandbox(settings),
@@ -47,7 +53,11 @@ def main() -> None:
         read_file_max_lines=settings.read_file_max_lines,
         read_file_max_chars=settings.read_file_max_chars,
         history_max_messages=settings.history_max_messages,
+        tool_defs=tool_defs,
     )
+    if tool_defs:
+        names = ", ".join(t.name for t in tool_defs)
+        print(f"  provisioned tools available (tool-demo template): {names}")
     uvicorn.run(app, host=settings.host, port=settings.port)
 
 
