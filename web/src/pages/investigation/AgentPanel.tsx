@@ -289,6 +289,7 @@ export function AgentPanel({
             style={{ display: "none" }}
           />
           <Popover
+            side="top"
             trigger={({ onClick }) => (
               <button
                 type="button"

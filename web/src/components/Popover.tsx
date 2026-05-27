@@ -10,11 +10,15 @@ export function Popover({
   trigger,
   children,
   align = "start",
+  side = "bottom",
   width,
 }: {
   trigger: (props: { onClick: () => void; open: boolean }) => React.ReactNode;
   children: (close: () => void) => React.ReactNode;
   align?: "start" | "end";
+  /** Which side of the trigger to open on. Use "top" for triggers anchored near
+   * the bottom of the viewport (e.g. the composer) so the menu isn't clipped. */
+  side?: "top" | "bottom";
   width?: number;
 }) {
   const [open, setOpen] = useState(false);
@@ -48,7 +52,7 @@ export function Popover({
           role="dialog"
           style={{
             position: "absolute",
-            top: "calc(100% + 6px)",
+            [side === "top" ? "bottom" : "top"]: "calc(100% + 6px)",
             [align === "start" ? "left" : "right"]: 0,
             background: "var(--white)",
             border: "1px solid var(--paper-3)",
