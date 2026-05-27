@@ -449,7 +449,7 @@ export function KbCollectionsPage({
                             {d.status === "indexing" ? "indexing…" : "error"}
                           </span>
                         )}
-                        <a className="kb-iconbtn" href={docHref(d.resource_id)} target="_blank" rel="noreferrer" title="Open in new tab" aria-label={`Open ${d.path} in new tab`}>
+                        <a className="kb-iconbtn" href={docHref(d.resource_id)} target="_blank" rel="noreferrer" title="Open full view" aria-label={`Open ${d.path} in full view`}>
                           <Icon name="arrow_u" size={13} />
                         </a>
                       </span>
