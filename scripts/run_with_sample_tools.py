@@ -1,18 +1,24 @@
 """Run the app with the two sample provisioned tools wired in — for manual testing.
 
-    SANDBOX_ISOLATE=false uv run python scripts/run_with_sample_tools.py
+    uv run python scripts/run_with_sample_tools.py
 
-(`SANDBOX_ISOLATE=false` so the sandbox runs commands on the host with the
-workspace dir as cwd — that way `uv` on your PATH is reachable. The default
-chroot/userns jail wouldn't have `uv` unless you bake it into the sandbox.)
+USE THIS, not `python -m workspace_app`: the default entry has no provisioned
+tools, so the agent would only see the built-ins and (if a prompt mentions
+`data-fetch`) improvise a bogus `exec` call.
 
-Then open http://127.0.0.1:8000, start an investigation, and ask the agent e.g.:
+It forces `SANDBOX_ISOLATE=false` so the sandbox runs commands on the host with
+the workspace dir as cwd — that way `uv` on your PATH is reachable. The default
+chroot/userns jail has no `uv`, so a provisioned tool would fail there unless
+you bake `uv` + the tool into the sandbox image (the production path).
+
+Then open http://127.0.0.1:8000, start an investigation (the `tool-demo`
+template primes the agent), and ask:
 
     Fetch the "alloy-batches" dataset, then summarise its columns.
 
-The agent calls `data-fetch` (installed into the sandbox via `uv sync` on first
-use) to write alloy-batches.csv into the workspace, then `csv-column-summary` to
-summarise it — each tool's deps live in its own sample-tools/ venv, never the app.
+The agent calls the `data-fetch` function tool (installed into the sandbox via
+`uv sync` on first use) → writes alloy-batches.csv into the workspace → then
+`csv-column-summary`. Each tool's deps live in its own sample-tools/ venv.
 
 This file is the template for how a real deployment wires its own tools: define
 ToolDefs → pass `tool_defs=` to create_app → list the tool names in an
@@ -21,11 +27,16 @@ AgentConfig's `allowed_tools`.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import msgspec
 import uvicorn
 from specstar import QB
+
+# Local testing: the LocalProcessSandbox chroot jail has no `uv`; run unjailed so
+# the host's `uv` is reachable. (Override by exporting SANDBOX_ISOLATE yourself.)
+os.environ.setdefault("SANDBOX_ISOLATE", "false")
 
 from workspace_app.agent.provision import ToolDef
 from workspace_app.api import create_app
@@ -125,6 +136,13 @@ def build_app():
 
 def main() -> None:
     app, settings = build_app()
+    isolate = os.environ.get("SANDBOX_ISOLATE")
+    url = f"http://{settings.host}:{settings.port}"
+    print(
+        "\n  Sample tools wired: data-fetch, csv-column-summary"
+        f"\n  SANDBOX_ISOLATE={isolate}  (jail off so the sandbox can run uv)"
+        f"\n  -> {url}  — new investigation, pick the 'tool-demo' template\n"
+    )
     uvicorn.run(app, host=settings.host, port=settings.port)
 
 
