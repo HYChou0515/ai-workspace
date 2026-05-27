@@ -43,6 +43,7 @@ class _Recording:
 
     def __init__(self, results: dict[tuple[str, ...], ExecResult] | None = None) -> None:
         self.calls: list[list[str]] = []
+        self.uploads: list[tuple[str, int]] = []
         self._results = results or {}
 
     async def create(self, spec: SandboxSpec) -> SandboxHandle:  # pragma: no cover
@@ -51,6 +52,9 @@ class _Recording:
     async def exec(self, handle, cmd, on_output=None) -> ExecResult:
         self.calls.append(cmd)
         return self._results.get(tuple(cmd), ExecResult(exit_code=0, stdout=b"ok"))
+
+    async def upload(self, handle, data, remote_path) -> None:
+        self.uploads.append((remote_path, len(data)))
 
     async def kill(self, handle) -> None:  # pragma: no cover
         return None
@@ -110,6 +114,27 @@ async def test_provision_runs_each_setup_step():
     sb = _Recording()
     await provision_tools(sb, SandboxHandle(id="s1"), [_DEF])  # ty: ignore[invalid-argument-type]
     assert sb.calls == [["uv", "sync"]]
+
+
+async def test_provision_copies_prebuilt_package_into_sandbox(tmp_path):
+    # A prebuilt, relocatable package on the host (a fake venv tree).
+    pkg = tmp_path / "pkg"
+    (pkg / ".venv" / "bin").mkdir(parents=True)
+    (pkg / ".venv" / "bin" / "tool").write_text("#!/bin/sh\necho hi\n")
+    tool = ToolDef(
+        name="x",
+        description="",
+        invoke=["tools/x/.venv/bin/tool"],
+        prebuilt=str(pkg),
+        install_dir="tools/x",
+    )
+    sb = _Recording()
+    await provision_tools(sb, SandboxHandle(id="s1"), [tool])  # ty: ignore[invalid-argument-type]
+    # the package is shipped in as one workspace-relative archive upload …
+    assert sb.uploads and sb.uploads[0][0] == ".provision-x.tar.gz"
+    assert sb.uploads[0][1] > 0
+    # … then extracted into install_dir (mkdir + tar in one shell step).
+    assert any("tar xzf .provision-x.tar.gz -C tools/x" in " ".join(c) for c in sb.calls)
 
 
 async def test_provision_raises_on_nonzero_exit():

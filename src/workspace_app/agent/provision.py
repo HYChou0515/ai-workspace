@@ -19,9 +19,12 @@ A `ToolDef` is declarative + data-only (so it can later be a specstar resource):
 
 from __future__ import annotations
 
+import io
 import json
+import tarfile
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from agents import FunctionTool, RunContextWrapper
@@ -58,6 +61,23 @@ class ToolDef:
     # param names that map to positional argv (in order); everything else in the
     # schema becomes a `--flag` (or bare `--flag` for booleans).
     positional: list[str] = field(default_factory=list)
+    # A prebuilt, RELOCATABLE package on the host (e.g. `uv venv --relocatable` +
+    # the installed tool). At provision time it's copied INTO the sandbox at
+    # `install_dir` (tar → upload → untar), so the sandbox needs no uv / network
+    # / build step — `invoke` then runs the copied venv binary directly. Works
+    # inside the chroot jail / a container.
+    prebuilt: str | None = None
+    install_dir: str | None = None  # sandbox dest; defaults to /opt/tools/<name>
+
+
+def _tar_tree(src: Path) -> bytes:
+    """A gz tar of `src`'s contents (children at the archive root), preserving
+    permissions + symlinks — so an extracted relocatable venv still runs."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for child in sorted(src.iterdir()):
+            tar.add(child, arcname=child.name)
+    return buf.getvalue()
 
 
 def build_argv(tool: ToolDef, params: dict[str, Any]) -> list[str]:
@@ -82,9 +102,20 @@ def build_argv(tool: ToolDef, params: dict[str, Any]) -> list[str]:
 async def provision_tools(
     sandbox: Sandbox, handle: SandboxHandle, tools: Sequence[ToolDef]
 ) -> None:
-    """Run every tool's `setup` in the sandbox, in order. Raises `ProvisionError`
-    on the first non-zero exit so a broken install surfaces loudly."""
+    """Install each tool into the sandbox: copy in its prebuilt package (if any),
+    then run its `setup`. Raises `ProvisionError` on the first non-zero exit."""
     for tool in tools:
+        if tool.prebuilt:
+            dest = tool.install_dir or f"/opt/tools/{tool.name}"
+            # workspace-root-relative (upload is too) so it resolves the same in
+            # the chroot jail (root=/) and unjailed (cwd=workspace dir).
+            archive = f".provision-{tool.name}.tar.gz"
+            await sandbox.upload(handle, _tar_tree(Path(tool.prebuilt)), archive)
+            extract = await sandbox.exec(
+                handle, ["sh", "-c", f"mkdir -p {dest} && tar xzf {archive} -C {dest}"]
+            )
+            if extract.exit_code != 0:
+                raise ProvisionError(tool.name, ["tar", "-C", dest], extract)
         for cmd in tool.setup:
             result = await sandbox.exec(handle, cmd)
             if result.exit_code != 0:
