@@ -66,6 +66,12 @@ class Settings:
     runner_max_retries: int = 2
     runner_max_turns: int = 10
 
+    # read_file caps — a read past either is truncated with a notice (the agent
+    # pages with offset/limit). Defaults sized for a large-context model; tighten
+    # for a small local model. chars ≈ tokens × 4.
+    read_file_max_lines: int = 2000
+    read_file_max_chars: int = 200_000
+
     # KB embedder ("" → offline HashEmbedder). dim is EMBED_DIM (import-time;
     # the DocChunk Vector width), never a separate knob — they must agree.
     # Default is bge-m3 (1024-dim, == EMBED_DIM): a strong multilingual embedder
@@ -101,6 +107,8 @@ class Settings:
             filestore_kind=e.get("FILESTORE_KIND", d.filestore_kind),
             runner_max_retries=int(e.get("RUNNER_MAX_RETRIES", str(d.runner_max_retries))),
             runner_max_turns=int(e.get("RUNNER_MAX_TURNS", str(d.runner_max_turns))),
+            read_file_max_lines=int(e.get("READ_FILE_MAX_LINES", str(d.read_file_max_lines))),
+            read_file_max_chars=int(e.get("READ_FILE_MAX_CHARS", str(d.read_file_max_chars))),
             kb_embed_model=e.get("KB_EMBED_MODEL", d.kb_embed_model),
             kb_query_prefix=e.get("KB_QUERY_PREFIX", d.kb_query_prefix),
             kb_doc_prefix=e.get("KB_DOC_PREFIX", d.kb_doc_prefix),

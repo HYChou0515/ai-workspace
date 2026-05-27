@@ -44,6 +44,8 @@ def main() -> None:
         kb_llm=get_kb_llm(settings),
         monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
         root_path=settings.root_path,
+        read_file_max_lines=settings.read_file_max_lines,
+        read_file_max_chars=settings.read_file_max_chars,
     )
     uvicorn.run(app, host=settings.host, port=settings.port)
 

@@ -220,6 +220,8 @@ def create_app(
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
+    read_file_max_lines: int = 2000,
+    read_file_max_chars: int = 200_000,
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -552,6 +554,9 @@ def create_app(
             ask_kb=_ask_kb,
             # Lets the agent's mention_user tool summon a human to this case.
             mention=_agent_mention,
+            # read_file truncation caps (deploy config).
+            read_file_max_lines=read_file_max_lines,
+            read_file_max_chars=read_file_max_chars,
         )
 
         def persist(produced: list[TurnMessage]) -> None:

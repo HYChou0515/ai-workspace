@@ -40,14 +40,40 @@ async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) ->
     return _format_exec(result)
 
 
-async def read_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> str:
-    """Read a file from the workspace file store."""
+async def read_file_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    path: str,
+    offset: int | None = None,
+    limit: int | None = None,
+) -> str:
+    """Read a file from the workspace. Returns a window of lines: `offset` is the
+    1-based first line (default 1), `limit` the number of lines (default: the
+    configured cap). A large file is truncated — by line count and by a total
+    character budget — with a notice; page through it with `offset`/`limit`."""
     fs, inv = _workspace(ctx)
     try:
         data = await fs.read(inv, path)
     except FileNotFound:
         return f"error: file not found: {path}"
-    return data.decode("utf-8", errors="replace")
+
+    lines = data.decode("utf-8", errors="replace").split("\n")
+    total = len(lines)
+    start = max(0, (offset or 1) - 1)
+    count = limit if limit is not None else ctx.context.read_file_max_lines
+    window = lines[start : start + count]
+    body = "\n".join(window)
+
+    notices: list[str] = []
+    end = start + len(window)
+    if start > 0 or end < total:
+        notices.append(f"showing lines {start + 1}-{end} of {total}")
+    max_chars = ctx.context.read_file_max_chars
+    if len(body) > max_chars:
+        body = body[:max_chars]
+        notices.append(f"output capped at {max_chars} chars")
+    if notices:
+        body += f"\n\n[truncated: {'; '.join(notices)} — use offset/limit to read more]"
+    return body
 
 
 async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, content: str) -> str:

@@ -59,6 +59,11 @@ class AgentToolContext:
     # Optional sink the exec tool streams a command's stdout to while it runs,
     # so the runner can emit live tool-log events. Set per-run by the runner.
     on_exec_output: OutputSink | None = None
+    # read_file caps (deploy config; the API layer sets these from Settings).
+    # A read past either cap is truncated with a notice; the agent pages with
+    # offset/limit. Defaults sized for a large-context model.
+    read_file_max_lines: int = 2000
+    read_file_max_chars: int = 200_000
 
     # KB agent (kb_search tool).
     retriever: Retriever | None = None

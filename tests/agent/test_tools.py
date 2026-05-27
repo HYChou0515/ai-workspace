@@ -15,6 +15,48 @@ from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 
 
+async def test_read_file_caps_lines_with_a_notice_and_supports_offset_limit():
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1", files=files, read_file_max_lines=3, read_file_max_chars=10_000
+        )
+    )
+    body = "\n".join(f"line{i}" for i in range(10))  # line0 .. line9
+    await write_file_impl(ctx, "/big.txt", body)
+
+    # default (no offset/limit): first max_lines lines + a truncation notice
+    out = await read_file_impl(ctx, "/big.txt")
+    head, _, notice = out.partition("[truncated")
+    assert head.strip() == "line0\nline1\nline2"
+    assert notice and "offset" in notice  # tells the agent how to read more
+
+    # offset is 1-based; limit windows from there
+    win = await read_file_impl(ctx, "/big.txt", offset=5, limit=2)
+    assert win.partition("[truncated")[0].strip() == "line4\nline5"
+
+    # a small file (under the caps) is returned verbatim — no notice
+    await write_file_impl(ctx, "/small.txt", "a\nb")
+    assert await read_file_impl(ctx, "/small.txt") == "a\nb"
+
+
+async def test_read_file_caps_total_chars_even_on_one_long_line():
+    files = WorkspaceFiles(MemoryFileStore())
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            files=files,
+            read_file_max_lines=10_000,
+            read_file_max_chars=20,
+        )
+    )
+    await write_file_impl(ctx, "/wide.txt", "x" * 100)
+    out = await read_file_impl(ctx, "/wide.txt")
+    assert out.startswith("x" * 20)
+    assert "x" * 100 not in out
+    assert "[truncated" in out
+
+
 async def test_write_file_is_create_only_and_edit_file_modifies():
     files = WorkspaceFiles(MemoryFileStore())
     ctx = RunContextWrapper(AgentToolContext(investigation_id="inv-1", files=files))
