@@ -45,13 +45,8 @@ import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
 import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
-import {
-  basename,
-  breadcrumbSegments,
-  dirChildren,
-  isRawEditorView,
-  pickRenderer,
-} from "./renderer";
+import { basename, breadcrumbSegments, dirChildren } from "./renderer";
+import { hasEditToggle, isRawEditorView, pickRenderer } from "../../renderers/registry";
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPane } from "./TerminalPane";
 
@@ -1891,7 +1886,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
   const activeIsNotebook = activeKind === "notebook";
   // Markdown and images have a preview ↔ edit duality (the others are
   // always editable text or always rendered).
-  const activeHasEditToggle = activeKind === "markdown" || activeKind === "image";
+  const activeHasEditToggle = activeKind != null && hasEditToggle(activeKind);
   const editMode = useEditMode();
   const requestClose = useContext(RequestCloseContext);
   const [dragFrom, setDragFrom] = useState<number | null>(null);

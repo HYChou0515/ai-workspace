@@ -1,57 +1,11 @@
 /**
- * File-type → renderer mapping. The "views" in the design (brief / SPC /
- * Pareto / fishbone / 5-Why / report) are just renderers picked by
- * extension + filename. See contract.md §5.
+ * Pure path utilities for the workspace file tree / breadcrumbs.
+ *
+ * The file-type → renderer dispatch (pickRenderer / isRawEditorView /
+ * hasOutline / the renderer table) lives in `renderers/registry.ts` — the one
+ * place to add a preview type. `imageMime` stays here (a pure helper the image
+ * renderer uses; keeping it out of the registry avoids an import cycle).
  */
-
-export type RendererKey =
-  | "markdown"
-  | "notebook"
-  | "fishbone"
-  | "report"
-  | "csv"
-  | "json"
-  | "image"
-  | "text";
-
-export function pickRenderer(path: string): RendererKey {
-  // Report version files take a dedicated renderer that knows about /report.v*.md.
-  if (/^\/?report\.v\d+\.md$/.test(path)) return "report";
-
-  const ext = path.toLowerCase().split(".").pop() ?? "";
-  switch (ext) {
-    case "md":
-    case "markdown":
-      return "markdown";
-    case "ipynb":
-      return "notebook";
-    case "canvas":
-      return "fishbone";
-    case "csv":
-    case "tsv":
-      return "csv";
-    case "json":
-      return "json";
-    case "png":
-    case "jpg":
-    case "jpeg":
-    case "gif":
-    case "svg":
-    case "webp":
-      return "image";
-    default:
-      return "text";
-  }
-}
-
-/** True when the active view is a raw full-bleed code editor (Monaco) vs a
- * rendered preview. Drives the pane padding — editors sit edge-to-edge,
- * previews get breathing room. */
-export function isRawEditorView(kind: RendererKey, editing: boolean): boolean {
-  if (kind === "text" || kind === "csv" || kind === "json") return true;
-  if (kind === "markdown" || kind === "image") return editing;
-  return false; // notebook / report / fishbone render their own layout
-}
 
 /** MIME type for an image path, for building a Blob URL from edited bytes. */
 export function imageMime(path: string): string {
@@ -68,17 +22,11 @@ export function imageMime(path: string): string {
       return "image/svg+xml";
     case "webp":
       return "image/webp";
+    case "bmp":
+      return "image/bmp";
     default:
       return "application/octet-stream";
   }
-}
-
-/** Does this file type have markdown headings worth showing in the
- * Outline panel? Both the markdown renderer and the report renderer
- * (which wraps /report.v*.md) render markdown bodies. */
-export function hasOutline(path: string): boolean {
-  const kind = pickRenderer(path);
-  return kind === "markdown" || kind === "report";
 }
 
 /** Basename of a file path. Used in tab strip and breadcrumb. */

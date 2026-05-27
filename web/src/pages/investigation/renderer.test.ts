@@ -1,34 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  basename,
-  breadcrumbSegments,
-  dirChildren,
-  dirname,
-  imageMime,
-  isRawEditorView,
-  pickRenderer,
-} from "./renderer";
-
-describe("isRawEditorView", () => {
-  it("text-like kinds are always raw editors", () => {
-    for (const k of ["text", "csv", "json"] as const) {
-      expect(isRawEditorView(k, false)).toBe(true);
-      expect(isRawEditorView(k, true)).toBe(true);
-    }
-  });
-  it("markdown and image are raw editors only while editing", () => {
-    expect(isRawEditorView("markdown", true)).toBe(true);
-    expect(isRawEditorView("markdown", false)).toBe(false);
-    expect(isRawEditorView("image", true)).toBe(true);
-    expect(isRawEditorView("image", false)).toBe(false);
-  });
-  it("rendered views are never raw editors", () => {
-    for (const k of ["notebook", "report", "fishbone"] as const) {
-      expect(isRawEditorView(k, true)).toBe(false);
-    }
-  });
-});
+import { basename, breadcrumbSegments, dirChildren, dirname, imageMime } from "./renderer";
 
 describe("imageMime", () => {
   it("maps extensions to image MIME types", () => {
@@ -38,34 +10,7 @@ describe("imageMime", () => {
     expect(imageMime("/a.gif")).toBe("image/gif");
     expect(imageMime("/a.svg")).toBe("image/svg+xml");
     expect(imageMime("/a.webp")).toBe("image/webp");
-  });
-});
-
-describe("pickRenderer", () => {
-  it("routes /report.vN.md to the report renderer (not generic markdown)", () => {
-    expect(pickRenderer("/report.v1.md")).toBe("report");
-    expect(pickRenderer("/report.v42.md")).toBe("report");
-    expect(pickRenderer("report.v3.md")).toBe("report");
-  });
-
-  it("does not match the report pattern for arbitrary .md files", () => {
-    expect(pickRenderer("/brief.md")).toBe("markdown");
-    expect(pickRenderer("/5-why.md")).toBe("markdown");
-    expect(pickRenderer("/notes/report-template.md")).toBe("markdown");
-  });
-
-  it("routes by file extension", () => {
-    expect(pickRenderer("/analyses/drift.ipynb")).toBe("notebook");
-    expect(pickRenderer("/fishbone.canvas")).toBe("fishbone");
-    expect(pickRenderer("/data/spc.csv")).toBe("csv");
-    expect(pickRenderer("/config.json")).toBe("json");
-    expect(pickRenderer("/photos/bridge.png")).toBe("image");
-    expect(pickRenderer("/photos/x-ray.JPG")).toBe("image");
-  });
-
-  it("falls back to plain text for unknown extensions", () => {
-    expect(pickRenderer("/data/log.txt")).toBe("text");
-    expect(pickRenderer("/Makefile")).toBe("text");
+    expect(imageMime("/a.bmp")).toBe("image/bmp");
   });
 });
 

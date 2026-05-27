@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
+import { hasOutline } from "../../renderers/registry";
 import { extractHeadings } from "./InvestigationShell";
-import { hasOutline } from "./renderer";
 
 describe("hasOutline", () => {
   it("is true for markdown files", () => {
