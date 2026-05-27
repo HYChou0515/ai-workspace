@@ -92,9 +92,19 @@ export function tokensPerSec(m: AgentMetricsState): number {
   return m.elapsedMs > 0 ? Math.round(m.completionTokens / (m.elapsedMs / 1000)) : 0;
 }
 
+/** True while any tool call in the log is still running (no tool_end yet). The
+ * status line uses this to keep the cumulative token count visible — but
+ * paused — during the tool gap, when no new metrics arrive. */
+export function isToolRunning(log: AgentLog): boolean {
+  return log.entries.some((e) => e.kind === "tool_call" && e.call.status === "running");
+}
+
 /** Claude-Code-style one-liner: ↑ prompt while sending, ↓ completion +
- * tok/s while/after receiving. */
-export function formatMetrics(m: AgentMetricsState): string {
+ * tok/s while/after receiving. While a tool runs (`toolRunning`), generation is
+ * paused and no fresh metrics arrive, so keep the cumulative ↑/↓ tokens but drop
+ * the would-be-stale tok/s · elapsed and flag the tool instead. */
+export function formatMetrics(m: AgentMetricsState, toolRunning = false): string {
+  if (toolRunning) return `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok · ⏳ running…`;
   const secs = (m.elapsedMs / 1000).toFixed(1);
   if (m.phase === "up") return `↑ ${m.promptTokens} tok · sending…`;
   return `↑ ${m.promptTokens} · ↓ ${m.completionTokens} tok · ${tokensPerSec(m)} tok/s · ${secs}s`;

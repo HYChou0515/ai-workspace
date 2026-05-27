@@ -14,7 +14,7 @@ import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
 import { useKbChat } from "../../hooks/useKbChat";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
-import { formatMetrics } from "../investigation/agentLog";
+import { formatMetrics, isToolRunning } from "../investigation/agentLog";
 
 export function KbChatPanel({
   chatId = null,
@@ -85,7 +85,9 @@ export function KbChatPanel({
           <EntryView key={i} entry={entry} onOpenCitation={onOpenCitation} />
         ))}
         {log.streaming && !log.metrics && <div className="kb-drawer__searching">working…</div>}
-        {log.metrics && <div className="kb-metrics">{formatMetrics(log.metrics)}</div>}
+        {log.metrics && (
+          <div className="kb-metrics">{formatMetrics(log.metrics, isToolRunning(log))}</div>
+        )}
         {log.error && <div className="kb-drawer__error">{log.error}</div>}
       </div>
 

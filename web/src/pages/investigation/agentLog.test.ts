@@ -5,6 +5,7 @@ import {
   EMPTY_LOG,
   type AgentLog,
   formatMetrics,
+  isToolRunning,
   logFromMessages,
   reduceAgent,
   tokensPerSec,
@@ -21,6 +22,28 @@ describe("metrics formatting", () => {
     expect(down).toContain("↑ 256");
     expect(down).toContain("↓ 40 tok");
     expect(down).toContain("40 tok/s");
+  });
+  it("during a tool call keeps cumulative tokens but drops the stale tok/s", () => {
+    const m = { phase: "down" as const, promptTokens: 256, completionTokens: 40, elapsedMs: 1000 };
+    const line = formatMetrics(m, true);
+    expect(line).toContain("↑ 256");
+    expect(line).toContain("↓ 40 tok");
+    expect(line).toContain("running");
+    expect(line).not.toContain("tok/s"); // paused — no misleading rate during the tool gap
+  });
+});
+
+describe("isToolRunning", () => {
+  const tool = (status: "running" | "done") => ({
+    kind: "tool_call" as const,
+    call: { call_id: "t1", name: "kb_search", args: {}, status },
+  });
+  it("is true while a tool_call entry is still running", () => {
+    expect(isToolRunning({ ...EMPTY_LOG, entries: [tool("running")] })).toBe(true);
+  });
+  it("is false once every tool call is done (or there are none)", () => {
+    expect(isToolRunning({ ...EMPTY_LOG, entries: [tool("done")] })).toBe(false);
+    expect(isToolRunning(EMPTY_LOG)).toBe(false);
   });
 });
 

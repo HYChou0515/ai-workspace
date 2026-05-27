@@ -16,7 +16,7 @@ import { UserPicker } from "../../components/UserPicker";
 import { useAgent } from "../../hooks/useAgent";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
-import { formatMetrics } from "./agentLog";
+import { formatMetrics, isToolRunning } from "./agentLog";
 
 const TEXT_EXTENSIONS = new Set([
   ".md",
@@ -164,7 +164,7 @@ export function AgentPanel({
               padding: "2px 0 0 28px",
             }}
           >
-            {formatMetrics(log.metrics)}
+            {formatMetrics(log.metrics, isToolRunning(log))}
           </div>
         )}
         {log.error && (
