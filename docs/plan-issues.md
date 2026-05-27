@@ -150,13 +150,36 @@ secrets for real (non-sample) tools.
 
 ---
 
+## #16 — multi-pod state ✅ (filestore fixed; runtime needs sticky routing)
+
+Target: **multi-replica**, hundreds of users (NOT single-replica). Verified the
+whole in-memory inventory; only ONE thing is a code-fixable cross-pod data bug:
+
+- **`SpecstarFileStore._ids` (FIXED).** It cached workspace_id→resource_id in
+  memory, so a fresh pod created a DUPLICATE `_WorkspaceFiles` and pods couldn't
+  see each other's files. Fix: the resource id is **deterministic** —
+  `quote(workspace_id)` — so any pod `get()`s the one shared record. No cache,
+  no index, no duplicates. (Tested: a 2nd instance on the same store sees the
+  1st's files.) Files were always in specstar (shared); only the cache was wrong
+  — so this matters even with sticky routing (a pod restart/failover gives a
+  fresh, empty cache).
+
+**Inherently pod-local runtime → sticky routing (deployment, chosen path A):** a
+live subprocess / Jupyter kernel / in-flight turn task / in-process lock
+physically lives on one pod and can't move. So route a workspace's requests to a
+consistent pod (session affinity keyed by investigation/workspace id). This is
+multi-replica + horizontal (workspaces spread across N pods → hundreds of
+users); it is NOT single-replica. The pod-local set (verified by reading each):
+`LocalProcessSandbox._dirs`, `DockerSandbox._containers`, `KernelService._kernels`,
+`ChatTurnEngine._sessions`, `InvestigationRegistry._sessions`, `WorkspaceFiles._locks`.
+NOT bugs: `SandboxSync._versions` (re-mirror at worst), `MonitorProcessor._groups`
+(a trace is wholly on one pod). Dev/test: MockSandbox, MemoryFileStore.
+
+**Deployment requirement:** k8s Service `sessionAffinity` / ingress affinity by
+the workspace id, OR externalize the sandbox runtime into a remote sandbox
+service (stateless pods — a bigger change, deferred; path B).
+
 ## Parked
 
-- **#16 multi-pod in-memory state.** Concrete bug: `SpecstarFileStore._ids`
-  in-memory cache → not actually cross-pod (fix: derive resource id from
-  `workspace_id`, no cache). Sandbox handles + in-flight turn sessions are
-  inherently pod-local (sticky routing / externalize — deployment, not a code
-  tweak). Today the deploy is single-replica (`replicas: 1`, *"does not
-  horizontally scale as-is"*), so this is forward-prep — revisit when scaling.
 - **#22 FE half.** Show the persisted metrics (and confirm reasoning/tool cards)
   on reload in `AgentEntryView` / the chat panels.
