@@ -43,6 +43,7 @@ export type IconName =
   | "flame"
   | "refresh"
   | "quote"
+  | "external"
   | "paperclip";
 
 export function Icon({
@@ -227,6 +228,13 @@ export function Icon({
         d="M7 7 H10 V12 Q10 15 7 16 M14 7 H17 V12 Q17 15 14 16"
         {...sp}
       />
+    ),
+    // "open in new tab / full view" — a box with a diagonal arrow leaving it.
+    external: (
+      <>
+        <path d="M18 13 V18 A1 1 0 0 1 17 19 H6 A1 1 0 0 1 5 18 V7 A1 1 0 0 1 6 6 H11" {...sp} />
+        <path d="M14 5 H19 V10 M19 5 L11 13" {...sp} />
+      </>
     ),
   };
 

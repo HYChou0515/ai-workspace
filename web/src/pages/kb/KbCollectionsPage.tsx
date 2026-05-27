@@ -450,7 +450,7 @@ export function KbCollectionsPage({
                           </span>
                         )}
                         <a className="kb-iconbtn" href={docHref(d.resource_id)} target="_blank" rel="noreferrer" title="Open full view" aria-label={`Open ${d.path} in full view`}>
-                          <Icon name="arrow_u" size={13} />
+                          <Icon name="external" size={13} />
                         </a>
                       </span>
                     </div>

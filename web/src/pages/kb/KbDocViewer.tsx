@@ -106,7 +106,7 @@ export function KbDocViewer({
 
         <div className="kb-docviewer__actions">
           <a className="kb-btn kb-btn--sm" href={docHref(docId, snippet)} target="_blank" rel="noreferrer">
-            <Icon name="arrow_u" size={13} /> Open full view
+            <Icon name="external" size={13} /> Open full view
           </a>
           {doc && (
             <a className="kb-btn kb-btn--sm" href={blobHref(doc.file_id)} download={doc.filename}>
