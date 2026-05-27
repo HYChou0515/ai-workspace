@@ -13,7 +13,7 @@ own commit. Tick a box when it lands.
 | 15 | embed service timeout | ✅ done (1b8a538) |
 | 22 | persist token metrics (BE half) | ✅ done (1057171) |
 | 17 | agent has no cross-turn memory | ✅ done (91df4a0) |
-| 21 | sandbox tool provisioning (wiring) | ✅ done (8f52e5b) — caching/secrets follow-up |
+| 21 | sandbox tool provisioning | ✅ done — prebuilt-venv copy + template→AgentConfig; caching/secrets/base-python follow-ups |
 | 16 | multi-pod in-memory state | ⏸ parked |
 
 ---
@@ -96,27 +96,47 @@ continuity). History window configurable in `Settings`.
 - Tests: a 2nd turn's runner input includes the 1st turn's user+assistant text;
   windowing caps old turns; tool/reasoning messages excluded from replay.
 
-## #21 — sandbox tool provisioning (wiring)
+## #21 — sandbox tool provisioning ✅ wired
 
-**Mechanism: DONE** (`agent/provision.py` + `tests/agent/test_provision.py`) —
-`ToolDef` (declarative `setup`/`invoke`/`params`), `provision_tools`,
-`build_provisioned_tools`; proven end-to-end installing the two `sample-tools/`
-into a real sandbox and chaining them. **Not yet wired into a real turn.**
+**Mechanism** (`agent/provision.py`): `ToolDef` is declarative
+(`invoke`/`params`/`positional` + either `setup` argv steps **or** a `prebuilt`
+package). `provision_tools` runs on `ensure_sandbox` for the config's
+`allowed_tools`; `build_provisioned_tools` / `_agent_for` expose each as a
+`FunctionTool` so the agent calls it with structured params (not improvised
+`exec`).
 
-**Open decisions (grill before wiring)**
-1. Where `ToolDef`s live: a dedicated registry/resource vs `AgentConfig`.
-2. Provision timing: eager on sandbox create (in `InvestigationRegistry` /
-   `ensure_sandbox`) vs lazy on first invoke.
-3. `_agent_for` appends `build_provisioned_tools(allowed)` to the agent's tools.
-4. Caching (re-clone/re-sync per cold sandbox is slow), private-repo secrets.
+**Install model — prebuilt relocatable venv (chosen):** a tool is prebuilt once
+on the host as a `uv venv --relocatable` + the installed CLI
+(`scripts/prebuild_tools.py`), then at provision time the whole package is
+`tar`→`upload`→extracted into the sandbox (`--no-same-owner`, since we're
+mapped-root in the userns jail). The sandbox needs **no uv / network / build
+step**; `invoke` runs the copied venv binary. Verified end-to-end: extract works
+in the real chroot jail; provision+invoke chain works via `ensure_sandbox`.
 
-**Approach (once decided)**
-- A `ToolRegistry` of `ToolDef`s; `AgentConfig.allowed_tools` gates which apply.
-- `ensure_sandbox` / registry runs `provision_tools` for allowed defs after
-  create; `_agent_for` adds the provisioned `FunctionTool`s.
-- Tests: a turn with an allowed provisioned tool installs it + the agent can
-  call it (scripted runner / the real-sandbox integration test already proves
-  the exec path).
+**Wiring (no launcher):** `ToolDef`s stay deploy-level code
+(`rca/sample_tools.py`), passed to `create_app(tool_defs=...)` by `__main__`
+(only those whose prebuilt package exists are advertised). A **template profile
+binds its own `AgentConfig`** via `_config.json` (`load_template_config`;
+resolution = attached → template config → store default), so selecting the
+`tool-demo` template — not a launcher — lists the tools in `allowed_tools` and
+turns them on.
+
+**Base-python caveat (important):** a relocatable venv still resolves its base
+python *by path*, so build the venv against the python the SANDBOX has:
+- production LocalProcessSandbox in a py3.12 pod → `prebuild_tools.py --python
+  3.12` (the pod's `/usr/bin/python` is overlaid into the jail), isolate on;
+- the dev box here has only system python 3.9 (tools need ≥3.10) and uv's python
+  isn't in the jail → run with `SANDBOX_ISOLATE=false` (host python reachable).
+Bundling a portable python *into* the package was tried and rejected: the
+standalone `libpython` fails to resolve inside the chroot (linker symbol error).
+
+**Local test flow:** `uv run python scripts/prebuild_tools.py` then
+`SANDBOX_ISOLATE=false uv run python -m workspace_app` → new investigation →
+`tool-demo` template.
+
+**Follow-ups:** provisioning cache (re-copying a big venv per cold sandbox is
+slow), private-repo secrets, and confirming the production base-python /
+sandbox-image choice.
 
 ---
 
