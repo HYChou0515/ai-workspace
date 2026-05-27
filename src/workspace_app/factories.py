@@ -81,6 +81,11 @@ class Settings:
     kb_embed_model: str = "ollama/bge-m3"
     kb_query_prefix: str = ""
     kb_doc_prefix: str = ""
+    # Embedding HTTP resilience: a big doc's chunks are sent in batches, each
+    # with a timeout + retries (a slow/loaded model can otherwise hang/time out).
+    kb_embed_timeout: float = 60.0
+    kb_embed_num_retries: int = 2
+    kb_embed_batch_size: int = 64
 
     # KB chunker
     kb_chunk_max_tokens: int = 256
@@ -112,6 +117,9 @@ class Settings:
             kb_embed_model=e.get("KB_EMBED_MODEL", d.kb_embed_model),
             kb_query_prefix=e.get("KB_QUERY_PREFIX", d.kb_query_prefix),
             kb_doc_prefix=e.get("KB_DOC_PREFIX", d.kb_doc_prefix),
+            kb_embed_timeout=float(e.get("KB_EMBED_TIMEOUT", str(d.kb_embed_timeout))),
+            kb_embed_num_retries=int(e.get("KB_EMBED_NUM_RETRIES", str(d.kb_embed_num_retries))),
+            kb_embed_batch_size=int(e.get("KB_EMBED_BATCH_SIZE", str(d.kb_embed_batch_size))),
             kb_chunk_max_tokens=int(e.get("KB_CHUNK_MAX_TOKENS", str(d.kb_chunk_max_tokens))),
             kb_chunk_overlap=int(e.get("KB_CHUNK_OVERLAP", str(d.kb_chunk_overlap))),
             kb_llm_model=e.get("KB_LLM_MODEL", d.kb_llm_model),
@@ -167,6 +175,9 @@ def get_embedder(settings: Settings) -> Embedder:
             dim=EMBED_DIM,
             query_prefix=settings.kb_query_prefix,
             doc_prefix=settings.kb_doc_prefix,
+            timeout=settings.kb_embed_timeout,
+            num_retries=settings.kb_embed_num_retries,
+            batch_size=settings.kb_embed_batch_size,
         )
     return HashEmbedder(dim=EMBED_DIM)
 

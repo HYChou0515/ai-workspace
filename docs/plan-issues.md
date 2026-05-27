@@ -9,7 +9,7 @@ own commit. Tick a box when it lands.
 
 | # | Title | Status |
 |---|-------|--------|
-| 20 | read_file blows the context window | ☐ todo |
+| 20 | read_file blows the context window | ✅ done (1599ec0) |
 | 15 | embed service timeout | ☐ todo |
 | 22 | persist token metrics (BE half) | ☐ todo |
 | 17 | agent has no cross-turn memory | ☐ todo |

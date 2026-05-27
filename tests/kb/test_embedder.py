@@ -29,3 +29,21 @@ def test_litellm_embedder_constructs_and_reports_its_dim():
     e = LitellmEmbedder("ollama/qwen3-embedding", dim=1024, query_prefix="Q: ")
     assert isinstance(e, LitellmEmbedder)
     assert e.dim == 1024  # must match the DocChunk Vector dim (KB_EMBED_DIM)
+    assert e._timeout == 60.0 and e._num_retries == 2 and e._batch_size == 64  # defaults
+
+
+def test_litellm_embedder_batches_requests_and_preserves_order(monkeypatch):
+    # A large doc → many chunks; we must NOT send them all in one request.
+    e = LitellmEmbedder("m", dim=2, batch_size=2)
+    calls: list[list[str]] = []
+
+    def fake_batch(texts: list[str]) -> list[list[float]]:
+        calls.append(list(texts))
+        return [[float(len(t)), 0.0] for t in texts]
+
+    monkeypatch.setattr(e, "_embed_batch", fake_batch)
+    out = e.embed_documents(["a", "bb", "ccc", "dddd", "eeeee"])  # 5 → batches of 2,2,1
+
+    assert calls == [["a", "bb"], ["ccc", "dddd"], ["eeeee"]]
+    assert len(out) == 5
+    assert out[0] == [1.0, 0.0] and out[3] == [4.0, 0.0]  # order preserved across batches

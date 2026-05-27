@@ -97,18 +97,43 @@ class LitellmEmbedder(_PrefixedEmbedder):
     qwen3-embedding's instruction format) are configured by the caller."""
 
     def __init__(
-        self, model: str, *, dim: int, query_prefix: str = "", doc_prefix: str = ""
+        self,
+        model: str,
+        *,
+        dim: int,
+        query_prefix: str = "",
+        doc_prefix: str = "",
+        timeout: float = 60.0,
+        num_retries: int = 2,
+        batch_size: int = 64,
     ) -> None:
         super().__init__(query_prefix=query_prefix, doc_prefix=doc_prefix)
         self._model = model
         self._dim = dim
+        self._timeout = timeout
+        self._num_retries = num_retries
+        self._batch_size = batch_size
 
     @property
     def dim(self) -> int:
         return self._dim
 
-    def _embed(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover — live model
+    def _embed(self, texts: list[str]) -> list[list[float]]:
+        # A big document yields many chunks — send them in bounded batches so one
+        # request can't be huge (and slow to the point of timing out). Order is
+        # preserved across batches.
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self._batch_size):
+            out.extend(self._embed_batch(texts[i : i + self._batch_size]))
+        return out
+
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover — live model
         import litellm
 
-        resp = litellm.embedding(model=self._model, input=texts)
+        resp = litellm.embedding(
+            model=self._model,
+            input=texts,
+            timeout=self._timeout,
+            num_retries=self._num_retries,
+        )
         return [item["embedding"] for item in resp.data]
