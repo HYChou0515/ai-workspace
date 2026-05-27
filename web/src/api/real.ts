@@ -98,6 +98,7 @@ function toInvestigation(e: SpecstarEntry<InvestigationStruct>): Investigation {
     resource_id: e.revision_info.resource_id,
     created_time: e.revision_info.created_time,
     updated_time: e.revision_info.updated_time,
+    created_by: e.revision_info.created_by,
     title: d.title,
     owner: d.owner,
     description: d.description ?? "",

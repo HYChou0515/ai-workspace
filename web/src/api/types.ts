@@ -29,6 +29,9 @@ export type Investigation = {
   resource_id: string;
   title: string;
   owner: string;
+  /** Server-stamped creator (specstar created_by = the authenticated user).
+   * Authoritative — the panel shows this, not the client-supplied `owner`. */
+  created_by?: string;
   description: string;
   severity: Severity;
   status: Status;

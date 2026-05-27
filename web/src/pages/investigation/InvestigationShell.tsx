@@ -10,6 +10,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../../api";
 import type { AgentConfigInfo, CloseStatus, FileInfo, Investigation } from "../../api/types";
 import { isOpen } from "../../api/types";
+import { ymd } from "../../lib/date";
 import { Icon, type IconName } from "../../components/Icon";
 import { NewInvestigationModal } from "../../components/NewInvestigationModal";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
@@ -1331,11 +1332,9 @@ function SidebarFrame({
       >
         <FootMeta label="Severity"><SeverityChip level={investigation.severity} /></FootMeta>
         <FootMeta label="Status"><StatusChip status={investigation.status} /></FootMeta>
-        <FootMeta label="Owner">{investigation.owner}</FootMeta>
+        <FootMeta label="Owner">{investigation.created_by ?? investigation.owner}</FootMeta>
         <FootMeta label="Product">{investigation.product || "—"}</FootMeta>
-        <FootMeta label="Opened">
-          {new Date(investigation.created_time).toLocaleDateString()}
-        </FootMeta>
+        <FootMeta label="Opened">{ymd(investigation.created_time)}</FootMeta>
       </footer>
     </aside>
   );
