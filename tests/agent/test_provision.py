@@ -103,6 +103,17 @@ def test_agent_for_threads_base_url_and_api_key_to_the_model():
     assert agent.model.api_key == "sk-1"
 
 
+def test_agent_for_threads_reasoning_effort_to_model_settings():
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources.agent_config import AgentConfig
+
+    agent = _agent_for(AgentConfig(name="a"), reasoning_effort="high")
+    assert agent.model_settings.reasoning is not None
+    assert agent.model_settings.reasoning.effort == "high"
+    # absent → no reasoning settings (model's default; nothing forced)
+    assert _agent_for(AgentConfig(name="a")).model_settings.reasoning is None
+
+
 def test_build_argv_positional_then_flags_then_bools():
     assert build_argv(_DEF, {"name": "alloy-batches", "rows": 60, "json": True}) == [
         "uv",

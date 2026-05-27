@@ -67,6 +67,28 @@ def test_template_config_drives_the_turn_so_its_tools_are_allowed():
     assert "csv-column-summary" in allowed
 
 
+def test_message_reasoning_effort_threads_to_the_turn_context():
+    """The per-message reasoning_effort from the UI selector reaches the turn's
+    ctx (→ the model's ModelSettings); absent → None (model default)."""
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    captured: dict[str, object] = {}
+
+    class _Capture:
+        async def run(self, prompt, ctx):
+            captured["effort"] = ctx.reasoning_effort
+            yield RunDone()
+
+    app = create_app(
+        spec=spec, sandbox=MockSandbox(), filestore=MemoryFileStore(), runner=_Capture()
+    )
+    client = TestClient(app)
+    client.post("/investigations/ws-r/messages", json={"content": "q", "reasoning_effort": "high"})
+    assert captured["effort"] == "high"
+    client.post("/investigations/ws-r/messages", json={"content": "q"})
+    assert captured["effort"] is None
+
+
 def test_tool_end_without_a_matching_start_persists_with_null_name_args():
     """Defensive: a ToolEnd with no preceding ToolStart still persists (name +
     args null), rather than crashing the turn."""

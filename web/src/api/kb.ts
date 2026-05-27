@@ -11,6 +11,7 @@ import type { AgentEvent } from "../events";
 import { apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
+import type { ReasoningEffort } from "./types";
 
 export type KbCollection = {
   resource_id: string;
@@ -113,6 +114,7 @@ export type SendKbMessageArgs = {
   chatId: string;
   content: string;
   signal?: AbortSignal;
+  reasoningEffort?: ReasoningEffort;
 };
 
 export type KbAgentConfig = {
@@ -304,7 +306,7 @@ export const realKbApi: KbApi = {
     const resp = await apiFetch(`/kb/chats/${encodeURIComponent(args.chatId)}/messages`, {
       method: "POST",
       headers: jsonHeaders,
-      body: JSON.stringify({ content: args.content }),
+      body: JSON.stringify({ content: args.content, reasoning_effort: args.reasoningEffort }),
       signal: args.signal,
     });
     if (!resp.ok || !resp.body) throw new Error(`kb message failed: ${resp.status}`);

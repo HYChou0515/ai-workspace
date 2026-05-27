@@ -75,6 +75,10 @@ class AgentToolContext:
     # layer from create_app config.
     tool_defs: list[ToolDef] = field(default_factory=list)
 
+    # Per-message reasoning effort from the UI selector ("low"/"medium"/"high");
+    # None → the model's default. Threaded to the model's ModelSettings.
+    reasoning_effort: str | None = None
+
     # KB agent (kb_search tool).
     retriever: Retriever | None = None
     collection_ids: list[str] = field(default_factory=list)

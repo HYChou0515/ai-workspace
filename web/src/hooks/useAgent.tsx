@@ -10,6 +10,7 @@ import {
 
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
+import { getReasoningEffort } from "../lib/reasoningEffort";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -93,6 +94,7 @@ export function useAgentInternal(investigationId: string): AgentState {
           investigationId,
           content: trimmed,
           signal: controller.signal,
+          reasoningEffort: getReasoningEffort() ?? undefined,
         })) {
           setLog((prev) => reduceAgent(prev, ev));
         }

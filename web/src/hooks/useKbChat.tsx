@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi } from "../api/kb";
 import { qk } from "../api/queryKeys";
+import { getReasoningEffort } from "../lib/reasoningEffort";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -102,6 +103,7 @@ export function useKbChat({
           chatId: id,
           content: trimmed,
           signal: controller.signal,
+          reasoningEffort: getReasoningEffort() ?? undefined,
         })) {
           setLog((prev) => reduceAgent(prev, ev));
         }

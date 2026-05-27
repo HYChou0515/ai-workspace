@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import Literal
 
 import msgspec
 from fastapi import FastAPI, HTTPException, Response
@@ -97,6 +98,8 @@ class _ChatBody(BaseModel):
 
 class _MsgBody(BaseModel):
     content: str
+    # Per-message reasoning effort from the UI selector; None → model default.
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
 
 
 class _ShareBody(BaseModel):
@@ -248,6 +251,8 @@ def register_kb_chat_routes(
             agent_config=default_kb_agent_config(),
             # Cross-turn memory: prior dialogue (excludes the user msg just added).
             history=history_items(chat.messages[:-1], max_messages=history_max_messages),
+            # Per-message reasoning effort from the UI selector.
+            reasoning_effort=body.reasoning_effort,
         )
 
         def persist(produced: list[TurnMessage]) -> None:

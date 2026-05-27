@@ -132,10 +132,14 @@ export type SearchResult = { path: string; matches: SearchMatch[] };
 
 /* ---------------------- ApiClient interface ---------------------- */
 
+/** Per-message reasoning effort (the UI selector); omitted → model default. */
+export type ReasoningEffort = "low" | "medium" | "high";
+
 export type SendMessageArgs = {
   investigationId: string;
   content: string;
   signal?: AbortSignal;
+  reasoningEffort?: ReasoningEffort;
 };
 
 export type ExecuteCellArgs = {

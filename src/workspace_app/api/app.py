@@ -120,6 +120,8 @@ class _SpaStaticFiles(StaticFiles):
 
 class _MessageBody(BaseModel):
     content: str
+    # Per-message reasoning effort from the UI selector; None → model default.
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
 
 
 class _MentionBody(BaseModel):
@@ -616,6 +618,8 @@ def create_app(
             # Provisionable tools (installed into the sandbox on create; the
             # runner exposes the allowed ones). Deploy config.
             tool_defs=tool_defs or [],
+            # Per-message reasoning effort from the UI selector.
+            reasoning_effort=body.reasoning_effort,
         )
 
         def persist(produced: list[TurnMessage]) -> None:

@@ -12,6 +12,7 @@ import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
+import { ReasoningEffortPicker } from "../../components/ReasoningEffortPicker";
 import { useKbChat } from "../../hooks/useKbChat";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { formatMetrics, isToolRunning } from "../investigation/agentLog";
@@ -138,6 +139,7 @@ export function KbChatPanel({
           />
           <div className="kb-composer__row">
             <span className="kb-composer__hint">⌘↵ to send</span>
+            <ReasoningEffortPicker />
             {log.streaming ? (
               <button type="button" className="kb-btn kb-btn--stop" onClick={cancel}>
                 <Icon name="x" size={13} /> Stop

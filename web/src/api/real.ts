@@ -423,7 +423,7 @@ export const realApi: ApiClient = {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: args.content }),
+        body: JSON.stringify({ content: args.content, reasoning_effort: args.reasoningEffort }),
         signal: args.signal,
       },
     );

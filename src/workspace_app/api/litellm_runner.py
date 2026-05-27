@@ -15,9 +15,11 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any, Literal
 
-from agents import Agent, RunConfig, Runner
+import litellm
+from agents import Agent, ModelSettings, RunConfig, Runner
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
+from openai.types.shared import Reasoning
 
 from ..agent.context import AgentToolContext
 from ..agent.provision import ToolDef, build_provisioned_tools
@@ -35,6 +37,11 @@ from .events import (
     ToolLog,
     ToolStart,
 )
+
+# Drop params a model doesn't support (e.g. reasoning_effort on a non-reasoning
+# model) instead of erroring — the per-message reasoning-effort selector sends
+# it to every model, and LiteLLM's support varies by provider.
+litellm.drop_params = True
 
 
 def _approx_tokens(chars: int) -> int:
@@ -154,6 +161,7 @@ def _agent_for(
     extra_instructions: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
+    reasoning_effort: str | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
@@ -165,10 +173,20 @@ def _agent_for(
     provisioned = [d for d in (tool_defs or []) if d.name in allowed]
     if provisioned:
         tools.extend(build_provisioned_tools(provisioned))
+    # Per-message reasoning effort (the UI selector). Only set when chosen —
+    # absent leaves the model's default. drop_params (above) drops it on models
+    # that don't support it, so it's safe to send to any model.
+    model_settings = (
+        # effort is validated to low/medium/high by the request body.
+        ModelSettings(reasoning=Reasoning(effort=reasoning_effort))  # ty: ignore[invalid-argument-type]
+        if reasoning_effort
+        else ModelSettings()
+    )
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
         model=LitellmModel(model=config.model, base_url=base_url, api_key=api_key),
+        model_settings=model_settings,
         tools=tools,  # ty: ignore[invalid-argument-type]  # list[FunctionTool] ⊂ list[Tool]
     )
 
@@ -326,6 +344,7 @@ class LitellmAgentRunner:
             extra_instructions=feedback,
             base_url=self._base_url,
             api_key=self._api_key,
+            reasoning_effort=ctx.reasoning_effort,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))

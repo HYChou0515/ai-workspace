@@ -11,6 +11,7 @@ import { API_BASE } from "../../api/http";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
+import { ReasoningEffortPicker } from "../../components/ReasoningEffortPicker";
 import { RcaMark } from "../../components/RcaMark";
 import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
@@ -278,6 +279,7 @@ export function AgentPanel({
           }}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <ReasoningEffortPicker />
           <input
             ref={fileInputRef}
             type="file"
