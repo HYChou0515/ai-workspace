@@ -23,6 +23,8 @@ from msgspec import Struct, field
 from specstar import OnDelete, Ref, Vector
 from specstar.types import Binary
 
+from .conversation import MessageMetrics
+
 # Embedding dimensionality. MUST match the active Embedder; changing the model
 # is a re-index event (every chunk re-embedded). Set per deployment.
 EMBED_DIM = int(os.getenv("KB_EMBED_DIM", "1024"))  # e.g. bge-m3 = 1024
@@ -113,6 +115,7 @@ class KbMessage(Struct):
     tool_args: dict[str, Any] | None = None
     citations: list[Citation] = field(default_factory=list)
     created_at: int | None = None  # epoch ms
+    metrics: MessageMetrics | None = None  # assistant answers: final token usage (survives reload)
 
 
 class KbChat(Struct):  # → resource "kb-chat"

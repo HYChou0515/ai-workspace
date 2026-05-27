@@ -23,7 +23,17 @@ from typing import Any
 from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
-from .events import AgentEvent, MessageDelta, RunCancelled, RunError, ToolEnd, ToolStart, to_sse
+from ..resources.conversation import MessageMetrics
+from .events import (
+    AgentEvent,
+    AgentMetrics,
+    MessageDelta,
+    RunCancelled,
+    RunError,
+    ToolEnd,
+    ToolStart,
+    to_sse,
+)
 from .runner import AgentRunner
 
 
@@ -44,6 +54,7 @@ class TurnMessage:
     tool_name: str | None = None
     tool_args: dict[str, Any] | None = None
     created_at: int = field(default_factory=_now_ms)
+    metrics: MessageMetrics | None = None
 
 
 @dataclass
@@ -155,6 +166,17 @@ class ChatTurnEngine:
                             tool_args=dict(start.args) if start else None,
                         )
                     )
+                elif isinstance(item, AgentMetrics):
+                    # Pin the latest token usage onto the current assistant answer
+                    # so the ↑/↓ line survives a reload (the stream is live-only).
+                    for msg in reversed(produced):
+                        if msg.role == "assistant":
+                            msg.metrics = MessageMetrics(
+                                prompt_tokens=item.prompt_tokens,
+                                completion_tokens=item.completion_tokens,
+                                elapsed_ms=item.elapsed_ms,
+                            )
+                            break
                 yield to_sse(item)
 
         return StreamingResponse(gen(), media_type="text/event-stream")

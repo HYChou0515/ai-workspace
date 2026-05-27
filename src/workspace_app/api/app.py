@@ -69,6 +69,7 @@ def _to_rca_message(m: TurnMessage) -> Message:
             author="RCA Agent",
             reasoning=m.reasoning,
             created_at=m.created_at,
+            metrics=m.metrics,
         )
     return Message(
         role="tool",

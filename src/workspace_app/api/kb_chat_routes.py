@@ -260,6 +260,7 @@ def register_kb_chat_routes(
                     tool_name=m.tool_name,
                     tool_args=m.tool_args,
                     created_at=m.created_at,
+                    metrics=m.metrics,
                 )
                 # Resolve [n] on answers against the passages this turn searched,
                 # and log each as a CitationEvent (powers the cited counts).
@@ -294,6 +295,15 @@ def _message_dict(m: KbMessage) -> dict:
         "tool_args": m.tool_args,
         "tool_call_id": m.tool_call_id,
         "created_at": m.created_at,
+        "metrics": (
+            {
+                "prompt_tokens": m.metrics.prompt_tokens,
+                "completion_tokens": m.metrics.completion_tokens,
+                "elapsed_ms": m.metrics.elapsed_ms,
+            }
+            if m.metrics is not None
+            else None
+        ),
         "citations": [
             {
                 "marker": c.marker,

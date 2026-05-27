@@ -6,6 +6,16 @@ from msgspec import Struct, field
 from specstar import OnDelete, Ref
 
 
+class MessageMetrics(Struct, frozen=True):
+    """The turn's final token usage, persisted on the assistant message so a
+    reloaded thread can still show the ↑prompt / ↓completion line (which is
+    otherwise live-only / lost on refresh)."""
+
+    prompt_tokens: int
+    completion_tokens: int
+    elapsed_ms: int
+
+
 class Message(Struct):
     role: str
     """One of `user` / `assistant` / `tool` / `system`."""
@@ -37,6 +47,10 @@ class Message(Struct):
     """Epoch milliseconds when the message was produced. Persisted so the agent
     log's timestamps survive a reload. None for messages created before this
     field existed (the FE then shows no time)."""
+
+    metrics: MessageMetrics | None = None
+    """Only set on assistant answers — the turn's final token usage, so the
+    live ↑/↓ token line survives a reload. None for older / non-assistant."""
 
     mentions: list[str] = field(default_factory=list)
     """Only set when role=mention — the user ids summoned ("@ come look").

@@ -6,7 +6,15 @@ from specstar import SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
-from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, ToolEnd, ToolLog, ToolStart
+from workspace_app.api.events import (
+    AgentEvent,
+    AgentMetrics,
+    MessageDelta,
+    RunDone,
+    ToolEnd,
+    ToolLog,
+    ToolStart,
+)
 from workspace_app.api.kb_chat_routes import answer_question
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
@@ -62,6 +70,28 @@ class _ToolRunner:
         yield ToolEnd(call_id="t1", output="[1] reflow.md: zone three drift")
         yield MessageDelta(text="Zone three drifted [1].")
         yield RunDone()
+
+
+class _MetricsRunner:
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        yield MessageDelta(text="Answer.")
+        yield AgentMetrics(
+            phase="final", prompt_tokens=42, completion_tokens=7, elapsed_ms=1234
+        )
+        yield RunDone()
+
+
+def test_send_message_persists_final_token_metrics():
+    client = _client(_MetricsRunner())
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()[
+        "resource_id"
+    ]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
+
+    answer = client.get(f"/kb/chats/{cid}").json()["messages"][-1]
+    assert answer["role"] == "assistant"
+    # the live token line survives a reload (persisted on the assistant message)
+    assert answer["metrics"] == {"prompt_tokens": 42, "completion_tokens": 7, "elapsed_ms": 1234}
 
 
 class _OrphanToolRunner:
