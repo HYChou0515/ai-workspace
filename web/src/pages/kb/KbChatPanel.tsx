@@ -13,6 +13,7 @@ import { qk } from "../../api/queryKeys";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
 import { useKbChat } from "../../hooks/useKbChat";
+import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { formatMetrics } from "../investigation/agentLog";
 
 export function KbChatPanel({
@@ -51,6 +52,8 @@ export function KbChatPanel({
 
   const collectionIds = useMemo(() => [...selected], [selected]);
   const { log, send, cancel } = useKbChat({ collectionIds, chatId, client, onChatCreated });
+  // Follow the conversation as it streams; back off when the user scrolls up.
+  const bodyRef = useStickToBottom<HTMLDivElement>(log);
 
   const submit = (text: string) => {
     const t = text.trim();
@@ -72,7 +75,7 @@ export function KbChatPanel({
 
   return (
     <div className="kb-chatpanel">
-      <div className="kb-chatpanel__body">
+      <div className="kb-chatpanel__body" ref={bodyRef}>
         {empty && (
           <p className="kb-drawer__hello">
             Hi — ask me anything across your knowledge base. I'll cite the sources.

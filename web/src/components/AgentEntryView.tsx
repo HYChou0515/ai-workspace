@@ -14,6 +14,7 @@ import remarkMath from "remark-math";
 
 import type { Message, MessageCitation } from "../api/types";
 import type { AgentEntry, ToolCallView } from "../pages/investigation/agentLog";
+import { useStickToBottom } from "../hooks/useStickToBottom";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
 import { UserChip } from "./UserChip";
@@ -190,6 +191,9 @@ function MessageBlock({
 
 function ReasoningBlock({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
+  // Follow the reasoning as it streams (same rule as the chat) — bounded so a
+  // long chain doesn't shove the answer off-screen.
+  const preRef = useStickToBottom<HTMLPreElement>(text);
   return (
     <details
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
@@ -200,6 +204,7 @@ function ReasoningBlock({ text }: { text: string }) {
         Show thinking
       </summary>
       <pre
+        ref={preRef}
         style={{
           marginTop: 4,
           padding: 8,
@@ -209,6 +214,8 @@ function ReasoningBlock({ text }: { text: string }) {
           fontFamily: "var(--font-mono)",
           fontSize: 11,
           color: "var(--text-paper-d)",
+          maxHeight: 220,
+          overflow: "auto",
         }}
       >
         {text}
@@ -222,6 +229,8 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
   // final formatted output supersedes it. Auto-expand a streaming tool.
   const body = call.status === "done" ? call.output : (call.liveOutput ?? call.output);
   const streamingLive = call.status === "running" && !!call.liveOutput;
+  // Follow streaming stdout to the bottom unless the user scrolls up.
+  const preRef = useStickToBottom<HTMLPreElement>(body);
   return (
     <details
       open={streamingLive}
@@ -266,6 +275,7 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
       )}
       {body !== undefined && (
         <pre
+          ref={preRef}
           style={{
             color: "var(--text-paper-d)",
             whiteSpace: "pre-wrap",
