@@ -56,23 +56,34 @@ describe("<ResizeDivider />", () => {
     expect(hLine?.style.right).toBe("0px");
   });
 
-  it("reports each pointermove as a signed delta from the previous position", () => {
+  it("reports each pointermove as an absolute delta from the DRAG START position", () => {
+    // Anchored to drag-start (not last event) so:
+    //  - coalesced pointer events at high speed don't accumulate error
+    //  - the value tracks the cursor 1:1 even after a clamp (overshoot
+    //    + come back gives back the same value, not a transient).
+    const onResizeStart = vi.fn();
     const onResize = vi.fn();
-    const { getByRole } = render(<ResizeDivider orientation="vertical" onResize={onResize} />);
+    const onResizeEnd = vi.fn();
+    const { getByRole } = render(
+      <ResizeDivider
+        orientation="vertical"
+        onResizeStart={onResizeStart}
+        onResize={onResize}
+        onResizeEnd={onResizeEnd}
+      />,
+    );
     const divider = getByRole("separator");
-
-    // setPointerCapture isn't implemented in happy-dom — stub it so the
-    // pointerdown handler doesn't throw.
     (divider as unknown as { setPointerCapture: (id: number) => void }).setPointerCapture = vi.fn();
     (divider as unknown as { releasePointerCapture: (id: number) => void }).releasePointerCapture = vi.fn();
 
     fireEvent(divider, pointer("pointerdown", { clientX: 100 }));
-    fireEvent(divider, pointer("pointermove", { clientX: 112 })); // +12
-    fireEvent(divider, pointer("pointermove", { clientX: 105 })); // -7
-    fireEvent(divider, pointer("pointermove", { clientX: 130 })); // +25
+    fireEvent(divider, pointer("pointermove", { clientX: 112 })); // +12 from start
+    fireEvent(divider, pointer("pointermove", { clientX: 105 })); // +5 from start
+    fireEvent(divider, pointer("pointermove", { clientX: 130 })); // +30 from start
     fireEvent(divider, pointer("pointerup",   { clientX: 130 }));
 
-    expect(onResize).toHaveBeenCalledTimes(3);
-    expect(onResize.mock.calls.map((c) => c[0])).toEqual([12, -7, 25]);
+    expect(onResizeStart).toHaveBeenCalledTimes(1);
+    expect(onResize.mock.calls.map((c) => c[0])).toEqual([12, 5, 30]);
+    expect(onResizeEnd).toHaveBeenCalledTimes(1);
   });
 });

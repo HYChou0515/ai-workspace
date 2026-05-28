@@ -1,13 +1,14 @@
 /**
- * Draggable divider for resizable panels. Reports a signed pixel delta as
- * the user drags; the parent applies it to a panel dimension (and usually
- * persists it). Pointer-capture means the drag keeps tracking even if the
- * cursor leaves the thin hit area.
+ * Draggable divider for resizable panels. The parent snapshots whatever state
+ * it cares about in `onResizeStart`, then each `onResize` reports the signed
+ * pixel delta from the DRAG START position (not the previous event). That's
+ * the standard pattern for pointer-driven drag: it tracks the cursor 1:1
+ * regardless of event coalescing, and clamping at the parent doesn't
+ * accumulate drift when the cursor overshoots and comes back.
  *
- * Layout: the outer hit area is 12px (wide enough to grab comfortably) but
- * is pulled back with negative margins so it doesn't reserve layout space.
- * An absolutely-positioned 1–2 px line centers inside the hit area —
- * invisible at rest, paper-3 on hover, accent while dragging.
+ * Layout: 12px hit area (off-layout via negative margins). An absolutely-
+ * positioned 1–2 px line centers inside — invisible at rest, paper-3 on
+ * hover, accent while dragging.
  */
 
 import { useRef, useState } from "react";
@@ -18,13 +19,20 @@ const HALF = HIT / 2;
 export function ResizeDivider({
   orientation,
   onResize,
+  onResizeStart,
+  onResizeEnd,
   ariaLabel,
 }: {
   orientation: "vertical" | "horizontal"; // vertical = resizes width, horizontal = resizes height
-  onResize: (deltaPx: number) => void;
+  onResize: (deltaFromStart: number) => void;
+  /** Snapshot the value(s) the parent will anchor to (fired on pointerdown). */
+  onResizeStart?: () => void;
+  /** Cleanup hook (fired on pointerup). */
+  onResizeEnd?: () => void;
   ariaLabel?: string;
 }) {
-  const last = useRef<number | null>(null);
+  // Where the drag started, in viewport coords along the active axis.
+  const startCoord = useRef<number | null>(null);
   const [active, setActive] = useState(false);
   const [hover, setHover] = useState(false);
   const vertical = orientation === "vertical";
@@ -39,23 +47,21 @@ export function ResizeDivider({
       aria-label={ariaLabel}
       aria-orientation={orientation}
       onPointerDown={(e) => {
-        // Capture on the outer (currentTarget) — `e.target` may be the
-        // visible inner line (1–2 px) which is brittle to capture on.
         e.currentTarget.setPointerCapture(e.pointerId);
-        last.current = vertical ? e.clientX : e.clientY;
+        startCoord.current = vertical ? e.clientX : e.clientY;
         setActive(true);
+        onResizeStart?.();
       }}
       onPointerMove={(e) => {
-        if (last.current == null) return;
+        if (startCoord.current == null) return;
         const cur = vertical ? e.clientX : e.clientY;
-        const delta = cur - last.current;
-        last.current = cur;
-        if (delta !== 0) onResize(delta);
+        onResize(cur - startCoord.current);
       }}
       onPointerUp={(e) => {
         e.currentTarget.releasePointerCapture(e.pointerId);
-        last.current = null;
+        startCoord.current = null;
         setActive(false);
+        onResizeEnd?.();
       }}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
@@ -69,9 +75,6 @@ export function ResizeDivider({
           : { height: HIT, marginBlock: -HALF, alignSelf: "stretch" }),
       }}
     >
-      {/* Absolutely positioned so it stretches along the divider's main axis
-          (the full height for vertical / full width for horizontal) without
-          flex layout games. pointerEvents:none so the outer always wins. */}
       <div
         aria-hidden
         style={{

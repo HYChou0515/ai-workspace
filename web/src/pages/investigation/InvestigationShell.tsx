@@ -160,6 +160,11 @@ function ShellBody({
   const [sidebarW, setSidebarW] = usePersistentNumber("rca:layout:sidebar", 260, 180, 560);
   const [agentW, setAgentW] = usePersistentNumber("rca:layout:agent", 380, 280, 680);
   const [bottomH, setBottomH] = usePersistentNumber("rca:layout:bottom", 200, 80, 600);
+  // Snapshot panel sizes at drag start so each pointermove computes
+  // `start + delta` (anchored). See ResizeDivider docs.
+  const sidebarStart = useRef(sidebarW);
+  const agentStart = useRef(agentW);
+  const bottomStart = useRef(bottomH);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bottomOpen, setBottomOpen] = useState(true);
 
@@ -335,9 +340,10 @@ function ShellBody({
               <ResizeDivider
                 orientation="vertical"
                 ariaLabel="resize sidebar"
-                // Functional form so rapid pointermove events don't lose deltas
-                // to stale closures (see usePersistentNumber #30).
-                onResize={(d) => setSidebarW((p) => p + d)}
+                onResizeStart={() => {
+                  sidebarStart.current = sidebarW;
+                }}
+                onResize={(d) => setSidebarW(sidebarStart.current + d)}
               />
             </>
           )}
@@ -347,13 +353,19 @@ function ShellBody({
             files={files}
             bottomHeight={bottomH}
             bottomOpen={bottomOpen}
-            onResizeBottom={(d) => setBottomH((p) => p - d)}
+            onResizeBottomStart={() => {
+              bottomStart.current = bottomH;
+            }}
+            onResizeBottom={(d) => setBottomH(bottomStart.current - d)}
             onToggleBottom={() => setBottomOpen((v) => !v)}
           />
           <ResizeDivider
             orientation="vertical"
             ariaLabel="resize agent panel"
-            onResize={(d) => setAgentW((p) => p - d)}
+            onResizeStart={() => {
+              agentStart.current = agentW;
+            }}
+            onResize={(d) => setAgentW(agentStart.current - d)}
           />
           <AgentPanel
             investigationId={investigation.resource_id}
@@ -1400,6 +1412,7 @@ function EditorArea({
   bottomHeight,
   bottomOpen,
   onResizeBottom,
+  onResizeBottomStart,
   onToggleBottom,
 }: {
   investigationId: string;
@@ -1407,7 +1420,8 @@ function EditorArea({
   files: FileInfo[];
   bottomHeight: number;
   bottomOpen: boolean;
-  onResizeBottom: (deltaPx: number) => void;
+  onResizeBottom: (deltaFromStart: number) => void;
+  onResizeBottomStart: () => void;
   onToggleBottom: () => void;
 }) {
   const [bottomTab, setBottomTab] = useState<"problems" | "output" | "terminal" | "agent_log" | "run_history">("agent_log");
@@ -1427,6 +1441,7 @@ function EditorArea({
         <ResizeDivider
           orientation="horizontal"
           ariaLabel="resize bottom panel"
+          onResizeStart={onResizeBottomStart}
           onResize={onResizeBottom}
         />
       )}
@@ -1499,14 +1514,19 @@ function SplitView({
 }) {
   const row = split.dir === "row";
   const containerRef = useRef<HTMLDivElement>(null);
-  // Convert px delta from the divider into a ratio delta, scaled by the
-  // container's current width/height.
-  const onResize = (deltaPx: number) => {
+  // Snapshotted on drag start: ratio + container size at the moment the
+  // drag began. Each pointermove reports its delta from the start cursor;
+  // we apply it against the anchor for stable 1:1 tracking.
+  const startRatio = useRef(split.ratio);
+  const startSize = useRef(0);
+  const onResizeStart = () => {
+    startRatio.current = split.ratio;
     const el = containerRef.current;
-    if (!el) return;
-    const size = row ? el.clientWidth : el.clientHeight;
-    if (size <= 0) return;
-    groups.setSplitRatio(path, split.ratio + deltaPx / size);
+    startSize.current = el ? (row ? el.clientWidth : el.clientHeight) : 0;
+  };
+  const onResize = (deltaFromStart: number) => {
+    if (startSize.current <= 0) return;
+    groups.setSplitRatio(path, startRatio.current + deltaFromStart / startSize.current);
   };
   return (
     <div
@@ -1540,6 +1560,7 @@ function SplitView({
       <ResizeDivider
         orientation={row ? "vertical" : "horizontal"}
         ariaLabel={row ? "resize split column" : "resize split row"}
+        onResizeStart={onResizeStart}
         onResize={onResize}
       />
       <div
