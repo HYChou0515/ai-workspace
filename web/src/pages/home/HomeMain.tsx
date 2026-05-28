@@ -112,7 +112,15 @@ export function HomeMain({
     onFilters({ query: "", severities: [], owners: [], topics: [], products: [], statuses: [] });
 
   return (
-    <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+    <main
+      style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        minHeight: 0,
+      }}
+    >
       <TopBar query={filters.query} onQuery={setQuery} />
 
       <header
@@ -211,7 +219,7 @@ export function HomeMain({
         clearAll={clearAll}
       />
 
-      <div className="scrollable" style={{ flex: 1, overflow: "auto" }}>
+      <div className="scrollable" style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
         <table
           style={{
             width: "100%",

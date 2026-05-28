@@ -82,7 +82,12 @@ export function Home() {
   return (
     <div
       data-testid="page-home"
-      style={{ display: "flex", minHeight: "100vh", background: "var(--paper)" }}
+      style={{
+        display: "flex",
+        height: "100vh",
+        overflow: "hidden",
+        background: "var(--paper)",
+      }}
     >
       <HomeSidebar
         items={items}
@@ -144,7 +149,12 @@ function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div
       data-testid="page-home"
-      style={{ display: "flex", minHeight: "100vh", background: "var(--paper)" }}
+      style={{
+        display: "flex",
+        height: "100vh",
+        overflow: "hidden",
+        background: "var(--paper)",
+      }}
     >
       <div
         style={{

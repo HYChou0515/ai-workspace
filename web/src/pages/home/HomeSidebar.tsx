@@ -121,7 +121,13 @@ export function HomeSidebar({
         </button>
       </header>
 
-      <nav className="scrollable" style={{ padding: 8, flex: 1, overflowY: "auto" }}>
+      <nav
+        className="scrollable"
+        // minHeight: 0 — without it `flex:1` defers to content's intrinsic
+        // height and overflowY:auto never kicks in (sidebar pushes the shell
+        // past 100vh → page scrollbar).
+        style={{ padding: 8, flex: 1, minHeight: 0, overflowY: "auto" }}
+      >
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {navItems.map((n) => {
             const active = n.key === activeTab;
