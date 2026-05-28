@@ -13,6 +13,7 @@ import {
   type PaneNode,
   leaf,
   leafIds,
+  linkedSiblingPath,
   removeLeaf,
   setRatioAt,
   splitLeaf,
@@ -202,9 +203,17 @@ export function useEditorGroups(initialPaths: string[]) {
   );
 
   /** Move the divider between split panes — `path` addresses the split
-   * (array of "a"/"b" from root); `ratio` is A's new share (0..1, clamped). */
+   * (array of "a"/"b" from root); `ratio` is A's new share (0..1, clamped).
+   * If the split has a perpendicular sibling split at the same parent (2x2
+   * case), the sibling's ratio is forced to match — the cross/T handle is
+   * always meaningful and panes never drift out of alignment. */
   const setSplitRatio = useCallback((path: ("a" | "b")[], ratio: number) => {
-    setTree((t) => setRatioAt(t, path, ratio));
+    setTree((t) => {
+      let next = setRatioAt(t, path, ratio);
+      const linked = linkedSiblingPath(t, path);
+      if (linked) next = setRatioAt(next, linked, ratio);
+      return next;
+    });
   }, []);
 
   const collapseToSingle = useCallback(() => {
