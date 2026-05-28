@@ -90,46 +90,6 @@ export function setRatioAt(node: PaneNode, path: ("a" | "b")[], ratio: number): 
   return node;
 }
 
-/** Walk from root along an "a"/"b" path. Returns null if the path tries to
- * descend into a leaf. */
-export function getNodeAt(root: PaneNode, path: ("a" | "b")[]): PaneNode | null {
-  let node: PaneNode = root;
-  for (const seg of path) {
-    if (node.type !== "split") return null;
-    node = seg === "a" ? node.a : node.b;
-  }
-  return node;
-}
-
-/** Find the path of a sibling split that should be LINKED to the one at
- * `path` — i.e., its ratio is forced to stay equal so the dividers between
- * 4 panes stay aligned and a cross/T handle is always meaningful.
- *
- * A split S at `path` has a linked sibling iff:
- *   - S has a parent (path is non-empty)
- *   - The sibling at the parent is also a split
- *   - Both S and the sibling are PERPENDICULAR to the parent
- *     (i.e. parent is row → both children are col splits)
- *
- * The 2x2 case has this; "左一右二" (sibling is a leaf) does not. */
-export function linkedSiblingPath(
-  root: PaneNode,
-  path: ("a" | "b")[],
-): ("a" | "b")[] | null {
-  if (path.length === 0) return null;
-  const parentPath = path.slice(0, -1);
-  const parent = getNodeAt(root, parentPath);
-  if (!parent || parent.type !== "split") return null;
-  const me = getNodeAt(root, path);
-  if (!me || me.type !== "split") return null;
-  if (me.dir === parent.dir) return null; // parallel to parent — not a perp child
-  const lastSeg = path[path.length - 1] as "a" | "b";
-  const sibling = lastSeg === "a" ? parent.b : parent.a;
-  if (sibling.type !== "split") return null;
-  if (sibling.dir !== me.dir) return null;
-  return [...parentPath, lastSeg === "a" ? "b" : "a"];
-}
-
 /** Map a pointer position within a rect to a drop edge. The center 40% box
  * is "open here"; the outer margins pick a direction. */
 export function edgeForPoint(
