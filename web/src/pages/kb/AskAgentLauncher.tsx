@@ -1,7 +1,12 @@
 /**
- * AskAgentLauncher — the global "Ask agent" button (top bar) that opens the
- * fast-chat drawer, plus the doc viewer a citation opens. Self-contained so any
- * page can drop it in; "manage sources" jumps to the KB page.
+ * AskAgentLauncher — the "Ask agent" button used on both Home (TopBar) and
+ * the KB shell (KbHome topbar). Opens the fast-chat drawer; renders a
+ * citation viewer when a citation is followed.
+ *
+ * `onManage` / `onHistory` / `onOpenCitation` are overridable so the KB
+ * shell can switch its own tab + reuse its own viewer (instead of navigating
+ * away or popping a second overlay). Home leaves them off — the defaults
+ * navigate to /kb and use the launcher's own viewer.
  */
 
 import { useState } from "react";
@@ -12,36 +17,52 @@ import { Icon } from "../../components/Icon";
 import { AskAgentDrawer } from "./AskAgentDrawer";
 import { KbDocViewer } from "./KbDocViewer";
 
-export function AskAgentLauncher({ client = kbApi }: { client?: KbApi }) {
+export function AskAgentLauncher({
+  client = kbApi,
+  onManage,
+  onHistory,
+  onOpenCitation,
+}: {
+  client?: KbApi;
+  /** Override "manage sources" — defaults to navigating to /kb. */
+  onManage?: () => void;
+  /** Override "history" — defaults to navigating to /kb?tab=chats. */
+  onHistory?: () => void;
+  /** Override the citation handler — if set, the launcher does NOT render its
+   * own viewer (the caller handles it). Defaults to the internal viewer. */
+  onOpenCitation?: (c: KbCitation) => void;
+}) {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [viewer, setViewer] = useState<{ documentId: string; snippet?: string } | null>(null);
 
+  const handleManage = () => {
+    setOpen(false);
+    if (onManage) onManage();
+    else navigate("/kb");
+  };
+  const handleHistory = () => {
+    setOpen(false);
+    if (onHistory) onHistory();
+    else navigate("/kb?tab=chats");
+  };
+  const handleCitation = (c: KbCitation) => {
+    if (onOpenCitation) onOpenCitation(c);
+    else setViewer({ documentId: c.document_id, snippet: c.snippet });
+  };
+
   return (
     <>
-      <button
-        type="button"
-        className="kb-btn"
-        style={{ background: "var(--ink)", color: "var(--text-dark)", border: "none" }}
-        onClick={() => setOpen(true)}
-      >
-        <Icon name="sparkle" size={13} color="var(--accent)" /> Ask agent
+      <button type="button" className="kb-btn kb-btn--primary" onClick={() => setOpen(true)}>
+        <Icon name="sparkle" size={14} /> Ask agent
       </button>
 
       <AskAgentDrawer
         open={open}
         onClose={() => setOpen(false)}
-        onManage={() => {
-          setOpen(false);
-          navigate("/kb");
-        }}
-        onHistory={() => {
-          setOpen(false);
-          navigate("/kb?tab=chats");
-        }}
-        onOpenCitation={(c: KbCitation) =>
-          setViewer({ documentId: c.document_id, snippet: c.snippet })
-        }
+        onManage={handleManage}
+        onHistory={handleHistory}
+        onOpenCitation={handleCitation}
         client={client}
       />
 

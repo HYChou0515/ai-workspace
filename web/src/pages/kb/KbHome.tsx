@@ -13,7 +13,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
-import { AskAgentDrawer } from "./AskAgentDrawer";
+import { AskAgentLauncher } from "./AskAgentLauncher";
 import { KbChatsPage } from "./KbChatsPage";
 import { KbChatView } from "./KbChatView";
 import { KbCollectionsPage } from "./KbCollectionsPage";
@@ -29,7 +29,6 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const qc = useQueryClient();
   const [params] = useSearchParams();
   const [tab, setTab] = useState<Tab>(params.get("tab") === "chats" ? "chats" : "collections");
-  const [ask, setAsk] = useState(false);
   const [chatId, setChatId] = useState<Selected>(undefined);
   const [viewKey, setViewKey] = useState(0);
   const [chatListVersion, setChatListVersion] = useState(0);
@@ -76,9 +75,14 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
           <span className="kb-topbar__title">
             {tab === "collections" ? "Collections" : "Conversations"}
           </span>
-          <button type="button" className="kb-btn kb-btn--primary" onClick={() => setAsk(true)}>
-            <Icon name="sparkle" size={14} /> Ask agent
-          </button>
+          {/* Same component Home uses — switches our own tab on
+              manage/history and reuses our viewer for citations. */}
+          <AskAgentLauncher
+            client={client}
+            onManage={() => setTab("collections")}
+            onHistory={() => setTab("chats")}
+            onOpenCitation={openCite}
+          />
         </header>
 
         <div className="kb-surface">
@@ -114,21 +118,6 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
           )}
         </div>
       </main>
-
-      <AskAgentDrawer
-        open={ask}
-        onClose={() => setAsk(false)}
-        onManage={() => {
-          setAsk(false);
-          setTab("collections");
-        }}
-        onHistory={() => {
-          setAsk(false);
-          setTab("chats");
-        }}
-        onOpenCitation={openCite}
-        client={client}
-      />
 
       {viewer && (
         <KbDocViewer
