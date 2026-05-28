@@ -6,8 +6,8 @@
  *
  * Layout: the outer hit area is 12px (wide enough to grab comfortably) but
  * is pulled back with negative margins so it doesn't reserve layout space.
- * The visible 1–2px line lives inside the hit area, centered — invisible at
- * rest, paper-3 on hover, accent while dragging.
+ * An absolutely-positioned 1–2 px line centers inside the hit area —
+ * invisible at rest, paper-3 on hover, accent while dragging.
  */
 
 import { useRef, useState } from "react";
@@ -31,6 +31,7 @@ export function ResizeDivider({
 
   const showLine = active || hover;
   const lineColor = active ? "var(--accent)" : showLine ? "var(--paper-3)" : "transparent";
+  const lineThickness = active ? 2 : 1;
 
   return (
     <div
@@ -38,7 +39,9 @@ export function ResizeDivider({
       aria-label={ariaLabel}
       aria-orientation={orientation}
       onPointerDown={(e) => {
-        (e.target as HTMLElement).setPointerCapture(e.pointerId);
+        // Capture on the outer (currentTarget) — `e.target` may be the
+        // visible inner line (1–2 px) which is brittle to capture on.
+        e.currentTarget.setPointerCapture(e.pointerId);
         last.current = vertical ? e.clientX : e.clientY;
         setActive(true);
       }}
@@ -50,7 +53,7 @@ export function ResizeDivider({
         if (delta !== 0) onResize(delta);
       }}
       onPointerUp={(e) => {
-        (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+        e.currentTarget.releasePointerCapture(e.pointerId);
         last.current = null;
         setActive(false);
       }}
@@ -59,24 +62,36 @@ export function ResizeDivider({
       style={{
         flexShrink: 0,
         cursor: vertical ? "col-resize" : "row-resize",
-        display: "flex",
-        alignItems: vertical ? "stretch" : "center",
-        justifyContent: vertical ? "center" : "stretch",
         background: "transparent",
+        position: "relative", // anchor the inner line absolutely
         ...(vertical
           ? { width: HIT, marginInline: -HALF, alignSelf: "stretch" }
-          : { height: HIT, marginBlock: -HALF }),
+          : { height: HIT, marginBlock: -HALF, alignSelf: "stretch" }),
       }}
     >
-      {/* Visible 1–2 px line, centered inside the wider hit area. */}
+      {/* Absolutely positioned so it stretches along the divider's main axis
+          (the full height for vertical / full width for horizontal) without
+          flex layout games. pointerEvents:none so the outer always wins. */}
       <div
         aria-hidden
         style={{
+          position: "absolute",
           background: lineColor,
+          pointerEvents: "none",
           transition: active ? "none" : "background 0.15s ease",
           ...(vertical
-            ? { width: active ? 2 : 1, alignSelf: "stretch" }
-            : { height: active ? 2 : 1, alignSelf: "stretch" }),
+            ? {
+                top: 0,
+                bottom: 0,
+                left: HALF - lineThickness / 2,
+                width: lineThickness,
+              }
+            : {
+                left: 0,
+                right: 0,
+                top: HALF - lineThickness / 2,
+                height: lineThickness,
+              }),
         }}
       />
     </div>

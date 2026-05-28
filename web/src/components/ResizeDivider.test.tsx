@@ -30,6 +30,32 @@ describe("<ResizeDivider />", () => {
     expect(Number.parseInt(divider.style.height, 10)).toBeGreaterThanOrEqual(10);
   });
 
+  it("renders a visible line that stretches along the divider's main axis", () => {
+    // Regression: the first attempt at a layered hit area used flex
+    // alignSelf:stretch on the inner line. That made VERTICAL lines tall
+    // and visible, but HORIZONTAL ones collapsed to 0×1 (invisible) — the
+    // bottom-panel divider became un-grabbable because the user couldn't
+    // see it.
+    const { getByRole: getV, unmount: u1 } = render(
+      <ResizeDivider orientation="vertical" onResize={vi.fn()} />,
+    );
+    const vLine = getV("separator").querySelector("[aria-hidden]") as HTMLElement | null;
+    expect(vLine).not.toBeNull();
+    // Vertical: line must fill the height (top:0 + bottom:0 or height:100%).
+    expect(vLine?.style.top).toBe("0px");
+    expect(vLine?.style.bottom).toBe("0px");
+    u1();
+
+    const { getByRole: getH } = render(
+      <ResizeDivider orientation="horizontal" onResize={vi.fn()} />,
+    );
+    const hLine = getH("separator").querySelector("[aria-hidden]") as HTMLElement | null;
+    expect(hLine).not.toBeNull();
+    // Horizontal: line must fill the width.
+    expect(hLine?.style.left).toBe("0px");
+    expect(hLine?.style.right).toBe("0px");
+  });
+
   it("reports each pointermove as a signed delta from the previous position", () => {
     const onResize = vi.fn();
     const { getByRole } = render(<ResizeDivider orientation="vertical" onResize={onResize} />);
