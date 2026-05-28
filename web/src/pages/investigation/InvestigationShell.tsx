@@ -335,7 +335,9 @@ function ShellBody({
               <ResizeDivider
                 orientation="vertical"
                 ariaLabel="resize sidebar"
-                onResize={(d) => setSidebarW(sidebarW + d)}
+                // Functional form so rapid pointermove events don't lose deltas
+                // to stale closures (see usePersistentNumber #30).
+                onResize={(d) => setSidebarW((p) => p + d)}
               />
             </>
           )}
@@ -345,13 +347,13 @@ function ShellBody({
             files={files}
             bottomHeight={bottomH}
             bottomOpen={bottomOpen}
-            onResizeBottom={(d) => setBottomH(bottomH - d)}
+            onResizeBottom={(d) => setBottomH((p) => p - d)}
             onToggleBottom={() => setBottomOpen((v) => !v)}
           />
           <ResizeDivider
             orientation="vertical"
             ariaLabel="resize agent panel"
-            onResize={(d) => setAgentW(agentW - d)}
+            onResize={(d) => setAgentW((p) => p - d)}
           />
           <AgentPanel
             investigationId={investigation.resource_id}

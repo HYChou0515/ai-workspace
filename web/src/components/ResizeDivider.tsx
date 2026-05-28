@@ -3,9 +3,17 @@
  * the user drags; the parent applies it to a panel dimension (and usually
  * persists it). Pointer-capture means the drag keeps tracking even if the
  * cursor leaves the thin hit area.
+ *
+ * Layout: the outer hit area is 12px (wide enough to grab comfortably) but
+ * is pulled back with negative margins so it doesn't reserve layout space.
+ * The visible 1–2px line lives inside the hit area, centered — invisible at
+ * rest, paper-3 on hover, accent while dragging.
  */
 
 import { useRef, useState } from "react";
+
+const HIT = 12;
+const HALF = HIT / 2;
 
 export function ResizeDivider({
   orientation,
@@ -18,7 +26,11 @@ export function ResizeDivider({
 }) {
   const last = useRef<number | null>(null);
   const [active, setActive] = useState(false);
+  const [hover, setHover] = useState(false);
   const vertical = orientation === "vertical";
+
+  const showLine = active || hover;
+  const lineColor = active ? "var(--accent)" : showLine ? "var(--paper-3)" : "transparent";
 
   return (
     <div
@@ -42,21 +54,31 @@ export function ResizeDivider({
         last.current = null;
         setActive(false);
       }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
         flexShrink: 0,
         cursor: vertical ? "col-resize" : "row-resize",
-        background: active ? "var(--accent)" : "transparent",
-        transition: active ? "none" : "background 0.15s ease",
+        display: "flex",
+        alignItems: vertical ? "stretch" : "center",
+        justifyContent: vertical ? "center" : "stretch",
+        background: "transparent",
         ...(vertical
-          ? { width: 5, marginInline: -2, alignSelf: "stretch" }
-          : { height: 5, marginBlock: -2 }),
+          ? { width: HIT, marginInline: -HALF, alignSelf: "stretch" }
+          : { height: HIT, marginBlock: -HALF }),
       }}
-      onMouseEnter={(e) => {
-        if (!active) (e.currentTarget as HTMLElement).style.background = "var(--paper-3)";
-      }}
-      onMouseLeave={(e) => {
-        if (!active) (e.currentTarget as HTMLElement).style.background = "transparent";
-      }}
-    />
+    >
+      {/* Visible 1–2 px line, centered inside the wider hit area. */}
+      <div
+        aria-hidden
+        style={{
+          background: lineColor,
+          transition: active ? "none" : "background 0.15s ease",
+          ...(vertical
+            ? { width: active ? 2 : 1, alignSelf: "stretch" }
+            : { height: active ? 2 : 1, alignSelf: "stretch" }),
+        }}
+      />
+    </div>
   );
 }
