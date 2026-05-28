@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { ExecResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
+import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 
 type Entry = {
   prompt: string;
@@ -28,6 +29,12 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
   }, [history]);
+
+  // A command may have created/deleted/overwritten files in the sandbox
+  // (`rm`, `cp`, `>`, …). The /exec endpoint already flushes the snapshot,
+  // but the FE has its own caches (file list, opened-file content, editor
+  // buffers) that need busting too. Fires after every command resolves.
+  const refreshFiles = useRefreshFiles(investigationId);
 
   const stop = () => abortRef.current?.abort();
 
@@ -68,6 +75,9 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
     } finally {
       if (abortRef.current === controller) abortRef.current = null;
       setRunning(false);
+      // Bust FE caches whether the command succeeded or failed — both can
+      // mutate the sandbox (a partial write before an error counts).
+      void refreshFiles();
     }
   };
 

@@ -626,6 +626,12 @@ export const mockApi: ApiClient = {
       .sort((a, b) => a.path.localeCompare(b.path));
   },
 
+  async refreshFiles(_investigationId) {
+    // Mock has no separate sandbox/snapshot — the in-memory map IS the
+    // source of truth. Flushing is a no-op; we just delay a tick.
+    await delay(10);
+  },
+
   async readFile(investigationId, path): Promise<FileContent> {
     await delay(30);
     const f = files.get(investigationId)?.get(path);

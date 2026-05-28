@@ -40,6 +40,7 @@ import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
+import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
 import { AgentPanel } from "./AgentPanel";
@@ -187,9 +188,17 @@ function ShellBody({
   const gRef = useRef(groups);
   gRef.current = groups;
 
-  // When an agent turn finishes it may have created/edited files via its
-  // tools — re-fetch the tree so those show up (it isn't otherwise notified).
-  useOnTurnEnd(useAgent().log.streaming, () => onFilesChanged?.());
+  // Full refresh: sandbox flush → invalidate file list + dirs + every open
+  // file's content + reload editor buffers. Called from the refresh button,
+  // after agent turns, and after terminal exec — see useRefreshFiles for the
+  // four caches it busts.
+  const refreshFiles = useRefreshFiles(investigation.resource_id);
+  // When an agent turn finishes it may have created/edited/deleted files via
+  // its tools — refresh everything so the tree, viewers, and editor catch up.
+  useOnTurnEnd(useAgent().log.streaming, () => {
+    void refreshFiles();
+    onFilesChanged?.();
+  });
 
   // VSCode-style delete-open-file handling: when a file disappears from the
   // listing (deleted in the tree), auto-close its CLEAN tabs; keep dirty
@@ -335,7 +344,13 @@ function ShellBody({
                   activePath={groups.activeFile}
                   recentFiles={recentFiles.values}
                   onOpenFile={openFile}
-                  onFilesChanged={onFilesChanged}
+                  // Full refresh (sandbox flush + every cache busted) on
+                  // top of the parent's lightweight list-refetch. The button
+                  // routes here via `ActivitySidebar → FileTree.onChanged`.
+                  onFilesChanged={() => {
+                    void refreshFiles();
+                    onFilesChanged?.();
+                  }}
                 />
               </div>
               <ResizeDivider

@@ -223,6 +223,11 @@ export interface ApiClient {
   getConversation(investigationId: string): Promise<Conversation | null>;
 
   listFiles(investigationId: string, prefix?: string): Promise<FileInfo[]>;
+  /** POST /investigations/{id}/files/refresh — force-mirror the live sandbox
+   * to the snapshot (don't wait for the throttled sweep). Call this before a
+   * read whenever the sandbox may have changed out-of-band (terminal `rm`,
+   * an exec side-effect, slow flush). */
+  refreshFiles(investigationId: string): Promise<void>;
   readFile(investigationId: string, path: string): Promise<FileContent>;
   /** Raw write. `body` may be a string (UTF-8) or a binary Blob/ArrayBuffer
    * — the FE uploads notebook JSON as string, attachments as Blob. */

@@ -304,6 +304,22 @@ export const realApi: ApiClient = {
     }
   },
 
+  async refreshFiles(investigationId) {
+    // Server flushes sandbox → snapshot. Swallow 404/405 the same way as
+    // listFiles for older backends.
+    try {
+      await apiFetch(
+        `/investigations/${encodeURIComponent(investigationId)}/files/refresh`,
+        { method: "POST" },
+      );
+    } catch (err) {
+      if (err instanceof HttpError && (err.status === 404 || err.status === 405)) {
+        return;
+      }
+      throw err;
+    }
+  },
+
   async readFile(investigationId, path) {
     const resp = await apiFetch(
       `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,

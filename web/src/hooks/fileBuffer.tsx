@@ -122,6 +122,15 @@ export class FileBufferStore {
     this.ensureLoaded(path);
   }
 
+  /** All paths that currently have a buffer (loaded or in-flight). The
+   * refresh-files chain calls `reload(path)` on each clean one after a
+   * sandbox state change so the open editor never shows stale content;
+   * the caller should skip dirty paths (reload would clobber the user's
+   * unsaved edits silently — they can save first then refresh). */
+  bufferedPaths(): string[] {
+    return [...this.entries.keys()];
+  }
+
   /** Update the in-memory text (live across all panes). Marks dirty unless
    * the text matches the last-saved baseline. Never autosaves. */
   setText(path: string, text: string): void {
