@@ -1499,12 +1499,7 @@ function GroupTreeView({
   );
 }
 
-/** One A/B split with a draggable divider in between. Also renders a
- * VSCode-style cross handle at any T-junction (where an inner perpendicular
- * split's divider endpoint lies on this split's main divider). Dragging the
- * cross handle updates this split's ratio AND the inner split's ratio in
- * one gesture. Each side (A / B) gets its own handle — they're independent
- * (no auto-linking when ratios happen to align). */
+/** One A/B split with a draggable divider in between. */
 function SplitView({
   split,
   path,
@@ -1520,65 +1515,58 @@ function SplitView({
 }) {
   const row = split.dir === "row";
   const containerRef = useRef<HTMLDivElement>(null);
-  // Snapshotted on drag start: ratio + container size. Anchor-on-start so
-  // the pane tracks the cursor 1:1 regardless of pointer-event coalescing.
+  // Snapshotted on drag start: ratio + container size at the moment the
+  // drag began. Each pointermove reports its delta from the start cursor;
+  // we apply it against the anchor for stable 1:1 tracking.
   const startRatio = useRef(split.ratio);
-  const startSize = useRef(0);
+  const startSize = useRef({ w: 0, h: 0 });
   const onResizeStart = () => {
     startRatio.current = split.ratio;
     const el = containerRef.current;
-    startSize.current = el ? (row ? el.clientWidth : el.clientHeight) : 0;
+    startSize.current = el ? { w: el.clientWidth, h: el.clientHeight } : { w: 0, h: 0 };
   };
   const onResize = (deltaFromStart: number) => {
-    if (startSize.current <= 0) return;
-    groups.setSplitRatio(path, startRatio.current + deltaFromStart / startSize.current);
+    const size = row ? startSize.current.w : startSize.current.h;
+    if (size <= 0) return;
+    groups.setSplitRatio(path, startRatio.current + deltaFromStart / size);
   };
 
-  // Snapshot shared between the two T-handles (mouse can only drag one at a
-  // time, so a single ref is fine).
-  const tStart = useRef({ outer: 0, inner: 0, width: 0, height: 0 });
-  const renderTHandle = (side: "a" | "b") => {
-    const inner = split[side];
-    // T-junction only exists when the inner child is itself a split AND
-    // perpendicular to this one (its divider crosses ours).
-    if (inner.type !== "split" || inner.dir === split.dir) return null;
-    const innerSplit = inner;
-    // Handle center:
-    //  - row split (outer divider vertical): X follows OUR ratio, Y follows
-    //    the inner's ratio.
-    //  - col split (outer divider horizontal): X follows inner, Y follows OUR.
-    const leftPct = row ? split.ratio * 100 : innerSplit.ratio * 100;
-    const topPct = row ? innerSplit.ratio * 100 : split.ratio * 100;
-    return (
-      <CrossHandle
-        key={side}
-        ariaLabel={`cross resize ${side}`}
-        left={`${leftPct}%`}
-        top={`${topPct}%`}
-        onResizeStart={() => {
-          const el = containerRef.current;
-          tStart.current = {
-            outer: split.ratio,
-            inner: innerSplit.ratio,
-            width: el?.clientWidth ?? 0,
-            height: el?.clientHeight ?? 0,
-          };
-        }}
-        onResize={(dx, dy) => {
-          const { outer, inner: innerStart, width, height } = tStart.current;
-          if (width <= 0 || height <= 0) return;
-          if (row) {
-            // outer is vertical → dx adjusts OUR ratio, dy adjusts inner ratio
-            groups.setSplitRatio(path, outer + dx / width);
-            groups.setSplitRatio([...path, side], innerStart + dy / height);
-          } else {
-            // outer is horizontal → dy adjusts OUR ratio, dx adjusts inner ratio
-            groups.setSplitRatio(path, outer + dy / height);
-            groups.setSplitRatio([...path, side], innerStart + dx / width);
-          }
-        }}
-      />
-    );
+  // Find the inner perpendicular split (if any) — its divider's endpoint on
+  // OUR divider is where we drop a cross/T handle that drags both axes.
+  // When BOTH children are perpendicular splits, their ratios are linked
+  // (see useEditorGroups.setSplitRatio), so it doesn't matter which we
+  // address — updating one updates the other. We prefer A by convention.
+  const aPerp = split.a.type === "split" && split.a.dir !== split.dir;
+  const bPerp = split.b.type === "split" && split.b.dir !== split.dir;
+  const innerSeg: "a" | "b" | null = aPerp ? "a" : bPerp ? "b" : null;
+  const innerSplit =
+    innerSeg === "a" && split.a.type === "split"
+      ? split.a
+      : innerSeg === "b" && split.b.type === "split"
+        ? split.b
+        : null;
+  // Inner snapshots — separate from outer because the cross is one drag
+  // that updates two ratios; each needs its own anchor.
+  const innerStartRatio = useRef(innerSplit?.ratio ?? 0.5);
+  const onCrossStart = () => {
+    onResizeStart();
+    innerStartRatio.current = innerSplit?.ratio ?? 0.5;
+  };
+  const onCross = (dx: number, dy: number) => {
+    if (!innerSplit || !innerSeg) return;
+    const outerDelta = row ? dx : dy;
+    const innerDelta = row ? dy : dx;
+    const outerSize = row ? startSize.current.w : startSize.current.h;
+    const innerSize = row ? startSize.current.h : startSize.current.w;
+    if (outerSize > 0) {
+      groups.setSplitRatio(path, startRatio.current + outerDelta / outerSize);
+    }
+    if (innerSize > 0) {
+      groups.setSplitRatio(
+        [...path, innerSeg],
+        innerStartRatio.current + innerDelta / innerSize,
+      );
+    }
   };
 
   return (
@@ -1588,9 +1576,9 @@ function SplitView({
         flex: 1,
         minWidth: 0,
         minHeight: 0,
+        position: "relative", // anchor the absolute CrossHandle
         display: "flex",
         flexDirection: row ? "row" : "column",
-        position: "relative", // anchor T-handle absolute positions
       }}
     >
       <div
@@ -1635,8 +1623,14 @@ function SplitView({
           path={[...path, "b"]}
         />
       </div>
-      {renderTHandle("a")}
-      {renderTHandle("b")}
+      {innerSplit && (
+        <CrossHandle
+          leftPct={row ? split.ratio : innerSplit.ratio}
+          topPct={row ? innerSplit.ratio : split.ratio}
+          onResizeStart={onCrossStart}
+          onResize={onCross}
+        />
+      )}
     </div>
   );
 }

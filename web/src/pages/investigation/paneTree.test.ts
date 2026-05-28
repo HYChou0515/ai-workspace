@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   edgeForPoint,
+  getNodeAt,
   leaf,
   leafIds,
+  linkedSiblingPath,
   type PaneNode,
   removeLeaf,
   setRatioAt,
@@ -90,6 +92,51 @@ describe("paneTree", () => {
     const t2 = splitLeaf(leaf("a"), "a", "right", "b");
     // path ["a"] addresses a LEAF (a) — should be a no-op
     expect(setRatioAt(t2, ["a"], 0.3)).toEqual(t2);
+  });
+
+  it("getNodeAt walks 'a'/'b' from root, returns null on overshoot", () => {
+    let t: PaneNode = splitLeaf(leaf("a"), "a", "right", "b");
+    t = splitLeaf(t, "b", "bottom", "c"); // split(row, a, split(col, b, c))
+    expect(getNodeAt(t, [])).toBe(t);
+    expect(getNodeAt(t, ["a"])).toEqual(leaf("a"));
+    expect(getNodeAt(t, ["b", "a"])).toEqual(leaf("b"));
+    expect(getNodeAt(t, ["b", "b"])).toEqual(leaf("c"));
+    // can't descend into a leaf
+    expect(getNodeAt(t, ["a", "a"])).toBeNull();
+  });
+
+  it("linkedSiblingPath finds a perpendicular-split sibling at the same parent", () => {
+    // Build 2x2: split(row, split(col, a, c), split(col, b, d))
+    let t: PaneNode = splitLeaf(leaf("a"), "a", "right", "b");
+    t = splitLeaf(t, "a", "bottom", "c");
+    t = splitLeaf(t, "b", "bottom", "d");
+    expect(linkedSiblingPath(t, ["a"])).toEqual(["b"]);
+    expect(linkedSiblingPath(t, ["b"])).toEqual(["a"]);
+  });
+
+  it("linkedSiblingPath returns null when there's no sibling split (左一右二)", () => {
+    // split(row, leaf("a"), split(col, b, c)) — A is leaf, no link
+    let t: PaneNode = splitLeaf(leaf("a"), "a", "right", "b");
+    t = splitLeaf(t, "b", "bottom", "c");
+    expect(linkedSiblingPath(t, ["b"])).toBeNull();
+  });
+
+  it("linkedSiblingPath returns null at root (no parent)", () => {
+    const t: PaneNode = splitLeaf(leaf("a"), "a", "right", "b");
+    expect(linkedSiblingPath(t, [])).toBeNull();
+  });
+
+  it("linkedSiblingPath returns null when sibling split has a different direction", () => {
+    // split(row, split(col, a, c), split(row, b, d)) — sibling B is row, not col
+    // Can't build this with splitLeaf alone, so construct manually:
+    const t: PaneNode = {
+      type: "split",
+      dir: "row",
+      ratio: 0.5,
+      a: { type: "split", dir: "col", ratio: 0.5, a: leaf("a"), b: leaf("c") },
+      b: { type: "split", dir: "row", ratio: 0.5, a: leaf("b"), b: leaf("d") },
+    };
+    expect(linkedSiblingPath(t, ["a"])).toBeNull();
   });
 
   it("edgeForPoint picks center in the middle, edges near the sides", () => {

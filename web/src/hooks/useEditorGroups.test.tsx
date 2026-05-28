@@ -56,4 +56,31 @@ describe("useEditorGroups — split pane ratio", () => {
       expect(result.current.tree.ratio).toBeLessThan(0.1);
     }
   });
+
+  it("setSplitRatio on a 2x2 inner split also updates the perpendicular sibling (linked)", () => {
+    // Build a 2x2: (col(a, c)) | (col(b, d))
+    const { result } = renderHook(() => useEditorGroups(["/a.md"]));
+    act(() => result.current.splitActive("right", "/b.md"));   // a | b   active=b
+    act(() => result.current.splitActive("down", "/c.md"));    // a | (b/c) — splits B
+    // Now focus and split A:
+    act(() => result.current.focusGroup("g0"));                 // a is g0
+    act(() => result.current.splitActive("down", "/d.md"));    // (a/d) | (b/c)
+    // Both inner splits should start at 0.5 (default)
+    const before = result.current.tree;
+    if (before.type !== "split" || before.a.type !== "split" || before.b.type !== "split") {
+      throw new Error("expected 2x2");
+    }
+    expect(before.a.ratio).toBe(0.5);
+    expect(before.b.ratio).toBe(0.5);
+
+    // Drag the A-side inner divider:
+    act(() => result.current.setSplitRatio(["a"], 0.3));
+    const after = result.current.tree;
+    if (after.type !== "split" || after.a.type !== "split" || after.b.type !== "split") {
+      throw new Error("expected 2x2");
+    }
+    expect(after.a.ratio).toBeCloseTo(0.3);
+    // …and the B-side ratio MUST follow (forced alignment).
+    expect(after.b.ratio).toBeCloseTo(0.3);
+  });
 });

@@ -20,46 +20,46 @@ function pointer(
 }
 
 describe("<CrossHandle />", () => {
-  it("renders absolutely positioned at the given (left, top) point", () => {
+  it("positions absolutely at (leftPct, topPct) of its parent", () => {
     const { getByRole } = render(
-      <CrossHandle left="40%" top="30%" onResize={vi.fn()} />,
+      <div style={{ position: "relative" }}>
+        <CrossHandle leftPct={0.5} topPct={0.5} onResize={vi.fn()} />
+      </div>,
     );
-    const h = getByRole("separator");
-    expect(h.style.position).toBe("absolute");
-    expect(h.style.left).toBe("40%");
-    expect(h.style.top).toBe("30%");
-    // square hit area, ≥10px on each side so it's grabbable
-    expect(Number.parseInt(h.style.width, 10)).toBeGreaterThanOrEqual(10);
-    expect(Number.parseInt(h.style.height, 10)).toBeGreaterThanOrEqual(10);
+    const handle = getByRole("button", { name: /resize panes/i });
+    expect(handle.style.left).toBe("50%");
+    expect(handle.style.top).toBe("50%");
+    // hit area must be grabbable (≥ 12 px)
+    expect(Number.parseInt(handle.style.width, 10)).toBeGreaterThanOrEqual(12);
+    expect(Number.parseInt(handle.style.height, 10)).toBeGreaterThanOrEqual(12);
   });
 
-  it("reports (dx, dy) absolute deltas from drag start; fires start/end hooks", () => {
+  it("reports (dx, dy) as deltas from the drag-start cursor (anchored)", () => {
     const onResizeStart = vi.fn();
     const onResize = vi.fn();
     const onResizeEnd = vi.fn();
     const { getByRole } = render(
-      <CrossHandle
-        left="50%"
-        top="50%"
-        onResizeStart={onResizeStart}
-        onResize={onResize}
-        onResizeEnd={onResizeEnd}
-      />,
+      <div style={{ position: "relative" }}>
+        <CrossHandle
+          leftPct={0.5}
+          topPct={0.5}
+          onResizeStart={onResizeStart}
+          onResize={onResize}
+          onResizeEnd={onResizeEnd}
+        />
+      </div>,
     );
-    const h = getByRole("separator");
-    (h as unknown as { setPointerCapture: (id: number) => void }).setPointerCapture = vi.fn();
-    (h as unknown as { releasePointerCapture: (id: number) => void }).releasePointerCapture = vi.fn();
+    const handle = getByRole("button", { name: /resize panes/i });
+    (handle as unknown as { setPointerCapture: (id: number) => void }).setPointerCapture = vi.fn();
+    (handle as unknown as { releasePointerCapture: (id: number) => void }).releasePointerCapture = vi.fn();
 
-    fireEvent(h, pointer("pointerdown", { clientX: 100, clientY: 200 }));
-    fireEvent(h, pointer("pointermove", { clientX: 120, clientY: 215 })); // +20, +15
-    fireEvent(h, pointer("pointermove", { clientX: 130, clientY: 190 })); // +30, -10
-    fireEvent(h, pointer("pointerup", { clientX: 130, clientY: 190 }));
+    fireEvent(handle, pointer("pointerdown", { clientX: 100, clientY: 200 }));
+    fireEvent(handle, pointer("pointermove", { clientX: 130, clientY: 210 })); // (+30, +10)
+    fireEvent(handle, pointer("pointermove", { clientX: 90, clientY: 250 }));  // (-10, +50)
+    fireEvent(handle, pointer("pointerup",   { clientX: 90, clientY: 250 }));
 
     expect(onResizeStart).toHaveBeenCalledTimes(1);
-    expect(onResize.mock.calls).toEqual([
-      [20, 15],
-      [30, -10],
-    ]);
+    expect(onResize.mock.calls).toEqual([[30, 10], [-10, 50]]);
     expect(onResizeEnd).toHaveBeenCalledTimes(1);
   });
 });
