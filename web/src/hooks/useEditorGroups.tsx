@@ -14,6 +14,7 @@ import {
   leaf,
   leafIds,
   removeLeaf,
+  setRatioAt,
   splitLeaf,
 } from "../pages/investigation/paneTree";
 
@@ -200,6 +201,12 @@ export function useEditorGroups(initialPaths: string[]) {
     [splitGroup, activeGroupId],
   );
 
+  /** Move the divider between split panes — `path` addresses the split
+   * (array of "a"/"b" from root); `ratio` is A's new share (0..1, clamped). */
+  const setSplitRatio = useCallback((path: ("a" | "b")[], ratio: number) => {
+    setTree((t) => setRatioAt(t, path, ratio));
+  }, []);
+
   const collapseToSingle = useCallback(() => {
     setGroups((prev) => ({ [activeGroupId]: prev[activeGroupId]! }));
     setTree(leaf(activeGroupId));
@@ -247,6 +254,7 @@ export function useEditorGroups(initialPaths: string[]) {
       closeGroupTabs,
       splitGroup,
       splitActive,
+      setSplitRatio,
       collapseToSingle,
       dropTabOnGroup,
       isSplit: leafIds(tree).length > 1,
@@ -269,6 +277,7 @@ export function useEditorGroups(initialPaths: string[]) {
       closeGroupTabs,
       splitGroup,
       splitActive,
+      setSplitRatio,
       collapseToSingle,
       dropTabOnGroup,
     ],

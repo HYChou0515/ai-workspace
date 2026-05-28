@@ -9,8 +9,20 @@
 export type Edge = "left" | "right" | "top" | "bottom" | "center";
 
 export type PaneLeaf = { type: "leaf"; id: string };
-export type PaneSplit = { type: "split"; dir: "row" | "col"; a: PaneNode; b: PaneNode };
+/** ratio = A's share of the split (0..1); B gets 1 - ratio. */
+export type PaneSplit = {
+  type: "split";
+  dir: "row" | "col";
+  ratio: number;
+  a: PaneNode;
+  b: PaneNode;
+};
 export type PaneNode = PaneLeaf | PaneSplit;
+
+/** Min/max share for either side of a split (~5%/95%) so a pane can't be
+ * dragged to 0 / 100 % and "vanish". */
+export const MIN_RATIO = 0.05;
+export const MAX_RATIO = 0.95;
 
 export function leaf(id: string): PaneLeaf {
   return { type: "leaf", id };
@@ -38,7 +50,13 @@ export function splitLeaf(
     const dir = edge === "left" || edge === "right" ? "row" : "col";
     const fresh = leaf(newId);
     const newFirst = edge === "left" || edge === "top";
-    return { type: "split", dir, a: newFirst ? fresh : node, b: newFirst ? node : fresh };
+    return {
+      type: "split",
+      dir,
+      ratio: 0.5,
+      a: newFirst ? fresh : node,
+      b: newFirst ? node : fresh,
+    };
   }
   return {
     ...node,
@@ -54,6 +72,22 @@ export function removeLeaf(node: PaneNode, id: string): PaneNode {
   if (node.a.type === "leaf" && node.a.id === id) return node.b;
   if (node.b.type === "leaf" && node.b.id === id) return node.a;
   return { ...node, a: removeLeaf(node.a, id), b: removeLeaf(node.b, id) };
+}
+
+/** Replace `ratio` on the split addressed by `path` (an array of "a"/"b" from
+ * root). No-op if the path doesn't land on a split. Used by the divider
+ * between split panes to adjust its share. */
+export function setRatioAt(node: PaneNode, path: ("a" | "b")[], ratio: number): PaneNode {
+  if (path.length === 0) {
+    if (node.type !== "split") return node;
+    const clamped = Math.max(MIN_RATIO, Math.min(MAX_RATIO, ratio));
+    return { ...node, ratio: clamped };
+  }
+  if (node.type !== "split") return node;
+  const [head, ...rest] = path;
+  if (head === "a") return { ...node, a: setRatioAt(node.a, rest, ratio) };
+  if (head === "b") return { ...node, b: setRatioAt(node.b, rest, ratio) };
+  return node;
 }
 
 /** Map a pointer position within a rect to a drop edge. The center 40% box

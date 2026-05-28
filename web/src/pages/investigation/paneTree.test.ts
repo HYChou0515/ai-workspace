@@ -6,6 +6,7 @@ import {
   leafIds,
   type PaneNode,
   removeLeaf,
+  setRatioAt,
   splitLeaf,
 } from "./paneTree";
 
@@ -49,6 +50,46 @@ describe("paneTree", () => {
 
   it("removeLeaf on the sole root leaf is a no-op", () => {
     expect(removeLeaf(leaf("a"), "a")).toEqual(leaf("a"));
+  });
+
+  it("splitLeaf initialises ratio to 0.5 (even split)", () => {
+    const t = splitLeaf(leaf("a"), "a", "right", "b");
+    if (t.type === "split") expect(t.ratio).toBe(0.5);
+  });
+
+  it("setRatioAt updates the addressed split, leaving siblings untouched", () => {
+    // [a | (b / c)]: root is row, b/c is col under root.b
+    let t: PaneNode = splitLeaf(leaf("a"), "a", "right", "b");
+    t = splitLeaf(t, "b", "bottom", "c");
+    // address the ROOT split (empty path)
+    const t1 = setRatioAt(t, [], 0.3);
+    if (t1.type === "split") {
+      expect(t1.ratio).toBe(0.3);
+      // the inner b/c split kept its 0.5
+      if (t1.b.type === "split") expect(t1.b.ratio).toBe(0.5);
+    }
+    // address the inner split via ["b"]
+    const t2 = setRatioAt(t, ["b"], 0.7);
+    if (t2.type === "split" && t2.b.type === "split") {
+      expect(t2.b.ratio).toBe(0.7);
+      expect(t2.ratio).toBe(0.5); // outer untouched
+    }
+  });
+
+  it("setRatioAt clamps to (0, 1) so a pane can't be dragged to 0/100%", () => {
+    const t = splitLeaf(leaf("a"), "a", "right", "b");
+    const lo = setRatioAt(t, [], -0.5);
+    const hi = setRatioAt(t, [], 1.5);
+    if (lo.type === "split") expect(lo.ratio).toBeGreaterThan(0);
+    if (hi.type === "split") expect(hi.ratio).toBeLessThan(1);
+  });
+
+  it("setRatioAt is a no-op when the path doesn't address a split", () => {
+    const t = leaf("a");
+    expect(setRatioAt(t, [], 0.3)).toEqual(t); // leaf has no ratio
+    const t2 = splitLeaf(leaf("a"), "a", "right", "b");
+    // path ["a"] addresses a LEAF (a) — should be a no-op
+    expect(setRatioAt(t2, ["a"], 0.3)).toEqual(t2);
   });
 
   it("edgeForPoint picks center in the middle, edges near the sides", () => {

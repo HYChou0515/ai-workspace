@@ -1443,17 +1443,22 @@ function EditorArea({
   );
 }
 
-/** Recursively lay out the structural pane tree; leaves render a group. */
+/** Recursively lay out the structural pane tree; leaves render a group.
+ * Split nodes use flex-grow proportional to `node.ratio` so the divider
+ * between A and B can adjust their share by calling groups.setSplitRatio
+ * with this node's path from root. */
 function GroupTreeView({
   node,
   groups,
   investigationId,
   files,
+  path = [],
 }: {
   node: PaneNode;
   groups: Groups;
   investigationId: string;
   files: FileInfo[];
+  path?: ("a" | "b")[];
 }) {
   if (node.type === "leaf") {
     const group = groups.groups[node.id];
@@ -1467,9 +1472,45 @@ function GroupTreeView({
       />
     );
   }
-  const row = node.dir === "row";
+  return (
+    <SplitView
+      split={node}
+      path={path}
+      groups={groups}
+      investigationId={investigationId}
+      files={files}
+    />
+  );
+}
+
+/** One A/B split with a draggable divider in between. */
+function SplitView({
+  split,
+  path,
+  groups,
+  investigationId,
+  files,
+}: {
+  split: Extract<PaneNode, { type: "split" }>;
+  path: ("a" | "b")[];
+  groups: Groups;
+  investigationId: string;
+  files: FileInfo[];
+}) {
+  const row = split.dir === "row";
+  const containerRef = useRef<HTMLDivElement>(null);
+  // Convert px delta from the divider into a ratio delta, scaled by the
+  // container's current width/height.
+  const onResize = (deltaPx: number) => {
+    const el = containerRef.current;
+    if (!el) return;
+    const size = row ? el.clientWidth : el.clientHeight;
+    if (size <= 0) return;
+    groups.setSplitRatio(path, split.ratio + deltaPx / size);
+  };
   return (
     <div
+      ref={containerRef}
       style={{
         flex: 1,
         minWidth: 0,
@@ -1478,16 +1519,47 @@ function GroupTreeView({
         flexDirection: row ? "row" : "column",
       }}
     >
-      <GroupTreeView node={node.a} groups={groups} investigationId={investigationId} files={files} />
       <div
-        aria-hidden
-        style={
-          row
-            ? { width: 1, background: "var(--paper-3)", flexShrink: 0 }
-            : { height: 1, background: "var(--paper-3)", flexShrink: 0 }
-        }
+        style={{
+          flexGrow: split.ratio,
+          flexShrink: 1,
+          flexBasis: 0,
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+        }}
+      >
+        <GroupTreeView
+          node={split.a}
+          groups={groups}
+          investigationId={investigationId}
+          files={files}
+          path={[...path, "a"]}
+        />
+      </div>
+      <ResizeDivider
+        orientation={row ? "vertical" : "horizontal"}
+        ariaLabel={row ? "resize split column" : "resize split row"}
+        onResize={onResize}
       />
-      <GroupTreeView node={node.b} groups={groups} investigationId={investigationId} files={files} />
+      <div
+        style={{
+          flexGrow: 1 - split.ratio,
+          flexShrink: 1,
+          flexBasis: 0,
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+        }}
+      >
+        <GroupTreeView
+          node={split.b}
+          groups={groups}
+          investigationId={investigationId}
+          files={files}
+          path={[...path, "b"]}
+        />
+      </div>
     </div>
   );
 }

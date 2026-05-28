@@ -33,3 +33,27 @@ describe("useEditorGroups — empty panes are removed", () => {
     expect(result.current.activeFile).toBeNull();
   });
 });
+
+describe("useEditorGroups — split pane ratio", () => {
+  it("setSplitRatio updates the addressed split", () => {
+    const { result } = renderHook(() => useEditorGroups(["/a.md"]));
+    act(() => result.current.splitActive("right", "/a.md"));
+    // tree is now a single split at root: setSplitRatio([], 0.3)
+    act(() => result.current.setSplitRatio([], 0.3));
+    if (result.current.tree.type === "split") {
+      expect(result.current.tree.ratio).toBeCloseTo(0.3);
+    } else {
+      throw new Error("expected a split at root after splitActive");
+    }
+  });
+
+  it("setSplitRatio clamps to (0, 1)", () => {
+    const { result } = renderHook(() => useEditorGroups(["/a.md"]));
+    act(() => result.current.splitActive("right", "/a.md"));
+    act(() => result.current.setSplitRatio([], -10));
+    if (result.current.tree.type === "split") {
+      expect(result.current.tree.ratio).toBeGreaterThan(0);
+      expect(result.current.tree.ratio).toBeLessThan(0.1);
+    }
+  });
+});
