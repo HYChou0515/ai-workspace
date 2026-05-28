@@ -25,6 +25,7 @@ from workspace_app.api.litellm_runner import (
     _exact_usage,
     _final_tokens,
     _map_event,
+    _should_retry,
     diagnose_error,
 )
 from workspace_app.resources import AgentConfig
@@ -88,6 +89,78 @@ def test_think_splitter_flushes_unclosed_think_as_reasoning():
 def test_runner_constructs_with_default_config():
     r = LitellmAgentRunner()
     assert r is not None
+
+
+def test_should_retry_blocks_restart_after_assistant_progress():
+    """Issue #26: once the user has seen partial output, restarting the turn
+    (which is what the SDK does — no resume) would clobber it. So retry only
+    when nothing assistant-visible has streamed yet."""
+    # Fresh attempt, no progress, retries available → retry.
+    assert _should_retry(progress_made=False, attempt=1, max_retries=2) is True
+    # Progress made → never retry, regardless of attempt count.
+    assert _should_retry(progress_made=True, attempt=1, max_retries=2) is False
+    assert _should_retry(progress_made=True, attempt=0, max_retries=5) is False
+    # No progress but out of retries.
+    assert _should_retry(progress_made=False, attempt=3, max_retries=2) is False
+    # Edge: max_retries=0 means no retry ever.
+    assert _should_retry(progress_made=False, attempt=1, max_retries=0) is False
+
+
+class _ScriptedOnce(LitellmAgentRunner):
+    """Test double: replaces `_run_once` with a per-attempt event script so
+    we can drive the run() outer loop deterministically without an LLM."""
+
+    def __init__(self, per_attempt):
+        super().__init__(max_retries=2)
+        self._per_attempt = list(per_attempt)
+        self._calls = 0
+
+    async def _run_once(self, prompt, ctx, feedback):  # type: ignore[override]
+        events = self._per_attempt[self._calls]
+        self._calls += 1
+        for ev in events:
+            if isinstance(ev, BaseException):
+                raise ev
+            yield ev
+
+
+async def test_run_does_not_restart_after_assistant_delta_streamed():
+    """#26 repro: if `_run_once` emitted a MessageDelta then raised, the user
+    has already seen that content. `run()` must NOT call `_run_once` again
+    (which would re-prompt the LLM from scratch and clobber the partial
+    answer). Instead, surface the error and end."""
+    runner = _ScriptedOnce([
+        [MessageDelta(text="Looking at the logs… "), RuntimeError("model timed out")],
+        # If `run()` restarts despite progress, this second script would run.
+        [MessageDelta(text="should-not-see"), RunDone()],
+    ])
+    events = [ev async for ev in runner.run("anything", AgentToolContext(investigation_id="x"))]
+    # Exactly one attempt: delta then RunError then RunDone (no retry).
+    assert runner._calls == 1
+    kinds = [type(e).__name__ for e in events]
+    assert kinds == ["MessageDelta", "RunError", "RunDone"]
+    err = next(e for e in events if isinstance(e, RunError))
+    assert "model timed out" in err.message
+    # The retry-budget phrasing is reserved for "no progress + give up" —
+    # we made one attempt that produced output, not N attempts that gave up.
+    assert "giving up" not in err.message
+
+
+async def test_run_still_retries_when_failure_is_early():
+    """Counterpart: an early failure (before any content) keeps the existing
+    retry-with-hint behaviour — that's the small-model JSON-parse fix path."""
+    runner = _ScriptedOnce([
+        [ValueError("Extra data: tool call malformed")],  # diagnose → ToolCallParseError
+        [MessageDelta(text="OK, one tool at a time."), RunDone()],
+    ])
+    events = [ev async for ev in runner.run("anything", AgentToolContext(investigation_id="x"))]
+    assert runner._calls == 2  # actually retried
+    kinds = [type(e).__name__ for e in events]
+    # First attempt: the classify_retry_event yields ToolCallParseError; then
+    # second attempt streams delta + RunDone.
+    assert "MessageDelta" in kinds
+    assert "RunDone" in kinds
+    assert "RunError" not in kinds
 
 
 def test_runner_constructs_with_custom_config():

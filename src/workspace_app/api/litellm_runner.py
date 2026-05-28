@@ -286,6 +286,21 @@ def _map_event(event: Any) -> AgentEvent | None:
     return None
 
 
+def _should_retry(*, progress_made: bool, attempt: int, max_retries: int) -> bool:
+    """Decide whether to restart the turn after `_run_once` raised.
+
+    Issue #26: the agents-SDK can't resume a stream mid-turn — a restart
+    re-runs the prompt from scratch, throwing away any text the user has
+    already seen + any tool calls already executed. So only retry when
+    nothing user-visible has streamed yet (the early small-model JSON-parse
+    failures we hand a hint back for). Once there's progress, showing the
+    error wins over clobbering the chat.
+    """
+    if progress_made:
+        return False
+    return attempt <= max_retries
+
+
 class LitellmAgentRunner:
     """Runs one user turn through agents-SDK + LiteLLM, retrying once on
     recognised small-model failures and surfacing the diagnosis to the
@@ -312,8 +327,16 @@ class LitellmAgentRunner:
         feedback: str | None = None
         attempt = 0
         while True:
+            # Tracks whether anything user-visible has streamed this attempt.
+            # If yes, a restart on failure would clobber it (the SDK can't
+            # resume) — see #26 + _should_retry.
+            progress_made = False
             try:
                 async for ev in self._run_once(prompt, ctx, feedback):
+                    if isinstance(ev, MessageDelta) and ev.text:
+                        progress_made = True
+                    elif isinstance(ev, ToolEnd):
+                        progress_made = True
                     yield ev
                 yield RunDone()
                 return
@@ -326,10 +349,19 @@ class LitellmAgentRunner:
                 return
             except Exception as exc:  # noqa: BLE001 — every other failure becomes a hint or final error
                 attempt += 1
-                if attempt > self._max_retries:
-                    yield RunError(
-                        message=f"giving up after {attempt} attempts: {type(exc).__name__}: {exc}"
-                    )
+                if not _should_retry(
+                    progress_made=progress_made, attempt=attempt, max_retries=self._max_retries
+                ):
+                    if progress_made:
+                        # Don't pretend "giving up after N attempts" — we
+                        # made exactly one attempt; it produced output and
+                        # then failed. The user keeps the partial output.
+                        yield RunError(message=f"{type(exc).__name__}: {exc}")
+                    else:
+                        yield RunError(
+                            message=f"giving up after {attempt} attempts: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
                     yield RunDone()
                     return
                 feedback = diagnose_error(exc)
