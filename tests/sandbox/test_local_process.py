@@ -33,6 +33,18 @@ async def test_exec_false_returns_exit_1(sandbox: LocalProcessSandbox):
     assert r.exit_code == 1
 
 
+async def test_exec_unknown_command_returns_127(sandbox: LocalProcessSandbox):
+    """Per protocol: a non-zero exit is RETURNED in exit_code, not raised.
+    `create_subprocess_exec` raises FileNotFoundError when the binary doesn't
+    exist; translate to POSIX's "command not found" exit 127 + stderr — so
+    the terminal pane and /exec endpoint see a normal failure, not a 500."""
+    h = await sandbox.create(SandboxSpec())
+    r = await sandbox.exec(h, ["definitely-not-a-real-command-xyz"])
+    assert r.exit_code == 127
+    assert b"not found" in r.stderr.lower()
+    assert b"definitely-not-a-real-command-xyz" in r.stderr
+
+
 async def test_exec_times_out_instead_of_hanging(tmp_path):
     """A command that runs longer than the timeout is killed and returns a
     timeout result, so an interactive program (vim) can't freeze the

@@ -196,18 +196,38 @@ class LocalProcessSandbox:
             argv = cmd
             sub_cwd = ws
             env["HOME"] = str(ws)
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            cwd=sub_cwd,
-            # /dev/null stdin: a program reading input gets EOF instead of
-            # blocking on a terminal it doesn't have.
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            # Unbuffer Python so a long-running script's prints stream live to
-            # on_output rather than sitting in a pipe buffer until it exits.
-            env=env,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                cwd=sub_cwd,
+                # /dev/null stdin: a program reading input gets EOF instead of
+                # blocking on a terminal it doesn't have.
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                # Unbuffer Python so a long-running script's prints stream live to
+                # on_output rather than sitting in a pipe buffer until it exits.
+                env=env,
+            )
+        except FileNotFoundError:
+            # `create_subprocess_exec` raises when the binary is missing.
+            # Protocol contract says "non-zero exit returned, not raised", so
+            # translate to POSIX-standard exit 127 (command not found) with a
+            # stderr message — the /exec endpoint and the agent's exec tool
+            # then see a normal command failure, not a 500.
+            return ExecResult(
+                exit_code=127,
+                stdout=b"",
+                stderr=f"{cmd[0]}: command not found\n".encode(),
+            )
+        except PermissionError as exc:
+            # The binary exists but isn't executable (no x-bit, or the jail
+            # blocks it). POSIX exit 126 = "found but not executable".
+            return ExecResult(
+                exit_code=126,
+                stdout=b"",
+                stderr=f"{cmd[0]}: {exc.strerror or 'permission denied'}\n".encode(),
+            )
         # stdout/stderr are PIPE above, so the StreamReaders are always present.
         assert proc.stdout is not None and proc.stderr is not None
         out_buf: list[bytes] = []

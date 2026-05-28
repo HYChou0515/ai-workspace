@@ -970,9 +970,23 @@ def create_app(
     async def exec_in_sandbox(investigation_id: str, body: _ExecBody) -> dict[str, object]:
         if not body.cmd:
             raise HTTPException(status_code=422, detail="cmd must be non-empty")
-        session = await registry.session(investigation_id)
-        handle = await registry.ensure_handle(session)
-        result = await sandbox.exec(handle, body.cmd)
+        try:
+            session = await registry.session(investigation_id)
+            handle = await registry.ensure_handle(session)
+            result = await sandbox.exec(handle, body.cmd)
+        except Exception as exc:  # noqa: BLE001
+            # The Terminal pane has nowhere to render an HTTP error and the
+            # agent's exec tool expects a structured ExecResult body — any
+            # unexpected failure becomes a 200 with a non-zero exit code and
+            # the error in stderr (so the consumer sees a normal command
+            # failure). In-sandbox "command not found" / "permission denied"
+            # are already translated to POSIX exits 127/126 inside the sandbox
+            # impls, so we only land here for genuinely unexpected failures.
+            return {
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": f"sandbox error: {type(exc).__name__}: {exc}\n",
+            }
         # The sandbox is the source of truth, so the file routes already see any
         # files the command created; mirror them to the snapshot now for
         # durability. Stale handle (killed mid-call) is swallowed — re-run.

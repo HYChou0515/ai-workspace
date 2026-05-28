@@ -70,3 +70,27 @@ def test_exec_unknown_command_reports_127(harness: Harness):
     assert resp.status_code == 200
     body = resp.json()
     assert body["exit_code"] == 127
+
+
+def test_exec_unexpected_sandbox_error_returns_200(harness: Harness, monkeypatch):
+    """The endpoint must NEVER 500 on a sandbox-side failure — the Terminal
+    pane has nowhere to show an HTTP error. Any unexpected exception from
+    sandbox.exec becomes a structured 200 body with the error in stderr."""
+    from workspace_app.sandbox.mock import MockSandbox
+
+    async def boom(*_a, **_kw):
+        raise RuntimeError("kernel went away")
+
+    monkeypatch.setattr(MockSandbox, "exec", boom)
+
+    resp = harness.client.post(
+        "/investigations/inv-1/exec",
+        json={"cmd": ["echo", "x"]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    # Real-ish exit code (non-zero, NOT a made-up 0); stderr explains.
+    assert body["exit_code"] != 0
+    assert body["stdout"] == ""
+    assert "kernel went away" in body["stderr"]
+    assert "RuntimeError" in body["stderr"]
