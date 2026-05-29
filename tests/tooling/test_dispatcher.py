@@ -111,6 +111,32 @@ def test_dispatcher_command_decorator_requires_pydantic_args():
         def _bad(args: dict) -> None: ...  # dict, not BaseModel
 
 
+def test_dispatcher_command_handler_with_no_args_raises_typeerror():
+    """A handler must take exactly one Args param — zero args (or two+)
+    is a registration error, not a runtime one. Covers the param-count
+    branch of the decorator."""
+    d = Dispatcher()
+    with pytest.raises(TypeError, match="exactly one Args arg"):
+
+        @d.command("nullary", "no args at all")
+        def _bad() -> None: ...
+
+
+def test_dispatcher_command_handler_with_unresolvable_forward_ref_raises():
+    """An Args annotation that can't be resolved (a forward ref pointing
+    at a symbol that doesn't exist in any visible namespace) raises
+    TypeError at registration — covers the get_type_hints NameError branch."""
+    d = Dispatcher()
+    # Build a handler whose annotation is a forward ref to something undefined.
+    # Using `exec` keeps the bad symbol invisible at module scope so the
+    # NameError fires on get_type_hints, not at function definition time.
+    src = "def handler(args: 'DefinitelyDoesNotExist') -> None: ...\n"
+    ns: dict = {}
+    exec(src, ns)
+    with pytest.raises(TypeError, match="cannot resolve Args annotation"):
+        d.command("bad-ref", "uses an undefined ref")(ns["handler"])
+
+
 def test_dispatcher_uses_sys_argv_when_argv_not_passed(monkeypatch, capsys):
     """Calling `main()` without argv= falls back to sys.argv — the
     normal CLI entrypoint path."""

@@ -104,6 +104,49 @@ def test_discover_packages_skips_subdirs_without_commands_json(tmp_path: Path):
     assert [p.name for p in pkgs] == ["good"]
 
 
+def test_discover_packages_ignores_stray_files_at_root(tmp_path: Path):
+    """A non-dir entry (e.g. someone dropped a `.DS_Store` or a README
+    into the prebuilt root) is silently skipped — only sub-dirs are
+    candidate packages."""
+    pre = tmp_path / "prebuilt"
+    pre.mkdir()
+    (pre / "stray.txt").write_text("ignore me")
+    _seed_package(pre, "good", [_cmd("g", "ok", x={"type": "string"})])
+    pkgs = discover_packages(pre)
+    assert [p.name for p in pkgs] == ["good"]
+
+
+def test_discover_packages_skips_subdir_without_schemas_dir(tmp_path: Path):
+    """commands.json present but `schemas/` missing → skipped (the
+    second condition in the same guard). Covers the half-built variant
+    where the bundle authoring stopped between writing commands.json
+    and writing the per-command schemas."""
+    pre = tmp_path / "prebuilt"
+    pre.mkdir()
+    (pre / "halfbuilt").mkdir()
+    (pre / "halfbuilt" / "commands.json").write_text("[]")  # exists, but no schemas/
+    _seed_package(pre, "good", [_cmd("g", "ok", x={"type": "string"})])
+    pkgs = discover_packages(pre)
+    assert [p.name for p in pkgs] == ["good"]
+
+
+def test_discover_packages_skips_command_missing_schema_file(tmp_path: Path):
+    """commands.json lists a command but its `schemas/<name>.json` is
+    missing → that command is silently dropped (the package still loads
+    with the rest). Covers the per-command schema-missing branch."""
+    pre = tmp_path / "prebuilt"
+    (pre / "datalab" / "schemas").mkdir(parents=True)
+    (pre / "datalab" / "commands.json").write_text(
+        '[{"name":"summarise","description":"s"},{"name":"missing","description":"m"}]'
+    )
+    (pre / "datalab" / "schemas" / "summarise.json").write_text(
+        '{"name":"summarise","description":"s","params_json_schema":{"type":"object","properties":{}}}'
+    )
+    # missing.json deliberately absent.
+    pkgs = discover_packages(pre)
+    assert [c.name for c in pkgs[0].commands] == ["summarise"]
+
+
 def test_discover_packages_returns_empty_when_prebuilt_missing(tmp_path: Path):
     """No prebuilt dir at all → empty list, not crash. Production startup
     just `if available: ...`s; tests that don't set up prebuilt rely on this."""
@@ -167,6 +210,18 @@ def test_build_function_tools_raises_on_cross_package_collision(tmp_path: Path):
     pkgs = discover_packages(pre)
     with pytest.raises(ValueError, match="fetch.*a.*b|a.*b.*fetch|b.*a.*fetch"):
         build_function_tools(pkgs, allowed=["a", "b"])
+
+
+def test_build_function_tools_unknown_command_in_known_pkg_is_silently_skipped(
+    tmp_path: Path,
+):
+    """`allowed=["datalab:nope"]` (package exists, command doesn't) →
+    empty result, not a crash. Covers the unknown-cmd branch inside the
+    colon arm of `_select_commands`."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(pre, "datalab", [_cmd("summarise", "Summarise", csv={"type": "string"})])
+    pkgs = discover_packages(pre)
+    assert build_function_tools(pkgs, allowed=["datalab:nope"]) == []
 
 
 def test_build_function_tools_unknown_pkg_in_allowed_is_silently_skipped(tmp_path: Path):

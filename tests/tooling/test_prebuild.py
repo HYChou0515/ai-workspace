@@ -92,6 +92,26 @@ def test_dump_schemas_raises_when_launch_misbehaves(tmp_path: Path):
         _dump_schemas(bad, tmp_path / "dst")
 
 
+def test_dump_schemas_raises_when_per_command_schema_fails(tmp_path: Path):
+    """The bare-launch enumeration succeeds (returning one command), but
+    `launch <cmd>` exits non-zero. Covers the per-command failure branch."""
+    launch = tmp_path / "launch"
+    # bare → [{"name": "broken", ...}]  ; broken → exit 1
+    launch.write_text(
+        "#!/bin/sh\n"
+        "if [ $# -eq 0 ]; then\n"
+        '  printf %s \'[{"name":"broken","description":"d"}]\'\n'
+        "  exit 0\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    launch.chmod(0o755)
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    with pytest.raises(RuntimeError, match="broken"):
+        _dump_schemas(launch, dst)
+
+
 def test_should_rebuild_true_when_dst_missing(tmp_path: Path):
     """No dst dir yet → must rebuild from scratch."""
     src = tmp_path / "src"
@@ -156,6 +176,67 @@ def test_should_rebuild_ignores_dot_subdirs_in_src(tmp_path: Path):
 
 def _has_uv() -> bool:
     return shutil.which("uv") is not None
+
+
+def test_build_package_short_circuits_when_source_unchanged(tmp_path: Path, monkeypatch):
+    """When `_should_rebuild` says no → `build_package` returns early
+    without touching uv. Covers the idempotent skip path."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("x")
+    os.utime(src / "a.py", (1000.0, 1000.0))
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / ".built").write_text("ok")
+    os.utime(dst / ".built", (2000.0, 2000.0))
+
+    # If subprocess.run gets called the test fails — short-circuit means
+    # uv venv / pip install never run.
+    called: list = []
+    monkeypatch.setattr(prebuild.subprocess, "run", lambda *a, **kw: called.append(a))
+    prebuild.build_package(name="pkg", source=src, dst=dst)
+    assert called == []
+
+
+def test_build_package_removes_existing_dst_before_rebuilding(tmp_path: Path, monkeypatch):
+    """When dst already exists (stale build), rebuild starts by rm'ing
+    it. Covers the `if dst.exists(): shutil.rmtree(dst)` branch without
+    needing a real uv venv."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("x")  # newer than dst's built marker → rebuild
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / "stale-file").write_text("old")
+    # NO `.built` marker → _should_rebuild returns True (dst missing marker).
+
+    # Replace the heavy lifting (uv venv / pip install / copytree / dump
+    # schemas) with no-ops; we only care about the rmtree → recreate path.
+    monkeypatch.setattr(prebuild.subprocess, "run", lambda *a, **kw: None)
+    monkeypatch.setattr(prebuild.shutil, "copytree", lambda *a, **kw: None)
+    monkeypatch.setattr(prebuild, "_dump_schemas", lambda launch, dst: None)
+
+    # Synthesize the "bundled python" target so `.resolve()` finds something.
+    bundled = tmp_path / "bin" / "python3.99"
+    bundled.parent.mkdir()
+    bundled.write_text("")
+
+    class _FakePath(type(dst / ".venv" / "bin" / "python")):
+        def resolve(self):
+            return bundled
+
+    monkeypatch.setattr(
+        prebuild.Path, "resolve", lambda self: bundled if self.name == "python" else self
+    )
+
+    prebuild.build_package(name="pkg", source=src, dst=dst)
+    # Stale file is gone; dst was rebuilt + .built marker set.
+    assert not (dst / "stale-file").exists()
+    assert (dst / ".built").exists()
 
 
 @pytest.mark.skipif(not _has_uv(), reason="uv not available")
