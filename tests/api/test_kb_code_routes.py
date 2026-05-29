@@ -127,6 +127,46 @@ def test_sync_endpoint_400s_when_collection_has_no_git_url(app):
     assert resp.status_code == 400
 
 
+def test_lifespan_runs_code_sync_sweeper(remote: str):
+    """When create_app(code_sync_check_interval=…) is set, the lifespan
+    starts a sweeper task that re-syncs due Collections — proving the
+    background hook is actually wired (not just the helper class)."""
+    import asyncio
+    from datetime import timedelta
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    text = HashEmbedder(dim=EMBED_DIM)
+    application = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        kb_embedder=text,
+        kb_pipeline=build_doc_pipeline(embedder=text),
+        # Quick poll so the test isn't slow.
+        code_sync_check_interval=timedelta(milliseconds=50),
+    )
+    client = TestClient(application)
+    cid = client.post(
+        "/kb/collections",
+        json={"name": "r", "git_url": remote, "sync_interval_hours": 1},
+    ).json()["resource_id"]
+    with client:  # enter lifespan
+        # The sweeper ticks once every 50ms; poll for the side-effect.
+        async def _wait() -> str | None:
+            for _ in range(40):  # ~2s budget
+                got = client.get("/kb/collections").json()
+                for c in got:
+                    if c["resource_id"] == cid and c["git_last_sha"]:
+                        return c["git_last_sha"]
+                await asyncio.sleep(0.05)
+            return None
+
+        sha = asyncio.run(_wait())
+    assert sha and len(sha) == 40
+
+
 def test_sync_endpoint_502s_on_clone_failure(app, tmp_path: Path):
     """A bogus git_url surfaces as 502 (upstream failure), not 500."""
     client = TestClient(app)

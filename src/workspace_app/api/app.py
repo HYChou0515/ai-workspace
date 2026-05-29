@@ -288,6 +288,10 @@ def create_app(
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
+    # P3.0: background code-repo sync sweeper interval. None ⇒ sweeper
+    # disabled (manual /sync only). __main__ derives this from
+    # Settings.sync_check_interval_sec.
+    code_sync_check_interval: timedelta | None = None,
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
     history_max_messages: int = 40,
@@ -337,6 +341,21 @@ def create_app(
         except asyncio.CancelledError:
             return
 
+    async def _code_sync_sweeper() -> None:
+        """Re-clone any code Collection whose `sync_interval_hours` has
+        elapsed. The actual clone runs in a worker thread so the loop stays
+        responsive. Per-collection sync failures are caught inside `tick`."""
+        from ..kb.code_repo import CodeRepoIngestor, CodeRepoSweeper
+
+        assert code_sync_check_interval is not None  # gated by caller
+        sweeper = CodeRepoSweeper(spec, code_repo=CodeRepoIngestor(spec, ingestor=ingestor))
+        try:
+            while True:
+                await asyncio.sleep(code_sync_check_interval.total_seconds())
+                await asyncio.to_thread(sweeper.tick)
+        except asyncio.CancelledError:
+            return
+
     async def _mirror_sweeper() -> None:
         """Throttle: every ~mirror_interval, persist any warm sandbox the agent
         wrote to since the last sweep into the FileStore snapshot. Coalesces a
@@ -351,6 +370,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
+        if code_sync_check_interval is not None:
+            bg.append(asyncio.create_task(_code_sync_sweeper()))
         try:
             yield
         finally:

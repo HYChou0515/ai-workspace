@@ -25,11 +25,12 @@ import logging
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
 import msgspec
-from specstar import SpecStar
+from specstar import QB, SpecStar
 
 from ..resources.kb import Collection
 from .ingest import Ingestor
@@ -53,7 +54,7 @@ class CodeRepoIngestor:
         self._spec = spec
         self._ingestor = ingestor
 
-    def sync(self, *, collection_id: str, user: str) -> None:
+    def sync(self, *, collection_id: str, user: str, now_ms: int | None = None) -> None:
         """Clone the Collection's `git_url` and ingest each tracked file.
 
         No-op when the Collection has no `git_url` set (so a scheduler can
@@ -79,7 +80,13 @@ class CodeRepoIngestor:
                 # for the case where git itself wrote .git permissions that
                 # block rmtree on some filesystems.
                 shutil.rmtree(checkout, ignore_errors=True)
-        crm.update(collection_id, msgspec.structs.replace(coll, git_last_sha=sha))
+        # Stamp both the cloned HEAD and the wall-clock pull time so the
+        # background sweeper can decide whether the Collection is due next.
+        stamp = now_ms if now_ms is not None else int(time.time() * 1000)
+        crm.update(
+            collection_id,
+            msgspec.structs.replace(coll, git_last_sha=sha, git_last_pulled_at=stamp),
+        )
 
     # ─────────────────────── git wrappers ───────────────────────
 
@@ -124,6 +131,57 @@ class CodeRepoIngestor:
                 logger.warning("code-repo: could not read %s — skipping", rel)
                 continue
             self._ingestor.ingest(collection_id=collection_id, user=user, filename=rel, data=data)
+
+
+class CodeRepoSweeper:
+    """Background-loop helper: every tick, re-sync any Collection whose
+    `sync_interval_hours` has elapsed since `git_last_pulled_at`.
+
+    `tick()` is what does one pass (caller drives the cadence). Per-collection
+    sync failures are caught + logged so one bad remote never crashes the
+    sweeper. The app's lifespan task awakens every
+    ``Settings.sync_check_interval_sec`` and calls `tick()`."""
+
+    _DEFAULT_USER = "default-user"  # v1: no auth on the sweeper either
+
+    def __init__(self, spec: SpecStar, *, code_repo: CodeRepoIngestor) -> None:
+        self._spec = spec
+        self._code_repo = code_repo
+
+    def tick(self, *, now_ms: int | None = None) -> list[str]:
+        """Run one sweep pass. Returns the Collection ids that were
+        successfully synced this tick (skipped + failed ones excluded)."""
+        stamp = now_ms if now_ms is not None else int(time.time() * 1000)
+        synced: list[str] = []
+        rm = self._spec.get_resource_manager(Collection)
+        for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+            coll = r.data
+            assert isinstance(coll, Collection)
+            if not coll.git_url or coll.sync_interval_hours is None:
+                continue
+            # First-pull (last_pulled_at=None) is always due — we don't make
+            # the user wait `sync_interval_hours` after creating a code
+            # Collection before its initial clone. Subsequent ticks honour
+            # the interval.
+            interval_ms = coll.sync_interval_hours * 3600_000
+            if (
+                coll.git_last_pulled_at is not None
+                and stamp - coll.git_last_pulled_at < interval_ms
+            ):
+                continue  # not yet due
+            cid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            try:
+                self._code_repo.sync(
+                    collection_id=cid,
+                    user=self._DEFAULT_USER,
+                    now_ms=stamp,
+                )
+            except CodeRepoSyncError:
+                # Don't take down the whole sweep over one bad remote.
+                logger.exception("code-repo sweeper: sync failed for %s", cid)
+                continue
+            synced.append(cid)
+        return synced
 
 
 def _splice_token(url: str, token: str | None) -> str:

@@ -17,6 +17,8 @@ Common env vars (all optional; see `factories.Settings` for the full list):
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import uvicorn
 
 from workspace_app.api import create_app
@@ -70,6 +72,13 @@ def main() -> None:
         read_file_max_chars=settings.read_file_max_chars,
         history_max_messages=settings.history_max_messages,
         tool_defs=tool_defs,
+        # P3.0: background sweeper for code-Collection re-syncs. Disable by
+        # setting SYNC_CHECK_INTERVAL_SEC=0.
+        code_sync_check_interval=(
+            timedelta(seconds=settings.sync_check_interval_sec)
+            if settings.sync_check_interval_sec > 0
+            else None
+        ),
     )
     if tool_defs:
         names = ", ".join(t.name for t in tool_defs)
