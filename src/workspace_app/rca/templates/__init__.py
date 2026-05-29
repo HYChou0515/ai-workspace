@@ -64,11 +64,31 @@ def load_template_config(profile: str) -> AgentConfig | None:
 
 
 def compose_system_prompt(base: str, profile: str) -> str:
-    """Stable base prompt + the profile's starting-files appendix. The base
-    carries app-level conventions (report versioning, fishbone schema, …); the
-    appendix carries the template-specific file layout."""
+    """Stable base prompt + the profile's starting-files appendix + (if the
+    profile ships any) a **skill index** of available `(name, description)`
+    pairs the agent can call `read_skill(name)` on.
+
+    The base carries app-level conventions (report versioning, fishbone
+    schema, …); the appendix carries the template-specific file layout;
+    the skill index advertises progressive-disclosure methodologies the
+    agent can load on demand (issue #29 / §A)."""
+    from .. import skills as skills_mod  # late import to avoid template→skills cycle
+
+    parts: list[str] = [base.rstrip()] if base else []
     appendix = load_template_appendix(profile)
-    return f"{base}\n\n{appendix}".strip() if appendix else base
+    if appendix:
+        parts.append(appendix.rstrip())
+    metas = skills_mod.list_skills(profile)
+    if metas:
+        lines = [
+            "## Available skills",
+            "",
+            "Call `read_skill(name)` to load the body before applying one.",
+            "",
+        ]
+        lines += [f"- `{m.name}`: {m.description}" for m in metas]
+        parts.append("\n".join(lines))
+    return "\n\n".join(parts) if parts else ""
 
 
 def list_profiles() -> list[str]:
