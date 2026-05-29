@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..files import WorkspaceFiles
@@ -13,7 +14,7 @@ if TYPE_CHECKING:
     from ..kb.retriever import Retriever
     from ..resources import AgentConfig
     from ..resources.kb import RetrievedPassage
-    from .provision import ToolDef
+    from ..tooling.registry import PackageInfo
 
 
 @dataclass
@@ -69,11 +70,16 @@ class AgentToolContext:
     # memory (#17). Set per-turn by the API layer from the persisted thread; the
     # runner prepends it to this turn's message. Empty for a fresh thread.
     history: list[dict[str, str]] = field(default_factory=list)
-    # Deploy-level registry of provisionable tools (#21). When the sandbox is
-    # created, the ones named in agent_config.allowed_tools are installed into
-    # it (setup); the runner also exposes them as function tools. Set by the API
-    # layer from create_app config.
-    tool_defs: list[ToolDef] = field(default_factory=list)
+    # Deploy-level registry of provisionable tool packages (#21, #25). When
+    # the sandbox is created, the packages that appear in
+    # agent_config.allowed_tools (raw pkg name, or `pkg:cmd` colon syntax) are
+    # installed into it from prebuilt_dir; the runner also exposes their
+    # commands as function tools. Set by the API layer from create_app config.
+    packages: list[PackageInfo] = field(default_factory=list)
+    # Host path to the prebuilt-packages root. ``provision_tools`` reads
+    # ``prebuilt_dir / pkg.name`` and tars it into the sandbox. Required when
+    # ``packages`` is non-empty.
+    prebuilt_dir: Path | None = None
 
     # Per-message reasoning effort from the UI selector ("low"/"medium"/"high");
     # None → the model's default. Threaded to the model's ModelSettings.
@@ -103,14 +109,22 @@ class AgentToolContext:
                 self.handle = await self.ensure_sandbox_via()
             else:
                 self.handle = await self.sandbox.create(self.sandbox_spec)
-            # Eagerly install the allowed provisioned tools into the fresh
-            # sandbox (after any snapshot restore the ensure-hook did), so the
-            # agent can call them. Runs once per sandbox (handle was None).
-            if self.tool_defs and self.agent_config is not None:
+            # Eagerly install the allowed packages into the fresh sandbox
+            # (after any snapshot restore the ensure-hook did), so the agent
+            # can call their commands. Runs once per sandbox (handle was None).
+            #
+            # `allowed_tools` uses the colon syntax (`"pkg"` or `"pkg:cmd"`);
+            # for provisioning, a package goes in if ANY of its commands
+            # appear in the allow list — we can't install half a venv.
+            if self.packages and self.agent_config is not None:
                 from .provision import provision_tools
 
-                allowed = set(self.agent_config.allowed_tools or [])
-                todo = [d for d in self.tool_defs if d.name in allowed]
-                if todo:
-                    await provision_tools(self.sandbox, self.handle, todo)
+                pkg_names_in_allowed = {
+                    a.split(":", 1)[0] for a in (self.agent_config.allowed_tools or [])
+                }
+                todo = [p for p in self.packages if p.name in pkg_names_in_allowed]
+                if todo and self.prebuilt_dir is not None:
+                    await provision_tools(
+                        self.sandbox, self.handle, todo, prebuilt_dir=self.prebuilt_dir
+                    )
         return self.handle

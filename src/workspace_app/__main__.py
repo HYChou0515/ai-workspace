@@ -35,20 +35,23 @@ from workspace_app.factories import (
     get_spec,
 )
 from workspace_app.monitor import SpecstarMonitor
-from workspace_app.rca.sample_tools import PREBUILT_DIR, available_sample_tools
+from workspace_app.rca.tool_packages import PREBUILT_DIR
+from workspace_app.tooling.registry import discover_packages
 
 
 def main() -> None:
     settings = Settings.from_env()
     spec = get_spec(settings)
-    # Deploy-level provisioned tools. Only those whose prebuilt package exists
-    # are advertised (run `scripts/prebuild_tools.py`); a real deployment swaps
-    # this for its own ToolDefs. They're gated per-investigation by the agent
-    # config's allowed_tools, so the tool-demo template is what turns them on.
-    tool_defs = available_sample_tools()
+    # Deploy-level provisionable tool packages (#25). discover_packages reads
+    # the prebuilt bundles under PREBUILT_DIR (run `scripts/prebuild_tools.py`);
+    # a real deployment swaps tool_packages.PACKAGES for its own dict. They're
+    # gated per-investigation by the agent config's allowed_tools (colon
+    # syntax: `"pkg"` for the whole package, `"pkg:cmd"` for one command), so
+    # the tool-demo template is what turns them on.
+    packages = discover_packages(PREBUILT_DIR)
     # The sandbox mounts the prebuilt dir read-only at /.tools (outside the
     # workspace) — no per-sandbox copy. Only point at it once it's built.
-    tools_dir = PREBUILT_DIR if tool_defs else None
+    tools_dir = PREBUILT_DIR if packages else None
     embedder = get_embedder(settings)
     kb_llm = get_kb_llm(settings)
     app = create_app(
@@ -71,7 +74,8 @@ def main() -> None:
         read_file_max_lines=settings.read_file_max_lines,
         read_file_max_chars=settings.read_file_max_chars,
         history_max_messages=settings.history_max_messages,
-        tool_defs=tool_defs,
+        packages=packages,
+        prebuilt_dir=PREBUILT_DIR if packages else None,
         # P3.0: background sweeper for code-Collection re-syncs. Disable by
         # setting SYNC_CHECK_INTERVAL_SEC=0.
         code_sync_check_interval=(
@@ -80,9 +84,9 @@ def main() -> None:
             else None
         ),
     )
-    if tool_defs:
-        names = ", ".join(t.name for t in tool_defs)
-        print(f"  provisioned tools available (tool-demo template): {names}")
+    if packages:
+        names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)
+        print(f"  provisioned tool packages (tool-demo template): {names}")
     uvicorn.run(app, host=settings.host, port=settings.port)
 
 

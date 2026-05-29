@@ -1,45 +1,56 @@
+"""§B.T5 provisioning: install each PackageInfo's prebuilt bundle into
+the sandbox.
+
+The new model:
+
+- `PackageInfo` comes from `workspace_app.tooling.registry.discover_packages`
+  (it carries `name`, `commands`, sandbox-relative `install_dir`).
+- `provision_tools(sandbox, handle, packages, prebuilt_dir=…)` tars
+  `prebuilt_dir/<pkg>/` and uploads it to `install_dir`. No setup step;
+  the prebuild has already done everything.
+- ctx routes via `agent_config.allowed_tools` — colon syntax
+  (`"pkg"` for all, `"pkg:cmd"` for one) means a package goes in if ANY
+  of its commands appear in the allow list (can't install half a venv).
+"""
+
+from __future__ import annotations
+
 import json
-import shutil
 from pathlib import Path
 
 import pytest
 from agents import RunContextWrapper
 
 from workspace_app.agent.context import AgentToolContext
-from workspace_app.agent.provision import (
-    ProvisionError,
-    ToolDef,
-    build_argv,
-    build_provisioned_tools,
-    provision_tools,
-)
+from workspace_app.agent.provision import ProvisionError, provision_tools
+from workspace_app.resources.agent_config import AgentConfig
 from workspace_app.sandbox.protocol import ExecResult, SandboxHandle, SandboxSpec
-
-_REPO = Path(__file__).resolve().parents[2]
-_TOOLS = _REPO / "sample-tools"
-
-_FETCH_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string", "enum": ["alloy-batches", "sensor-telemetry"]},
-        "rows": {"type": "integer"},
-        "out": {"type": "string"},
-        "json": {"type": "boolean"},
-    },
-}
-_DEF = ToolDef(
-    name="data-fetch",
-    description="materialise a named dataset",
-    invoke=["uv", "run", "data-fetch"],
-    setup=[["uv", "sync"]],
-    positional=["name"],
-    params_json_schema=_FETCH_SCHEMA,
+from workspace_app.tooling.registry import (
+    CommandInfo,
+    PackageInfo,
+    build_function_tools,
 )
 
 
-# ---------------------------- a tiny recording sandbox ----------------------------
+def _pkg(name: str, *cmds: str) -> PackageInfo:
+    """Build a PackageInfo with one trivial command per name in `cmds`."""
+    return PackageInfo(
+        name=name,
+        commands=tuple(
+            CommandInfo(
+                name=c,
+                description=f"{c}",
+                params_json_schema={"type": "object", "properties": {}},
+            )
+            for c in cmds
+        ),
+        install_dir=f"../.tools/{name}",
+    )
+
+
 class _Recording:
-    """Minimal Sandbox stand-in: records exec argv, returns canned results."""
+    """Minimal Sandbox stand-in: records exec argv + uploads, returns
+    canned results."""
 
     def __init__(self, results: dict[tuple[str, ...], ExecResult] | None = None) -> None:
         self.calls: list[list[str]] = []
@@ -60,42 +71,173 @@ class _Recording:
         return None
 
 
-async def test_ensure_sandbox_provisions_only_allowed_tools():
-    from workspace_app.resources.agent_config import AgentConfig
+# ─── provision_tools direct ──────────────────────────────────────────
 
+
+def _seed_prebuilt(prebuilt_dir: Path, name: str) -> None:
+    """Lay down a minimal prebuilt tree (just enough for `_tar_tree` to
+    archive). No real venv — provision_tools doesn't inspect content."""
+    pkg_dir = prebuilt_dir / name
+    pkg_dir.mkdir(parents=True)
+    (pkg_dir / "launch").write_text("#!/bin/sh\necho hi\n")
+    (pkg_dir / "launch").chmod(0o755)
+    (pkg_dir / "commands.json").write_text("[]")
+
+
+async def test_provision_uploads_each_package_archive_into_sandbox(tmp_path: Path):
+    """For each PackageInfo, the bundle gets tar'd and uploaded to
+    `<install_dir>.provision.tar.gz`, then extracted at install_dir."""
+    _seed_prebuilt(tmp_path / "prebuilt", "datalab")
+    pkg = _pkg("datalab", "summarise", "plot")
+    sb = _Recording()
+    await provision_tools(
+        sb,  # ty: ignore[invalid-argument-type]
+        SandboxHandle(id="s1"),
+        [pkg],
+        prebuilt_dir=tmp_path / "prebuilt",
+    )
+    # one upload at the sandbox-relative install path
+    assert sb.uploads and sb.uploads[0][0] == "../.tools/datalab.provision.tar.gz"
+    assert sb.uploads[0][1] > 0
+    # one extract command with the jail-friendly tar flags
+    extract = next(c for c in sb.calls if "tar xzf" in " ".join(c))
+    cmd = " ".join(extract)
+    assert "tar xzf ../.tools/datalab.provision.tar.gz -C ../.tools/datalab --no-same-owner" in cmd
+    assert "rm -f ../.tools/datalab.provision.tar.gz" in cmd
+
+
+async def test_provision_raises_when_extract_fails(tmp_path: Path):
+    """Non-zero extract → ProvisionError surfacing the offending package."""
+    _seed_prebuilt(tmp_path / "prebuilt", "datalab")
+    pkg = _pkg("datalab", "summarise")
+    extract_cmd = (
+        "sh",
+        "-c",
+        "mkdir -p ../.tools/datalab && tar xzf ../.tools/datalab.provision.tar.gz "
+        "-C ../.tools/datalab --no-same-owner && rm -f ../.tools/datalab.provision.tar.gz",
+    )
+    sb = _Recording({extract_cmd: ExecResult(exit_code=2, stdout=b"corrupt archive")})
+    with pytest.raises(ProvisionError) as exc:
+        await provision_tools(
+            sb,  # ty: ignore[invalid-argument-type]
+            SandboxHandle(id="s1"),
+            [pkg],
+            prebuilt_dir=tmp_path / "prebuilt",
+        )
+    assert exc.value.package == "datalab"
+
+
+async def test_provision_installs_every_package_in_order(tmp_path: Path):
+    """Multi-package: each gets its own upload + extract, in order."""
+    prebuilt = tmp_path / "prebuilt"
+    _seed_prebuilt(prebuilt, "datalab")
+    _seed_prebuilt(prebuilt, "fetcher")
+    sb = _Recording()
+    await provision_tools(
+        sb,  # ty: ignore[invalid-argument-type]
+        SandboxHandle(id="s1"),
+        [_pkg("datalab", "summarise"), _pkg("fetcher", "fetch")],
+        prebuilt_dir=prebuilt,
+    )
+    assert [u[0] for u in sb.uploads] == [
+        "../.tools/datalab.provision.tar.gz",
+        "../.tools/fetcher.provision.tar.gz",
+    ]
+
+
+# ─── ctx.ensure_sandbox provisions allowed packages ───────────────────
+
+
+async def test_ensure_sandbox_provisions_packages_matching_allowed_tools(tmp_path: Path):
+    """A package whose name appears in allowed_tools (bare or as a colon
+    prefix) gets provisioned; one that doesn't is skipped."""
+    prebuilt = tmp_path / "prebuilt"
+    _seed_prebuilt(prebuilt, "datalab")
+    _seed_prebuilt(prebuilt, "irrelevant")
     sb = _Recording()
     ctx = AgentToolContext(
         sandbox=sb,  # ty: ignore[invalid-argument-type]
-        agent_config=AgentConfig(name="a", allowed_tools=["t1"]),
-        tool_defs=[
-            ToolDef(name="t1", description="", invoke=["run-t1"], setup=[["echo", "install-t1"]]),
-            ToolDef(name="t2", description="", invoke=["run-t2"], setup=[["echo", "install-t2"]]),
-        ],
+        agent_config=AgentConfig(name="a", allowed_tools=["datalab"]),
+        packages=[_pkg("datalab", "summarise"), _pkg("irrelevant", "x")],
+        prebuilt_dir=prebuilt,
     )
     await ctx.ensure_sandbox()
-    assert ["echo", "install-t1"] in sb.calls  # allowed → installed
-    assert ["echo", "install-t2"] not in sb.calls  # not in allowed_tools → skipped
+    uploaded = {u[0] for u in sb.uploads}
+    assert "../.tools/datalab.provision.tar.gz" in uploaded
+    assert "../.tools/irrelevant.provision.tar.gz" not in uploaded
 
 
-def test_agent_for_adds_allowed_provisioned_tools():
+async def test_ensure_sandbox_provisions_package_when_only_one_command_allowed(
+    tmp_path: Path,
+):
+    """`allowed_tools=["datalab:plot"]` still installs the whole datalab
+    package — you can't install half a venv. Only the LLM's tool-list
+    filtering scopes it down to just `plot`."""
+    prebuilt = tmp_path / "prebuilt"
+    _seed_prebuilt(prebuilt, "datalab")
+    sb = _Recording()
+    ctx = AgentToolContext(
+        sandbox=sb,  # ty: ignore[invalid-argument-type]
+        agent_config=AgentConfig(name="a", allowed_tools=["datalab:plot"]),
+        packages=[_pkg("datalab", "summarise", "plot")],
+        prebuilt_dir=prebuilt,
+    )
+    await ctx.ensure_sandbox()
+    assert any(u[0] == "../.tools/datalab.provision.tar.gz" for u in sb.uploads)
+
+
+async def test_ensure_sandbox_skips_provision_when_no_packages_match(tmp_path: Path):
+    """Nothing in allowed_tools matches any package → no upload, no exec."""
+    prebuilt = tmp_path / "prebuilt"
+    _seed_prebuilt(prebuilt, "datalab")
+    sb = _Recording()
+    ctx = AgentToolContext(
+        sandbox=sb,  # ty: ignore[invalid-argument-type]
+        agent_config=AgentConfig(name="a", allowed_tools=["nothing-here"]),
+        packages=[_pkg("datalab", "summarise")],
+        prebuilt_dir=prebuilt,
+    )
+    await ctx.ensure_sandbox()
+    assert sb.uploads == []
+
+
+# ─── runner _agent_for hooks the package commands as FunctionTools ────
+
+
+def test_agent_for_exposes_allowed_package_commands_as_function_tools():
+    """`allowed_tools=["datalab"]` puts every datalab command in the
+    agent's tool list (plus the built-ins from build_tools)."""
     from workspace_app.api.litellm_runner import _agent_for
-    from workspace_app.resources.agent_config import AgentConfig
 
     agent = _agent_for(
-        AgentConfig(name="a", allowed_tools=["exec", "t1"]),
-        tool_defs=[ToolDef(name="t1", description="d", invoke=["run-t1"])],
+        AgentConfig(name="a", allowed_tools=["exec", "datalab"]),
+        packages=[_pkg("datalab", "summarise", "plot")],
     )
     names = {t.name for t in agent.tools}
-    assert "t1" in names  # provisioned tool the agent can call
+    assert "summarise" in names
+    assert "plot" in names
     assert "exec" in names  # built-in still there
-    assert "data-fetch" not in names  # an un-allowed def is absent
+    assert "data-fetch" not in names  # not in any allowed entry
+
+
+def test_agent_for_colon_filters_to_one_command():
+    """`allowed_tools=["datalab:plot"]` → only `plot` exposed, not
+    summarise — the LLM doesn't see the whole package."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(
+        AgentConfig(name="a", allowed_tools=["datalab:plot"]),
+        packages=[_pkg("datalab", "summarise", "plot")],
+    )
+    names = {t.name for t in agent.tools}
+    assert "plot" in names
+    assert "summarise" not in names
 
 
 def test_agent_for_threads_base_url_and_api_key_to_the_model():
     from agents.extensions.models.litellm_model import LitellmModel
 
     from workspace_app.api.litellm_runner import _agent_for
-    from workspace_app.resources.agent_config import AgentConfig
 
     agent = _agent_for(AgentConfig(name="a"), base_url="https://hosted/v1", api_key="sk-1")
     assert isinstance(agent.model, LitellmModel)
@@ -105,7 +247,6 @@ def test_agent_for_threads_base_url_and_api_key_to_the_model():
 
 def test_agent_for_threads_reasoning_effort_to_model_settings():
     from workspace_app.api.litellm_runner import _agent_for
-    from workspace_app.resources.agent_config import AgentConfig
 
     agent = _agent_for(AgentConfig(name="a"), reasoning_effort="high")
     assert agent.model_settings.reasoning is not None
@@ -114,149 +255,29 @@ def test_agent_for_threads_reasoning_effort_to_model_settings():
     assert _agent_for(AgentConfig(name="a")).model_settings.reasoning is None
 
 
-def test_build_argv_positional_then_flags_then_bools():
-    assert build_argv(_DEF, {"name": "alloy-batches", "rows": 60, "json": True}) == [
-        "uv",
-        "run",
-        "data-fetch",
-        "alloy-batches",
-        "--rows",
-        "60",
-        "--json",
-    ]
-    # a false bool + an absent optional are omitted
-    assert build_argv(_DEF, {"name": "sensor-telemetry", "json": False}) == [
-        "uv",
-        "run",
-        "data-fetch",
-        "sensor-telemetry",
-    ]
-    # an absent positional (name) is skipped entirely
-    assert build_argv(_DEF, {"json": True}) == ["uv", "run", "data-fetch", "--json"]
+# ─── function-tool on_invoke execs launch <cmd> '<args-json>' ─────────
 
 
-async def test_provision_runs_each_setup_step():
-    sb = _Recording()
-    await provision_tools(sb, SandboxHandle(id="s1"), [_DEF])  # ty: ignore[invalid-argument-type]
-    assert sb.calls == [["uv", "sync"]]
-
-
-async def test_provision_copies_prebuilt_package_into_sandbox(tmp_path):
-    # A prebuilt, relocatable package on the host (a fake venv tree).
-    pkg = tmp_path / "pkg"
-    (pkg / ".venv" / "bin").mkdir(parents=True)
-    (pkg / ".venv" / "bin" / "tool").write_text("#!/bin/sh\necho hi\n")
-    tool = ToolDef(
-        name="x",
-        description="",
-        invoke=["tools/x/.venv/bin/tool"],
-        prebuilt=str(pkg),
-        install_dir="tools/x",
-    )
-    sb = _Recording()
-    await provision_tools(sb, SandboxHandle(id="s1"), [tool])  # ty: ignore[invalid-argument-type]
-    # the package is shipped in as one archive upload, sitting next to dest …
-    assert sb.uploads and sb.uploads[0][0] == "tools/x.provision.tar.gz"
-    assert sb.uploads[0][1] > 0
-    # … then extracted into install_dir (mkdir + tar in one shell step), with
-    # --no-same-owner (mapped-root in the userns jail), and the archive removed.
-    extract = next(c for c in sb.calls if "tar xzf" in " ".join(c))
-    cmd = " ".join(extract)
-    assert "tar xzf tools/x.provision.tar.gz -C tools/x --no-same-owner" in cmd
-    assert "rm -f tools/x.provision.tar.gz" in cmd
-
-
-async def test_provision_raises_when_prebuilt_extract_fails(tmp_path):
-    pkg = tmp_path / "pkg"
-    (pkg / ".venv").mkdir(parents=True)
-    tool = ToolDef(name="x", description="", invoke=["x"], prebuilt=str(pkg), install_dir="tools/x")
-    extract = (
-        "sh",
-        "-c",
-        "mkdir -p tools/x && tar xzf tools/x.provision.tar.gz -C tools/x "
-        "--no-same-owner && rm -f tools/x.provision.tar.gz",
-    )
-    sb = _Recording({extract: ExecResult(exit_code=2, stdout=b"corrupt archive")})
-    with pytest.raises(ProvisionError) as exc:
-        await provision_tools(sb, SandboxHandle(id="s1"), [tool])  # ty: ignore[invalid-argument-type]
-    assert exc.value.tool == "x"
-
-
-async def test_ensure_sandbox_skips_provision_when_no_allowed_tool_matches():
-    from workspace_app.resources.agent_config import AgentConfig
-
-    sb = _Recording()
-    ctx = AgentToolContext(
-        sandbox=sb,  # ty: ignore[invalid-argument-type]
-        agent_config=AgentConfig(name="a", allowed_tools=["something-else"]),
-        tool_defs=[ToolDef(name="t1", description="", invoke=["run"], setup=[["echo", "x"]])],
-    )
-    await ctx.ensure_sandbox()
-    assert ["echo", "x"] not in sb.calls  # t1 not allowed → nothing provisioned
-
-
-async def test_provision_raises_on_nonzero_exit():
-    sb = _Recording({("uv", "sync"): ExecResult(exit_code=1, stdout=b"boom")})
-    with pytest.raises(ProvisionError) as exc:
-        await provision_tools(sb, SandboxHandle(id="s1"), [_DEF])  # ty: ignore[invalid-argument-type]
-    assert exc.value.tool == "data-fetch"
-
-
-async def test_provisioned_tool_execs_invoke_argv_in_sandbox():
+async def test_function_tool_passes_args_json_through_to_sandbox_exec():
+    """The LLM-given args_json reaches the sandbox unchanged as argv[2] of
+    the launch command — no argparse translation."""
     sb = _Recording()
     actx = AgentToolContext(sandbox=sb, handle=SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
-    [tool] = build_provisioned_tools([_DEF])
-    assert tool.name == "data-fetch"
-    assert tool.params_json_schema["properties"]["name"]["enum"]  # enum reaches the model
-
-    args = json.dumps({"name": "alloy-batches", "rows": 5})
+    pkg = _pkg("datalab", "summarise")
+    [tool] = build_function_tools([pkg], allowed=["datalab:summarise"])
+    args = json.dumps({"csv": "x.csv"})
     out = await tool.on_invoke_tool(RunContextWrapper(actx), args)  # ty: ignore[invalid-argument-type]
-    assert sb.calls[-1] == ["uv", "run", "data-fetch", "alloy-batches", "--rows", "5"]
+    assert sb.calls[-1] == ["../.tools/datalab/launch", "summarise", args]
     assert "ok" in out
 
 
-# --------- integration: provision + chain the two real example tools ---------
-def _tooldef(dir_name: str, tool: str, positional: list[str], schema: dict) -> ToolDef:
-    proj = str(_TOOLS / dir_name)
-    return ToolDef(
-        name=tool,
-        description=f"example provisioned tool: {tool}",
-        setup=[["uv", "sync", "--project", proj]],
-        invoke=["uv", "run", "--project", proj, tool],
-        positional=positional,
-        params_json_schema=schema,
-    )
-
-
-@pytest.mark.skipif(shutil.which("uv") is None, reason="uv not on PATH")
-async def test_two_tools_provision_and_chain_in_a_real_sandbox(tmp_path: Path):
-    """End-to-end: install both example tools INTO a real sandbox, then fetch a
-    dataset with one and summarise it with the other — files flow through the
-    sandbox workspace, deps stay in the tools' own venvs."""
-    from workspace_app.sandbox.local_process import LocalProcessSandbox
-
-    fetch = _tooldef("data-fetch", "data-fetch", ["name"], _FETCH_SCHEMA)
-    summarise = _tooldef(
-        "csv-column-summary",
-        "csv-column-summary",
-        ["csv"],
-        {"type": "object", "properties": {"csv": {"type": "string"}, "json": {"type": "boolean"}}},
-    )
-
-    sandbox = LocalProcessSandbox(root_dir=tmp_path / "sbx", isolate=False)
-    handle = await sandbox.create(SandboxSpec())
-    try:
-        await provision_tools(sandbox, handle, [fetch, summarise])
-        actx = AgentToolContext(sandbox=sandbox, handle=handle)
-        tools = {t.name: t for t in build_provisioned_tools([fetch, summarise])}
-        ctx = RunContextWrapper(actx)
-
-        fetch_args = json.dumps({"name": "alloy-batches", "rows": 60})
-        fetched = await tools["data-fetch"].on_invoke_tool(ctx, fetch_args)  # ty: ignore[invalid-argument-type]
-        assert "60 rows" in fetched
-
-        sum_args = json.dumps({"csv": "alloy-batches.csv"})
-        summarised = await tools["csv-column-summary"].on_invoke_tool(ctx, sum_args)  # ty: ignore[invalid-argument-type]
-        assert "60 rows" in summarised and "columns" in summarised
-    finally:
-        await sandbox.kill(handle)
+async def test_function_tool_substitutes_empty_args_json_with_curly_braces():
+    """LLM occasionally calls a tool with empty args; the dispatcher
+    contract requires SOME JSON. We pass `{}` so it gets validated as an
+    empty object rather than `pydantic` choking on an empty string."""
+    sb = _Recording()
+    actx = AgentToolContext(sandbox=sb, handle=SandboxHandle(id="s1"))  # ty: ignore[invalid-argument-type]
+    pkg = _pkg("datalab", "summarise")
+    [tool] = build_function_tools([pkg], allowed=["datalab"])
+    await tool.on_invoke_tool(RunContextWrapper(actx), "")  # ty: ignore[invalid-argument-type]
+    assert sb.calls[-1] == ["../.tools/datalab/launch", "summarise", "{}"]

@@ -233,6 +233,8 @@ def build_tools(allowed: list[str] | None = None) -> list[FunctionTool]:
     """Build FunctionTool list for the Agent. If `allowed` is None, the
     workspace toolset (file/exec); otherwise exactly the named tools."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
-    # Skip names that aren't built-ins — they may be provisioned tools (#21),
-    # which the runner adds separately from the ToolDef registry.
+    # Skip names that aren't built-ins — they may be provisioned tool-package
+    # commands (#21, #25), which the runner adds separately via
+    # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
+    # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     return [function_tool(_IMPLS[n], name_override=n) for n in names if n in _IMPLS]

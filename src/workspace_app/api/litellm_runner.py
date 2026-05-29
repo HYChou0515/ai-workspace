@@ -22,9 +22,9 @@ from agents.extensions.models.litellm_model import LitellmModel
 from openai.types.shared import Reasoning
 
 from ..agent.context import AgentToolContext
-from ..agent.provision import ToolDef, build_provisioned_tools
 from ..agent.tools import build_tools
 from ..resources import AgentConfig
+from ..tooling.registry import PackageInfo, build_function_tools
 from .events import (
     AgentEvent,
     AgentMetrics,
@@ -157,7 +157,7 @@ def _final_tokens(
 
 def _agent_for(
     config: AgentConfig,
-    tool_defs: list[ToolDef] | None = None,
+    packages: list[PackageInfo] | None = None,
     extra_instructions: str | None = None,
     base_url: str | None = None,
     api_key: str | None = None,
@@ -167,12 +167,12 @@ def _agent_for(
     if extra_instructions:
         base = f"{base}\n\n{extra_instructions}".strip()
     tools = list(build_tools(config.allowed_tools or None))
-    # Add the provisioned tools the agent is allowed (installed into the sandbox
-    # by ctx.ensure_sandbox). build_tools already skipped these unknown names.
-    allowed = set(config.allowed_tools or [])
-    provisioned = [d for d in (tool_defs or []) if d.name in allowed]
-    if provisioned:
-        tools.extend(build_provisioned_tools(provisioned))
+    # Expand the package selection (allowed_tools colon syntax) into
+    # FunctionTools; the sandbox-side launcher gets execed when the LLM
+    # calls one. build_function_tools handles `"pkg"` (all commands) and
+    # `"pkg:cmd"` (single command), and silently skips unknown names.
+    if packages:
+        tools.extend(build_function_tools(packages, allowed=config.allowed_tools or []))
     # Per-message reasoning effort (the UI selector). Only set when chosen —
     # absent leaves the model's default. drop_params (above) drops it on models
     # that don't support it, so it's safe to send to any model.
@@ -370,7 +370,7 @@ class LitellmAgentRunner:
     ) -> AsyncIterator[AgentEvent]:
         agent = _agent_for(
             ctx.agent_config or self._config,
-            ctx.tool_defs,
+            ctx.packages,
             extra_instructions=feedback,
             base_url=self._base_url,
             api_key=self._api_key,

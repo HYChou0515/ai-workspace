@@ -19,7 +19,6 @@ from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..agent.context import AgentToolContext
-from ..agent.provision import ToolDef
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..kb.chunker import Chunker, FixedTokenChunker
@@ -49,6 +48,7 @@ from ..resources import (
 from ..resources.kb import EMBED_DIM, Citation, Collection
 from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
+from ..tooling.registry import PackageInfo
 from ..users import MockUserDirectory, UserDirectory
 from .activity import ActivityLog
 from .events import (
@@ -295,7 +295,8 @@ def create_app(
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
     history_max_messages: int = 40,
-    tool_defs: list[ToolDef] | None = None,
+    packages: list[PackageInfo] | None = None,
+    prebuilt_dir: Path | None = None,
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -715,9 +716,11 @@ def create_app(
             read_file_max_chars=read_file_max_chars,
             # Cross-turn memory: prior dialogue (excludes the user msg just added).
             history=history_items(conv.messages[:-1], max_messages=history_max_messages),
-            # Provisionable tools (installed into the sandbox on create; the
-            # runner exposes the allowed ones). Deploy config.
-            tool_defs=tool_defs or [],
+            # Provisionable tool packages (installed into the sandbox on
+            # create; the runner exposes the allowed-via-colon commands).
+            # Deploy config (see workspace_app.rca.tool_packages).
+            packages=packages or [],
+            prebuilt_dir=prebuilt_dir,
             # Per-message reasoning effort from the UI selector.
             reasoning_effort=body.reasoning_effort,
         )
