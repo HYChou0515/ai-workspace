@@ -4,7 +4,7 @@
   "suggestions": [
     "Fetch the alloy-batches dataset (500 rows), then summarise its columns.",
     "List the workspace files.",
-    "Summarise the columns of the CSV you just fetched."
+    "Summarise the columns of the CSV you just fetched, then plot the distributions."
   ],
   "allowed_tools": [
     "exec",
