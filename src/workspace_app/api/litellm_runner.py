@@ -162,11 +162,14 @@ def _agent_for(
     base_url: str | None = None,
     api_key: str | None = None,
     reasoning_effort: str | None = None,
+    template_profile: str | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
         base = f"{base}\n\n{extra_instructions}".strip()
-    tools = list(build_tools(config.allowed_tools or None))
+    # `template_profile` opts in `read_skill` when the profile ships skills
+    # (issue #29 / §A). build_tools handles the conditional internally.
+    tools = list(build_tools(config.allowed_tools or None, profile=template_profile))
     # Expand the package selection (allowed_tools colon syntax) into
     # FunctionTools; the sandbox-side launcher gets execed when the LLM
     # calls one. build_function_tools handles `"pkg"` (all commands) and
@@ -375,6 +378,7 @@ class LitellmAgentRunner:
             base_url=self._base_url,
             api_key=self._api_key,
             reasoning_effort=ctx.reasoning_effort,
+            template_profile=ctx.template_profile,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))

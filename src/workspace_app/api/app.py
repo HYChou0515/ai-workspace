@@ -598,18 +598,31 @@ def create_app(
         assert isinstance(first.data, AgentConfig)
         return first.data
 
+    def _template_profile_for(investigation_id: str) -> str:
+        """The Investigation's template_profile, or "default" when the id
+        doesn't map to a real Investigation (fresh send-message path or
+        a re-used id from a deleted record)."""
+        inv_rm = spec.get_resource_manager(Investigation)
+        try:
+            inv = inv_rm.get(investigation_id).data
+        except ResourceIDNotFoundError:
+            return "default"
+        if isinstance(inv, Investigation):
+            return inv.template_profile
+        return "default"
+
     def _resolve_agent_config(investigation_id: str) -> AgentConfig | None:
         """The AgentConfig that drives this investigation's turn: the one
         attached to it, else the store's default (first config, issue #2). The
         investigation's template appendix is composed onto the prompt so the
         agent is told about *this* template's starting files."""
+        template = _template_profile_for(investigation_id)
         inv_rm = spec.get_resource_manager(Investigation)
         try:
             inv = inv_rm.get(investigation_id).data
         except ResourceIDNotFoundError:
             inv = None
         is_inv = isinstance(inv, Investigation)
-        template = inv.template_profile if is_inv else "default"
 
         cfg: AgentConfig | None = None
         attached_id = inv.attached_agent_config_id if is_inv else None
@@ -723,6 +736,9 @@ def create_app(
             prebuilt_dir=prebuilt_dir,
             # Per-message reasoning effort from the UI selector.
             reasoning_effort=body.reasoning_effort,
+            # Template profile drives the §A skill index: the runner exposes
+            # `read_skill` when the profile ships skills.
+            template_profile=_template_profile_for(investigation_id),
         )
 
         def persist(produced: list[TurnMessage]) -> None:

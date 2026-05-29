@@ -44,9 +44,7 @@ def _profile_with_skill(root: Path, profile: str, name: str, description: str, b
     skill_dir.mkdir()
     sd = skill_dir / name
     sd.mkdir()
-    (sd / "SKILL.md").write_text(
-        f"---\nname: {name}\ndescription: {description}\n---\n\n{body}"
-    )
+    (sd / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n{body}")
 
 
 # ─── read_skill tool body ─────────────────────────────────────────────
