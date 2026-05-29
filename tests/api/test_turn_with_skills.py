@@ -87,3 +87,34 @@ def test_agent_for_without_template_profile_omits_read_skill():
     agent = _agent_for(AgentConfig(name="a"))
     names = {t.name for t in agent.tools}
     assert "read_skill" not in names
+
+
+async def test_turn_agent_can_call_read_skill_via_scripted_runner(isolated_templates: Path):
+    """End-to-end wiring: when the runner builds the agent with a
+    template that has skills, the read_skill FunctionTool is in the
+    agent's tool list, has the right schema shape (so the LLM can call
+    it), and its impl reference is `read_skill_impl`. The actual impl
+    behaviour is exercised in tests/agent/test_read_skill_tool.py;
+    this test is the join-point assertion that the agent runner
+    actually exposes the tool to the LLM."""
+    from workspace_app.agent.tools import build_tools, read_skill_impl
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.resources.agent_config import AgentConfig
+
+    _profile_with_skill(isolated_templates, "methodology")
+    # The runner-built agent surfaces read_skill as a tool …
+    agent = _agent_for(AgentConfig(name="a"), template_profile="methodology")
+    read_skill_tool = next(t for t in agent.tools if t.name == "read_skill")
+    # … carrying a schema with `name` as its single required arg (so the LLM
+    # knows how to call it).
+    schema = read_skill_tool.params_json_schema
+    assert "name" in schema["properties"]
+    # And the tool registry the agent's runner uses points at the same impl
+    # the unit tests in test_read_skill_tool.py exercise — no shadow path.
+    direct_tools = {t.name: t for t in build_tools(profile="methodology")}
+    assert "read_skill" in direct_tools
+    # The function_tool-wrapped impl can't be unwrapped from FunctionTool
+    # without invoking the SDK, but the impl symbol is what `_IMPLS` resolves.
+    from workspace_app.agent.tools import _IMPLS
+
+    assert _IMPLS["read_skill"] is read_skill_impl

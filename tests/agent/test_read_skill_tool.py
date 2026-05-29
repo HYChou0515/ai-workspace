@@ -83,6 +83,55 @@ async def test_read_skill_unknown_name_returns_friendly_error_listing_available(
     assert "good" in out
 
 
+async def test_read_skill_uses_template_profile_from_context(isolated_templates: Path):
+    """Lock in the contract: the tool reads `ctx.template_profile` to
+    pick which template's `.skill/` to scan — not a hardcoded constant.
+    Two profiles with same skill name, different bodies; ctx switching
+    must route the read to the right one."""
+    from workspace_app.agent.tools import read_skill_impl
+
+    _profile_with_skill(isolated_templates, "methodology", "5-why", "x", "A-body")
+    _profile_with_skill(isolated_templates, "smt", "5-why", "x", "B-body")
+    a = await read_skill_impl(  # ty: ignore[invalid-argument-type]
+        RunContextWrapper(AgentToolContext(template_profile="methodology")), "5-why"
+    )
+    b = await read_skill_impl(  # ty: ignore[invalid-argument-type]
+        RunContextWrapper(AgentToolContext(template_profile="smt")), "5-why"
+    )
+    assert a == "A-body"
+    assert b == "B-body"
+
+
+async def test_read_skill_does_not_wake_sandbox(isolated_templates: Path):
+    """Skills are host-side markdown — calling `read_skill` must not
+    wake the sandbox (per the §A.Q3 lazy-sandbox decision). We use a
+    sandbox stand-in whose `create` blows up if invoked; the tool must
+    still succeed."""
+    from workspace_app.agent.tools import read_skill_impl
+
+    _profile_with_skill(isolated_templates, "methodology", "5-why", "x", "body")
+
+    class _BlowUpSandbox:
+        async def create(self, spec):
+            raise AssertionError("read_skill must NOT wake the sandbox")
+
+        async def exec(self, *a, **kw):
+            raise AssertionError("read_skill must NOT exec in the sandbox")
+
+        async def upload(self, *a, **kw):  # pragma: no cover
+            raise AssertionError("read_skill must NOT upload")
+
+        async def kill(self, *a, **kw):  # pragma: no cover
+            return None
+
+    ctx = AgentToolContext(
+        sandbox=_BlowUpSandbox(),  # ty: ignore[invalid-argument-type]
+        template_profile="methodology",
+    )
+    body = await read_skill_impl(RunContextWrapper(ctx), "5-why")  # ty: ignore[invalid-argument-type]
+    assert body == "body"
+
+
 async def test_read_skill_without_template_profile_returns_error():
     """A context with no template_profile (e.g. KB chat reusing the
     runner) → friendly error, never crash."""
