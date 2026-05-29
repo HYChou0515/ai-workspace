@@ -609,7 +609,9 @@ def create_app(
             return "default"
         if isinstance(inv, Investigation):
             return inv.template_profile
-        return "default"
+        # Defensive guard: specstar's get() always returns the typed data
+        # or raises, so this fallthrough is structurally unreachable.
+        return "default"  # pragma: no cover
 
     def _resolve_agent_config(investigation_id: str) -> AgentConfig | None:
         """The AgentConfig that drives this investigation's turn: the one

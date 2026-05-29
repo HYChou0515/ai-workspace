@@ -242,3 +242,75 @@ def test_skill_directory_without_skill_md_is_skipped(isolated_templates: Path):
     (sk / "in-progress").mkdir()  # no SKILL.md
     _make_skill(sk, "done", "Done.", "body")
     assert [m.name for m in list_skills("methodology")] == ["done"]
+
+
+def test_list_skills_ignores_non_dir_entries_under_skill_dir(isolated_templates: Path):
+    """A stray file under `.skill/` (not a skill subdir) is silently
+    skipped — `list_skills` only considers directories."""
+    from workspace_app.rca.skills import list_skills
+
+    sk = _make_profile(isolated_templates, "methodology")
+    (sk / "README.md").write_text("not a skill")  # file, not a skill subdir
+    _make_skill(sk, "good", "ok", "body")
+    assert [m.name for m in list_skills("methodology")] == ["good"]
+
+
+def test_load_skill_for_profile_without_skills_raises(isolated_templates: Path):
+    """`load_skill` against a profile with no `.skill/` dir → SkillError
+    that explicitly says so."""
+    from workspace_app.rca.skills import SkillError, load_skill
+
+    (isolated_templates / "default").mkdir()
+    (isolated_templates / "default" / "__init__.py").write_text("")
+    with pytest.raises(SkillError, match="has no skills"):
+        load_skill("default", "anything")
+
+
+def test_parse_frontmatter_returns_empty_when_no_frontmatter_block():
+    """SKILL.md without `---` frontmatter → ({}, body) so list_skills
+    treats it as a missing-name skill (skipped with warning)."""
+    from workspace_app.rca.skills import _parse_frontmatter
+
+    front, body = _parse_frontmatter(b"# Just a body\n\nno frontmatter here.")
+    assert front == {}
+    assert body.startswith("# Just a body")
+
+
+def test_parse_frontmatter_returns_empty_when_no_closing_fence():
+    """An open `---` without a matching closing fence is treated as no
+    frontmatter (rather than guessing where it ends)."""
+    from workspace_app.rca.skills import _parse_frontmatter
+
+    raw = b"---\nname: maybe\n# never closes\n# more body\n"
+    front, body = _parse_frontmatter(raw)
+    assert front == {}
+    assert body.startswith("---")
+
+
+def test_parse_frontmatter_rejects_non_mapping_yaml():
+    """Frontmatter that parses but isn't a mapping (e.g. a line w/o `:`)
+    raises SkillError so list_skills logs + skips."""
+    from workspace_app.rca.skills import SkillError, _parse_frontmatter
+
+    raw = b"---\nname-no-colon\n---\nbody"
+    with pytest.raises(SkillError, match="malformed"):
+        _parse_frontmatter(raw)
+
+
+def test_parse_yaml_tolerates_blank_lines_and_comments():
+    """`_parse_yaml` skips blank lines and `#` comments — author may
+    indent their frontmatter cleanly without breaking the parse."""
+    from workspace_app.rca.skills import _parse_yaml
+
+    out = _parse_yaml("name: foo\n\n# a comment\ndescription: bar\n")
+    assert out == {"name": "foo", "description": "bar"}
+
+
+def test_balanced_helper_detects_unmatched_close():
+    """`_balanced` flags `description: ]foo` (close before open) as
+    unbalanced — guards against subtle frontmatter bugs."""
+    from workspace_app.rca.skills import _balanced
+
+    assert _balanced("[ok]") is True
+    assert _balanced("[") is False  # depth remains > 0
+    assert _balanced("]") is False  # close before open

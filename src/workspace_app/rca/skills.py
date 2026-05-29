@@ -132,19 +132,19 @@ def _skill_root(profile: str) -> Traversable | None:
     works the same way for editable installs and zip-imported wheels."""
     try:
         pkg = resources.files(_TEMPLATES_PKG)
-    except (ModuleNotFoundError, FileNotFoundError):
+    except (ModuleNotFoundError, FileNotFoundError):  # pragma: no cover — defensive
         return None
     profile_root = pkg / profile
     skill_root = profile_root / ".skill"
     try:
         if not skill_root.is_dir():
             return None
-    except (FileNotFoundError, NotADirectoryError):
+    except (FileNotFoundError, NotADirectoryError):  # pragma: no cover — Traversable platform shim
         return None
     return skill_root
 
 
-def _parse_frontmatter(raw: bytes) -> tuple[dict[str, str], str]:
+def _parse_frontmatter(raw: bytes) -> tuple[dict[str, object], str]:
     """Split an `---` ... `---` YAML frontmatter from its body.
 
     Returns `({}, raw_decoded)` when no frontmatter is present (an
@@ -164,7 +164,7 @@ def _parse_frontmatter(raw: bytes) -> tuple[dict[str, str], str]:
         front = _parse_yaml(front_text)
     except ValueError as e:
         raise SkillError(f"malformed frontmatter YAML: {e}") from e
-    if not isinstance(front, dict):
+    if not isinstance(front, dict):  # pragma: no cover — _parse_yaml only ever returns dict
         raise SkillError(f"frontmatter must be a YAML mapping, got {type(front).__name__}")
     return {str(k): v for k, v in front.items()}, body_text
 

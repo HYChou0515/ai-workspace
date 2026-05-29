@@ -31,6 +31,10 @@ from ...resources import AgentConfig, Investigation
 _TEMPLATES_PKG = "workspace_app.rca.templates"
 _TPL_SUFFIX = ".tpl"
 _NON_PROFILE = {"__pycache__"}
+# Skill bodies are host-side prompt metadata (#29 / §A), never seeded
+# into the investigation's workspace. The walker drops the whole
+# subtree under any dotted dir matching this name.
+_SKILL_DIR = ".skill"
 # Per-profile system-prompt appendix: describes THAT profile's starting files
 # so the agent prompt stays accurate when the template is swapped. It is prompt
 # metadata, not a workspace file, so seeding skips it.
@@ -155,9 +159,13 @@ def _walk(node, prefix: PurePosixPath | None = None) -> list[PurePosixPath]:
     out: list[PurePosixPath] = []
     for child in node.iterdir():
         name = child.name
-        if name in ("__init__.py", "__pycache__", _PROMPT_FILE, _CONFIG_FILE) or name.endswith(
-            ".pyc"
-        ):
+        if name in (
+            "__init__.py",
+            "__pycache__",
+            _PROMPT_FILE,
+            _CONFIG_FILE,
+            _SKILL_DIR,
+        ) or name.endswith(".pyc"):
             continue
         here = prefix / name
         if child.is_dir():

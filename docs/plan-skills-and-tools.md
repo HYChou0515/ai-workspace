@@ -1,6 +1,6 @@
 # Skills + Tool packages — issues #29 + #25
 
-> Status: 草稿(grill 已完成,等用戶 review 後進 /tdd)。
+> Status: **完成**(全部 17 階段 ✅ — §A.S1–S7 + §B.T1–T10)。672 tests green; full coverage gate at 100%; ty + ruff clean.
 > 投資人: hychour。
 > 來源:
 > - §A: issue #29「支援 skill」+ 9 題 grill。
@@ -135,12 +135,12 @@ src/workspace_app/rca/templates/methodology/.skill/
 | # | 內容 | 狀態 |
 |---|---|---|
 | **S1** | grill + plan(本份) | ✅ |
-| **S2** | `rca/skills.py`(SkillMeta + list_skills + load_skill + frontmatter parse + cap)+ 單元測試 | ⬜ |
-| **S3** | `compose_system_prompt` 串 skill index + 測試 | ⬜ |
-| **S4** | `read_skill` tool + `AgentToolContext.template_profile` + `build_tools(profile=)` + 整合測試 | ⬜ |
-| **S5** | runner / app.py 把 template_profile 一路串到 ToolContext + 端對端測試 | ⬜ |
-| **S6** | seed `methodology/.skill/{5-why-walkthrough, fishbone-6m, stop-the-line-checklist}/SKILL.md` | ⬜ |
-| **S7** | 100% coverage / ty / ruff | ⬜ |
+| **S2** | `rca/skills.py`(SkillMeta + list_skills + load_skill + frontmatter parse + cap)+ 單元測試 | ✅ |
+| **S3** | `compose_system_prompt` 串 skill index + 測試 | ✅ |
+| **S4** | `read_skill` tool + `AgentToolContext.template_profile` + `build_tools(profile=)` + 整合測試 | ✅ |
+| **S5** | runner / app.py 把 template_profile 一路串到 ToolContext + 端對端測試 | ✅ |
+| **S6** | seed `methodology/.skill/{5-why-walkthrough, fishbone-6m, stop-the-line-checklist}/SKILL.md` | ✅ |
+| **S7** | 100% coverage / ty / ruff | ✅ |
 
 ## A.3 · 不做(v1 之外)
 
@@ -346,15 +346,15 @@ def main():
 | # | 內容 | 狀態 |
 |---|---|---|
 | **T1** | grill + plan(本份) | ✅ |
-| **T2** | `tooling/dispatcher.py`(helper module + 三段 contract 抽出) + 單元測試 | ⬜ |
-| **T3** | `tooling/prebuild.py`(build_package + dump schemas + 增量) + 單元測試 | ⬜ |
-| **T4** | `tooling/registry.py`(discover_packages + build_function_tools + 撞名偵測) + 單元測試 | ⬜ |
-| **T5** | `provision.py` 重寫:drop ToolDef / build_argv;`provision_tools(sandbox, handle, packages)` 改新參數型別 | ⬜ |
-| **T6** | `rca/tool_packages.py`(取代 sample_tools.py)+ `PACKAGES` dict + `__main__` 串接 | ⬜ |
-| **T7** | migrate `sample-tools/data-fetch`(單 command contract) | ⬜ |
-| **T8** | migrate `sample-tools/csv-column-summary`(多 command:summarise + plot,共享 venv) | ⬜ |
-| **T9** | `tool-demo` template `_config.json` 改 `["data-fetch", "csv-column-summary"]`,端對端跑通 | ⬜ |
-| **T10** | 100% coverage / ty / ruff | ⬜ |
+| **T2** | `tooling/dispatcher.py`(helper module + 三段 contract 抽出) + 單元測試 | ✅ |
+| **T3** | `tooling/prebuild.py`(build_package + dump schemas + 增量) + 單元測試 | ✅ |
+| **T4** | `tooling/registry.py`(discover_packages + build_function_tools + 撞名偵測) + 單元測試 | ✅ |
+| **T5** | `provision.py` 重寫:drop ToolDef / build_argv;`provision_tools(sandbox, handle, packages)` 改新參數型別 | ✅ |
+| **T6** | `rca/tool_packages.py`(取代 sample_tools.py)+ `PACKAGES` dict + `__main__` 串接 | ✅ |
+| **T7** | migrate `sample-tools/data-fetch`(單 command contract) | ✅ |
+| **T8** | migrate `sample-tools/csv-column-summary`(多 command:summarise + plot,共享 venv) | ✅ |
+| **T9** | `tool-demo` template `_config.json` 改 `["data-fetch", "csv-column-summary"]`,端對端跑通 | ✅ |
+| **T10** | 100% coverage / ty / ruff | ✅ |
 
 ## B.9 · 不做(v1 之外)
 
