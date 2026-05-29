@@ -35,11 +35,26 @@ EMBED_DIM = int(os.getenv("KB_EMBED_DIM", "1024"))  # e.g. bge-m3 = 1024
 
 class Collection(Struct):  # → resource "collection"
     """A named knowledge base. Each SourceDoc / DocChunk belongs to one.
-    created/updated time + created_by come from specstar meta (``.info``)."""
+    created/updated time + created_by come from specstar meta (``.info``).
+
+    Code-repo fields (``git_*``) are P3.0 — set on a Collection bound to a
+    source tree; ``CodeRepoIngestor.sync`` clones the remote, ingests each
+    code/markdown file, and records ``git_last_sha`` / ``git_last_pulled_at``
+    so subsequent syncs can short-circuit (and the FE can display "synced at
+    commit …"). ``git_token`` is the PAT for self-hosted remotes; v1 stores
+    it in plaintext under the deploy.md "DB lives in a controlled network"
+    assumption — re-encrypt before SaaS.
+    """
 
     name: str
     description: str = ""
     icon: str = "layers"  # icon name (FE Icon set) for the collection card
+    git_url: str | None = None  # `https://gitlab.…/g/r.git` or `file://…` (tests)
+    git_branch: str | None = None  # None ⇒ remote default
+    git_token: str | None = None  # PAT for self-hosted gitlab (HTTP basic; v1 plaintext)
+    git_last_sha: str | None = None  # HEAD captured at last successful sync
+    git_last_pulled_at: int | None = None  # epoch ms; sweeper uses this + interval
+    sync_interval_hours: int | None = None  # None ⇒ manual-sync only
 
 
 class SourceDoc(Struct):  # → resource "source-doc"
