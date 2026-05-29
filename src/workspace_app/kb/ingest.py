@@ -44,6 +44,11 @@ _BINARY_MIMES_VIA_READER = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 }
 _ARCHIVE_MIMES = {"application/zip", "application/x-tar", "application/gzip"}
+# Source-code files we accept by extension when a pipeline is wired. libmagic
+# usually classifies these as `text/x-script.python`, `text/x-c`, etc. — not
+# in `_TEXT_MIMES`. The pipeline's DispatchSplitter routes them to LI's
+# CodeSplitter (tree-sitter, function-boundary aware).
+_CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 
 
 def normalize_text(raw: str) -> str:
@@ -176,7 +181,11 @@ class Ingestor:
         accepted = _TEXT_MIMES | (_BINARY_MIMES_VIA_READER if self._pipeline else set())
         touched: list[str] = []
         for path, member in members:
-            if magic.from_buffer(member, mime=True) not in accepted:
+            member_mime = magic.from_buffer(member, mime=True)
+            is_code = self._pipeline is not None and any(
+                path.lower().endswith(ext) for ext in _CODE_EXTENSIONS
+            )
+            if member_mime not in accepted and not is_code:
                 continue
             doc_id = self._store_file(collection_id, user, path, member)
             if doc_id is not None:
@@ -285,8 +294,9 @@ class Ingestor:
         heading breadcrumb)."""
         assert self._pipeline is not None
         mime = magic.from_buffer(data, mime=True)
+        is_code = any(path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
         docs: list[Document]
-        if mime in _TEXT_MIMES:
+        if mime in _TEXT_MIMES or is_code:
             text = normalize_text(data.decode("utf-8", errors="replace"))
             docs = [Document(text=text, metadata={"filename": path, "mime": mime})]
         else:

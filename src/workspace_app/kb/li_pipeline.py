@@ -16,10 +16,25 @@ from pathlib import Path
 from typing import Any
 
 from llama_index.core.ingestion import IngestionPipeline
-from llama_index.core.node_parser import MarkdownNodeParser, SentenceSplitter
+from llama_index.core.node_parser import (
+    CodeSplitter,
+    MarkdownNodeParser,
+    SentenceSplitter,
+)
 from llama_index.core.schema import BaseNode, Document, TextNode, TransformComponent
 
 from .embedder import Embedder
+
+# Map source-file extension → tree-sitter language name expected by
+# LI's CodeSplitter (which delegates to the `tree_sitter_languages` pack).
+# Kept tight to the P3.0 starter set; expand as more languages get demand.
+_CODE_LANG_BY_EXT: dict[str, str] = {
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".js": "javascript",
+    ".jsx": "javascript",
+}
 
 
 class DispatchSplitter(TransformComponent):
@@ -40,6 +55,9 @@ class DispatchSplitter(TransformComponent):
     # Default sub-splitters; overridable per instance for tests/tuning.
     sentence_splitter: SentenceSplitter
     markdown_parser: MarkdownNodeParser
+    # Lazily filled cache of CodeSplitter(language=…) — instantiating eagerly
+    # would import every tree-sitter grammar just to ingest a .md.
+    code_splitters: dict[str, CodeSplitter]
 
     def __init__(
         self,
@@ -53,6 +71,7 @@ class DispatchSplitter(TransformComponent):
                 chunk_overlap=sentence_overlap,
             ),
             markdown_parser=MarkdownNodeParser(),
+            code_splitters={},
         )
 
     def __call__(self, nodes: Sequence[BaseNode], **_kw: Any) -> list[BaseNode]:  # type: ignore[override]
@@ -60,6 +79,7 @@ class DispatchSplitter(TransformComponent):
         for node in nodes:
             mime = str(node.metadata.get("mime", "")).lower()
             filename = str(node.metadata.get("filename", "")).lower()
+            code_lang = _code_language_for(filename)
             if mime == "text/markdown" or filename.endswith(".md"):
                 sub = self.markdown_parser.get_nodes_from_documents([node])
                 # Prepend heading hierarchy to each chunk's text so the
@@ -69,9 +89,29 @@ class DispatchSplitter(TransformComponent):
                     if breadcrumb and isinstance(n, TextNode):
                         n.text = f"{breadcrumb}\n\n{n.text}"
                 out.extend(sub)
+            elif code_lang is not None:
+                out.extend(self._split_code(node, code_lang))
             else:
                 out.extend(self.sentence_splitter.get_nodes_from_documents([node]))
         return out
+
+    def _split_code(self, node: BaseNode, language: str) -> list[BaseNode]:
+        """Run LI's tree-sitter `CodeSplitter` for `language`, instantiating
+        on first use and caching per-instance."""
+        splitter = self.code_splitters.get(language)
+        if splitter is None:
+            splitter = CodeSplitter(language=language)
+            self.code_splitters[language] = splitter
+        return splitter.get_nodes_from_documents([node])
+
+
+def _code_language_for(filename: str) -> str | None:
+    """Tree-sitter language name for a code file, or None if not supported."""
+    f = filename.lower()
+    for ext, lang in _CODE_LANG_BY_EXT.items():
+        if f.endswith(ext):
+            return lang
+    return None
 
 
 def _heading_breadcrumb(node: BaseNode) -> str:

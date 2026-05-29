@@ -27,6 +27,49 @@ def _chunks_of(spec: SpecStar, doc_id: str) -> list[DocChunk]:
     return [r.data for r in rs]  # ty: ignore[invalid-return-type]
 
 
+def test_dispatch_splitter_routes_python_to_code_splitter(spec: SpecStar, embedder: HashEmbedder):
+    """A `.py` file goes through CodeSplitter (tree-sitter), producing
+    function/class-boundary chunks — not sentence-window chunks. Tracer
+    bullet for P3.0 code-QA support."""
+    cid = _new_collection(spec)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder)
+
+    # A bigger file to force CodeSplitter to actually split (tree-sitter
+    # respects function boundaries; small files stay as one chunk).
+    py_src = (
+        "def authenticate_user(username: str, password: str) -> bool:\n"
+        "    return username.lower() == password.lower()\n"
+        "\n"
+        "\n"
+        "def calculate_score(answers: list[int]) -> float:\n"
+        "    if not answers:\n"
+        "        return 0.0\n"
+        "    return sum(answers) / len(answers)\n"
+        "\n"
+        "\n"
+        "class Validator:\n"
+        "    def __init__(self, schema: dict) -> None:\n"
+        "        self.schema = schema\n"
+        "\n"
+        "    def validate(self, payload: dict) -> bool:\n"
+        "        for key in self.schema:\n"
+        "            if key not in payload:\n"
+        "                return False\n"
+        "        return True\n"
+    ) * 4  # repeat 4x so we force chunk splitting
+
+    ids = ingestor.ingest(
+        collection_id=cid, user="alice", filename="auth.py", data=py_src.encode()
+    )
+    chunks = _chunks_of(spec, ids[0])
+    assert len(chunks) >= 2, "CodeSplitter should produce multiple chunks for a multi-function file"
+    # Chunks land at function/class boundaries — text starts at a `def` or
+    # `class` line (not mid-statement like SentenceSplitter would).
+    starts = [c.text.lstrip()[:5] for c in chunks]
+    assert any(s.startswith(("def", "class")) for s in starts), starts
+
+
 def test_markdown_chunks_carry_heading_breadcrumb_in_text(spec: SpecStar, embedder: HashEmbedder):
     """A markdown doc with H1/H2 → chunks whose `text` (what gets embedded)
     includes the heading hierarchy as a prefix. This is the headline P1
