@@ -178,6 +178,60 @@ class _InvestigationCreateBody(BaseModel):
     template_profile: str = "default"
 
 
+async def _promote_chat_to_kb(
+    *,
+    ingestor: Ingestor,
+    insights_collection_id: str,
+    actor: str,
+    investigation_id: str,
+    investigation_title: str,
+    messages: list[Message],
+) -> list[str]:
+    """Run `ingestor.ingest_chat` in a thread (the LLM call is blocking).
+    Swallows exceptions — chat → knowledge is best-effort, never block /close
+    or surface as a hard failure to the FE. Returns the SourceDoc ids written
+    (or `[]` on error / inconclusive chat). Logs failures."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        msgs = [
+            {
+                "role": m.role,
+                "content": m.content,
+                "tool_name": m.tool_name or "",
+            }
+            for m in messages
+        ]
+        return await asyncio.to_thread(
+            ingestor.ingest_chat,
+            collection_id=insights_collection_id,
+            user=actor,
+            investigation_id=investigation_id,
+            investigation_title=investigation_title,
+            messages=msgs,
+        )
+    except Exception:  # noqa: BLE001 — best-effort; don't propagate
+        logger.exception("chat → knowledge promote failed for %s", investigation_id)
+        return []
+
+
+def _ensure_insights_collection(spec: SpecStar, name: str) -> str:
+    """Idempotently ensure the chat-insights collection exists, returning its
+    id. Used by the chat→knowledge promote path (P2) — every server boot
+    runs this so the target collection is always available.
+
+    `Collection.name` isn't indexed; we walk all collections at startup
+    (small enumeration) rather than add an index just for this lookup."""
+    from specstar import QB
+
+    rm = spec.get_resource_manager(Collection)
+    for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+        if r.data.name == name:  # ty: ignore[unresolved-attribute]
+            return r.info.resource_id  # ty: ignore[unresolved-attribute]
+    return rm.create(Collection(name=name)).resource_id
+
+
 def _seed_agent_configs(spec: SpecStar) -> None:
     """Create the default RCA agent configs once, if none exist yet, so the
     agent picker always has options. Models route through LiteLLM."""
@@ -222,6 +276,8 @@ def create_app(
     kb_embedder: Embedder | None = None,
     kb_chunker: Chunker | None = None,
     kb_pipeline: object | None = None,  # llama_index.core.ingestion.IngestionPipeline
+    kb_chat_pipeline: object | None = None,  # P2 chat → knowledge IngestionPipeline
+    insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
     get_user_id: Callable[[], str] | None = None,
     users: UserDirectory | None = None,
@@ -396,9 +452,23 @@ def create_app(
     # Pipeline mode (P1) takes precedence; legacy chunker stays for tests +
     # offline runs that don't construct an LI pipeline.
     if kb_pipeline is not None:
-        ingestor = Ingestor(spec, pipeline=kb_pipeline, embedder=embedder)  # ty: ignore[invalid-argument-type]
+        ingestor = Ingestor(
+            spec,
+            pipeline=kb_pipeline,  # ty: ignore[invalid-argument-type]
+            chat_pipeline=kb_chat_pipeline,  # ty: ignore[invalid-argument-type]
+            embedder=embedder,
+        )
     else:
-        ingestor = Ingestor(spec, chunker=kb_chunker or FixedTokenChunker(), embedder=embedder)
+        ingestor = Ingestor(
+            spec,
+            chunker=kb_chunker or FixedTokenChunker(),
+            chat_pipeline=kb_chat_pipeline,  # ty: ignore[invalid-argument-type]
+            embedder=embedder,
+        )
+    # P2: ensure the "Investigations Knowledge" collection exists at boot so
+    # the chat-promote path always has a target. Idempotent (re-uses a
+    # collection with the same name).
+    insights_collection_id = _ensure_insights_collection(spec, insights_collection_name)
     register_kb_routes(app, spec, ingestor)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
@@ -668,6 +738,31 @@ def create_app(
         _record_mention(investigation_id, inv.title, body.user_ids, body.note, actor=me, author=me)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.post("/investigations/{investigation_id}/promote-to-kb")
+    async def promote_chat_to_kb(investigation_id: str) -> dict[str, list[str]]:
+        """Manual trigger for chat → knowledge insight extraction. Runs
+        synchronously (FE shows a spinner) and returns the SourceDoc ids
+        written. `[]` when the chat had no extractable insights, the LLM
+        failed, or no chat pipeline is wired (offline / no KB LLM)."""
+        if kb_chat_pipeline is None:
+            return {"insight_ids": []}
+        inv_rm = spec.get_resource_manager(Investigation)
+        try:
+            inv = inv_rm.get(investigation_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        assert isinstance(inv, Investigation)
+        _rid, conv = _conversation_for(investigation_id)
+        ids = await _promote_chat_to_kb(
+            ingestor=ingestor,
+            insights_collection_id=insights_collection_id,
+            actor=get_user_id(),
+            investigation_id=investigation_id,
+            investigation_title=inv.title,
+            messages=conv.messages,
+        )
+        return {"insight_ids": ids}
+
     @app.post(
         "/investigations/{investigation_id}/close",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -688,6 +783,21 @@ def create_app(
                 f"Closed “{current.title}” as {body.status}",
                 {"investigation_id": investigation_id},
             )
+            # P2: chat → knowledge. Schedule insight extraction in the
+            # background so the close response doesn't wait on the LLM.
+            # Only when a chat pipeline is wired (LLM available).
+            if kb_chat_pipeline is not None:
+                _, conv_for_promote = _conversation_for(investigation_id)
+                asyncio.create_task(
+                    _promote_chat_to_kb(
+                        ingestor=ingestor,
+                        insights_collection_id=insights_collection_id,
+                        actor=get_user_id(),
+                        investigation_id=investigation_id,
+                        investigation_title=current.title,
+                        messages=conv_for_promote.messages,
+                    )
+                )
             # Notify the owner + watchers (except whoever did it).
             actor = get_user_id()
             for uid in {current.owner, *current.members} - {actor}:

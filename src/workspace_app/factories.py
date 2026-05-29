@@ -225,6 +225,19 @@ def get_doc_pipeline(settings: Settings, embedder: Embedder) -> object:  # Inges
     return build_doc_pipeline(embedder=embedder)
 
 
+def get_chat_pipeline(
+    settings: Settings, embedder: Embedder, llm: ILlm | None
+) -> object | None:  # IngestionPipeline | None
+    """P2 production path: chat-ingest pipeline. Returns None when no LLM is
+    wired (offline / no KB chat model) — chat → knowledge can't run without an
+    LLM. The Ingestor + close hook check this and degrade gracefully."""
+    if llm is None:
+        return None
+    from .kb.li_pipeline import build_chat_pipeline
+
+    return build_chat_pipeline(llm=llm, embedder=embedder)
+
+
 def get_kb_llm(settings: Settings) -> ILlm | None:
     if not settings.kb_llm_model:
         return None

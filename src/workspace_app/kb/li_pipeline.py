@@ -182,3 +182,21 @@ def build_doc_pipeline(*, embedder: Embedder) -> IngestionPipeline:
             EmbedderAdapter(embedder),
         ],
     )
+
+
+def build_chat_pipeline(*, llm: Any, embedder: Embedder) -> IngestionPipeline:
+    """The P2 chat-ingest pipeline: extract insights from a RCA conversation
+    via LLM → split (most insights stay as one chunk; long ones split via
+    markdown parser, since insight bodies are markdown) → embed. The
+    Ingestor feeds a single `Document` (the serialised conversation), then
+    writes each insight-node back as a SourceDoc + DocChunk in the
+    "Investigations Knowledge" collection."""
+    from .insight_extractor import InsightExtractor
+
+    return IngestionPipeline(
+        transformations=[
+            InsightExtractor(llm=llm),
+            DispatchSplitter(),
+            EmbedderAdapter(embedder),
+        ],
+    )

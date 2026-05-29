@@ -11,6 +11,7 @@ import io
 import logging
 import tarfile
 import zipfile
+from typing import Any
 
 import magic
 import msgspec
@@ -59,20 +60,24 @@ class Ingestor:
         chunker: Chunker | None = None,
         embedder: Embedder,
         pipeline: IngestionPipeline | None = None,
+        chat_pipeline: IngestionPipeline | None = None,
     ) -> None:
-        """Two indexing modes:
-
-        - **`pipeline`** (P1 production): LlamaIndex `IngestionPipeline`
-          encapsulates chunking + embedding. `embedder` is still required for
-          the dim-equality assertion against `DocChunk` Vector field.
+        """Doc-ingest mode (P1):
+        - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
+          encapsulates chunking + embedding for uploaded docs.
         - **`chunker`** (legacy): manual `Chunker.chunk(text)` + then
           `embedder.embed_documents(...)`. Tests + offline path use this.
+          Exactly one of `chunker` / `pipeline` should be set.
 
-        Exactly one of `chunker` / `pipeline` should be set. Both → pipeline wins."""
+        Chat-ingest mode (P2):
+        - **`chat_pipeline`**: a separate `IngestionPipeline` whose
+          transformations include `InsightExtractor` (LLM-driven). Required
+          for `ingest_chat`; None = chat → knowledge disabled."""
         self._spec = spec
         self._chunker = chunker
         self._embedder = embedder
         self._pipeline = pipeline
+        self._chat_pipeline = chat_pipeline
 
     def ingest(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
         """Store + index synchronously; returns the SourceDoc ids touched.
@@ -83,6 +88,78 @@ class Ingestor:
         for doc_id in touched:
             self.index(doc_id)
         return touched
+
+    def ingest_chat(
+        self,
+        *,
+        collection_id: str,
+        user: str,
+        investigation_id: str,
+        investigation_title: str,
+        messages: list[dict[str, Any]],
+    ) -> list[str]:
+        """P2: extract insights from a RCA chat and write each as a markdown
+        SourceDoc in the insights collection.
+
+        Runs the **chat** pipeline (must be wired): the conversation is
+        serialised into one Document, the pipeline's InsightExtractor calls
+        the LLM to produce N insight markdown bodies, those flow through
+        the splitter + embedder, and the result is N SourceDocs (one per
+        insight) at deterministic paths `{investigation_id}/insight-{seq}.md`
+        — so re-promoting overwrites in place rather than duplicating.
+
+        Returns the SourceDoc ids written (`[]` for an inconclusive chat
+        where the LLM returned no insights)."""
+        assert self._chat_pipeline is not None, "ingest_chat requires a chat_pipeline"
+        from .insight_extractor import conversation_to_extraction_doc
+
+        doc = conversation_to_extraction_doc(
+            investigation_id=investigation_id,
+            title=investigation_title,
+            messages=messages,
+        )
+        nodes = self._chat_pipeline.run(documents=[doc], show_progress=False)
+        if not nodes:
+            return []
+        # Group nodes by `insight_seq` so a long insight the splitter chopped
+        # into multiple nodes still becomes one SourceDoc (one insight = one
+        # markdown doc; chunks within it are per-section).
+        by_seq: dict[int, list[Any]] = {}
+        for n in nodes:
+            seq = int(n.metadata.get("insight_seq", 0))
+            by_seq.setdefault(seq, []).append(n)
+
+        written: list[str] = []
+        for seq, group in sorted(by_seq.items()):
+            path = f"{investigation_id}/insight-{seq}.md"
+            # Markdown body for the persisted SourceDoc. Joining each node's
+            # content reconstructs the insight even when the splitter chopped
+            # it across multiple TextNodes.
+            body = "\n\n".join(n.get_content() for n in group).encode("utf-8")
+            doc_id = self._store_file(collection_id, user, path, body)
+            if doc_id is None:
+                # Unchanged bytes → existing chunks survive, no work to do.
+                continue
+            self._delete_chunks(doc_id)
+            chrm = self._spec.get_resource_manager(DocChunk)
+            for chunk_seq, n in enumerate(group):
+                chrm.create(
+                    DocChunk(
+                        collection_id=collection_id,
+                        source_doc_id=doc_id,
+                        seq=chunk_seq,
+                        start=n.start_char_idx or 0,
+                        end=n.end_char_idx or len(n.get_content()),
+                        text=n.get_content(),
+                        embedding=n.embedding or [],
+                    )
+                )
+            drm = self._spec.get_resource_manager(SourceDoc)
+            sd = drm.get(doc_id).data
+            assert isinstance(sd, SourceDoc)
+            drm.update(doc_id, msgspec.structs.replace(sd, status="ready"))
+            written.append(doc_id)
+        return written
 
     def store(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
         """Fast path: persist the SourceDoc(s) as ``status="indexing"`` and
