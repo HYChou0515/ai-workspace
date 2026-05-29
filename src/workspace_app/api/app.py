@@ -221,6 +221,7 @@ def create_app(
     runner: AgentRunner,
     kb_embedder: Embedder | None = None,
     kb_chunker: Chunker | None = None,
+    kb_pipeline: object | None = None,  # llama_index.core.ingestion.IngestionPipeline
     kb_llm: ILlm | None = None,
     get_user_id: Callable[[], str] | None = None,
     users: UserDirectory | None = None,
@@ -392,7 +393,12 @@ def create_app(
     # Embedder/Chunker are swappable; defaults are offline-friendly (production
     # injects a LiteLLM embedder for real semantic search).
     embedder = kb_embedder or HashEmbedder(dim=EMBED_DIM)
-    ingestor = Ingestor(spec, chunker=kb_chunker or FixedTokenChunker(), embedder=embedder)
+    # Pipeline mode (P1) takes precedence; legacy chunker stays for tests +
+    # offline runs that don't construct an LI pipeline.
+    if kb_pipeline is not None:
+        ingestor = Ingestor(spec, pipeline=kb_pipeline, embedder=embedder)  # ty: ignore[invalid-argument-type]
+    else:
+        ingestor = Ingestor(spec, chunker=kb_chunker or FixedTokenChunker(), embedder=embedder)
     register_kb_routes(app, spec, ingestor)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.

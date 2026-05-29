@@ -333,9 +333,7 @@ class LitellmAgentRunner:
             progress_made = False
             try:
                 async for ev in self._run_once(prompt, ctx, feedback):
-                    if isinstance(ev, MessageDelta) and ev.text:
-                        progress_made = True
-                    elif isinstance(ev, ToolEnd):
+                    if isinstance(ev, MessageDelta) and ev.text or isinstance(ev, ToolEnd):
                         progress_made = True
                     yield ev
                 yield RunDone()

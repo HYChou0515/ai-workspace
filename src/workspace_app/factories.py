@@ -216,6 +216,15 @@ def get_chunker(settings: Settings) -> Chunker:
     )
 
 
+def get_doc_pipeline(settings: Settings, embedder: Embedder) -> object:  # IngestionPipeline
+    """P1 production path: LlamaIndex `IngestionPipeline` for doc ingest.
+    Separate from `get_chunker` so the legacy chunker stays reachable for
+    tests + offline runs; production wires this into `create_app(kb_pipeline=...)`."""
+    from .kb.li_pipeline import build_doc_pipeline
+
+    return build_doc_pipeline(embedder=embedder)
+
+
 def get_kb_llm(settings: Settings) -> ILlm | None:
     if not settings.kb_llm_model:
         return None

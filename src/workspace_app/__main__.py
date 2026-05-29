@@ -22,7 +22,7 @@ import uvicorn
 from workspace_app.api import create_app
 from workspace_app.factories import (
     Settings,
-    get_chunker,
+    get_doc_pipeline,
     get_embedder,
     get_filestore,
     get_kb_llm,
@@ -45,13 +45,16 @@ def main() -> None:
     # The sandbox mounts the prebuilt dir read-only at /.tools (outside the
     # workspace) — no per-sandbox copy. Only point at it once it's built.
     tools_dir = PREBUILT_DIR if tool_defs else None
+    embedder = get_embedder(settings)
     app = create_app(
         spec=spec,
         sandbox=get_sandbox(settings, tools_dir=tools_dir),
         filestore=get_filestore(settings, spec),
         runner=get_runner(settings),
-        kb_embedder=get_embedder(settings),
-        kb_chunker=get_chunker(settings),
+        kb_embedder=embedder,
+        # P1: LlamaIndex IngestionPipeline replaces the hand-rolled chunker.
+        # Tests/offline runs still pass `kb_chunker=` directly to create_app.
+        kb_pipeline=get_doc_pipeline(settings, embedder),
         kb_llm=get_kb_llm(settings),
         monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
         root_path=settings.root_path,

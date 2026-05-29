@@ -129,11 +129,13 @@ async def test_run_does_not_restart_after_assistant_delta_streamed():
     has already seen that content. `run()` must NOT call `_run_once` again
     (which would re-prompt the LLM from scratch and clobber the partial
     answer). Instead, surface the error and end."""
-    runner = _ScriptedOnce([
-        [MessageDelta(text="Looking at the logs… "), RuntimeError("model timed out")],
-        # If `run()` restarts despite progress, this second script would run.
-        [MessageDelta(text="should-not-see"), RunDone()],
-    ])
+    runner = _ScriptedOnce(
+        [
+            [MessageDelta(text="Looking at the logs… "), RuntimeError("model timed out")],
+            # If `run()` restarts despite progress, this second script would run.
+            [MessageDelta(text="should-not-see"), RunDone()],
+        ]
+    )
     events = [ev async for ev in runner.run("anything", AgentToolContext(investigation_id="x"))]
     # Exactly one attempt: delta then RunError then RunDone (no retry).
     assert runner._calls == 1
@@ -149,10 +151,12 @@ async def test_run_does_not_restart_after_assistant_delta_streamed():
 async def test_run_still_retries_when_failure_is_early():
     """Counterpart: an early failure (before any content) keeps the existing
     retry-with-hint behaviour — that's the small-model JSON-parse fix path."""
-    runner = _ScriptedOnce([
-        [ValueError("Extra data: tool call malformed")],  # diagnose → ToolCallParseError
-        [MessageDelta(text="OK, one tool at a time."), RunDone()],
-    ])
+    runner = _ScriptedOnce(
+        [
+            [ValueError("Extra data: tool call malformed")],  # diagnose → ToolCallParseError
+            [MessageDelta(text="OK, one tool at a time."), RunDone()],
+        ]
+    )
     events = [ev async for ev in runner.run("anything", AgentToolContext(investigation_id="x"))]
     assert runner._calls == 2  # actually retried
     kinds = [type(e).__name__ for e in events]
