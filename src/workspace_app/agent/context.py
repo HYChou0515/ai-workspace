@@ -85,6 +85,12 @@ class AgentToolContext:
     # None → the model's default. Threaded to the model's ModelSettings.
     reasoning_effort: str | None = None
 
+    # The investigation's template profile name (#29 / §A). When set, the
+    # runner exposes `read_skill` if the profile ships skills, and the
+    # read_skill tool reads from `templates/<profile>/.skill/...`. None
+    # for KB-flavour contexts (no template).
+    template_profile: str | None = None
+
     # KB agent (kb_search tool).
     retriever: Retriever | None = None
     collection_ids: list[str] = field(default_factory=list)

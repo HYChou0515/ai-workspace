@@ -199,6 +199,28 @@ async def mention_user_impl(
     return f"Notified {user_id} to come look at this investigation."
 
 
+async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -> str:
+    """Load a skill's body markdown by name. Progressive disclosure: the
+    system prompt's "Available skills" index already lists `(name,
+    description)`; this tool returns the *body* on demand so large
+    methodologies don't bloat every turn.
+
+    Returns a friendly error string (not raise) for the agent to recover
+    from — unknown name lists the available skills, body-cap exceeded
+    explains the deployer should split the skill. Host-side only: never
+    wakes the sandbox (skills are pure host markdown)."""
+    from ..rca.skills import SkillError, list_skills, load_skill
+
+    profile = ctx.context.template_profile
+    if profile is None:
+        return "error: read_skill is only available in an RCA workspace turn"
+    try:
+        return load_skill(profile, name)
+    except SkillError as e:
+        avail = ", ".join(m.name for m in list_skills(profile)) or "(none)"
+        return f"error: {e}. available skills: {avail}"
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -210,6 +232,10 @@ _IMPLS = {
     "mention_user": mention_user_impl,
     "ask_knowledge_base": ask_knowledge_base_impl,
     "kb_search": kb_search_impl,
+    # `read_skill` is opt-in (#29 / §A): only registered when the active
+    # template profile has any skills. `build_tools(profile=)` handles
+    # the conditional injection — never present in `_WORKSPACE_TOOLS`.
+    "read_skill": read_skill_impl,
 }
 
 # The RCA workspace toolset — what `build_tools(None)` hands out. It includes
@@ -229,12 +255,26 @@ _WORKSPACE_TOOLS = [
 ]
 
 
-def build_tools(allowed: list[str] | None = None) -> list[FunctionTool]:
+def build_tools(
+    allowed: list[str] | None = None,
+    *,
+    profile: str | None = None,
+) -> list[FunctionTool]:
     """Build FunctionTool list for the Agent. If `allowed` is None, the
-    workspace toolset (file/exec); otherwise exactly the named tools."""
+    workspace toolset (file/exec); otherwise exactly the named tools.
+
+    When `profile` is set and that template profile has any skills,
+    `read_skill` is appended (issue #29 / §A — "skill index + tool same
+    flag in/out"). Set per turn from `Investigation.template_profile`."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
     # Skip names that aren't built-ins — they may be provisioned tool-package
     # commands (#21, #25), which the runner adds separately via
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
-    return [function_tool(_IMPLS[n], name_override=n) for n in names if n in _IMPLS]
+    tools = [function_tool(_IMPLS[n], name_override=n) for n in names if n in _IMPLS]
+    if profile is not None:
+        from ..rca.skills import list_skills
+
+        if list_skills(profile):
+            tools.append(function_tool(_IMPLS["read_skill"], name_override="read_skill"))
+    return tools
