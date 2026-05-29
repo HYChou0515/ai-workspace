@@ -188,6 +188,99 @@ def test_zip_archive_expands_and_ingests_each_member(spec: SpecStar, embedder: H
         assert len(chunks) >= 1
 
 
+def test_reader_for_picks_correctly_or_returns_none():
+    """Direct unit test for the reader-dispatch helper — covers the .docx
+    branch (we don't have a DocxReader fixture to ingest end-to-end) and the
+    unknown-mime fallback."""
+    from workspace_app.kb.li_pipeline import reader_for
+
+    assert reader_for(filename="paper.pdf", mime="application/pdf") is not None
+    assert reader_for(filename="page.html", mime="text/html") is not None
+    assert (
+        reader_for(
+            filename="doc.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        is not None
+    )
+    # Filename-only fallback (mime unknown).
+    assert reader_for(filename="x.docx", mime="application/octet-stream") is not None
+    assert reader_for(filename="unknown.bin", mime="application/octet-stream") is None
+
+
+def test_lazy_docx_reader_constructs():
+    """The docx reader's constructor is the only thing exercised offline
+    (we don't have a .docx fixture); confirm the import + ctor work."""
+    from workspace_app.kb.li_pipeline import _lazy_docx_reader
+
+    reader = _lazy_docx_reader()
+    assert reader is not None
+
+
+def test_ingest_skips_binary_without_reader(spec: SpecStar, embedder: HashEmbedder, caplog):
+    """A binary mime that the store layer accepts (because pipeline is wired)
+    but `reader_for` can't handle is logged + skipped, not crashed. Forces
+    the `_index_via_pipeline` "no reader" branch via a fake non-PDF file
+    posing as PDF mime (libmagic won't actually classify random bytes as
+    pdf, so we monkeypatch `reader_for` to simulate the gap)."""
+    import logging
+
+    from workspace_app.kb import ingest as ingest_mod
+
+    cid = _new_collection(spec)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder)
+
+    # Make a doc that store() accepts (PDF mime via magic) but pretend no
+    # reader exists for it.
+    original = ingest_mod.reader_for
+    try:
+        ingest_mod.reader_for = lambda *, filename, mime: None  # type: ignore[assignment]
+        with caplog.at_level(logging.WARNING):
+            ingestor.ingest(collection_id=cid, user="alice", filename="x.pdf", data=_MINIMAL_PDF)
+        assert any("no reader for" in r.message for r in caplog.records)
+    finally:
+        ingest_mod.reader_for = original
+
+
+def test_get_doc_pipeline_factory_constructs():
+    """`get_doc_pipeline(settings, embedder)` wires the production pipeline."""
+    from workspace_app.factories import Settings, get_doc_pipeline
+
+    settings = Settings()
+    pipeline = get_doc_pipeline(settings, HashEmbedder(dim=EMBED_DIM))
+    assert pipeline is not None
+    # Two transformations: DispatchSplitter + EmbedderAdapter.
+    assert len(pipeline.transformations) == 2  # type: ignore[attr-defined]
+
+
+def test_create_app_accepts_kb_pipeline():
+    """`create_app(kb_pipeline=...)` routes through the new pipeline path
+    instead of the legacy chunker — exercises the if-branch in create_app."""
+    from datetime import UTC, datetime
+
+    from specstar import SpecStar
+
+    from workspace_app.api import ScriptedAgentRunner, create_app
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.kb.li_pipeline import build_doc_pipeline
+    from workspace_app.sandbox.mock import MockSandbox
+
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    embedder = HashEmbedder(dim=EMBED_DIM)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        kb_embedder=embedder,
+        kb_pipeline=pipeline,
+    )
+    assert app is not None  # construction succeeded → pipeline branch ran
+
+
 def test_embedder_dim_mismatch_is_caught(spec: SpecStar):
     """If someone wires an embedder whose `dim` doesn't match `EMBED_DIM`
     (the DocChunk Vector column width), the ingest must fail loudly — not

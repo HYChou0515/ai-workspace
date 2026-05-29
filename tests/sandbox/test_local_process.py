@@ -33,6 +33,23 @@ async def test_exec_false_returns_exit_1(sandbox: LocalProcessSandbox):
     assert r.exit_code == 1
 
 
+async def test_exec_non_executable_returns_126(sandbox: LocalProcessSandbox, tmp_path):
+    """A file that exists but isn't x-bit → POSIX exit 126 + stderr 'permission
+    denied'. Distinguished from missing-binary (127)."""
+    import os
+
+    h = await sandbox.create(SandboxSpec())
+    # Write a script INTO the workspace, no +x.
+    workspace = tmp_path / h.id / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    script = workspace / "noexec.sh"
+    script.write_text("#!/bin/sh\necho hi\n")
+    os.chmod(script, 0o644)  # readable but not executable
+    r = await sandbox.exec(h, [str(script)])
+    assert r.exit_code == 126
+    assert b"permission denied" in r.stderr.lower()
+
+
 async def test_exec_unknown_command_returns_127(sandbox: LocalProcessSandbox):
     """Per protocol: a non-zero exit is RETURNED in exit_code, not raised.
     `create_subprocess_exec` raises FileNotFoundError when the binary doesn't
