@@ -14,8 +14,8 @@
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| **P1** | 引入 LlamaIndex,doc ingest 改走 `IngestionPipeline` + multi-format Reader + 結構感知 Splitter | ⬜ |
-| **P2** | Chat → knowledge:把 RCA 對話抽成 insight,進入 KB 另一個 collection | ⬜ |
+| **P1** | 引入 LlamaIndex,doc ingest 改走 `IngestionPipeline` + multi-format Reader + 結構感知 Splitter | ✅ 完成(`5226def` + `1780a5e`) |
+| **P2** | Chat → knowledge:把 RCA 對話抽成 insight,進入 KB 另一個 collection | ✅ 完成 backend(`77af468`),FE Promote 按鈕另開 PR |
 | **P3**（未來) | Code QA:tree-sitter `CodeSplitter` + 跨檔 reference + 程式碼專用 embedder | ⏸ 預留 |
 
 每階段完成定義:`uv run ruff check && ruff format --check && ty check` 全清、後端
