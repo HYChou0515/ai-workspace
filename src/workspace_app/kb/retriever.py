@@ -47,12 +47,18 @@ class Retriever:
         llm: ILlm | None = None,
         candidates: int = 20,
         top_k: int = 5,
+        code_embedder: Embedder | None = None,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
         self._llm = llm
         self._candidates = candidates
         self._top_k = top_k
+        # P3.0 §2.9 D1+parallel: a code-specialised embedder for the
+        # `embedding_alt` field. When wired, the dense pass fans out over
+        # both vector fields in parallel (one rank per field, RRF-merged).
+        # None ⇒ retriever stays single-field (legacy `embedding` only).
+        self._code_embedder = code_embedder
 
     def search(
         self, query: str, collection_ids: list[str], on_progress: OnChunk | None = None
@@ -76,7 +82,15 @@ class Retriever:
         ranked_lists: list[list[str]] = []
         for q in queries:
             qv = self._embedder.embed_query(q)
-            ranked_lists.append(self._dense_order(collection_ids, qv))
+            ranked_lists.append(self._dense_order(collection_ids, qv, field="embedding"))
+            # P3.0 fan-out: a separate dense pass for the code-vector field
+            # (when wired). Each field uses its own embedder, so the query
+            # vector is in the right geometry.
+            if self._code_embedder is not None:
+                qv_alt = self._code_embedder.embed_query(q)
+                ranked_lists.append(
+                    self._dense_order(collection_ids, qv_alt, field="embedding_alt")
+                )
             ranked_lists.append(bm25_rank(q, corpus))
 
         # HyDE: embed a hypothetical answer (as a pseudo-document) and add it as
@@ -86,7 +100,12 @@ class Retriever:
             hyde = hypothetical_document(self._llm, query, on_progress=on_progress)
             if hyde:
                 hv = self._embedder.embed_documents([hyde])[0]
-                ranked_lists.append(self._dense_order(collection_ids, hv))
+                ranked_lists.append(self._dense_order(collection_ids, hv, field="embedding"))
+                if self._code_embedder is not None:
+                    hv_alt = self._code_embedder.embed_documents([hyde])[0]
+                    ranked_lists.append(
+                        self._dense_order(collection_ids, hv_alt, field="embedding_alt")
+                    )
 
         fused = reciprocal_rank_fusion(ranked_lists)[: self._candidates]
 
@@ -128,16 +147,19 @@ class Retriever:
             passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
         return passages[: self._top_k]
 
-    def _dense_order(self, collection_ids: list[str], vec: list[float]) -> list[str]:
-        """Top candidate chunk ids nearest `vec`, via specstar's native vector
-        query (pgvector-indexed when available; computed in-store otherwise) —
-        no full in-process scan/sort. Ordered nearest-first by cosine distance."""
+    def _dense_order(
+        self, collection_ids: list[str], vec: list[float], *, field: str = "embedding"
+    ) -> list[str]:
+        """Top candidate chunk ids nearest `vec` in the given vector `field`
+        (``embedding`` or ``embedding_alt``), via specstar's native vector
+        query (pgvector-indexed when available; computed in-store otherwise).
+        Ordered nearest-first by cosine distance."""
         rm = self._spec.get_resource_manager(DocChunk)
         query = (
             QB["collection_id"]
             .in_(collection_ids)
             # specstar's order_by type union omits VectorDistanceSort (works at runtime)
-            .order_by(QB["embedding"].cosine(vec).asc())  # ty: ignore[invalid-argument-type]
+            .order_by(QB[field].cosine(vec).asc())  # ty: ignore[invalid-argument-type]
             .limit(self._candidates)
             .build()
         )
