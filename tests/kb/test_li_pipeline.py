@@ -59,9 +59,7 @@ def test_dispatch_splitter_routes_python_to_code_splitter(spec: SpecStar, embedd
         "        return True\n"
     ) * 4  # repeat 4x so we force chunk splitting
 
-    ids = ingestor.ingest(
-        collection_id=cid, user="alice", filename="auth.py", data=py_src.encode()
-    )
+    ids = ingestor.ingest(collection_id=cid, user="alice", filename="auth.py", data=py_src.encode())
     chunks = _chunks_of(spec, ids[0])
     assert len(chunks) >= 2, "CodeSplitter should produce multiple chunks for a multi-function file"
     # Chunks land at function/class boundaries — text starts at a `def` or

@@ -25,7 +25,7 @@ from llama_index.core.schema import Document
 from specstar import QB, SpecStar
 from specstar.types import Binary, ResourceIDNotFoundError
 
-from ..resources.kb import DocChunk, SourceDoc
+from ..resources.kb import Collection, DocChunk, SourceDoc
 from .chunker import Chunker
 from .doc_id import encode_doc_id
 from .embedder import Embedder
@@ -66,6 +66,7 @@ class Ingestor:
         embedder: Embedder,
         pipeline: IngestionPipeline | None = None,
         chat_pipeline: IngestionPipeline | None = None,
+        code_embedder: Embedder | None = None,
     ) -> None:
         """Doc-ingest mode (P1):
         - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
@@ -83,6 +84,10 @@ class Ingestor:
         self._embedder = embedder
         self._pipeline = pipeline
         self._chat_pipeline = chat_pipeline
+        # P3.0: an optional code-specialised embedder. When the Collection's
+        # embedder_id != 0, chunks are routed through this embedder and the
+        # vector lands on DocChunk.embedding_alt instead of .embedding.
+        self._code_embedder = code_embedder
 
     def ingest(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
         """Store + index synchronously; returns the SourceDoc ids touched.
@@ -309,6 +314,15 @@ class Ingestor:
                 d.metadata.setdefault("filename", path)
                 d.metadata.setdefault("mime", mime)
         nodes = self._pipeline.run(documents=docs, show_progress=False)
+        # P3.0 vector routing: collections with embedder_id != 0 use the code
+        # embedder and write into `embedding_alt`, leaving `embedding` empty
+        # so the retriever's two-path fan-out can dispatch cleanly.
+        use_alt = self._should_use_alt_embedder(collection_id)
+        if use_alt:
+            assert self._code_embedder is not None, (
+                "Collection has embedder_id != 0 but no code_embedder was wired"
+            )
+            alt_vecs = self._code_embedder.embed_documents([n.get_content() for n in nodes])
         chrm = self._spec.get_resource_manager(DocChunk)
         for seq, n in enumerate(nodes):
             start = n.start_char_idx if n.start_char_idx is not None else 0
@@ -321,6 +335,15 @@ class Ingestor:
                     start=start,
                     end=end,
                     text=n.get_content(),
-                    embedding=n.embedding or [],
+                    embedding=None if use_alt else (n.embedding or None),
+                    embedding_alt=alt_vecs[seq] if use_alt else None,
                 )
             )
+
+    def _should_use_alt_embedder(self, collection_id: str) -> bool:
+        """Return True iff the Collection's `embedder_id` selects the alt
+        (code-specialised) embedder. Cached lookups are cheap — single GET
+        on the manager — and this runs once per ingested doc, not per chunk."""
+        coll = self._spec.get_resource_manager(Collection).get(collection_id).data
+        assert isinstance(coll, Collection)
+        return coll.embedder_id != 0

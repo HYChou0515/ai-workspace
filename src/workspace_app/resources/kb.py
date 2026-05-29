@@ -28,6 +28,11 @@ from .conversation import MessageMetrics
 # Embedding dimensionality. MUST match the active Embedder; changing the model
 # is a re-index event (every chunk re-embedded). Set per deployment.
 EMBED_DIM = int(os.getenv("KB_EMBED_DIM", "1024"))  # e.g. bge-m3 = 1024
+# P3.0 code-specialised embedding width. Stored on `DocChunk.embedding_alt`
+# for Collections with ``embedder_id=1`` so the retriever can fan out across
+# both fields in parallel and RRF the results. Defaults to 768 (a common
+# size for nomic-embed-code / jina-code).
+CODE_EMBED_DIM = int(os.getenv("KB_CODE_EMBED_DIM", "768"))
 
 
 # ───────────────────────────── resources ─────────────────────────────
@@ -55,6 +60,10 @@ class Collection(Struct):  # → resource "collection"
     git_last_sha: str | None = None  # HEAD captured at last successful sync
     git_last_pulled_at: int | None = None  # epoch ms; sweeper uses this + interval
     sync_interval_hours: int | None = None  # None ⇒ manual-sync only
+    # 0 = default (text) embedder, vectors land on DocChunk.embedding.
+    # 1 = code embedder, vectors land on DocChunk.embedding_alt instead so
+    # the retriever can fan out across both fields in parallel + RRF.
+    embedder_id: int = 0
 
 
 class SourceDoc(Struct):  # → resource "source-doc"
@@ -96,7 +105,15 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     start: int  # inclusive char offset into canonical text
     end: int  # exclusive char offset
     text: str
-    embedding: Annotated[list[float], Vector(dim=EMBED_DIM, distance="cosine")]
+    # P3.0: exactly one of `embedding` / `embedding_alt` is populated per
+    # chunk — `embedder_id == 0` chunks use `embedding` (default text model),
+    # `embedder_id != 0` chunks use `embedding_alt` (code-specialised model).
+    # Both are nullable so the retriever can fan out across both fields in
+    # parallel and RRF the results.
+    embedding: Annotated[list[float] | None, Vector(dim=EMBED_DIM, distance="cosine")] = None
+    embedding_alt: Annotated[list[float] | None, Vector(dim=CODE_EMBED_DIM, distance="cosine")] = (
+        None
+    )
 
 
 # ─────────────────── value structs (nested / payloads) ───────────────────

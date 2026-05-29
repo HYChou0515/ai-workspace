@@ -110,9 +110,7 @@ def test_sync_persists_last_sha_on_the_collection(spec: SpecStar, fake_remote: s
     cid = _new_code_collection(spec, fake_remote)
     embedder = HashEmbedder(dim=EMBED_DIM)
     pipeline = build_doc_pipeline(embedder=embedder)
-    repo = CodeRepoIngestor(
-        spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder)
-    )
+    repo = CodeRepoIngestor(spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder))
     repo.sync(collection_id=cid, user="alice")
 
     cdata = spec.get_resource_manager(Collection).get(cid).data
@@ -126,9 +124,7 @@ def test_sync_skips_when_collection_has_no_git_url(spec: SpecStar):
     cid = spec.get_resource_manager(Collection).create(Collection(name="docs")).resource_id
     embedder = HashEmbedder(dim=EMBED_DIM)
     pipeline = build_doc_pipeline(embedder=embedder)
-    repo = CodeRepoIngestor(
-        spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder)
-    )
+    repo = CodeRepoIngestor(spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder))
     # Returns without raising; nothing got written.
     repo.sync(collection_id=cid, user="alice")
     sd_rm = spec.get_resource_manager(SourceDoc)
@@ -142,8 +138,6 @@ def test_sync_raises_when_clone_fails(spec: SpecStar, tmp_path: Path):
     cid = _new_code_collection(spec, bogus)
     embedder = HashEmbedder(dim=EMBED_DIM)
     pipeline = build_doc_pipeline(embedder=embedder)
-    repo = CodeRepoIngestor(
-        spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder)
-    )
+    repo = CodeRepoIngestor(spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder))
     with pytest.raises(CodeRepoSyncError):
         repo.sync(collection_id=cid, user="alice")

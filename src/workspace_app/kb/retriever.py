@@ -30,6 +30,14 @@ from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
 
 
+def _chunk_vec(chunk: DocChunk) -> list[float]:
+    """Read whichever vector field the chunk's collection populated. P3.0
+    chunks use exactly one of `embedding` (default text model) or
+    `embedding_alt` (code model); empty list returned for the (impossible)
+    null/null case so MMR returns cosine=1 (max distance) rather than crash."""
+    return chunk.embedding or chunk.embedding_alt or []
+
+
 class Retriever:
     def __init__(
         self,
@@ -88,7 +96,13 @@ class Retriever:
         order = mmr(
             fused,
             relevance=relevance,
-            similarity=lambda a, b: 1.0 - cosine_distance(chunks[a].embedding, chunks[b].embedding),
+            # Either `embedding` (default text vector) or `embedding_alt`
+            # (code vector) is populated per chunk. P3.0 retriever fan-out
+            # keeps each path's vectors homogeneous (same field), so the MMR
+            # similarity safely reads whichever is set.
+            similarity=lambda a, b: (
+                1.0 - cosine_distance(_chunk_vec(chunks[a]), _chunk_vec(chunks[b]))
+            ),
             k=self._top_k * 3,
         )
 

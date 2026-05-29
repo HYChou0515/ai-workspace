@@ -79,9 +79,7 @@ class CodeRepoIngestor:
                 # for the case where git itself wrote .git permissions that
                 # block rmtree on some filesystems.
                 shutil.rmtree(checkout, ignore_errors=True)
-        crm.update(
-            collection_id, msgspec.structs.replace(coll, git_last_sha=sha)
-        )
+        crm.update(collection_id, msgspec.structs.replace(coll, git_last_sha=sha))
 
     # ─────────────────────── git wrappers ───────────────────────
 
@@ -125,9 +123,7 @@ class CodeRepoIngestor:
                 # the whole sync over one bad entry.
                 logger.warning("code-repo: could not read %s — skipping", rel)
                 continue
-            self._ingestor.ingest(
-                collection_id=collection_id, user=user, filename=rel, data=data
-            )
+            self._ingestor.ingest(collection_id=collection_id, user=user, filename=rel, data=data)
 
 
 def _splice_token(url: str, token: str | None) -> str:
