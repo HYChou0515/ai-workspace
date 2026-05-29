@@ -28,7 +28,7 @@ from .kb.chunker import Chunker, FixedTokenChunker
 from .kb.embedder import Embedder, HashEmbedder, LitellmEmbedder
 from .kb.llm import ILlm, LitellmLlm
 from .rca.agent import default_rca_agent_config
-from .resources.kb import EMBED_DIM
+from .resources.kb import CODE_EMBED_DIM, EMBED_DIM
 from .sandbox.local_process import LocalProcessSandbox
 from .sandbox.mock import MockSandbox
 from .sandbox.protocol import Sandbox
@@ -111,6 +111,24 @@ class Settings:
     # KB retrieval LLM ("" → None, disables multi-query / HyDE / rerank)
     kb_llm_model: str = "ollama_chat/qwen3:14b"
 
+    # P3.0 code-specialised embedder. Empty → None → code collections fall back
+    # to the default embedder (still routes through CodeSplitter, just no
+    # specialised code semantics). Width is CODE_EMBED_DIM (the
+    # DocChunk.embedding_alt Vector column size) — they must agree.
+    kb_code_embed_model: str = ""
+    kb_code_query_prefix: str = ""
+    kb_code_doc_prefix: str = ""
+    kb_code_embed_base_url: str = ""
+    kb_code_embed_api_key: str = ""
+
+    # P3.0 git-clone defaults. Per-Collection overrides win; these are
+    # fallbacks (e.g. a corporate-wide PAT a sweeper can use across repos).
+    git_default_token: str = ""
+    # How often the background sweeper checks whether any Collection is due
+    # for a re-sync. The interval itself is per-Collection
+    # (Collection.sync_interval_hours).
+    sync_check_interval_sec: int = 300
+
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
         import os
@@ -145,6 +163,15 @@ class Settings:
             kb_chunk_max_tokens=int(e.get("KB_CHUNK_MAX_TOKENS", str(d.kb_chunk_max_tokens))),
             kb_chunk_overlap=int(e.get("KB_CHUNK_OVERLAP", str(d.kb_chunk_overlap))),
             kb_llm_model=e.get("KB_LLM_MODEL", d.kb_llm_model),
+            kb_code_embed_model=e.get("KB_CODE_EMBED_MODEL", d.kb_code_embed_model),
+            kb_code_query_prefix=e.get("KB_CODE_QUERY_PREFIX", d.kb_code_query_prefix),
+            kb_code_doc_prefix=e.get("KB_CODE_DOC_PREFIX", d.kb_code_doc_prefix),
+            kb_code_embed_base_url=e.get("KB_CODE_EMBED_BASE_URL", d.kb_code_embed_base_url),
+            kb_code_embed_api_key=e.get("KB_CODE_EMBED_API_KEY", d.kb_code_embed_api_key),
+            git_default_token=e.get("GIT_DEFAULT_TOKEN", d.git_default_token),
+            sync_check_interval_sec=int(
+                e.get("SYNC_CHECK_INTERVAL_SEC", str(d.sync_check_interval_sec))
+            ),
         )
 
 
@@ -208,6 +235,28 @@ def get_embedder(settings: Settings) -> Embedder:
             api_key=settings.kb_embed_api_key or None,
         )
     return HashEmbedder(dim=EMBED_DIM)
+
+
+def get_code_embedder(settings: Settings) -> Embedder | None:
+    """P3.0: the code-specialised embedder for `DocChunk.embedding_alt`.
+
+    None when no code embedder is configured — code Collections still work
+    (the retriever falls back to single-vector behaviour); only the
+    semantic-code geometry is gone. Production wires this into
+    ``create_app(kb_code_embedder=...)``."""
+    if not settings.kb_code_embed_model:
+        return None
+    return LitellmEmbedder(
+        settings.kb_code_embed_model,
+        dim=CODE_EMBED_DIM,
+        query_prefix=settings.kb_code_query_prefix,
+        doc_prefix=settings.kb_code_doc_prefix,
+        timeout=settings.kb_embed_timeout,
+        num_retries=settings.kb_embed_num_retries,
+        batch_size=settings.kb_embed_batch_size,
+        base_url=settings.kb_code_embed_base_url or None,
+        api_key=settings.kb_code_embed_api_key or None,
+    )
 
 
 def get_chunker(settings: Settings) -> Chunker:

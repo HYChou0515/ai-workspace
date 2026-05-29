@@ -36,12 +36,12 @@ def _ingest_code(spec: SpecStar, name: str) -> tuple[str, Ingestor]:
         user="alice",
         filename="auth.py",
         data=(
-            "def authenticate_user(username, password):\n"
-            "    return username == password\n"
-            "\n\n"
-            "def reset_password(user_id):\n"
-            "    return True\n"
-        ).encode()
+            b"def authenticate_user(username, password):\n"
+            b"    return username == password\n"
+            b"\n\n"
+            b"def reset_password(user_id):\n"
+            b"    return True\n"
+        )
         * 4,
     )
     return cid, ing

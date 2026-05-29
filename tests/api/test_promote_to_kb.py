@@ -226,10 +226,7 @@ def test_ingest_chat_skips_unchanged_insight_bytes(spec_factory):
     rm = spec.get_resource_manager(Collection)
     cid = rm.create(Collection(name="insights")).resource_id
     # Same insight twice — second run hits the "unchanged bytes" continue.
-    canned = (
-        '{"insights": [{"kind": "lesson_learned", "title": "t",'
-        ' "markdown": "# t\\n\\nbody"}]}'
-    )
+    canned = '{"insights": [{"kind": "lesson_learned", "title": "t", "markdown": "# t\\n\\nbody"}]}'
     p1 = _build(llm=_FakeLlm(canned), embedder=embedder)
     ing = _Ingestor(spec, chat_pipeline=p1, embedder=embedder)
     first = ing.ingest_chat(

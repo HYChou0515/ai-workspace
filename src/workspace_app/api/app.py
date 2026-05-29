@@ -274,6 +274,7 @@ def create_app(
     filestore: FileStore,
     runner: AgentRunner,
     kb_embedder: Embedder | None = None,
+    kb_code_embedder: Embedder | None = None,  # P3.0 code-specialised embedder
     kb_chunker: Chunker | None = None,
     kb_pipeline: object | None = None,  # llama_index.core.ingestion.IngestionPipeline
     kb_chat_pipeline: object | None = None,  # P2 chat → knowledge IngestionPipeline
@@ -457,6 +458,7 @@ def create_app(
             pipeline=kb_pipeline,  # ty: ignore[invalid-argument-type]
             chat_pipeline=kb_chat_pipeline,  # ty: ignore[invalid-argument-type]
             embedder=embedder,
+            code_embedder=kb_code_embedder,
         )
     else:
         ingestor = Ingestor(
@@ -464,6 +466,7 @@ def create_app(
             chunker=kb_chunker or FixedTokenChunker(),
             chat_pipeline=kb_chat_pipeline,  # ty: ignore[invalid-argument-type]
             embedder=embedder,
+            code_embedder=kb_code_embedder,
         )
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
@@ -473,7 +476,7 @@ def create_app(
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
     # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
-    kb_retriever = Retriever(spec, embedder=embedder, llm=kb_llm)
+    kb_retriever = Retriever(spec, embedder=embedder, llm=kb_llm, code_embedder=kb_code_embedder)
     # One turn engine drives every chat surface (RCA workspace + KB chat): one
     # cancellable in-flight turn per conversation, SSE streaming, cancel hook.
     turn_engine = ChatTurnEngine(runner)

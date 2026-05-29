@@ -15,6 +15,7 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..kb.cited import chunk_cited, collection_cited, doc_cited
+from ..kb.code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..kb.ingest import Ingestor, normalize_text
 from ..kb.links import rewrite_md_links
 from ..resources.kb import Collection, DocChunk, SourceDoc
@@ -33,6 +34,14 @@ class _CollectionBody(BaseModel):
     name: str
     description: str = ""
     icon: str = "layers"
+    # P3.0 code-repo fields. Setting git_url makes this a code Collection
+    # syncable via POST /sync. embedder_id=1 routes its chunks through the
+    # code-specialised embedder onto DocChunk.embedding_alt.
+    git_url: str | None = None
+    git_branch: str | None = None
+    git_token: str | None = None  # write-only; never echoed in responses
+    embedder_id: int = 0
+    sync_interval_hours: int | None = None
 
 
 class CollectionOut(BaseModel):
@@ -48,6 +57,21 @@ class CollectionOut(BaseModel):
     size: int  # total bytes across the collection's documents
     updated_at: int  # epoch ms — the most recently updated doc (or the collection)
     owner: str  # created_by
+    # P3.0 code-repo metadata (None for non-code Collections). `git_token` is
+    # write-only and NEVER returned — it's a secret.
+    git_url: str | None = None
+    git_branch: str | None = None
+    git_last_sha: str | None = None
+    git_last_pulled_at: int | None = None
+    embedder_id: int = 0
+    sync_interval_hours: int | None = None
+
+
+class SyncOut(BaseModel):
+    """Result of POST /kb/collections/:id/sync — the cloned HEAD sha + status."""
+
+    status: str
+    git_last_sha: str | None = None
 
 
 class ReindexOut(BaseModel):
@@ -85,6 +109,8 @@ def _ms(dt: datetime) -> int:
 
 
 def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None:
+    code_repo = CodeRepoIngestor(spec, ingestor=ingestor)
+
     def _collection_out(r, cited: dict[str, int]) -> CollectionOut:
         data = r.data
         assert isinstance(data, Collection)
@@ -110,12 +136,29 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
             size=size,
             updated_at=updated,
             owner=r.info.created_by,
+            git_url=data.git_url,
+            git_branch=data.git_branch,
+            git_last_sha=data.git_last_sha,
+            git_last_pulled_at=data.git_last_pulled_at,
+            embedder_id=data.embedder_id,
+            sync_interval_hours=data.sync_interval_hours,
         )
 
     @app.post("/kb/collections")
     async def create_collection(body: _CollectionBody) -> CollectionOut:
         rm = spec.get_resource_manager(Collection)
-        rev = rm.create(Collection(name=body.name, description=body.description, icon=body.icon))
+        rev = rm.create(
+            Collection(
+                name=body.name,
+                description=body.description,
+                icon=body.icon,
+                git_url=body.git_url,
+                git_branch=body.git_branch,
+                git_token=body.git_token,
+                embedder_id=body.embedder_id,
+                sync_interval_hours=body.sync_interval_hours,
+            )
+        )
         return CollectionOut(
             resource_id=rev.resource_id,
             name=body.name,
@@ -126,6 +169,12 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
             size=0,
             updated_at=_ms(rev.updated_time),
             owner=rev.created_by,
+            git_url=body.git_url,
+            git_branch=body.git_branch,
+            git_last_sha=None,
+            git_last_pulled_at=None,
+            embedder_id=body.embedder_id,
+            sync_interval_hours=body.sync_interval_hours,
         )
 
     @app.get("/kb/collections")
@@ -155,6 +204,33 @@ def register_kb_routes(app: FastAPI, spec: SpecStar, ingestor: Ingestor) -> None
         for doc_id in ids:
             background.add_task(_index_in_thread, ingestor, doc_id)
         return {"document_ids": ids, "status": "indexing"}
+
+    @app.post("/kb/collections/{collection_id}/sync")
+    async def sync_collection(collection_id: str) -> SyncOut:
+        """P3.0: re-clone the Collection's git_url and re-ingest. 400 when
+        the Collection isn't a code Collection (no git_url), 502 when the
+        clone/auth fails (typed CodeRepoSyncError), 404 when the id is unknown.
+
+        The clone + ingest runs in a worker thread so the event loop keeps
+        serving other requests during the (potentially multi-second) sync."""
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as e:
+            raise HTTPException(status_code=404, detail="collection not found") from e
+        assert isinstance(coll, Collection)
+        if not coll.git_url:
+            raise HTTPException(
+                status_code=400, detail="collection has no git_url; not a code collection"
+            )
+        try:
+            await asyncio.to_thread(code_repo.sync, collection_id=collection_id, user=_DEFAULT_USER)
+        except CodeRepoSyncError as e:
+            raise HTTPException(status_code=502, detail=str(e)) from e
+        # Re-read so we return the freshly-recorded sha.
+        refreshed = rm.get(collection_id).data
+        assert isinstance(refreshed, Collection)
+        return SyncOut(status="ok", git_last_sha=refreshed.git_last_sha)
 
     @app.post("/kb/collections/{collection_id}/reindex")
     async def reindex_collection(collection_id: str, background: BackgroundTasks) -> ReindexOut:

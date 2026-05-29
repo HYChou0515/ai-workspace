@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from specstar import QB, SpecStar
 
+from workspace_app.factories import Settings, get_code_embedder
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
@@ -63,6 +64,21 @@ def test_code_collection_embeddings_land_on_embedding_alt(spec: SpecStar):
     for c in chunks:
         assert c.embedding is None, "code collection must NOT populate the default field"
         assert c.embedding_alt is not None and len(c.embedding_alt) == CODE_EMBED_DIM
+
+
+def test_code_embedder_factory_returns_none_when_unconfigured():
+    """The default Settings doesn't wire a code embedder (the FE flag is
+    opt-in per Collection); factory returns None and the Ingestor + Retriever
+    paths fall back to single-vector behaviour."""
+    assert get_code_embedder(Settings()) is None
+
+
+def test_code_embedder_factory_returns_embedder_when_configured():
+    """KB_CODE_EMBED_MODEL set → factory constructs a LitellmEmbedder at the
+    CODE_EMBED_DIM width."""
+    settings = Settings(kb_code_embed_model="ollama/nomic-embed-code")
+    e = get_code_embedder(settings)
+    assert e is not None and e.dim == CODE_EMBED_DIM
 
 
 def test_doc_collection_default_routing_unchanged(spec: SpecStar):

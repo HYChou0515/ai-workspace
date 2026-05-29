@@ -1,0 +1,138 @@
+"""POST /kb/collections (with git_*) + POST /kb/collections/:id/sync.
+
+P3.0 §2.9 routes. A FE creates a code Collection by POSTing the git_url
++ embedder_id; later it calls /sync to re-clone and re-ingest. Tests use
+file:// URLs so no network/auth.
+"""
+
+from __future__ import annotations
+
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+from specstar import SpecStar
+
+from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.kb.li_pipeline import build_doc_pipeline
+from workspace_app.resources.kb import CODE_EMBED_DIM, EMBED_DIM
+from workspace_app.sandbox.mock import MockSandbox
+
+
+def _git(cwd: Path, *args: str) -> None:
+    env = {
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "PATH": "/usr/bin:/bin",
+    }
+    subprocess.run(
+        ["git", "-c", "init.defaultBranch=main", *args],
+        cwd=cwd,
+        check=True,
+        env=env,
+        capture_output=True,
+    )
+
+
+@pytest.fixture
+def remote(tmp_path: Path) -> str:
+    work = tmp_path / "repo"
+    work.mkdir()
+    (work / "a.py").write_text("def f():\n    return 1\n")
+    (work / "README.md").write_text("# r\n\nx\n")
+    _git(work, "init")
+    _git(work, "add", ".")
+    _git(work, "commit", "-m", "i")
+    return work.as_uri()
+
+
+@pytest.fixture
+def app(tmp_path: Path):
+    spec = SpecStar()
+    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    text = HashEmbedder(dim=EMBED_DIM)
+    code = HashEmbedder(dim=CODE_EMBED_DIM, doc_prefix="code: ")
+    return create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        kb_embedder=text,
+        kb_code_embedder=code,
+        kb_pipeline=build_doc_pipeline(embedder=text),
+    )
+
+
+def test_create_collection_accepts_git_url_and_embedder_id(app):
+    """The body now takes git_url / git_branch / git_token / embedder_id
+    (per §2.9). On a successful POST the persisted Collection carries them."""
+    client = TestClient(app)
+    resp = client.post(
+        "/kb/collections",
+        json={
+            "name": "my-repo",
+            "git_url": "https://gitlab.example/g/r.git",
+            "git_branch": "main",
+            "git_token": "glpat-xxx",
+            "embedder_id": 1,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["git_url"] == "https://gitlab.example/g/r.git"
+    assert body["git_branch"] == "main"
+    assert body["embedder_id"] == 1
+    # token is write-only — we don't echo it back (it's a secret).
+    assert "git_token" not in body or body["git_token"] is None
+
+
+def test_sync_endpoint_clones_and_ingests(app, remote: str):
+    """POST /kb/collections/:id/sync clones the git_url + ingests each file.
+    The endpoint returns 200 with the cloned HEAD sha."""
+    client = TestClient(app)
+    created = client.post(
+        "/kb/collections",
+        json={"name": "repo", "git_url": remote, "embedder_id": 1},
+    ).json()
+    cid = created["resource_id"]
+    resp = client.post(f"/kb/collections/{cid}/sync")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert isinstance(body["git_last_sha"], str) and len(body["git_last_sha"]) == 40
+    # Verify side-effect via the documents-list endpoint: the cloned files
+    # made it into SourceDocs.
+    docs = client.get(f"/kb/collections/{cid}/documents").json()
+    paths = {d["path"] for d in docs}
+    assert "a.py" in paths
+    assert "README.md" in paths
+
+
+def test_sync_endpoint_404s_on_unknown_collection(app):
+    client = TestClient(app)
+    resp = client.post("/kb/collections/does-not-exist/sync")
+    assert resp.status_code == 404
+
+
+def test_sync_endpoint_400s_when_collection_has_no_git_url(app):
+    client = TestClient(app)
+    cid = client.post("/kb/collections", json={"name": "no-git"}).json()["resource_id"]
+    resp = client.post(f"/kb/collections/{cid}/sync")
+    assert resp.status_code == 400
+
+
+def test_sync_endpoint_502s_on_clone_failure(app, tmp_path: Path):
+    """A bogus git_url surfaces as 502 (upstream failure), not 500."""
+    client = TestClient(app)
+    bogus = (tmp_path / "no-such").as_uri()
+    cid = client.post(
+        "/kb/collections", json={"name": "bad", "git_url": bogus, "embedder_id": 1}
+    ).json()["resource_id"]
+    resp = client.post(f"/kb/collections/{cid}/sync")
+    assert resp.status_code == 502

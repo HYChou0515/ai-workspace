@@ -23,6 +23,7 @@ from workspace_app.api import create_app
 from workspace_app.factories import (
     Settings,
     get_chat_pipeline,
+    get_code_embedder,
     get_doc_pipeline,
     get_embedder,
     get_filestore,
@@ -54,6 +55,9 @@ def main() -> None:
         filestore=get_filestore(settings, spec),
         runner=get_runner(settings),
         kb_embedder=embedder,
+        # P3.0: code-specialised embedder (`KB_CODE_EMBED_MODEL`); None ⇒ code
+        # collections fall back to the default embedder.
+        kb_code_embedder=get_code_embedder(settings),
         # P1: LlamaIndex IngestionPipeline replaces the hand-rolled chunker.
         # Tests/offline runs still pass `kb_chunker=` directly to create_app.
         kb_pipeline=get_doc_pipeline(settings, embedder),
