@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 # This tool brings its OWN dependencies (pandas + matplotlib for --plot). It
 # lives in its own repo and is bundled into a self-contained package at prebuild
 # time, so it never pollutes the host app's dependencies.
-dependencies = ["pandas>=2.0", "matplotlib>=3.8"]
+dependencies = ["pydantic>=2", "pandas>=2.0", "matplotlib>=3.8"]
 
 [project.scripts]
 csv-column-summary = "csv_column_summary.cli:main"
