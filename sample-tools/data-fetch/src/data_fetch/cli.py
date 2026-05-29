@@ -1,27 +1,27 @@
 """CLI: materialise a *named* dataset into the workspace as CSV.
 
-The agent never supplies a URL or a schema — it picks a NAME from a fixed
-catalog. Each name maps to a bundled scikit-learn dataset that we augment
-(bootstrap-resample + jitter + synthetic id / categorical / datetime columns)
-into a large, mixed-dtype table disguised as a domain dataset. Fully offline.
+Single-command package — a reference example of the simplest tool
+shape under the 3-stage contract (see docs/plan-skills-and-tools.md
+§B.2). The host runs the launch wrapper one of three ways:
 
-    data-fetch --list                       # available dataset names
-    data-fetch sensor-telemetry             # → sensor-telemetry.csv (25k+ rows, 20+ cols)
-    data-fetch alloy-batches --rows 50000 --out /data/alloy.csv
-    data-fetch sensor-telemetry --json
+    ./launch                       → list commands as JSON
+    ./launch data-fetch            → that command's metadata + JSON schema
+    ./launch data-fetch '<json>'   → pydantic-validate + execute
 
-Exit 0 on success, 2 on a usage error (unknown name).
+For multi-command examples (one venv, several commands), see
+``sample-tools/csv-column-summary``.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from dataclasses import asdict, dataclass
+from typing import Literal
 
 import numpy as np
 import pandas as pd
+from pydantic import BaseModel, Field, ValidationError
 from sklearn import datasets as skd
 
 # name → (bundled sklearn loader, column-name prefix, optional base-col cap).
@@ -41,6 +41,33 @@ _LOADERS = {
 }
 
 _MIN_NUMERIC_COLS = 18  # + 6 synthetic (id/line/shift/operator/timestamp/label) ⇒ 20+ total
+
+
+# ─── tool contract ───────────────────────────────────────────────────
+
+
+_DATASET_NAMES = Literal[
+    "sensor-telemetry", "alloy-batches", "process-readings", "panel-inspection"
+]
+
+
+class FetchArgs(BaseModel):
+    """The agent's input. ``name`` is constrained by an enum so the model
+    can never invent a bad value; ``out`` defaults to ``<name>.csv``."""
+
+    name: _DATASET_NAMES = Field(description="which dataset to materialise")
+    rows: int = Field(default=25_000, ge=1, description="row count")
+    out: str | None = Field(default=None, description="output CSV path (default: <name>.csv)")
+    seed: int = Field(default=0, description="random seed for the synthesis")
+
+
+DESCRIPTION = (
+    "Materialise a named (sklearn-augmented) dataset into the workspace as a CSV. "
+    "The dataset is chosen by NAME from a fixed catalog — you cannot pass a URL."
+)
+
+
+# ─── synthesis ───────────────────────────────────────────────────────
 
 
 @dataclass
@@ -95,50 +122,56 @@ def synthesize(name: str, *, rows: int = 25_000, seed: int = 0) -> pd.DataFrame:
     return df.sample(frac=1.0, random_state=seed).reset_index(drop=True)
 
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="data-fetch",
-        description="Materialise a named (sklearn-augmented) dataset into the workspace as CSV.",
-    )
-    parser.add_argument("name", nargs="?", help="dataset name (see --list)")
-    parser.add_argument("--out", help="output CSV path (default: <name>.csv)")
-    parser.add_argument("--rows", type=int, default=25_000, help="row count (default 25000)")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--list", action="store_true", help="list available dataset names")
-    parser.add_argument("--json", action="store_true", help="emit JSON")
-    args = parser.parse_args(argv)
-
-    if args.list or not args.name:
-        names = sorted(_CATALOG)
-        if args.json:
-            print(json.dumps({"datasets": names}, indent=2))
-        else:
-            print("available datasets:")
-            for n in names:
-                print(f"  - {n}")
-        return 0
-
-    if args.name not in _CATALOG:
-        print(
-            f"error: unknown dataset {args.name!r}. available: {', '.join(sorted(_CATALOG))}",
-            file=sys.stderr,
-        )
-        return 2
-
-    rows = max(1, args.rows)
-    # Progress on stderr — the sandbox relays stderr live, so a long fetch shows
-    # in the chat as it runs instead of a silent wait (issue #23).
-    print(f"synthesizing '{args.name}' ({rows} rows) …", file=sys.stderr, flush=True)
-    df = synthesize(args.name, rows=rows, seed=args.seed)
+def run(args: FetchArgs) -> Result:
+    """Execute the fetch with already-validated args; prints stderr
+    progress (sandbox relays it live to the chat — issue #23) and the
+    written CSV summary on stdout."""
+    print(f"synthesizing '{args.name}' ({args.rows} rows) …", file=sys.stderr, flush=True)
+    df = synthesize(args.name, rows=args.rows, seed=args.seed)
     out = args.out or f"{args.name}.csv"
-    print(f"writing {df.shape[0]} rows × {df.shape[1]} cols → {out} …", file=sys.stderr, flush=True)
+    print(
+        f"writing {df.shape[0]} rows × {df.shape[1]} cols → {out} …",
+        file=sys.stderr,
+        flush=True,
+    )
     df.to_csv(out, index=False)
     result = Result(name=args.name, path=out, rows=df.shape[0], columns=df.shape[1])
+    print(json.dumps(asdict(result)))
+    return result
 
-    if args.json:
-        print(json.dumps(asdict(result), indent=2))
-    else:
-        print(f"wrote {result.path} — {result.rows} rows × {result.columns} columns")
+
+# ─── 3-stage dispatcher (hand-written so the contract stays visible) ──
+
+
+def main(argv: list[str] | None = None) -> int:
+    a = argv if argv is not None else sys.argv[1:]
+    # Stage 1: bare → list commands.
+    if not a:
+        print(json.dumps([{"name": "data-fetch", "description": DESCRIPTION}]))
+        return 0
+    cmd = a[0]
+    if cmd != "data-fetch":
+        print(f"unknown command: {cmd}", file=sys.stderr)
+        return 2
+    # Stage 2: command only → metadata + JSON schema.
+    if len(a) == 1:
+        print(
+            json.dumps(
+                {
+                    "name": "data-fetch",
+                    "description": DESCRIPTION,
+                    "params_json_schema": FetchArgs.model_json_schema(),
+                }
+            )
+        )
+        return 0
+    # Stage 3: command + JSON args → pydantic validate + run.
+    try:
+        args = FetchArgs.model_validate_json(a[1])
+    except ValidationError as e:
+        print(str(e), file=sys.stderr)
+        return 2
+    run(args)
     return 0
 
 

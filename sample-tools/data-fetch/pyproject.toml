@@ -6,7 +6,7 @@ requires-python = ">=3.10"
 # Its OWN heavy analysis deps (scikit-learn / pandas / numpy). Installed INTO the
 # sandbox at provision time, so the host app never inherits them. Generates
 # offline from bundled sklearn datasets — no network, no LLM-supplied URL.
-dependencies = ["scikit-learn>=1.3", "pandas>=2.0", "numpy>=1.24"]
+dependencies = ["pydantic>=2", "scikit-learn>=1.3", "pandas>=2.0", "numpy>=1.24"]
 
 [project.scripts]
 data-fetch = "data_fetch.cli:main"
