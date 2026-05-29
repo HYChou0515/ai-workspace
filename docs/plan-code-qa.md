@@ -11,8 +11,8 @@
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| **P3.0** | Backend:Collection 加 git 欄位、第二個 embedder slot、DocChunk 加 `embedding_alt`、CodeSplitter dispatch (py/ts/tsx/js/jsx)、git clone ingest、parallel retrieval (group-by-embedder + RRF merge)、手動 sync endpoint | ⬜ |
-| **P3.1** | 排程 sync scheduler、cross-file reference (softlink prepend)、FE「New code collection」表單 + 「Sync now」按鈕 | ⏸ |
+| **P3.0** | Backend:Collection 加 git 欄位、第二個 embedder slot、DocChunk 加 `embedding_alt`、CodeSplitter dispatch (py/ts/tsx/js/jsx)、git clone ingest、parallel retrieval (group-by-embedder + RRF merge)、手動 sync endpoint、**背景 sync sweeper(已內含)** | ✅ |
+| **P3.1** | cross-file reference (softlink prepend)、FE「New code collection」表單 + 「Sync now」按鈕 | ⏸ |
 | **P3.2**(未來) | LSP 級 cross-file references、code-specific Reranker、`.go`/`.rs`/`.java`/... 語言擴充 | ⏸ |
 
 每階段完成定義:`uv run ruff check && ruff format --check && ty check` 全清、後端
@@ -253,31 +253,29 @@ App 啟動時 `asyncio.create_task(_sync_scheduler(spec, ingestor, code_repo, se
 
 ### 2.9 P3.0 範圍(checklist)
 
-- [ ] Deps:`tree-sitter-language-pack`(50MB) 加進 pyproject;`subprocess` 已內建
-- [ ] `Collection` schema 加欄位 + indexed_fields 加 `git_url`(查 sync 候選用)
-- [ ] `DocChunk.embedding_alt` 欄位 + 雙 Vector index
-- [ ] `Settings` 加 `kb_code_embed_*` + `git_*` + `sync_check_interval_sec`
-- [ ] `factories.get_code_embedder()` + `build_code_pipeline()`
-- [ ] `kb/code_repo.py`:`CodeRepoIngestor` clone+walk
-- [ ] `Ingestor` 雙 embedder(根據 collection embedder_id 寫對欄位)
-- [ ] `DispatchSplitter` 加 CodeSplitter dispatch
-- [ ] `Retriever`:group-by-embedder + per-group dense + RRF merge
-- [ ] `kb_routes.py`:`POST /kb/collections` 接 git 欄位、`POST /kb/collections/:id/sync`
-- [ ] Background scheduler(若 v1.0 來不及,降到 P3.1;但 endpoint 要先有)
-- [ ] Tests:
-  - `test_collection_git_fields`:schema migration 不爆、optional fields 預設 None
-  - `test_code_repo_ingestor`:mock subprocess clone,確認 walk + extension filter + last_sha
-  - `test_code_splitter_dispatch`:.py 走 CodeSplitter、.go 走 SentenceSplitter fallback
-  - `test_ingestor_dual_embedder`:embedder_id=0 寫 `embedding`、=1 寫 `embedding_alt`
-  - `test_retriever_parallel_groups`:跨兩個 embedder 的 collection 一起搜,RRF 結果裡兩邊都有
-  - `test_endpoint_create_git_collection`:POST 帶 git_url 自動觸發 sync、回 last_sha
-  - `test_endpoint_sync_now`:手動 sync 拉新 SHA、re-ingest 改動檔案
-- [ ] 100% backend coverage + ty + ruff 全綠
+- [x] Deps:`tree-sitter-languages 1.10.2` + `tree-sitter<0.22` 加進 pyproject
+- [x] `Collection` schema 加 `git_url/git_branch/git_token/git_last_sha/git_last_pulled_at/embedder_id/sync_interval_hours`
+- [x] `DocChunk.embedding` 改 nullable + `embedding_alt` (dim=`CODE_EMBED_DIM`)
+- [x] `Settings` 加 `kb_code_embed_*` + `git_default_token` + `sync_check_interval_sec`
+- [x] `factories.get_code_embedder()`(`build_code_pipeline()` 暫不需要 — 同一 pipeline 內 routing)
+- [x] `kb/code_repo.py`:`CodeRepoIngestor.sync()` ephemeral clone + walk + ingest
+- [x] `Ingestor` 雙 embedder(根據 collection `embedder_id` 寫對欄位)
+- [x] `DispatchSplitter` 加 CodeSplitter dispatch(`.py/.ts/.tsx/.js/.jsx`)
+- [x] `Retriever`:per-field dense fan-out + 既有 RRF 合併(`code_embedder=` 注入時自動雙路)
+- [x] `kb_routes.py`:`POST /kb/collections` 接 git 欄位、`POST /kb/collections/:id/sync`
+- [x] Background scheduler:`CodeRepoSweeper.tick()` + lifespan `_code_sync_sweeper()` 已內含
+- [x] Tests(實際命名 / 落點):
+  - `tests/kb/test_li_pipeline.py::test_dispatch_splitter_routes_python_to_code_splitter`
+  - `tests/kb/test_code_repo.py`:clone + last_sha + branch + OSError skip + splice_token + bogus URL
+  - `tests/kb/test_dual_embedder.py`:embedder_id 路由 + factory(None/有/無)
+  - `tests/kb/test_dual_retriever.py`:雙欄位 fan-out 計次 + HyDE alt branch
+  - `tests/kb/test_code_sweeper.py`:tick due/not-due/manual-only/fail-isolation
+  - `tests/api/test_kb_code_routes.py`:create with git_*、sync 200/400/404/502、lifespan sweeper
+- [x] 100% backend coverage(`kb/code_repo.py` + `kb/retriever.py` 100% 行+分支)、ty + ruff 全綠
 
 ### 邊界(P3.0 不做)
 
-- ❌ FE 任何改動(另外 PR)
-- ❌ 排程 scheduler(P3.1)
+- ❌ FE 任何改動(另外 PR;P3.1)
 - ❌ Cross-file reference(P3.1 用 softlink prepend)
 - ❌ webhook
 - ❌ Git submodule 處理(submodule 不 recurse,只 clone top-level)
