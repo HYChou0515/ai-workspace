@@ -61,6 +61,27 @@ def test_retriever_returns_code_passages_for_code_only_collection(spec: SpecStar
         assert "def authenticate_user" in h.text or "def reset_password" in h.text
 
 
+def test_hyde_pass_also_fans_out_to_alt_field(spec: SpecStar):
+    """HyDE (LLM-generated pseudo-document) gets re-embedded with the code
+    embedder too — covering the alt-field branch inside the HyDE block."""
+    from collections.abc import Iterator
+
+    from workspace_app.kb.llm import ILlm
+
+    class _FakeLlm(ILlm):
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            yield ("// some plausible code", False)
+
+    cid, _ = _ingest_code(spec, "code-only-hyde")
+    code_embedder = HashEmbedder(dim=CODE_EMBED_DIM, doc_prefix="code: ")
+    text_embedder = HashEmbedder(dim=EMBED_DIM)
+    retriever = Retriever(spec, embedder=text_embedder, code_embedder=code_embedder, llm=_FakeLlm())
+    # An LLM is wired → multi-query + HyDE + rerank fire; the alt-field HyDE
+    # branch is the one we're after. Just need it to not crash + return hits.
+    hits = retriever.search("authenticate user", collection_ids=[cid])
+    assert hits
+
+
 def test_dense_pass_fans_out_to_both_vector_fields(spec: SpecStar):
     """The dense pass must hit both `embedding` and `embedding_alt`.
 

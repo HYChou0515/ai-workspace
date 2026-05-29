@@ -131,6 +131,116 @@ def test_sync_skips_when_collection_has_no_git_url(spec: SpecStar):
     assert not list(sd_rm.list_resources(QB.all()))
 
 
+def test_sync_with_explicit_branch_passes_through_to_git_clone(spec: SpecStar, tmp_path: Path):
+    """git_branch on the Collection is forwarded to `git clone --branch …`.
+    Exercises the branch-explicit code path."""
+    # Build a repo whose default branch is `main`, then a feature branch
+    # `dev` that adds a unique file. Cloning by branch=dev brings in that file.
+    work = tmp_path / "feat"
+    work.mkdir()
+    (work / "common.py").write_text("def common():\n    return 1\n")
+    _git(work, "init")
+    _git(work, "add", ".")
+    _git(work, "commit", "-m", "main")
+    _git(work, "checkout", "-b", "dev")
+    (work / "feature.py").write_text("def feature():\n    return 2\n")
+    _git(work, "add", ".")
+    _git(work, "commit", "-m", "dev")
+    _git(work, "checkout", "main")
+    url = work.as_uri()
+
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="branched", git_url=url, git_branch="dev"))
+        .resource_id
+    )
+    embedder = HashEmbedder(dim=EMBED_DIM)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    repo = CodeRepoIngestor(spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder))
+    repo.sync(collection_id=cid, user="alice")
+
+    sd_rm = spec.get_resource_manager(SourceDoc)
+    # `feature.py` is only on `dev` — it must have been ingested.
+    feat = sd_rm.get(encode_doc_id(cid, "alice", "feature.py")).data
+    assert feat.status == "ready"
+
+
+def test_ingest_tree_skips_empty_ls_files_line_and_unreadable_paths(
+    spec: SpecStar, tmp_path: Path, monkeypatch
+):
+    """`git ls-files` may emit a blank trailing line (it doesn't in practice
+    after splitlines but we still guard); separately, a tracked file we can't
+    read is logged + skipped rather than crashing the sync. Exercises the
+    `if not rel: continue` and OSError branches."""
+    work = tmp_path / "r"
+    work.mkdir()
+    (work / "good.py").write_text("def g():\n    return 1\n")
+    (work / "bad.py").write_text("def b():\n    return 2\n")
+    _git(work, "init")
+    _git(work, "add", ".")
+    _git(work, "commit", "-m", "i")
+
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="r", git_url=work.as_uri()))
+        .resource_id
+    )
+    embedder = HashEmbedder(dim=EMBED_DIM)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder)
+    repo = CodeRepoIngestor(spec, ingestor=ingestor)
+
+    # Patch Path.read_bytes to OSError for "bad.py" and inject a blank line
+    # into ls-files output via a fake subprocess.run.
+    real_run = subprocess.run
+
+    def fake_run(args, **kw):
+        result = real_run(args, **kw)
+        if args[0:2] == ["git", "ls-files"]:
+            result.stdout = result.stdout + b"\n"  # trailing blank line
+        return result
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    real_read = Path.read_bytes
+
+    def maybe_fail(self):
+        if self.name == "bad.py":
+            raise OSError("nope")
+        return real_read(self)
+
+    monkeypatch.setattr(Path, "read_bytes", maybe_fail)
+
+    repo.sync(collection_id=cid, user="alice")
+
+    sd_rm = spec.get_resource_manager(SourceDoc)
+    # good.py made it; bad.py was skipped (no SourceDoc created).
+    assert sd_rm.get(encode_doc_id(cid, "alice", "good.py")).data.status == "ready"
+    from specstar.types import ResourceIDNotFoundError
+
+    try:
+        sd_rm.get(encode_doc_id(cid, "alice", "bad.py"))
+        raise AssertionError("bad.py should not have been ingested")
+    except ResourceIDNotFoundError:
+        pass
+
+
+def test_splice_token_returns_url_untouched_for_non_http_schemes():
+    """A PAT only makes sense for https; ssh:// / file:// URLs are passed
+    through unchanged. Also: when the URL has a port, that port is preserved
+    in the rewritten netloc."""
+    from workspace_app.kb.code_repo import _splice_token
+
+    assert _splice_token("ssh://git@gitlab/g/r.git", "tok") == "ssh://git@gitlab/g/r.git"
+    assert _splice_token("file:///tmp/r", "tok") == "file:///tmp/r"
+    # https + port → token spliced + port preserved.
+    out = _splice_token("https://gitlab.example:8443/g/r.git", "glpat-x")
+    assert out == "https://oauth2:glpat-x@gitlab.example:8443/g/r.git"
+    # https without port → token spliced, no port appended (covers the
+    # else-branch of the port guard).
+    out2 = _splice_token("https://gitlab.example/g/r.git", "glpat-y")
+    assert out2 == "https://oauth2:glpat-y@gitlab.example/g/r.git"
+
+
 def test_sync_raises_when_clone_fails(spec: SpecStar, tmp_path: Path):
     """A bogus URL (no remote, no creds) bubbles a typed
     `CodeRepoSyncError` so the API layer can return a clean 502."""
