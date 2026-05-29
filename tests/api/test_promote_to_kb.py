@@ -191,6 +191,30 @@ def test_get_chat_pipeline_factory_constructs_when_llm_present():
     assert pipeline is not None
 
 
+def test_get_chat_pipeline_factory_returns_none_without_llm():
+    """No KB LLM wired → factory returns None and the chat path degrades
+    gracefully (the close hook + endpoint check for None)."""
+    from workspace_app.factories import Settings, get_chat_pipeline
+
+    assert get_chat_pipeline(Settings(), HashEmbedder(dim=EMBED_DIM), None) is None
+
+
+def test_ensure_insights_collection_skips_unrelated_collections(spec_factory):
+    """The lookup walks every Collection looking for one with the target
+    name. Exercise the iterate-past-non-matching branch by seeding a few
+    unrelated collections first."""
+    from workspace_app.api.app import _ensure_insights_collection
+
+    spec = spec_factory()
+    rm = spec.get_resource_manager(Collection)
+    rm.create(Collection(name="Reflow SOPs"))
+    rm.create(Collection(name="MX-7 Manuals"))
+    cid = _ensure_insights_collection(spec, "Investigations Knowledge")
+    # Got a fresh id (the target name didn't pre-exist) but iterated past
+    # the others. Re-call returns the same id.
+    assert _ensure_insights_collection(spec, "Investigations Knowledge") == cid
+
+
 def test_ingest_chat_skips_unchanged_insight_bytes(spec_factory):
     """When `_store_file` returns None (same bytes as the existing insight),
     `ingest_chat` skips the re-chunk step — exercises the "unchanged" branch."""
