@@ -19,8 +19,9 @@ from typing import Any
 import msgspec
 from specstar import SpecStar
 
+from .gate import AwaitingHuman
 from .handle import WorkflowHandle
-from .run import RunStatus, WorkflowRun
+from .run import PendingDecision, RunStatus, WorkflowRun
 
 ProfileRun = Callable[[WorkflowHandle, Any], Awaitable[Any]]
 
@@ -52,6 +53,16 @@ async def run_workflow(
     _patch(status=RunStatus.RUNNING, started=now())
     try:
         result = await profile_run(wf, inputs)
+    except AwaitingHuman as gate:
+        # Suspend: record the open decision; the run task exits. A human responds
+        # via the decisions endpoint, then re-running resumes (manual §10).
+        _patch(
+            status=RunStatus.AWAITING_HUMAN,
+            pending_decision=PendingDecision(
+                phase=gate.phase, title=gate.title, summary=gate.summary, allow=gate.allow
+            ),
+        )
+        return
     except asyncio.CancelledError:
         _patch(status=RunStatus.CANCELLED, ended=now())
         raise

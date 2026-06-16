@@ -48,6 +48,17 @@ class Failure(Struct):
     phase: str = ""
 
 
+class PendingDecision(Struct):
+    """The open human gate while a run is ``awaiting_human`` (manual §10, §13) — what
+    the FE renders as the review card. ``decided_by`` records who answered."""
+
+    phase: str
+    title: str
+    summary: str = ""
+    allow: list[str] = field(default_factory=list)
+    decided_by: str = ""
+
+
 class WorkflowRun(Struct):
     item_id: str
     """Indexed — the owning item (any App's WorkItem ``resource_id``; #89). One
@@ -68,6 +79,8 @@ class WorkflowRun(Struct):
     """Epoch ms when the run reached a terminal status; None until then."""
     result: dict[str, Any] | None = None
     """The ``run()`` return value (a summary), persisted on terminal."""
+    pending_decision: PendingDecision | None = None
+    """Set while ``awaiting_human`` — the open gate the FE renders (manual §10)."""
 
 
 # What the platform registers: the resource + its indexes (manual §13). item_id

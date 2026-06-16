@@ -9,12 +9,14 @@ are layered on in later phases; this is the file/IO surface.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
 from typing import Any
 
 from ..filestore.protocol import FileStore
+from .engine import StepFailed
 
 # How an agent node runs one turn: given the (feedback-augmented) prompt + the tool
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
@@ -91,3 +93,29 @@ class WorkflowHandle:
             ):
                 out.append(p)
         return sorted(out)
+
+    async def map(
+        self,
+        fn: Callable[[Any], Awaitable[Any]],
+        items: list[Any],
+        *,
+        concurrency: int = 8,
+    ) -> list[dict[str, str]]:
+        """The parallel for-each (manual §11): run ``fn(item)`` for every item
+        concurrently, bounded by ``concurrency``. A ``StepFailed`` in an element is
+        caught and collected (skip+collect) so one bad element doesn't kill the
+        batch; returns the ``{item, error}`` failures. NOTE: agent turns on the
+        *same* handle still serialize (ChatTurnEngine is FIFO-per-key) — true
+        parallel agent turns need per-element sub-handles wired by the driver."""
+        sem = asyncio.Semaphore(concurrency)
+        failures: list[dict[str, str]] = []
+
+        async def _one(item: Any) -> None:
+            async with sem:
+                try:
+                    await fn(item)
+                except StepFailed as exc:
+                    failures.append({"item": str(item), "error": str(exc)})
+
+        await asyncio.gather(*(_one(item) for item in items))
+        return failures

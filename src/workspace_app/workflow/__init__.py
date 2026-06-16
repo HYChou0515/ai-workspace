@@ -15,14 +15,18 @@ from __future__ import annotations
 
 from .checks import choice_in, file_nonempty
 from .engine import CheckResult, StepFailed, fail, run_step
+from .gate import AwaitingHuman, Decision, human_gate, record_decision
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
-from .run import Failure, PhaseState, RunStatus, WorkflowRun
+from .run import Failure, PendingDecision, PhaseState, RunStatus, WorkflowRun
 from .steps import agent_step, sandbox_node
 
 __all__ = [
+    "AwaitingHuman",
     "CheckResult",
+    "Decision",
     "Failure",
+    "PendingDecision",
     "PhaseState",
     "RunStatus",
     "StepFailed",
@@ -34,6 +38,8 @@ __all__ = [
     "choice_in",
     "fail",
     "file_nonempty",
+    "human_gate",
+    "record_decision",
     "run_step",
     "sandbox_node",
 ]
