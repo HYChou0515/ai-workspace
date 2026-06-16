@@ -59,7 +59,7 @@ def test_code_collection_embeddings_land_on_embedding_alt(spec: SpecStar):
     ) * 4
     ingestor.ingest(collection_id=cid, user="alice", filename="g.py", data=py.encode())
 
-    chunks = _chunks_of(spec, encode_doc_id(cid, "alice", "g.py"))
+    chunks = _chunks_of(spec, encode_doc_id(cid, "g.py"))
     assert chunks
     for c in chunks:
         assert c.embedding is None, "code collection must NOT populate the default field"
@@ -74,9 +74,18 @@ def test_code_embedder_factory_returns_none_when_unconfigured():
 
 
 def test_code_embedder_factory_returns_embedder_when_configured():
-    """KB_CODE_EMBED_MODEL set → factory constructs a LitellmEmbedder at the
-    CODE_EMBED_DIM width."""
-    settings = Settings(kb_code_embed_model="ollama/nomic-embed-code")
+    """kb.code_embedder.model set → factory constructs a LitellmEmbedder
+    at the CODE_EMBED_DIM width."""
+    from dataclasses import replace
+
+    base = Settings()
+    settings = replace(
+        base,
+        kb=replace(
+            base.kb,
+            code_embedder=replace(base.kb.code_embedder, model="ollama/nomic-embed-code"),
+        ),
+    )
     e = get_code_embedder(settings)
     assert e is not None and e.dim == CODE_EMBED_DIM
 
@@ -105,7 +114,7 @@ def test_doc_collection_default_routing_unchanged(spec: SpecStar):
         filename="x.md",
         data=b"# H\n\nSome body content explaining the system.",
     )
-    chunks = _chunks_of(spec, encode_doc_id(cid, "alice", "x.md"))
+    chunks = _chunks_of(spec, encode_doc_id(cid, "x.md"))
     assert chunks
     for c in chunks:
         assert len(c.embedding) == EMBED_DIM

@@ -3,13 +3,11 @@ notifications (produced by an investigation status change)."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from fastapi.testclient import TestClient
-from specstar import SpecStar
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.users import MockUserDirectory, User
 
@@ -17,8 +15,7 @@ from workspace_app.users import MockUserDirectory, User
 def _client(holder: dict[str, str]) -> TestClient:
     """App whose 'current user' follows holder['id'] — flip it between requests
     to simulate different people acting."""
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec()
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
@@ -56,21 +53,50 @@ def test_users_lists_the_directory():
     assert {"Alice Chen", "Bob Liu", "Carol Kao"} <= names
 
 
-def _make_investigation(c: TestClient, owner: str, members: list[str]) -> str:
+def test_users_dedupes_by_id_even_if_the_directory_repeats_a_person():
+    """#42: a real directory may list one person once per section/group, so
+    ``all_users()`` can repeat an id. ``/users`` must return each id ONCE —
+    duplicate ids become duplicate React keys in the FE picker and break its
+    filtered rendering (stale rows on top, matches appended at the bottom)."""
+
+    class _DupDir(MockUserDirectory):
+        def all_users(self) -> list[User]:
+            return [
+                User("alice", "Alice Chen", "Reflow"),
+                User("alice", "Alice Chen", "SMT"),  # same person, another group
+                User("bob", "Bob Liu", "Etch"),
+                User("alice", "Alice Chen", "AOI"),
+            ]
+
+    app = create_app(
+        spec=make_spec(),
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        users=_DupDir(),
+    )
+    rows = TestClient(app).get("/users").json()
+    ids = [u["id"] for u in rows]
+    assert ids.count("alice") == 1  # the person appears once, not 3×
+    assert sorted(ids) == ["alice", "bob"]
+
+
+def _make_item(c: TestClient, holder: dict[str, str], owner: str, members: list[str]) -> str:
+    holder["id"] = owner  # the new create takes its owner from auth
     return c.post(
-        "/investigation",
-        json={"title": "Reflow drift", "owner": owner, "members": members},
+        "/a/rca/items",
+        json={"title": "Reflow drift", "members": members},
     ).json()["resource_id"]
 
 
 def test_status_change_notifies_owner_and_watchers_not_the_actor():
     holder = {"id": "alice"}
     c = _client(holder)
-    inv = _make_investigation(c, owner="alice", members=["bob"])
+    inv = _make_item(c, holder, owner="alice", members=["bob"])
 
     # carol resolves it → alice (owner) + bob (watcher) get notified; carol doesn't.
     holder["id"] = "carol"
-    assert c.post(f"/investigations/{inv}/close", json={"status": "resolved"}).status_code == 204
+    assert c.post(f"/a/rca/items/{inv}/close", json={"status": "resolved"}).status_code == 204
 
     holder["id"] = "carol"
     assert c.get("/notifications").json() == []  # the actor isn't notified
@@ -81,7 +107,7 @@ def test_status_change_notifies_owner_and_watchers_not_the_actor():
     n = alice_notifs[0]
     assert n["kind"] == "status"
     assert n["actor"] == "carol"
-    assert n["link"] == f"/investigations/{inv}"
+    assert n["link"] == f"/a/rca/{inv}"
     assert "resolved" in n["title"]
     assert n["read"] is False
 
@@ -92,12 +118,13 @@ def test_status_change_notifies_owner_and_watchers_not_the_actor():
 def test_mark_all_read_and_mark_one_read():
     holder = {"id": "alice"}
     c = _client(holder)
-    inv = _make_investigation(c, owner="alice", members=[])
+    inv = _make_item(c, holder, owner="alice", members=[])
     holder["id"] = "bob"
     # bob abandons it twice-worth of state changes → give alice two notifications
-    c.post(f"/investigations/{inv}/close", json={"status": "abandoned"})
-    inv2 = _make_investigation(c, owner="alice", members=[])
-    c.post(f"/investigations/{inv2}/close", json={"status": "resolved"})
+    c.post(f"/a/rca/items/{inv}/close", json={"status": "abandoned"})
+    inv2 = _make_item(c, holder, owner="alice", members=[])
+    holder["id"] = "bob"
+    c.post(f"/a/rca/items/{inv2}/close", json={"status": "resolved"})
 
     holder["id"] = "alice"
     notifs = c.get("/notifications").json()
@@ -122,9 +149,9 @@ def test_mark_all_read_and_mark_one_read():
 def test_mark_read_guards_owner_and_missing():
     holder = {"id": "alice"}
     c = _client(holder)
-    inv = _make_investigation(c, owner="alice", members=[])
+    inv = _make_item(c, holder, owner="alice", members=[])
     holder["id"] = "bob"
-    c.post(f"/investigations/{inv}/close", json={"status": "resolved"})
+    c.post(f"/a/rca/items/{inv}/close", json={"status": "resolved"})
 
     holder["id"] = "alice"
     nid = c.get("/notifications").json()[0]["resource_id"]

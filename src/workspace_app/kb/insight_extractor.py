@@ -31,11 +31,33 @@ from .llm import ILlm
 
 logger = logging.getLogger(__name__)
 
-_VALID_KINDS = {"root_cause", "procedure", "lesson_learned", "false_hypothesis"}
+# The distillation taxonomy. The first four capture FINDINGS; the last
+# three (issue #39 chat-history grilling, 以終為始) capture the useful
+# information a conversation carries beyond findings: domain terminology
+# as actually used, the user's situational context, and the implicit
+# assumptions the discussion leaned on (valuable precisely because
+# they're unverified — future investigations can challenge them).
+_VALID_KINDS = {
+    "root_cause",
+    "procedure",
+    "lesson_learned",
+    "false_hypothesis",
+    "terminology",
+    "context",
+    "assumption",
+}
 
 _DEFAULT_PROMPT = (Path(__file__).parent / "prompts" / "insight_extraction.md").read_text(
     encoding="utf-8"
 )
+
+
+def extraction_prompt(conversation_text: str, *, template: str | None = None) -> str:
+    """The exact prompt one conversation document is extracted with.
+    Public because the replay diagnostics (#51) must rebuild it
+    bit-identically — `str.replace` (not `.format`) so JSON-schema
+    examples in the template don't collide with positional braces."""
+    return (template or _DEFAULT_PROMPT).replace("{conversation}", conversation_text)
 
 
 class InsightExtractor(TransformComponent):
@@ -52,7 +74,10 @@ class InsightExtractor(TransformComponent):
         self,
         *,
         llm: ILlm,
-        max_insights: int = 5,
+        # 8 = the prompt's stated cap (4 finding kinds + 3 distilled-
+        # context kinds need headroom; was 5 when findings were all
+        # there was).
+        max_insights: int = 8,
         prompt_template: str | None = None,
     ) -> None:
         super().__init__(
@@ -64,9 +89,7 @@ class InsightExtractor(TransformComponent):
     def __call__(self, nodes: Sequence[BaseNode], **_kw: Any) -> list[BaseNode]:  # type: ignore[override]
         out: list[BaseNode] = []
         for node in nodes:
-            # `str.replace` (not `.format`) so JSON-schema examples in the
-            # prompt template don't collide with positional braces.
-            prompt = self.prompt_template.replace("{conversation}", node.get_content())
+            prompt = extraction_prompt(node.get_content(), template=self.prompt_template)
             raw = self.llm.collect(prompt)
             insights = _parse_insights(raw, max_n=self.max_insights)
             for seq, insight in enumerate(insights):

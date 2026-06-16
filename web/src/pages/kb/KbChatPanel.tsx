@@ -12,7 +12,9 @@ import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
-import { ReasoningEffortPicker } from "../../components/ReasoningEffortPicker";
+import { ModelEffortPicker } from "../../components/ModelEffortPicker";
+import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
+import { useKbAgentName } from "../../lib/kbAgent";
 import { useKbChat } from "../../hooks/useKbChat";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { formatMetrics, isToolRunning } from "../investigation/agentLog";
@@ -30,17 +32,24 @@ export function KbChatPanel({
 }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState("");
+  // #51 P6: replay diagnostic for one past entry (answer / kb_search).
+  const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
 
   const { data: collections = [] } = useQuery({
     queryKey: qk.kb.collections,
     queryFn: () => client.listCollections(),
   });
-  const { data: agentConfig } = useQuery({
+  // Issue #32: /kb/agent returns an array — one entry per kb_chat
+  // picker row. Suggestions come from the CURRENTLY-CHOSEN entry so
+  // changing models also swaps the empty-state chips.
+  const { data: agents = [] } = useQuery({
     queryKey: qk.kb.agent,
     queryFn: () => client.getAgentConfig(),
     staleTime: Number.POSITIVE_INFINITY,
   });
-  const suggestions = agentConfig?.suggestions ?? [];
+  const [pickedAgent, setPickedAgent] = useKbAgentName();
+  const activeAgent = agents.find((a) => a.name === pickedAgent) ?? agents[0];
+  const suggestions = activeAgent?.suggestions ?? [];
 
   // Default: search every collection — seed the selection once they load.
   const seededRef = useRef(false);
@@ -83,7 +92,22 @@ export function KbChatPanel({
           </p>
         )}
         {log.entries.map((entry, i) => (
-          <EntryView key={i} entry={entry} onOpenCitation={onOpenCitation} />
+          <EntryView
+            key={i}
+            entry={entry}
+            onOpenCitation={onOpenCitation}
+            // #51 P6: same 1:1 entry↔message mapping as the RCA panel;
+            // only for persisted threads (chatId) and never mid-stream.
+            onReplay={
+              chatId != null &&
+              !log.streaming &&
+              (entry.kind === "tool_call" ||
+                (entry.kind === "message" && entry.message.role === "assistant"))
+                ? () =>
+                    setReplayReq({ kind: "turn", source: "kb", threadId: chatId, messageIndex: i })
+                : undefined
+            }
+          />
         ))}
         {log.streaming && !log.metrics && <div className="kb-drawer__searching">working…</div>}
         {log.metrics && (
@@ -116,9 +140,14 @@ export function KbChatPanel({
         {empty && suggestions.length > 0 && (
           <div className="kb-suggestions">
             {suggestions.map((s) => (
-              <button key={s} type="button" className="kb-suggestion" onClick={() => submit(s)}>
+              <button
+                key={s.label}
+                type="button"
+                className="kb-suggestion"
+                onClick={() => submit(s.prompt)}
+              >
                 <Icon name="sparkle" size={11} color="var(--accent)" />
-                {s}
+                {s.label}
               </button>
             ))}
           </div>
@@ -139,7 +168,18 @@ export function KbChatPanel({
           />
           <div className="kb-composer__row">
             <span className="kb-composer__hint">⌘↵ to send</span>
-            <ReasoningEffortPicker />
+            {/* Handoff 3.0: one combined chip replaces the three
+                separate model / depth / effort controls. Model pick
+                stays per-message (sticky), same semantics as before. */}
+            <ModelEffortPicker
+              models={agents}
+              selectedName={pickedAgent}
+              onSelectModel={setPickedAgent}
+              retrieval
+              wikiAvailable={collections.some(
+                (c) => collectionIds.includes(c.resource_id) && c.use_wiki,
+              )}
+            />
             {log.streaming ? (
               <button type="button" className="kb-btn kb-btn--stop" onClick={cancel}>
                 <Icon name="x" size={13} /> Stop
@@ -157,6 +197,7 @@ export function KbChatPanel({
           </div>
         </div>
       </div>
+      {replayReq && <ReplayDialog request={replayReq} onClose={() => setReplayReq(null)} />}
     </div>
   );
 }

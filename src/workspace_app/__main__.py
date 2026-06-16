@@ -1,93 +1,237 @@
 """Default entry point: `uv run python -m workspace_app`.
 
-Thin composition root: read `Settings` from the environment, build each
-Protocol implementation via the `factories.get_*` functions, and wire them into
-`create_app`. To change which implementation backs a seam, set the matching
-env var (see `factories.Settings`) — no code change. To compose differently in
-code, import `workspace_app.factories` (or `create_app`) directly.
+Thin composition root: read `Settings` from config.yaml (+ ${ENV_VAR}
+interpolation), build each Protocol implementation via the
+`factories.get_*` functions, and wire them into `create_app`. To change
+which implementation backs a seam, edit `configs/config.yaml` — no code
+change. To compose differently in code, import `workspace_app.factories`
+(or `create_app`) directly.
 
-Common env vars (all optional; see `factories.Settings` for the full list):
-  SANDBOX_KIND=local|docker|mock      FILESTORE_KIND=memory|specstar
-  KB_EMBED_MODEL=ollama/bge-m3        KB_EMBED_DIM=1024
-  KB_LLM_MODEL=ollama_chat/qwen3:14b  ("" disables multi-query/HyDE/rerank)
-  LLM_BASE_URL / LLM_API_KEY          (chat: RCA agent + KB chat; "" → LiteLLM defaults)
-  KB_EMBED_BASE_URL / KB_EMBED_API_KEY  (embedder endpoint; separate from chat)
-  APP_HOST / APP_PORT
+See `configs/config.example.yaml` for the full schema. Env vars are
+referenced via `${VAR}` inside YAML string values (Q2 of the
+config-refactor grill — the only env override mechanism).
 """
 
 from __future__ import annotations
 
+import argparse
 from datetime import timedelta
+from pathlib import Path
 
 import uvicorn
 
 from workspace_app.api import create_app
+from workspace_app.config.dump import emit_config_dump
+from workspace_app.config.loader import load_with_provenance
 from workspace_app.factories import (
-    Settings,
+    build_message_queue_factory,
+    get_agent_config_catalog,
     get_chat_pipeline,
+    get_check_registry,
     get_code_embedder,
     get_doc_pipeline,
     get_embedder,
     get_filestore,
+    get_infer_modules_run_config,
     get_kb_llm,
+    get_parser_registry,
+    get_replay_service,
     get_runner,
     get_sandbox,
+    get_sanity_llm_factory,
+    get_sanity_models,
     get_spec,
+    get_wiki_endpoint,
 )
 from workspace_app.monitor import SpecstarMonitor
-from workspace_app.rca.tool_packages import PREBUILT_DIR
+from workspace_app.observability.setup import install_llm_logging
+from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
 from workspace_app.tooling.registry import discover_packages
 
 
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """CLI surface — currently just `--config / -c` to point at a
+    specific config.yaml. Kept separate from `main()` so tests can
+    drive it without spinning up uvicorn."""
+    p = argparse.ArgumentParser(
+        prog="workspace_app",
+        description="RCA / KB workspace agent backend.",
+    )
+    p.add_argument(
+        "--config",
+        "-c",
+        type=Path,
+        default=None,
+        help=(
+            "Path to a config.yaml. Falls back to $WORKSPACE_APP_CONFIG, then "
+            "./config.yaml when both are unset."
+        ),
+    )
+    return p.parse_args(argv)
+
+
 def main() -> None:
-    settings = Settings.from_env()
-    spec = get_spec(settings)
+    import os
+    import sys
+
+    args = _parse_args()
+    settings, provenance = load_with_provenance(config_path=args.config)
+    # Tell the operator which config file (if any) was applied — useful
+    # when a setting "isn't taking effect" and it's actually the wrong
+    # file getting read.
+    cfg_env = os.environ.get("WORKSPACE_APP_CONFIG")
+    cfg_default = Path("./config.yaml")
+    if args.config:
+        config_dir = args.config.parent
+        print(f"  config: {args.config}  (--config)")
+    elif cfg_env:
+        config_dir = Path(cfg_env).parent
+        print(f"  config: {cfg_env}  (WORKSPACE_APP_CONFIG)")
+    elif cfg_default.is_file():
+        config_dir = cfg_default.parent
+        print(f"  config: {cfg_default}")
+    else:
+        config_dir = None
+        print("  config: (none; bundled defaults)")
+    # Observability: print the resolved config (provenance-annotated, secrets
+    # masked) and write the full real-value copy next to config.yaml (0600).
+    # Best-effort — never blocks boot.
+    emit_config_dump(settings, provenance, config_dir=config_dir, stream=sys.stdout)
+    # Single current-user seam, threaded into BOTH get_spec (so specstar stamps
+    # `created_by`) and create_app (access layer + KB doc-id minting) so they
+    # never diverge — a divergence silently breaks KB cross-ref links for any
+    # non-default user (#41). Default = the configured single tenant; a real
+    # deploy overrides this with a cookie/JWT reader.
+    get_user_id = lambda: settings.server.default_user  # noqa: E731
+    # Observability feature B: register the faithful LLM call logger into
+    # litellm.callbacks before any LLM call. Best-effort; default-on with the
+    # WORKSPACE_LLM_LOG=0 off-switch.
+    if install_llm_logging(settings) is not None:
+        print(
+            f"  llm log: ON → {settings.observability.llm_log.dir}/ "
+            f"(set WORKSPACE_LLM_LOG=0 to silence)"
+        )
+    else:
+        print("  llm log: off (set WORKSPACE_LLM_LOG=1 or observability.llm_log.enabled: true)")
+    spec = get_spec(settings, get_user_id=get_user_id)
     # Deploy-level provisionable tool packages (#25). discover_packages reads
     # the prebuilt bundles under PREBUILT_DIR (run `scripts/prebuild_tools.py`);
     # a real deployment swaps tool_packages.PACKAGES for its own dict. They're
     # gated per-investigation by the agent config's allowed_tools (colon
     # syntax: `"pkg"` for the whole package, `"pkg:cmd"` for one command), so
     # the tool-demo template is what turns them on.
-    packages = discover_packages(PREBUILT_DIR)
-    # The sandbox mounts the prebuilt dir read-only at /.tools (outside the
+    #
+    # discover_packages is fail-loud as of the May-30 incident: a missing
+    # PREBUILT_DIR or any half-built subdir raises with the offender's path
+    # (silent-skip was the root cause — the agent ran for hours with zero
+    # tool packages and nobody knew). The skip path is the explicit one:
+    # if the deployer cleared PACKAGES they're opting out, no prebuild
+    # required.
+    # #63: `tools.mode: uv-run` is a lightweight DEBUG mode — instead of the
+    # heavy prebuilt bundles, each package runs from its live source via
+    # `uv run`, so editing a tool takes effect immediately. The bundles are
+    # built fresh at startup into a sibling dir and the sandbox is forced
+    # non-isolated (handled in get_sandbox).
+    tools_root = PREBUILT_DIR
+    if PACKAGES and settings.tools.mode == "uv-run":
+        from workspace_app.tooling.prebuild import provision_uvrun
+
+        tools_root = PREBUILT_DIR.parent / f"{PREBUILT_DIR.name}-uvrun"
+        provision_uvrun(PACKAGES, tools_root)
+        packages = discover_packages(tools_root)
+        print(f"  tools: uv-run debug mode (live source via uv run) → {tools_root}")
+    elif PACKAGES:
+        packages = discover_packages(PREBUILT_DIR)
+        missing = set(PACKAGES) - {p.name for p in packages}
+        if missing:
+            raise RuntimeError(
+                f"tool packages declared in PACKAGES but missing from prebuilt: "
+                f"{sorted(missing)}. Rerun `uv run python scripts/prebuild_tools.py`."
+            )
+    else:
+        packages = []
+    # The sandbox mounts the tools dir read-only at /.tools (outside the
     # workspace) — no per-sandbox copy. Only point at it once it's built.
-    tools_dir = PREBUILT_DIR if packages else None
+    tools_dir = tools_root if packages else None
     embedder = get_embedder(settings)
     kb_llm = get_kb_llm(settings)
+    # #56: the wiki agents' model/endpoint resolve from kb.wiki.llm (the
+    # preset-reference pattern), not the old flat runner.wiki_*. Empty
+    # ⇒ create_app's wiki configs keep their in-code default model.
+    wiki_model, wiki_llm_base_url, wiki_llm_api_key = get_wiki_endpoint(settings)
+    # #66: the infer_modules tool's per-step KB depth / reasoning / fan-out.
+    infer_cfg = get_infer_modules_run_config(settings)
     app = create_app(
         spec=spec,
+        get_user_id=get_user_id,
         sandbox=get_sandbox(settings, tools_dir=tools_dir),
         filestore=get_filestore(settings, spec),
         runner=get_runner(settings),
+        agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
         kb_embedder=embedder,
-        # P3.0: code-specialised embedder (`KB_CODE_EMBED_MODEL`); None ⇒ code
-        # collections fall back to the default embedder.
+        # P3.0: code-specialised embedder; None ⇒ code collections fall
+        # back to the default embedder.
         kb_code_embedder=get_code_embedder(settings),
         # P1: LlamaIndex IngestionPipeline replaces the hand-rolled chunker.
         # Tests/offline runs still pass `kb_chunker=` directly to create_app.
         kb_pipeline=get_doc_pipeline(settings, embedder),
+        # Issue #39: custom parsers (kb.parsers) + VLM-backed bundled
+        # parsers (kb.vlm_llm), minus kb.parsers_disabled.
+        kb_parser_registry=get_parser_registry(settings),
+        # Issue #51: LLM sanity checks — fast set blocks boot, full
+        # capability round runs async; FE re-runs via /health/checks.
+        check_registry=get_check_registry(settings),
+        # Issue #51 P4: replay diagnostics (turn / doc) — pure LLM
+        # probes against the live endpoints, no tool execution.
+        replay_service=get_replay_service(settings, kb_llm),
+        # Model-sanity battery (Diagnostics matrix): a live behavioural probe
+        # per configured chat model × reasoning level, on the same ILlm seam
+        # kb_search uses.
+        sanity_llm_factory=get_sanity_llm_factory(settings),
+        sanity_models=get_sanity_models(settings),
         # P2: chat → knowledge insight extraction (None when no KB llm wired).
         kb_chat_pipeline=get_chat_pipeline(settings, embedder, kb_llm),
         kb_llm=kb_llm,
+        kb_retrieval_enhancements=settings.kb.retrieval.enhancements,
         monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
-        root_path=settings.root_path,
-        read_file_max_lines=settings.read_file_max_lines,
-        read_file_max_chars=settings.read_file_max_chars,
-        history_max_messages=settings.history_max_messages,
+        root_path=settings.server.root_path,
+        read_file_max_lines=settings.read_file.max_lines,
+        read_file_max_chars=settings.read_file.max_chars,
+        exec_output_max_chars=settings.exec.output_max_chars,
+        wiki_maintainer_max_turns=settings.kb.wiki.maintainer_max_turns,
+        wiki_reader_max_turns=settings.kb.wiki.reader_max_turns,
+        wiki_model=wiki_model or "",
+        wiki_llm_base_url=wiki_llm_base_url or "",
+        wiki_llm_api_key=wiki_llm_api_key or "",
+        message_queue_factory=build_message_queue_factory(settings),
+        infer_modules_enhancements=infer_cfg.enhancements,
+        infer_modules_reasoning_effort=infer_cfg.reasoning_effort,
+        infer_modules_parallelism=infer_cfg.parallelism,
+        infer_modules_collection=infer_cfg.collection,
+        history_max_messages=settings.history.max_messages,
+        history_max_context_tokens=settings.history.max_context_tokens,
         packages=packages,
-        prebuilt_dir=PREBUILT_DIR if packages else None,
+        # `prebuilt_dir=None` even with packages: the sandbox's `tools_dir`
+        # above already bind-mounts PREBUILT_DIR read-only at /.tools/ inside
+        # the jail (or symlinks it in unjailed mode). `provision_tools` would
+        # then try to `tar xzf ... -C ../.tools/<pkg>` into that read-only
+        # mount and fail with `exit 2`. The bind-mount IS the install — no
+        # tar+extract pass needed. (Provision_tools stays in the codebase
+        # for hypothetical sandboxes without a tools mount, which can pass
+        # prebuilt_dir explicitly.)
+        prebuilt_dir=None,
         # P3.0: background sweeper for code-Collection re-syncs. Disable by
-        # setting SYNC_CHECK_INTERVAL_SEC=0.
+        # setting kb.git.sync_check_interval_sec: 0.
         code_sync_check_interval=(
-            timedelta(seconds=settings.sync_check_interval_sec)
-            if settings.sync_check_interval_sec > 0
+            timedelta(seconds=settings.kb.git.sync_check_interval_sec)
+            if settings.kb.git.sync_check_interval_sec > 0
             else None
         ),
     )
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)
         print(f"  provisioned tool packages (tool-demo template): {names}")
-    uvicorn.run(app, host=settings.host, port=settings.port)
+    uvicorn.run(app, host=settings.server.host, port=settings.server.port)
 
 
 if __name__ == "__main__":

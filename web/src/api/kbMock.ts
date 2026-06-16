@@ -25,6 +25,24 @@ const collections = new Map<string, KbCollection>();
 const documents = new Map<string, KbDocument[]>();
 const docChunks = new Map<string, KbDocChunk[]>();
 const chats = new Map<string, KbChatDetail>();
+// collectionId → (page path → markdown). The LLM wiki, mocked.
+const wikiPages = new Map<string, Map<string, string>>();
+// collectionId → live build status (the "Updating…" UI polls this).
+const wikiStatus = new Map<
+  string,
+  {
+    building: boolean;
+    total: number;
+    done: number;
+    current: string | null;
+    phase: string | null;
+    errors: number;
+    last_error: string | null;
+  }
+>();
+
+/** Path stem (basename without extension) — wiki link target. */
+const stem = (path: string) => (path.split("/").pop() ?? path).replace(/\.[^.]+$/, "");
 
 // Deterministic chunking for the mock: split into ~120-char windows so a small
 // upload yields at least one chunk. Cited counts stay 0 (the mock doesn't feed
@@ -61,10 +79,21 @@ function summarize(chat: KbChatDetail): KbChatSummary {
 
 export const mockKbApi: KbApi = {
   async getAgentConfig() {
-    return {
-      name: "KB Agent",
-      suggestions: ["What does the knowledge base say about this?", "Find related past findings"],
-    };
+    // Issue #32: array of picker entries. Single-entry default in the
+    // mock; tests that need multiple can override mockKbApi.
+    return [
+      {
+        name: "KB Agent",
+        model: "ollama_chat/qwen3:14b",
+        suggestions: [
+          {
+            label: "What does the knowledge base say about this?",
+            prompt: "What does the knowledge base say about this?",
+          },
+          { label: "Find related past findings", prompt: "Find related past findings" },
+        ],
+      },
+    ];
   },
   async listCollections() {
     // Recompute the card aggregates from the collection's documents.
@@ -75,7 +104,7 @@ export const mockKbApi: KbApi = {
       return { ...c, doc_count: docs.length, size, updated_at: updated };
     });
   },
-  async createCollection(name, description = "") {
+  async createCollection(name, description = "", opts) {
     const c: KbCollection = {
       resource_id: nextId("col"),
       name,
@@ -86,6 +115,10 @@ export const mockKbApi: KbApi = {
       size: 0,
       updated_at: Date.now(),
       owner: "me",
+      use_rag: opts?.useRag ?? true,
+      use_wiki: opts?.useWiki ?? false,
+      wiki_maintainer_guidance: "",
+      wiki_reader_guidance: "",
     };
     collections.set(c.resource_id, c);
     return c;
@@ -105,8 +138,21 @@ export const mockKbApi: KbApi = {
       list.map((d) => ({ ...d, status: "ready" })),
     );
   },
-  async listDocuments(collectionId) {
-    return documents.get(collectionId) ?? [];
+  async listDocuments(collectionId, page) {
+    const all = documents.get(collectionId) ?? [];
+    // Mirror the BE sort (most-recent first) so paging looks the same as
+    // production. Use updated_at when present; fall back to insertion order.
+    const sorted = [...all].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+    const offset = page?.offset ?? 0;
+    const limit = page?.limit ?? 50;
+    const items = sorted.slice(offset, offset + limit);
+    return {
+      items,
+      total: sorted.length,
+      offset,
+      limit,
+      has_more: offset + items.length < sorted.length,
+    };
   },
   async uploadDocument(collectionId, file, path) {
     const docPath = path ?? file.name;
@@ -170,6 +216,23 @@ export const mockKbApi: KbApi = {
     );
     docChunks.delete(documentId);
   },
+  async moveDocument(documentId, to) {
+    const collectionId = documentId.split("/")[0] ?? "";
+    const list = documents.get(collectionId) ?? [];
+    const doc = list.find((d) => d.resource_id === documentId);
+    if (!doc) return;
+    // Re-key on the new path, preserving the creator (mock id = col/user/path).
+    const newId = `${collectionId}/${doc.created_by}/${to.replace(/^\/+/, "")}`;
+    documents.set(collectionId, [
+      ...list.filter((d) => d.resource_id !== documentId),
+      { ...doc, resource_id: newId, path: to },
+    ]);
+    const chunks = docChunks.get(documentId);
+    if (chunks) {
+      docChunks.set(newId, chunks);
+      docChunks.delete(documentId);
+    }
+  },
 
   async listChats() {
     return [...chats.values()].map(summarize);
@@ -203,6 +266,71 @@ export const mockKbApi: KbApi = {
     const chat = chats.get(chatId);
     if (!chat) throw new Error(`chat not found: ${chatId}`);
     chat.shared_with = (chat.shared_with ?? []).filter((u) => u !== userId);
+  },
+  async listWikiPages(collectionId) {
+    return { pages: [...(wikiPages.get(collectionId)?.keys() ?? [])].sort() };
+  },
+  async getWikiPage(collectionId, path) {
+    const content = wikiPages.get(collectionId)?.get(path);
+    if (content == null) throw new Error(`no wiki page ${path}`);
+    return { path, content };
+  },
+  async writeWikiPage(collectionId, path, content) {
+    let pages = wikiPages.get(collectionId);
+    if (!pages) {
+      pages = new Map();
+      wikiPages.set(collectionId, pages);
+    }
+    pages.set(path, content);
+  },
+  async moveWikiPage(collectionId, from, to) {
+    const pages = wikiPages.get(collectionId);
+    if (!pages || !pages.has(from)) throw new Error(`no wiki page ${from}`);
+    pages.set(to, pages.get(from) as string);
+    pages.delete(from);
+  },
+  async deleteWikiPage(collectionId, path) {
+    wikiPages.get(collectionId)?.delete(path);
+  },
+  async rebuildWiki(collectionId) {
+    // Synthesize a tiny wiki from the collection's docs so the browser has
+    // something to show: an index linking to one entity page per document.
+    const docs = documents.get(collectionId) ?? [];
+    const pages = new Map<string, string>();
+    pages.set("/WIKI.md", "# Wiki conventions\n");
+    const links = docs.map((d) => `- [[${stem(d.path)}]]`).join("\n");
+    pages.set("/index.md", `# Knowledge wiki\n\n${links}\n`);
+    for (const d of docs) {
+      pages.set(
+        `/entities/${stem(d.path)}.md`,
+        `# ${stem(d.path)}\n\nSynthesized from the source.\n\nSources: ${d.path}\n`,
+      );
+    }
+    wikiPages.set(collectionId, pages);
+    // The mock build completes instantly — report it done.
+    wikiStatus.set(collectionId, {
+      building: false,
+      total: docs.length,
+      done: docs.length,
+      current: null,
+      phase: null,
+      errors: 0,
+      last_error: null,
+    });
+    return { queued: docs.length, status: "rebuilding" };
+  },
+  async getWikiStatus(collectionId) {
+    return (
+      wikiStatus.get(collectionId) ?? {
+        building: false,
+        total: 0,
+        done: 0,
+        current: null,
+        phase: null,
+        errors: 0,
+        last_error: null,
+      }
+    );
   },
   async cancelMessage(_chatId) {
     // No server turn to cancel in the mock; the FE aborts the stream locally.
@@ -267,11 +395,40 @@ function blankUser(content: string): KbChatMessage {
   };
 }
 
+/** Internal — seed a collection's wiki pages for tests. */
+export const _seedWikiMock = (collectionId: string, pages: Record<string, string>) => {
+  wikiPages.set(collectionId, new Map(Object.entries(pages)));
+};
+
+/** Internal — seed a collection's live build status for tests. */
+export const _setWikiStatusMock = (
+  collectionId: string,
+  status: {
+    building: boolean;
+    total: number;
+    done: number;
+    current?: string | null;
+    phase?: string | null;
+    errors?: number;
+    last_error?: string | null;
+  },
+) => {
+  wikiStatus.set(collectionId, {
+    current: null,
+    phase: null,
+    errors: 0,
+    last_error: null,
+    ...status,
+  });
+};
+
 /** Internal — reset between tests. */
 export const _resetKbMock = () => {
   collections.clear();
   documents.clear();
   docChunks.clear();
   chats.clear();
+  wikiPages.clear();
+  wikiStatus.clear();
   seq = 0;
 };

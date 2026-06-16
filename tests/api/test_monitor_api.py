@@ -12,6 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.monitor import IMonitor, InMemoryMonitor
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 
@@ -21,6 +22,7 @@ def _route(app, path: str):
 
 def _app(monitor: IMonitor):
     return create_app(
+        spec=make_spec(),
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
         runner=ScriptedAgentRunner([]),

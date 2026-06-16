@@ -7,9 +7,11 @@
  * import {severityTone, statusTone} or just use the chip.
  */
 
-import type { Severity, Status } from "../api/types";
+import type { ChipTone, Severity, Status } from "../api/types";
 
-export type ChipTone = "err" | "warn" | "ok" | "info" | "muted";
+// ChipTone now lives in api/types (shared with App `field_styles`); re-exported
+// here so existing importers (DiagnosticsPage, DomainField) keep working.
+export type { ChipTone };
 
 export function severityTone(level: Severity): ChipTone {
   switch (level) {
@@ -53,7 +55,7 @@ const TONE_FG: Record<ChipTone, string> = {
   muted: "var(--text-paper-d)",
 };
 
-function chipStyle(tone: ChipTone): React.CSSProperties {
+export function chipStyle(tone: ChipTone): React.CSSProperties {
   return {
     display: "inline-flex",
     alignItems: "center",

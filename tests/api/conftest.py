@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -14,8 +13,24 @@ from workspace_app.api import (
     ToolStart,
     create_app,
 )
+from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
+
+
+def register_rca_item(spec: SpecStar, **fields: object) -> str:
+    """Create a real rca App item directly via the resource manager (no file
+    seeding) and return its id. The workspace routes validate slug→item (#95),
+    so own-client tests use this instead of an arbitrary synthetic id."""
+    data = {"title": "t", "owner": "u", **fields}
+    return (
+        spec.get_resource_manager(RcaInvestigation)
+        .create(
+            RcaInvestigation(**data)  # ty: ignore[missing-argument]
+        )
+        .resource_id
+    )
 
 
 @dataclass
@@ -23,6 +38,12 @@ class Harness:
     client: TestClient
     spec: SpecStar
     filestore: SpecstarFileStore
+    iid: str  # a real rca App item; workspace routes validate slug→item (#95)
+
+    def wpath(self, suffix: str = "") -> str:
+        """Build a workspace route path for this harness's item — the routes
+        nest under /a/{slug}/items/{item_id} (#95). `suffix` starts with '/'."""
+        return f"/a/rca/items/{self.iid}{suffix}"
 
 
 @pytest.fixture
@@ -38,10 +59,17 @@ def scripted_events() -> list[AgentEvent]:
 
 @pytest.fixture
 def harness(scripted_events: list[AgentEvent]) -> Harness:
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec()
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     runner = ScriptedAgentRunner(scripted_events)
     app = create_app(spec=spec, sandbox=sandbox, filestore=filestore, runner=runner)
-    return Harness(client=TestClient(app), spec=spec, filestore=filestore)
+    # A real rca App item so the workspace routes' slug→item validation (#95)
+    # passes. Created via the resource manager (not the seeding endpoint) so the
+    # workspace starts empty — file-listing tests see only what they write.
+    iid = (
+        spec.get_resource_manager(RcaInvestigation)
+        .create(RcaInvestigation(title="t", owner="u"))
+        .resource_id
+    )
+    return Harness(client=TestClient(app), spec=spec, filestore=filestore, iid=iid)

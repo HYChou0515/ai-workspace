@@ -1,0 +1,171 @@
+"""#43 P2: the collaborative turn queue. In a shared investigation, concurrent
+messages must SERIALIZE (one turn at a time on the shared sandbox/files) rather
+than cancel each other, and Stop must interrupt only the running turn — the
+queue keeps draining.
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+from workspace_app.agent import AgentToolContext
+from workspace_app.api import MessageDelta, RunDone
+from workspace_app.api.turns import ChatTurnEngine
+
+
+async def test_enqueue_runs_queued_turns_in_fifo_order_without_cancelling():
+    """Two messages enqueued back-to-back both run, in order, and the first runs
+    to completion — a second message does NOT cancel the first (the key
+    difference from stream()'s cancel-prior)."""
+    order: list[tuple[str, str]] = []
+
+    class _Runner:
+        async def run(self, content, ctx):
+            order.append(("start", content))
+            yield MessageDelta(text=content)
+            yield RunDone()
+            order.append(("end", content))
+
+    engine = ChatTurnEngine(_Runner())
+    results: list[list] = []
+    both_done = asyncio.Event()
+
+    def on_complete(msgs):
+        results.append(msgs)
+        if len(results) == 2:
+            both_done.set()
+
+    engine.enqueue("inv", "a", AgentToolContext(), on_complete=on_complete)
+    engine.enqueue("inv", "b", AgentToolContext(), on_complete=on_complete)
+    await asyncio.wait_for(both_done.wait(), 3)
+    engine.forget("inv")
+
+    # 'a' fully finished before 'b' started — serialized, not cancelled.
+    assert order == [("start", "a"), ("end", "a"), ("start", "b"), ("end", "b")]
+    assert results[0][0].content == "a"
+    assert results[1][0].content == "b"
+
+
+async def test_cancel_current_stops_only_the_running_turn_then_next_runs():
+    """Stop cancels the in-flight turn (persisted with a cancelled marker) and
+    the worker proceeds to the next queued message — one person's Stop doesn't
+    clear everyone's queue."""
+    started_slow = asyncio.Event()
+    results: dict[str, list] = {}
+    fast_done = asyncio.Event()
+
+    class _Runner:
+        async def run(self, content, ctx):
+            if content == "slow":
+                started_slow.set()
+                await asyncio.sleep(30)  # hang until cancelled
+            yield MessageDelta(text=content)
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())
+
+    def oc_slow(msgs):
+        results["slow"] = msgs
+
+    def oc_fast(msgs):
+        results["fast"] = msgs
+        fast_done.set()
+
+    engine.enqueue("inv", "slow", AgentToolContext(), on_complete=oc_slow)
+    engine.enqueue("inv", "fast", AgentToolContext(), on_complete=oc_fast)
+    await asyncio.wait_for(started_slow.wait(), 3)
+    await engine.cancel_current("inv")
+    await asyncio.wait_for(fast_done.wait(), 3)
+    engine.forget("inv")
+
+    # the slow turn was cancelled → a cancelled error marker is persisted
+    assert any(m.role == "error" and m.error_kind == "cancelled" for m in results["slow"])
+    # the next queued turn still ran to completion
+    assert results["fast"][0].content == "fast"
+
+
+async def test_all_subscribers_receive_a_turns_broadcast_events():
+    """#43 broadcast: every viewer subscribed to an investigation sees the SAME
+    live events for a turn, regardless of who sent it."""
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text="hi")
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())
+    sub1 = engine.subscribe("inv")  # registers its queue synchronously
+    sub2 = engine.subscribe("inv")
+
+    async def collect(sub, n):
+        out = []
+        async for ev in sub:
+            out.append(ev)
+            if len(out) >= n:
+                return out
+        return out
+
+    t1 = asyncio.create_task(collect(sub1, 2))
+    t2 = asyncio.create_task(collect(sub2, 2))
+    engine.enqueue("inv", "q", AgentToolContext(), on_complete=lambda m: None)
+    got1, got2 = await asyncio.wait_for(asyncio.gather(t1, t2), 3)
+    engine.forget("inv")
+
+    assert [type(e).__name__ for e in got1] == ["MessageDelta", "RunDone"]
+    assert got1 == got2  # both viewers saw identical events
+
+
+async def test_subscribe_sse_yields_sse_encoded_frames():
+    """subscribe_sse wraps subscribe with SSE encoding so the endpoint is a
+    trivial StreamingResponse wrapper."""
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text="hi")
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())
+    frames = engine.subscribe_sse("inv")
+
+    async def collect(n):
+        out: list[str] = []
+        async for f in frames:
+            out.append(f)
+            if len(out) >= n:
+                return out
+        return out
+
+    task = asyncio.create_task(collect(2))
+    engine.enqueue("inv", "q", AgentToolContext(), on_complete=lambda m: None)
+    got = await asyncio.wait_for(task, 3)
+    engine.forget("inv")
+    assert all(f.startswith("data: ") for f in got)
+    assert '"message_delta"' in got[0]
+
+
+async def test_forget_on_an_unknown_key_is_a_noop():
+    """forget for a key that never enqueued/subscribed (no workspace session)
+    returns cleanly — e.g. closing a KB chat, which uses stream() not the queue."""
+
+    class _Runner:
+        async def run(self, content, ctx):  # pragma: no cover — never invoked
+            yield RunDone()
+
+    ChatTurnEngine(_Runner()).forget("never-touched")
+
+
+async def test_cancel_current_when_idle_is_a_noop():
+    """Stop after a turn already finished (session exists, nothing in flight) is
+    a clean no-op."""
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text="done")
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())
+    finished = asyncio.Event()
+    engine.enqueue("inv", "x", AgentToolContext(), on_complete=lambda m: finished.set())
+    await asyncio.wait_for(finished.wait(), 3)
+    await engine.cancel_current("inv")  # session exists, current_turn is None → no-op
+    engine.forget("inv")

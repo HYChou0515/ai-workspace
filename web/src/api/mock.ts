@@ -9,15 +9,14 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import type {
-  AgentConfigInfo,
   ApiClient,
+  AppItem,
+  AppManifest,
   CellRef,
   CloseStatus,
   Conversation,
   ExecuteCellArgs,
   FileContent,
-  Investigation,
-  InvestigationInput,
   Message,
   NotebookRef,
   SearchMatch,
@@ -81,7 +80,11 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-const investigations: Investigation[] = [
+// #89: the mock dashboard's in-memory items (createAppItem appends here;
+// listAppItems / getAppItem / closeInvestigation read it). Seeded with demo
+// rows so a fresh mock dashboard isn't empty. Typed AppItem — the extra
+// domain fields (severity/status/product/…) ride the index signature.
+const _mockAppItems: AppItem[] = [
   {
     resource_id: "INC-2026-0142",
     title: "Reflow zone-3 drift on MX-7 board",
@@ -281,28 +284,6 @@ const investigations: Investigation[] = [
   },
 ];
 
-const AGENT_SUGGESTIONS = [
-  "Show the SPC analysis",
-  "Run a Pareto of defect modes",
-  "Sketch a fishbone",
-  "Draft a 5-Why",
-  "Draft the report",
-];
-const agentConfigs: AgentConfigInfo[] = [
-  {
-    resource_id: "agent-config:qwen-local",
-    name: "RCA · Qwen3 (local)",
-    model: "ollama_chat/qwen3:14b",
-    suggestions: AGENT_SUGGESTIONS,
-  },
-  {
-    resource_id: "agent-config:claude-opus",
-    name: "RCA · Claude Opus",
-    model: "claude-opus-4-7",
-    suggestions: AGENT_SUGGESTIONS,
-  },
-];
-
 const conversations = new Map<string, Conversation>();
 
 function ensureConversation(id: string): Conversation {
@@ -498,8 +479,17 @@ function recordEvent(investigationId: string, ev: AgentEvent): void {
   }
 }
 
+/* --- #43: per-investigation broadcast pub/sub (mirrors GET .../stream) --- */
+
+const streamSubs = new Map<string, Set<(ev: AgentEvent) => void>>();
+
+function publish(investigationId: string, ev: AgentEvent): void {
+  const subs = streamSubs.get(investigationId);
+  if (!subs) return;
+  for (const fn of [...subs]) fn(ev);
+}
+
 let callCounter = 1;
-let createCounter = 200;
 
 export const mockApi: ApiClient = {
   async getCurrentUser() {
@@ -521,69 +511,124 @@ export const mockApi: ApiClient = {
   },
   async markAllNotificationsRead() {},
   async markNotificationRead() {},
-  async addMention() {},
+  async addMention(_slug: string, ) {},
 
-  async listInvestigations() {
-    await delay(40);
-    return investigations.map((i) => ({ ...i }));
+  async listApps() {
+    await delay(10);
+    return [
+      {
+        slug: "rca",
+        title: "Root Cause Analysis",
+        description: "Structured failure investigations — SPC, Pareto, reports.",
+        icon: "flame",
+        color: "#F0502E",
+      },
+    ];
   },
 
-  async getInvestigation(id) {
-    await delay(30);
-    const hit = investigations.find((i) => i.resource_id === id);
-    if (!hit) throw new Error(`not found: ${id}`);
-    return { ...hit };
-  },
-
-  async createInvestigation(input: InvestigationInput) {
-    await delay(60);
-    const id = `INC-2026-${String(createCounter++).padStart(4, "0")}`;
-    const inv: Investigation = {
-      resource_id: id,
-      created_time: nowIso(),
-      updated_time: nowIso(),
-      title: input.title,
-      owner: "default-user",
-      description: input.description ?? "",
-      severity: input.severity ?? "P2",
-      status: "triaging",
-      product: input.product ?? "",
-      members: [],
-      topics: input.topics ?? [],
-      attached_agent_config_id: null,
+  async getAppManifest(slug: string): Promise<AppManifest> {
+    await delay(10);
+    return {
+      slug,
+      title: "Root Cause Analysis",
+      description: "Structured failure investigations — SPC, Pareto, reports.",
+      icon: "flame",
+      color: "#F0502E",
+      function: { workspace: true, sandbox: true, terminal: true },
+      agent: {
+        picker: [{ preset: "qwen3-local", name: "RCA · Qwen3 (local)" }],
+        suggestions: [{ label: "SPC analysis", prompt: "Show the SPC analysis" }],
+      },
+      item: { noun: "Investigation", noun_plural: "Investigations", create_label: "Start Investigation" },
+      layout: {
+        breadcrumb: ["severity", "status"],
+        statusbar: ["severity", "status", "product"],
+        list: ["severity", "status", "product"],
+        form: ["severity", "status", "product"],
+        default_tabs: ["/SOP.md", "/brief.md"],
+      },
+      lifecycle: { status_field: "status", closing_states: ["resolved", "abandoned"] },
+      labels: { severity: "Severity", status: "Status", product: "Product" },
+      field_styles: {
+        severity: { P0: "err", P1: "err", P2: "warn", P3: "ok", P4: "ok" },
+        status: { triaging: "warn", awaiting_review: "info", resolved: "ok", abandoned: "muted" },
+      },
+      fields: [
+        { name: "title", label: "Title", kind: "text" },
+        { name: "owner", label: "Owner", kind: "text" },
+        { name: "description", label: "Description", kind: "text" },
+        {
+          name: "severity",
+          label: "Severity",
+          kind: "select",
+          options: ["P0", "P1", "P2", "P3", "P4"],
+        },
+        {
+          name: "status",
+          label: "Status",
+          kind: "select",
+          options: ["triaging", "awaiting_review", "resolved", "abandoned"],
+        },
+        { name: "product", label: "Product", kind: "text" },
+      ],
+      default_profile: "default",
+      profiles: [
+        { name: "default", title: "Default", description: "Standard RCA workspace." },
+        { name: "tool-demo", title: "Tool demo", description: "Smoke-test the analysis tools." },
+        { name: "local-lab", title: "Local lab", description: "RCA SOP sandbox." },
+        {
+          name: "smt-reflow-example",
+          title: "SMT reflow (worked example)",
+          description: "A fully-populated worked example.",
+        },
+      ],
+      resource_route: "/rca-investigation",
     };
-    investigations.unshift(inv);
-    return { ...inv };
   },
 
-  async updateInvestigation(id, input) {
-    await delay(40);
-    const hit = investigations.find((i) => i.resource_id === id);
-    if (!hit) throw new Error(`not found: ${id}`);
-    hit.title = input.title;
-    hit.description = input.description ?? "";
-    hit.severity = input.severity ?? "P2";
-    hit.product = input.product ?? "";
-    hit.topics = input.topics ?? [];
-    hit.updated_time = nowIso();
-  },
-
-  async listAgentConfigs() {
+  async listAppItems(_resourceRoute: string): Promise<AppItem[]> {
     await delay(10);
-    return agentConfigs.map((c) => ({ ...c }));
+    return _mockAppItems;
   },
 
-  async attachAgentConfig(investigationId: string, configId: string | null) {
+  async countAppItems(_resourceRoute: string): Promise<number> {
     await delay(10);
-    const hit = investigations.find((i) => i.resource_id === investigationId);
-    if (!hit) throw new Error(`not found: ${investigationId}`);
-    hit.attached_agent_config_id = configId;
-    hit.updated_time = nowIso();
+    return _mockAppItems.length;
   },
 
-  async listTemplates() {
+  async getAppItem(_resourceRoute: string, id: string): Promise<AppItem> {
     await delay(10);
-    return ["default", "smt-reflow-example"];
+    return (
+      _mockAppItems.find((it) => it.resource_id === id) ?? {
+        resource_id: id,
+        title: "Mock item",
+        owner: "default-user",
+        severity: "P2",
+        status: "triaging",
+        product: "",
+      }
+    );
+  },
+
+  async createAppItem(_slug: string, body: Record<string, unknown>) {
+    await delay(10);
+    const resource_id = `rca-investigation/${_mockAppItems.length + 1}`;
+    _mockAppItems.push({
+      resource_id,
+      title: String(body.title ?? ""),
+      owner: "default-user",
+      severity: body.severity ?? "P2",
+      status: "triaging",
+      product: body.product ?? "",
+    });
+    return { resource_id };
+  },
+
+  async updateAppItem(_resourceRoute: string, id: string, data: Record<string, unknown>) {
+    await delay(10);
+    const idx = _mockAppItems.findIndex((it) => it.resource_id === id);
+    if (idx >= 0) _mockAppItems[idx] = { ...(data as AppItem), resource_id: id };
+    return { resource_id: id };
   },
 
   async listActivity() {
@@ -616,7 +661,7 @@ export const mockApi: ApiClient = {
     };
   },
 
-  async listFiles(investigationId, prefix) {
+  async listFiles(_slug: string, investigationId, prefix) {
     await delay(30);
     const tree = files.get(investigationId);
     if (!tree) return [];
@@ -626,13 +671,13 @@ export const mockApi: ApiClient = {
       .sort((a, b) => a.path.localeCompare(b.path));
   },
 
-  async refreshFiles(_investigationId) {
+  async refreshFiles(_slug: string, _investigationId) {
     // Mock has no separate sandbox/snapshot — the in-memory map IS the
     // source of truth. Flushing is a no-op; we just delay a tick.
     await delay(10);
   },
 
-  async readFile(investigationId, path): Promise<FileContent> {
+  async readFile(_slug: string, investigationId, path): Promise<FileContent> {
     await delay(30);
     const f = files.get(investigationId)?.get(path);
     if (!f) throw new Error(`file not found: ${path}`);
@@ -640,7 +685,7 @@ export const mockApi: ApiClient = {
     return { kind: "text", path, size: f.bytes, text: f.text, encoding: "utf-8" };
   },
 
-  async writeFile(investigationId, path, body) {
+  async writeFile(_slug: string, investigationId, path, body) {
     await delay(20);
     if (typeof body === "string") {
       ensureFiles(investigationId).set(path, { text: body, bytes: body.length });
@@ -652,25 +697,68 @@ export const mockApi: ApiClient = {
     for (const d of dirAncestors(path)) ensureDirs(investigationId).add(d);
   },
 
-  async *streamAgentEvents(args: SendMessageArgs) {
+  async *subscribeInvestigation(_slug: string, 
+    id: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    // #43: a local queue fed by `publish` (and drained here). Mirrors the live
+    // long-lived broadcast: every viewer subscribes and sees all turns.
+    const queue: AgentEvent[] = [];
+    let wake: (() => void) | null = null;
+    const push = (ev: AgentEvent) => {
+      queue.push(ev);
+      wake?.();
+    };
+    const subs = streamSubs.get(id) ?? new Set();
+    subs.add(push);
+    streamSubs.set(id, subs);
+
+    const cleanup = () => {
+      subs.delete(push);
+    };
+    try {
+      while (!signal?.aborted) {
+        if (queue.length === 0) {
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+            if (signal) signal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          wake = null;
+        }
+        while (queue.length > 0) {
+          if (signal?.aborted) return;
+          yield queue.shift()!;
+        }
+      }
+    } finally {
+      cleanup();
+    }
+  },
+
+  async sendMessage(args: SendMessageArgs): Promise<void> {
+    // #43: enqueue the turn — record the user message + broadcast it, then run
+    // the script publishing each event onto the shared stream (instead of
+    // yielding). Cancellation now comes via cancelMessage + DELETE, not a signal.
     ensureConversation(args.investigationId).messages.push({
       role: "user",
       author: "default-user",
       content: args.content,
     });
+    publish(args.investigationId, {
+      type: "user_message",
+      author: "default-user",
+      content: args.content,
+      created_at: Date.now(),
+    });
     const script = pickScript(args.content);
     const call = () => `mock-call-${callCounter++}`;
     try {
       for await (const ev of script(call)) {
-        if (args.signal?.aborted) {
-          yield { type: "run_cancelled" } as AgentEvent;
-          return;
-        }
         recordEvent(args.investigationId, ev);
-        yield ev;
+        publish(args.investigationId, ev);
       }
     } catch (err) {
-      yield { type: "error", message: String(err) };
+      publish(args.investigationId, { type: "error", message: String(err) });
     }
   },
 
@@ -685,16 +773,16 @@ export const mockApi: ApiClient = {
     yield { type: "cell_done", execution_count: args.cellIndex + 1 };
   },
 
-  async closeInvestigation(id: string, status: CloseStatus | null) {
+  async closeInvestigation(_slug: string, id: string, status: CloseStatus | null) {
     await delay(20);
-    const hit = investigations.find((i) => i.resource_id === id);
-    if (!hit) throw new Error(`not found: ${id}`);
+    const hit = _mockAppItems.find((i) => i.resource_id === id);
+    if (!hit) return; // already gone / pure-close on an unseeded item — no-op
     // null = pure close: tear the session down, leave status untouched.
     if (status !== null) hit.status = status;
     hit.updated_time = nowIso();
   },
 
-  async mkdir(investigationId: string, path: string) {
+  async mkdir(_slug: string, investigationId: string, path: string) {
     await delay(10);
     if (ensureFiles(investigationId).has(path)) throw new Error(`file exists at ${path}`);
     const ds = ensureDirs(investigationId);
@@ -702,12 +790,12 @@ export const mockApi: ApiClient = {
     for (const d of dirAncestors(path)) ds.add(d);
   },
 
-  async listDirs(investigationId: string) {
+  async listDirs(_slug: string, investigationId: string) {
     await delay(10);
     return [...ensureDirs(investigationId)].sort();
   },
 
-  async deleteFile(investigationId: string, path: string) {
+  async deleteFile(_slug: string, investigationId: string, path: string) {
     await delay(15);
     const ds = ensureDirs(investigationId);
     if (ds.has(path)) {
@@ -721,18 +809,29 @@ export const mockApi: ApiClient = {
     files.get(investigationId)?.delete(path); // file delete leaves dirs intact
   },
 
-  async moveFile(investigationId: string, from: string, to: string) {
+  async moveFile(_slug: string, investigationId: string, from: string, to: string) {
     await delay(15);
     transferMock(investigationId, from, to, false);
   },
 
-  async copyFile(investigationId: string, from: string, to: string) {
+  async copyFile(_slug: string, investigationId: string, from: string, to: string) {
     await delay(15);
     transferMock(investigationId, from, to, true);
   },
 
-  async cancelMessage(_investigationId: string) {
+  async cancelMessage(_slug: string, _investigationId: string) {
     await delay(10);
+  },
+
+  async undoTurns(_slug: string, investigationId: string, turns: number) {
+    await delay(10);
+    const conv = ensureConversation(investigationId);
+    const userIdxs = conv.messages
+      .map((m, i) => (m.role === "user" ? i : -1))
+      .filter((i) => i >= 0);
+    const cut = turns >= userIdxs.length ? 0 : userIdxs[userIdxs.length - turns]!;
+    conv.messages = conv.messages.slice(0, cut);
+    return { message_count: conv.messages.length };
   },
 
   async interruptCell(_ref: CellRef) {
@@ -743,7 +842,7 @@ export const mockApi: ApiClient = {
     await delay(20);
   },
 
-  async searchFiles(investigationId: string, query: string, opts: SearchOptions = {}) {
+  async searchFiles(_slug: string, investigationId: string, query: string, opts: SearchOptions = {}) {
     await delay(20);
     if (!query) return [];
     const re = compileQuery(query, opts);
@@ -759,7 +858,7 @@ export const mockApi: ApiClient = {
     return results;
   },
 
-  async replaceInFiles(
+  async replaceInFiles(_slug: string, 
     investigationId: string,
     query: string,
     replacement: string,
@@ -788,7 +887,7 @@ export const mockApi: ApiClient = {
     return replaced;
   },
 
-  async execShell(_investigationId: string, cmd: string[], _signal?: AbortSignal) {
+  async execShell(_slug: string, _investigationId: string, cmd: string[], _signal?: AbortSignal) {
     await delay(40);
     if (cmd.length === 0) {
       return { exit_code: 2, stdout: "", stderr: "empty command\n" };
@@ -811,4 +910,4 @@ export const mockApi: ApiClient = {
 };
 
 /** Internal — exported for tests only. */
-export const _mockState = { investigations, conversations, files };
+export const _mockState = { items: _mockAppItems, conversations, files };

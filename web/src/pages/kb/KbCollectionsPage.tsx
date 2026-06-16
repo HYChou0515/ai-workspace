@@ -11,16 +11,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
-import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
+import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
 import { UserAvatar } from "../../components/UserChip";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
-import { kindIcon } from "./docKind";
-import { docHref } from "./kbLinks";
+import { KbDocIde } from "./KbDocIde";
 import { NewCollectionModal } from "./NewCollectionModal";
+import { RetrievalToggles, WikiBadge } from "./RetrievalToggles";
+import { WikiBrowser } from "./WikiBrowser";
+
+/** Every type the #39 parser registry ingests (or at least displays):
+ * text/markdown + archives (expanded server-side), documents (pdf /
+ * html / docx / pptx), structured data (json / jsonl / csv / tsv /
+ * xlsx), images (VLM-described; gif/svg display-only), and the code
+ * extensions DispatchSplitter routes through tree-sitter. Keep in sync
+ * with the bundled parsers in `factories.get_parser_registry`. */
+const UPLOAD_ACCEPT = [
+  ".md", ".txt", ".zip", ".tar", ".gz", ".tgz",
+  ".pdf", ".html", ".htm", ".docx", ".pptx",
+  ".json", ".jsonl", ".csv", ".tsv", ".xlsx",
+  ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg",
+  ".py", ".ts", ".tsx", ".js", ".jsx",
+].join(",");
 
 const ICON_OPTIONS: IconName[] = [
   "layers", "file", "folder", "flame", "bug", "check",
@@ -57,7 +72,8 @@ export function KbCollectionsPage({
   const qc = useQueryClient();
   const me = useCurrentUser();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [docQuery, setDocQuery] = useState("");
+  const [collectionTab, setCollectionTab] = useState<"documents" | "wiki">("documents");
+  const [showRetrieval, setShowRetrieval] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("all");
   const [ownerFilter, setOwnerFilter] = useState<string | null>(null);
@@ -85,34 +101,29 @@ export function KbCollectionsPage({
     queryFn: () => client.listCollections(),
   });
 
-  // Reset the open collection's transient UI when switching away.
+  // Reset the open collection's transient UI when switching away. (The doc
+  // tree + editor own their own state inside KbDocIde.)
   useEffect(() => {
-    setDocQuery("");
     setIconOpen(false);
     setEditingName(false);
     setEditingDesc(false);
     setConfirmDel(false);
   }, [selectedId]);
 
-  const { data: documents = [] } = useQuery({
-    queryKey: qk.kb.documents(selectedId ?? "__none__"),
-    queryFn: () => client.listDocuments(selectedId as string),
-    enabled: selectedId != null,
-    refetchInterval: (query) => {
-      const data = query.state.data as KbDocument[] | undefined;
-      return data?.some((d) => d.status === "indexing") ? 1500 : false;
-    },
-  });
-
   const createMut = useMutation({
-    mutationFn: (v: { name: string; description: string }) =>
-      client.createCollection(v.name, v.description),
+    mutationFn: (v: { name: string; description: string; useRag: boolean; useWiki: boolean }) =>
+      client.createCollection(v.name, v.description, { useRag: v.useRag, useWiki: v.useWiki }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });
 
   const updateMut = useMutation({
-    mutationFn: (patch: { name?: string; icon?: string; description?: string }) =>
-      client.updateCollection(selectedId as string, patch),
+    mutationFn: (patch: {
+      name?: string;
+      icon?: string;
+      description?: string;
+      use_rag?: boolean;
+      use_wiki?: boolean;
+    }) => client.updateCollection(selectedId as string, patch),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });
 
@@ -184,13 +195,9 @@ export function KbCollectionsPage({
     if (cq && !c.name.toLowerCase().includes(cq)) return false;
     return true;
   });
-  const q = docQuery.trim().toLowerCase();
-  const shownDocs = q ? documents.filter((d) => d.path.toLowerCase().includes(q)) : documents;
-
   // ---- the full collection page (a collection is open) ----
   if (selected) {
     const isPinned = pinned.has(selected.resource_id);
-    const chunksTotal = documents.reduce((s, d) => s + (d.chunks ?? 0), 0);
     const commitRename = () => {
       const name = nameDraft.trim();
       setEditingName(false);
@@ -204,14 +211,16 @@ export function KbCollectionsPage({
     const stats: [string, string, boolean?][] = [
       ["Documents", String(selected.doc_count)],
       ["Size", fmtBytes(selected.size)],
-      ["Chunks", String(chunksTotal)],
       ["Cited", `${selected.cited}×`, selected.cited > 0],
       ["Owner", selected.owner],
       ["Updated", fmtDate(selected.updated_at)],
     ];
+    // The Wiki tab only exists for collections that build one; otherwise the
+    // page is just the documents table.
+    const effectiveTab = selected.use_wiki && collectionTab === "wiki" ? "wiki" : "documents";
     return (
       <section className="kb-colpage" aria-label="Collection">
-        <input ref={fileRef} type="file" multiple accept=".md,.txt,.zip,.tar,.gz,.tgz" hidden onChange={(e) => upload(e.target.files)} />
+        <input ref={fileRef} type="file" multiple accept={UPLOAD_ACCEPT} hidden onChange={(e) => upload(e.target.files)} />
         <input ref={folderInputRef} type="file" multiple hidden onChange={(e) => upload(e.target.files, true)} />
 
         <button type="button" className="kb-nav__back" onClick={() => setSelectedId(null)}>
@@ -337,7 +346,10 @@ export function KbCollectionsPage({
                   <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setNameDraft(selected.name); setEditingName(true); }}>
                     <Icon name="tag" size={14} color="var(--text-paper-d)" /> Rename
                   </button>
-                  <button type="button" role="menuitem" className="kb-menu__item" disabled={documents.length === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
+                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setShowRetrieval((v) => !v); }}>
+                    <Icon name="layers" size={14} color="var(--text-paper-d)" /> Retrieval modes
+                  </button>
+                  <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
                     <Icon name="refresh" size={14} color="var(--text-paper-d)" /> Re-index all
                   </button>
                   <div className="kb-menu__divider" />
@@ -398,68 +410,79 @@ export function KbCollectionsPage({
           ))}
         </div>
 
-        <div className="kb-colpage__docs">
-          {documents.length === 0 ? (
-            <p className="kb-cols__empty">Upload markdown, text, or an archive to index it.</p>
-          ) : (
-            <>
-              <label className="kb-docsearch">
-                <Icon name="search" size={14} color="var(--text-paper-d)" />
-                <input type="search" placeholder="Search in this collection…" value={docQuery} onChange={(e) => setDocQuery(e.target.value)} />
-              </label>
-              {shownDocs.length === 0 ? (
-                <p className="kb-cols__empty">No documents match “{docQuery}”.</p>
-              ) : (
-                <div className="kb-doctable">
-                  <div className="kb-doctable__head">
-                    <span />
-                    <span className="kb-doctable__h">Name</span>
-                    <span className="kb-doctable__h">Uploaded by</span>
-                    <span className="kb-doctable__h">Updated</span>
-                    <span className="kb-doctable__h kb-doctable__num">Size</span>
-                    <span className="kb-doctable__h kb-doctable__num">Chunks</span>
-                    <span className="kb-doctable__h kb-doctable__num">Cited</span>
-                    <span />
-                  </div>
-                  {shownDocs.map((d) => (
-                    <div key={d.resource_id} className="kb-doctable__row">
-                      <span className="kb-doctable__kind">
-                        <Icon name={kindIcon(d.path)} size={14} color="var(--text-paper-d)" />
-                      </span>
-                      <button type="button" className="kb-doctable__name" onClick={() => onOpenDoc?.(d.resource_id)}>
-                        {d.path}
-                      </button>
-                      <span className="kb-doctable__by" title="Added by">
-                        <UserAvatar userId={d.created_by} size={20} />
-                        {d.created_by}
-                      </span>
-                      <span className="kb-doctable__cell mono">
-                        {typeof d.updated_at === "number" ? fmtDate(d.updated_at) : "—"}
-                      </span>
-                      <span className="kb-doctable__cell mono kb-doctable__num">
-                        {typeof d.size === "number" ? fmtBytes(d.size) : "—"}
-                      </span>
-                      <span className="kb-doctable__cell mono kb-doctable__num">{d.chunks ?? "—"}</span>
-                      <span className={`kb-doctable__cell mono kb-doctable__num${(d.cited ?? 0) > 0 ? " is-hot" : ""}`}>
-                        {d.cited ?? 0}
-                      </span>
-                      <span className="kb-doctable__actions">
-                        {d.status !== "ready" && (
-                          <span className={`kb-status kb-status--${d.status}`}>
-                            {d.status === "indexing" ? "indexing…" : "error"}
-                          </span>
-                        )}
-                        <a className="kb-iconbtn" href={docHref(d.resource_id)} target="_blank" rel="noreferrer" title="Open full view" aria-label={`Open ${d.path} in full view`}>
-                          <Icon name="external" size={13} />
-                        </a>
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </>
-          )}
-        </div>
+        {showRetrieval && (
+          <div
+            style={{
+              margin: "4px 0 8px",
+              padding: 14,
+              border: "1px solid var(--paper-3)",
+              borderRadius: 8,
+              background: "var(--paper-2)",
+            }}
+          >
+            <div
+              style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}
+            >
+              <span className="caps">Retrieval modes</span>
+              <button
+                type="button"
+                className="kb-btn"
+                aria-label="Close retrieval modes"
+                onClick={() => setShowRetrieval(false)}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            </div>
+            <RetrievalToggles
+              docSearch={selected.use_rag}
+              wiki={selected.use_wiki}
+              onChange={({ docSearch, wiki }) => {
+                // Keep at least one mode on (a collection that answers nothing
+                // is a footgun); the toggle that would empty it is a no-op.
+                if (!docSearch && !wiki) return;
+                updateMut.mutate({ use_rag: docSearch, use_wiki: wiki });
+              }}
+            />
+          </div>
+        )}
+
+        {selected.use_wiki && (
+          <div className="kb-tabs" role="tablist" aria-label="Collection view">
+            {(["documents", "wiki"] as const).map((id) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={effectiveTab === id}
+                className={`kb-tab${effectiveTab === id ? " is-active" : ""}`}
+                onClick={() => setCollectionTab(id)}
+              >
+                {id === "documents" ? "Documents" : "Wiki"}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {effectiveTab === "wiki" ? (
+          <div className="kb-colpage__docs">
+            <WikiBrowser
+              collectionId={selected.resource_id}
+              collectionName={selected.name}
+              onOpenDoc={onOpenDoc}
+              client={client}
+              maintainerGuidance={selected.wiki_maintainer_guidance}
+              readerGuidance={selected.wiki_reader_guidance}
+            />
+          </div>
+        ) : (
+          // Documents as a VSCode-shaped tree + editor (#87) — the same shell
+          // the investigation workspace uses, over this collection's docs.
+          // Per-doc chunks / cited / full metadata live in the full-page viewer
+          // (the upload button + reindex menu stay in the page chrome above).
+          <div className="kb-colpage__docs">
+            <KbDocIde collectionId={selected.resource_id} client={client} />
+          </div>
+        )}
       </section>
     );
   }
@@ -561,8 +584,11 @@ export function KbCollectionsPage({
         open={newOpen}
         busy={createMut.isPending}
         onClose={() => setNewOpen(false)}
-        onCreate={(name, description) =>
-          createMut.mutate({ name, description }, { onSuccess: () => setNewOpen(false) })
+        onCreate={(name, description, opts) =>
+          createMut.mutate(
+            { name, description, useRag: opts.useRag, useWiki: opts.useWiki },
+            { onSuccess: () => setNewOpen(false) },
+          )
         }
       />
 
@@ -585,6 +611,7 @@ export function KbCollectionsPage({
                     <Icon name="file" size={10} color="var(--text-paper-d2)" /> {c.doc_count} docs
                   </span>
                   <span className="kb-chip">{fmtBytes(c.size)}</span>
+                  {c.use_wiki && <WikiBadge />}
                   {c.cited > 0 && (
                     <span className="kb-chip kb-chip--accent">
                       <Icon name="quote" size={10} color="var(--accent-h)" /> cited {c.cited}×

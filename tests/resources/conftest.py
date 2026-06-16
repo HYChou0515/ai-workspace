@@ -1,11 +1,10 @@
-from datetime import UTC, datetime
-
 import pytest
 from specstar import SpecStar
+
+from workspace_app.resources import make_spec
 
 
 @pytest.fixture
 def spec_instance() -> SpecStar:
-    s = SpecStar()
-    s.configure(default_user="test-user", default_now=lambda: datetime.now(UTC))
+    s = make_spec(default_user="test-user")
     return s

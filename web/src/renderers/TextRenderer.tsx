@@ -7,7 +7,7 @@
 import { MonacoEditor, monacoLanguage } from "../components/MonacoEditor";
 import { useFileBuffer } from "../hooks/fileBuffer";
 
-export function TextRenderer({ path }: { investigationId: string; path: string }) {
+export function TextRenderer({ path }: { path: string }) {
   const { entry, setText } = useFileBuffer(path);
 
   if (entry.status === "loading") return <Status>Loading {path}…</Status>;

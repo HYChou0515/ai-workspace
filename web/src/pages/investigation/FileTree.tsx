@@ -7,7 +7,7 @@
 
 import { useRef, useState } from "react";
 
-import { api } from "../../api";
+import { type FileCaps, useFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
 import { useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
@@ -31,25 +31,33 @@ const uploadMenuItem: React.CSSProperties = {
 };
 
 export function FileTree({
-  investigationId,
   files,
   dirs = [],
   activePath,
   onOpen,
   onOpenInSplit,
   onChanged,
+  onReindex,
+  decorate,
 }: {
-  investigationId: string;
   files: FileInfo[];
   dirs?: string[];
   activePath: string | null;
   onOpen: OpenFn;
   onOpenInSplit?: (path: string) => void;
   onChanged?: () => void;
+  /** Re-index the given paths (KB doc IDE). Omitted → no "Reindex" menu item
+   * (the investigation workspace + wiki have nothing to re-index). */
+  onReindex?: (paths: string[]) => void;
+  /** Optional trailing badge per file row (e.g. KB indexing / unsaved dot).
+   * Omitted → no badges (the investigation workspace looks unchanged). */
+  decorate?: (path: string) => React.ReactNode;
 }) {
+  const svc = useFileService();
+  const caps = svc.caps;
   const dialog = useDialog();
   const tree = buildFileTree(files, dirs);
-  const collapsed = usePersistentSet(`rca:tree-collapsed:${investigationId}`);
+  const collapsed = usePersistentSet(`rca:tree-collapsed:${svc.scopeId}`);
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
@@ -63,6 +71,10 @@ export function FileTree({
   const [rootDrop, setRootDrop] = useState(false);
   const [uploadMenu, setUploadMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Set by the folder context menu just before it opens the file picker, so the
+  // resulting upload targets that folder regardless of the current selection;
+  // null → the toolbar button, which falls back to the anchored `createDir`.
+  const uploadDirRef = useRef<string | null>(null);
 
   // Where a new file/folder lands: inside the anchored folder, or beside
   // the anchored file, else the root.
@@ -91,7 +103,10 @@ export function FileTree({
 
   const refresh = () => onChanged?.();
 
-  const upload = async (fileList: FileList | null) => {
+  // Upload into `targetDir` ("" = root). Defaults to the anchored folder so the
+  // toolbar button drops files where the rest of the create actions land; the
+  // folder context menu passes an explicit dir.
+  const upload = async (fileList: FileList | null, targetDir: string = createDir) => {
     if (!fileList || fileList.length === 0) return;
     const existing = new Set(files.map((f) => f.path));
     let firstPath: string | null = null;
@@ -102,9 +117,9 @@ export function FileTree({
       }
       // Preserve folder structure when a directory was picked.
       const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
-      const path = `/${rel}`.replace(/\/+/g, "/");
+      const path = `${targetDir}/${rel}`.replace(/\/+/g, "/");
       if (existing.has(path) && !confirm(`${path} exists. Overwrite?`)) continue;
-      await api.writeFile(investigationId, path, f);
+      await svc.writeFile(path, f);
       firstPath ??= path;
     }
     refresh();
@@ -129,7 +144,7 @@ export function FileTree({
       ],
     });
     if (choice !== "replace") return false;
-    await api.deleteFile(investigationId, dest);
+    await svc.deleteFile(dest);
     return true;
   };
 
@@ -142,8 +157,8 @@ export function FileTree({
         const destBase = `${destDir}/${basename(srcPath)}`.replace(/\/+/g, "/");
         if (destBase === srcPath || destBase.startsWith(srcPath + "/")) continue; // into-self
         if (!(await ensureReplaceable(destBase))) continue;
-        if (copy) await api.copyFile(investigationId, srcPath, destBase);
-        else await api.moveFile(investigationId, srcPath, destBase);
+        if (copy) await svc.copyFile(srcPath, destBase);
+        else await svc.moveFile(srcPath, destBase);
       }
       refresh();
       if (!copy && tops.length === 1) {
@@ -177,12 +192,12 @@ export function FileTree({
     try {
       if (!(await ensureReplaceable(path))) return;
       if (c.kind === "file") {
-        await api.writeFile(investigationId, path, "");
+        await svc.writeFile(path, "");
         refresh();
         onOpen(path, { preview: false });
       } else {
         // Real, honest folder — no .keep placeholder.
-        await api.mkdir(investigationId, path);
+        await svc.mkdir(path);
         if (collapsed.has(path)) collapsed.toggle(path);
         refresh();
       }
@@ -198,7 +213,7 @@ export function FileTree({
     if (!name.trim() || next === node.path) return;
     try {
       if (!(await ensureReplaceable(next))) return;
-      await api.moveFile(investigationId, node.path, next);
+      await svc.moveFile(node.path, next);
       refresh();
       if (!node.isDir) onOpen(next, { preview: false });
     } catch (e) {
@@ -225,7 +240,7 @@ export function FileTree({
       ],
     });
     if (choice !== "delete") return;
-    for (const p of tops) await api.deleteFile(investigationId, p);
+    for (const p of tops) await svc.deleteFile(p);
     setSel({ selected: [], anchor: null });
     refresh();
   };
@@ -252,32 +267,37 @@ export function FileTree({
         >
           <Icon name="refresh" size={13} />
         </button>
-        <button
-          type="button"
-          title={createDir ? `New file in ${createDir}/` : "New file"}
-          onClick={() => {
-            if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
-            setCreating({ kind: "file", dir: createDir });
-          }}
-          style={{ color: "var(--text-paper-d)", padding: 2 }}
-        >
-          <Icon name="plus" size={13} />
-        </button>
-        <button
-          type="button"
-          title={createDir ? `New folder in ${createDir}/` : "New folder"}
-          onClick={() => {
-            if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
-            setCreating({ kind: "folder", dir: createDir });
-          }}
-          style={{ color: "var(--text-paper-d)", padding: 2 }}
-        >
-          <Icon name="folder" size={13} />
-        </button>
+        {caps.create && (
+          <button
+            type="button"
+            title={createDir ? `New file in ${createDir}/` : "New file"}
+            onClick={() => {
+              if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
+              setCreating({ kind: "file", dir: createDir });
+            }}
+            style={{ color: "var(--text-paper-d)", padding: 2 }}
+          >
+            <Icon name="plus" size={13} />
+          </button>
+        )}
+        {caps.folders && (
+          <button
+            type="button"
+            title={createDir ? `New folder in ${createDir}/` : "New folder"}
+            onClick={() => {
+              if (createDir && collapsed.has(createDir)) collapsed.toggle(createDir);
+              setCreating({ kind: "folder", dir: createDir });
+            }}
+            style={{ color: "var(--text-paper-d)", padding: 2 }}
+          >
+            <Icon name="folder" size={13} />
+          </button>
+        )}
+        {caps.upload && (
         <div style={{ position: "relative" }}>
           <button
             type="button"
-            title="Upload files or a folder"
+            title={createDir ? `Upload to ${createDir}/` : "Upload files or a folder"}
             onClick={() => setUploadMenu((v) => !v)}
             style={{ color: "var(--text-paper-d)", padding: 2 }}
           >
@@ -327,12 +347,14 @@ export function FileTree({
             </>
           )}
         </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"
           multiple
           onChange={(e) => {
-            void upload(e.target.files);
+            void upload(e.target.files, uploadDirRef.current ?? createDir);
+            uploadDirRef.current = null;
             e.target.value = "";
           }}
           style={{ display: "none" }}
@@ -343,7 +365,8 @@ export function FileTree({
           // @ts-expect-error — non-standard but widely supported folder picker
           webkitdirectory=""
           onChange={(e) => {
-            void upload(e.target.files);
+            void upload(e.target.files, uploadDirRef.current ?? createDir);
+            uploadDirRef.current = null;
             e.target.value = "";
           }}
           style={{ display: "none" }}
@@ -378,7 +401,7 @@ export function FileTree({
         tabIndex={0}
         onKeyDown={(e) => {
           if (sel.selected.length === 0) return;
-          if (e.key === "Delete" || e.key === "Backspace") {
+          if (caps.delete && (e.key === "Delete" || e.key === "Backspace")) {
             e.preventDefault();
             void deletePaths(sel.selected);
           } else if (e.key === "Enter") {
@@ -418,6 +441,8 @@ export function FileTree({
             key={node.path}
             node={node}
             depth={0}
+            caps={caps}
+            decorate={decorate}
             activePath={activePath}
             selectedSet={selectedSet}
             multi={sel.selected.length > 1}
@@ -455,12 +480,19 @@ export function FileTree({
           node={menu.node}
           x={menu.x}
           y={menu.y}
+          caps={caps}
+          multi={selectedSet.has(menu.node.path) && sel.selected.length > 1}
           canSplit={!!onOpenInSplit && !menu.node.isDir}
           onClose={() => setMenu(null)}
           onNewFile={(dir) => setCreating({ kind: "file", dir })}
           onNewFolder={(dir) => setCreating({ kind: "folder", dir })}
+          onUploadHere={(dir, kind) => {
+            uploadDirRef.current = dir;
+            (kind === "folder" ? folderInputRef : fileInputRef).current?.click();
+          }}
           onRename={(n) => setRenaming(n.path)}
           onDelete={(n) => void deletePaths(targetsFor(n.path))}
+          onReindex={onReindex ? (n) => onReindex(targetsFor(n.path)) : undefined}
           onCopyPath={(p) => void navigator.clipboard?.writeText(p)}
           onOpenInSplit={onOpenInSplit}
         />
@@ -525,6 +557,8 @@ type Creating = { kind: "file" | "folder"; dir: string } | null;
 function TreeRow({
   node,
   depth,
+  caps,
+  decorate,
   activePath,
   selectedSet,
   multi,
@@ -545,6 +579,8 @@ function TreeRow({
 }: {
   node: TreeNode;
   depth: number;
+  caps: FileCaps;
+  decorate?: (path: string) => React.ReactNode;
   activePath: string | null;
   selectedSet: Set<string>;
   multi: boolean;
@@ -567,6 +603,8 @@ function TreeRow({
   const isCollapsed = collapsed.has(node.path);
   const [dropOver, setDropOver] = useState(false);
   const [dragging, setDragging] = useState(false);
+  // Drag move/copy only when the service supports relocation (KB v1 doesn't).
+  const canDrag = caps.move || caps.copy;
 
   if (renaming === node.path) {
     return (
@@ -585,7 +623,7 @@ function TreeRow({
       <div>
         <button
           type="button"
-          draggable
+          draggable={canDrag}
           onDragStart={(e) => {
             e.dataTransfer.setData(
               "application/x-rca-file",
@@ -656,6 +694,8 @@ function TreeRow({
                 key={c.path}
                 node={c}
                 depth={depth + 1}
+                caps={caps}
+                decorate={decorate}
                 activePath={activePath}
                 selectedSet={selectedSet}
                 multi={multi}
@@ -686,7 +726,7 @@ function TreeRow({
   return (
     <button
       type="button"
-      draggable
+      draggable={canDrag}
       onDragStart={(e) => {
         e.dataTransfer.setData(
           "application/x-rca-file",
@@ -700,9 +740,11 @@ function TreeRow({
       onDoubleClick={() => onDoubleOpen(node.path)}
       onContextMenu={(e) => onContext(node, e)}
       title={
-        multi && selected
-          ? "Drag to move all selected · Ctrl/⌘ to copy"
-          : "Drag onto a folder to move · Ctrl/⌘-drag to copy · drag into a pane to open there"
+        canDrag
+          ? multi && selected
+            ? "Drag to move all selected · Ctrl/⌘ to copy"
+            : "Drag onto a folder to move · Ctrl/⌘-drag to copy · drag into a pane to open there"
+          : basename(node.path)
       }
       style={{
         display: "flex",
@@ -720,9 +762,17 @@ function TreeRow({
       }}
     >
       <Icon name="file" size={13} color="var(--text-paper-d)" />
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+      <span
+        style={{
+          flex: 1,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+        }}
+      >
         {basename(node.path)}
       </span>
+      {decorate?.(node.path)}
     </button>
   );
 }
@@ -731,24 +781,34 @@ function TreeContextMenu({
   node,
   x,
   y,
+  caps,
+  multi,
   canSplit,
   onClose,
   onNewFile,
   onNewFolder,
+  onUploadHere,
   onRename,
   onDelete,
+  onReindex,
   onCopyPath,
   onOpenInSplit,
 }: {
   node: TreeNode;
   x: number;
   y: number;
+  caps: FileCaps;
+  /** The right-clicked node is part of a multi-selection (>1) — only show
+   * actions that act on the whole selection (#98). */
+  multi: boolean;
   canSplit: boolean;
   onClose: () => void;
   onNewFile: (dir: string) => void;
   onNewFolder: (dir: string) => void;
+  onUploadHere: (dir: string, kind: "file" | "folder") => void;
   onRename: (n: TreeNode) => void;
   onDelete: (n: TreeNode) => void;
+  onReindex?: (n: TreeNode) => void;
   onCopyPath: (p: string) => void;
   onOpenInSplit?: (p: string) => void;
 }) {
@@ -777,14 +837,25 @@ function TreeContextMenu({
     </button>
   );
   const sep = <div style={{ height: 1, background: "var(--paper-3)", margin: "4px 0" }} />;
+  // Keep the menu on-screen: when the click is near the bottom / right edge,
+  // anchor from the opposite side so it opens upward / leftward instead of
+  // running off the viewport (#99). A generous estimate is fine — flipping a
+  // touch early just opens the menu above/left of the cursor.
+  const EST_H = 300;
+  const EST_W = 200;
+  const vstyle: React.CSSProperties =
+    y + EST_H > window.innerHeight ? { bottom: window.innerHeight - y } : { top: y };
+  const hstyle: React.CSSProperties =
+    x + EST_W > window.innerWidth ? { right: window.innerWidth - x } : { left: x };
   return (
     <>
       <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 80 }} />
       <div
+        data-testid="tree-context-menu"
         style={{
           position: "fixed",
-          top: y,
-          left: x,
+          ...vstyle,
+          ...hstyle,
           zIndex: 81,
           minWidth: 190,
           background: "var(--white)",
@@ -794,14 +865,41 @@ function TreeContextMenu({
           padding: "4px 0",
         }}
       >
-        {!node.isDir && canSplit && onOpenInSplit && item("Open to the side", () => onOpenInSplit(node.path))}
-        {item("New file…", () => onNewFile(dir))}
-        {item("New folder…", () => onNewFolder(dir))}
-        {sep}
-        {item("Rename…", () => onRename(node))}
-        {item("Delete", () => onDelete(node))}
-        {sep}
-        {item("Copy path", () => onCopyPath(node.path))}
+        {/* A multi-selection only exposes actions that span the whole
+            selection — single-target ops (rename, new, copy path, open-to-side)
+            would be ambiguous, so they're hidden (#98). */}
+        {multi ? (
+          <>
+            {onReindex && item("Reindex", () => onReindex(node))}
+            {caps.delete && item("Delete", () => onDelete(node))}
+          </>
+        ) : (
+          /* Groups (create · mutate · copy) gated by caps; seps only between two
+             non-empty groups, so KB (delete-only) shows no stray rules. */
+          (() => {
+          const topGroup =
+            (!node.isDir && canSplit && !!onOpenInSplit) ||
+            caps.create ||
+            caps.folders ||
+            caps.upload;
+          const mutateGroup = caps.move || caps.delete || !!onReindex;
+          return (
+            <>
+              {!node.isDir && canSplit && onOpenInSplit && item("Open to the side", () => onOpenInSplit(node.path))}
+              {caps.create && item("New file…", () => onNewFile(dir))}
+              {caps.folders && item("New folder…", () => onNewFolder(dir))}
+              {caps.upload && item("Upload files here…", () => onUploadHere(dir, "file"))}
+              {caps.upload && item("Upload folder here…", () => onUploadHere(dir, "folder"))}
+              {topGroup && mutateGroup && sep}
+              {onReindex && item("Reindex", () => onReindex(node))}
+              {caps.move && item("Rename…", () => onRename(node))}
+              {caps.delete && item("Delete", () => onDelete(node))}
+              {(topGroup || mutateGroup) && sep}
+              {item("Copy path", () => onCopyPath(node.path))}
+            </>
+          );
+          })()
+        )}
       </div>
     </>
   );

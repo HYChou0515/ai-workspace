@@ -1,18 +1,14 @@
 """root_path belongs on the FastAPI app (so the OpenAPI/servers + generated
 URLs respect a reverse-proxy mount), not just on uvicorn.run."""
 
-from datetime import UTC, datetime
-
-from specstar import SpecStar
-
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 
 def _app(**kw):
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec()
     return create_app(
         spec=spec,
         sandbox=MockSandbox(),

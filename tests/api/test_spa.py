@@ -1,20 +1,19 @@
 """SPA history fallback — refreshing a client-side route like
-/investigations/{id} must serve index.html, not a 404.
+/a/{slug}/items/{id} must serve index.html, not a 404.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi.testclient import TestClient
-from specstar import SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 
@@ -28,8 +27,7 @@ def _client(tmp_path: Path) -> TestClient:
     (tmp_path / "index.html").write_text("<!doctype html><div id=root>RCA SPA</div>")
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets" / "app.js").write_text("console.log('app')")
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
@@ -48,7 +46,7 @@ def test_root_serves_index(tmp_path: Path):
 
 def test_deep_client_route_falls_back_to_index(tmp_path: Path):
     """Refreshing a client route boots the SPA (index.html), not a 404."""
-    resp = _client(tmp_path).get("/investigations/investigation:abc-123")
+    resp = _client(tmp_path).get("/a/rca/items/abc-123")
     assert resp.status_code == 200
     assert "RCA SPA" in resp.text
 
@@ -64,7 +62,7 @@ def test_index_is_served_no_cache(tmp_path: Path):
     references are picked up — both at `/` and via the history fallback."""
     client = _client(tmp_path)
     assert client.get("/").headers.get("cache-control") == "no-cache"
-    fallback = client.get("/investigations/investigation:abc-123")
+    fallback = client.get("/a/rca/items/abc-123")
     assert fallback.headers.get("cache-control") == "no-cache"
 
 
@@ -76,12 +74,12 @@ def test_hashed_asset_is_not_no_cache(tmp_path: Path):
 
 def test_unknown_api_route_still_404s_json(tmp_path: Path):
     """API misses keep their JSON 404 — only non-API paths fall back."""
-    resp = _client(tmp_path).get("/investigation/does-not-exist")
+    resp = _client(tmp_path).get("/rca-investigation/does-not-exist")
     assert resp.status_code == 404
 
 
 def test_non_get_to_spa_path_is_not_rewritten(tmp_path: Path):
     """Only 404s fall back to index.html — other static errors (e.g. a
     405 for a non-GET method) propagate unchanged."""
-    resp = _client(tmp_path).post("/investigations/abc")
+    resp = _client(tmp_path).post("/a/rca/items/abc")
     assert resp.status_code == 405

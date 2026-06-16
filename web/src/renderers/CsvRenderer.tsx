@@ -13,7 +13,7 @@ import { TextRenderer } from "./TextRenderer";
 
 const MAX_ROWS = 500; // preview cap — the byte editor (Edit) shows the whole file
 
-export function CsvRenderer({ investigationId, path }: { investigationId: string; path: string }) {
+export function CsvRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
   const { entry } = useFileBuffer(path);
   const editing = isEditing(path);
@@ -21,7 +21,7 @@ export function CsvRenderer({ investigationId, path }: { investigationId: string
   const text = entry.status === "ready" ? entry.text : "";
   const rows = useMemo(() => parseCsv(text), [text]);
 
-  if (editing) return <TextRenderer investigationId={investigationId} path={path} />;
+  if (editing) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
   }

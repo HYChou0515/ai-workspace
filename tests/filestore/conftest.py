@@ -1,13 +1,10 @@
-from datetime import UTC, datetime
-
 import pytest
-from specstar import SpecStar
 
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 
 
 @pytest.fixture
 def store() -> SpecstarFileStore:
-    spec = SpecStar()
-    spec.configure(default_user="test-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="test-user")
     return SpecstarFileStore(spec)

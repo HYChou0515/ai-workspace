@@ -22,9 +22,18 @@ import { UserChip } from "./UserChip";
 export function EntryView({
   entry,
   onOpenCitation,
+  onReplay,
+  onUndo,
 }: {
   entry: AgentEntry;
   onOpenCitation?: (c: MessageCitation) => void;
+  /** #51 P6: re-run this step (assistant answer / tool decision)
+   * against the current model as a diagnostic — provided by surfaces
+   * that know the persisted thread position; absent → no affordance. */
+  onReplay?: () => void;
+  /** #38: undo this user turn and everything after it — provided only
+   * for user messages by surfaces that support undo; absent → none. */
+  onUndo?: () => void;
 }) {
   if (entry.kind === "banner") {
     return (
@@ -42,12 +51,70 @@ export function EntryView({
     );
   }
   if (entry.kind === "tool_call") {
-    return <ToolCallCard call={entry.call} />;
+    return <ToolCallCard call={entry.call} onOpenCitation={onOpenCitation} onReplay={onReplay} />;
   }
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
   }
-  return <MessageBlock message={entry.message} onOpenCitation={onOpenCitation} />;
+  return (
+    <MessageBlock
+      message={entry.message}
+      onOpenCitation={onOpenCitation}
+      onReplay={onReplay}
+      onUndo={onUndo}
+    />
+  );
+}
+
+/** Subtle per-entry trigger for the replay diagnostic (#51 P6). */
+function ReplayButton({ onReplay }: { onReplay: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Replay this step with the current AI"
+      title="Replay this step with the current AI"
+      onClick={(e) => {
+        // Inside a <summary>: don't toggle the tool card open/closed.
+        e.preventDefault();
+        e.stopPropagation();
+        onReplay();
+      }}
+      style={{
+        border: "none",
+        background: "none",
+        padding: 2,
+        cursor: "pointer",
+        color: "var(--text-paper-d2)",
+        display: "inline-flex",
+        alignItems: "center",
+      }}
+    >
+      <Icon name="refresh" size={11} />
+    </button>
+  );
+}
+
+/** Per-turn "undo to here" trigger on a user message (#38). */
+function UndoButton({ onUndo }: { onUndo: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Undo this turn and everything after it"
+      title="Undo this turn and everything after it"
+      onClick={onUndo}
+      style={{
+        border: "none",
+        background: "none",
+        padding: 2,
+        cursor: "pointer",
+        color: "var(--text-paper-d2)",
+        display: "inline-flex",
+        alignItems: "center",
+      }}
+    >
+      <Icon name="undo" size={12} />
+    </button>
+  );
 }
 
 function MentionLine({ by, users, note }: { by: string; users: string[]; note: string }) {
@@ -82,9 +149,13 @@ function MentionLine({ by, users, note }: { by: string; users: string[]; note: s
 function MessageBlock({
   message,
   onOpenCitation,
+  onReplay,
+  onUndo,
 }: {
   message: Message;
   onOpenCitation?: (c: MessageCitation) => void;
+  onReplay?: () => void;
+  onUndo?: () => void;
 }) {
   if (message.role === "user") {
     return (
@@ -116,6 +187,12 @@ function MessageBlock({
             {(message.author ?? "U").slice(0, 2).toUpperCase()}
           </span>
           <span>{message.author ?? "user"}</span>
+          {onUndo && (
+            <>
+              <span style={{ flex: 1 }} />
+              <UndoButton onUndo={onUndo} />
+            </>
+          )}
         </div>
         <div
           style={{
@@ -161,6 +238,7 @@ function MessageBlock({
             <RcaMark size={14} color="var(--text-dark)" dot="var(--accent)" />
           </span>
           <span>{message.author ?? "Agent"}</span>
+          {onReplay && <ReplayButton onReplay={onReplay} />}
         </div>
         {message.reasoning && <ReasoningBlock text={message.reasoning} />}
         <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
@@ -173,7 +251,7 @@ function MessageBlock({
             <div className="kb-cites__label">Sources</div>
             {message.citations.map((c) => (
               <button
-                key={c.marker}
+                key={`${c.marker}:${c.document_id}#${c.start}`}
                 type="button"
                 className="kb-cite"
                 onClick={() => onOpenCitation?.(c)}
@@ -235,7 +313,15 @@ function ReasoningBlock({ text }: { text: string }) {
   );
 }
 
-function ToolCallCard({ call }: { call: ToolCallView }) {
+function ToolCallCard({
+  call,
+  onOpenCitation,
+  onReplay,
+}: {
+  call: ToolCallView;
+  onOpenCitation?: (c: MessageCitation) => void;
+  onReplay?: () => void;
+}) {
   // While running, show whatever stdout has streamed so far; once done, the
   // final formatted output supersedes it. Auto-expand a streaming tool.
   const body = call.status === "done" ? call.output : (call.liveOutput ?? call.output);
@@ -278,6 +364,7 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
             · {streamingLive ? "streaming…" : "result"}
           </span>
         )}
+        {onReplay && <ReplayButton onReplay={onReplay} />}
       </summary>
       {call.parseError && (
         <div style={{ color: "var(--warn)", fontSize: 11, marginTop: 4 }}>
@@ -298,6 +385,30 @@ function ToolCallCard({ call }: { call: ToolCallView }) {
         >
           {body}
         </pre>
+      )}
+      {call.citations && call.citations.length > 0 && (
+        // Reference cards under an ask_knowledge_base tool card — same
+        // visual treatment as the assistant-answer Sources block on the
+        // KB chat. Clicking opens the source document (when the parent
+        // wires `onOpenCitation`); no-op otherwise.
+        <div className="kb-cites" style={{ marginTop: 6 }}>
+          <div className="kb-cites__label">Sources</div>
+          {call.citations.map((c) => (
+            <button
+              key={c.marker}
+              type="button"
+              className="kb-cite"
+              onClick={() => onOpenCitation?.(c)}
+            >
+              <span className="kb-cite__marker">[{c.marker}]</span>
+              <span className="kb-cite__body">
+                <span className="kb-cite__file">{c.filename}</span>
+                <span className="kb-cite__snippet">{c.snippet}</span>
+              </span>
+              <Icon name="arrow_r" size={12} color="var(--text-paper-d2)" />
+            </button>
+          ))}
+        </div>
       )}
     </details>
   );

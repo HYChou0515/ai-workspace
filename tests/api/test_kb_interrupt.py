@@ -7,10 +7,8 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 from httpx import ASGITransport, AsyncClient
-from specstar import SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import RunDone, ToolStart, create_app
@@ -18,6 +16,7 @@ from workspace_app.api.events import AgentEvent
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
 
@@ -37,8 +36,7 @@ class _BlockingRunner:
 
 
 def _app(runner: _BlockingRunner):
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     return create_app(
         spec=spec,
         sandbox=MockSandbox(),

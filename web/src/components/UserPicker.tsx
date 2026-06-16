@@ -25,11 +25,19 @@ export function UserPicker({
   const sel = new Set(selected);
   const ex = new Set(exclude);
   const needle = q.trim().toLowerCase();
-  const shown = users.filter(
-    (u) =>
-      !ex.has(u.id) &&
-      (needle === "" || u.name.toLowerCase().includes(needle) || u.id.toLowerCase().includes(needle)),
-  );
+  // Search across every identity surface a person typing into the picker
+  // might use: display name, stable id (what's persisted on records and
+  // shown on chips), email (typing the local part before `@` is common
+  // when the user is looking at someone's signature), and section (for
+  // "everyone in Reflow"). Lazy `.toLowerCase()` is fine — directory has
+  // a few hundred entries at most.
+  const matches = (u: { id: string; name: string; section: string; email: string }) =>
+    needle === "" ||
+    u.name.toLowerCase().includes(needle) ||
+    u.id.toLowerCase().includes(needle) ||
+    u.email.toLowerCase().includes(needle) ||
+    u.section.toLowerCase().includes(needle);
+  const shown = users.filter((u) => !ex.has(u.id) && matches(u));
 
   return (
     <div style={{ minWidth: 240 }}>
@@ -61,7 +69,10 @@ export function UserPicker({
               <UserAvatar userId={u.id} size={22} />
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ fontWeight: 500 }}>{u.name}</span>{" "}
-                <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>{u.section}</span>
+                <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>
+                  {u.id}
+                  {u.section ? ` · ${u.section}` : ""}
+                </span>
               </span>
               {sel.has(u.id) && <Icon name="check" size={14} color="var(--accent)" />}
             </button>

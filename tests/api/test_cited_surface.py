@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 from specstar import QB, SpecStar
@@ -16,6 +15,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.cited import record_citations
 from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM, Citation, DocChunk
 from workspace_app.sandbox.mock import MockSandbox
 
@@ -27,8 +27,7 @@ class _Runner:
 
 
 def _app() -> tuple[TestClient, SpecStar]:
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec()
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
@@ -45,12 +44,15 @@ def test_cited_counts_surface_on_collections_documents_and_chunks():
     cid = c.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
     files = {"file": ("guide.md", b"# Guide\none two three four five", "text/markdown")}
     docid = c.post(f"/kb/collections/{cid}/documents", files=files).json()["document_ids"][0]
+    c.app.state.index_coordinator.wait_idle()  # #82: indexing runs on the queue — drain it
 
     # before any citation
     doc = next(
-        d for d in c.get(f"/kb/collections/{cid}/documents").json() if d["resource_id"] == docid
+        d
+        for d in c.get(f"/kb/collections/{cid}/documents").json()["items"]
+        if d["resource_id"] == docid
     )
-    assert doc["chunks"] >= 1  # indexed (TestClient runs the bg task)
+    assert doc["chunks"] >= 1  # indexed (drained above)
     assert doc["cited"] == 0
     assert next(x for x in c.get("/kb/collections").json() if x["resource_id"] == cid)["cited"] == 0
 
@@ -84,7 +86,9 @@ def test_cited_counts_surface_on_collections_documents_and_chunks():
     # after: the count surfaces at collection, doc, and chunk level
     assert next(x for x in c.get("/kb/collections").json() if x["resource_id"] == cid)["cited"] == 1
     doc = next(
-        d for d in c.get(f"/kb/collections/{cid}/documents").json() if d["resource_id"] == docid
+        d
+        for d in c.get(f"/kb/collections/{cid}/documents").json()["items"]
+        if d["resource_id"] == docid
     )
     assert doc["cited"] == 1
 
@@ -101,7 +105,9 @@ def test_documents_carry_byte_size_and_update_time():
     docid = c.post(f"/kb/collections/{cid}/documents", files=files).json()["document_ids"][0]
 
     doc = next(
-        d for d in c.get(f"/kb/collections/{cid}/documents").json() if d["resource_id"] == docid
+        d
+        for d in c.get(f"/kb/collections/{cid}/documents").json()["items"]
+        if d["resource_id"] == docid
     )
     # specstar computes the blob size on store — surfaced verbatim (bytes)
     assert doc["size"] == len(body)

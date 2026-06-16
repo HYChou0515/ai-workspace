@@ -1,0 +1,357 @@
+# config.example.yaml
+# Copy to `config.yaml` (gitignored) and tweak. Bundled defaults already
+# work for a fresh deploy: local sandbox, in-memory filestore, Qwen3
+# via Ollama, 3 RCA picker entries, KB chat wired with `kb_search`.
+# Uncomment + override only what you want to change.
+#
+# Override mechanisms (in order of preference):
+#
+#   1. Edit this file. Layered merge — write only the delta, the rest
+#      stays at bundled defaults.
+#   2. Use ${ENV_VAR} or $ENV_VAR inside any string value. Substituted
+#      at load time. Use this for secrets (api_key examples below).
+#      Unset env var = loud raise at deploy startup (no silent empty).
+#   3. WORKSPACE_APP_CONFIG=/path/to/your.yaml redirects the lookup.
+#
+# Strict validation runs at startup:
+#   - unknown YAML key → raise (typo defence)
+#   - broken preset reference (workspace_chat / kb_chat / infer_modules / kb.retrieval_llm / kb.wiki.llm) → raise
+#   - missing prompt_file target → raise
+#   - unset ${ENV_VAR} → raise
+#   - `agents.kb_chat` resolves WITHOUT `kb_search` in allowed_tools → raise
+#     (catches "kb_chat pointed at an RCA preset without overrides" footgun)
+#   - `kb.retrieval_llm` with missing `preset` → raise (use `null` to disable)
+
+# ─── server ─────────────────────────────────────────────────────────
+# server:
+#   default_user: default-user
+#   host: 127.0.0.1
+#   port: 8000
+#   root_path: ""              # external sub-path behind a stripping proxy
+
+# ─── sandbox (agent execution environment) ──────────────────────────
+# sandbox:
+#   kind: local                # local | docker | mock
+#   root: null                 # null = tmpdir per sandbox
+#   exec_timeout: 60.0         # TOTAL wall-clock cap per command; 0 = no cap
+#   log_timeout: 60.0          # IDLE cap (#70): kill if no stdout/stderr output
+#                              # for this long (assumed hung); 0 = disabled.
+#                              # Long jobs: set exec_timeout: 0 + a log_timeout.
+#   isolate: null              # null = auto-detect userns
+
+# ─── tools (how RCA tool packages are provisioned) ──────────────────
+# tools:
+#   mode: prebuilt             # prebuilt | uv-run
+#   # prebuilt: the self-contained bundles from scripts/prebuild_tools.py
+#   #   (own python + venv), dropped read-only into the sandbox.
+#   # uv-run: DEBUG mode — run each package straight from its live source
+#   #   via `uv run`, so editing a tool takes effect on the next call with
+#   #   no rebuild and no copied python. Needs uv on the host and forces a
+#   #   non-isolated sandbox (set sandbox.isolate: false / leave it null).
+
+# ─── filestore ──────────────────────────────────────────────────────
+# filestore:
+#   kind: memory               # memory | specstar
+#   pg_dsn: ${SPECSTAR_PG_DSN} # secret → env
+#   disk_root: ./data/specstar
+
+# ─── runner (RCA agent loop) ────────────────────────────────────────
+# runner:
+#   max_retries: 2
+#   max_turns: 10
+#   # NOTE: the wiki agents' model + step budgets moved OUT of `runner`
+#   # (the old `runner.wiki_model` / `wiki_*_max_turns`) into `kb.wiki`
+#   # (issue #56), so they follow the same preset-reference pattern as
+#   # every other LLM. A stale `runner.wiki_*` now fails validation loud.
+
+# ─── message queue (issue #58/#59/#82: durable background job queues) ──
+# Two background queues — wiki maintenance (#59) AND KB indexing (#82,
+# chunk+embed off the request path) — share ONE backend, selected here.
+# Jobs survive restarts, dedup re-uploads, serialize per collection, and
+# — crucially — span pods.
+#   - simple  : jobs are specstar resources on the shared backend, so
+#               every pod consumes the same queue. Multipod works with
+#               ZERO extra infra (it rides the same shared backend the
+#               specstar filestore already requires). The default.
+#   - rabbitmq: broker-backed, for higher throughput. The knobs below are
+#               all OPTIONAL — unset ones keep specstar's defaults (shown).
+# message_queue:
+#   kind: simple                  # simple | rabbitmq
+#   # rabbitmq:
+#   #   url: ${RABBITMQ_URL}       # e.g. amqp://guest:guest@host:5672/
+#   #   queue_prefix: "specstar:"  # namespace queues on a shared broker
+#   #   max_retries: 3             # redelivery attempts for a failed job
+#   #   retry_delay_seconds: 10    # wait between redeliveries
+#   #   heartbeat_seconds: 600     # AMQP heartbeat — RAISE if slow index
+#   #                              # jobs run longer than this (else reaped)
+
+# ─── observability ──────────────────────────────────────────────────
+# Two startup observability aids:
+#   1. Resolved-config dump — ALWAYS ON (no knob). On boot the fully
+#      resolved config is printed (provenance-annotated, secrets masked)
+#      and written to `<this dir>/config.resolved.yaml` (real values,
+#      chmod 0600). Diff it against this file to see what defaulted.
+#   2. LLM call log — one faithful, replayable record per outbound
+#      litellm call (full messages + tools + params + the assembled
+#      response). Ships ENABLED; the env var `WORKSPACE_LLM_LOG=0`
+#      silences it without editing config (the prod off-switch).
+#      Generative calls get a full JSON record under `<dir>/<date>/`;
+#      embeddings/rerank get a one-line index summary. Delete a day with
+#      `rm -rf logs/llm/<date>`. The per-call file's `request` block is
+#      exactly `litellm.completion(**request)` kwargs — copy-paste it, or
+#      run the dropped `logs/llm/replay.py <file>`, to re-fire the call.
+# observability:
+#   llm_log:
+#     enabled: true             # WORKSPACE_LLM_LOG=0 overrides to off
+#     dir: logs/llm             # log root (relative → run's cwd)
+#     keep_days: 0              # 0 = keep all (manual prune)
+
+# ─── chat LLM endpoint (fallback for any preset that omits llm.*) ──
+# Per-preset `llm.base_url` / `llm.api_key` (under agents.presets.*)
+# win over this. Empty = LiteLLM's provider env defaults.
+# llm:
+#   base_url: ""
+#   api_key: ${LLM_API_KEY}
+
+# ─── read_file caps (sandbox tool) ──────────────────────────────────
+# read_file:
+#   max_lines: 2000
+#   max_chars: 200000
+
+# ─── exec / tool output cap (issue #44) ─────────────────────────────
+# A tool command (e.g. `grep` over a big file) whose stdout+stderr
+# exceeds this is truncated head+tail with a notice, so one call can't
+# flood the model's context. Smaller than read_file's cap because tool
+# outputs accumulate across turns.
+# exec:
+#   output_max_chars: 30000
+
+# ─── cross-turn memory (chat history replay) ────────────────────────
+# `max_context_tokens` (issue #45): after the message-count window,
+# oldest items are dropped until the estimated tokens (~chars/4) fit, so
+# huge tool outputs can't overflow the context within max_messages. 0
+# disables the token budget. Default sized for the bundled local qwen3
+# (~32K ctx); raise it for big-context hosted models.
+# history:
+#   max_messages: 40
+#   max_context_tokens: 24000
+
+# ─── KB subsystem ───────────────────────────────────────────────────
+# kb:
+#   embedder:
+#     model: ollama/bge-m3                  # change → re-index event
+#     query_prefix: ""
+#     doc_prefix: ""
+#     timeout: 60.0
+#     num_retries: 2
+#     batch_size: 64
+#     base_url: ""
+#     api_key: ${KB_EMBED_API_KEY}
+#   chunker:
+#     max_tokens: 256
+#     overlap: 32
+#   retrieval_llm:                          # usage-entry reference for kb_search multi-query / HyDE / rerank
+#     preset: kb-retrieval                  # ← bundled LLM-only preset (no prompt/tools)
+#     # model: openai/gpt-4o-mini           # ← optional: override the preset's model inline
+#     # llm:                                # ← optional: per-call endpoint creds
+#     #   base_url: ""                      #     empty → preset.llm.* → top-level llm.* → None
+#     #   api_key: ${OPENAI_API_KEY}        #     REQUIRED if model is OpenAI/hosted and neither
+#     #                                     #     preset.llm.* nor top-level llm.* carry it
+#     # reasoning_effort: none              # ← none|low|medium|high; thinking for kb_search's
+#     #                                     #   multi-query/HyDE/rerank calls. `none` → Ollama
+#     #                                     #   think=False (qwen3 stops <think>ing on every
+#     #                                     #   expansion = faster); omit = model default.
+#   # retrieval_llm: null                   # ← off switch: multi-query / HyDE / rerank disabled
+#   retrieval:                              # retriever behaviour (separate from retrieval_llm)
+#     enhancements:                         # each knob has {default, max}
+#       expand: { default: 1, max: 3 }      # int — alt query phrasings; 0 = off
+#       hyde:   { default: 0, max: 1 }      # int — hypothetical-doc probes; 0 = off
+#       rerank: { default: true, max: true } # bool — max=false forces off
+# # Resolution: LLM tool args > caller (context) > default; clamped to max.
+# # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
+# # when recall trumps latency. Setting max below default is fine — `min(...)`
+# # clamps the default down too.
+#   code_embedder:
+#     model: ""                             # "" disables P3.0 code-specialised embed
+#     query_prefix: ""
+#     doc_prefix: ""
+#     base_url: ""
+#     api_key: ${KB_CODE_EMBED_API_KEY}
+#   git:
+#     default_token: ${GIT_DEFAULT_TOKEN}   # PAT for self-hosted gitlab
+#     sync_check_interval_sec: 300
+#   vlm_llm:                                # issue #39: VLM for image / PDF visual pages / slides
+#     preset: kb-vlm                        # ← bundled LLM-only preset (qwen2.5-vl via Ollama)
+#     # model: openai/gpt-4o                # ← optional inline override (hosted vision model)
+#   # vlm_llm: null                         # ← off switch: image uploads store with zero chunks
+#   #                                       #   until a VLM is configured + the doc is reindexed
+#   wiki:                                   # issue #56: the LLM wiki (maintainer / reader / merge)
+#     llm:                                  # ← which model drives the wiki agents. SAME preset-ref
+#       preset: wiki-default                #   shape as retrieval_llm / vlm_llm. The agents own
+#       # model: openai/gpt-5.5             #   their prompts + tools in code — this names only the
+#       # llm:                              #   model + endpoint. NOTE: the bundled local qwen3:14b
+#       #   api_key: ${OPENAI_API_KEY}      #   narrates instead of calling write_file (the
+#     maintainer_max_turns: 40              #   agent-wiki-* health probe flags this) — point it at
+#     reader_max_turns: 24                  #   a stronger tool-calling model. Reuse an existing
+#                                           #   hosted preset to avoid restating the creds.
+#   # wiki:                                 # ← off switch: `wiki.llm: null` disables wiki
+#   #   llm: null                           #   maintenance on ingest + the KB-chat wiki route
+#                                           #   (migration from the removed `runner.wiki_*`:
+#                                           #    set kb.wiki.llm to a preset; the step budgets
+#                                           #    moved here from runner too).
+#   parsers: []                             # issue #39: custom in-house IParser dotted paths,
+#                                           #   e.g. ["my.pkg.DoclingParser"] — registered at the
+#                                           #   HEAD of the registry, run ALONGSIDE bundled ones
+#   parsers_disabled: []                    # bundled parser class names to skip — replacement =
+#                                           #   register custom + disable bundled, e.g.
+#                                           #   parsers: ["my.pkg.DoclingParser"]
+#                                           #   parsers_disabled: ["PdfParser"]
+
+# ─── agents (named presets + the picker / KB-chat that reference them) ──
+#
+# Mental model:
+#
+#   - `presets`: a library of LLM backends. Each preset bundles a model,
+#     a system prompt, an LLM endpoint (base_url + api_key), and optionally
+#     a baseline allowed_tools / suggestions / sandbox image.
+#   - `workspace_chat[]`: the FE RCA picker. Order matters — the FIRST
+#     entry is the default that new investigations auto-attach to and
+#     the FE picker highlights from the first paint. Each entry just
+#     references a preset; you can override any preset field here.
+#   - `kb_chat`: the KB chat surface. Same shape as a workspace_chat
+#     entry. MUST resolve to `allowed_tools` containing `kb_search` —
+#     the catalog refuses to start otherwise (without that tool, the
+#     KB sub-agent can't search collections and silently degrades to
+#     "I can't access the KB" natural-language refusals).
+#
+# Bundled defaults ship 8 presets and the standard wiring:
+#
+#   presets:
+#     qwen3-local:           { model: ollama_chat/qwen3:14b,  prompt: pkg:.../rca/prompts/system.md }
+#     claude-opus:           { model: claude-opus-4-7,        prompt: pkg:.../rca/prompts/system.md }
+#     openai-mini:           { model: openai/gpt-4o-mini,     prompt: pkg:.../rca/prompts/system.md }
+#     kb-default:            { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/system.md,
+#                              allowed_tools: [kb_search] }
+#     kb-claude:             { model: claude-opus-4-7,        prompt: pkg:.../kb/prompts/system.md,
+#                              allowed_tools: [kb_search] }
+#     kb-openai:             { model: openai/gpt-4o-mini,     prompt: pkg:.../kb/prompts/system.md,
+#                              allowed_tools: [kb_search] }
+#     infer-modules-default: { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/infer_modules.md,
+#                              allowed_tools: [kb_search] }
+#     kb-retrieval:          { model: ollama_chat/qwen3:14b }   # LLM-only — no prompt/tools
+#     kb-vlm:                { model: ollama_chat/qwen2.5vl:7b } # LLM-only — vision (issue #39)
+#     wiki-default:          { model: ollama_chat/qwen3:14b }   # LLM-only — wiki agents (issue #56)
+#   workspace_chat:
+#     - { preset: qwen3-local, name: "RCA · Qwen3 (local)" }   # default
+#     - { preset: claude-opus, name: "RCA · Claude Opus"  }
+#     - { preset: openai-mini, name: "RCA · GPT-4o-mini"  }
+#   kb_chat:
+#     - { preset: kb-default, name: "KB · Qwen3 (local)" }     # default
+#     - { preset: kb-claude,  name: "KB · Claude Opus"  }
+#     - { preset: kb-openai,  name: "KB · GPT-4o-mini"  }
+#   infer_modules:                                              # issue #66
+#     # The infer_modules tool classifies EVERY process step (one KB-backed
+#     # sub-agent call per UNIQUE step, run in parallel — ~1500 steps seen).
+#     # Beyond the model preset, the first entry carries the per-step config:
+#     - preset: infer-modules-default
+#       reasoning_effort: medium        # low | medium | high (sub-agent effort)
+#       parallelism: 16                 # how many steps classify concurrently
+#       collection: fab-process-docs    # KB collection NAME to search for
+#                                       # module naming. Omit → search ALL
+#                                       # collections. Resolved once per turn;
+#                                       # a name that matches nothing errors
+#                                       # loudly (typo guard).
+#       # KB query depth, CLAMPED by kb.retrieval.enhancements max. DEFAULT IS
+#       # OFF (expand/hyde/rerank 0/false): classifying one step name is a
+#       # focused lookup, and multi-query/rerank × ~1500 steps explodes into
+#       # thousands of extra retrieval-LLM calls. Only raise if you really need
+#       # it. NOTE: real concurrency also needs the LLM endpoint to allow it
+#       # (e.g. Ollama: OLLAMA_NUM_PARALLEL>1), else requests serialize there.
+#       enhancements: { expand: 0, hyde: 0, rerank: false }
+#   kb.retrieval_llm: { preset: kb-retrieval }
+#
+# `allowed_tools` is TRI-STATE:
+#   - omitted (None)  → runner exposes the default workspace toolset
+#                       (exec, read_file, ..., ask_knowledge_base, ...,
+#                       plus every provisioned package command). Bundled
+#                       RCA presets use this so picking one gives the
+#                       standard agent.
+#   - `[]` empty list → runner exposes NO tools (explicit lockdown).
+#   - `[a, b, c]`     → exactly those.
+#
+# Resolve cascade on every turn:
+#   backend = catalog.get(attached_name) OR catalog.default()
+#   template_raw = load_template_config(investigation.template_profile)
+#   final.model / prompt / llm = backend's
+#   final.allowed_tools / suggestions = template's if specified, else backend's
+# So the picker (which LLM) and the template's `_config.json` (which
+# tools) compose orthogonally — pick GPT for a local-lab investigation
+# and you still get rca-tools/ask_knowledge_base/etc.
+
+# ─── Example 1: keep bundled Qwen + Claude + GPT picker, just add a tuned preset ─
+#
+# agents:
+#   presets:
+#     local-tuned:
+#       model: ollama_chat/qwen3:14b
+#       prompt_file: prompts/local-tuned.md   # relative → THIS file's dir
+#       suggestions: [draft the report, run a 5-Why]
+#   workspace_chat:
+#     - { preset: qwen3-local, name: "RCA · Qwen3 (local)" }   # still default
+#     - { preset: local-tuned, name: "RCA · Local tuned" }
+#     - { preset: claude-opus, name: "RCA · Claude Opus" }
+#     - { preset: openai-mini, name: "RCA · GPT-4o-mini" }
+
+# ─── Example 2: deploy where EVERYTHING runs on OpenAI ────────────────
+#
+# Override JUST the model + endpoint on the bundled presets (prompts,
+# kb_search, suggestions all inherit). KB chat then auto-uses kb-default
+# (with OpenAI), so no `kb_chat:` block needed.
+#
+# agents:
+#   presets:
+#     qwen3-local:                         # repurpose as "OpenAI default"
+#       model: openai/gpt-4o-mini
+#       llm: { api_key: ${OPENAI_API_KEY} }
+#     kb-default:                          # KB stays kb-default, just on OpenAI
+#       model: openai/gpt-4o-mini
+#       llm: { api_key: ${OPENAI_API_KEY} }
+#   workspace_chat:
+#     - { preset: qwen3-local, name: "RCA · GPT-4o-mini" }     # default
+
+# ─── Example 3: kb_chat behind a non-default preset (must add kb_search) ──
+#
+# `kb_chat` is a LIST (issue #32) — each entry shows up in the FE
+# picker, first is the default. If you point an entry at a preset that
+# ISN'T `kb-default`, you must add `allowed_tools: [kb_search]`
+# somewhere along the merge chain (on the preset OR as a usage-level
+# override) — otherwise catalog startup raises with the path-to-fix.
+#
+# agents:
+#   presets:
+#     hosted-claude:
+#       model: claude-opus-4-7
+#       prompt_file: pkg:workspace_app.kb.prompts/system.md
+#       llm: { api_key: ${ANTHROPIC_API_KEY} }
+#       allowed_tools: [kb_search]                 # ← required for kb_chat
+#   kb_chat:
+#     - { preset: hosted-claude, name: "KB · Claude" }     # default
+#     - { preset: kb-default,    name: "KB · Qwen (local)" }
+
+# ─── Example 4: KB chat model picker (issue #32) ────────────────────
+#
+# Multiple `kb_chat[]` entries → the FE composer shows a model
+# dropdown. Each entry is the same usage-dict shape as workspace_chat
+# (preset reference + any override). The legacy single-dict form
+# (`kb_chat: { preset: x }`) is still accepted at load — wrapped into
+# a single-entry list — so existing operator configs keep working.
+#
+# agents:
+#   kb_chat:
+#     - { preset: kb-default,    name: "KB · Qwen (local)" }   # default
+#     - { preset: hosted-claude, name: "KB · Claude" }
+
+# ─── prompt_file value forms ────────────────────────────────────────
+#   pkg:<dotted-package>/<file.md>   bundled (ships with the wheel)
+#   /absolute/path.md                absolute filesystem path
+#   relative/path.md                 relative to THIS file's directory

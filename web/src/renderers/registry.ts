@@ -14,7 +14,6 @@
 import type { ComponentType } from "react";
 
 import { CsvRenderer } from "./CsvRenderer";
-import { FishboneRenderer } from "./fishbone/FishboneRenderer";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { ImageRenderer } from "./ImageRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -22,7 +21,7 @@ import { NotebookRenderer } from "./notebook/NotebookRenderer";
 import { ReportRenderer } from "./report/ReportRenderer";
 import { TextRenderer } from "./TextRenderer";
 
-export type RendererProps = { investigationId: string; path: string };
+export type RendererProps = { path: string };
 
 export type RendererDef = {
   key: string;
@@ -40,16 +39,19 @@ const ext =
     exts.includes(path.toLowerCase().split(".").pop() ?? "");
 
 export const RENDERERS: RendererDef[] = [
-  // Report version files (/report.v*.md) get a dedicated renderer, not generic md.
+  // Report version files (basename `report.v*.md`) get a dedicated renderer,
+  // not generic md. Matches anywhere in the workspace (root or step folder),
+  // so the by-step organisation that the local-lab prompt recommends doesn't
+  // demote the report to generic markdown. Same anchoring as `reportVersions`
+  // in `report/versions.ts` — keep them in sync.
   {
     key: "report",
-    match: (p) => /^\/?report\.v\d+\.md$/.test(p),
+    match: (p) => /(?:^|\/)report\.v\d+\.md$/i.test(p),
     Component: ReportRenderer,
     outline: true,
   },
   { key: "markdown", match: ext("md", "markdown"), Component: MarkdownRenderer, editToggle: true, outline: true },
   { key: "notebook", match: ext("ipynb"), Component: NotebookRenderer },
-  { key: "fishbone", match: ext("canvas"), Component: FishboneRenderer },
   { key: "csv", match: ext("csv", "tsv"), Component: CsvRenderer, editToggle: true },
   { key: "html", match: ext("html", "htm"), Component: HtmlRenderer, editToggle: true },
   {

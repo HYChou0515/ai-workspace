@@ -18,7 +18,16 @@ export function parseKbDocHref(href: string): string | null {
   if (!href.startsWith(KB_DOC_PREFIX)) return null;
   const rest = href.slice(KB_DOC_PREFIX.length);
   const id = rest.split("#", 1)[0];
-  return id.length > 0 ? id : null;
+  if (!id) return null;
+  // The markdown renderer percent-encodes the non-ASCII ∕ (U+2215) the doc id
+  // uses as its separator, so the href arrives as `…%E2%88%95…`. Decode it back
+  // to the RAW id — every consumer (docPath route, renderDocument) re-encodes
+  // exactly once, so returning the encoded form here double-encodes → 404.
+  try {
+    return decodeURIComponent(id);
+  } catch {
+    return id; // malformed escape — hand back what we have
+  }
 }
 
 /**

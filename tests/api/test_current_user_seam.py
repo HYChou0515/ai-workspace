@@ -1,39 +1,42 @@
-"""The current-user seam is single-sourced: create_app makes specstar stamp
-created_by with the SAME get_user_id used for access checks, so a request's
-owner can never diverge from who the access layer thinks they are.
+"""The current-user seam is single-sourced: the SAME get_user_id
+callable threads into both `make_spec(default_user=...)` (so specstar
+stamps created_by per request) and `create_app(get_user_id=...)` (so
+access checks read the same identity). A request's owner can never
+diverge from who the access layer thinks they are.
 
-Regression: real deploys inject a dynamic current user (e.g. read from a
-cookie) via get_user_id, while factories.get_spec configures specstar with a
-*static* default_user. Without unification a user is stamped owner=default-user
-on everything they create, then 403s when fetching their own resource.
+Regression: real deploys inject a dynamic current user (e.g. read from
+a cookie). If `make_spec` is called with a static default_user but
+`create_app` gets a dynamic callable, the user is stamped
+owner=default-user on everything they create, then 403s when fetching
+their own resource. The fix is the same callable in both places —
+production wiring does this via `factories.get_spec(settings,
+get_user_id=...)` which forwards into `make_spec`.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from fastapi.testclient import TestClient
-from specstar import SpecStar
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
 
 
 def _client(holder: dict[str, str]) -> TestClient:
-    """Production-shaped wiring: the passed-in spec is configured with a STATIC
-    default_user (as get_spec does), and get_user_id is dynamic (the cookie)."""
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    """Production-shaped wiring: ONE `get_user_id` callable goes into
+    both make_spec (created_by stamping) and create_app (access checks)."""
+    get_user_id = lambda: holder["id"]  # noqa: E731
+    spec = make_spec(default_user=get_user_id)
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
         runner=ScriptedAgentRunner([]),
-        get_user_id=lambda: holder["id"],
+        get_user_id=get_user_id,
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
     )

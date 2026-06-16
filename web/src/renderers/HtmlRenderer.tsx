@@ -7,11 +7,11 @@ import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { TextRenderer } from "./TextRenderer";
 
-export function HtmlRenderer({ investigationId, path }: { investigationId: string; path: string }) {
+export function HtmlRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
   const { entry } = useFileBuffer(path);
 
-  if (isEditing(path)) return <TextRenderer investigationId={investigationId} path={path} />;
+  if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
   }

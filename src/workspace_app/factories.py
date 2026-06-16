@@ -1,196 +1,174 @@
-"""Composition root — `Settings` + `get_*(settings) -> Protocol` factories.
+"""Composition root — nested `Settings` + `get_*(settings) -> Protocol` factories.
 
 The single place that decides *which* implementation backs each Protocol seam
 (sandbox / filestore / runner / embedder / chunker / KB llm) + the specstar data
 layer. Everything downstream (`create_app` and the app internals) depends only
 on the Protocols, never on a concrete implementation or on `Settings`.
 
-`__main__` reads `Settings.from_env()` and wires the factories into
-`create_app`. Tests inject mocks/scripted impls directly and do NOT go through
-these factories — the factories serve the production composition only.
+`__main__` reads `load_settings()` and wires the factories into `create_app`.
+Tests inject mocks/scripted impls directly and do NOT go through these
+factories — the factories serve the production composition only.
+
+The `Settings` itself is the nested dataclass defined in `config.schema`
+(re-exported here for backward compat of `from workspace_app.factories
+import Settings`). The legacy flat `Settings.from_env(...)` is gone — use
+`config.loader.load(config_path=..., env=...)` (re-exported as
+`load_settings`).
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
-from specstar import SpecStar
+from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
 
+from workspace_app.resources import make_spec
+
+from .agent.config_catalog import AgentConfigCatalog
 from .api.litellm_runner import LitellmAgentRunner
 from .api.runner import AgentRunner
+from .apps.catalog import AppCatalog, validate_all_apps
+from .config.catalog_build import build_catalog
+from .config.loader import load as load_settings
+from .config.schema import RetrievalLlmRef, Settings
 from .filestore.memory import MemoryFileStore
 from .filestore.protocol import FileStore
 from .filestore.specstar_impl import SpecstarFileStore
 from .kb.chunker import Chunker, FixedTokenChunker
 from .kb.embedder import Embedder, HashEmbedder, LitellmEmbedder
 from .kb.llm import ILlm, LitellmLlm
-from .rca.agent import default_rca_agent_config
+from .kb.retriever import Enhancements
 from .resources.kb import CODE_EMBED_DIM, EMBED_DIM
 from .sandbox.local_process import LocalProcessSandbox
 from .sandbox.mock import MockSandbox
 from .sandbox.protocol import Sandbox
 
+__all__ = [
+    "Settings",
+    "load_settings",
+    "get_spec",
+    "get_sandbox",
+    "get_filestore",
+    "get_runner",
+    "get_agent_config_catalog",
+    "get_app_catalog",
+    "get_embedder",
+    "get_code_embedder",
+    "get_chunker",
+    "get_doc_pipeline",
+    "get_chat_pipeline",
+    "get_kb_llm",
+    "get_kb_vlm",
+    "get_wiki_endpoint",
+    "get_infer_modules_run_config",
+    "InferModulesRunConfig",
+    "get_check_registry",
+    "build_message_queue_factory",
+]
 
-def _flag(value: str | None) -> bool | None:
-    """Tri-state: unset → None (auto-detect); set → truthy parse."""
-    if value is None:
-        return None
-    return value.strip().lower() in {"1", "true", "yes", "on"}
 
+def build_message_queue_factory(settings: Settings):  # -> IMessageQueueFactory
+    """The job-queue backend shared by the durable background queues — wiki
+    maintenance (#58/#59) AND KB indexing (#82) — selected by
+    ``settings.message_queue.kind``:
 
-@dataclass(frozen=True)
-class Settings:
-    """All deployment knobs, read from the environment in one place."""
+    - ``simple`` — jobs are specstar resources on the shared backend, so
+      every pod consumes the same queue (multipod with zero extra infra).
+    - ``rabbitmq`` — broker-backed, for higher throughput; all the
+      production knobs (prefix / retry policy / heartbeat) are threaded
+      through from ``settings.message_queue.rabbitmq``.
 
-    default_user: str = "default-user"
-    host: str = "127.0.0.1"
-    port: int = 8000
-    # External sub-path when behind a path-stripping proxy (e.g. "/my-svc/rca").
-    # Only affects generated URLs (OpenAPI/docs); the SPA's own base path is a
-    # build-time setting (VITE_BASE_PATH). Default "" = served at root.
-    root_path: str = ""
+    Construction does NOT open a connection (the RabbitMQ factory only
+    records the config), so this is safe to call at startup."""
+    mq = settings.message_queue
+    if mq.kind == "simple":
+        from specstar.message_queue import SimpleMessageQueueFactory
 
-    # sandbox (execution environment)
-    sandbox_kind: str = "local"  # local | docker | mock
-    sandbox_root: str | None = None
-    exec_timeout: float = 60.0
-    sandbox_isolate: bool | None = None  # None = auto-detect userns
+        return SimpleMessageQueueFactory()
+    if mq.kind == "rabbitmq":
+        from specstar.message_queue import RabbitMQMessageQueueFactory
 
-    # file store
-    filestore_kind: str = "memory"  # memory | specstar
-
-    # agent runner (model + prompt come per-investigation from AgentConfig)
-    runner_max_retries: int = 2
-    runner_max_turns: int = 10
-
-    # Chat LLM endpoint, shared by the RCA agent runner + the KB chat llm. Empty
-    # → None → LiteLLM's own provider env / Ollama defaults (unchanged). The
-    # model string's provider prefix still picks the provider; base_url just
-    # overrides its host (e.g. `openai/<model>` + a hosted OpenAI-compatible
-    # endpoint). The embedder has its OWN pair below — they don't share, so chat
-    # can go hosted while embeddings stay on local Ollama.
-    llm_base_url: str = ""
-    llm_api_key: str = ""
-
-    # read_file caps — a read past either is truncated with a notice (the agent
-    # pages with offset/limit). Defaults sized for a large-context model; tighten
-    # for a small local model. chars ≈ tokens × 4.
-    read_file_max_lines: int = 2000
-    read_file_max_chars: int = 200_000
-
-    # Cross-turn memory: how many prior user/assistant messages to replay as the
-    # agent's input each turn (windowed; generous for a large-context model).
-    history_max_messages: int = 40
-
-    # KB embedder ("" → offline HashEmbedder). dim is EMBED_DIM (import-time;
-    # the DocChunk Vector width), never a separate knob — they must agree.
-    # Default is bge-m3 (1024-dim, == EMBED_DIM): a strong multilingual embedder
-    # that's commonly pulled. To use another model `ollama pull` it first and set
-    # KB_EMBED_MODEL (+ KB_EMBED_DIM to its width) — a missing model 404s and the
-    # doc lands in `error`.
-    kb_embed_model: str = "ollama/bge-m3"
-    kb_query_prefix: str = ""
-    kb_doc_prefix: str = ""
-    # Embedding HTTP resilience: a big doc's chunks are sent in batches, each
-    # with a timeout + retries (a slow/loaded model can otherwise hang/time out).
-    kb_embed_timeout: float = 60.0
-    kb_embed_num_retries: int = 2
-    kb_embed_batch_size: int = 64
-    # Embedder endpoint (separate from the chat LLM above). Empty → None →
-    # current Ollama/env behavior.
-    kb_embed_base_url: str = ""
-    kb_embed_api_key: str = ""
-
-    # KB chunker
-    kb_chunk_max_tokens: int = 256
-    kb_chunk_overlap: int = 32
-
-    # KB retrieval LLM ("" → None, disables multi-query / HyDE / rerank)
-    kb_llm_model: str = "ollama_chat/qwen3:14b"
-
-    # P3.0 code-specialised embedder. Empty → None → code collections fall back
-    # to the default embedder (still routes through CodeSplitter, just no
-    # specialised code semantics). Width is CODE_EMBED_DIM (the
-    # DocChunk.embedding_alt Vector column size) — they must agree.
-    kb_code_embed_model: str = ""
-    kb_code_query_prefix: str = ""
-    kb_code_doc_prefix: str = ""
-    kb_code_embed_base_url: str = ""
-    kb_code_embed_api_key: str = ""
-
-    # P3.0 git-clone defaults. Per-Collection overrides win; these are
-    # fallbacks (e.g. a corporate-wide PAT a sweeper can use across repos).
-    git_default_token: str = ""
-    # How often the background sweeper checks whether any Collection is due
-    # for a re-sync. The interval itself is per-Collection
-    # (Collection.sync_interval_hours).
-    sync_check_interval_sec: int = 300
-
-    @classmethod
-    def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
-        import os
-
-        e = os.environ if env is None else env
-        d = cls()  # defaults
-        return cls(
-            default_user=e.get("DEFAULT_USER", d.default_user),
-            host=e.get("APP_HOST", d.host),
-            port=int(e.get("APP_PORT", str(d.port))),
-            root_path=e.get("APP_ROOT_PATH", d.root_path),
-            sandbox_kind=e.get("SANDBOX_KIND", d.sandbox_kind),
-            sandbox_root=e.get("SANDBOX_ROOT", d.sandbox_root),
-            exec_timeout=float(e.get("SANDBOX_EXEC_TIMEOUT", str(d.exec_timeout))),
-            sandbox_isolate=_flag(e.get("SANDBOX_ISOLATE")),
-            filestore_kind=e.get("FILESTORE_KIND", d.filestore_kind),
-            runner_max_retries=int(e.get("RUNNER_MAX_RETRIES", str(d.runner_max_retries))),
-            runner_max_turns=int(e.get("RUNNER_MAX_TURNS", str(d.runner_max_turns))),
-            llm_base_url=e.get("LLM_BASE_URL", d.llm_base_url),
-            llm_api_key=e.get("LLM_API_KEY", d.llm_api_key),
-            read_file_max_lines=int(e.get("READ_FILE_MAX_LINES", str(d.read_file_max_lines))),
-            read_file_max_chars=int(e.get("READ_FILE_MAX_CHARS", str(d.read_file_max_chars))),
-            history_max_messages=int(e.get("HISTORY_MAX_MESSAGES", str(d.history_max_messages))),
-            kb_embed_model=e.get("KB_EMBED_MODEL", d.kb_embed_model),
-            kb_query_prefix=e.get("KB_QUERY_PREFIX", d.kb_query_prefix),
-            kb_doc_prefix=e.get("KB_DOC_PREFIX", d.kb_doc_prefix),
-            kb_embed_timeout=float(e.get("KB_EMBED_TIMEOUT", str(d.kb_embed_timeout))),
-            kb_embed_num_retries=int(e.get("KB_EMBED_NUM_RETRIES", str(d.kb_embed_num_retries))),
-            kb_embed_batch_size=int(e.get("KB_EMBED_BATCH_SIZE", str(d.kb_embed_batch_size))),
-            kb_embed_base_url=e.get("KB_EMBED_BASE_URL", d.kb_embed_base_url),
-            kb_embed_api_key=e.get("KB_EMBED_API_KEY", d.kb_embed_api_key),
-            kb_chunk_max_tokens=int(e.get("KB_CHUNK_MAX_TOKENS", str(d.kb_chunk_max_tokens))),
-            kb_chunk_overlap=int(e.get("KB_CHUNK_OVERLAP", str(d.kb_chunk_overlap))),
-            kb_llm_model=e.get("KB_LLM_MODEL", d.kb_llm_model),
-            kb_code_embed_model=e.get("KB_CODE_EMBED_MODEL", d.kb_code_embed_model),
-            kb_code_query_prefix=e.get("KB_CODE_QUERY_PREFIX", d.kb_code_query_prefix),
-            kb_code_doc_prefix=e.get("KB_CODE_DOC_PREFIX", d.kb_code_doc_prefix),
-            kb_code_embed_base_url=e.get("KB_CODE_EMBED_BASE_URL", d.kb_code_embed_base_url),
-            kb_code_embed_api_key=e.get("KB_CODE_EMBED_API_KEY", d.kb_code_embed_api_key),
-            git_default_token=e.get("GIT_DEFAULT_TOKEN", d.git_default_token),
-            sync_check_interval_sec=int(
-                e.get("SYNC_CHECK_INTERVAL_SEC", str(d.sync_check_interval_sec))
-            ),
+        rmq = mq.rabbitmq
+        return RabbitMQMessageQueueFactory(
+            amqp_url=rmq.url,
+            queue_prefix=rmq.queue_prefix,
+            max_retries=rmq.max_retries,
+            retry_delay_seconds=rmq.retry_delay_seconds,
+            amqp_heartbeat_seconds=rmq.heartbeat_seconds,
         )
+    raise ValueError(f"unknown message_queue.kind: {mq.kind!r} (use simple | rabbitmq)")
 
 
-def get_spec(settings: Settings) -> SpecStar:
-    spec = SpecStar()
-    spec.configure(default_user=settings.default_user, default_now=lambda: datetime.now(UTC))
-    return spec
+def get_spec(
+    settings: Settings,
+    get_user_id: Callable[[], str] | None = None,
+) -> SpecStar:
+    """Production spec wiring: backend connections come from settings;
+    `get_user_id` (if set) overrides `settings.server.default_user` so
+    the spec stamps `created_by` with the same callable the API access
+    layer checks against. Delegates registration to `make_spec` — there
+    is no "construct + register" 2-step at this layer.
+
+    When `filestore.disk_root` and `filestore.pg_dsn` are both empty
+    (the dataclass default), no `backend=` is passed and specstar uses
+    its in-memory default — keeps `Settings()` usable for tests +
+    fast-dev iteration without forcing a disk path."""
+    return make_spec(
+        default_user=get_user_id or settings.server.default_user,
+        backend=_backend_for(settings),
+    )
+
+
+def _backend_for(settings: Settings) -> BackendConfig | None:
+    """Compose a specstar BackendConfig from settings, or ``None`` when
+    neither connection field is set. Empty options would make specstar
+    reject the connection (`disk backend requires options.rootdir`), so
+    we skip the whole config block in that case."""
+    fs = settings.filestore
+    if not fs.disk_root and not fs.pg_dsn:
+        return None
+    connections: dict[str, ConnectionProfile] = {}
+    if fs.disk_root:
+        connections["local"] = ConnectionProfile(type="disk", options={"rootdir": fs.disk_root})
+    if fs.pg_dsn:
+        connections["pg"] = ConnectionProfile(
+            type="postgres", options={"connection_string": fs.pg_dsn}
+        )
+    bind = "local" if "local" in connections else "pg"
+    return BackendConfig(
+        connections=connections,
+        meta=BackendBinding(use=bind),
+        resource=BackendBinding(use=bind),
+        blob=BackendBinding(use=bind),
+    )
 
 
 def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
-    match settings.sandbox_kind:
+    sb = settings.sandbox
+    match sb.kind:
         case "mock":
             return MockSandbox()
         case "local":
+            isolate = sb.isolate
+            if settings.tools.mode == "uv-run":
+                # uv-run runs tools from live source via `uv run`, which needs
+                # the host env — the chroot jail has neither uv nor network.
+                # Force isolation off; reject an explicit opt-in as a
+                # contradiction (#63).
+                if sb.isolate is True:
+                    raise ValueError(
+                        "tools.mode=uv-run requires a non-isolated sandbox (uv run "
+                        "needs the host env), but sandbox.isolate is true — set "
+                        "sandbox.isolate: false (or remove it)."
+                    )
+                isolate = False
             return LocalProcessSandbox(
-                root_dir=Path(settings.sandbox_root) if settings.sandbox_root else None,
-                exec_timeout=settings.exec_timeout,
-                isolate=settings.sandbox_isolate,
-                # Shared prebuilt provisioned tools, mounted read-only at /.tools.
+                root_dir=Path(sb.root) if sb.root else None,
+                exec_timeout=sb.exec_timeout,
+                log_timeout=sb.log_timeout,
+                isolate=isolate,
                 tools_dir=tools_dir,
             )
         case "docker":
@@ -198,41 +176,68 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
 
             return DockerSandbox()
         case other:
-            raise ValueError(f"unknown SANDBOX_KIND: {other!r}")
+            raise ValueError(f"unknown sandbox.kind: {other!r}")
 
 
 def get_filestore(settings: Settings, spec: SpecStar) -> FileStore:
-    match settings.filestore_kind:
+    match settings.filestore.kind:
         case "memory":
             return MemoryFileStore()
         case "specstar":
             return SpecstarFileStore(spec)
         case other:
-            raise ValueError(f"unknown FILESTORE_KIND: {other!r}")
+            raise ValueError(f"unknown filestore.kind: {other!r}")
 
 
 def get_runner(settings: Settings) -> AgentRunner:
+    """Production agent runner. Reads top-level `runner` / `llm`
+    settings for the runner-wide defaults; per-preset endpoint overrides
+    (set via `agents.presets.<name>.llm.*`) ride on each AgentConfig and
+    win per turn (see `LitellmAgentRunner._build_agent`)."""
     return LitellmAgentRunner(
-        default_rca_agent_config(),
-        max_retries=settings.runner_max_retries,
-        max_turns=settings.runner_max_turns,
-        base_url=settings.llm_base_url or None,
-        api_key=settings.llm_api_key or None,
+        max_retries=settings.runner.max_retries,
+        max_turns=settings.runner.max_turns,
+        base_url=settings.llm.base_url or None,
+        api_key=settings.llm.api_key or None,
     )
 
 
+def get_agent_config_catalog(
+    settings: Settings, config_dir: Path | None = None
+) -> AgentConfigCatalog:
+    """Build the deploy's AgentConfigCatalog from `settings.agents`.
+
+    Resolves the KB-facing sub-agent lists (`kb_chat` / `infer_modules`) +
+    the preset registry against `agents.presets` (Y semantics + Q5 merge
+    rules). Threading: `__main__.py` calls this once at startup and passes the
+    result into `create_app(agent_config_catalog=...)`."""
+    return build_catalog(settings, config_dir=config_dir)
+
+
+def get_app_catalog(settings: Settings) -> AppCatalog:
+    """Build the deploy's `AppCatalog` from `agents.presets` (#89, decision 25).
+
+    Validates every discovered App's function/tools coherence at startup
+    (decision 11) so an incoherent `app.json` fails the boot loud. The picker /
+    per-turn resolve are not yet wired to this in P3d (that cutover is P4); this
+    makes the App layer constructible + validated."""
+    validate_all_apps()
+    return AppCatalog(presets=settings.agents.presets)
+
+
 def get_embedder(settings: Settings) -> Embedder:
-    if settings.kb_embed_model:
+    e = settings.kb.embedder
+    if e.model:
         return LitellmEmbedder(
-            settings.kb_embed_model,
+            e.model,
             dim=EMBED_DIM,
-            query_prefix=settings.kb_query_prefix,
-            doc_prefix=settings.kb_doc_prefix,
-            timeout=settings.kb_embed_timeout,
-            num_retries=settings.kb_embed_num_retries,
-            batch_size=settings.kb_embed_batch_size,
-            base_url=settings.kb_embed_base_url or None,
-            api_key=settings.kb_embed_api_key or None,
+            query_prefix=e.query_prefix,
+            doc_prefix=e.doc_prefix,
+            timeout=e.timeout,
+            num_retries=e.num_retries,
+            batch_size=e.batch_size,
+            base_url=e.base_url or None,
+            api_key=e.api_key or None,
         )
     return HashEmbedder(dim=EMBED_DIM)
 
@@ -244,25 +249,26 @@ def get_code_embedder(settings: Settings) -> Embedder | None:
     (the retriever falls back to single-vector behaviour); only the
     semantic-code geometry is gone. Production wires this into
     ``create_app(kb_code_embedder=...)``."""
-    if not settings.kb_code_embed_model:
+    ce = settings.kb.code_embedder
+    if not ce.model:
         return None
+    eb = settings.kb.embedder  # shares HTTP resilience knobs with default embedder
     return LitellmEmbedder(
-        settings.kb_code_embed_model,
+        ce.model,
         dim=CODE_EMBED_DIM,
-        query_prefix=settings.kb_code_query_prefix,
-        doc_prefix=settings.kb_code_doc_prefix,
-        timeout=settings.kb_embed_timeout,
-        num_retries=settings.kb_embed_num_retries,
-        batch_size=settings.kb_embed_batch_size,
-        base_url=settings.kb_code_embed_base_url or None,
-        api_key=settings.kb_code_embed_api_key or None,
+        query_prefix=ce.query_prefix,
+        doc_prefix=ce.doc_prefix,
+        timeout=eb.timeout,
+        num_retries=eb.num_retries,
+        batch_size=eb.batch_size,
+        base_url=ce.base_url or None,
+        api_key=ce.api_key or None,
     )
 
 
 def get_chunker(settings: Settings) -> Chunker:
-    return FixedTokenChunker(
-        max_tokens=settings.kb_chunk_max_tokens, overlap_tokens=settings.kb_chunk_overlap
-    )
+    c = settings.kb.chunker
+    return FixedTokenChunker(max_tokens=c.max_tokens, overlap_tokens=c.overlap)
 
 
 def get_doc_pipeline(settings: Settings, embedder: Embedder) -> object:  # IngestionPipeline
@@ -287,11 +293,473 @@ def get_chat_pipeline(
     return build_chat_pipeline(llm=llm, embedder=embedder)
 
 
+def get_parser_registry(settings: Settings):  # -> ParserRegistry
+    """Build the ``ParserRegistry`` the Ingestor uses to route uploads
+    to parsers (issue #39).
+
+    Registration order is custom-first, bundled-last. Operator
+    declares custom parsers as dotted import paths under
+    ``kb.parsers: ["my.pkg.MyCsvParser", ...]``; each path resolves
+    to an ``IParser`` class which is constructed with zero arguments
+    today (dependency injection lands when a bundled parser needs
+    it). Custom-first means an in-house parser intentionally shadows
+    a bundled one for the same extension.
+
+    Bundled parsers (in fixed order — most-specific first): the
+    LlamaIndex-Reader-backed ``PdfParser`` / ``HtmlParser`` /
+    ``DocxParser``. The pre-#39 ``reader_for`` chain handled these
+    same three formats; this registry replaces it.
+
+    Errors raise at deploy startup (NOT at first upload) so
+    operators see them immediately:
+
+      - Unknown dotted path → ``ValueError`` with the path quoted.
+      - Resolved class isn't an ``IParser`` subclass → ``TypeError``.
+    """
+    import importlib
+
+    from .kb.parsers import IParser, ParserRegistry
+    from .kb.parsers.chat_export_parser import ChatExportParser
+    from .kb.parsers.json_file import JsonParser
+    from .kb.parsers.llamaindex_readers import DocxParser, HtmlParser
+    from .kb.parsers.pdf import PdfParser
+    from .kb.parsers.slides import PptxParser
+    from .kb.parsers.svg_image import SvgParser
+    from .kb.parsers.tabular import CsvParser, ExcelParser
+    from .kb.parsers.vlm_image import VlmImageParser
+    from .kb.vlm import VlmDescriber
+
+    registry = ParserRegistry()
+    # Custom first — operator's declared order is preserved (multiple
+    # in-house parsers stack without ordering surprises).
+    for dotted in settings.kb.parsers:
+        module_name, _, class_name = dotted.rpartition(".")
+        if not module_name or not class_name:
+            raise ValueError(
+                f"kb.parsers entry {dotted!r} is not a dotted import path "
+                f"(expected `pkg.module.ClassName`)"
+            )
+        try:
+            module = importlib.import_module(module_name)
+        except ImportError as exc:
+            raise ValueError(f"kb.parsers entry {dotted!r} could not be imported: {exc}") from exc
+        cls = getattr(module, class_name, None)
+        if cls is None:
+            raise ValueError(
+                f"kb.parsers entry {dotted!r}: module {module_name!r} has no "
+                f"attribute {class_name!r}"
+            )
+        if not (isinstance(cls, type) and issubclass(cls, IParser)):
+            raise TypeError(
+                f"kb.parsers entry {dotted!r}: resolved object {cls!r} is not an IParser subclass"
+            )
+        registry.register(cls())
+    # Vision wiring: one shared VlmDescriber (or None when kb.vlm_llm
+    # is disabled — VlmImageParser then never matches; PdfParser /
+    # PptxParser degrade to text-layer-only pages).
+    vlm = get_kb_vlm(settings)
+    describer = VlmDescriber(vlm) if vlm is not None else None
+    # Bundled parsers — fixed order, most-specific extensions first.
+    # `kb.parsers_disabled` (class names) skips bundled entries: with
+    # all-matching dispatch (Q8b) a custom parser runs ALONGSIDE a
+    # bundled one rather than shadowing it, so replacing e.g. the PDF
+    # path (Docling adaptation point) = register the custom parser in
+    # `kb.parsers` + list "PdfParser" here.
+    bundled: list[IParser] = [
+        PdfParser(describer),
+        HtmlParser(),
+        DocxParser(),
+        # ChatExportParser before JsonParser purely for readability —
+        # all_matching runs every match; JsonParser itself declines
+        # `.chat.json` so a conversation never shreds into key-path lines.
+        ChatExportParser(get_kb_llm(settings)),
+        JsonParser(),
+        CsvParser(),
+        ExcelParser(),
+        VlmImageParser(describer),
+        SvgParser(describer),  # #81: vector SVG → rasterize → same VLM describe path
+        PptxParser(describer),
+    ]
+    disabled = set(settings.kb.parsers_disabled)
+    unknown = disabled - {type(p).__name__ for p in bundled}
+    if unknown:
+        raise ValueError(
+            f"kb.parsers_disabled names unknown bundled parser(s) {sorted(unknown)}; "
+            f"bundled: {sorted(type(p).__name__ for p in bundled)}"
+        )
+    for parser in bundled:
+        if type(parser).__name__ not in disabled:
+            registry.register(parser)
+    return registry
+
+
 def get_kb_llm(settings: Settings) -> ILlm | None:
-    if not settings.kb_llm_model:
+    """KB retrieval LLM (multi-query / HyDE / rerank).
+
+    `kb.retrieval_llm` is a usage-entry reference to a named preset
+    (like `workspace_chat[]` / `kb_chat[]` / `infer_modules[]`). The
+    resolution cascade for each LLM-call field:
+
+      ref.<field>  ◇  preset.<field>  ◇  settings.llm.<field>  ◇  None
+
+    `None` retrieval_llm = enhancements disabled (factory returns
+    None). Operators put retrieval on a different provider from the
+    agent chat by editing the referenced preset (or by writing a new
+    preset and pointing the ref at it) — no parallel flat config
+    block to keep in sync."""
+    ref = settings.kb.retrieval_llm
+    model, base_url, api_key = _resolve_llm_ref(settings, ref)
+    if model is None:
         return None
+    assert ref is not None  # model resolved ⇒ the ref is present
     return LitellmLlm(
-        settings.kb_llm_model,
-        base_url=settings.llm_base_url or None,
-        api_key=settings.llm_api_key or None,
+        model,
+        base_url=base_url,
+        api_key=api_key,
+        # "" (unset) ⇒ None so the param is omitted (model default); none|low|
+        # medium|high pass through (none → Ollama think=False).
+        reasoning_effort=ref.reasoning_effort or None,
     )
+
+
+def _resolve_llm_ref(
+    settings: Settings, ref: RetrievalLlmRef | None
+) -> tuple[str | None, str | None, str | None]:
+    """(model, base_url, api_key) for a `RetrievalLlmRef` preset
+    reference — the one resolution cascade shared by every LLM-only
+    usage site (`kb.retrieval_llm`, `kb.vlm_llm`, `kb.wiki.llm`):
+
+      ref.<field>  ◇  preset.<field>  ◇  settings.llm.<field>  ◇  None
+
+    `ref is None` (the off switch) → `(None, None, None)`."""
+    if ref is None:
+        return None, None, None
+    preset = settings.agents.presets.get(ref.preset)
+    assert preset is not None, f"preset {ref.preset!r} unknown — loader should have caught this"
+    model = ref.model or preset.model
+    base_url = ref.llm.base_url or preset.llm.base_url or settings.llm.base_url or None
+    api_key = ref.llm.api_key or preset.llm.api_key or settings.llm.api_key or None
+    return model, base_url, api_key
+
+
+def _sanity_endpoints(settings: Settings) -> dict[str, tuple[str | None, str | None]]:
+    """model → (base_url, api_key) for every TEXT model the deploy references,
+    for the model-sanity matrix: the KB chat fleet (``kb_chat[]``) plus
+    ``kb.retrieval_llm`` (the kb_search expand/HyDE LLM — the reason this
+    feature exists) and ``kb.wiki.llm``. ``kb.vlm_llm`` is excluded (vision,
+    not text reasoning). Resolved through the same preset cascade as the rest
+    of the factory; last write wins on a duplicate model."""
+    out: dict[str, tuple[str | None, str | None]] = {}
+    presets = settings.agents.presets
+    for purpose in ("kb_chat",):
+        for entry in settings.agents.sub_agents.get(purpose, []):
+            preset = presets.get(str(entry.get("preset", "")))
+            if preset is None:
+                continue
+            entry_llm = entry.get("llm") or {}
+            model = str(entry.get("model", "")) or preset.model
+            base_url = entry_llm.get("base_url", "") or preset.llm.base_url or settings.llm.base_url
+            api_key = entry_llm.get("api_key", "") or preset.llm.api_key or settings.llm.api_key
+            if model:
+                out[model] = (base_url or None, api_key or None)
+    for ref in (settings.kb.retrieval_llm, settings.kb.wiki.llm):
+        model, base_url, api_key = _resolve_llm_ref(settings, ref)
+        if model:
+            out[model] = (base_url, api_key)
+    return out
+
+
+def get_sanity_models(settings: Settings) -> list[str]:
+    """Sorted, deduped list of the models the sanity matrix probes (see
+    ``_sanity_endpoints``) — the FE's model dropdown."""
+    return sorted(_sanity_endpoints(settings))
+
+
+def get_sanity_llm_factory(settings: Settings):  # -> Callable[[str, str], ILlm]
+    """A ``(model, reasoning_level) -> ILlm`` factory for the sanity matrix. It
+    returns the SAME ``LitellmLlm`` kb_search runs on — per model endpoint +
+    ``reasoning_effort=level`` — so the battery exercises the real LLM seam, not
+    a parallel runner. An unknown model falls back to litellm's provider env."""
+    endpoints = _sanity_endpoints(settings)
+
+    def make(model: str, level: str) -> ILlm:
+        base_url, api_key = endpoints.get(model, (None, None))
+        return LitellmLlm(model, base_url=base_url, api_key=api_key, reasoning_effort=level)
+
+    return make
+
+
+def get_kb_vlm(settings: Settings):  # -> IVlm | None
+    """KB vision LLM for the vision-backed parsers (issue #39: image /
+    PDF visual pages / slides). Same preset-reference resolution
+    cascade as `get_kb_llm`:
+
+      ref.<field>  ◇  preset.<field>  ◇  settings.llm.<field>  ◇  None
+
+    `kb.vlm_llm: null` = VLM parsing disabled (factory returns None;
+    image-only uploads store with zero chunks until an operator wires
+    a VLM and reindexes)."""
+    from .kb.vlm import LitellmVlm
+
+    model, base_url, api_key = _resolve_llm_ref(settings, settings.kb.vlm_llm)
+    if model is None:
+        return None
+    return LitellmVlm(model, base_url=base_url, api_key=api_key)
+
+
+def get_wiki_endpoint(settings: Settings) -> tuple[str | None, str | None, str | None]:
+    """(model, base_url, api_key) for the wiki agents (maintainer /
+    reader / merge), resolved from `kb.wiki.llm` through the shared
+    preset cascade. `(None, None, None)` when `kb.wiki.llm` is null —
+    the off switch (#56): the wiki agents fall back to their in-code
+    default model, and the health probes / disable logic treat a missing
+    model as "wiki not configured"."""
+    return _resolve_llm_ref(settings, settings.kb.wiki.llm)
+
+
+def _agent_endpoint(settings: Settings, purpose: str) -> tuple[str | None, str | None, str | None]:
+    """(model, base_url, api_key) for a sub-agent purpose's DEFAULT
+    (first) usage entry — the same resolution cascade as get_kb_llm:
+    entry.* ◇ preset.* ◇ top-level llm.*. (None, None, None) when the
+    purpose has no entries (→ the check reports skip)."""
+    entries = settings.agents.sub_agents.get(purpose, [])
+    if not entries:
+        return None, None, None
+    entry = entries[0]
+    preset = settings.agents.presets.get(str(entry.get("preset", "")))
+    if preset is None:
+        return None, None, None
+    entry_llm = entry.get("llm") or {}
+    model = str(entry.get("model", "")) or preset.model
+    base_url = entry_llm.get("base_url", "") or preset.llm.base_url or settings.llm.base_url
+    api_key = entry_llm.get("api_key", "") or preset.llm.api_key or settings.llm.api_key
+    return model, base_url or None, api_key or None
+
+
+@dataclass(frozen=True)
+class InferModulesRunConfig:
+    """Resolved per-step config for the `infer_modules` tool (#66): the KB
+    query depth + reasoning effort each classification sub-agent runs with,
+    and how many run concurrently. Read from the FIRST `agents.infer_modules`
+    usage entry's optional `enhancements` / `reasoning_effort` / `parallelism`
+    keys (defaults: operator KB defaults, model default, 8)."""
+
+    enhancements: Enhancements | None
+    reasoning_effort: str | None
+    parallelism: int
+    # The KB collection NAME the per-step classifier searches (#66). "" ⇒
+    # search ALL collections (backward-compatible). The API resolves the name
+    # to ids once per turn.
+    collection: str
+
+
+def get_infer_modules_run_config(settings: Settings) -> InferModulesRunConfig:
+    """Resolve the infer_modules per-step run config from
+    `agents.infer_modules[0]`. These are NOT the composer's live settings —
+    infer_modules is a focused classification probe with its own config."""
+    entries = settings.agents.sub_agents.get("infer_modules", [])
+    entry = entries[0] if entries else {}
+    enh = entry.get("enhancements")
+    if isinstance(enh, dict):
+        enhancements = Enhancements(
+            expand=enh.get("expand"), hyde=enh.get("hyde"), rerank=enh.get("rerank")
+        )
+    else:
+        # #66: default OFF (expand/hyde/rerank all 0/false). Classifying ONE
+        # step name is a focused lookup that doesn't need multi-query / HyDE /
+        # rerank, and the tool runs one classification PER unique step (~1500
+        # seen), so any per-step enhancement explodes into thousands of extra
+        # retrieval-LLM round-trips. Operators opt back in (clamped by the
+        # retriever's max) via agents.infer_modules[].enhancements.
+        enhancements = Enhancements(expand=0, hyde=0, rerank=False)
+    reasoning = entry.get("reasoning_effort")
+    par = entry.get("parallelism", 16)
+    collection = entry.get("collection")
+    return InferModulesRunConfig(
+        enhancements=enhancements,
+        reasoning_effort=reasoning if isinstance(reasoning, str) else None,
+        parallelism=par if isinstance(par, int) and par > 0 else 16,
+        collection=collection if isinstance(collection, str) else "",
+    )
+
+
+def get_check_registry(settings: Settings):  # -> health.CheckRegistry
+    """The #51 sanity-check registry: the bundled capability
+    probes (minus ``health.checks_disabled``) plus custom
+    ``health.checks`` dotted-path classes. Same conventions as
+    ``get_parser_registry``: unknown disabled ids and broken dotted
+    paths raise at startup, not at first run."""
+    from .health import CheckRegistry, ISanityCheck
+    from .health.checks import (
+        EmbedderDimCheck,
+        InsightExtractionCheck,
+        RetrievalExpandCheck,
+        ToolCallCheck,
+        VlmDescribeCheck,
+    )
+
+    kb_llm = get_kb_llm(settings)
+    bundled: list[ISanityCheck] = [
+        EmbedderDimCheck(
+            get_embedder(settings),
+            expected_dim=EMBED_DIM,
+            check_id="embedder-default",
+            description="Embed one sentence with the default model and verify the vector width",
+        ),
+        EmbedderDimCheck(
+            get_code_embedder(settings),
+            expected_dim=CODE_EMBED_DIM,
+            check_id="embedder-code",
+            description="Embed one sentence with the code model and verify the vector width",
+        ),
+        InsightExtractionCheck(kb_llm),
+        RetrievalExpandCheck(kb_llm),
+        VlmDescribeCheck(get_kb_vlm(settings)),
+        ToolCallCheck(
+            check_id="agent-kb-chat",
+            description="KB chat agent model can call tools",
+            **_tool_check_kwargs(settings, "kb_chat"),
+        ),
+        ToolCallCheck(
+            check_id="agent-infer-modules",
+            description="infer_modules sub-agent model can call tools",
+            **_tool_check_kwargs(settings, "infer_modules"),
+        ),
+        ToolCallCheck(
+            check_id="agent-wiki-reader",
+            description="Wiki reader model navigates the wiki (calls search_wiki) instead of "
+            "answering from memory",
+            tool_name="search_wiki",
+            tool_description="Search the collection's knowledge wiki pages for a term.",
+            param_name="query",
+            param_description="term to search the wiki for",
+            prompt="Find what the wiki says about 'reflow'. Do not answer from memory — "
+            "call search_wiki.",
+            **_wiki_check_kwargs(settings),
+        ),
+        ToolCallCheck(
+            check_id="agent-wiki-maintainer",
+            description="Wiki maintainer model edits wiki pages (calls write_file) instead of "
+            "narrating",
+            tool_name="write_file",
+            tool_description="Write content to a wiki page at the given path.",
+            param_name="path",
+            param_description="wiki page path to write",
+            prompt="Record that 'reflow zone 3 setpoint is 245C' on the page "
+            "/entities/reflow.md. Do not narrate — call write_file.",
+            **_wiki_check_kwargs(settings),
+        ),
+    ]
+    # #89: one tool-call probe per registered App's default agent — the model a
+    # live workspace turn resolves through the AppCatalog. Replaces the removed
+    # workspace_chat 'agent-workspace' check.
+    from .apps.catalog import discover_app_slugs
+
+    for slug in discover_app_slugs():
+        bundled.append(
+            ToolCallCheck(
+                check_id=f"agent-{slug}",
+                description=f"{slug} App agent model can call tools",
+                **_app_agent_check_kwargs(settings, slug),
+            )
+        )
+    disabled = set(settings.health.checks_disabled)
+    unknown = disabled - {c.check_id for c in bundled}
+    if unknown:
+        raise ValueError(
+            f"health.checks_disabled names unknown check(s) {sorted(unknown)}; "
+            f"bundled: {sorted(c.check_id for c in bundled)}"
+        )
+    registry = CheckRegistry()
+    for check in bundled:
+        if check.check_id not in disabled:
+            registry.register(check)
+    for dotted in settings.health.checks:
+        registry.register(_construct_dotted(dotted, ISanityCheck, config_key="health.checks"))
+    return registry
+
+
+def _tool_check_kwargs(settings: Settings, purpose: str) -> dict:
+    model, base_url, api_key = _agent_endpoint(settings, purpose)
+    return {"model": model, "base_url": base_url, "api_key": api_key}
+
+
+def _app_agent_check_kwargs(settings: Settings, slug: str) -> dict:
+    """Endpoint for an App's default-agent probe (#89). Resolves the App's
+    `default_profile` through the AppCatalog — the same path a live turn takes
+    — and capability-tests THAT model. `None` model ⇒ the check reports skip."""
+    from .apps.manifest import load_app_manifest
+
+    catalog = get_app_catalog(settings)
+    cfg = catalog.resolve(
+        app_slug=slug,
+        profile=load_app_manifest(slug).default_profile,
+        attached_preset=None,
+    )
+    if cfg is None:
+        return {"model": None, "base_url": None, "api_key": None}
+    return {
+        "model": cfg.model,
+        "base_url": cfg.llm_base_url or None,
+        "api_key": cfg.llm_api_key or None,
+    }
+
+
+def _wiki_check_kwargs(settings: Settings) -> dict:
+    """Endpoint for the wiki-agent probes (#50 P8 / #57). The wiki
+    maintainer + reader run on the model named by ``kb.wiki.llm``, so the
+    probe must capability-test THAT model — not the workspace agent's.
+    (#57: the old `runner.wiki_*` lived in a namespace the resolver never
+    read, so the probe silently tested the workspace model and could not
+    detect a wiki model that narrates instead of calling tools.)
+    ``kb.wiki.llm: null`` ⇒ model None ⇒ the check reports skip."""
+    model, base_url, api_key = get_wiki_endpoint(settings)
+    return {"model": model, "base_url": base_url, "api_key": api_key}
+
+
+def get_replay_service(settings: Settings, kb_llm: ILlm | None):  # -> health.ReplayService
+    """#51 P4 replay diagnostics. Reuses the already-built KB LLM (so
+    chat-export replays hit the same endpoint extraction does) and
+    builds its own describer over `kb.vlm_llm` (stateless — sharing the
+    parser registry's instance buys nothing). Turn replays inherit the
+    runner-wide endpoint defaults (`settings.llm`), with per-preset
+    overrides riding on each AgentConfig exactly like live turns."""
+    from .health.replay import ReplayService
+    from .kb.vlm import VlmDescriber
+
+    vlm = get_kb_vlm(settings)
+    return ReplayService(
+        kb_llm=kb_llm,
+        describer=VlmDescriber(vlm) if vlm is not None else None,
+        default_base_url=settings.llm.base_url or None,
+        default_api_key=settings.llm.api_key or None,
+    )
+
+
+def _construct_dotted(dotted: str, base_cls: type, *, config_key: str):
+    """Resolve a `pkg.module.ClassName` config entry to a zero-arg
+    instance of `base_cls`, raising at startup with the offending entry
+    quoted (same contract as the kb.parsers resolver)."""
+    import importlib
+
+    module_name, _, class_name = dotted.rpartition(".")
+    if not module_name or not class_name:
+        raise ValueError(
+            f"{config_key} entry {dotted!r} is not a dotted import path "
+            f"(expected `pkg.module.ClassName`)"
+        )
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ValueError(f"{config_key} entry {dotted!r} could not be imported: {exc}") from exc
+    cls = getattr(module, class_name, None)
+    if cls is None:
+        raise ValueError(
+            f"{config_key} entry {dotted!r}: module {module_name!r} has no attribute {class_name!r}"
+        )
+    if not (isinstance(cls, type) and issubclass(cls, base_cls)):
+        raise TypeError(
+            f"{config_key} entry {dotted!r}: resolved object {cls!r} is "
+            f"not an {base_cls.__name__} subclass"
+        )
+    return cls()

@@ -6,13 +6,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SearchOptions, SearchResult } from "../../api/types";
 import { SearchPanel } from "./SearchPanel";
+import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 
 afterEach(cleanup);
 
 function stubClient(results: SearchResult[]) {
   return {
     searchFiles: vi.fn(
-      async (_id: string, _q: string, _o?: SearchOptions): Promise<SearchResult[]> => results,
+      async (_slug: string, _id: string, _q: string, _o?: SearchOptions): Promise<SearchResult[]> => results,
     ),
     replaceInFiles: vi.fn(async (): Promise<number> => 0),
   };
@@ -33,7 +34,11 @@ describe("<SearchPanel />", () => {
   it("searches as you type and groups matches by file", async () => {
     const user = userEvent.setup();
     const client = stubClient(SAMPLE);
-    render(<SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />);
+    render(
+      <WorkspaceSlugProvider value="rca">
+        <SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />
+      </WorkspaceSlugProvider>,
+    );
 
     await user.type(screen.getByPlaceholderText(/search/i), "void");
     await waitFor(() => expect(client.searchFiles).toHaveBeenCalled());
@@ -59,7 +64,11 @@ describe("<SearchPanel />", () => {
   it("passes regex / case / word toggles through to the client", async () => {
     const user = userEvent.setup();
     const client = stubClient([]);
-    render(<SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />);
+    render(
+      <WorkspaceSlugProvider value="rca">
+        <SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />
+      </WorkspaceSlugProvider>,
+    );
 
     await user.click(screen.getByRole("button", { name: /match case/i }));
     await user.click(screen.getByRole("button", { name: /whole word/i }));
@@ -68,7 +77,7 @@ describe("<SearchPanel />", () => {
 
     await waitFor(() => {
       const lastCall = client.searchFiles.mock.calls.at(-1);
-      expect(lastCall?.[2]).toMatchObject({
+      expect(lastCall?.[3]).toMatchObject({
         caseSensitive: true,
         wholeWord: true,
         regex: true,
@@ -79,7 +88,11 @@ describe("<SearchPanel />", () => {
   it("replace all runs replaceInFiles then re-searches", async () => {
     const user = userEvent.setup();
     const client = stubClient(SAMPLE);
-    render(<SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />);
+    render(
+      <WorkspaceSlugProvider value="rca">
+        <SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />
+      </WorkspaceSlugProvider>,
+    );
 
     await user.type(screen.getByPlaceholderText(/search/i), "void");
     await screen.findByText("a.md");
@@ -90,6 +103,7 @@ describe("<SearchPanel />", () => {
 
     await waitFor(() =>
       expect(client.replaceInFiles).toHaveBeenCalledWith(
+        "rca",
         "inv1",
         "void",
         "VOID",
@@ -101,13 +115,17 @@ describe("<SearchPanel />", () => {
   it("shows include / exclude inputs and forwards them", async () => {
     const user = userEvent.setup();
     const client = stubClient([]);
-    render(<SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />);
+    render(
+      <WorkspaceSlugProvider value="rca">
+        <SearchPanel investigationId="inv1" onOpenFile={vi.fn()} client={client} />
+      </WorkspaceSlugProvider>,
+    );
     await user.type(screen.getByPlaceholderText(/files to include/i), "*.md");
     await user.type(screen.getByPlaceholderText(/files to exclude/i), "data/**");
     await user.type(screen.getByPlaceholderText(/search/i), "x");
     await waitFor(() => {
       const lastCall = client.searchFiles.mock.calls.at(-1);
-      expect(lastCall?.[2]).toMatchObject({ include: "*.md", exclude: "data/**" });
+      expect(lastCall?.[3]).toMatchObject({ include: "*.md", exclude: "data/**" });
     });
   });
 });

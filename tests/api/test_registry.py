@@ -273,7 +273,7 @@ async def test_close_all_mirrors_before_killing_each():
 
 
 async def test_close_session_mirrors_then_kills_then_evicts():
-    """Manual close — used by POST /investigations/{id}/close — runs
+    """Manual close — used by POST /a/{slug}/items/{id}/close — runs
     mirror-sync, kills the sandbox handle, and removes the session
     from the registry."""
     events: list[str] = []

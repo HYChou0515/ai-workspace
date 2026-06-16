@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-
 from fastapi.testclient import TestClient
-from specstar import SpecStar
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
 
 
 def _client(holder: dict[str, str]) -> TestClient:
     """App where both created_by (owner) and the current user follow holder['id']."""
-    spec = SpecStar()
-    spec.configure(default_user=lambda: holder["id"], default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user=lambda: holder["id"])
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),

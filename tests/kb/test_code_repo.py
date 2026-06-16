@@ -85,15 +85,15 @@ def test_sync_clones_remote_and_ingests_python_files(spec: SpecStar, fake_remote
     # Both .py files became SourceDocs at their repo-relative paths.
     sd_rm = spec.get_resource_manager(SourceDoc)
     ids = {
-        encode_doc_id(cid, "alice", "auth.py"),
-        encode_doc_id(cid, "alice", "scoring.py"),
+        encode_doc_id(cid, "auth.py"),
+        encode_doc_id(cid, "scoring.py"),
     }
     for doc_id in ids:
         doc = sd_rm.get(doc_id).data
         assert doc.collection_id == cid
         assert doc.status == "ready"
     # README.md is markdown, also welcome — exercised via the existing pipeline.
-    md_id = encode_doc_id(cid, "alice", "README.md")
+    md_id = encode_doc_id(cid, "README.md")
     assert sd_rm.get(md_id).data.status == "ready"
 
     # Each .py produced at least one chunk (CodeSplitter routed via dispatch).
@@ -161,7 +161,7 @@ def test_sync_with_explicit_branch_passes_through_to_git_clone(spec: SpecStar, t
 
     sd_rm = spec.get_resource_manager(SourceDoc)
     # `feature.py` is only on `dev` — it must have been ingested.
-    feat = sd_rm.get(encode_doc_id(cid, "alice", "feature.py")).data
+    feat = sd_rm.get(encode_doc_id(cid, "feature.py")).data
     assert feat.status == "ready"
 
 
@@ -214,11 +214,11 @@ def test_ingest_tree_skips_empty_ls_files_line_and_unreadable_paths(
 
     sd_rm = spec.get_resource_manager(SourceDoc)
     # good.py made it; bad.py was skipped (no SourceDoc created).
-    assert sd_rm.get(encode_doc_id(cid, "alice", "good.py")).data.status == "ready"
+    assert sd_rm.get(encode_doc_id(cid, "good.py")).data.status == "ready"
     from specstar.types import ResourceIDNotFoundError
 
     try:
-        sd_rm.get(encode_doc_id(cid, "alice", "bad.py"))
+        sd_rm.get(encode_doc_id(cid, "bad.py"))
         raise AssertionError("bad.py should not have been ingested")
     except ResourceIDNotFoundError:
         pass

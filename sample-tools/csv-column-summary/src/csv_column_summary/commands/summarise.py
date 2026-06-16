@@ -8,7 +8,7 @@ from dataclasses import asdict
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from ..core import progress, summarize
+from csv_column_summary.core import progress, summarize
 
 
 class Args(BaseModel):

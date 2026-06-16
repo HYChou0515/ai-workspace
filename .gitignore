@@ -10,6 +10,21 @@ htmlcov/
 dist/
 build/
 
+# Editor / IDE
+.vscode/
+
+# Local runtime state (specstar DB written when you run the server).
+/data/
+
 # Claude Code local-only settings
 .claude/settings.local.json
-.rca-tools/
+.workspace-tools/
+.workspace-tools-uvrun/
+
+# Per-deploy config (copy from config.example.yaml).  See factories.Settings.
+/config.yaml
+
+# Observability: startup resolved-config dump (real secrets, 0600) + the
+# faithful LLM call log. Both are local runtime artifacts, never committed.
+config.resolved.yaml
+/logs/

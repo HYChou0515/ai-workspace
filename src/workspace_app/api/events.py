@@ -26,6 +26,11 @@ class ToolStart:
 class ToolEnd:
     call_id: str
     output: str
+    # #62: the FULL display result (a successful command's stderr kept), when
+    # it differs from `output` (the cleaned, LLM-facing result). "" ⇒ no
+    # separate display; the FE renders `output`. The exec tools record it on
+    # the context and the runner attaches it here keyed by `output`.
+    display: str = ""
     type: Literal["tool_end"] = "tool_end"
 
 
@@ -82,6 +87,31 @@ class MaxTurnsExceeded:
 
 
 @dataclass(frozen=True)
+class UserMessage:
+    """#43: a human message posted to a SHARED investigation, broadcast on the
+    per-investigation stream so every viewer sees who said what — live, before
+    the agent turn it triggers. Only appears on the broadcast stream (never
+    produced by the runner / per-requester KB stream)."""
+
+    author: str
+    content: str
+    created_at: int = 0
+    type: Literal["user_message"] = "user_message"
+
+
+@dataclass(frozen=True)
+class FileChanged:
+    """#43: a workspace file changed (a human wrote / moved / deleted it),
+    broadcast on the per-investigation stream so other viewers refetch. The
+    model is last-write-wins; this is the 'someone else edited' signal."""
+
+    path: str
+    by: str
+    kind: str  # written | moved | copied | deleted | dir_created
+    type: Literal["file_changed"] = "file_changed"
+
+
+@dataclass(frozen=True)
 class AgentMetrics:
     """Live token telemetry for the current turn. `phase` is:
       - "up":    the prompt is being sent (Claude-Code's ↑),
@@ -108,6 +138,8 @@ AgentEvent = (
     | ToolCallParseError
     | MaxTurnsExceeded
     | AgentMetrics
+    | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
+    | FileChanged  # #43: broadcast-only (a workspace file changed)
 )
 
 

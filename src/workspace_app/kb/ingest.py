@@ -11,7 +11,7 @@ import io
 import logging
 import tarfile
 import zipfile
-from typing import Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import magic
 import msgspec
@@ -27,22 +27,39 @@ from specstar.types import Binary, ResourceIDNotFoundError
 
 from ..resources.kb import Collection, DocChunk, SourceDoc
 from .chunker import Chunker
-from .doc_id import encode_doc_id
+from .doc_id import canonical_path, encode_doc_id
 from .embedder import Embedder
-from .li_pipeline import reader_for
+from .parsers import MaterialisedParserInput, ParserRegistry
+from .parsers.chat_export_parser import ChatExportParser
+from .parsers.json_file import JsonParser
+from .parsers.llamaindex_readers import DocxParser, HtmlParser
+from .parsers.pdf import PdfParser
+from .parsers.slides import PptxParser
+from .parsers.tabular import CsvParser, ExcelParser
+
+if TYPE_CHECKING:
+    from specstar.types import IResourceManager
 
 logger = logging.getLogger(__name__)
 
+
+class _IndexOutput(NamedTuple):
+    """What one index pass hands back to ``index()``.
+
+    - ``text`` — the 'text converter' output: the whole-document text BEFORE the
+      chunker (joined parser Documents, or the inline-decoded text). Persisted on
+      ``SourceDoc.text`` so the wiki maintainer reads clean source text instead
+      of decoding the raw bytes (issue #86). ``None`` when nothing was extracted
+      (a binary type no parser claimed).
+    - ``preview`` — a browser-displayable derivative a parser handed back.
+    """
+
+    text: str | None
+    preview: Binary | None
+
+
 # md sniffs as text/plain on libmagic; both accepted.
 _TEXT_MIMES = {"text/plain", "text/markdown"}
-# Binary types we can extract text from via a LI Reader (P1+). The store
-# layer accepts these only when a `pipeline` is wired — the legacy chunker
-# path stays text-only.
-_BINARY_MIMES_VIA_READER = {
-    "application/pdf",
-    "text/html",
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-}
 _ARCHIVE_MIMES = {"application/zip", "application/x-tar", "application/gzip"}
 # Source-code files we accept by extension when a pipeline is wired. libmagic
 # usually classifies these as `text/x-script.python`, `text/x-c`, etc. — not
@@ -67,6 +84,7 @@ class Ingestor:
         pipeline: IngestionPipeline | None = None,
         chat_pipeline: IngestionPipeline | None = None,
         code_embedder: Embedder | None = None,
+        parser_registry: ParserRegistry | None = None,
     ) -> None:
         """Doc-ingest mode (P1):
         - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
@@ -88,6 +106,28 @@ class Ingestor:
         # embedder_id != 0, chunks are routed through this embedder and the
         # vector lands on DocChunk.embedding_alt instead of .embedding.
         self._code_embedder = code_embedder
+        # Issue #39: pluggable parsers handle binary uploads. The
+        # factory builds this from `kb.parsers: [...]` (custom) + the
+        # bundled PDF/HTML/DOCX. Tests + offline callers that don't
+        # supply one get a bundled-only fallback so legacy
+        # `Ingestor(spec, pipeline=...)` constructions still parse
+        # PDF/HTML/DOCX.
+        if parser_registry is not None:
+            self._parser_registry = parser_registry
+        else:
+            self._parser_registry = (
+                ParserRegistry()
+                .register(PdfParser())
+                .register(HtmlParser())
+                .register(DocxParser())
+                # No LLM in the fallback: a .chat.json upload errors with
+                # an actionable message instead of silently doing nothing.
+                .register(ChatExportParser())
+                .register(JsonParser())
+                .register(CsvParser())
+                .register(ExcelParser())
+                .register(PptxParser())
+            )
 
     def ingest(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
         """Store + index synchronously; returns the SourceDoc ids touched.
@@ -176,47 +216,98 @@ class Ingestor:
         return the ids that need indexing (new or changed). No chunking/embedding
         — that's the slow `index` step.
 
-        A zip/tar(.gz) is unpacked and each md/txt member stored at its
-        archive-relative path; a lone file is stored if it's md/txt. Other types
-        are skipped. Content type is sniffed via magic, not the extension."""
+        A zip/tar(.gz) is unpacked and each member stored at its
+        archive-relative path; a lone file is stored as-is. Issue #39
+        Q8a — in pipeline mode every upload is stored regardless of
+        whether a parser currently handles it (an unknown type stays
+        on disk so a future custom parser registered later can
+        reindex it). The legacy non-pipeline path is still text-only.
+        Content type is sniffed via magic, not the extension.
+
+        **Parser claim beats archive expansion**: pptx/xlsx/docx are
+        zip containers — when libmagic only sees ``application/zip``,
+        blind expansion would explode an office file into its internal
+        XML members. An upload ANY registered parser claims is stored
+        whole; only unclaimed archives expand."""
         mime = magic.from_buffer(data, mime=True)
-        members = self._extract(mime, data) if mime in _ARCHIVE_MIMES else [(filename, data)]
-        # Pipeline mode unlocks Reader-backed binary types (PDF / HTML / DOCX);
-        # the legacy chunker path stays text-only.
-        accepted = _TEXT_MIMES | (_BINARY_MIMES_VIA_READER if self._pipeline else set())
+        unpack = mime in _ARCHIVE_MIMES
+        if unpack and self._pipeline is not None:
+            with MaterialisedParserInput(data, filename=filename) as source:
+                unpack = not self._parser_registry.all_matching(
+                    filename=filename, mime=mime, source=source
+                )
+        members = self._extract(mime, data) if unpack else [(filename, data)]
         touched: list[str] = []
         for path, member in members:
             member_mime = magic.from_buffer(member, mime=True)
-            is_code = self._pipeline is not None and any(
-                path.lower().endswith(ext) for ext in _CODE_EXTENSIONS
-            )
-            if member_mime not in accepted and not is_code:
+            # Legacy chunker path (pipeline is None): text-only.
+            # Binary uploads are skipped (no parser dispatch outside
+            # the pipeline).
+            if self._pipeline is None and member_mime not in _TEXT_MIMES:
                 continue
+            # Pipeline mode: store everything. index() decides whether
+            # any parser claims it and writes chunks; an unclaimed file
+            # ends up status=ready, chunks=0.
             doc_id = self._store_file(collection_id, user, path, member)
             if doc_id is not None:
                 touched.append(doc_id)
         return touched
 
-    def index(self, doc_id: str) -> None:
+    def index(
+        self, doc_id: str, *, source_doc_rm: IResourceManager[SourceDoc] | None = None
+    ) -> None:
         """Slow path: (re)build a stored doc's chunks — chunk + embed — then
         flip its status to ``ready`` (``error`` if embedding fails). Safe to run
-        off the request thread."""
-        drm = self._spec.get_resource_manager(SourceDoc)
+        off the request thread.
+
+        Issue #39: a file with no matching parser still flips to
+        ``status="ready"`` with ``chunks=0`` — the upload survives on
+        disk (so a future custom parser can reindex it) but isn't
+        searchable. This is the same UX the pre-#39 renderable-image
+        path had; the explicit MIME allowlist is gone now.
+
+        Issue #83: ``source_doc_rm`` lets the IndexCoordinator — which runs in a
+        job pod with NO request user — hand in a SourceDoc manager already scoped
+        to the doc's last updater via ``rm.using(user=...)``. The final status/
+        text write below then keeps ``updated_by`` as the real uploader instead
+        of stamping the bare worker default. The sync/request path omits it (its
+        acting user is already the right one) and we fetch our own. The final
+        update is always the last SourceDoc write of the run, so binding it is
+        enough — interim ``status_detail`` progress writes are overwritten."""
+        drm = (
+            source_doc_rm
+            if source_doc_rm is not None
+            else self._spec.get_resource_manager(SourceDoc)
+        )
         doc = drm.get(doc_id).data
         assert isinstance(doc, SourceDoc)
         raw = drm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)
+        detail = ""
+        preview: Binary | None = None
+        text: str | None = None
         try:
             self._delete_chunks(doc_id)
-            self._index(doc.collection_id, doc_id, doc.path, raw)
+            text, preview = self._index(doc.collection_id, doc_id, doc.path, raw)
             status = "ready"
-        except Exception:  # noqa: BLE001 — surface failure as doc status, don't crash the worker
+        except Exception as exc:  # noqa: BLE001 — surface failure as doc status, don't crash the worker
             status = "error"
             # Don't lose the cause: the status flip alone is opaque (a missing
             # embedding model, a dim mismatch, …). Log the traceback so it's
             # visible in the server logs instead of a silent "error" badge.
             logger.exception("indexing failed for %s", doc_id)
-        drm.update(doc_id, msgspec.structs.replace(doc, status=status))
+            # Surface a one-line summary on the doc row too so the FE
+            # operator sees what blew up without combing through server
+            # logs. Truncate to a sensible width.
+            detail = f"{type(exc).__name__}: {exc!s}"[:240]
+        # `preview` and `text` are derived + current-only like the chunks: each
+        # (re)index round's hand-back wins; None clears a stale one.
+        drm.update(
+            doc_id,
+            msgspec.structs.replace(
+                doc, status=status, status_detail=detail, preview=preview, text=text
+            ),
+        )
 
     @staticmethod
     def _extract(mime: str, data: bytes) -> list[tuple[str, bytes]]:
@@ -236,9 +327,15 @@ class Ingestor:
         return out
 
     def _store_file(self, collection_id: str, user: str, path: str, data: bytes) -> str | None:
-        # specstar resource ids can't contain '/', so the natural key is
-        # percent-encoded into a slash-free, reversible id.
-        doc_id = encode_doc_id(collection_id, user, path)
+        # The id keys on collection + path only (NOT the user), so a collection
+        # is a shared space: the same path is ONE doc whoever uploads it, and a
+        # second writer updates it in place (last write wins; `created_by` stays
+        # the original). `user` is kept as the acting-user context, not the key.
+        # Canonicalise first — every ingest entry point funnels through here, so
+        # surface variants of one path (leading slash, "//", "./..") can never
+        # mint two ids for the same logical doc.
+        path = canonical_path(path)
+        doc_id = encode_doc_id(collection_id, path)
         drm = self._spec.get_resource_manager(SourceDoc)
         try:
             existing = drm.get(doc_id).data
@@ -264,10 +361,24 @@ class Ingestor:
         for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
             chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
-    def _index(self, collection_id: str, doc_id: str, path: str, data: bytes) -> None:
+    def _set_status_detail(self, doc_id: str, message: str) -> None:
+        """Long-parser progress surface (issue #39 Q11): write `message`
+        onto the SourceDoc's `status_detail` so the FE's indexing poll
+        shows it live. Swallows update errors — a transient DB blip
+        must not crash the parser mid-doc; the next call retries."""
+        drm = self._spec.get_resource_manager(SourceDoc)
+        try:
+            sd = drm.get(doc_id).data
+            assert isinstance(sd, SourceDoc)
+            drm.update(doc_id, msgspec.structs.replace(sd, status_detail=message))
+        except Exception:  # noqa: BLE001
+            logger.warning("status_detail update failed for %s", doc_id, exc_info=True)
+
+    def _index(self, collection_id: str, doc_id: str, path: str, data: bytes) -> _IndexOutput:
+        """(Re)build a doc's chunks. Returns the converter ``text`` (persisted on
+        SourceDoc.text) + the doc's browser-preview Binary (pipeline mode only)."""
         if self._pipeline is not None:
-            self._index_via_pipeline(collection_id, doc_id, path, data)
-            return
+            return self._index_via_pipeline(collection_id, doc_id, path, data)
         text = normalize_text(data.decode("utf-8", errors="replace"))
         assert self._chunker is not None  # one of pipeline/chunker is required
         chunks = self._chunker.chunk(text)
@@ -285,60 +396,120 @@ class Ingestor:
                     embedding=vec,
                 )
             )
+        return _IndexOutput(text or None, None)
 
-    def _index_via_pipeline(self, collection_id: str, doc_id: str, path: str, data: bytes) -> None:
-        """P1 indexing path: text mimes go straight into a `Document`; binary
-        mimes are routed through `reader_for(...)` (PDFReader / etc.) to get
-        their text. Either way the result is `Document`(s) carrying
-        filename/mime metadata for the splitter dispatch, which the pipeline
-        runs through splitter + embedder. The resulting embedded nodes are
-        mapped back to DocChunk storage.
+    def _index_via_pipeline(
+        self, collection_id: str, doc_id: str, path: str, data: bytes
+    ) -> _IndexOutput:
+        """Issue #39: pipeline-mode indexing. Routing has three cases:
 
-        Char offsets fall back to (0, len(node.text)) when the splitter
-        doesn't record them (e.g. MarkdownNodeParser after we prepend a
-        heading breadcrumb)."""
+        1. **Parser(s) match**: every parser whose ``matches(...)``
+           returns True runs — parsers take precedence over the inline
+           text path so a structured-text type (e.g. JSON, which
+           libmagic may sniff as text/plain) is consistently owned by
+           its parser. Each parser's output is a separate "packet" of
+           LI Documents that pipes through the pipeline (splitter +
+           embedder) and lands as DocChunks tagged with
+           ``parser_id = type(parser).__name__``. Operator can later
+           reindex one parser's chunks without touching the others.
+        2. **No parser, text / code**: handled inline — the
+           DispatchSplitter inside the pipeline picks the right splitter
+           by mime / extension. Chunks have ``parser_id=""``.
+        3. **No parser, binary**: log + return. The caller's
+           ``index()`` wraps this and flips status=ready with
+           chunks=0; the SourceDoc stays on disk so a custom parser
+           added later can reindex.
+
+        Long-running parsers (VLM image / VLM slide) call ``on_progress``
+        with a short status; the Ingestor writes it onto
+        ``SourceDoc.status_detail`` so the FE row shows progress.
+
+        Returns the doc's browser-preview ``Binary`` when a parser
+        handed one back via ``on_preview`` (e.g. PptxParser's converted
+        PDF; last hand-back wins if several parsers offer one)."""
         assert self._pipeline is not None
         mime = magic.from_buffer(data, mime=True)
         is_code = any(path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
-        docs: list[Document]
-        if mime in _TEXT_MIMES or is_code:
-            text = normalize_text(data.decode("utf-8", errors="replace"))
-            docs = [Document(text=text, metadata={"filename": path, "mime": mime})]
-        else:
-            reader = reader_for(filename=path, mime=mime)
-            if reader is None:
-                logger.warning("no reader for %s (%s) — skipping", path, mime)
-                return
-            docs = reader(data)
-            for d in docs:
-                d.metadata.setdefault("filename", path)
-                d.metadata.setdefault("mime", mime)
-        nodes = self._pipeline.run(documents=docs, show_progress=False)
-        # P3.0 vector routing: collections with embedder_id != 0 use the code
-        # embedder and write into `embedding_alt`, leaving `embedding` empty
-        # so the retriever's two-path fan-out can dispatch cleanly.
-        use_alt = self._should_use_alt_embedder(collection_id)
-        if use_alt:
-            assert self._code_embedder is not None, (
-                "Collection has embedder_id != 0 but no code_embedder was wired"
-            )
-            alt_vecs = self._code_embedder.embed_documents([n.get_content() for n in nodes])
+
         chrm = self._spec.get_resource_manager(DocChunk)
-        for seq, n in enumerate(nodes):
-            start = n.start_char_idx if n.start_char_idx is not None else 0
-            end = n.end_char_idx if n.end_char_idx is not None else len(n.get_content())
-            chrm.create(
-                DocChunk(
-                    collection_id=collection_id,
-                    source_doc_id=doc_id,
-                    seq=seq,
-                    start=start,
-                    end=end,
-                    text=n.get_content(),
-                    embedding=None if use_alt else (n.embedding or None),
-                    embedding_alt=alt_vecs[seq] if use_alt else None,
+
+        def on_progress(message: str) -> None:
+            self._set_status_detail(doc_id, message)
+
+        preview: Binary | None = None
+
+        def on_preview(preview_data: bytes, preview_mime: str) -> None:
+            nonlocal preview
+            preview = Binary(data=preview_data, content_type=preview_mime)
+
+        # Collect (parser_id, list[Document]) packets. Parsers first;
+        # the inline text/code packet (parser_id="") is the fallback for
+        # plain text no parser claims.
+        packets: list[tuple[str, list[Document]]] = []
+        with MaterialisedParserInput(data, filename=path) as source:
+            parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
+            for parser in parsers:
+                parser_id = type(parser).__name__
+                docs = list(
+                    parser.parse(
+                        source,
+                        filename=path,
+                        mime=mime,
+                        on_progress=on_progress,
+                        on_preview=on_preview,
+                    )
                 )
-            )
+                for d in docs:
+                    d.metadata.setdefault("filename", path)
+                    d.metadata.setdefault("mime", mime)
+                packets.append((parser_id, docs))
+        if not packets:
+            if mime in _TEXT_MIMES or is_code:
+                text = normalize_text(data.decode("utf-8", errors="replace"))
+                packets.append(
+                    ("", [Document(text=text, metadata={"filename": path, "mime": mime})])
+                )
+            else:
+                logger.info("no parser for %s (%s) — chunks=0, status=ready", path, mime)
+                return _IndexOutput(None, None)
+
+        # The 'text converter' output: the whole-document text BEFORE chunking
+        # (issue #86). Joining the parser Documents is overlap-free and
+        # breadcrumb-free — unlike re-joining DocChunks — so the wiki maintainer
+        # reads clean source text. The chunker downstream still consumes the
+        # SAME Documents into DocChunks.
+        full_text = "\n\n".join(d.text for _, docs in packets for d in docs).strip()
+
+        # Run each packet through the pipeline. seq is global across
+        # packets so adjacency-merge in retrieval stays meaningful
+        # (parser A's last chunk is seq N; parser B's first is N+1).
+        use_alt = self._should_use_alt_embedder(collection_id)
+        seq_offset = 0
+        for parser_id, docs in packets:
+            nodes = self._pipeline.run(documents=docs, show_progress=False)
+            if use_alt:
+                assert self._code_embedder is not None, (
+                    "Collection has embedder_id != 0 but no code_embedder was wired"
+                )
+                alt_vecs = self._code_embedder.embed_documents([n.get_content() for n in nodes])
+            for i, n in enumerate(nodes):
+                start = n.start_char_idx if n.start_char_idx is not None else 0
+                end = n.end_char_idx if n.end_char_idx is not None else len(n.get_content())
+                chrm.create(
+                    DocChunk(
+                        collection_id=collection_id,
+                        source_doc_id=doc_id,
+                        seq=seq_offset + i,
+                        start=start,
+                        end=end,
+                        text=n.get_content(),
+                        embedding=None if use_alt else (n.embedding or None),
+                        embedding_alt=alt_vecs[i] if use_alt else None,
+                        parser_id=parser_id,
+                    )
+                )
+            seq_offset += len(nodes)
+        return _IndexOutput(full_text or None, preview)
 
     def _should_use_alt_embedder(self, collection_id: str) -> bool:
         """Return True iff the Collection's `embedder_id` selects the alt

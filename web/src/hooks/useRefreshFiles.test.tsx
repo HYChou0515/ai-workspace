@@ -8,15 +8,16 @@ import { api } from "../api";
 import { qk } from "../api/queryKeys";
 import { FileBufferProvider, FileBufferStore } from "./fileBuffer";
 import { useRefreshFiles } from "./useRefreshFiles";
+import { WorkspaceSlugProvider } from "./useWorkspaceSlug";
 
 afterEach(() => vi.restoreAllMocks());
 
 function wrapper(client: QueryClient, store: FileBufferStore) {
   return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>
-      <FileBufferProvider investigationId={store.investigationId} store={store}>
-        {children}
-      </FileBufferProvider>
+      <WorkspaceSlugProvider value="rca">
+        <FileBufferProvider store={store}>{children}</FileBufferProvider>
+      </WorkspaceSlugProvider>
     </QueryClientProvider>
   );
 }
@@ -33,7 +34,7 @@ describe("useRefreshFiles", () => {
     client.setQueryData(qk.file(id, "/a.md"), { text: "old" });
     client.setQueryData(qk.file(id, "/b.md"), { text: "old-b" });
     // Pre-populate the editor buffer for one path so reload should fire.
-    const store = new FileBufferStore(id, {
+    const store = new FileBufferStore({
       readFile: vi.fn(async () => ({
         kind: "text" as const,
         path: "/a.md",
@@ -58,7 +59,7 @@ describe("useRefreshFiles", () => {
     });
 
     // 1. Server flush called.
-    expect(refreshSpy).toHaveBeenCalledWith(id);
+    expect(refreshSpy).toHaveBeenCalledWith("rca", id);
     // 2. All three cache families invalidated (state stale).
     expect(client.getQueryState(qk.files(id))?.isInvalidated).toBe(true);
     expect(client.getQueryState(qk.dirs(id))?.isInvalidated).toBe(true);
@@ -71,7 +72,7 @@ describe("useRefreshFiles", () => {
   it("skips reloading buffers with unsaved (dirty) edits", async () => {
     const id = "inv-x";
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const store = new FileBufferStore(id, {
+    const store = new FileBufferStore({
       readFile: vi.fn(async () => ({
         kind: "text" as const,
         path: "/dirty.md",
@@ -107,7 +108,7 @@ describe("useRefreshFiles", () => {
     const id = "inv-x";
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     client.setQueryData(qk.files(id), { items: [], dirs: [] });
-    const store = new FileBufferStore(id, {
+    const store = new FileBufferStore({
       readFile: vi.fn(),
       writeFile: vi.fn(),
     });

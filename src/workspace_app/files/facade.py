@@ -15,10 +15,24 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 from ..filestore.protocol import FileNotFound, FileStore
 from ..sandbox.protocol import Sandbox, SandboxHandle
+
+# How many times an etag-guarded edit re-bases against a concurrent writer
+# before giving up and reporting a conflict. A handful is plenty — contention
+# on one wiki page across workers is rare and each retry re-reads fresh.
+_CAS_EDIT_RETRIES = 5
+
+
+def _norm(path: str) -> str:
+    """Canonicalise a workspace path: ``./brief.md``, ``brief.md`` and
+    ``/brief.md`` all map to the same internal key ``/brief.md``. So
+    the agent can write whichever feels natural in prose and the
+    underlying store stays consistent."""
+    p = path.removeprefix("./")
+    return p if p.startswith("/") else "/" + p
 
 
 class WorkspaceFiles:
@@ -43,6 +57,7 @@ class WorkspaceFiles:
         return (self._sb, handle) if handle is not None else None
 
     async def read(self, workspace_id: str, path: str) -> bytes:
+        path = _norm(path)
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -53,6 +68,7 @@ class WorkspaceFiles:
         return await self._fs.read(workspace_id, path)
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
+        path = _norm(path)
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -61,6 +77,7 @@ class WorkspaceFiles:
             await self._fs.write(workspace_id, path, data)
 
     async def exists(self, workspace_id: str, path: str) -> bool:
+        path = _norm(path)
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -68,6 +85,7 @@ class WorkspaceFiles:
         return await self._fs.exists(workspace_id, path)
 
     async def delete(self, workspace_id: str, path: str) -> None:
+        path = _norm(path)
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -79,6 +97,7 @@ class WorkspaceFiles:
             await self._fs.delete(workspace_id, path)
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
+        prefix = _norm(prefix) if prefix else prefix
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -86,6 +105,7 @@ class WorkspaceFiles:
         return await self._fs.ls(workspace_id, prefix)
 
     async def mkdir(self, workspace_id: str, path: str) -> None:
+        path = _norm(path)
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -94,6 +114,7 @@ class WorkspaceFiles:
             await self._fs.mkdir(workspace_id, path)
 
     async def rmdir(self, workspace_id: str, path: str) -> None:
+        path = _norm(path)
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -105,6 +126,7 @@ class WorkspaceFiles:
             await self._fs.rmdir(workspace_id, path)
 
     async def is_dir(self, workspace_id: str, path: str) -> bool:
+        path = _norm(path)
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -113,6 +135,7 @@ class WorkspaceFiles:
         return await self._fs.is_dir(workspace_id, path)
 
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
+        prefix = _norm(prefix) if prefix else prefix
         warm = self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
@@ -130,6 +153,7 @@ class WorkspaceFiles:
         """Create-only write: succeed (return None) if `path` doesn't exist;
         otherwise don't clobber — return the current bytes so the caller can
         decide. Atomic under the per-path lock."""
+        path = _norm(path)
         async with self._locks[(workspace_id, path)]:
             if await self.exists(workspace_id, path):
                 return await self.read(workspace_id, path)
@@ -142,8 +166,21 @@ class WorkspaceFiles:
         conflict (missing file, text not found, or ambiguous) and the current
         text is returned so the caller can re-base. Atomic under the per-path
         lock — so a concurrent change makes `old` stop matching and the edit is
-        rejected rather than blindly applied."""
+        rejected rather than blindly applied.
+
+        When the file store exposes optimistic-concurrency hooks
+        (``read_with_etag`` + ``write_cas``) and no live sandbox owns the
+        workspace, the read→write is additionally guarded by the store's etag,
+        so the edit is safe against writers in *other processes* (e.g. a second
+        ingest worker), not just other coroutines — the per-path lock only
+        covers this process."""
+        path = _norm(path)
+        warm = self._warm(workspace_id)
+        write_cas = getattr(self._fs, "write_cas", None)
+        read_with_etag = getattr(self._fs, "read_with_etag", None)
         async with self._locks[(workspace_id, path)]:
+            if warm is None and write_cas is not None and read_with_etag is not None:
+                return await self._edit_cas(workspace_id, path, old, new, write_cas, read_with_etag)
             try:
                 current = (await self.read(workspace_id, path)).decode("utf-8", errors="replace")
             except FileNotFound:
@@ -152,3 +189,33 @@ class WorkspaceFiles:
                 return current
             await self.write(workspace_id, path, current.replace(old, new, 1).encode("utf-8"))
             return None
+
+    async def _edit_cas(
+        self,
+        workspace_id: str,
+        path: str,
+        old: str,
+        new: str,
+        write_cas: Callable[[str, str, bytes, str | None], Awaitable[bool]],
+        read_with_etag: Callable[[str, str], Awaitable[tuple[bytes, str] | None]],
+    ) -> str | None:
+        """Etag-guarded edit→retry: re-read on every attempt so a concurrent
+        write makes us re-base off the latest content instead of clobbering it."""
+        for _ in range(_CAS_EDIT_RETRIES):
+            got = await read_with_etag(workspace_id, path)
+            if got is None:
+                return ""  # the page doesn't exist — re-create it with write_file
+            data, etag = got
+            current = data.decode("utf-8", errors="replace")
+            if current.count(old) != 1:
+                return current  # text conflict — caller re-reads and re-bases
+            applied = await write_cas(
+                workspace_id, path, current.replace(old, new, 1).encode("utf-8"), etag
+            )
+            if applied:
+                return None
+            # A concurrent writer bumped the etag between our read and write —
+            # loop to re-read and re-apply against the new content.
+        # Persistent contention: hand back the latest content as a conflict.
+        got = await read_with_etag(workspace_id, path)
+        return got[0].decode("utf-8", errors="replace") if got is not None else ""

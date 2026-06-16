@@ -12,6 +12,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { AskAgentLauncher } from "./AskAgentLauncher";
 import { KbChatsPage } from "./KbChatsPage";
@@ -75,6 +76,7 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
           <span className="kb-topbar__title">
             {tab === "collections" ? "Collections" : "Conversations"}
           </span>
+          <HealthDot />
           {/* Same component Home uses — switches our own tab on
               manage/history and reuses our viewer for citations. */}
           <AskAgentLauncher

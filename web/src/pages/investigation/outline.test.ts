@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { hasOutline } from "../../renderers/registry";
-import { extractHeadings } from "./InvestigationShell";
+import { extractHeadings } from "./WorkspaceShell";
 
 describe("hasOutline", () => {
   it("is true for markdown files", () => {
     expect(hasOutline("/brief.md")).toBe(true);
-    expect(hasOutline("/5-why.md")).toBe(true);
+    expect(hasOutline("/SOP.md")).toBe(true);
   });
 
   it("is true for report version files", () => {
@@ -14,9 +14,9 @@ describe("hasOutline", () => {
     expect(hasOutline("/report.v12.md")).toBe(true);
   });
 
-  it("is false for notebooks / canvas / csv", () => {
+  it("is false for notebooks / json / csv", () => {
     expect(hasOutline("/drift.ipynb")).toBe(false);
-    expect(hasOutline("/fishbone.canvas")).toBe(false);
+    expect(hasOutline("/config.json")).toBe(false);
     expect(hasOutline("/data/x.csv")).toBe(false);
   });
 });

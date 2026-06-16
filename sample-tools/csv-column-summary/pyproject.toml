@@ -25,3 +25,14 @@ dev = ["pytest>=8"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Absolute imports only (`csv_column_summary.core.*`) — same rule as
+# rca-tools; tool-package code is copied around too much for `..` forms.
+select = ["E", "F", "I", "TID252"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"

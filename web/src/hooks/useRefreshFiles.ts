@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { api } from "../api";
 import { qk } from "../api/queryKeys";
 import { useFileBufferStore } from "./fileBuffer";
+import { useWorkspaceSlug } from "./useWorkspaceSlug";
 
 /**
  * Full refresh of an investigation's file state — fixes #31's two faces of
@@ -23,13 +24,14 @@ import { useFileBufferStore } from "./fileBuffer";
  * Must be invoked inside a `<FileBufferProvider>` (uses `useFileBufferStore`).
  */
 export function useRefreshFiles(investigationId: string): () => Promise<void> {
+  const slug = useWorkspaceSlug();
   const queryClient = useQueryClient();
   const buffers = useFileBufferStore();
   return useCallback(async () => {
     // 1. Sandbox → snapshot. Tolerate failure (a stale snapshot is still
     //    better than nothing; the invalidations below still help).
     try {
-      await api.refreshFiles(investigationId);
+      await api.refreshFiles(slug, investigationId);
     } catch {
       /* ignore */
     }
@@ -46,5 +48,5 @@ export function useRefreshFiles(investigationId: string): () => Promise<void> {
     for (const path of buffers.bufferedPaths()) {
       if (!buffers.isDirty(path)) buffers.reload(path);
     }
-  }, [investigationId, queryClient, buffers]);
+  }, [slug, investigationId, queryClient, buffers]);
 }

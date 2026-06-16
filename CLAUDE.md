@@ -15,7 +15,7 @@ Respond to the user in **Traditional Taiwanese Chinese (繁體中文 / 台灣用
 
 Backend (Python 3.12, uv-managed):
 
-- Install: `uv sync`
+- Install: `uv sync --all-extras` (the `process-sandbox` extra — pandera / scipy / scikit-learn / seaborn — is needed by the tabular parser + data-analysis tools; a bare `uv sync` leaves `test_infer_modules` failing)
 - Run all tests + coverage: `uv run coverage run -m pytest && uv run coverage report`
   - Use `coverage.py` directly — **do not** add `pytest-cov`.
 - Run a single test: `uv run pytest tests/path/to/test_file.py::test_name`
@@ -81,6 +81,8 @@ Key conventions:
 - **Embeddings are computed by us and stored raw** on `DocChunk` (`Vector`, cosine). `KB_EMBED_DIM` must match the embedder's output width; changing it requires re-indexing.
 - **specstar singleton vs instance**: always construct a fresh `SpecStar()` instance — never use the module-level `specstar.spec` singleton. This keeps tests isolated.
 - **`dict[str, Any]`** (not `dict[str, object]`) for specstar struct fields — `object` breaks JSON-schema generation. Narrow `resource.data` with `assert isinstance(...)` for `ty` (coverage-clean).
+- **Backfilling a new index onto existing rows**: specstar extracts `indexed_data` at write time and does NOT auto-backfill — rows written before the index group under `None` and under-count in aggregates. To make them countable, register the model as `Schema("vN").step(None, _reindex_only, source_type=Model)` (the `None` step covers rows written before any `Schema`), then an operator runs the **migrate route** `POST /{model}/migrate/execute` (specstar's `MigrateRouteTemplate` — opt-in, registered globally in `make_spec`) to re-extract their `indexed_data`. `rm.migrate` is the only backfill op; **don't hand-roll a reindex loop** (specstar discussions #365/#366).
+- **List/page aggregates must be scoped**: count/sum for a page goes through `exp_aggregate_by(..., query=...)` bounded to the page's ids (or the collection) — never a global group-by just to look up one page (e.g. `doc_cited_for_ids(spec, ids)`, not `doc_cited(spec)`, in `list_documents`). `.contains` is a membership *filter*, not a group-by (it can't produce per-element counts), and lowers to substring `LIKE` on Postgres.
 - **FE data layer is TanStack Query**: GET-style reads go through `useQuery` (keys in `web/src/api/queryKeys.ts`, one client in `web/src/api/queryClient.ts`); writes are `useMutation` + `invalidateQueries`. SSE stays imperative (`useAgent`/`useKbChat`), but their initial hydration is a `useQuery`. Components/hooks under test need a provider — wrap with `web/src/test/queryWrapper.tsx` (`QueryWrap` / `renderWithQuery`). The signed-in user id is `api.getCurrentUser()` via `useCurrentUser()` (mocked until SSO), not a hardcoded constant.
 
 See the rationale and rejected alternatives in the conversation history under `/grill-me` (Q1-Q12).

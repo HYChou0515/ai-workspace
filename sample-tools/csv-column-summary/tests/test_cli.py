@@ -13,7 +13,6 @@ from csv_column_summary.cli import main
 from csv_column_summary.commands import summarise as summarise_mod
 from csv_column_summary.core import plot, summarize
 
-
 # ─── core ─────────────────────────────────────────────────────────────
 
 

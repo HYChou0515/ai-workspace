@@ -17,8 +17,6 @@ export type {
   ExecuteCellArgs,
   FileContent,
   FileInfo,
-  Investigation,
-  InvestigationInput,
   Message,
   MessageRole,
   SendMessageArgs,

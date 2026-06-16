@@ -237,6 +237,95 @@ async def test_exec_streaming_timeout_preserves_partial_stdout(tmp_path):
     assert b"first\n" in b"".join(streamed)
 
 
+async def test_exec_log_timeout_kills_silent_command(tmp_path):
+    """#70: a command that goes silent longer than log_timeout is killed as
+    hung — even though it's well within exec_timeout. Exit 124, a 'no output'
+    notice, and the partial stdout kept."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False, exec_timeout=20, log_timeout=0.4)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["sh", "-c", "echo started; sleep 5; echo never"])
+    assert r.exit_code == 124
+    assert b"started\n" in r.stdout
+    assert b"never" not in r.stdout
+    assert b"no output" in r.stderr.lower()
+
+
+async def test_exec_log_timeout_resets_on_output(tmp_path):
+    """#70: steady output (each gap < log_timeout) keeps the command alive past
+    log_timeout — the idle timer resets on every chunk, so a chatty long job
+    isn't killed."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False, exec_timeout=20, log_timeout=0.5)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["sh", "-c", "for i in 1 2 3 4 5; do echo o$i; sleep 0.2; done"])
+    assert r.exit_code == 0  # total ~1s > log_timeout, but never idle that long
+    assert b"o5\n" in r.stdout
+
+
+async def test_exec_with_both_timeouts_disabled_runs_to_completion(tmp_path):
+    """#70: exec_timeout=0 AND log_timeout=0 disables both caps — the command
+    runs to completion with no watchdog deadline."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False, exec_timeout=0, log_timeout=0)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["sh", "-c", "echo hi"])
+    assert r.exit_code == 0
+    assert b"hi\n" in r.stdout
+
+
+async def test_exec_total_timeout_still_caps_even_with_output(tmp_path):
+    """#70: the original exec_timeout (total wall-clock) still fires even when
+    the command keeps producing output (so log_timeout never triggers). Its
+    notice says 'total' to distinguish from a log timeout."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False, exec_timeout=0.5, log_timeout=20)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["sh", "-c", "while true; do echo x; sleep 0.05; done"])
+    assert r.exit_code == 124
+    assert b"total" in r.stderr.lower()
+
+
+async def test_exec_kills_whole_process_group_on_cancel(tmp_path):
+    """#74: cancelling the awaiting turn must kill the running command AND its
+    detached grandchildren, not orphan them in the background. The command
+    spawns a backgrounded `sleep` (grandchild), records its PID, then blocks;
+    after the exec task is cancelled that PID must be dead — proving the whole
+    process GROUP was killed, not just the direct child."""
+    import asyncio
+    import contextlib
+    import os
+    import time
+
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = await sb.create(SandboxSpec())
+    pidfile = tmp_path / "grandchild.pid"
+    cmd = ["sh", "-c", f"sleep 30 & echo $! > '{pidfile}'; sleep 30"]
+    task = asyncio.create_task(sb.exec(h, cmd))
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and not (pidfile.exists() and pidfile.read_text().strip()):
+        await asyncio.sleep(0.02)
+    grandchild = int(pidfile.read_text().strip())
+
+    def alive(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    assert alive(grandchild)  # the grandchild is running before we cancel
+    try:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        for _ in range(100):  # give the OS a moment to reap the killed group
+            if not alive(grandchild):
+                break
+            await asyncio.sleep(0.02)
+        assert not alive(grandchild), "background grandchild survived cancel (orphaned)"
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(grandchild, 9)  # never leak the sleep if the assertion failed
+
+
 # ---------------- Isolation (user-namespace + chroot jail) ----------------
 
 from workspace_app.sandbox.local_process import _jail_argv, _userns_supported  # noqa: E402
@@ -361,6 +450,76 @@ async def test_isolated_exec_python_is_python3(tmp_path):
     sb = LocalProcessSandbox(root_dir=tmp_path, isolate=True)
     h = await sb.create(SandboxSpec())
     r = await sb.exec(h, ["python", "-c", "import sys; print(sys.version_info.major)"])
+    assert r.exit_code == 0
+    assert r.stdout.decode().strip() == "3"
+
+
+@_needs_userns
+async def test_isolated_python_shim_prefers_python_stack_when_provisioned(tmp_path):
+    """When the `python-stack` venv carrier is provisioned (its launcher
+    bind-mounted at /.tools/python-stack/launch), the jail's `python`
+    shim must route there — so the agent's raw `python` calls see the
+    bundle's pandas / numpy / scipy / matplotlib instead of the bare
+    host python with no data stack.
+
+    Fake the carrier by writing a `launch` script that just prints a
+    sentinel; if the shim routes correctly, `python anything` emits
+    that sentinel.
+    """
+    tools = tmp_path / "prebuilt"
+    stack = tools / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["python", "-c", "ignored"])
+    assert r.exit_code == 0
+    assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode()
+
+
+@_needs_userns
+async def test_isolated_python_shim_survives_bash_login_shell(tmp_path):
+    """The agent commonly runs commands as `bash -lc "python3 -c …"` (login
+    shell + command). A naive PATH export from the jail bootstrap is then
+    clobbered by /etc/profile's hard-coded PATH on Debian/Ubuntu, dropping
+    /tmp/.jailbin and routing `python3` back to the host's /usr/bin/python3
+    — which has none of the python-stack carrier's data deps. Regression
+    lock for the May 31 ModuleNotFoundError that fired in two consecutive
+    investigations: the bootstrap's /etc/profile.d/jailbin.sh overlay must
+    re-prepend the jailbin even under a login shell.
+    """
+    tools = tmp_path / "prebuilt"
+    stack = tools / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    # `bash -lc` is the failure mode the user hit: login shell sources
+    # /etc/profile, which on Debian sets PATH=/usr/local/sbin:/usr/local/bin:
+    # /usr/sbin:/usr/bin:/sbin:/bin. Without our profile.d hook the python3
+    # call would resolve to /usr/bin/python3 — the host Python, no pandas.
+    r = await sb.exec(h, ["bash", "-lc", "python3 -c 'pass'"])
+    assert r.exit_code == 0
+    assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode()
+
+
+@_needs_userns
+async def test_isolated_python_shim_falls_back_to_host_python3_without_carrier(tmp_path):
+    """Without a python-stack bundle in tools_dir, `python` must still
+    work — it falls back to /usr/bin/python3. Regression lock so the
+    new carrier-aware logic doesn't accidentally drop the fallback."""
+    tools = tmp_path / "prebuilt"
+    tools.mkdir()
+    # tools_dir is non-empty but contains NO python-stack subdir.
+    (tools / "something-else").mkdir()
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=True, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["python", "-c", "print(__import__('sys').version_info.major)"])
     assert r.exit_code == 0
     assert r.stdout.decode().strip() == "3"
 

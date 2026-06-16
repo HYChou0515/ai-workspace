@@ -132,3 +132,127 @@ describe("KbDocViewer", () => {
     expect(onClose).toHaveBeenCalled();
   });
 });
+
+describe("KbDocViewer binary documents (issue #39 bug)", () => {
+  afterEach(cleanup);
+
+  it("renders an image doc as an <img> from its blob, not decoded bytes", async () => {
+    const client = fakeClient({
+      "col-1/u/shot.png": mkDoc({
+        filename: "shot.png",
+        markdown: "", // BE ships no body for binary docs
+        content_type: "image/png",
+        file_id: "blob-png-1",
+      }),
+    });
+    render(<KbDocViewer documentId="col-1/u/shot.png" onClose={() => {}} client={client} />);
+    const img = await screen.findByRole("img", { name: "shot.png" });
+    expect(img).toHaveAttribute("src", "/blobs/blob-png-1");
+  });
+
+  it("renders a download notice for undisplayable binary docs (pptx)", async () => {
+    const client = fakeClient({
+      "col-1/u/deck.pptx": mkDoc({
+        filename: "deck.pptx",
+        markdown: "",
+        content_type:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        file_id: "blob-pptx-1",
+      }),
+    });
+    render(<KbDocViewer documentId="col-1/u/deck.pptx" onClose={() => {}} client={client} />);
+    // User-facing copy stays jargon-free — no format/mime internals.
+    expect(await screen.findByText(/preview isn't available/i)).toBeInTheDocument();
+    // No mojibake article body.
+    expect(screen.queryByRole("img")).toBeNull();
+  });
+});
+
+describe("KbDocViewer browser-native documents (issue #39)", () => {
+  afterEach(cleanup);
+
+  it("renders a PDF doc in an iframe pointed at its blob", async () => {
+    const client = fakeClient({
+      "col-1/u/deck2.pdf": mkDoc({
+        filename: "deck2.pdf",
+        markdown: "",
+        content_type: "application/pdf",
+        file_id: "blob-pdf-2",
+      }),
+    });
+    render(<KbDocViewer documentId="col-1/u/deck2.pdf" onClose={() => {}} client={client} />);
+    const frame = await screen.findByTitle("deck2.pdf");
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame).toHaveAttribute("src", "/blobs/blob-pdf-2");
+  });
+
+  it("renders an HTML doc in a sandboxed iframe (no scripts)", async () => {
+    const client = fakeClient({
+      "col-1/u/page.html": mkDoc({
+        filename: "page.html",
+        markdown: "",
+        content_type: "text/html",
+        file_id: "blob-html-1",
+      }),
+    });
+    render(<KbDocViewer documentId="col-1/u/page.html" onClose={() => {}} client={client} />);
+    const frame = await screen.findByTitle("page.html");
+    expect(frame.tagName).toBe("IFRAME");
+    expect(frame).toHaveAttribute("src", "/blobs/blob-html-1");
+    // sandbox with NO allow-scripts — uploaded HTML must not run JS.
+    expect(frame).toHaveAttribute("sandbox", "");
+  });
+});
+
+describe("KbDocViewer parser previews (pptx → converted PDF)", () => {
+  afterEach(cleanup);
+
+  it("iframes the preview blob when the doc carries one", async () => {
+    const client = fakeClient({
+      "col-1/u/deck.pptx": mkDoc({
+        filename: "deck.pptx",
+        markdown: "",
+        content_type:
+          "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        file_id: "blob-pptx-1",
+        preview_file_id: "blob-preview-pdf-1",
+      }),
+    });
+    render(<KbDocViewer documentId="col-1/u/deck.pptx" onClose={() => {}} client={client} />);
+    const frame = await screen.findByTitle("deck.pptx");
+    expect(frame.tagName).toBe("IFRAME");
+    // The PREVIEW blob (converted PDF), not the original pptx bytes.
+    expect(frame).toHaveAttribute("src", "/blobs/blob-preview-pdf-1");
+  });
+});
+
+describe("KbDocViewer — replay entry (#51 P6)", () => {
+  afterEach(cleanup);
+
+  it("offers a replay action for documents whose processing involved AI", async () => {
+    const client = fakeClient({
+      "col-1/u/inv-1.chat.json": mkDoc({
+        filename: "inv-1.chat.json",
+        content_type: "application/json",
+        markdown: "```json\n{}\n```",
+      }),
+    });
+    render(
+      <KbDocViewer documentId="col-1/u/inv-1.chat.json" onClose={() => {}} client={client} />,
+    );
+    const btn = await screen.findByRole("button", { name: /test ai/i });
+    await userEvent.click(btn);
+    // The replay dialog opens (its probe runs against the real client —
+    // here it just shows the dialog frame).
+    expect(await screen.findByRole("dialog", { name: /replay/i })).toBeInTheDocument();
+  });
+
+  it("hides the action for documents with no AI step", async () => {
+    const client = fakeClient({
+      "col-1/u/notes.md": mkDoc({ filename: "notes.md", markdown: "# notes" }),
+    });
+    render(<KbDocViewer documentId="col-1/u/notes.md" onClose={() => {}} client={client} />);
+    await screen.findByText("notes.md");
+    expect(screen.queryByRole("button", { name: /test ai/i })).not.toBeInTheDocument();
+  });
+});

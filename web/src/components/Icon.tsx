@@ -42,6 +42,7 @@ export type IconName =
   | "bug"
   | "flame"
   | "refresh"
+  | "undo"
   | "quote"
   | "external"
   | "paperclip";
@@ -215,6 +216,12 @@ export function Icon({
       <>
         <path d="M20 8 A8 8 0 1 0 19 16" {...sp} />
         <path d="M20 4 V8 H16" {...sp} />
+      </>
+    ),
+    undo: (
+      <>
+        <path d="M9 7 L4 12 L9 17" {...sp} />
+        <path d="M4 12 H14 A6 6 0 0 1 14 24" {...sp} transform="translate(0,-6)" />
       </>
     ),
     paperclip: (

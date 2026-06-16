@@ -1,5 +1,5 @@
 """Loader for the KB agent system prompt (markdown so it's editable without
-recompiling and diff-friendly in PRs — mirrors workspace_app.rca.prompts)."""
+recompiling and diff-friendly in PRs)."""
 
 from __future__ import annotations
 

@@ -1,0 +1,35 @@
+[project]
+name = "python-stack"
+version = "0.1.0"
+description = "Sandbox venv carrier — bundles the pandas / numpy / scipy / matplotlib data stack so the agent's raw `exec([\"python\", ...])` calls have working imports. No CLI commands of its own; the jail bootstrap shims `python` to this bundle's launcher when the package is provisioned."
+requires-python = ">=3.12"
+
+# Heavy-deps strategy as data-fetch / csv-column-summary / rca-tools:
+# bundled into the sandbox at prebuild time, never touches the host
+# app's tree. Pinned by this directory's uv.lock so every operator's
+# prebuild gets the same versions.
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+]
+
+# Intentionally NO [project.scripts]: this package is a venv carrier,
+# not a CLI tool. The prebuild step recognises packages without a
+# scripts table and writes a pure-python launcher instead of the
+# command-dispatcher launcher used by data-fetch / rca-tools / …. The
+# sandbox's jail bootstrap then routes the raw `python` shim to this
+# bundle's launcher when it's present, so the agent's
+# `exec(["python", "script.py"])` calls see pandas / numpy / scipy /
+# matplotlib without any extra import gymnastics.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# We still need *a* package for uv sync to install non-editable, even
+# though there's no source code that does work — the bundle's value is
+# the .venv it ships with.
+packages = ["src/python_stack"]

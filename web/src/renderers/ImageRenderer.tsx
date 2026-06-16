@@ -11,7 +11,7 @@ import { useFileBuffer } from "../hooks/fileBuffer";
 import { imageMime } from "../pages/investigation/renderer";
 import { TextRenderer } from "./TextRenderer";
 
-export function ImageRenderer({ investigationId, path }: { investigationId: string; path: string }) {
+export function ImageRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
   const { entry } = useFileBuffer(path);
   const editing = isEditing(path);
@@ -24,7 +24,7 @@ export function ImageRenderer({ investigationId, path }: { investigationId: stri
 
   useEffect(() => () => void (url && URL.revokeObjectURL(url)), [url]);
 
-  if (editing) return <TextRenderer investigationId={investigationId} path={path} />;
+  if (editing) return <TextRenderer path={path} />;
   if (entry.status === "loading" || !url) {
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
   }

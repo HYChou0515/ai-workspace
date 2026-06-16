@@ -14,18 +14,20 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
-from specstar import SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import RunDone, create_app
 from workspace_app.api.events import AgentEvent
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+
+from .conftest import register_rca_item
 
 
 class _CountingSandbox(MockSandbox):
@@ -75,8 +77,7 @@ def _make_components(
     mirror_interval: timedelta = timedelta(seconds=60),
     runner=None,
 ):
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     sandbox = _CountingSandbox()
     filestore = SpecstarFileStore(spec)
     app = create_app(
@@ -88,7 +89,7 @@ def _make_components(
         idle_check_interval=idle_check_interval,
         mirror_interval=mirror_interval,
     )
-    return app, sandbox, filestore
+    return app, sandbox, filestore, spec
 
 
 @asynccontextmanager
@@ -105,13 +106,14 @@ async def _running_app(app):
 async def test_idle_killer_reaps_session_past_threshold():
     """End-to-end: POST creates a session+sandbox. After idle_timeout
     elapses with no further activity, the next sweep kills it."""
-    app, sandbox, _ = _make_components(
+    app, sandbox, _, spec = _make_components(
         idle_timeout=timedelta(seconds=0.1),
         idle_check_interval=timedelta(seconds=0.05),
     )
+    iid = register_rca_item(spec)
     async with _running_app(app) as client:
-        resp = await client.post("/investigations/ws/messages", json={"content": "x"})
-        assert resp.status_code == 200
+        resp = await client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
+        assert resp.status_code == 202
         assert sandbox.create_calls == 1
         # Wait long enough for idle threshold + at least one sweep.
         for _ in range(40):
@@ -122,12 +124,13 @@ async def test_idle_killer_reaps_session_past_threshold():
 
 
 async def test_active_session_within_threshold_is_not_reaped():
-    app, sandbox, _ = _make_components(
+    app, sandbox, _, spec = _make_components(
         idle_timeout=timedelta(seconds=2),
         idle_check_interval=timedelta(seconds=0.05),
     )
+    iid = register_rca_item(spec)
     async with _running_app(app) as client:
-        await client.post("/investigations/ws/messages", json={"content": "x"})
+        await client.post(f"/a/rca/items/{iid}/messages", json={"content": "x"})
         # Sweep happens but nothing's idle yet.
         await asyncio.sleep(0.2)
     # Lifespan-shutdown's close_all will count as a kill — so we only
@@ -139,13 +142,15 @@ async def test_active_session_within_threshold_is_not_reaped():
 async def test_shutdown_close_all_kills_alive_sessions():
     """When the app's lifespan exits, the idle-killer is cancelled and
     registry.close_all() releases anything still in-flight."""
-    app, sandbox, _ = _make_components(
+    app, sandbox, _, spec = _make_components(
         idle_timeout=timedelta(seconds=60),
         idle_check_interval=timedelta(seconds=60),
     )
+    iid_a = register_rca_item(spec)
+    iid_b = register_rca_item(spec)
     async with _running_app(app) as client:
-        await client.post("/investigations/ws-a/messages", json={"content": "a"})
-        await client.post("/investigations/ws-b/messages", json={"content": "b"})
+        await client.post(f"/a/rca/items/{iid_a}/messages", json={"content": "a"})
+        await client.post(f"/a/rca/items/{iid_b}/messages", json={"content": "b"})
         assert sandbox.create_calls == 2
         assert sandbox.kill_calls == 0  # nothing reaped yet
     # Lifespan exit happens here.
@@ -156,21 +161,22 @@ async def test_mirror_sweeper_persists_warm_sandbox_to_snapshot():
     """The throttle sweep mirrors a warm sandbox to the snapshot every
     mirror_interval — surfacing even files the shell wrote (which the file
     tools never touched) in the durable FileStore."""
-    app, _sandbox, filestore = _make_components(
+    app, _sandbox, filestore, spec = _make_components(
         idle_timeout=timedelta(seconds=60),
         idle_check_interval=timedelta(seconds=60),
         mirror_interval=timedelta(seconds=0.05),
         runner=_ShellWritingRunner(),
     )
+    iid = register_rca_item(spec)
     async with _running_app(app) as client:
-        await client.post("/investigations/ws/messages", json={"content": "go"})
+        await client.post(f"/a/rca/items/{iid}/messages", json={"content": "go"})
         # the shell-written file is NOT in the snapshot yet (no mirror ran)…
         for _ in range(40):
             await asyncio.sleep(0.05)
-            if await filestore.exists("ws", "/out.txt"):
+            if await filestore.exists(iid, "/out.txt"):
                 break
     # …a sweep tick mirrored it into the snapshot.
-    assert await filestore.read("ws", "/out.txt") == b"shell-made"
+    assert await filestore.read(iid, "/out.txt") == b"shell-made"
 
 
 async def test_default_idle_timeout_matches_rca_pivot():

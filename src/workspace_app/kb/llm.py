@@ -43,20 +43,32 @@ class ILlm(abc.ABC):
 class LitellmLlm(ILlm):
     """Production ILlm via LiteLLM (model string routes the provider)."""
 
-    def __init__(self, model: str, base_url: str | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        reasoning_effort: str | None = None,
+    ) -> None:
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
+        # Factory-configured (kb.retrieval_llm.reasoning_effort). None ⇒ omit the
+        # param (model default). "none" ⇒ Ollama think=False (no <think> on query
+        # expansion / HyDE / rerank); low|medium|high ⇒ thinking on.
+        self.reasoning_effort = reasoning_effort
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:  # pragma: no cover — live model
         import litellm
 
+        extra = {} if self.reasoning_effort is None else {"reasoning_effort": self.reasoning_effort}
         for chunk in litellm.completion(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
             stream=True,
             api_base=self._base_url,
             api_key=self._api_key,
+            **extra,
         ):
             delta = chunk.choices[0].delta
             reasoning = getattr(delta, "reasoning_content", None)

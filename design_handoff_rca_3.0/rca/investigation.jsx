@@ -93,22 +93,7 @@ function InvestigationRCA({ onBack } = {}) {
             ))}
           </FileSection>
 
-          <FileSection label="Investigation files">
-            <FileRow icon="folder" label="data" expanded/>
-            <FileRow icon="table" label="reflow_zone3.csv" depth={1} scm="M"/>
-            <FileRow icon="table" label="paste_press_log.csv" depth={1}/>
-            <FileRow icon="table" label="aoi_voids_w14.csv" depth={1} scm="A"/>
-            <FileRow icon="folder" label="photos / x-rays" expanded/>
-            <FileRow icon="photo" label="board-A-0142.jpg" depth={1}/>
-            <FileRow icon="photo" label="xray-stack-1.tiff" depth={1}/>
-            <FileRow icon="folder" label="analyses" expanded/>
-            {INV_TABS.map((t, i) => (
-              <div key={t.view} onClick={() => setView(t.view)} style={{ cursor: "pointer" }}>
-                <FileRow icon={t.icon} label={t.file} depth={1} active={view === t.view} scm={t.modified ? "M" : null}/>
-              </div>
-            ))}
-            <FileRow icon="folder" label=".rca" />
-          </FileSection>
+          <EvidenceTree view={view} setView={setView}/>
 
           <FileSection label="Outline">
             <OutlineRow label="Context"/>
@@ -361,6 +346,163 @@ function FileRow({ icon, label, depth = 0, active, modified, expanded, scm }) {
       <span style={{ fontSize: 13, color: active ? RCA.ink : RCA.textPaper, flex: 1, fontWeight: active ? 500 : 400 }}>{label}</span>
       {modified && <span style={{ width: 6, height: 6, borderRadius: "50%", background: RCA.warn }}/>}
       {scm && <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: scm === "M" ? RCA.warn : scm === "A" ? RCA.ok : RCA.accent }}>{scm}</span>}
+    </div>
+  );
+}
+
+// ---- evidence tree node (recursive) ----
+function EvNode({ node, depth, open, toggle, view, onSelect, renaming, setRenaming, onRename, onCtx }) {
+  const pad = 16 + depth * 14;
+  const isRenaming = renaming === node.path;
+  const [draftName, setDraftName] = React.useState(node.name);
+  React.useEffect(() => { if (isRenaming) setDraftName(node.name); }, [isRenaming]);
+  const renameBox = (
+    <input autoFocus value={draftName} onClick={(e) => e.stopPropagation()} onChange={(e) => setDraftName(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") { onRename(node, draftName); setRenaming(null); } if (e.key === "Escape") setRenaming(null); }}
+      onBlur={() => { onRename(node, draftName); setRenaming(null); }}
+      style={{ flex: 1, minWidth: 0, height: 20, border: `1px solid ${RCA.accent}`, borderRadius: 3, padding: "0 5px", fontFamily: RCA.fMono, fontSize: 12, color: RCA.ink, outline: "none", background: RCA.white }}/>
+  );
+  if (node.type === "folder") {
+    const o = open.has(node.path);
+    return (
+      <div>
+        <div onClick={() => toggle(node.path)} onContextMenu={(e) => onCtx(e, node)} style={{ display: "flex", alignItems: "center", gap: 6, padding: `4px 12px 4px ${pad}px`, cursor: "pointer", userSelect: "none" }}
+          onMouseEnter={(e) => (e.currentTarget.style.background = RCA.paper2)} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+          <I name={o ? "chev_d" : "chev_r"} size={11} color={RCA.textPaperD2}/>
+          <I name="folder" size={13} color={RCA.textPaperD}/>
+          {isRenaming ? renameBox : <span style={{ fontSize: 13, color: RCA.textPaper, flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{node.name}</span>}
+          {!isRenaming && <span className="mono" style={{ fontSize: 10, color: RCA.textPaperD2 }}>{countFiles(node)}</span>}
+        </div>
+        {o && node.children.map((c, i) => (
+          <EvNode key={c.path + i} node={c} depth={depth + 1} open={open} toggle={toggle} view={view} onSelect={onSelect} renaming={renaming} setRenaming={setRenaming} onRename={onRename} onCtx={onCtx}/>
+        ))}
+      </div>
+    );
+  }
+  const active = node.doc.view && node.doc.view === view;
+  return (
+    <div onClick={() => onSelect(node.doc)} onContextMenu={(e) => onCtx(e, node)} style={{ display: "flex", alignItems: "center", gap: 6, padding: `4px 12px 4px ${pad}px`, cursor: "pointer", background: active ? RCA.accentSoft + "55" : "transparent", borderLeft: active ? `2px solid ${RCA.accent}` : "2px solid transparent", marginLeft: -2, userSelect: "none" }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.background = RCA.paper2; }} onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}>
+      <I name={node.doc.icon || docIcon(node.doc.kind)} size={13} color={active ? RCA.accentH : RCA.textPaperD}/>
+      {isRenaming ? renameBox : <span style={{ fontSize: 13, color: active ? RCA.ink : RCA.textPaper, flex: 1, fontWeight: active ? 500 : 400, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{node.name}</span>}
+      {!isRenaming && node.doc.status === "indexing" && <Spinner/>}
+      {!isRenaming && node.doc.status !== "indexing" && node.doc.scm && <span className="mono" style={{ fontSize: 10, fontWeight: 600, color: node.doc.scm === "M" ? RCA.warn : node.doc.scm === "A" ? RCA.ok : RCA.accent }}>{node.doc.scm}</span>}
+    </div>
+  );
+}
+
+// ---- evidence tree: stateful, uploadable, editable file manager ----
+function EvidenceTree({ view, setView }) {
+  const storeKey = "rca-inv-evidence";
+  const seed = [
+    { path: "data/reflow_zone3.csv", kind: "csv", scm: "M" },
+    { path: "data/paste_press_log.csv", kind: "csv" },
+    { path: "data/aoi_voids_w14.csv", kind: "csv", scm: "A" },
+    { path: "photos-x-rays/board-A-0142.jpg", kind: "image" },
+    { path: "photos-x-rays/xray-stack-1.tiff", kind: "image" },
+    { path: "analyses/brief.md", kind: "md", icon: "file", view: "brief", scm: "M" },
+    { path: "analyses/drift.ipynb", kind: "ipynb", icon: "chart", view: "spc", scm: "M" },
+    { path: "analyses/pareto.ipynb", kind: "ipynb", icon: "pareto", view: "pareto" },
+    { path: "analyses/fishbone.canvas", kind: "canvas", icon: "fishbone", view: "fishbone" },
+    { path: "analyses/5-why.md", kind: "md", icon: "file", view: "fivewhy" },
+    { path: "analyses/report.md", kind: "md", icon: "file", view: "report" },
+  ].map((e) => ({ ...e, status: "indexed" }));
+  const seedFolders = [".rca"];
+
+  const [entries, setEntries] = React.useState(() => { try { const s = JSON.parse(localStorage.getItem(storeKey)); if (s && s.entries) return s.entries; } catch (e) {} return seed; });
+  const [folders, setFolders] = React.useState(() => { try { const s = JSON.parse(localStorage.getItem(storeKey)); if (s && s.folders) return s.folders; } catch (e) {} return seedFolders; });
+  React.useEffect(() => { try { localStorage.setItem(storeKey, JSON.stringify({ entries, folders })); } catch (e) {} }, [entries, folders]);
+
+  const tree = React.useMemo(() => buildTree(entries, folders), [entries, folders]);
+  const allFolders = React.useMemo(() => { const acc = []; const walk = (n) => n.children.forEach((c) => { if (c.type === "folder") { acc.push(c.path); walk(c); } }); walk(tree); return acc; }, [tree]);
+  const [open, setOpen] = React.useState(() => new Set(allFolders));
+  const [renaming, setRenaming] = React.useState(null);
+  const [ctx, setCtx] = React.useState(null);
+  const [dragActive, setDragActive] = React.useState(false);
+  const [toast, setToast] = React.useState(null);
+  const fileInputRef = React.useRef(null);
+  const pendingFolder = React.useRef("");
+
+  const toggle = (p) => setOpen((s) => { const n = new Set(s); n.has(p) ? n.delete(p) : n.add(p); return n; });
+  const flash = (m) => { setToast(m); setTimeout(() => setToast((t) => (t === m ? null : t)), 2200); };
+  const uniquePath = (base) => { let p = base, i = 2; const has = (x) => entries.some((e) => e.path === x); const dot = base.lastIndexOf("."); while (has(p)) { p = dot > base.lastIndexOf("/") ? base.slice(0, dot) + "-" + i + base.slice(dot) : base + "-" + i; i++; } return p; };
+
+  const addFiles = (fileList, folder) => {
+    const arr = [...fileList]; if (!arr.length) return; let n = 0;
+    arr.forEach((file) => {
+      const rel = file.webkitRelativePath || file.name;
+      const path = uniquePath((folder ? folder + "/" : "") + rel);
+      setEntries((es) => [...es, { path, kind: extKind(file.name), scm: "A", status: "indexing" }]);
+      setTimeout(() => setEntries((es) => es.map((e) => e.path === path ? { ...e, status: "indexed" } : e)), 1500);
+      if (rel.includes("/")) { const parts = ((folder ? folder + "/" : "") + rel).split("/").slice(0, -1); const acc = []; parts.forEach((_, i) => acc.push(parts.slice(0, i + 1).join("/"))); setFolders((f) => [...new Set([...f, ...acc])]); }
+      n++;
+    });
+    if (folder) setOpen((s) => new Set([...s, folder]));
+    flash(n + (n === 1 ? " file added \u00b7 indexing\u2026" : " files added \u00b7 indexing\u2026"));
+  };
+
+  const onRename = (node, raw) => {
+    const name = (raw || "").trim(); if (!name || name === node.name) return;
+    if (node.type === "file") { const parts = node.path.split("/"); parts[parts.length - 1] = name; const np = parts.join("/"); setEntries((es) => es.map((e) => e.path === node.path ? { ...e, path: np, kind: extKind(name) } : e)); }
+    else { const parts = node.path.split("/"); parts[parts.length - 1] = name; const np = parts.join("/"); setEntries((es) => es.map((e) => e.path.startsWith(node.path + "/") ? { ...e, path: np + e.path.slice(node.path.length) } : e)); setFolders((f) => f.map((p) => p === node.path ? np : p.startsWith(node.path + "/") ? np + p.slice(node.path.length) : p)); }
+  };
+  const onDelete = (node) => {
+    if (node.type === "file") setEntries((es) => es.filter((e) => e.path !== node.path));
+    else { setEntries((es) => es.filter((e) => !(e.path === node.path || e.path.startsWith(node.path + "/")))); setFolders((f) => f.filter((p) => !(p === node.path || p.startsWith(node.path + "/")))); }
+    flash("Deleted " + node.name);
+  };
+  const onDownload = (node) => { const blob = new Blob([""], { type: "text/plain" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = node.name; a.click(); URL.revokeObjectURL(url); };
+  const newFile = () => { const path = uniquePath("analyses/untitled.md"); setEntries((es) => [...es, { path, kind: "md", icon: "file", scm: "A", status: "indexed" }]); setOpen((s) => new Set([...s, "analyses"])); setTimeout(() => setRenaming(path), 60); };
+  const newFolder = () => { let name = "new-folder", i = 2; while (folders.includes(name) || tree.children.some((c) => c.type === "folder" && c.name === name)) name = "new-folder-" + (i++); setFolders((f) => [...f, name]); setOpen((s) => new Set([...s, name])); setTimeout(() => setRenaming(name), 60); };
+  const onSelect = (doc) => { if (doc.view) setView(doc.view); };
+  const openCtx = (e, node) => { e.preventDefault(); e.stopPropagation(); setCtx({ x: e.clientX, y: e.clientY, node }); };
+  const ctxItems = (node) => node.type === "file" ? [
+    { icon: "pencil", label: "Rename", onClick: () => setRenaming(node.path) },
+    { icon: "download", label: "Download", onClick: () => onDownload(node) },
+    { sep: true },
+    { icon: "trash", label: "Delete", danger: true, onClick: () => onDelete(node) },
+  ] : [
+    { icon: "file_plus", label: "New file here", onClick: () => { const path = uniquePath(node.path + "/untitled.md"); setEntries((es) => [...es, { path, kind: "md", icon: "file", scm: "A", status: "indexed" }]); setOpen((s) => new Set([...s, node.path])); setTimeout(() => setRenaming(path), 60); } },
+    { icon: "pencil", label: "Rename", onClick: () => setRenaming(node.path) },
+    { sep: true },
+    { icon: "trash", label: "Delete folder", danger: true, onClick: () => onDelete(node) },
+  ];
+
+  return (
+    <div style={{ padding: "4px 0", position: "relative" }}
+      onDragEnter={(e) => { e.preventDefault(); setDragActive(true); }}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={(e) => { if (e.currentTarget === e.target) setDragActive(false); }}
+      onDrop={(e) => { e.preventDefault(); setDragActive(false); if (e.dataTransfer.files && e.dataTransfer.files.length) addFiles(e.dataTransfer.files, ""); }}>
+      <style>{`@keyframes rcaspin{to{transform:rotate(360deg)}}`}</style>
+      {ctx && <CtxMenu x={ctx.x} y={ctx.y} items={ctxItems(ctx.node)} onClose={() => setCtx(null)}/>}
+      <input ref={fileInputRef} type="file" multiple style={{ display: "none" }} onChange={(e) => { addFiles(e.target.files, pendingFolder.current); pendingFolder.current = ""; e.target.value = ""; }}/>
+      <div style={{ padding: "4px 8px 4px 16px", display: "flex", alignItems: "center", gap: 2 }}>
+        <I name="chev_d" size={10} color={RCA.textPaperD2}/>
+        <CapsLabel style={{ fontSize: 10 }}>Investigation files</CapsLabel>
+        <div style={{ flex: 1 }}/>
+        <IconBtn name="file_plus" title="New file" onClick={newFile}/>
+        <IconBtn name="folder_plus" title="New folder" onClick={newFolder}/>
+        <IconBtn name="upload" title="Upload files" onClick={() => { pendingFolder.current = ""; fileInputRef.current && fileInputRef.current.click(); }}/>
+        <IconBtn name="collapse" title="Collapse all" onClick={() => setOpen(new Set())}/>
+      </div>
+      <div>
+        {tree.children.map((c, i) => (
+          <EvNode key={c.path + i} node={c} depth={0} open={open} toggle={toggle} view={view} onSelect={onSelect} renaming={renaming} setRenaming={setRenaming} onRename={onRename} onCtx={openCtx}/>
+        ))}
+      </div>
+      {dragActive && (
+        <div style={{ position: "absolute", inset: 4, background: "rgba(240,80,46,0.06)", border: `2px dashed ${RCA.accent}`, borderRadius: 8, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, pointerEvents: "none", zIndex: 5 }}>
+          <I name="upload" size={22} color={RCA.accent}/>
+          <div style={{ fontSize: 12, fontWeight: 600, color: RCA.accentH }}>Drop to add evidence</div>
+        </div>
+      )}
+      {toast && (
+        <div style={{ position: "fixed", bottom: 44, left: 320, zIndex: 60, display: "flex", alignItems: "center", gap: 9, padding: "9px 14px", background: RCA.ink, color: RCA.white, borderRadius: 8, fontSize: 12, boxShadow: "0 8px 28px rgba(22,24,29,0.22)" }}>
+          <span style={{ width: 16, height: 16, borderRadius: 4, background: RCA.accent, display: "inline-flex", alignItems: "center", justifyContent: "center" }}><RCAMark size={11} color={RCA.white}/></span>
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileInfo } from "../../api/types";
-import { Breadcrumb } from "./InvestigationShell";
+import { Breadcrumb } from "./WorkspaceShell";
 
 afterEach(cleanup);
 

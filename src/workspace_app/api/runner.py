@@ -15,9 +15,14 @@ class AgentRunner(Protocol):
     variant. The RCA and KB chats share one runner — `ctx` (AgentToolContext)
     tells them apart.
 
+    The picker (which AgentConfigs the deploy offers, which one drives
+    THIS investigation) is NOT this Protocol's job — that's the
+    `AgentConfigCatalog` (see CONTEXT.md). The runner just runs the
+    turn it's given.
+
     Implement this to swap the agent engine (different framework, add RAG,
-    change the event stream): as long as `run` yields the `AgentEvent` union the
-    FE understands, nothing else changes.
+    change the event stream): as long as `run` yields the `AgentEvent` union
+    the FE understands, nothing else changes.
     """
 
     def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:

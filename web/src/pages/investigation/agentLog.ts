@@ -9,7 +9,7 @@
  */
 
 import type { AgentEvent } from "../../events";
-import type { Message } from "../../api/types";
+import type { Message, MessageCitation } from "../../api/types";
 
 export type ToolCallView = {
   call_id: string;
@@ -23,6 +23,11 @@ export type ToolCallView = {
   /** epoch ms when the call started / finished (for duration + timestamps). */
   startedAt?: number;
   endedAt?: number;
+  /** Resolved [n] citations on this tool's answer. Only set for
+   * `ask_knowledge_base` tool messages on reload — the BE attaches the KB
+   * sub-agent's citations onto the persisted tool message. Rendered as
+   * clickable source cards under the tool card (same UX as KB chat). */
+  citations?: MessageCitation[];
 };
 
 /** Live token telemetry for the current turn (Claude-Code-style ↑/↓). */
@@ -67,9 +72,15 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
           name: m.tool_name ?? "tool",
           args: m.tool_args ?? {},
           status: "done",
-          output: m.content,
+          // #62: prefer the full display (success stderr kept) so a reloaded
+          // card shows the error the user saw live, not the cleaned content.
+          output: m.tool_display || m.content,
           startedAt: m.created_at ?? undefined,
           endedAt: m.created_at ?? undefined,
+          // Carry the BE-attached citations through so an ask_knowledge_base
+          // tool message reloads with its reference cards. Non-ask_kb tools
+          // never set this on the BE side — empty becomes undefined.
+          citations: m.citations && m.citations.length > 0 ? m.citations : undefined,
         },
       });
     } else if (m.role === "mention") {
@@ -80,11 +91,29 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
         note: m.content,
         at: m.created_at ?? undefined,
       });
+    } else if (m.role === "error") {
+      // #37: a persisted terminal failure — rendered as a banner so a
+      // reloaded thread shows the turn died (matching the live error
+      // banners), rather than the message silently vanishing.
+      entries.push({ kind: "banner", text: m.content, at: m.created_at ?? undefined });
     } else {
       entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
     }
   }
   return { entries, streaming: false, error: null, metrics: null };
+}
+
+/** How many whole turns to undo to remove everything from `entries[index]`
+ * onward (issue #38) = the count of user-prompt entries at or after it. A
+ * turn is delimited by a user message; this matches the BE's turn-count
+ * semantics so "undo to here" on a user turn drops it and all later turns. */
+export function turnsFromEntry(entries: readonly AgentEntry[], index: number): number {
+  let n = 0;
+  for (let i = index; i < entries.length; i++) {
+    const e = entries[i];
+    if (e && e.kind === "message" && e.message.role === "user") n++;
+  }
+  return n;
 }
 
 /** tok/s for the completion phase (0 until any time has elapsed). */
@@ -118,6 +147,12 @@ function findCall(entries: AgentEntry[], call_id: string): number {
     if (e && e.kind === "tool_call" && e.call.call_id === call_id) return i;
   }
   return -1;
+}
+
+/** Cap the model's raw bad-args echo so a runaway emission (e.g. a huge
+ * write_file content blob) can't blow up the parse-error banner. */
+function truncateRaw(raw: string, max = 200): string {
+  return raw.length <= max ? raw : `${raw.slice(0, max)}…`;
 }
 
 /** Index of the tool call a tool_log belongs to: the matching call_id, or
@@ -204,7 +239,10 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
         if (e && e.kind === "tool_call") {
           entries[idx] = {
             kind: "tool_call",
-            call: { ...e.call, status: "done", output: ev.output, endedAt: now },
+            // #62: prefer the full display result (success stderr kept) so the
+            // card keeps the error that streamed live instead of the cleaned
+            // "exit_code=0"; absent ⇒ the cleaned output.
+            call: { ...e.call, status: "done", output: ev.display || ev.output, endedAt: now },
           };
         }
       }
@@ -226,20 +264,22 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     }
 
     case "tool_call_parse_error": {
+      // #76 transparency: the user has a right to see WHAT the model got wrong,
+      // not just the coaching hint. Append the model's actual emission (`raw`,
+      // truncated) so a malformed tool call like `{"path": ./hello.md"}` is
+      // visible. Attach to the running tool card when we can find it; otherwise
+      // ALWAYS push a banner — never silently drop, or the retry is invisible.
+      const sent = ev.raw ? ` — the model sent: ${truncateRaw(ev.raw)}` : "";
+      const text = `${ev.hint}${sent}`;
       if (ev.call_id) {
         const idx = findCall(entries, ev.call_id);
-        if (idx >= 0) {
-          const e = entries[idx];
-          if (e && e.kind === "tool_call") {
-            entries[idx] = {
-              kind: "tool_call",
-              call: { ...e.call, parseError: ev.hint },
-            };
-          }
+        const e = idx >= 0 ? entries[idx] : undefined;
+        if (e && e.kind === "tool_call") {
+          entries[idx] = { kind: "tool_call", call: { ...e.call, parseError: text } };
+          return { ...log, entries };
         }
-      } else {
-        entries.push({ kind: "banner", at: now, text: `parse error: ${ev.hint}` });
       }
+      entries.push({ kind: "banner", at: now, text: `parse error: ${text}` });
       return { ...log, entries };
     }
 
@@ -264,5 +304,21 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
 
     case "done":
       return { ...log, entries, streaming: false };
+
+    case "user_message":
+      // #43: a human message on the shared investigation, broadcast to every
+      // viewer. A turn is now in flight — flip `streaming` so the spinner
+      // shows for everyone, not just the sender.
+      entries.push({
+        kind: "message",
+        at: ev.created_at || now,
+        message: { role: "user", author: ev.author, content: ev.content },
+      });
+      return { ...log, entries, streaming: true };
+
+    case "file_changed":
+      // #43: a workspace file changed — a side effect handled in the hook
+      // (refetch the file tree), not folded into the agent log.
+      return log;
   }
 }

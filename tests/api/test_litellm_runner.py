@@ -26,9 +26,10 @@ from workspace_app.api.litellm_runner import (
     _final_tokens,
     _map_event,
     _should_retry,
+    classify_retry_event,
     diagnose_error,
 )
-from workspace_app.resources import AgentConfig
+from workspace_app.resources import AgentConfig, make_spec
 
 
 def test_final_tokens_prefers_exact_but_falls_back_when_zero_or_absent():
@@ -86,9 +87,22 @@ def test_think_splitter_flushes_unclosed_think_as_reasoning():
     assert reasoning == "still thinking"
 
 
-def test_runner_constructs_with_default_config():
+def test_runner_constructs():
     r = LitellmAgentRunner()
     assert r is not None
+
+
+async def test_runner_fails_loud_when_ctx_has_no_agent_config():
+    """#94: no silent fallback. A turn whose ctx carries no resolved
+    agent_config yields a RunError naming the cause (and never reaches the
+    LLM), instead of quietly running some default agent."""
+    r = LitellmAgentRunner()
+    ctx = AgentToolContext(investigation_id="x")  # agent_config defaults to None
+    events = [ev async for ev in r.run("hi", ctx)]
+    kinds = {type(e).__name__ for e in events}
+    assert "RunError" in kinds and "RunDone" in kinds
+    msg = " ".join(e.message for e in events if isinstance(e, RunError))
+    assert "agent config" in msg.lower()
 
 
 def test_should_retry_blocks_restart_after_assistant_progress():
@@ -136,7 +150,12 @@ async def test_run_does_not_restart_after_assistant_delta_streamed():
             [MessageDelta(text="should-not-see"), RunDone()],
         ]
     )
-    events = [ev async for ev in runner.run("anything", AgentToolContext(investigation_id="x"))]
+    events = [
+        ev
+        async for ev in runner.run(
+            "anything", AgentToolContext(investigation_id="x", agent_config=AgentConfig(name="t"))
+        )
+    ]
     # Exactly one attempt: delta then RunError then RunDone (no retry).
     assert runner._calls == 1
     kinds = [type(e).__name__ for e in events]
@@ -157,11 +176,54 @@ async def test_run_still_retries_when_failure_is_early():
             [MessageDelta(text="OK, one tool at a time."), RunDone()],
         ]
     )
-    events = [ev async for ev in runner.run("anything", AgentToolContext(investigation_id="x"))]
+    events = [
+        ev
+        async for ev in runner.run(
+            "anything", AgentToolContext(investigation_id="x", agent_config=AgentConfig(name="t"))
+        )
+    ]
     assert runner._calls == 2  # actually retried
     kinds = [type(e).__name__ for e in events]
     # First attempt: the classify_retry_event yields ToolCallParseError; then
     # second attempt streams delta + RunDone.
+    assert "MessageDelta" in kinds
+    assert "RunDone" in kinds
+    assert "RunError" not in kinds
+
+
+async def test_run_retries_when_only_reasoning_streamed_before_failure():
+    """Production transcript: model emits ~500 tokens of <think>…</think>
+    reasoning, THEN a malformed concatenated tool_call. args_recovery
+    raises 'Extra data on `plot`', the exception reaches run(), and
+    _should_retry sees progress_made=True (because the runner's
+    progress check treated reasoning-channel MessageDelta as visible
+    progress). Result: no retry, user sees the raw error and 'then it
+    just stopped'.
+
+    Reasoning is collapsed in the FE and doesn't constitute the
+    'partial output a restart would clobber' that progress_made is
+    supposed to gate. Only visible deltas (reasoning=False) and
+    ToolEnd should set progress_made → block retry."""
+    runner = _ScriptedOnce(
+        [
+            [
+                MessageDelta(text="Let me think about which tool …", reasoning=True),
+                ValueError("Extra data on `plot`: streaming aggregator merged …"),
+            ],
+            # If retry works the second attempt runs cleanly.
+            [MessageDelta(text="OK, one tool at a time."), RunDone()],
+        ]
+    )
+    events = [
+        ev
+        async for ev in runner.run(
+            "anything", AgentToolContext(investigation_id="x", agent_config=AgentConfig(name="t"))
+        )
+    ]
+    assert runner._calls == 2  # actually retried — reasoning didn't gate progress
+    kinds = [type(e).__name__ for e in events]
+    # First attempt's reasoning delta is preserved; then the retry event;
+    # second attempt's visible delta + RunDone. No RunError.
     assert "MessageDelta" in kinds
     assert "RunDone" in kinds
     assert "RunError" not in kinds
@@ -220,7 +282,20 @@ def test_map_event_maps_tool_called():
     assert out.args == {"cmd": ["echo", "hi"]}
 
 
-def test_map_event_tool_called_with_invalid_json_keeps_raw():
+def test_map_event_tool_called_with_invalid_json_does_not_fabricate_raw_sentinel():
+    """When the streaming aggregator merged tool_calls (or the model
+    just emitted garbage), the `arguments` string can't be json.loads'd.
+    The previous behaviour wrapped it as `{"_raw": <string>}` so the
+    FE could display the bytes — but that sentinel was indistinguishable
+    from a legitimate tool that happens to have a `_raw` field, and it
+    leaked into history projection (`_projected_tool_arguments`) and
+    back to the model, which then mimicked the wrong shape on its
+    NEXT call (the May-31 `read_file(_raw="…")` regression).
+
+    Stop fabricating the sentinel: empty dict means 'we couldn't
+    parse what the model sent.' args_recovery already raises at
+    invoke-time so the run retries; this just stops the sentinel
+    from polluting persisted state."""
     ev = _StreamEvent(
         type="run_item_stream_event",
         name="tool_called",
@@ -228,7 +303,8 @@ def test_map_event_tool_called_with_invalid_json_keeps_raw():
     )
     out = _map_event(ev)
     assert isinstance(out, ToolStart)
-    assert out.args == {"_raw": "not json"}
+    assert out.args == {}
+    assert "_raw" not in out.args
 
 
 def test_map_event_tool_called_with_empty_args():
@@ -333,19 +409,161 @@ def test_map_event_drops_message_output_created():
 
 
 def test_agent_for_with_system_prompt_set():
+    """The base system_prompt is preserved as the prefix; B.10 then appends
+    the auto-rendered tool inventory after it. The bare-prompt match
+    was stale (pre-B.10); now we assert the prompt STARTS with the
+    configured base + the inventory header follows."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(name="ws", system_prompt="You are helpful.")
     agent = _agent_for(cfg)
-    assert agent.instructions == "You are helpful."
+    assert isinstance(agent.instructions, str)
+    assert agent.instructions.startswith("You are helpful.")
+    assert "## Tools available" in agent.instructions
+
+
+def test_agent_for_does_not_force_parallel_tool_calls():
+    """#69: forcing `parallel_tool_calls=False` was the only wire-level
+    difference from the Replay path — which calls the model with the same
+    tools and NO such flag, and reliably gets a structured tool_call. For
+    some providers litellm even rejects the flag (ollama_chat →
+    UnsupportedParamsError). Leave it unset so the live turn's request
+    matches Replay; `args_recovery` still guards the concatenated-args case."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(AgentConfig(name="ws"))
+    assert agent.model_settings.parallel_tool_calls is None
+
+
+def test_agent_for_wraps_model_in_repairing_model_by_default():
+    """#76 self-repair is ON by default: _agent_for wraps the LitellmModel in a
+    RepairingModel so malformed tool-call JSON is fixed at the output boundary.
+    Commenting out the single wrap line in _agent_for disables it (falls back to
+    the bare LitellmModel) — no config/env knob."""
+    from agents.extensions.models.litellm_model import LitellmModel
+
+    from workspace_app.agent.repairing_model import RepairingModel
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(AgentConfig(name="ws"))
+    assert isinstance(agent.model, RepairingModel)
+    # transparent passthrough: the real model id is still reachable for the trace
+    assert isinstance(agent.model._inner, LitellmModel)
+    assert agent.model.model == AgentConfig(name="ws").model
+
+
+def test_agent_for_reasoning_effort_still_set_without_forcing_parallel_tool_calls():
+    """The reasoning-effort selector must keep threading effort into
+    ModelSettings, but it must NOT re-introduce the parallel_tool_calls
+    flag (#69)."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(AgentConfig(name="ws"), reasoning_effort="medium")
+    assert agent.model_settings.parallel_tool_calls is None
+    assert agent.model_settings.reasoning is not None
+    assert agent.model_settings.reasoning.effort == "medium"
+
+
+def test_emit_llm_trace_logs_request_and_flags_text_tool_call(caplog):
+    """#69 observability: the per-turn trace line carries the redacted
+    endpoint + tool knobs we sent, and labels a no-tool turn whose text
+    looks like a call as 'text-looks-like-tool-call' — the exact symptom."""
+    import logging
+
+    from workspace_app.agent import AgentToolContext
+    from workspace_app.api.litellm_runner import _agent_for, _emit_llm_trace
+
+    cfg = AgentConfig(name="kb", allowed_tools=["kb_search"], llm_base_url="http://proxy:4000/v1")
+    agent = _agent_for(cfg)
+    ctx = AgentToolContext(agent_config=cfg)
+    with caplog.at_level(logging.INFO, logger="workspace_app.api.litellm_runner"):
+        _emit_llm_trace(
+            agent,
+            ctx,
+            runner_base_url=None,
+            tool_calls=0,
+            content_text='I will kb_search({"query": "voids"})',
+        )
+    line = next(r.message for r in caplog.records if "LLM turn:" in r.message)
+    assert "endpoint=proxy:4000" in line
+    assert "tools=[kb_search]" in line
+    assert "parallel_tool_calls=unset" in line  # post-#69: no longer forced false
+    assert "outcome=text-looks-like-tool-call" in line
+
+
+def test_emit_llm_trace_swallows_extraction_errors(caplog):
+    """A trace must never break a turn: if reading the agent's settings
+    explodes, it degrades to a debug breadcrumb instead of raising."""
+    import logging
+
+    from workspace_app.agent import AgentToolContext
+    from workspace_app.api.litellm_runner import _emit_llm_trace
+
+    class _Boom:
+        tools: list = []
+        model = None
+
+        @property
+        def model_settings(self):
+            raise RuntimeError("boom")
+
+    with caplog.at_level(logging.DEBUG, logger="workspace_app.api.litellm_runner"):
+        _emit_llm_trace(
+            _Boom(), AgentToolContext(), runner_base_url=None, tool_calls=0, content_text=""
+        )
+    assert any("trace" in r.message.lower() for r in caplog.records)
 
 
 def test_agent_for_without_system_prompt():
+    """No base + default workspace tool set still yields a non-None
+    prompt — the tool inventory section is always there when tools are
+    registered (B.10). The pre-B.10 expectation of `is None` was stale."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(name="ws")
     agent = _agent_for(cfg)
-    assert agent.instructions is None
+    assert isinstance(agent.instructions, str)
+    assert agent.instructions.startswith("## Tools available")
+    # The 9 default workspace tools all appear under the inventory.
+    for name in ("exec", "read_file", "write_file", "ask_knowledge_base"):
+        assert f"### `{name}`" in agent.instructions
+
+
+def test_agent_for_with_explicit_empty_allowed_tools_registers_zero_tools():
+    """Tri-state contract for `allowed_tools` (Q4-followup of the
+    config grill): ``None`` → defaults, ``[]`` → none, ``[...]`` →
+    exact. The old runner aliased ``[]`` to ``None`` (a deploy
+    putting kb_chat behind a generic preset got every workspace tool
+    instead of the loud "you forgot kb_search" failure). This test
+    pins the explicit-empty case end-to-end through `_agent_for`."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", allowed_tools=[])
+    agent = _agent_for(cfg)
+    assert agent.tools == []
+
+
+def test_agent_for_with_explicit_list_registers_only_those_tools():
+    """The exact-list path: ``allowed_tools=["read_file"]`` → only
+    read_file is exposed."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", allowed_tools=["read_file"])
+    agent = _agent_for(cfg)
+    names = [t.name for t in agent.tools]
+    assert names == ["read_file"]
+
+
+def test_agent_for_with_none_allowed_tools_registers_defaults():
+    """The ``None`` (= "haven't specified") case — preserved behaviour
+    so existing test fixtures + bundled RCA presets keep working."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", allowed_tools=None)
+    agent = _agent_for(cfg)
+    names = {t.name for t in agent.tools}
+    # The workspace defaults — same set as the original test above.
+    assert {"exec", "read_file", "write_file", "ask_knowledge_base"} <= names
 
 
 def test_agent_for_appends_extra_instructions_to_system_prompt():
@@ -359,24 +577,87 @@ def test_agent_for_appends_extra_instructions_to_system_prompt():
 
 
 def test_agent_for_extra_instructions_with_no_base_prompt():
+    """Extra instructions (a retry feedback hint) become the prefix when
+    no base prompt is set; the auto tool inventory follows."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(name="ws")
     agent = _agent_for(cfg, extra_instructions="Hint only.")
-    assert agent.instructions == "Hint only."
+    assert isinstance(agent.instructions, str)
+    assert agent.instructions.startswith("Hint only.")
+    assert "## Tools available" in agent.instructions
+
+
+def test_agent_for_appends_tool_inventory_section_to_instructions():
+    """B.10 regression: every tool registered on the agent appears in
+    the auto-rendered `## Tools available` section the LLM sees in its
+    system prompt — name, description, JSON args schema. Small models
+    misread function tools as shell binaries without this; large
+    models can rely on the tool_choice payload alone, but we still
+    want it for parity + debugging."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", system_prompt="anchor")
+    agent = _agent_for(cfg)
+    instructions = agent.instructions
+    assert isinstance(instructions, str)
+    # the section header includes the "DO NOT exec a tool name" warning
+    # that's the whole point of B.10.
+    assert "Each entry below is a **function tool**" in instructions
+    assert "Do NOT" in instructions
+    # every registered tool's name + JSON schema block is there
+    for t in agent.tools:
+        assert f"### `{t.name}`" in instructions, f"tool {t.name} missing from prompt"
 
 
 # ---- diagnose_error ----
 
 
-def test_diagnose_extra_data_returns_one_tool_per_turn_hint():
+def test_diagnose_concatenated_tool_calls_returns_one_tool_per_turn_hint():
+    """#76: our own ConcatenatedToolCallsError routes to the 'one tool call
+    per turn' hint via isinstance, independent of message wording."""
+    from workspace_app.agent.args_recovery import ConcatenatedToolCallsError
+
+    hint = diagnose_error(ConcatenatedToolCallsError("Tool `plot` received more than one…"))
+    assert "one tool call" in hint.lower()
+
+
+def test_diagnose_malformed_args_tells_model_to_resend_valid_json():
+    """#76: a single malformed-JSON tool call must NOT be mis-coached as
+    'you combined multiple tool calls' — it gets an accurate 'your args
+    weren't valid JSON, re-send one JSON object' hint."""
+    from workspace_app.agent.args_recovery import MalformedToolArgsError
+
+    hint = diagnose_error(MalformedToolArgsError("The arguments for tool `read_file`…"))
+    low = hint.lower()
+    assert "valid json" in low
+    assert "multiple tool calls" not in low
+
+
+def test_diagnose_non_object_args_tells_model_to_send_one_object():
+    """#76: valid JSON but wrong shape (list/scalar) → 'send a single JSON
+    object' hint, distinct from both the malformed and the concat hints."""
+    from workspace_app.agent.args_recovery import NonObjectToolArgsError
+
+    hint = diagnose_error(NonObjectToolArgsError("…must be a single JSON object, not a list."))
+    low = hint.lower()
+    assert "json object" in low
+    assert "multiple tool calls" not in low
+
+
+def test_diagnose_upstream_extra_data_string_still_routes_to_concat_hint():
+    """Backstop: a genuine upstream LiteLLM/Ollama 'Extra data: line…' error
+    (a plain string, not our exception type) still means concatenation."""
     hint = diagnose_error(RuntimeError("Extra data: line 1 column 54 (char 53)"))
     assert "one tool call" in hint.lower()
 
 
-def test_diagnose_json_tool_error_returns_same_hint():
+def test_diagnose_upstream_json_tool_string_routes_to_malformed_hint():
+    """#76 flip: a generic upstream 'parse tool args as json' failure (no
+    'extra data') is a malformed-single-object case, so it now routes to the
+    'valid JSON' hint — NOT the old 'one tool call' hint."""
     hint = diagnose_error(RuntimeError("failed to parse tool args as json"))
-    assert "one tool call" in hint.lower()
+    assert "valid json" in hint.lower()
 
 
 def test_diagnose_timeout_returns_smaller_step_hint():
@@ -387,6 +668,48 @@ def test_diagnose_timeout_returns_smaller_step_hint():
 def test_diagnose_unknown_falls_back_to_generic_hint():
     hint = diagnose_error(RuntimeError("some weird upstream 500"))
     assert "try again" in hint.lower()
+
+
+# ---- classify_retry_event ----
+
+
+@pytest.mark.parametrize(
+    "exc_type",
+    ["MalformedToolArgsError", "NonObjectToolArgsError", "ConcatenatedToolCallsError"],
+)
+def test_classify_retry_event_maps_all_tool_arg_errors_to_parse_error(exc_type):
+    """#76: every flavour of bad tool args is a model-format glitch the FE
+    should render as a parse-error banner — not a generic RunError."""
+    import workspace_app.agent.args_recovery as ar
+    from workspace_app.api.events import ToolCallParseError
+
+    exc = getattr(ar, exc_type)("bad")
+    ev = classify_retry_event(exc, "some hint")
+    assert isinstance(ev, ToolCallParseError)
+    assert ev.hint == "some hint"
+
+
+def test_classify_retry_event_carries_raw_offending_args_for_transparency():
+    """#76: the user has a right to see WHAT the model got wrong. The parse-error
+    event must carry the model's actual bad args string in `raw` (and the
+    affected tool's call_id) so the FE can show it, not just a generic hint."""
+    from workspace_app.agent.args_recovery import MalformedToolArgsError
+    from workspace_app.api.events import ToolCallParseError
+
+    exc = MalformedToolArgsError(
+        "clean message", tool_name="read_file", raw_args='{"path": ./hello.md"}'
+    )
+    ev = classify_retry_event(exc, "re-send valid JSON")
+    assert isinstance(ev, ToolCallParseError)
+    assert ev.raw == '{"path": ./hello.md"}'  # the model's actual mistake, surfaced
+    assert ev.hint == "re-send valid JSON"
+
+
+def test_classify_retry_event_non_tool_error_is_generic_run_error():
+    from workspace_app.api.events import RunError
+
+    ev = classify_retry_event(RuntimeError("upstream 500"), "h")
+    assert isinstance(ev, RunError)
 
 
 # ---- retry loop ----
@@ -410,25 +733,21 @@ class _RecordingRunner(LitellmAgentRunner):
 
 
 def _ctx() -> AgentToolContext:
-    from specstar import SpecStar
 
     from workspace_app.filestore.specstar_impl import SpecstarFileStore
     from workspace_app.sandbox.mock import MockSandbox
     from workspace_app.sync import SandboxSync
 
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     return AgentToolContext(
         investigation_id="ws-x",
+        agent_config=AgentConfig(name="t"),
         sandbox=sandbox,
         filestore=filestore,
         sync=SandboxSync(filestore=filestore, sandbox=sandbox),
     )
-
-
-from datetime import UTC, datetime  # noqa: E402 — used by _ctx above
 
 
 async def test_runner_succeeds_first_try_emits_done():
@@ -525,21 +844,18 @@ def _ollama_default_model_available() -> bool:
     reason="Ollama or the default AgentConfig.model not available",
 )
 async def test_live_run_against_ollama_emits_at_least_one_event():
-    from datetime import UTC, datetime
-
-    from specstar import SpecStar
 
     from workspace_app.agent import AgentToolContext
     from workspace_app.filestore.specstar_impl import SpecstarFileStore
     from workspace_app.sandbox.mock import MockSandbox
     from workspace_app.sync import SandboxSync
 
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     ctx = AgentToolContext(
         investigation_id="ws-live",
+        agent_config=AgentConfig(name="workspace-agent"),
         sandbox=sandbox,
         filestore=filestore,
         sync=SandboxSync(filestore=filestore, sandbox=sandbox),
@@ -554,3 +870,26 @@ async def test_live_run_against_ollama_emits_at_least_one_event():
     assert events, "expected at least one event"
     types = {type(e).__name__ for e in events}
     assert "RunDone" in types or "MessageDelta" in types
+
+
+def test_trace_workflow_name_distinguishes_run_flavours():
+    """The SDK trace label tells wiki maintenance / reader / merge apart from
+    KB chat and the RCA workspace turn (issue #11 telemetry, wiki visibility)."""
+    from workspace_app.api.litellm_runner import _trace_workflow_name
+    from workspace_app.resources import AgentConfig
+
+    def ctx(**kw) -> AgentToolContext:
+        return AgentToolContext(**kw)
+
+    # Wiki configs have fixed names → matched precisely.
+    assert _trace_workflow_name(ctx(agent_config=AgentConfig(name="Wiki Maintainer"))) == (
+        "Wiki maintainer"
+    )
+    assert _trace_workflow_name(ctx(agent_config=AgentConfig(name="Wiki Reader"))) == "Wiki reader"
+    assert _trace_workflow_name(ctx(agent_config=AgentConfig(name="Wiki Merge"))) == "Wiki merge"
+    # Context flags are belt-and-suspenders for the maintainer / reader.
+    assert _trace_workflow_name(ctx(wiki_new_source="x")) == "Wiki maintainer"
+    assert _trace_workflow_name(ctx(wiki_cite_sources=True)) == "Wiki reader"
+    # A retriever-bearing context is a KB-style lookup; the rest is the RCA turn.
+    assert _trace_workflow_name(ctx(retriever=object())) == "KB chat"  # type: ignore[arg-type]
+    assert _trace_workflow_name(ctx(investigation_id="inv-1")) == "RCA turn"

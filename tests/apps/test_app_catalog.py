@@ -1,0 +1,133 @@
+import pytest
+
+from workspace_app.apps.catalog import (
+    AppCatalog,
+    _subset_or_raise,
+    discover_app_slugs,
+    validate_all_apps,
+    validate_function_coherence,
+)
+from workspace_app.apps.manifest import AgentManifest, AppManifest, FunctionToggles, ItemNouns
+from workspace_app.config.schema import Preset
+
+
+def _presets() -> dict[str, Preset]:
+    return {
+        "qwen3-local": Preset(model="ollama_chat/qwen3:14b", description="local"),
+        "claude-opus": Preset(model="claude-opus-4-7", description="hosted"),
+        "openai-mini": Preset(model="openai/gpt-4o-mini"),
+    }
+
+
+# ─── 3-layer resolve ────────────────────────────────────────────────
+def test_resolve_default_inherits_ceiling_and_uses_chosen_preset():
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="claude-opus"
+    )
+    assert cfg.model == "claude-opus-4-7"  # preset supplies model/creds
+    assert cfg.name == "RCA · Claude Opus"  # picker display name
+    assert {"exec", "rca-tools"} <= set(cfg.allowed_tools or [])  # full ceiling
+    assert "RCA Agent" in cfg.system_prompt  # app base prompt
+    assert "SOP.md" in cfg.system_prompt  # + default profile appendix
+    # default profile has no suggestions → App fallback
+    assert [s.prompt for s in cfg.suggestions] == [
+        "Show the SPC analysis",
+        "Run a Pareto of defect modes",
+        "Draft the report",
+    ]
+
+
+def test_resolved_rca_prompt_carries_fe_renderer_conventions():
+    """#94 moved the artifact conventions from a shared base prompt into each
+    App's prompt. The resolved RCA agent prompt must still teach versioned
+    reports (`/report.v`), notebooks (`.ipynb`) — the FE renderers depend on
+    these — and the one-tool-call-per-turn rule (the LiteLLM small-model bug
+    workaround)."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    for marker in ("/report.v", ".ipynb"):
+        assert marker in cfg.system_prompt
+    assert "one tool call" in cfg.system_prompt.lower()
+
+
+def test_resolve_profile_narrows_tools_and_presets():
+    cfg = AppCatalog(presets=_presets()).resolve(app_slug="rca", profile="tool-demo")
+    assert cfg.model == "ollama_chat/qwen3:14b"  # only qwen3-local allowed → first
+    assert "data-fetch" in (cfg.allowed_tools or [])
+    assert "rca-tools" not in (cfg.allowed_tools or [])  # narrowed subset
+    assert cfg.suggestions  # tool-demo's own chips, not the App fallback
+
+
+def test_resolve_ignores_attached_preset_outside_the_allowed_subset():
+    # tool-demo allows only qwen3-local; an attached claude-opus is ignored.
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="tool-demo", attached_preset="claude-opus"
+    )
+    assert cfg.model == "ollama_chat/qwen3:14b"
+
+
+def test_resolve_raises_when_chosen_preset_not_declared():
+    cat = AppCatalog(presets={"openai-mini": Preset(model="x")})
+    with pytest.raises(ValueError, match="not declared"):
+        cat.resolve(app_slug="rca", profile="default", attached_preset="claude-opus")
+
+
+# ─── subset validation helper ───────────────────────────────────────
+def test_subset_or_raise():
+    _subset_or_raise(["a"], ["a", "b"], kind="tools", app="x", profile="p")  # ok
+    with pytest.raises(ValueError, match="tools"):
+        _subset_or_raise(["a", "z"], ["a", "b"], kind="tools", app="x", profile="p")
+
+
+def test_compose_prompt_joins_present_sections_and_skips_empty():
+    from workspace_app.apps.catalog import _compose_prompt
+    from workspace_app.apps.skills import SkillMeta
+
+    skill = SkillMeta(name="report-format", description="how to lay out the report")
+    # base only — no appendix, no skills (the empty-appendix path)
+    assert _compose_prompt("BASE", "", []) == "BASE"
+    # appendix appends; the skill index is advertised under its own heading
+    full = _compose_prompt("BASE", "APPENDIX", [skill])
+    assert full.startswith("BASE\n\nAPPENDIX")
+    assert "## Available skills" in full
+    assert "- `report-format`: how to lay out the report" in full
+
+
+# ─── function ↔ tools coherence (startup hard error) ────────────────
+def _manifest(*, tools, workspace=True, sandbox=True, terminal=True) -> AppManifest:
+    return AppManifest(
+        slug="x",
+        title="X",
+        agent=AgentManifest(prompt_file="prompts/system.md", tools=tools),
+        item=ItemNouns(noun="Item", noun_plural="Items"),
+        function=FunctionToggles(workspace=workspace, sandbox=sandbox, terminal=terminal),
+    )
+
+
+def test_coherence_ok_for_rca_shaped_app():
+    validate_function_coherence(_manifest(tools=["exec", "read_file"]))  # no raise
+
+
+def test_coherence_terminal_requires_sandbox():
+    with pytest.raises(ValueError, match="terminal"):
+        validate_function_coherence(_manifest(tools=[], sandbox=False, terminal=True))
+
+
+def test_coherence_exec_requires_sandbox():
+    with pytest.raises(ValueError, match="sandbox"):
+        validate_function_coherence(_manifest(tools=["exec"], sandbox=False, terminal=False))
+
+
+def test_coherence_file_tools_require_workspace():
+    with pytest.raises(ValueError, match="workspace"):
+        validate_function_coherence(_manifest(tools=["read_file"], workspace=False))
+
+
+# ─── discovery + startup validation ─────────────────────────────────
+def test_discover_app_slugs_includes_rca():
+    assert "rca" in discover_app_slugs()
+
+
+def test_validate_all_apps_passes_for_bundled_apps():
+    validate_all_apps()  # no raise — every bundled App (rca) is coherent

@@ -8,7 +8,7 @@ back here.
 Architectural posture: **the backend is RCA-agnostic.** It stores
 `Investigation` metadata + conversation history, runs the agent + the
 sandbox, and serves files. All RCA-specific structure (5-Why,
-fishbone, 8D report sections, hypothesis cells, corrective actions…)
+fishbone, report sections, hypothesis cells, corrective actions…)
 is **data the agent writes into the FileStore as plain `.md` /
 `.ipynb` / `.csv` / `.json` / `.canvas` files**. FE renderers detect
 file types by extension and apply the right renderer.
@@ -442,7 +442,7 @@ match on extension + content shape:
 | `/pareto.ipynb`     | nbformat v4 JSON                          | F8 notebook |
 | `/fishbone.canvas`  | JSON: `{effect: string, branches: [{label, side, items: [{t, strong?}]}]}` | F12 fishbone SVG |
 | `/5-why.md`         | Markdown with `## Why #N` headings        | F10 markdown (v1.5 may add structured JSON variant) |
-| `/report.v{N}.md`   | Markdown D1–D8 (8D)                       | F11 report (picks max N as current) |
+| `/report.v{N}.md`   | Markdown: Problem statement / Findings (a/b/c/d) / Next steps | F11 report (picks max N as current) |
 | `/data/*.csv`       | Sample fixture data (seeded by template)  | (not viewed; consumed by notebook code) |
 
 ---

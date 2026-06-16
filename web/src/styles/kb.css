@@ -214,6 +214,33 @@
   text-overflow: ellipsis;
 }
 
+/* Inline `[N]` citation pill — used in report markdown to make every
+ * marker in the body itself clickable (the Sources panel below has the
+ * full cards). The remark plugin in MarkdownRenderer / ReportRenderer
+ * turns a text `[12]` into a tiny button rendered with this style. */
+.kb-cite-inline {
+  display: inline-flex;
+  align-items: center;
+  height: 1.05em;
+  padding: 0 4px;
+  margin: 0 1px;
+  border: 1px solid var(--paper-3);
+  border-radius: 4px;
+  background: var(--paper-2);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 0.82em;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  vertical-align: baseline;
+  text-decoration: none;
+}
+.kb-cite-inline:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft, var(--paper-2));
+}
+
 /* footer: suggestions + composer */
 .kb-drawer__foot {
   border-top: 1px solid var(--paper-3);
@@ -1143,6 +1170,29 @@
   border-radius: 8px;
   overflow: hidden;
 }
+/* Prev/Next + "N–M of total" footer under the doc table. Right-aligned so
+ * it sits over the table edge without competing with the search input
+ * above (which is left-aligned). */
+.kb-doctable__pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 10px;
+}
+.kb-doctable__pagerinfo {
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  margin-right: 4px;
+}
+/* Inline "Loading…" shown next to the pager info while a page fetch is in
+ * flight. Subdued so the eye lands on the still-readable table behind it. */
+.kb-doctable__pagerload {
+  font-size: var(--text-xs);
+  color: var(--accent);
+  font-style: italic;
+  margin-right: 4px;
+}
 .kb-doctable__head,
 .kb-doctable__row {
   display: grid;
@@ -1633,6 +1683,44 @@
   color: var(--err);
   border-color: color-mix(in srgb, var(--err) 40%, transparent);
 }
+/* Issue #39: binary-doc viewer body — image docs render natively from
+   the blob endpoint; other binaries show the download notice. */
+.kb-docimage {
+  margin: 0;
+  text-align: center;
+}
+.kb-docimage img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.kb-docbinary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  padding: 24px 0;
+}
+/* PDF (browser viewer) + sandboxed HTML render in a full-width frame. */
+.kb-dociframe {
+  width: 100%;
+  height: 72vh;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+}
+
+/* Issue #39 Q11: live parser progress / error summary beside the chip.
+   Truncated — the full text rides the title attribute. */
+.kb-status-detail {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ------------------------- Document filter search ------------------------- */
 
@@ -1786,3 +1874,116 @@
   font-size: var(--text-xs);
   color: var(--text-paper);
 }
+
+/* ── KB document IDE (#87): shared file-tree + editor over a collection ── */
+.kb-ide {
+  display: flex;
+  flex-direction: column;
+  height: min(70vh, 720px);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--white);
+}
+.kb-ide__main {
+  display: grid;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  flex: 1;
+  min-height: 0;
+}
+.kb-ide__tree {
+  overflow: auto;
+  padding: 10px 0;
+  border-right: 1px solid var(--paper-3);
+  background: var(--paper-1, transparent);
+}
+.kb-ide__pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.kb-ide__editor {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.kb-ide__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--paper-3);
+  background: var(--paper-1, transparent);
+}
+.kb-ide__crumb {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+}
+.kb-ide__spacer {
+  flex: 1;
+}
+.kb-ide__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+.kb-ide__empty {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  color: var(--text-paper-d);
+  font-size: var(--text-body);
+}
+/* trailing tree-row badges (unsaved dot / indexing / error) */
+.kb-ide__dot {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
+}
+.kb-ide__badge {
+  margin-left: auto;
+  color: var(--text-paper-d);
+  font-size: 11px;
+  line-height: 1;
+}
+.kb-ide__badge--err {
+  color: var(--err);
+  font-weight: 700;
+}
+
+/* bottom status bar (#87 P5): active doc path + index status + chunks/cited/size */
+.kb-ide__status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 24px;
+  padding: 3px 12px;
+  border-top: 1px solid var(--paper-3);
+  background: var(--paper-1, transparent);
+  font-size: 11px;
+  color: var(--text-paper-d);
+}
+.kb-ide__status--error { color: var(--err); }
+.kb-ide__status-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-ide__status-spacer { flex: 1; }
+.kb-ide__status-detail {
+  overflow: hidden;
+  max-width: 40%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-ide__status-state { text-transform: capitalize; }
+.kb-ide__status-meta { font-family: var(--font-mono); }

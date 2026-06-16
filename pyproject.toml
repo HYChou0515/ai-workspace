@@ -4,16 +4,33 @@ version = "0.1.0"
 description = "Workspace management app with pluggable sandbox + agent runtime"
 requires-python = ">=3.12"
 dependencies = [
+    "cairosvg>=2.9.0",
     "docker>=7.1.0",
+    "docx2txt>=0.9",
     "ipykernel>=7.2.0",
+    "json-repair>=0.60.1",
     "jupyter-client>=8.8.0",
     "litellm>=1.85.1",
     "llama-index-core>=0.10,<0.11",
     "llama-index-readers-file>=0.1.33",
     "openai-agents>=0.17.3",
-    "specstar[magic]>=0.11.4",
+    "openpyxl>=3.1.5",
+    "pypdfium2>=5.9.0",
+    "pyyaml>=6.0.3",
+    "specstar[magic]>=0.11.8",
     "tree-sitter<0.22",
     "tree-sitter-languages>=1.10.2",
+]
+
+[project.optional-dependencies]
+process-sandbox = [
+    "matplotlib>=3.10.9",
+    "numpy>=1.26.4",
+    "pandas<3",
+    "pandera>=0.31.1",
+    "scikit-learn>=1.8.0",
+    "scipy>=1.17.1",
+    "seaborn>=0.13.2",
 ]
 
 [build-system]

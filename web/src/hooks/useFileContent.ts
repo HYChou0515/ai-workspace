@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { api } from "../api";
+import { useFileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import type { FileContent } from "../api/types";
 
@@ -10,14 +10,16 @@ type State =
   | { kind: "error"; error: Error };
 
 /**
- * Read a single file, cached under `qk.file(id, path)`. Disabled until a path
- * is given. A write that invalidates `qk.files(id)` does not touch this key,
- * so callers that edit a file should invalidate `qk.file(id, path)` too.
+ * Read a single file from the active `FileService`, cached under
+ * `qk.file(scopeId, path)`. Disabled until a path is given. A write that
+ * invalidates `qk.files(scopeId)` does not touch this key, so callers that edit
+ * a file should invalidate `qk.file(scopeId, path)` too.
  */
-export function useFileContent(investigationId: string, path: string | null): State {
+export function useFileContent(path: string | null): State {
+  const svc = useFileService();
   const q = useQuery({
-    queryKey: qk.file(investigationId, path ?? ""),
-    queryFn: () => api.readFile(investigationId, path as string),
+    queryKey: qk.file(svc.scopeId, path ?? ""),
+    queryFn: () => svc.readFile(path as string),
     enabled: path !== null,
   });
   if (q.isPending) return { kind: "loading" };

@@ -201,6 +201,35 @@ async def test_ensure_sandbox_skips_provision_when_no_packages_match(tmp_path: P
     assert sb.uploads == []
 
 
+async def test_ensure_sandbox_skips_provision_when_prebuilt_dir_none() -> None:
+    """When `prebuilt_dir is None` on the ctx, no provisioning happens
+    even if packages + allowed_tools match — the deployer has signalled
+    the sandbox already exposes tools by another mechanism (e.g.
+    LocalProcessSandbox's `tools_dir` bind-mounts PREBUILT_DIR
+    read-only at `/.tools`).
+
+    Regression: production __main__.py used to pass both `tools_dir`
+    (bind-mount) AND `prebuilt_dir` (tar-extract via provision_tools)
+    pointing at the same PREBUILT_DIR. Inside the jail the bind-mount
+    is read-only and overlays the .tar.gz that upload had landed on
+    host-side `<sandbox-root>/.tools/` — `tar xzf ../.tools/<pkg>.tar.gz`
+    then couldn't find the archive (shadowed by the mount) and exited
+    2. Symptom: first package tool call (`summarise`, `wafer-history`)
+    failed with `provisioning '<pkg>' failed at \\`tar -C ../.tools/<pkg>\\`
+    (exit 2)`."""
+    sb = _Recording()
+    ctx = AgentToolContext(
+        sandbox=sb,  # ty: ignore[invalid-argument-type]
+        agent_config=AgentConfig(name="a", allowed_tools=["datalab"]),
+        packages=[_pkg("datalab", "summarise")],
+        prebuilt_dir=None,
+    )
+    await ctx.ensure_sandbox()
+    assert sb.uploads == []
+    # And no `tar` / `mkdir -p ../.tools/...` extract command either.
+    assert not any("tar" in " ".join(c) for c in sb.calls)
+
+
 # ─── runner _agent_for hooks the package commands as FunctionTools ────
 
 
@@ -220,6 +249,29 @@ def test_agent_for_exposes_allowed_package_commands_as_function_tools():
     assert "data-fetch" not in names  # not in any allowed entry
 
 
+def test_agent_for_exposes_all_package_commands_when_allowed_tools_empty():
+    """A bare AgentConfig (no `allowed_tools` set, defaults to `[]`)
+    exposes EVERY package command — same semantics as for workspace
+    tools (empty list → no restriction). The asymmetric prior
+    behaviour (workspace=all, packages=none) caused the default
+    deploy config to ship 9 workspace tools and ZERO package tools;
+    the LLM's 'what tools do you have?' answer missed the entire
+    rca-tools / data-fetch / csv-column-summary suite."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(
+        AgentConfig(name="a"),  # allowed_tools defaults to []
+        packages=[_pkg("datalab", "summarise", "plot"), _pkg("fetch", "f")],
+    )
+    names = {t.name for t in agent.tools}
+    # Every package command is exposed.
+    assert "summarise" in names
+    assert "plot" in names
+    assert "f" in names
+    # Workspace tools still all there.
+    assert "exec" in names
+
+
 def test_agent_for_colon_filters_to_one_command():
     """`allowed_tools=["datalab:plot"]` → only `plot` exposed, not
     summarise — the LLM doesn't see the whole package."""
@@ -237,10 +289,14 @@ def test_agent_for_colon_filters_to_one_command():
 def test_agent_for_threads_base_url_and_api_key_to_the_model():
     from agents.extensions.models.litellm_model import LitellmModel
 
+    from workspace_app.agent.repairing_model import RepairingModel
     from workspace_app.api.litellm_runner import _agent_for
 
     agent = _agent_for(AgentConfig(name="a"), base_url="https://hosted/v1", api_key="sk-1")
-    assert isinstance(agent.model, LitellmModel)
+    # #76: the model is wrapped in RepairingModel for tool-arg self-repair; the
+    # creds still thread through to the inner LitellmModel (transparent passthrough).
+    assert isinstance(agent.model, RepairingModel)
+    assert isinstance(agent.model._inner, LitellmModel)
     assert agent.model.base_url == "https://hosted/v1"
     assert agent.model.api_key == "sk-1"
 

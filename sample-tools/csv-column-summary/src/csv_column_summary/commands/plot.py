@@ -7,8 +7,8 @@ import json
 import pandas as pd
 from pydantic import BaseModel, Field
 
-from ..core import plot as render_plots
-from ..core import progress
+from csv_column_summary.core import plot as render_plots
+from csv_column_summary.core import progress
 
 
 class Args(BaseModel):

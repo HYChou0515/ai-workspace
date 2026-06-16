@@ -305,7 +305,7 @@ rm.create(AgentConfig(
     name="我的 Agent · Llama3",
     model="ollama_chat/llama3:8b",
     system_prompt=open("my_prompt.md", encoding="utf-8").read(),
-    suggestions=["分析這份 log", "畫魚骨圖", "寫 8D 報告"],
+    suggestions=["分析這份 log", "畫魚骨圖", "起草 RCA 報告"],
     allowed_tools=["read_file", "ls", "exec"],   # 例：唯讀＋執行，不給寫/刪
 ))
 ```

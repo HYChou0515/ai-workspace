@@ -1,26 +1,37 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { BrandIntro } from "./components/BrandIntro";
-import { Home } from "./pages/Home";
-import { Investigation } from "./pages/Investigation";
+import { AppDashboard } from "./pages/AppDashboard";
+import { AppNewItem } from "./pages/AppNewItem";
+import { AppWorkspace } from "./pages/AppWorkspace";
+import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { KbHome } from "./pages/kb/KbHome";
+import { Launcher } from "./pages/Launcher";
 
 /**
  * AppRoutes is router-agnostic — the host (production: <BrowserRouter>,
- * tests: <MemoryRouter>) provides the router. Routes per plan §4:
- *   /                          → Home (investigation list)
- *   /investigations/:id        → Investigation (workspace)
- *   /kb                        → Knowledge base (collections, chats, ask agent)
- * Unknown paths bounce back to Home.
+ * tests: <MemoryRouter>) provides the router. Multi-app routes (#89):
+ *   /                          → App Launcher (pick an App)
+ *   /a/:slug                   → an App's dashboard (its item list)
+ *   /a/:slug/new               → the create modal, overlaid on the dashboard
+ *   /a/:slug/:itemId           → an item's workspace (the generic shell)
+ *   /kb                        → Knowledge base
+ * Unknown paths bounce back to the launcher.
  */
 export function AppRoutes() {
   return (
     <Routes>
-      <Route path="/" element={<Home />} />
-      <Route path="/investigations/:id" element={<Investigation />} />
+      <Route path="/" element={<Launcher />} />
+      {/* `new` is a CHILD of the dashboard so the create form renders as a modal
+          over the live dashboard (design-handoff), not as a standalone page. */}
+      <Route path="/a/:slug" element={<AppDashboard />}>
+        <Route path="new" element={<AppNewItem />} />
+      </Route>
+      <Route path="/a/:slug/:itemId" element={<AppWorkspace />} />
       <Route path="/kb" element={<KbHome />} />
       <Route path="/kb/doc/*" element={<KbDocPage />} />
+      <Route path="/diagnostics" element={<DiagnosticsPage />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

@@ -23,16 +23,87 @@ from msgspec import Struct, field
 from specstar import OnDelete, Ref, Vector
 from specstar.types import Binary
 
+from .conversation import Citation as Citation  # re-export — see conversation.Citation
 from .conversation import MessageMetrics
 
 # Embedding dimensionality. MUST match the active Embedder; changing the model
 # is a re-index event (every chunk re-embedded). Set per deployment.
-EMBED_DIM = int(os.getenv("KB_EMBED_DIM", "1024"))  # e.g. bge-m3 = 1024
+#
+# Resolution at import time:
+# 1. `KB_EMBED_DIM` env explicit → use it (unfamiliar model + you know its dim)
+# 2. `KB_EMBED_MODEL` env in the known table → derive (one-knob config)
+# 3. Neither + model unknown → raise (silent default would corrupt the column)
+# 4. Neither + bge-m3 / empty (offline) → 1024
+#
+# The `DocChunk.embedding` Vector column's width is bound below at class
+# definition time. Changing it post-deploy means re-indexing.
+
+_KNOWN_EMBED_DIMS: dict[str, int] = {
+    "ollama/bge-m3": 1024,
+    "ollama/nomic-embed-text": 768,
+    "openai/text-embedding-3-small": 1536,
+    "openai/text-embedding-3-large": 3072,
+    "openai/text-embedding-ada-002": 1536,
+    # Empty = offline HashEmbedder (factories.get_embedder); pin to bge-m3
+    # default so existing offline deploys are unaffected.
+    "": 1024,
+}
+
+_KNOWN_CODE_EMBED_DIMS: dict[str, int] = {
+    "ollama/nomic-embed-text": 768,
+    "ollama/nomic-embed-code": 768,
+    "ollama/jina-embeddings-v2-base-code": 768,
+    "": 768,
+}
+
+
+def _resolve_dim(
+    *,
+    dim_env: str,
+    model_env: str,
+    table: dict[str, int],
+    default_model: str,
+) -> int:
+    """Pick an embedding dim from env. Explicit `dim_env` wins; else
+    look up `model_env` (default `default_model`) in `table`; else raise
+    with the offending model name so the operator knows to set the
+    explicit dim."""
+    explicit = os.environ.get(dim_env)
+    if explicit:
+        return int(explicit)
+    model = os.environ.get(model_env, default_model)
+    if model in table:
+        return table[model]
+    raise ValueError(
+        f"unknown embed model {model!r} (from {model_env}); "
+        f"either set {dim_env} explicitly to the model's output "
+        f"width, or use one of: {sorted(table)}"
+    )
+
+
+def _resolve_embed_dim() -> int:
+    return _resolve_dim(
+        dim_env="KB_EMBED_DIM",
+        model_env="KB_EMBED_MODEL",
+        table=_KNOWN_EMBED_DIMS,
+        default_model="ollama/bge-m3",
+    )
+
+
+def _resolve_code_embed_dim() -> int:
+    return _resolve_dim(
+        dim_env="KB_CODE_EMBED_DIM",
+        model_env="KB_CODE_EMBED_MODEL",
+        table=_KNOWN_CODE_EMBED_DIMS,
+        default_model="",
+    )
+
+
+EMBED_DIM = _resolve_embed_dim()  # e.g. bge-m3 = 1024
 # P3.0 code-specialised embedding width. Stored on `DocChunk.embedding_alt`
 # for Collections with ``embedder_id=1`` so the retriever can fan out across
-# both fields in parallel and RRF the results. Defaults to 768 (a common
-# size for nomic-embed-code / jina-code).
-CODE_EMBED_DIM = int(os.getenv("KB_CODE_EMBED_DIM", "768"))
+# both fields in parallel and RRF the results. Defaults to 768.
+CODE_EMBED_DIM = _resolve_code_embed_dim()
 
 
 # ───────────────────────────── resources ─────────────────────────────
@@ -64,6 +135,58 @@ class Collection(Struct):  # → resource "collection"
     # 1 = code embedder, vectors land on DocChunk.embedding_alt instead so
     # the retriever can fan out across both fields in parallel + RRF.
     embedder_id: int = 0
+    # Issue #50: which retrieval pipeline(s) this collection uses — two
+    # independent toggles. `use_rag` = the chunk-RAG path (default on, so
+    # every existing collection keeps working). `use_wiki` = the parallel
+    # LLM-wiki path (maintainer builds it on ingest; reader navigates it at
+    # query). Both on ⇒ both run and their answers merge.
+    use_rag: bool = True
+    use_wiki: bool = False
+    # Issue #90: per-collection wiki guidance, APPENDED onto the bundled wiki
+    # prompts (never a replacement — the machinery stays). `maintainer` shapes
+    # how pages are written/organised (fold + unfold); `reader` shapes how the
+    # wiki answers. Blank ⇒ the bundled prompt verbatim. Non-indexed: never
+    # filtered/sorted on, so adding them needs no migration (old rows decode
+    # with the empty default). See kb/wiki/guidance.with_collection_guidance.
+    wiki_maintainer_guidance: str = ""
+    wiki_reader_guidance: str = ""
+
+
+class WikiPage(Struct):  # → resource "wiki-page"
+    """One page of a collection's LLM wiki (issue #50) — markdown the wiki
+    agents own and maintain. Backed by the FileStore-protocol
+    ``WikiFileStore`` (one resource per page → editing a page is O(page),
+    not O(whole wiki); writes use draft ``modify()`` so high-churn machine
+    edits don't bloat revision history). Metadata (created/updated time,
+    revision) is specstar's — not redefined here.
+
+    Resource id = ``{collection_id}/{path}`` slash-free (see
+    ``kb/wiki/store.py``). ``content`` is a Binary blob (markdown bytes)."""
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    path: str  # e.g. "/index.md", "/entities/reflow-zone-3.md"
+    content: Binary
+
+
+class WikiBuildState(Struct):  # → resource "wiki-build-state"
+    """Live progress of a collection's wiki maintenance (#59), for the FE's
+    "Updating…" UI — the durable, cross-pod replacement for the old in-memory
+    status dict. One resource per collection (resource id = collection id).
+
+    ``total`` is the count of sources enqueued in the current build epoch
+    (reset when a fresh batch starts); ``current`` / ``phase`` are the live
+    activity the consuming pod writes as the maintainer works; ``errors`` /
+    ``last_error`` surface terminal run failures so a maintainer that writes
+    nothing is never silent. ``building`` and the done-count are NOT stored —
+    they're derived at read time from the live count of PENDING/PROCESSING
+    jobs, so they stay correct across retries and multiple pods."""
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    total: int = 0
+    current: str | None = None
+    phase: str | None = None
+    errors: int = 0
+    last_error: str | None = None
 
 
 class SourceDoc(Struct):  # → resource "source-doc"
@@ -81,10 +204,23 @@ class SourceDoc(Struct):  # → resource "source-doc"
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
     path: str  # relative path within the upload; part of the id + cross-ref key
     content: Binary
+    # Issue #39: a browser-displayable derivative a parser handed back
+    # via `on_preview` — e.g. PptxParser's soffice-converted PDF. Its
+    # own blob (separate file_id); the doc viewer iframes
+    # `/blobs/{preview.file_id}` instead of a binary-download notice.
+    # None for types that already display natively.
+    preview: Binary | None = None
     text: str | None = None
     # Indexing lifecycle: created "indexing", flips to "ready" once its chunks
     # are embedded (slow — runs off the upload request), or "error" on failure.
     status: str = "ready"
+    # Issue #39 / Q11: a short progress / error string that long-running
+    # parsers (VLM image, VLM slide) write via the Ingestor's
+    # `on_progress` callback so the FE polling the doc row sees
+    # "VlmImageParser: page 12/50" instead of just "indexing" for 25
+    # minutes. Cleared on success; carries the exception summary when
+    # status flips to "error".
+    status_detail: str = ""
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"
@@ -105,6 +241,13 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     start: int  # inclusive char offset into canonical text
     end: int  # exclusive char offset
     text: str
+    # Issue #39 / Q8c: the IParser subclass that produced this chunk
+    # ("PdfParser" / "VlmImageParser" / a custom in-house parser's
+    # class name). Empty string = legacy / non-parser path (the
+    # canonical-text chunker / chat-pipeline insight nodes). Lets the
+    # operator selectively reindex a single parser's output, or the
+    # FE label chunks by their source.
+    parser_id: str = ""
     # P3.0: exactly one of `embedding` / `embedding_alt` is populated per
     # chunk — `embedder_id == 0` chunks use `embedding` (default text model),
     # `embedder_id != 0` chunks use `embedding_alt` (code-specialised model).
@@ -119,27 +262,12 @@ class DocChunk(Struct):  # → resource "doc-chunk"
 # ─────────────────── value structs (nested / payloads) ───────────────────
 
 
-class Citation(Struct):
-    """A parsed ``[n]`` marker in a KB answer, resolved to its source. Retrieved
-    chunks get MERGED, so chunk-level provenance is the SET of original chunk
-    ids that composed the cited passage."""
-
-    marker: int  # the [n] in the answer
-    collection_id: str
-    document_id: str  # SourceDoc resource id (encoded natural key; see kb.doc_id)
-    filename: str  # display name = basename(path)
-    start: int  # merged span (min start) into canonical text
-    end: int  # max end
-    source_chunk_ids: list[str]  # original DocChunk ids merged
-    snippet: str = ""
-
-
 class KbMessage(Struct):
     """One message in a KB chat thread. Like the RCA Message + citations on
     assistant answers. ``created_at`` kept: it's a sub-object of KbChat, so
     specstar doesn't track per-message timestamps."""
 
-    role: str  # user / assistant / tool
+    role: str  # user / assistant / tool / error
     content: str = ""
     reasoning: str | None = None
     tool_call_id: str | None = None
@@ -148,6 +276,7 @@ class KbMessage(Struct):
     citations: list[Citation] = field(default_factory=list)
     created_at: int | None = None  # epoch ms
     metrics: MessageMetrics | None = None  # assistant answers: final token usage (survives reload)
+    error_kind: str | None = None  # role=error (#37): error | cancelled | max_turns
 
 
 class KbChat(Struct):  # → resource "kb-chat"

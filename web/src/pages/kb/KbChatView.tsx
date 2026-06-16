@@ -78,11 +78,24 @@ export function KbChatView({
 
   const exportJson = () => {
     if (!chat) return;
-    const blob = new Blob([JSON.stringify(chat, null, 2)], { type: "application/json" });
+    // The `.chat.json` round-trip format (issue #39): re-uploadable to
+    // any KB collection, where the BE runs the same insight extraction
+    // the promote path does. Shape mirrors kb/chat_export.py — only
+    // {title, messages:[{role, content, tool_name}]}, not the raw
+    // KbChat dump (citations/metrics don't round-trip).
+    const payload = {
+      title: chat.title || "chat",
+      messages: chat.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        tool_name: m.tool_name ?? "",
+      })),
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${(chat.title || "chat").replace(/[^\w.-]+/g, "-")}.json`;
+    a.download = `${(chat.title || "chat").replace(/[^\w.-]+/g, "-")}.chat.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

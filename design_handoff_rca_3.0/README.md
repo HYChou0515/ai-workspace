@@ -2,6 +2,15 @@
 
 > Defect root-cause analysis AI agent. Investigators (process engineers, QE, yield engineers) work with a chat-driven agent that pulls SPC data, AOI defects, logs, and photos to find root causes and co-draft 8D reports.
 
+## Platform model (multi-app)
+
+The product is now **multi-app**. Previously the product *was* RCA and `/` showed the investigation list. Now RCA is **one app** produced from a template; the platform can host several parallel apps, each a self-contained, separately-branded dashboard under `/a/:slug`.
+
+- `/` is the **App Launcher** — the entry screen where you pick which app to enter. Always shown (even with one app).
+- `/a/:slug` is an app dashboard (RCA lives at `/a/rca`); `/a/:slug/:itemId` is an item inside it.
+- The **Knowledge Base** (`/kb`) is a special **link**, not an app.
+- Per-app `color` drives a **full `--accent` re-theme inside the app**; on the launcher each app color is expressed **per-card-local only** (chrome stays neutral).
+
 ## About the design files
 
 The HTML files in this bundle are **design references**, not production code. They're React prototypes built with inline Babel + CDN React for fast iteration in a design environment. Your task is to **recreate these designs in the target codebase's existing environment** (React + your component library / framework of choice) — using its established patterns, design tokens, and routing. Do not ship the HTML; treat it as a spec.
@@ -13,11 +22,14 @@ The HTML files in this bundle are **design references**, not production code. Th
 ## How to read this bundle
 
 - `RCA 3.0 prototype.html` — the live clickable prototype. Open this first to understand flow.
+- `App Launcher.html` — the platform entry screen (`/`) prototype: pick which app to enter. Four states via the bottom switcher (Normal / one app / empty / loading).
+- `App Launcher (directions).html` — the three explored launcher directions (A quiet · **B platform header ✓ chosen** · C bold). Archive.
 - `rca/system.jsx` — design tokens (colors, type, spacing) + atomic components (Btn, RcaChip, Card, Avatar, I icons). Treat this as the source of truth for tokens.
 - `rca/home.jsx` — Home (investigation list) view.
 - `rca/investigation.jsx` — Main investigation workspace (VSCode-style shell).
 - `rca/views/analyses.jsx` — Pareto, Fishbone, 5-Why, Report (with versioning), New Investigation modal.
-- `rca/app.jsx` — Top-level router/state machine. Two routes: `home` and `investigation`.
+- `rca/launcher.jsx` — App Launcher screen + app/KB cards (chosen direction B `LauncherScreenB`, plus `LauncherQuiet` / `LauncherBold` variants). Depends only on `system.jsx`.
+- `rca/app.jsx` — Top-level router/state machine for the RCA app. Two routes: `home` and `investigation`. (The launcher is a standalone prototype, not yet wired into this router.)
 - `assets/` — Brand mark SVGs and favicon. **Ship the SVGs as-is**; they are the canonical brand.
 
 ---
@@ -85,9 +97,35 @@ mono-caps:  11   /* uppercase, letter-spacing 0.12em — section labels */
 
 ## Screens
 
+### 0. App Launcher
+
+**Path**: `/` — the platform entry screen. RCA is one app among several; `/` is always the launcher and **does not auto-skip** into the single app.
+
+**Layout**: neutral platform header + a responsive gallery of **large feature cards** (1 / 2 / 3-column reflow). Chosen direction: **B · platform header** (`LauncherScreenB` in `rca/launcher.jsx`). Two alternates (`LauncherQuiet`, `LauncherBold`) live in the same file and are shown side-by-side in `App Launcher (directions).html`.
+
+**Platform header (60px, neutral)**: 2×2 "Workspace" launcher mark + wordmark (a platform-level identity **placeholder** — swap for the real platform brand) · notifications bell · account chip. Platform-level chrome **stays neutral** — never painted in any one app's color.
+
+**Page header**: `APPS` caps label + H1 "Your apps" + count (`N apps · 1 link`).
+
+**App card** (`--white` surface, 1px `--paper-3` hairline, 14px radius):
+- **Top accent bar** (4px) in the app's own `color` — the one place the app color appears by default.
+- **Icon tile** (54px, neutral `--paper-2` bg): renders the manifest `icon` in any of its three forms at one consistent optical size — inline **SVG** markup (the app shipped its own `icon.svg`), an **emoji**, or a **named icon** key from the `I` set.
+- **Title** (Inter Tight 20) + one-line **description** (`--text-paper-d`).
+- **Footer**: route target `/a/{slug}` (mono) + right arrow. **Hover** = lift (translateY −3px) + border & arrow pick up the app color + background → a 7%-app-color wash, all derived locally from the single hex via `color-mix`. **Focus-visible** = 2px outline in the app color. Cards are `<a>` with an accessible name; full keyboard nav across the grid.
+
+**Knowledge Base card** (fixed, always last): links to `/kb`. Reads as a peer but is subtly distinct — **dashed** hairline border, neutral `layers` icon tile, a `Link` chip, and a **↗ external arrow** instead of →. KB is not an app; it's a special link.
+
+**Color / theming rule**: each app's `color` is expressed **per-card-local only** on the launcher (top bar + hover wash + focus ring). The full `--accent` re-theme (`--accent` / `--accent-h` / `--accent-soft`) happens **after you enter an app** at `/a/:slug`. The launcher is the one screen where many app colors appear at once — keep it calm.
+
+**States**:
+- **Normal** — N app cards + the KB card.
+- **One app only** — still the launcher; don't auto-skip.
+- **Empty** — no apps registered: a calm dashed "No apps yet" hint + the KB card (always present).
+- **Loading** — manifests fetching: 6 shimmer skeleton cards + "Loading apps…".
+
 ### 1. Home — Investigation list
 
-**Path**: `/`
+**Path**: `/a/rca` (the RCA app home — formerly `/`, moved under the app namespace now that `/` is the launcher)
 **Layout**: Two-column. Left sidebar 240px, main content flex.
 
 **Sidebar (240px, paper bg, right hairline)**
@@ -242,6 +280,15 @@ Triggered by `+ New investigation` in Home sidebar.
 ## State & data model
 
 ```ts
+type AppManifestSummary = {   // one card on the launcher
+  slug: string;          // route target → /a/{slug}
+  title: string;         // app name, e.g. "Root Cause Analysis"
+  description: string;   // one-line card subtitle
+  icon: string;          // inline SVG markup | emoji | named-icon key (I set)
+  color: string;         // hex, e.g. "#c0392b" — app accent/theme color
+};
+// The KB card is fixed (not an app): { title:"Knowledge Base", href:"/kb", icon:"layers", neutral color }.
+
 type Investigation = {
   id: string;            // "INC-2026-0142"
   title: string;
@@ -279,11 +326,15 @@ type ReportVersion = {
 ## Interactions & behavior
 
 ### Routing
-Two routes in the prototype:
-- `home` — Home view.
-- `investigation` (with id) — Investigation workspace.
+Three route levels in the platform model:
+- `/` — **App Launcher** (`LauncherScreenB`). Always shown.
+- `/a/:slug` — an app dashboard. RCA's `home` (investigation list) lives at `/a/rca`.
+- `/a/:slug/:itemId` — an item inside an app. RCA's `investigation` workspace lives at `/a/rca/:id`.
 
-Recommend a real router (Next.js / TanStack Router / RR) with `/investigations` and `/investigations/[id]` plus `?tab=brief|spc|pareto|fishbone|fivewhy|report`.
+The prototype's `rca/app.jsx` still has only the two RCA-internal routes (`home`, `investigation`); the launcher is a separate prototype file. Recommend a real router (Next.js / TanStack Router / RR) with `/`, `/a/[slug]`, and `/a/rca/[id]` plus `?tab=brief|spc|pareto|fishbone|fivewhy|report`.
+
+### App Launcher → app
+Click an app card → navigate to `/a/{slug}` (the app re-themes `--accent` to its `color` on entry). Click the KB card → `/kb`.
 
 ### Home → Investigation
 Click any row → navigate to that investigation's workspace.
@@ -370,9 +421,12 @@ Use the SVGs directly — do not redraw. The mark must always include the orange
 ## File index
 
 - `RCA 3.0 prototype.html` — prototype entrypoint
+- `App Launcher.html` — platform launcher prototype (entry at `/`, four states)
+- `App Launcher (directions).html` — the three explored launcher directions (archive)
 - `index.html` — design canvas with the design system page + all screens shown isolated (reference for tokens / spacing)
 - `design-canvas.jsx` — design canvas tool (not part of the product)
 - `rca/system.jsx` — tokens + atomic components
+- `rca/launcher.jsx` — App Launcher screen + app/KB cards (direction B + A/C variants)
 - `rca/home.jsx` — Home view
 - `rca/investigation.jsx` — Investigation workspace shell
 - `rca/views/analyses.jsx` — Pareto / Fishbone / 5-Why / Report / NewInvestigation modal

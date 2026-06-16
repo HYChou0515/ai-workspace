@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RCA Platform · App Launcher</title>
+<link rel="icon" href="assets/favicon.ico" sizes="any">
+<meta name="theme-color" content="#16181D">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #F1ECE0; font-family: 'Inter', system-ui, sans-serif; color: #16181D; }
+  * { box-sizing: border-box; }
+  /* state switcher (prototype chrome — not part of the launcher) */
+  .proto-bar {
+    position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+    z-index: 80; display: flex; align-items: center; gap: 4px;
+    background: #16181D; border-radius: 999px; padding: 5px;
+    box-shadow: 0 8px 30px rgba(20,22,28,.22);
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+  }
+  .proto-bar .lbl { color: #6A6E78; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; padding: 0 10px 0 12px; }
+  .proto-bar button {
+    appearance: none; border: 0; cursor: pointer;
+    background: transparent; color: #9CA0AB;
+    font: inherit; font-size: 12px; padding: 7px 13px; border-radius: 999px;
+    white-space: nowrap; transition: background .14s, color .14s;
+  }
+  .proto-bar button:hover { color: #F1ECE0; }
+  .proto-bar button[aria-pressed="true"] { background: #F0502E; color: #FBF9F4; }
+</style>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" src="rca/system.jsx"></script>
+<script type="text/babel" src="rca/launcher.jsx"></script>
+
+<script type="text/babel">
+const STATES = [
+  { id: "normal",  label: "Normal" },
+  { id: "one",     label: "One app" },
+  { id: "empty",   label: "Empty" },
+  { id: "loading", label: "Loading" },
+];
+
+function Prototype() {
+  const [state, setState] = React.useState(() => localStorage.getItem("launcher-state") || "normal");
+  React.useEffect(() => { localStorage.setItem("launcher-state", state); }, [state]);
+
+  const props =
+    state === "loading" ? { loading: true } :
+    state === "empty"   ? { apps: [] } :
+    state === "one"     ? { apps: LAUNCH_APPS.slice(0, 1) } :
+                          { apps: LAUNCH_APPS };
+
+  return (
+    <React.Fragment>
+      <LauncherScreenB {...props} />
+      <div className="proto-bar" role="group" aria-label="Prototype state">
+        <span className="lbl">State</span>
+        {STATES.map((s) => (
+          <button key={s.id} aria-pressed={state === s.id} onClick={() => setState(s.id)}>{s.label}</button>
+        ))}
+      </div>
+    </React.Fragment>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Prototype />);
+</script>
+</body>
+</html>

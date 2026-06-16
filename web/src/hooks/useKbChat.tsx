@@ -3,6 +3,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi } from "../api/kb";
 import { qk } from "../api/queryKeys";
+import { getKbAgentName } from "../lib/kbAgent";
+import {
+  getKbWiki,
+  getStored as getKbEnhancementSelection,
+  toBodyEnhancements,
+  withWikiFlag,
+} from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import {
   EMPTY_LOG,
@@ -104,6 +111,8 @@ export function useKbChat({
           content: trimmed,
           signal: controller.signal,
           reasoningEffort: getReasoningEffort() ?? undefined,
+          enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
+          agentName: getKbAgentName() ?? undefined,
         })) {
           setLog((prev) => reduceAgent(prev, ev));
         }
@@ -130,6 +139,9 @@ export function useKbChat({
     // runner. Only an already-created thread has a server turn to cancel.
     abortRef.current?.abort();
     if (chatId) void client.cancelMessage(chatId);
+    // #49: flip out of "streaming" immediately so Stop unblocks the
+    // composer even if the stream is slow to tear down.
+    setLog((prev) => ({ ...prev, streaming: false }));
   }, [chatId, client]);
 
   const reset = useCallback(() => {

@@ -1,19 +1,15 @@
-from datetime import UTC, datetime
-
 import pytest
 from specstar import SpecStar
 
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.resources import register_all
+from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 
 
 @pytest.fixture
 def spec() -> SpecStar:
-    s = SpecStar()
-    s.configure(default_user="u", default_now=lambda: datetime.now(UTC))
-    register_all(s)
+    s = make_spec(default_user="u")
     return s
 
 

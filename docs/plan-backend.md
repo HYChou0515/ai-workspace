@@ -51,7 +51,7 @@ needs to be re-done; references in the new sections cite them.
 
 **Core insight**: the backend is a **generic file store + agent +
 sandbox**. Everything RCA-specific (5-why structure, fishbone JSON
-schema, 8D report shape, hypothesis cells…) is **data the agent
+schema, report shape, hypothesis cells…) is **data the agent
 generates and writes to FileStore as files**. The system doesn't model
 any of it. It only stores and serves `.md` / `.ipynb` / `.csv` /
 `.json` / `.canvas` files; the frontend renders by extension and the
@@ -71,7 +71,7 @@ What changes at the BE level to deliver `design_handoff_rca_3.0`:
   `KernelService`, per-cell SSE, cell event types, `PUT /files/{path}`,
   new default sandbox image with `ipykernel + numpy/pandas/matplotlib/scipy`.
 - **RCA-tuned `AgentConfig`**: system prompt + tool allow-list encode
-  the 8D / 6M / SPC / Pareto workflow knowledge. Tools stay generic
+  the 6M / 5-Why / SPC / Pareto workflow knowledge. Tools stay generic
   (`exec`, `read_file`, `write_file`, `ls`, `exists`, `delete_file`).
 - **Idle threshold bump**: investigations stay warm 8 hours by default
   (was 15 min for workspace-app).
@@ -215,7 +215,7 @@ default-factory semantics.
 ## 4. Report versions are a file-naming convention, not a resource
 
 The design has `v1 superseded / v2 superseded / v3 current` semantics
-for the 8D report. We **don't** model this as a backend resource — the
+for the final report. We **don't** model this as a backend resource — the
 agent writes `/report.v1.md`, `/report.v2.md`, …; the FE iterates
 `/report.v*.md`, picks the highest N as **current**, renders earlier
 versions as **superseded**.
@@ -249,7 +249,7 @@ over the investigation lifetime.
 | `pareto.ipynb` | One markdown cell ("# Pareto"), one empty code cell |
 | `fishbone.canvas` | Empty 6M JSON skeleton (`{effect: "", branches: [...]}`) |
 | `5-why.md` | "## Why #1 …" through "## Why #5 …" placeholder text |
-| `report.md` | Initial D1–D8 skeleton headings (this is `report.v0.md`-equivalent — empty draft) |
+| `report.md` | Initial skeleton: Problem statement / Findings / Next steps headings (this is `report.v0.md`-equivalent — empty draft) |
 | `data/.gitkeep` | Empty marker; the `data/` folder is where fixtures land |
 
 Plus a small **fixture CSV** at `data/reflow.zone3.sample.csv` (the
@@ -457,7 +457,7 @@ testing doesn't need a separate setup.
 
 The RCA-specific behaviour is all in **AgentConfig.system_prompt**.
 The prompt teaches the agent:
-- The 8D / 6M / SPC / Pareto workflow vocabulary.
+- The 6M / 5-Why / SPC / Pareto workflow vocabulary.
 - The conventional file paths and shapes the FE renders
   (`/data/*.csv` is fixture data, `5-why.md` is structured under
   `## Why #N` headings, `fishbone.canvas` is the 6M JSON schema,
@@ -550,8 +550,8 @@ Probably cleanest: copy to `web/public/` at FE build time.
   and writing tests for each.
 - **Bias to in-process state for v1.** Registry, dirty-path trackers,
   kernel handles — all in-memory.
-- **The system is RCA-agnostic.** All RCA structure (8D, 6M, 5-Why,
-  hypothesis cells, correctional actions) lives in the agent's
+- **The system is RCA-agnostic.** All RCA structure (6M, 5-Why,
+  hypothesis cells, corrective actions, report layout) lives in the agent's
   system prompt + the files it writes, never in BE resources.
   Fixture data ships inside `rca/templates/default/data/`.
 - **Tests first via `/tdd`.** Red→green vertical-slice.

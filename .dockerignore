@@ -15,3 +15,7 @@ design_handoff_rca_3.0
 kubernetes
 *.md
 !README.md
+
+# Observability runtime artifacts (resolved-config dump + LLM call log).
+config.resolved.yaml
+logs

@@ -1,8 +1,8 @@
-"""§A.S4 — `read_skill` tool + `AgentToolContext.template_profile` +
-`build_tools(profile=)` conditional injection.
+"""§A.S4 / #89 — `read_skill` tool + `AgentToolContext.{app_slug,template_profile}`
++ `build_tools(app_slug=, profile=)` conditional injection.
 
-Tests use the same isolated-templates synthetic package fixture as
-`tests/rca/test_skills.py` so production templates are untouched.
+Tests use an isolated synthetic apps package so production profiles are
+untouched. Skills now live at `apps/<slug>/profiles/<profile>/.skill/`.
 """
 
 from __future__ import annotations
@@ -18,16 +18,16 @@ from workspace_app.agent.context import AgentToolContext
 
 
 @pytest.fixture
-def isolated_templates(tmp_path: Path, monkeypatch):
-    root = tmp_path / "tpl_root"
+def isolated_apps(tmp_path: Path, monkeypatch):
+    root = tmp_path / "apps_root"
     pkg = root / "tplpkg"
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text("")
     monkeypatch.syspath_prepend(str(root))
-    import workspace_app.rca.skills as skills
+    import workspace_app.apps.skills as skills
 
     importlib.reload(skills)
-    monkeypatch.setattr(skills, "_TEMPLATES_PKG", "tplpkg")
+    monkeypatch.setattr(skills, "_APPS_PKG", "tplpkg")
     skills.list_skills.cache_clear()
     skills.load_skill.cache_clear()
     yield pkg
@@ -36,46 +36,31 @@ def isolated_templates(tmp_path: Path, monkeypatch):
     sys.modules.pop("tplpkg", None)
 
 
-def _profile_with_skill(root: Path, profile: str, name: str, description: str, body: str) -> None:
-    prof = root / profile
-    prof.mkdir()
-    (prof / "__init__.py").write_text("")
-    skill_dir = prof / ".skill"
-    skill_dir.mkdir()
-    sd = skill_dir / name
-    sd.mkdir()
+def _profile_with_skill(
+    root: Path, slug: str, profile: str, name: str, description: str, body: str
+) -> None:
+    sd = root / slug / "profiles" / profile / ".skill" / name
+    sd.mkdir(parents=True)
     (sd / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {description}\n---\n\n{body}")
 
 
 # ─── read_skill tool body ─────────────────────────────────────────────
 
 
-async def test_read_skill_returns_body_for_known_skill(isolated_templates: Path):
-    """Tool returns the skill body when the name is registered. Uses
-    the impl directly (faster than spinning up an Agent for unit work)."""
+async def test_read_skill_returns_body_for_known_skill(isolated_apps: Path):
     from workspace_app.agent.tools import read_skill_impl
 
-    _profile_with_skill(
-        isolated_templates,
-        "methodology",
-        "5-why",
-        "Walk through 5 Whys.",
-        "# 5 Whys\n\nAsk why five times.",
-    )
-    ctx = AgentToolContext(template_profile="methodology")
-    body = await read_skill_impl(RunContextWrapper(ctx), "5-why")  # ty: ignore[invalid-argument-type]
-    assert body.startswith("# 5 Whys")
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "report-format", "fmt", "# Fmt\n\nbody.")
+    ctx = AgentToolContext(app_slug="rca", template_profile="local-lab")
+    body = await read_skill_impl(RunContextWrapper(ctx), "report-format")  # ty: ignore[invalid-argument-type]
+    assert body.startswith("# Fmt")
 
 
-async def test_read_skill_unknown_name_returns_friendly_error_listing_available(
-    isolated_templates: Path,
-):
-    """Unknown skill → friendly error string listing what IS available,
-    so the agent recovers without another query roundtrip (§A.Q5)."""
+async def test_read_skill_unknown_name_returns_error_listing_available(isolated_apps: Path):
     from workspace_app.agent.tools import read_skill_impl
 
-    _profile_with_skill(isolated_templates, "methodology", "good", "ok", "body")
-    ctx = AgentToolContext(template_profile="methodology")
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "good", "ok", "body")
+    ctx = AgentToolContext(app_slug="rca", template_profile="local-lab")
     out = await read_skill_impl(RunContextWrapper(ctx), "nope")  # ty: ignore[invalid-argument-type]
     assert "error:" in out
     assert "nope" in out
@@ -83,33 +68,29 @@ async def test_read_skill_unknown_name_returns_friendly_error_listing_available(
     assert "good" in out
 
 
-async def test_read_skill_uses_template_profile_from_context(isolated_templates: Path):
-    """Lock in the contract: the tool reads `ctx.template_profile` to
-    pick which template's `.skill/` to scan — not a hardcoded constant.
-    Two profiles with same skill name, different bodies; ctx switching
-    must route the read to the right one."""
+async def test_read_skill_uses_app_slug_and_profile_from_context(isolated_apps: Path):
+    """The tool reads `ctx.app_slug` + `ctx.template_profile` to pick which
+    profile's `.skill/` to scan. Same skill name in two profiles, different
+    bodies; ctx switching routes the read to the right one."""
     from workspace_app.agent.tools import read_skill_impl
 
-    _profile_with_skill(isolated_templates, "methodology", "5-why", "x", "A-body")
-    _profile_with_skill(isolated_templates, "smt", "5-why", "x", "B-body")
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "A-body")
+    _profile_with_skill(isolated_apps, "rca", "smt", "fmt", "x", "B-body")
     a = await read_skill_impl(  # ty: ignore[invalid-argument-type]
-        RunContextWrapper(AgentToolContext(template_profile="methodology")), "5-why"
+        RunContextWrapper(AgentToolContext(app_slug="rca", template_profile="local-lab")), "fmt"
     )
     b = await read_skill_impl(  # ty: ignore[invalid-argument-type]
-        RunContextWrapper(AgentToolContext(template_profile="smt")), "5-why"
+        RunContextWrapper(AgentToolContext(app_slug="rca", template_profile="smt")), "fmt"
     )
     assert a == "A-body"
     assert b == "B-body"
 
 
-async def test_read_skill_does_not_wake_sandbox(isolated_templates: Path):
-    """Skills are host-side markdown — calling `read_skill` must not
-    wake the sandbox (per the §A.Q3 lazy-sandbox decision). We use a
-    sandbox stand-in whose `create` blows up if invoked; the tool must
-    still succeed."""
+async def test_read_skill_does_not_wake_sandbox(isolated_apps: Path):
+    """Skills are host-side markdown — `read_skill` must not wake the sandbox."""
     from workspace_app.agent.tools import read_skill_impl
 
-    _profile_with_skill(isolated_templates, "methodology", "5-why", "x", "body")
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
 
     class _BlowUpSandbox:
         async def create(self, spec):
@@ -126,80 +107,65 @@ async def test_read_skill_does_not_wake_sandbox(isolated_templates: Path):
 
     ctx = AgentToolContext(
         sandbox=_BlowUpSandbox(),  # ty: ignore[invalid-argument-type]
-        template_profile="methodology",
+        app_slug="rca",
+        template_profile="local-lab",
     )
-    body = await read_skill_impl(RunContextWrapper(ctx), "5-why")  # ty: ignore[invalid-argument-type]
+    body = await read_skill_impl(RunContextWrapper(ctx), "fmt")  # ty: ignore[invalid-argument-type]
     assert body == "body"
 
 
-async def test_read_skill_without_template_profile_returns_error():
-    """A context with no template_profile (e.g. KB chat reusing the
-    runner) → friendly error, never crash."""
+async def test_read_skill_without_app_or_profile_returns_error():
+    """A context with no App/profile (e.g. KB chat reusing the runner) →
+    friendly error, never crash."""
     from workspace_app.agent.tools import read_skill_impl
 
-    ctx = AgentToolContext(template_profile=None)
+    ctx = AgentToolContext(app_slug=None, template_profile=None)
     out = await read_skill_impl(RunContextWrapper(ctx), "anything")  # ty: ignore[invalid-argument-type]
     assert "error" in out
-    assert "RCA workspace" in out
+    assert "App workspace" in out
 
 
 # ─── build_tools conditional injection ────────────────────────────────
 
 
-def test_build_tools_includes_read_skill_when_profile_has_skills(
-    isolated_templates: Path,
-):
-    """`build_tools(profile="methodology")` exposes read_skill when the
-    profile ships any skill (§A.Q6 "same flag in/out")."""
+def test_build_tools_includes_read_skill_when_profile_has_skills(isolated_apps: Path):
     from workspace_app.agent.tools import build_tools
 
-    _profile_with_skill(isolated_templates, "methodology", "5-why", "x", "body")
-    tools = build_tools(profile="methodology")
-    names = {t.name for t in tools}
-    assert "read_skill" in names
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
+    tools = build_tools(app_slug="rca", profile="local-lab")
+    assert "read_skill" in {t.name for t in tools}
 
 
-def test_build_tools_omits_read_skill_when_profile_has_no_skills(
-    isolated_templates: Path,
-):
-    """A profile without `.skill/` content → no read_skill tool. Avoids
-    a dead tool slot in the LLM's tool list."""
+def test_build_tools_omits_read_skill_when_profile_has_no_skills(isolated_apps: Path):
     from workspace_app.agent.tools import build_tools
 
-    # Create the profile but no skill dir.
-    (isolated_templates / "default").mkdir()
-    (isolated_templates / "default" / "__init__.py").write_text("")
-    tools = build_tools(profile="default")
-    names = {t.name for t in tools}
-    assert "read_skill" not in names
+    (isolated_apps / "rca" / "profiles" / "default").mkdir(parents=True)
+    tools = build_tools(app_slug="rca", profile="default")
+    assert "read_skill" not in {t.name for t in tools}
 
 
-def test_build_tools_omits_read_skill_when_profile_is_none():
-    """No profile in scope → no read_skill (KB flavour, tests, …)."""
+def test_build_tools_omits_read_skill_when_profile_or_app_is_none():
     from workspace_app.agent.tools import build_tools
 
-    tools = build_tools(profile=None)
-    names = {t.name for t in tools}
-    assert "read_skill" not in names
+    assert "read_skill" not in {t.name for t in build_tools(profile=None)}
+    assert "read_skill" not in {t.name for t in build_tools(app_slug="rca", profile=None)}
 
 
-def test_build_tools_keeps_default_workspace_tools(isolated_templates: Path):
-    """Adding read_skill doesn't drop the existing workspace toolset."""
+def test_build_tools_keeps_default_workspace_tools(isolated_apps: Path):
     from workspace_app.agent.tools import build_tools
 
-    _profile_with_skill(isolated_templates, "methodology", "5-why", "x", "body")
-    tools = build_tools(profile="methodology")
-    names = {t.name for t in tools}
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
+    names = {t.name for t in build_tools(app_slug="rca", profile="local-lab")}
     assert {"exec", "read_file", "write_file", "ls"} <= names
 
 
-# ─── AgentToolContext field exists ────────────────────────────────────
+# ─── AgentToolContext fields exist ────────────────────────────────────
 
 
-def test_agent_tool_context_template_profile_default_none():
-    """The field exists with a None default; doesn't break legacy
-    callers that don't set it."""
+def test_agent_tool_context_app_slug_and_profile_default_none():
     ctx = AgentToolContext()
+    assert ctx.app_slug is None
     assert ctx.template_profile is None
-    ctx2 = AgentToolContext(template_profile="methodology")
-    assert ctx2.template_profile == "methodology"
+    ctx2 = AgentToolContext(app_slug="rca", template_profile="local-lab")
+    assert ctx2.app_slug == "rca"
+    assert ctx2.template_profile == "local-lab"

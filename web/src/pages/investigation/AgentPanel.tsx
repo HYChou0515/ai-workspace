@@ -4,21 +4,30 @@
  * user / agent / tool-call entries, with suggestion chips + composer.
  */
 
+import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { api } from "../../api";
 import { API_BASE } from "../../api/http";
+import { kbApi } from "../../api/kb";
+import { qk } from "../../api/queryKeys";
 import { EntryView } from "../../components/AgentEntryView";
+import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
+import { ModelEffortPicker } from "../../components/ModelEffortPicker";
+import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
+import { useDialog } from "../../components/Dialog";
 import { Popover } from "../../components/Popover";
-import { ReasoningEffortPicker } from "../../components/ReasoningEffortPicker";
-import { RcaMark } from "../../components/RcaMark";
+import { AppIcon } from "../../components/AppIcon";
 import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
+import { docHref } from "../kb/kbLinks";
 import { useAgent } from "../../hooks/useAgent";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
-import { formatMetrics, isToolRunning } from "./agentLog";
+import { formatMetrics, isToolRunning, turnsFromEntry } from "./agentLog";
 
 const TEXT_EXTENSIONS = new Set([
   ".md",
@@ -44,22 +53,80 @@ function isTextFile(name: string): boolean {
 export function AgentPanel({
   investigationId,
   width = 380,
+  fill = false,
   suggestions,
+  picker,
+  attachedPreset,
+  onAttachPreset,
+  appTitle,
+  appIcon,
+  appColor,
 }: {
   investigationId: string;
   width?: number;
-  /** Quick-prompt chips from the attached AgentConfig (BE). */
-  suggestions?: string[];
+  /** When true (a workspace=false App), the panel fills the row instead of
+   * sitting at its fixed resizable width — it's the only pane. */
+  fill?: boolean;
+  /** Quick-prompt chips from the App manifest (``agent.suggestions``). Each
+   * entry has a ``label`` (button text) and a ``prompt`` (sent verbatim). */
+  suggestions?: import("../../api/types").Suggestion[];
+  /** The App's model picker (``manifest.agent.picker``) — friendly name + the
+   * config.yaml preset to attach (#89 candidate 3). */
+  picker: { preset: string; name: string }[];
+  /** The item's currently-attached preset (``attached_preset``). */
+  attachedPreset: string;
+  /** Persist a newly-picked preset onto the item (read-modify-PUT). */
+  onAttachPreset: (preset: string) => void;
+  /** App identity for the panel header (#89) — manifest title/icon/color. */
+  appTitle?: string;
+  appIcon?: string;
+  appColor?: string;
 }) {
   // Quick-prompt chips come ONLY from the attached AgentConfig (BE) — the FE
   // never invents its own. No config suggestions → no chip row.
+  const slug = useWorkspaceSlug();
   const chips = suggestions ?? [];
   const me = useCurrentUser();
-  const { log, send, mention, cancel } = useAgent();
+  const { log, send, mention, cancel, undo } = useAgent();
+  const dialog = useDialog();
+
+  // #38: "undo to here" on the user prompt at entry `i` — drop that turn
+  // and every later one. Confirm first (it's destructive + irreversible)
+  // and say plainly that workspace files aren't reverted.
+  const onUndoFromEntry = async (i: number) => {
+    if (log.streaming) return;
+    const turns = turnsFromEntry(log.entries, i);
+    if (turns <= 0) return;
+    const choice = await dialog.confirm({
+      title: turns === 1 ? "Undo this turn?" : `Undo the last ${turns} turns?`,
+      body: "This removes the messages from here on. Files the agent changed in the workspace are not reverted.",
+      actions: [
+        { id: "undo", label: "Undo", variant: "danger" },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (choice !== "undo") return;
+    try {
+      await undo(turns);
+    } catch (err) {
+      alert(`Undo failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
   const [attaching, setAttaching] = useState(false);
+  // #51 P6: replay diagnostic for one past entry (assistant / tool).
+  const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
+  // Handoff 3.0 composer model picker. Picking a model here CHANGES THE item's
+  // attached preset (persistent, every later turn, visible to all members) — the
+  // backend AppCatalog resolves it per turn. It is NOT a per-message override.
+  // The RCA agent's ask_knowledge_base searches every collection, so the
+  // "Search the wiki" toggle is offered when ANY collection builds a wiki.
+  const { data: kbCollections = [] } = useQuery({
+    queryKey: qk.kb.collections,
+    queryFn: () => kbApi.listCollections(),
+  });
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -78,7 +145,7 @@ export function AgentPanel({
     try {
       const text = await file.text();
       const path = `/uploads/${file.name}`;
-      await api.writeFile(investigationId, path, text);
+      await api.writeFile(slug, investigationId, path, text);
       const ref = `I've attached \`${path}\` — please review it.\n\n`;
       setDraft((d) => (d ? `${ref}${d}` : ref));
       composerRef.current?.focus();
@@ -123,8 +190,7 @@ export function AgentPanel({
     <aside
       data-testid="agent-panel"
       style={{
-        width,
-        flexShrink: 0,
+        ...(fill ? { flex: 1, minWidth: 0 } : { width, flexShrink: 0 }),
         background: "var(--paper)",
         borderLeft: "1px solid var(--paper-3)",
         display: "flex",
@@ -132,7 +198,13 @@ export function AgentPanel({
         minHeight: 0,
       }}
     >
-      <AgentHeader streaming={log.streaming} investigationId={investigationId} />
+      <AgentHeader
+        streaming={log.streaming}
+        investigationId={investigationId}
+        appTitle={appTitle}
+        appIcon={appIcon}
+        appColor={appColor}
+      />
       <ProgressBar streaming={log.streaming} />
 
       <div
@@ -151,11 +223,34 @@ export function AgentPanel({
         {log.entries.length === 0 && !log.streaming && (
           <div style={{ color: "var(--text-paper-d)", fontSize: 13 }}>
             Ask the agent anything — it can read evidence, run notebooks,
-            and draft 5-Why / 8D entries.
+            and draft the brief, analyses, and report.
           </div>
         )}
         {log.entries.map((e, i) => (
-          <EntryView key={i} entry={e} />
+          <EntryView
+            key={i}
+            entry={e}
+            onOpenCitation={(c) =>
+              window.open(docHref(c.document_id, c.snippet), "_blank", "noopener,noreferrer")
+            }
+            // #51 P6: hydrated entries map 1:1 onto the persisted
+            // conversation (logFromMessages), so the entry index IS the
+            // message index. Hidden while streaming — the in-flight
+            // turn isn't persisted yet, so indexes would lie.
+            onReplay={
+              !log.streaming && (e.kind === "tool_call" || (e.kind === "message" && e.message.role === "assistant"))
+                ? () => setReplayReq({ kind: "turn", source: "rca", threadId: investigationId, messageIndex: i })
+                : undefined
+            }
+            // #38: per-turn "undo to here" on each user prompt — removes
+            // that turn and everything after it. Hidden while streaming
+            // (the in-flight turn isn't persisted yet).
+            onUndo={
+              !log.streaming && e.kind === "message" && e.message.role === "user"
+                ? () => void onUndoFromEntry(i)
+                : undefined
+            }
+          />
         ))}
         {log.streaming && log.metrics && (
           <div
@@ -197,9 +292,9 @@ export function AgentPanel({
         >
           {chips.map((s) => (
           <button
-            key={s}
+            key={s.label}
             type="button"
-            onClick={() => onChip(s)}
+            onClick={() => onChip(s.prompt)}
             disabled={log.streaming}
             style={{
               display: "inline-flex",
@@ -216,7 +311,7 @@ export function AgentPanel({
             }}
           >
             <Icon name="sparkle" size={12} color="var(--accent)" />
-            {s}
+            {s.label}
           </button>
           ))}
         </div>
@@ -279,7 +374,18 @@ export function AgentPanel({
           }}
         />
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <ReasoningEffortPicker />
+          <ModelEffortPicker
+            models={pickerModels(picker)}
+            selectedName={nameForPreset(picker, attachedPreset)}
+            onSelectModel={(name) => {
+              const preset = presetForName(picker, name);
+              if (preset) onAttachPreset(preset);
+            }}
+            // Depth applies to this turn's ask_knowledge_base lookups —
+            // useAgent sends the sticky selection with every message.
+            retrieval
+            wikiAvailable={kbCollections.some((c) => c.use_wiki)}
+          />
           <input
             ref={fileInputRef}
             type="file"
@@ -383,11 +489,26 @@ export function AgentPanel({
           )}
         </div>
       </form>
+      {replayReq && <ReplayDialog request={replayReq} onClose={() => setReplayReq(null)} />}
     </aside>
   );
 }
 
-function AgentHeader({ streaming, investigationId }: { streaming: boolean; investigationId: string }) {
+export function AgentHeader({
+  streaming,
+  investigationId,
+  appTitle = "Agent",
+  appIcon,
+  appColor,
+}: {
+  streaming: boolean;
+  investigationId: string;
+  /** App identity for the agent panel header (#89) — falls back to a generic
+   * "Agent" mark when not provided (e.g. in isolated tests). */
+  appTitle?: string;
+  appIcon?: string;
+  appColor?: string;
+}) {
   return (
     <header
       style={{
@@ -398,22 +519,28 @@ function AgentHeader({ streaming, investigationId }: { streaming: boolean; inves
         gap: 10,
       }}
     >
-      <RcaMark size={20} />
+      {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>RCA Agent</div>
+        <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>{appTitle}</div>
         <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
           {streaming ? "investigating · live" : "ready"}
         </div>
       </div>
       <a
-        href={`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/export`}
+        // Downloads the `.chat.json` round-trip format (issue #39):
+        // re-uploadable to a KB collection, where the BE runs the same
+        // insight extraction the promote path does. The full debug dump
+        // (tool calls / reasoning / metrics) stays at `/export`,
+        // curl-only. Format details live in code, NOT in the copy.
+        href={`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/export-chat`}
         download
-        title="Export the full conversation as JSON"
+        title="Export this conversation"
         aria-label="Export conversation"
         style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--text-paper-d)", fontSize: 11 }}
       >
         <Icon name="download" size={13} /> Export
       </a>
+      <HealthDot />
       <span
         style={{
           display: "inline-flex",

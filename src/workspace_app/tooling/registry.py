@@ -28,10 +28,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from agents import FunctionTool, RunContextWrapper
+from agents import FunctionTool
+from agents.tool_context import ToolContext
 
 from ..agent.context import AgentToolContext
-from ..agent.tools import _format_exec
+from ..agent.tools import _exec_result_text
 
 
 @dataclass(frozen=True)
@@ -60,27 +61,63 @@ class PackageInfo:
 
 
 def discover_packages(prebuilt_dir: Path) -> list[PackageInfo]:
-    """Walk ``prebuilt_dir`` and return one ``PackageInfo`` per subdir
-    that has a ``commands.json``. Subdirs without one are skipped silently
-    (half-built bundles never half-advertise themselves). Returns ``[]``
-    when ``prebuilt_dir`` doesn't exist — common in tests + a fresh
-    deploy without prebuild yet."""
+    """Walk ``prebuilt_dir`` and return one ``PackageInfo`` per subdir.
+
+    **Strict**: every top-level subdir MUST be a complete bundle —
+    ``commands.json`` AND ``schemas/`` AND every command listed in
+    ``commands.json`` must have its ``schemas/<name>.json``. Anything
+    half-built raises ``RuntimeError`` naming the offender; a missing
+    ``prebuilt_dir`` itself raises ``FileNotFoundError``.
+
+    The old silent-skip semantics caused a real production-style
+    incident (May-30): three packages were half-built (``commands.json``
+    + ``schemas/`` missing under each), discover returned ``[]``, and
+    the agent ran with zero tool packages — the operator didn't know
+    until the LLM "what tools do you have" reply listed only the base
+    7. Fail-fast surfaces the same condition at startup instead of at
+    LLM-reply time.
+
+    Non-dir entries at the root (a ``README``, ``.DS_Store``) are still
+    silently skipped — they're orthogonal content, not half-built
+    bundles. Callers that genuinely don't want any packages should gate
+    on their own ``PACKAGES`` registry being empty BEFORE calling, not
+    rely on this function to silently no-op (see ``__main__.py``)."""
     if not prebuilt_dir.is_dir():
-        return []
+        raise FileNotFoundError(
+            f"prebuilt tool dir not found at {prebuilt_dir}; "
+            "run `uv run python scripts/prebuild_tools.py` (or set "
+            "WORKSPACE_TOOLS_DIR to your prebuild output). If this deploy "
+            "intentionally has no tool packages, clear "
+            "`workspace_app.tooling.packages.PACKAGES` instead."
+        )
     out: list[PackageInfo] = []
     for sub in sorted(prebuilt_dir.iterdir()):
         if not sub.is_dir():
             continue
         commands_json = sub / "commands.json"
         schemas_dir = sub / "schemas"
-        if not commands_json.is_file() or not schemas_dir.is_dir():
-            continue
+        if not commands_json.is_file():
+            raise RuntimeError(
+                f"package {sub.name!r} at {sub} is half-built: commands.json missing. "
+                "Rerun `uv run python scripts/prebuild_tools.py` — this subdir was "
+                "created by a prior prebuild that didn't finish, or by foreign "
+                "content dropped into PREBUILT_DIR."
+            )
+        if not schemas_dir.is_dir():
+            raise RuntimeError(
+                f"package {sub.name!r} at {sub} is half-built: schemas/ dir missing "
+                "(commands.json exists). Rerun `uv run python scripts/prebuild_tools.py`."
+            )
         meta = json.loads(commands_json.read_text())
         commands: list[CommandInfo] = []
         for entry in sorted(meta, key=lambda m: m["name"]):
             schema_path = schemas_dir / f"{entry['name']}.json"
             if not schema_path.is_file():
-                continue  # half-built — skip silently
+                raise RuntimeError(
+                    f"package {sub.name!r}: command {entry['name']!r} declared in "
+                    f"commands.json but its schema file is missing at {schema_path}. "
+                    "Rerun `uv run python scripts/prebuild_tools.py`."
+                )
             schema_obj = json.loads(schema_path.read_text())
             commands.append(
                 CommandInfo(
@@ -107,17 +144,23 @@ def build_function_tools(
     """Expand ``allowed`` (colon syntax: ``"pkg"`` for the full package,
     ``"pkg:cmd"`` for one command) into FunctionTools.
 
-    ``allowed=None`` → ``[]`` (no provisioned tools requested; common for
-    the default template). Unknown package names / command names are
-    silently skipped — mirrors the legacy ``build_tools`` behaviour and
-    keeps the LLM from seeing 500s for a config typo.
+    ``allowed=None`` → every command of every discovered package
+    (the deploy didn't restrict, so expose everything). This
+    matches ``build_tools(None)``'s "all workspace tools" semantics —
+    the prior asymmetry (None ⇒ empty here) silently dropped package
+    tools whenever an AgentConfig had ``allowed_tools=[]`` (default).
+    ``allowed=[]`` is the explicit "no packages" caller intent.
+    Unknown package names / command names are silently skipped —
+    mirrors the legacy ``build_tools`` behaviour and keeps the LLM
+    from seeing 500s for a config typo.
 
     Raises ``ValueError`` if two *different* packages export the same
     command name within the same selection — the resulting flat name
     would shadow one tool, so we want the deployer to rename one."""
     if allowed is None:
-        return []
-    selected = _select_commands(packages, allowed)
+        selected = [(pkg, cmd) for pkg in packages for cmd in pkg.commands]
+    else:
+        selected = _select_commands(packages, allowed)
     _check_collisions(selected)
     return [_to_function_tool(pkg, cmd) for pkg, cmd in selected]
 
@@ -167,7 +210,16 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
     Same exec-and-format pattern as the legacy provisioned tools, just
     with the JSON args passed straight through (no argv translation)."""
 
-    async def on_invoke(ctx: RunContextWrapper[AgentToolContext], args_json: str) -> str:
+    # `ToolContext` (not `RunContextWrapper`) so the SDK doesn't downgrade
+    # the context via `context._fork_with_tool_input(...)` — that strips
+    # runtime metadata which `_FailureHandlingFunctionToolInvoker` and the
+    # ask_knowledge_base bridge rely on. The args_recovery wrap already
+    # carries this annotation, and in production every tool goes through
+    # that wrap before reaching the SDK. Keeping the inner annotation
+    # consistent means an off-path test or future refactor that bypasses
+    # the wrap doesn't silently regress. See agents/tool.py
+    # `_get_function_tool_invoke_context`.
+    async def on_invoke(ctx: ToolContext[AgentToolContext], args_json: str) -> str:
         actx = ctx.context
         assert actx.sandbox is not None  # provisioned tools imply a sandbox
         handle = await actx.ensure_sandbox()
@@ -179,7 +231,7 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
             [f"{pkg.install_dir}/launch", cmd.name, args_json or "{}"],
             on_output=actx.on_exec_output,
         )
-        return _format_exec(result)
+        return _exec_result_text(actx, cmd.name, result)
 
     return FunctionTool(
         name=cmd.name,

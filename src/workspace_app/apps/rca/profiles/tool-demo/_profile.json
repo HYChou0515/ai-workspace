@@ -1,0 +1,17 @@
+{
+  "title": "Tool demo",
+  "description": "Smoke-test the provisioned analysis tools (data-fetch + csv-column-summary).",
+  "presets": ["qwen3-local"],
+  "tools": [
+    "exec", "read_file", "write_file", "edit_file", "ls", "exists",
+    "delete_file", "data-fetch", "csv-column-summary"
+  ],
+  "suggestions": [
+    { "label": "Fetch + summarise",
+      "prompt": "Fetch the alloy-batches dataset (500 rows), then summarise its columns." },
+    { "label": "List files",
+      "prompt": "List the workspace files." },
+    { "label": "Plot distributions",
+      "prompt": "Summarise the columns of the CSV you just fetched, then plot the distributions." }
+  ]
+}

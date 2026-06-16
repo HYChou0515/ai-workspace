@@ -1,73 +1,50 @@
-"""Prebuild the sample provisioned tools into SELF-CONTAINED packages.
+"""Prebuild every package in `tooling.packages.PACKAGES` into a
+SELF-CONTAINED bundle the sandbox can drop in at provision time.
 
     uv run python scripts/prebuild_tools.py
 
-For each tool in `workspace_app.rca.sample_tools.SOURCES` this builds, under
-`RCA_TOOLS_DIR/<tool>/`:
-  - `.venv/`   a `uv venv --relocatable` with the tool installed,
-  - `python/`  a copy of the (standalone, portable) python the venv used,
-  - `launch`   a tiny launcher.
+For each package, this writes under ``PREBUILT_DIR/<name>/``:
 
-At runtime the app copies the whole package into the sandbox and runs `launch`.
-The package is fully self-contained — it brings its own python — so it runs in
-the sandbox's userns chroot jail regardless of the host/pod python (you do NOT
-need SANDBOX_ISOLATE=false, and you do NOT have to match the jail's python).
+  - ``.venv/``           uv-built relocatable venv with the package installed
+  - ``python/``          bundled portable cpython
+  - ``launch``           jail-safe shell launcher (AT_SECURE workaround)
+  - ``commands.json``    cached from `launch` (3-stage contract stage 1)
+  - ``schemas/<cmd>.json`` cached from `launch <cmd>` (stage 2)
+  - ``.built``           mtime marker for incremental rebuild
 
-Why the launcher (not just `.venv/bin/<tool>`): inside the userns jail the
-process is AT_SECURE, so glibc's loader ignores `$ORIGIN`/RPATH/LD_LIBRARY_PATH
-and can't find the bundled libpython when python is started implicitly. The
-launcher invokes the bundled python through the *explicit* dynamic loader (which
-is not AT_SECURE) with the venv's site-packages on PYTHONPATH.
+Packages whose source dir is missing are skipped with a warning — this
+keeps `rca-tools` (a local-only in-house package) optional: a fresh
+clone without that source dir still builds cleanly.
 
-Then run the app normally:  uv run python -m workspace_app
-and pick the `tool-demo` template in a new investigation.
+Run `uv run python -m workspace_app` afterwards.
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
-from pathlib import Path
+import argparse
 
-from workspace_app.rca.sample_tools import PREBUILT_DIR, SOURCES
-
-# x86-64 / arm64 system loader; the launcher picks whichever exists in the jail.
-_LAUNCH = """\
-#!/bin/sh
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
-# Caches go to /tmp (writable, outside the workspace, never synced) — the tool
-# dir may be a read-only mount, and ~/.cache would otherwise pollute the workspace.
-export HOME=/tmp XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/.config/matplotlib
-ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
-exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
-"""
-
-
-def build_one(name: str, source: Path) -> None:
-    dst = PREBUILT_DIR / name
-    shutil.rmtree(dst, ignore_errors=True)
-    dst.mkdir(parents=True)
-    venv = dst / ".venv"
-    subprocess.run(["uv", "venv", "--relocatable", str(venv)], check=True)
-    subprocess.run(["uv", "pip", "install", "--python", str(venv), str(source)], check=True)
-    # Bundle the (portable) python the venv was built against, and derive its X.Y.
-    real = (venv / "bin" / "python").resolve()  # .../cpython-X.Y.Z/bin/pythonX.Y
-    ver = real.name.removeprefix("python")  # "3.13"
-    shutil.copytree(real.parent.parent, dst / "python", symlinks=True)
-    launch = dst / "launch"
-    launch.write_text(_LAUNCH.format(ver=ver, tool=name))
-    launch.chmod(0o755)
-    print(f"  built {name} -> {dst}  (bundled python {ver})")
+from workspace_app.tooling.packages import PACKAGES, PREBUILT_DIR
+from workspace_app.tooling.prebuild import build_package
 
 
 def main() -> None:
-    print(f"Prebuilding self-contained tool packages into {PREBUILT_DIR}")
-    for name, source in SOURCES.items():
+    parser = argparse.ArgumentParser(description="Prebuild RCA tool-package bundles.")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Rebuild every package even when its source content is unchanged.",
+    )
+    args = parser.parse_args()
+
+    print(f"Prebuilding tool packages into {PREBUILT_DIR}")
+    PREBUILT_DIR.mkdir(parents=True, exist_ok=True)
+    for name, source in PACKAGES.items():
         if not source.is_dir():
-            raise SystemExit(f"source repo missing: {source}")
-        build_one(name, source)
-    print("Done. Run `uv run python -m workspace_app` and pick the 'tool-demo' template.")
+            print(f"  ⏭  skipping {name}: source dir missing ({source})")
+            continue
+        print(f"  ▶  building {name} from {source} …")
+        build_package(name=name, source=source, dst=PREBUILT_DIR / name, force=args.force)
+    print("Done. Run `uv run python -m workspace_app`.")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""POST /investigations/{id}/promote-to-kb + close-hook auto-promotion.
+"""POST /a/{slug}/items/{id}/promote-to-kb + close-hook auto-promotion.
 
 P2 chat → knowledge endpoint and its background companion (close →
 extract insights). Uses a scripted fake LLM (no live model) wired into
@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,11 +21,12 @@ from workspace_app.api import (
     ScriptedAgentRunner,
     create_app,
 )
+from workspace_app.apps.rca.model import RcaInvestigation
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.li_pipeline import build_chat_pipeline
 from workspace_app.kb.llm import ILlm
-from workspace_app.resources import Conversation, Investigation, Message
+from workspace_app.resources import Conversation, Message, make_spec
 from workspace_app.resources.kb import EMBED_DIM, Collection, SourceDoc
 from workspace_app.sandbox.mock import MockSandbox
 
@@ -42,8 +42,7 @@ class _FakeLlm(ILlm):
 def _build_harness(llm_response: str) -> tuple[TestClient, SpecStar, str]:
     """create_app with a chat pipeline using the given fake LLM response.
     Returns (client, spec, insights_collection_id)."""
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec()
     embedder = HashEmbedder(dim=EMBED_DIM)
     events: list[AgentEvent] = [MessageDelta(text="ok"), RunDone()]
     app = create_app(
@@ -66,9 +65,9 @@ def _build_harness(llm_response: str) -> tuple[TestClient, SpecStar, str]:
 
 
 def _create_investigation(spec: SpecStar) -> str:
-    inv_rm = spec.get_resource_manager(Investigation)
+    inv_rm = spec.get_resource_manager(RcaInvestigation)
     res = inv_rm.create(
-        Investigation(
+        RcaInvestigation(
             title="MX-7 voids",
             owner="alice",
             description="lots flagged",
@@ -79,7 +78,7 @@ def _create_investigation(spec: SpecStar) -> str:
     conv_rm = spec.get_resource_manager(Conversation)
     conv_rm.create(
         Conversation(
-            investigation_id=rid,
+            item_id=rid,
             messages=[
                 Message(role="user", content="AOI flagged voids on lot 25-W14"),
                 Message(role="assistant", content="Checked zone temps; thermocouple drift."),
@@ -100,7 +99,7 @@ def test_promote_endpoint_writes_insights_to_kb():
         "]}"
     )
     inv_id = _create_investigation(spec)
-    resp = client.post(f"/investigations/{inv_id}/promote-to-kb")
+    resp = client.post(f"/a/rca/items/{inv_id}/promote-to-kb")
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["insight_ids"]) == 1
@@ -115,21 +114,20 @@ def test_promote_endpoint_returns_empty_for_inconclusive_chat():
     """If the LLM finds nothing to extract → empty list, no KB writes."""
     client, spec, _ = _build_harness('{"insights": []}')
     inv_id = _create_investigation(spec)
-    resp = client.post(f"/investigations/{inv_id}/promote-to-kb")
+    resp = client.post(f"/a/rca/items/{inv_id}/promote-to-kb")
     assert resp.status_code == 200
     assert resp.json() == {"insight_ids": []}
 
 
 def test_promote_endpoint_404s_on_unknown_investigation():
     client, _, _ = _build_harness('{"insights": []}')
-    resp = client.post("/investigations/does-not-exist/promote-to-kb")
+    resp = client.post("/a/rca/items/does-not-exist/promote-to-kb")
     assert resp.status_code == 404
 
 
 def test_promote_endpoint_returns_empty_when_no_chat_pipeline():
     """No KB LLM → no chat pipeline → endpoint cleanly returns []."""
-    spec = SpecStar()
-    spec.configure(default_user="default-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec()
     events: list[AgentEvent] = [MessageDelta(text="ok"), RunDone()]
     app = create_app(
         spec=spec,
@@ -140,7 +138,7 @@ def test_promote_endpoint_returns_empty_when_no_chat_pipeline():
     )
     client = TestClient(app)
     inv_id = _create_investigation(spec)
-    resp = client.post(f"/investigations/{inv_id}/promote-to-kb")
+    resp = client.post(f"/a/rca/items/{inv_id}/promote-to-kb")
     assert resp.status_code == 200
     assert resp.json() == {"insight_ids": []}
 
@@ -158,7 +156,7 @@ def test_promote_endpoint_swallows_ingest_chat_failure(monkeypatch):
         raise RuntimeError("model went away")
 
     monkeypatch.setattr(Ingestor, "ingest_chat", _explode)
-    resp = client.post(f"/investigations/{inv_id}/promote-to-kb")
+    resp = client.post(f"/a/rca/items/{inv_id}/promote-to-kb")
     assert resp.status_code == 200
     assert resp.json() == {"insight_ids": []}
 
@@ -252,30 +250,35 @@ def test_ingest_chat_skips_unchanged_insight_bytes(spec_factory):
 def spec_factory():
     """SpecStar with the workspace's resources registered (kb collection +
     sourcedoc + docchunk). Used by tests that build state outside the API."""
-    from workspace_app.resources import register_all
 
     def _make() -> SpecStar:
-        s = SpecStar()
-        s.configure(default_user="u", default_now=lambda: datetime.now(UTC))
-        register_all(s)
-        return s
+        return make_spec(default_user="u")
 
     return _make
 
 
 @pytest.mark.asyncio
-async def test_close_investigation_schedules_background_promote():
-    """Closing an investigation as resolved/abandoned fires the chat→KB
-    extraction in the background (doesn't block the 204). After a short
-    await for the task to run, the insight SourceDoc exists."""
+async def test_close_app_item_schedules_background_promote():
+    """The generic App close (`POST /a/{slug}/items/{id}/close`) fires the same
+    chat→KB extraction as the legacy close — closing a new RcaInvestigation as
+    a closing-state schedules the insight write in the background."""
     client, spec, insights_cid = _build_harness(
         '{"insights": [{"kind": "lesson_learned", "title": "t",'
         ' "markdown": "# Lesson\\n\\nbody."}]}'
     )
-    inv_id = _create_investigation(spec)
-    resp = client.post(f"/investigations/{inv_id}/close", json={"status": "resolved"})
+    item_id = client.post("/a/rca/items", json={"title": "Oven drift"}).json()["resource_id"]
+    # Seed the conversation the close hook reads from.
+    spec.get_resource_manager(Conversation).create(
+        Conversation(
+            item_id=item_id,
+            messages=[
+                Message(role="user", content="AOI flagged voids on lot 25-W14"),
+                Message(role="assistant", content="Thermocouple drift in zone 3."),
+            ],
+        )
+    )
+    resp = client.post(f"/a/rca/items/{item_id}/close", json={"status": "resolved"})
     assert resp.status_code == 204
-    # The promote runs as an asyncio.create_task; give the loop a slice.
     for _ in range(20):
         ids = [
             r.info.resource_id  # ty: ignore[unresolved-attribute]
@@ -287,3 +290,81 @@ async def test_close_investigation_schedules_background_promote():
             break
         await asyncio.sleep(0.05)
     assert ids, "expected the background promote to have written an insight"
+
+
+def test_export_chat_works_on_a_new_app_item():
+    """`/export-chat` must read the title generically (find_work_item), so it
+    works for a new RcaInvestigation that isn't in the Investigation table."""
+    from workspace_app.kb.chat_export import parse_chat_export
+
+    client, spec, _ = _build_harness('{"insights": []}')
+    item_id = client.post("/a/rca/items", json={"title": "Oven drift"}).json()["resource_id"]
+    spec.get_resource_manager(Conversation).create(
+        Conversation(item_id=item_id, messages=[Message(role="user", content="hi")])
+    )
+    resp = client.get(f"/a/rca/items/{item_id}/export-chat")
+    assert resp.status_code == 200, resp.text
+    title, _messages = parse_chat_export(resp.content)
+    assert title == "Oven drift"
+
+
+def test_promote_endpoint_works_on_a_new_app_item():
+    """`/promote-to-kb` reads the title generically too — manual promote works
+    on a new App item."""
+    client, spec, _ = _build_harness(
+        '{"insights": [{"kind": "lesson_learned", "title": "t", "markdown": "# t\\n\\nbody"}]}'
+    )
+    item_id = client.post("/a/rca/items", json={"title": "Oven drift"}).json()["resource_id"]
+    spec.get_resource_manager(Conversation).create(
+        Conversation(
+            item_id=item_id,
+            messages=[Message(role="user", content="x"), Message(role="assistant", content="y")],
+        )
+    )
+    resp = client.post(f"/a/rca/items/{item_id}/promote-to-kb")
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["insight_ids"]) == 1
+
+
+def test_export_includes_new_app_item_metadata():
+    """`/export` dumps the item's fields generically (find_work_item +
+    to_builtins), so a new RcaInvestigation's title/severity ride along
+    without the endpoint restating RCA fields."""
+    client, spec, _ = _build_harness('{"insights": []}')
+    item_id = client.post("/a/rca/items", json={"title": "Oven drift", "severity": "P1"}).json()[
+        "resource_id"
+    ]
+    spec.get_resource_manager(Conversation).create(
+        Conversation(item_id=item_id, messages=[Message(role="user", content="hi")])
+    )
+    resp = client.get(f"/a/rca/items/{item_id}/export")
+    assert resp.status_code == 200, resp.text
+    meta = resp.json()["investigation"]
+    assert meta["title"] == "Oven drift"
+    assert meta["severity"] == "P1"
+
+
+def test_export_chat_downloads_the_round_trip_format():
+    """GET /a/{slug}/items/{id}/export-chat ships the conversation in
+    the `.chat.json` format the KB upload path consumes — the suffix
+    contract is guaranteed by the Content-Disposition filename. The
+    payload round-trips through `parse_chat_export`."""
+    from workspace_app.kb.chat_export import parse_chat_export
+
+    client, spec, _ = _build_harness('{"insights": []}')
+    inv_id = _create_investigation(spec)
+
+    resp = client.get(f"/a/rca/items/{inv_id}/export-chat")
+    assert resp.status_code == 200
+    cd = resp.headers["content-disposition"]
+    assert cd.endswith('.chat.json"') and inv_id in cd
+
+    title, messages = parse_chat_export(resp.content)
+    assert title == "MX-7 voids"
+    assert [m["role"] for m in messages] == ["user", "assistant"]
+    assert messages[0]["content"] == "AOI flagged voids on lot 25-W14"
+
+
+def test_export_chat_404s_on_unknown_investigation():
+    client, _, _ = _build_harness('{"insights": []}')
+    assert client.get("/a/rca/items/nope/export-chat").status_code == 404

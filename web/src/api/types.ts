@@ -1,3 +1,5 @@
+import type { BodyEnhancements } from "../lib/kbEnhancementMode";
+
 /**
  * Wire types and ApiClient interface. The source of truth for these
  * shapes is docs/contract.md §1-§2. Keep in lock-step.
@@ -20,40 +22,7 @@ export type Status =
 
 /* ------------------------- Domain models ------------------------- */
 
-/**
- * Investigation as seen on the wire (specstar `data` + auto fields).
- * Display-only derived fields (id format, summary, agent state, pinned)
- * are computed FE-side — see contract.md §1.4 and helpers in this file.
- */
-export type Investigation = {
-  resource_id: string;
-  title: string;
-  owner: string;
-  /** Server-stamped creator (specstar created_by = the authenticated user).
-   * Authoritative — the panel shows this, not the client-supplied `owner`. */
-  created_by?: string;
-  description: string;
-  severity: Severity;
-  status: Status;
-  product: string;
-  members: string[];
-  topics: string[];
-  attached_agent_config_id: string | null;
-  created_time: string;
-  updated_time: string;
-};
-
-export type InvestigationInput = {
-  title: string;
-  description?: string;
-  severity?: Severity;
-  product?: string;
-  topics?: string[];
-  /** Template profile to seed from (default "default"). */
-  templateProfile?: string;
-};
-
-export type MessageRole = "user" | "assistant" | "tool" | "system" | "mention";
+export type MessageRole = "user" | "assistant" | "tool" | "system" | "mention" | "error";
 
 export type Message = {
   role: MessageRole;
@@ -66,6 +35,10 @@ export type Message = {
   tool_name?: string | null;
   /** role=tool only — the tool call's arguments (for log reload). */
   tool_args?: Record<string, unknown> | null;
+  /** role=tool only (#62) — the FULL result (success stderr kept) when it
+   * differs from the cleaned `content`. The card renders this when present so
+   * an error that streamed live doesn't vanish on reload; absent ⇒ `content`. */
+  tool_display?: string | null;
   /** Epoch ms the message was produced; restores the agent log's timestamps
    * after a reload. Absent for messages saved before this existed. */
   created_at?: number | null;
@@ -73,6 +46,9 @@ export type Message = {
   citations?: MessageCitation[];
   /** role=mention only — the user ids summoned ("@ come look"). */
   mentions?: string[];
+  /** role=error only (#37) — why the turn failed: error | cancelled |
+   * max_turns. The thread renders the failure as a banner on reload. */
+  error_kind?: string | null;
 };
 
 /** A resolved [n] citation marker — points at a span of a source document. */
@@ -96,14 +72,101 @@ export type Conversation = {
 export type FileInfo = { path: string; size: number };
 
 /** An agent profile the picker offers — model + prompt live BE-side; the
- * FE only needs enough to label the radio and PATCH the attachment. */
-export type AgentConfigInfo = {
-  resource_id: string;
-  name: string;
-  model: string;
-  /** Quick-prompt chips for the agent panel (sent verbatim when clicked). */
-  suggestions: string[];
+ * FE only needs enough to label the radio and PATCH the attachment.
+ *
+ * Identifier is `name`: post-refactor (commit 034fa96), the picker comes
+ * from `runner.list_configs()` (Settings.agent_configs / config.yaml),
+ * not from a specstar resource. `attached_agent_config_id` on the
+ * Investigation now carries the config's `name` directly. */
+/** One quick-prompt chip (#91). ``label`` is the button text, ``prompt`` is
+ * what gets sent as the user message when the chip is pressed. */
+export type Suggestion = {
+  label: string;
+  prompt: string;
 };
+
+/** One launcher card — a multi-app platform App (#89). `icon` is a named-icon
+ * key, an emoji, or inline `<svg>` markup; `color` is the App's accent hex. */
+export type AppSummary = {
+  slug: string;
+  title: string;
+  description: string;
+  icon: string;
+  color: string;
+};
+
+/** A chip colour token — the design's canonical palette for enum values, mapped
+ * to CSS vars by the chip components. App `field_styles` overlays pick from these. */
+export type ChipTone = "err" | "warn" | "ok" | "info" | "muted";
+
+/** One domain field's render schema (#89 P7b) — projected by the backend from
+ * the App's model (a field with an enum → `select` + its values as `options`;
+ * else `text`). The shell renders + inline-edits fields off this, never
+ * restating types/options on the FE. Mirrors specstar autocrud's ResourceField. */
+export type FieldSpec = {
+  name: string;
+  label: string;
+  kind: "select" | "text" | "tags";
+  options?: string[];
+};
+
+/** The full App manifest (GET /apps/:slug) the dashboard + workspace drive off
+ * (#89). `fields` carries each domain field's render kind + enum options (from
+ * the model); `layout` + `labels` are the display overlay. */
+export type AppManifest = AppSummary & {
+  function: { workspace: boolean; sandbox: boolean; terminal: boolean };
+  agent: { picker: { preset: string; name: string }[]; suggestions?: Suggestion[] };
+  item: { noun: string; noun_plural: string; create_label?: string };
+  layout: {
+    breadcrumb: string[];
+    statusbar: string[];
+    list: string[];
+    form?: string[];
+    /** Files the workspace opens on entry (filtered to those that exist). */
+    default_tabs: string[];
+  };
+  labels: Record<string, string>;
+  fields: FieldSpec[];
+  /** Display overlay: enum field → {option → tone}, so an App's chip palette is
+   * data. The `select` renderer styles its chip from this; absent → neutral. */
+  field_styles?: Record<string, Record<string, ChipTone>>;
+  /** Close/resolve workflow; absent → the shell shows no Close affordance. */
+  lifecycle?: { status_field: string; closing_states: string[] };
+  default_profile: string;
+  /** The App's profiles (starter-content bundles) — the create flow offers a
+   * picker when there's more than one. */
+  profiles: { name: string; title: string; description: string }[];
+  /** specstar CRUD route for this App's items, e.g. "/rca-investigation". */
+  resource_route: string;
+};
+
+/** One row in an App's item list — the WorkItem fields plus its resource id.
+ * App-declared (Tier 3) fields are extra keys read dynamically via `layout`. */
+export type AppItem = {
+  resource_id: string;
+  title: string;
+  owner: string;
+  updated_time?: string;
+  [field: string]: unknown;
+};
+
+/** Lean subset of the specstar list/count query params the dashboard uses
+ * (#95 follow-up). `data_conditions` is a JSON array of
+ * `{ field_path, operator, value }`; arrays (created_bys/updated_bys) serialize
+ * as repeated query params. Kept here (not imported from the excluded autocrud
+ * codegen) so our app stays decoupled from it. */
+export interface SearchParams {
+  data_conditions?: string;
+  created_bys?: string[];
+  updated_bys?: string[];
+  created_time_start?: string;
+  created_time_end?: string;
+  updated_time_start?: string;
+  updated_time_end?: string;
+  sorts?: string;
+  limit?: number;
+  offset?: number;
+}
 
 export type ActivityEntry = {
   ts: string; // ISO-8601
@@ -136,13 +199,18 @@ export type SearchResult = { path: string; matches: SearchMatch[] };
 export type ReasoningEffort = "low" | "medium" | "high";
 
 export type SendMessageArgs = {
+  slug: string;
   investigationId: string;
   content: string;
   signal?: AbortSignal;
   reasoningEffort?: ReasoningEffort;
+  /** Knowledge-search depth for this turn's ask_knowledge_base lookups
+   * (composer picker); shape mirrors the KB chat body. */
+  enhancements?: BodyEnhancements;
 };
 
 export type ExecuteCellArgs = {
+  slug: string;
   investigationId: string;
   notebookPath: string;
   cellIndex: number;
@@ -153,12 +221,14 @@ export type ExecuteCellArgs = {
 export type CloseStatus = "resolved" | "abandoned";
 
 export type CellRef = {
+  slug: string;
   investigationId: string;
   notebookPath: string;
   cellIndex: number;
 };
 
 export type NotebookRef = {
+  slug: string;
   investigationId: string;
   notebookPath: string;
 };
@@ -198,86 +268,106 @@ export interface ApiClient {
   getNotifications(): Promise<NotificationItem[]>;
   markAllNotificationsRead(): Promise<void>;
   markNotificationRead(id: string): Promise<void>;
-  listInvestigations(): Promise<Investigation[]>;
-  getInvestigation(id: string): Promise<Investigation>;
-  createInvestigation(input: InvestigationInput): Promise<Investigation>;
-  /** PATCH /investigation/{id} — edit metadata (title/description/severity/
-   * product/topics) via specstar's JSON-Patch auto-route. */
-  updateInvestigation(id: string, input: InvestigationInput): Promise<void>;
-  /** Close the workspace. `status` resolved|abandoned flips the status;
-   * `null` is a pure close — tear the session down, leave status alone. */
-  closeInvestigation(id: string, status: CloseStatus | null): Promise<void>;
-  /** @mention users in an investigation — a "come look" summon that notifies
-   * them (does NOT run the agent). POST /investigations/{id}/mentions. */
-  addMention(investigationId: string, userIds: string[], note?: string): Promise<void>;
-  /** GET /agent-config — agent profiles the picker offers. */
-  listAgentConfigs(): Promise<AgentConfigInfo[]>;
-  /** PATCH /investigation/{id} — attach (or, with null, detach) the agent
-   * config that drives this investigation's turns. */
-  attachAgentConfig(investigationId: string, configId: string | null): Promise<void>;
-  /** GET /templates — template profile names for the New Investigation picker. */
-  listTemplates(): Promise<string[]>;
+  /** Close the workspace via the per-App route POST /a/{slug}/items/{id}/close.
+   * `status` (one of the manifest's closing_states) flips the status; `null`
+   * is a pure close — tear the session down, leave status alone. */
+  closeInvestigation(slug: string, id: string, status: CloseStatus | null): Promise<void>;
+  /** @mention users in an item — a "come look" summon that notifies them
+   * (does NOT run the agent). POST /a/{slug}/items/{id}/mentions. */
+  addMention(slug: string, investigationId: string, userIds: string[], note?: string): Promise<void>;
+  /** GET /apps — launcher card summaries, one per registered App (#89). */
+  listApps(): Promise<AppSummary[]>;
+  /** GET /apps/{slug} — the full manifest the dashboard/workspace drive off. */
+  getAppManifest(slug: string): Promise<AppManifest>;
+  /** GET {resource_route} — the App's items (specstar list → flat rows).
+   * Optional SearchParams filter/sort server-side (dashboard nav + filters). */
+  listAppItems(resourceRoute: string, params?: SearchParams): Promise<AppItem[]>;
+  /** GET {resource_route}/count — server-side count under the same filter
+   * (dashboard nav badges). */
+  countAppItems(resourceRoute: string, params?: SearchParams): Promise<number>;
+  /** GET {resource_route}/{id} — one App item (specstar entry → flat row). */
+  getAppItem(resourceRoute: string, id: string): Promise<AppItem>;
+  /** POST /a/{slug}/items — create an item (+ seed its profile); returns the id. */
+  createAppItem(slug: string, body: Record<string, unknown>): Promise<{ resource_id: string }>;
+  /** PUT {resource_route}/{id} — replace an item (specstar CRUD update). Inline
+   * field edits read the item, change one field, and PUT the whole. */
+  updateAppItem(
+    resourceRoute: string,
+    id: string,
+    data: Record<string, unknown>,
+  ): Promise<{ resource_id: string }>;
   /** GET /activity — recent-activity feed (newest first). */
   listActivity(): Promise<ActivityEntry[]>;
 
   getConversation(investigationId: string): Promise<Conversation | null>;
 
-  listFiles(investigationId: string, prefix?: string): Promise<FileInfo[]>;
-  /** POST /investigations/{id}/files/refresh — force-mirror the live sandbox
+  listFiles(slug: string, investigationId: string, prefix?: string): Promise<FileInfo[]>;
+  /** POST /a/{slug}/items/{id}/files/refresh — force-mirror the live sandbox
    * to the snapshot (don't wait for the throttled sweep). Call this before a
    * read whenever the sandbox may have changed out-of-band (terminal `rm`,
    * an exec side-effect, slow flush). */
-  refreshFiles(investigationId: string): Promise<void>;
-  readFile(investigationId: string, path: string): Promise<FileContent>;
+  refreshFiles(slug: string, investigationId: string): Promise<void>;
+  readFile(slug: string, investigationId: string, path: string): Promise<FileContent>;
   /** Raw write. `body` may be a string (UTF-8) or a binary Blob/ArrayBuffer
    * — the FE uploads notebook JSON as string, attachments as Blob. */
-  writeFile(
+  writeFile(slug: string, 
     investigationId: string,
     path: string,
     body: string | Blob | ArrayBuffer,
   ): Promise<void>;
-  /** POST /investigations/{id}/files/mkdir — create an empty folder (real
+  /** POST /a/{slug}/items/{id}/files/mkdir — create an empty folder (real
    * directory; no .keep placeholder). 409 if a file occupies the path. */
-  mkdir(investigationId: string, path: string): Promise<void>;
-  /** GET /investigations/{id}/dirs — directory paths incl. empty ones. */
-  listDirs(investigationId: string): Promise<string[]>;
-  /** DELETE /investigations/{id}/files/{path} → 204. Removes a file, or a
+  mkdir(slug: string, investigationId: string, path: string): Promise<void>;
+  /** GET /a/{slug}/items/{id}/dirs — directory paths incl. empty ones. */
+  listDirs(slug: string, investigationId: string): Promise<string[]>;
+  /** DELETE /a/{slug}/items/{id}/files/{path} → 204. Removes a file, or a
    * folder and its whole subtree when the path is a directory. */
-  deleteFile(investigationId: string, path: string): Promise<void>;
-  /** POST /investigations/{id}/files/move — rename/move (409 if target exists). */
-  moveFile(investigationId: string, from: string, to: string): Promise<void>;
-  /** POST /investigations/{id}/files/copy — duplicate (409 if target exists). */
-  copyFile(investigationId: string, from: string, to: string): Promise<void>;
+  deleteFile(slug: string, investigationId: string, path: string): Promise<void>;
+  /** POST /a/{slug}/items/{id}/files/move — rename/move (409 if target exists). */
+  moveFile(slug: string, investigationId: string, from: string, to: string): Promise<void>;
+  /** POST /a/{slug}/items/{id}/files/copy — duplicate (409 if target exists). */
+  copyFile(slug: string, investigationId: string, from: string, to: string): Promise<void>;
 
-  streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent>;
-  /** DELETE /investigations/{id}/messages/current — tears the in-flight
+  /** POST /a/{slug}/items/{id}/messages — #43: enqueues the turn (202) and
+   * resolves once it's accepted; it NO LONGER streams. The turn's events arrive
+   * via `subscribeInvestigation`, the shared per-investigation broadcast. */
+  sendMessage(args: SendMessageArgs): Promise<void>;
+  /** GET /a/{slug}/items/{id}/stream — #43: the long-lived broadcast every
+   * viewer subscribes to. Yields ALL turns live (whoever sent them) plus the
+   * broadcast-only `user_message` / `file_changed` events. */
+  subscribeInvestigation(slug: string, investigationId: string, signal?: AbortSignal): AsyncGenerator<AgentEvent>;
+  /** DELETE /a/{slug}/items/{id}/messages/current — tears the in-flight
    * agent turn down on the BE so the kernel/sandbox stop spending tokens.
    * Idempotent: safe to call when nothing's running. */
-  cancelMessage(investigationId: string): Promise<void>;
+  cancelMessage(slug: string, investigationId: string): Promise<void>;
+  /** DELETE /a/{slug}/items/{id}/messages?turns=N — undo the last N whole
+   * turns (#38). Removes the prompt + its agent response as a unit. Does
+   * NOT revert workspace files. Returns the conversation's new length. */
+  undoTurns(slug: string, investigationId: string, turns: number): Promise<{ message_count: number }>;
 
   streamCellEvents(args: ExecuteCellArgs): AsyncGenerator<CellEvent>;
-  /** DELETE /investigations/{id}/notebooks/{path}/cells/{idx}/execute —
+  /** DELETE /a/{slug}/items/{id}/notebooks/{path}/cells/{idx}/execute —
    * stops the cell on the kernel side. Idempotent. */
   interruptCell(ref: CellRef): Promise<void>;
-  /** POST /investigations/{id}/notebooks/{path}/kernel/restart — wipes
+  /** POST /a/{slug}/items/{id}/notebooks/{path}/kernel/restart — wipes
    * the kernel's namespace; next execute spawns a fresh kernel. */
   restartKernel(ref: NotebookRef): Promise<void>;
 
-  /** POST /investigations/{id}/exec — run a shell command in the
+  /** POST /a/{slug}/items/{id}/exec — run a shell command in the
    * sandbox and return its ExecResult. Backs the Terminal pane. `signal`
    * lets the terminal's Stop button abort a long-running command. */
-  execShell(investigationId: string, cmd: string[], signal?: AbortSignal): Promise<ExecResult>;
+  execShell(slug: string, investigationId: string, cmd: string[], signal?: AbortSignal): Promise<ExecResult>;
 
-  /** POST /investigations/{id}/search — global text search over the
+  /** POST /a/{slug}/items/{id}/search — global text search over the
    * FileStore. Empty query → no results. */
-  searchFiles(
+  searchFiles(slug: string, 
     investigationId: string,
     query: string,
     opts?: SearchOptions,
   ): Promise<SearchResult[]>;
-  /** POST /investigations/{id}/replace — replace every match across the
+  /** POST /a/{slug}/items/{id}/replace — replace every match across the
    * (filtered) files; returns the total replacement count. */
-  replaceInFiles(
+  replaceInFiles(slug: string, 
     investigationId: string,
     query: string,
     replacement: string,

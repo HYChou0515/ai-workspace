@@ -1,9 +1,9 @@
-"""§A.S5 end-to-end — when an investigation's template_profile ships
-skills, the agent's tool list (built by the LitellmAgentRunner) includes
-`read_skill`. When the profile has none, it doesn't.
+"""§A.S5 / #89 end-to-end — when an item's App profile ships skills, the
+agent's tool list (built by the LitellmAgentRunner via `_agent_for`) includes
+`read_skill`. When the profile has none (or no App), it doesn't.
 
-We exercise this via `_agent_for` directly with a stubbed template
-profile resolver — the registry mechanics are covered by §A.S4 unit tests.
+Skills live at `apps/<slug>/profiles/<profile>/.skill/`; we mint a synthetic
+apps package so production profiles are untouched.
 """
 
 from __future__ import annotations
@@ -16,16 +16,16 @@ import pytest
 
 
 @pytest.fixture
-def isolated_templates(tmp_path: Path, monkeypatch):
-    root = tmp_path / "tpl_root"
+def isolated_apps(tmp_path: Path, monkeypatch):
+    root = tmp_path / "apps_root"
     pkg = root / "tplpkg"
     pkg.mkdir(parents=True)
     (pkg / "__init__.py").write_text("")
     monkeypatch.syspath_prepend(str(root))
-    import workspace_app.rca.skills as skills
+    import workspace_app.apps.skills as skills
 
     importlib.reload(skills)
-    monkeypatch.setattr(skills, "_TEMPLATES_PKG", "tplpkg")
+    monkeypatch.setattr(skills, "_APPS_PKG", "tplpkg")
     skills.list_skills.cache_clear()
     skills.load_skill.cache_clear()
     yield pkg
@@ -34,87 +34,52 @@ def isolated_templates(tmp_path: Path, monkeypatch):
     sys.modules.pop("tplpkg", None)
 
 
-def _profile_with_skill(root: Path, profile: str, name: str = "demo", body: str = "body") -> None:
-    prof = root / profile
-    prof.mkdir()
-    (prof / "__init__.py").write_text("")
-    skill_dir = prof / ".skill"
-    skill_dir.mkdir()
-    sd = skill_dir / name
-    sd.mkdir()
-    (sd / "SKILL.md").write_text(f"---\nname: {name}\ndescription: A demo skill.\n---\n\n{body}")
+def _profile_with_skill(root: Path, slug: str, profile: str, name: str = "demo") -> None:
+    sd = root / slug / "profiles" / profile / ".skill" / name
+    sd.mkdir(parents=True)
+    (sd / "SKILL.md").write_text(f"---\nname: {name}\ndescription: A demo skill.\n---\n\nbody")
 
 
-def _profile_without_skill(root: Path, profile: str) -> None:
-    prof = root / profile
-    prof.mkdir()
-    (prof / "__init__.py").write_text("")
+def _profile_without_skill(root: Path, slug: str, profile: str) -> None:
+    (root / slug / "profiles" / profile).mkdir(parents=True)
 
 
-def test_agent_for_with_template_profile_having_skills_exposes_read_skill(
-    isolated_templates: Path,
-):
-    """Wiring proof: `_agent_for(template_profile="<profile-with-skill>")`
-    puts read_skill in the agent's tool list."""
+def test_agent_for_with_profile_having_skills_exposes_read_skill(isolated_apps: Path):
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 
-    _profile_with_skill(isolated_templates, "methodology")
-    agent = _agent_for(AgentConfig(name="a"), template_profile="methodology")
-    names = {t.name for t in agent.tools}
-    assert "read_skill" in names
+    _profile_with_skill(isolated_apps, "rca", "local-lab")
+    agent = _agent_for(AgentConfig(name="a"), app_slug="rca", template_profile="local-lab")
+    assert "read_skill" in {t.name for t in agent.tools}
 
 
-def test_agent_for_with_template_profile_without_skills_omits_read_skill(
-    isolated_templates: Path,
-):
-    """The opposite wiring: no skills under the profile → no read_skill
-    tool (no dead tool slot in the LLM)."""
+def test_agent_for_with_profile_without_skills_omits_read_skill(isolated_apps: Path):
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 
-    _profile_without_skill(isolated_templates, "default")
-    agent = _agent_for(AgentConfig(name="a"), template_profile="default")
-    names = {t.name for t in agent.tools}
-    assert "read_skill" not in names
+    _profile_without_skill(isolated_apps, "rca", "default")
+    agent = _agent_for(AgentConfig(name="a"), app_slug="rca", template_profile="default")
+    assert "read_skill" not in {t.name for t in agent.tools}
 
 
-def test_agent_for_without_template_profile_omits_read_skill():
-    """No template_profile (KB chat, tests not setting it) → no read_skill."""
+def test_agent_for_without_app_or_profile_omits_read_skill():
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 
     agent = _agent_for(AgentConfig(name="a"))
-    names = {t.name for t in agent.tools}
-    assert "read_skill" not in names
+    assert "read_skill" not in {t.name for t in agent.tools}
 
 
-async def test_turn_agent_can_call_read_skill_via_scripted_runner(isolated_templates: Path):
-    """End-to-end wiring: when the runner builds the agent with a
-    template that has skills, the read_skill FunctionTool is in the
-    agent's tool list, has the right schema shape (so the LLM can call
-    it), and its impl reference is `read_skill_impl`. The actual impl
-    behaviour is exercised in tests/agent/test_read_skill_tool.py;
-    this test is the join-point assertion that the agent runner
-    actually exposes the tool to the LLM."""
-    from workspace_app.agent.tools import build_tools, read_skill_impl
+async def test_turn_agent_exposes_read_skill_pointing_at_the_shared_impl(isolated_apps: Path):
+    """Join-point: the runner-built agent surfaces read_skill with a callable
+    schema, and the registry points at the same impl the unit tests exercise."""
+    from workspace_app.agent.tools import _IMPLS, build_tools, read_skill_impl
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 
-    _profile_with_skill(isolated_templates, "methodology")
-    # The runner-built agent surfaces read_skill as a tool …
-    agent = _agent_for(AgentConfig(name="a"), template_profile="methodology")
+    _profile_with_skill(isolated_apps, "rca", "local-lab")
+    agent = _agent_for(AgentConfig(name="a"), app_slug="rca", template_profile="local-lab")
     read_skill_tool = next(t for t in agent.tools if t.name == "read_skill")
-    # … carrying a schema with `name` as its single required arg (so the LLM
-    # knows how to call it).
-    schema = read_skill_tool.params_json_schema
-    assert "name" in schema["properties"]
-    # And the tool registry the agent's runner uses points at the same impl
-    # the unit tests in test_read_skill_tool.py exercise — no shadow path.
-    direct_tools = {t.name: t for t in build_tools(profile="methodology")}
-    assert "read_skill" in direct_tools
-    # The function_tool-wrapped impl can't be unwrapped from FunctionTool
-    # without invoking the SDK, but the impl symbol is what `_IMPLS` resolves.
-    from workspace_app.agent.tools import _IMPLS
-
+    assert "name" in read_skill_tool.params_json_schema["properties"]
+    assert "read_skill" in {t.name for t in build_tools(app_slug="rca", profile="local-lab")}
     assert _IMPLS["read_skill"] is read_skill_impl

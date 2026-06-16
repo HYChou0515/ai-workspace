@@ -20,8 +20,8 @@ import {
   useSyncExternalStore,
 } from "react";
 
-import { api } from "../api";
 import { type FileEncoding, encodeText } from "../api/encoding";
+import type { FileService } from "../api/fileService";
 import type { FileContent } from "../api/types";
 
 export type SaveStatus = "clean" | "dirty" | "saving" | "saved" | "error";
@@ -48,20 +48,24 @@ const LOADING: BufferEntry = {
   save: "clean",
 };
 
-type IO = {
-  readFile: (id: string, path: string) => Promise<FileContent>;
-  writeFile: (id: string, path: string, body: string | ArrayBuffer | Blob) => Promise<void>;
+/** The narrow IO the buffer needs — a path-scoped read/write. A `FileService`
+ * satisfies it directly; tests pass an in-memory stub. */
+export type IO = {
+  readFile: (path: string) => Promise<FileContent>;
+  writeFile: (path: string, body: string | ArrayBuffer | Blob) => Promise<void>;
 };
+
+/** Adapt a `FileService` to the buffer's IO (it already has the right shape). */
+export function bufferIO(svc: FileService): IO {
+  return { readFile: (p) => svc.readFile(p), writeFile: (p, b) => svc.writeFile(p, b) };
+}
 
 export class FileBufferStore {
   private entries = new Map<string, BufferEntry>();
   private listeners = new Map<string, Set<() => void>>();
   private inflight = new Set<string>();
 
-  constructor(
-    public readonly investigationId: string,
-    private readonly io: IO = api,
-  ) {}
+  constructor(private readonly io: IO) {}
 
   subscribe(path: string, cb: () => void): () => void {
     let set = this.listeners.get(path);
@@ -92,7 +96,7 @@ export class FileBufferStore {
     this.inflight.add(path);
     this.entries.set(path, LOADING);
     this.io
-      .readFile(this.investigationId, path)
+      .readFile(path)
       .then((content) => {
         this.inflight.delete(path);
         const text = content.kind === "text" ? content.text : "";
@@ -173,7 +177,7 @@ export class FileBufferStore {
         entry.encoding === "binary"
           ? (encodeText(text, "binary").buffer as ArrayBuffer)
           : text;
-      await this.io.writeFile(this.investigationId, path, body);
+      await this.io.writeFile(path, body);
       const after = this.entries.get(path);
       // Keep dirty if the user typed more while the write was in flight.
       const save = after && after.text !== text ? "dirty" : "saved";
@@ -192,18 +196,19 @@ export class FileBufferStore {
 const FileBufferContext = createContext<FileBufferStore | null>(null);
 
 export function FileBufferProvider({
-  investigationId,
+  service,
   children,
   store,
 }: {
-  investigationId: string;
+  service?: FileService; // builds the store; optional when `store` is supplied
   children: React.ReactNode;
-  store?: FileBufferStore; // test seam
+  store?: FileBufferStore; // test seam / explicit store
 }) {
-  const value = useMemo(
-    () => store ?? new FileBufferStore(investigationId),
-    [store, investigationId],
-  );
+  const value = useMemo(() => {
+    if (store) return store;
+    if (!service) throw new Error("FileBufferProvider needs a `service` or a `store`");
+    return new FileBufferStore(bufferIO(service));
+  }, [store, service]);
   return (
     <FileBufferContext.Provider value={value}>{children}</FileBufferContext.Provider>
   );

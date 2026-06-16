@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "../../components/Icon";
+import { RetrievalToggles } from "./RetrievalToggles";
 
 export function NewCollectionModal({
   open,
@@ -16,17 +17,26 @@ export function NewCollectionModal({
 }: {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, description: string) => void;
+  onCreate: (
+    name: string,
+    description: string,
+    opts: { useRag: boolean; useWiki: boolean },
+  ) => void;
   busy?: boolean;
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  // Retrieval modes (#50): chunk search on by default, the LLM wiki opt-in.
+  const [useRag, setUseRag] = useState(true);
+  const [useWiki, setUseWiki] = useState(false);
 
   // Reset fields each time the modal opens.
   useEffect(() => {
     if (open) {
       setName("");
       setDescription("");
+      setUseRag(true);
+      setUseWiki(false);
     }
   }, [open]);
 
@@ -41,11 +51,12 @@ export function NewCollectionModal({
 
   if (!open) return null;
 
-  const canCreate = name.trim().length > 0 && !busy;
+  // At least one retrieval mode must be on, else the collection answers nothing.
+  const canCreate = name.trim().length > 0 && (useRag || useWiki) && !busy;
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!canCreate) return;
-    onCreate(name.trim(), description.trim());
+    onCreate(name.trim(), description.trim(), { useRag, useWiki });
   };
 
   return (
@@ -87,6 +98,17 @@ export function NewCollectionModal({
               onChange={(e) => setDescription(e.target.value)}
             />
           </label>
+          <fieldset className="kb-field" style={{ border: 0, margin: 0, padding: 0 }}>
+            <span className="kb-field__label">How answers are found</span>
+            <RetrievalToggles
+              docSearch={useRag}
+              wiki={useWiki}
+              onChange={({ docSearch, wiki }) => {
+                setUseRag(docSearch);
+                setUseWiki(wiki);
+              }}
+            />
+          </fieldset>
         </div>
 
         <footer className="kb-modal__foot">

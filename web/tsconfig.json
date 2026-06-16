@@ -18,5 +18,7 @@
     "noEmit": true,
     "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "//exclude": "autocrud/ and routes/ are specstar's `autocrud` codegen output (a standalone Mantine + TanStack Router admin UI with its own entry). Our app (App.tsx, react-router-dom) never imports them; they pull deps we don't install and aren't strict-clean. Kept on disk as a schema/query reference, excluded from our typecheck + build so `pnpm run build` stays green. Re-include once/if the admin UI is wired up.",
+  "exclude": ["src/autocrud", "src/routes"]
 }

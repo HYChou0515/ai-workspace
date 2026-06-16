@@ -20,7 +20,7 @@ describe("KB api (mock client)", () => {
 
     await kb.uploadDocument(c.resource_id, file); // same name → no duplicate row
     const docs = await kb.listDocuments(c.resource_id);
-    expect(docs.map((d) => d.path)).toEqual(["guide.md"]);
+    expect(docs.items.map((d) => d.path)).toEqual(["guide.md"]);
   });
 
   it("preserves a relative path on folder upload", async () => {
@@ -29,7 +29,7 @@ describe("KB api (mock client)", () => {
     const ids = await kb.uploadDocument(c.resource_id, file, "manuals/reflow/a.md");
     expect(ids).toEqual([`${c.resource_id}/me/manuals/reflow/a.md`]);
     const docs = await kb.listDocuments(c.resource_id);
-    expect(docs.map((d) => d.path)).toEqual(["manuals/reflow/a.md"]);
+    expect(docs.items.map((d) => d.path)).toEqual(["manuals/reflow/a.md"]);
   });
 
   it("lists a document's chunks with cited counts", async () => {
@@ -50,7 +50,7 @@ describe("KB api (mock client)", () => {
     const [docId] = await kb.uploadDocument(c.resource_id, file);
     const docs = await kb.listDocuments(c.resource_id);
     const chunks = await kb.getDocChunks(docId);
-    expect(docs[0].chunks).toBe(chunks.length);
+    expect(docs.items[0].chunks).toBe(chunks.length);
   });
 
   it("creates a chat and lists it with a message count", async () => {

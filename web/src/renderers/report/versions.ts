@@ -11,7 +11,12 @@ export type ReportVersion = {
   isCurrent: boolean;
 };
 
-const REPORT_RE = /^\/?report\.v(\d+)\.md$/i;
+// `report.v{N}.md` can live anywhere in the workspace — at the root for the
+// old layout, or under a step folder (e.g. `/step6-report/report.v3.md`) for
+// the by-step organisation the local-lab prompt now recommends. The regex
+// anchors the *basename* via `(?:^|/)` so it matches both, without writing
+// any specific subfolder name into FE code.
+const REPORT_RE = /(?:^|\/)report\.v(\d+)\.md$/i;
 
 /**
  * Build the version list from a file listing. Versions are sorted

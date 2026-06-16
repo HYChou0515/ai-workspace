@@ -17,7 +17,7 @@ class Notification(Struct):  # → resource "notification"
     kind: str  # mention | share | status | (assignment|agent_done|system reserved)
     title: str
     body: str = ""
-    link: str = ""  # where clicking goes, e.g. /investigations/{id} or /kb/chats/{id}
+    link: str = ""  # where clicking goes, e.g. /a/{slug}/items/{id} or /kb/chats/{id}
     actor: str | None = None  # who triggered it (user id); None when system/agent
     read: bool = False
     created_at: int | None = None  # epoch ms

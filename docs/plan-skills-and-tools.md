@@ -356,6 +356,30 @@ def main():
 | **T9** | `tool-demo` template `_config.json` 改 `["data-fetch", "csv-column-summary"]`,端對端跑通 | ✅ |
 | **T10** | 100% coverage / ty / ruff | ✅ |
 
+## B.10 · Agent-side prompt coverage(後補)
+
+§B.1–B.9 寫了 host-side 怎麼註冊 / build / dispatch FunctionTool,**但完全沒寫「agent 那端要怎麼被告知這些 tool 的存在跟用法」**。後果是 small LLM(Qwen3:14B 實測)看 tool inventory 裡的 `wafer-history`,以為是 PATH 上的 binary,直接 `exec(["wafer-history", "--output", ...])` → exit 127 → 編 URL 湊答案。
+
+OpenAI tool_calls schema 在 API payload 那層其實已經把 tool 帶給 LLM 了,**大 model 沒問題**;小 model 認不出來,需要 system prompt 內也明示。
+
+**解法**:`format_tools_for_prompt(tools)` 把每個 tool 的 (name, description, JSON args schema) render 成 system-prompt 末段,`_agent_for` 在 build 完 tools 後 append 上去。LLM 在生成 tool_calls **之前** 就讀到 inventory + JSON args schema,不會把 function tool 當 shell binary。
+
+**檔案**:
+- `src/workspace_app/agent/tool_prompt.py` — `format_tools_for_prompt(tools) -> str`,空 list → 空 string。
+- `src/workspace_app/api/litellm_runner.py::_agent_for` — build tools → append 到 system prompt → 餵 Agent。
+- `src/workspace_app/rca/prompts/system.md` — 刪掉 static 「`exec` / `read_file` / …」清單,改成「Tool inventory 在 prompt 末段(name + description + JSON args schema)」+ 點明「不要 `exec("<tool-name>")`」。
+- 每個 template 的 `_prompt.md` — provisioned tool 用法不要再寫 CLI 風格(「Call `data-fetch` with `name="..."`」),沒必要,LLM 看 schema 就懂。
+
+**Test**(`tests/agent/test_tool_prompt.py`):
+- `test_empty_tools_returns_empty_string`
+- `test_includes_section_header_and_invariant_warning`
+- `test_each_tool_gets_name_description_and_schema_block`
+- `test_multiple_tools_listed_in_order`
+- `test_tool_without_description_still_renders`
+- `test_complex_schema_with_enum_and_nested_objects_round_trips`
+
+**狀態**:✅(本次 commit 落地)。
+
 ## B.9 · 不做(v1 之外)
 
 - nested object / oneOf / discriminated union 的 schema 範例(pydantic 已支援,作者愛用就用)

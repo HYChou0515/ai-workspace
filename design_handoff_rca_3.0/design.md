@@ -39,6 +39,7 @@ The single most important verb: **find the root cause**. Everything in the UI sh
 - **Considered**: Notebook-only (Jupyter-shaped) or a doc editor with sidebar.
 - **Picked**: VSCode-shaped.
 - **Why**: Engineers already live in IDEs and notebooks. The activity bar / sidebar / tabbed editor / bottom panel / status bar pattern is muscle memory. We get scrubbable file tree, multi-view tabs (notebook / chart / canvas / md), terminal-shaped agent log, and a status bar for "what's the agent doing right now" — all without inventing a new metaphor.
+- **Evidence panel is a real file manager (Jun 2026).** The "Investigation files" tree (`EvidenceTree` in `investigation.jsx`) shares the Documents/Wiki tree mechanics (reuses `buildTree`/`CtxMenu`/`IconBtn`/`Spinner` exported from `doctree.jsx`): drag files/folders onto it to upload (agent shows an `indexing…` spinner per file), New file / New folder / Upload buttons in the section header, right-click → Rename / Download / Delete, inline rename, collapse-all. Clicking an analysis file that maps to a view still switches the editor view. State persists to `localStorage` (`rca-inv-evidence`).
 
 ### 3.3 · Final report
 - **Considered**: A living doc that updates in place; like Notion.
@@ -80,6 +81,19 @@ We landed on: `draft → triaging → awaiting review → resolved`, with `aband
 - **Considered**: Line and Lot as first-class metadata (factory floor convention).
 - **Picked**: Topic (a free-form tag, usually one but optionally many). Lot was dropped.
 - **Why**: An investigation spans whatever the engineer says it spans. Production-line-as-primary-axis was too restrictive for cross-line or supplier issues. Lot was noisy — most investigations touch multiple lots, and a single `lot` chip would lie.
+
+### 3.11 · Knowledge wiki (second retrieval mode)
+- **Considered**: Only document search (passage retrieval) over a collection.
+- **Picked**: Two retrieval modes a person chooses between — **Document search** (find passages) and a **Knowledge wiki** (an AI-built, cross-linked summary of the collection the agent reads for the big picture). Both can be on; answers draw on passages for detail and the wiki for context.
+- **Why**: Passage retrieval is sharp but myopic — it answers "what does this sentence say", not "how does this collection hang together". For a reflow process or a body of past investigations, the engineer often wants the *map* (entities, concepts, how they link) before the *quote*. The wiki is that map, kept current by the agent.
+- **Plain language, no RAG vocabulary.** The UI never says "RAG / chunks / embeddings". It says "Document search" and "Knowledge wiki". Every page cites the documents it was synthesized from.
+- **The wiki is editable (decision changed Jun 2026).** It started read-only (agent writes, people read). The user asked to let people correct the agent's generated wiki directly, so the Wiki tab now uses the **same VSCode-shaped file-tree + editor shell as Documents** (`DocTreeView` with `directEdit`): wiki pages are `.md` files under `entities/` and `concepts/`, opening one edits it in place (no Edit button), Save re-indexes, dropping docs onto the tree **regenerates** the wiki (agent animation), and pages can be renamed/deleted via the ⋮/right-click menu. Edits persist to `localStorage` per collection (`rca-wiki-<id>`). Auto-managed collections keep the wiki read-only. Each page still shows its **Sources** footer.
+- **Where it surfaces in the product** (integrated into the prototype):
+  - Collection detail → a **Wiki** tab beside Documents, rendering the per-collection `WikiBrowser` (states: ready / building / empty / disabled) as a file-tree + editor. A small green/amber dot on the tab signals ready/updating.
+  - New-collection modal → `RetrievalToggles` (document search on by default, wiki off).
+  - Chat composer → a **Search depth** popover (Quick / Standard / Deep) with a per-message **"Search the wiki"** row.
+  - Collection cards → a `Wiki` badge when the collection has a built wiki.
+- **Why off by default.** Building a wiki costs a pass over the whole collection; document search is the safe, cheap default. Turning the wiki on is an explicit, reversible choice — and the modal tells you it builds after the first upload.
 
 ---
 

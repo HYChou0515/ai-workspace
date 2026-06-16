@@ -7,6 +7,7 @@ import {
   formatMetrics,
   isToolRunning,
   logFromMessages,
+  turnsFromEntry,
   reduceAgent,
   tokensPerSec,
 } from "./agentLog";
@@ -123,6 +124,40 @@ describe("reduceAgent", () => {
     }
   });
 
+  it("prefers the full display over the cleaned output on tool_end (#62)", () => {
+    // A command that exits 0 but wrote to stderr: the cleaned output drops
+    // the stderr, but ToolEnd.display keeps it. The card must show the full
+    // version so the error the user saw stream live doesn't vanish.
+    const log = fold([
+      { type: "tool_start", call_id: "c1", name: "exec", args: {} },
+      {
+        type: "tool_end",
+        call_id: "c1",
+        output: "Tool `exec` returned (exit_code=0):\ndone",
+        display: "Tool `exec` returned (exit_code=0):\ndone\n--- stderr ---\nERROR: boom",
+      },
+    ]);
+    const e = log.entries[0];
+    if (e?.kind === "tool_call") {
+      expect(e.call.output).toContain("ERROR: boom");
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
+
+  it("falls back to the cleaned output when tool_end has no display (#62)", () => {
+    const log = fold([
+      { type: "tool_start", call_id: "c1", name: "exec", args: {} },
+      { type: "tool_end", call_id: "c1", output: "Tool `exec` returned (exit_code=0):\nok" },
+    ]);
+    const e = log.entries[0];
+    if (e?.kind === "tool_call") {
+      expect(e.call.output).toBe("Tool `exec` returned (exit_code=0):\nok");
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
+
   it("keeps live output visible after tool_end sets the final output", () => {
     const log = fold([
       { type: "tool_start", call_id: "c1", name: "exec", args: {} },
@@ -183,7 +218,8 @@ describe("reduceAgent", () => {
     ]);
     const e = log.entries[0];
     if (e?.kind === "tool_call") {
-      expect(e.call.parseError).toBe("close the brace");
+      expect(e.call.parseError).toContain("close the brace");
+      expect(e.call.parseError).toContain("{"); // the model's raw emission is shown
     } else {
       throw new Error("expected tool_call");
     }
@@ -194,6 +230,41 @@ describe("reduceAgent", () => {
     expect(log.entries).toMatchObject([
       { kind: "banner", text: "parse error: global parse error" },
     ]);
+  });
+
+  it("surfaces the model's actual bad args (raw) so the user sees the mistake", () => {
+    // #76 transparency: the user has a right to see WHAT the model got wrong.
+    const log = fold([
+      {
+        type: "tool_call_parse_error",
+        hint: "re-send valid JSON",
+        raw: '{"path": ./hello.md"}',
+      },
+    ]);
+    const banner = log.entries[0];
+    if (banner?.kind !== "banner") throw new Error("expected banner");
+    expect(banner.text).toContain("re-send valid JSON");
+    expect(banner.text).toContain('{"path": ./hello.md"}'); // the model's emission
+  });
+
+  it("truncates a huge raw emission so the banner can't blow up", () => {
+    const big = "x".repeat(500);
+    const log = fold([{ type: "tool_call_parse_error", hint: "bad", raw: big }]);
+    const banner = log.entries[0];
+    if (banner?.kind !== "banner") throw new Error("expected banner");
+    expect(banner.text).toContain("…");
+    expect(banner.text.length).toBeLessThan(300); // not the full 500-char blob
+  });
+
+  it("never silently drops a parse error when its call has no card yet", () => {
+    // call_id is set but no matching tool_call entry exists → must STILL banner,
+    // otherwise the retry is invisible to the user (#76).
+    const log = fold([
+      { type: "tool_call_parse_error", call_id: "ghost", hint: "bad json", raw: "{" },
+    ]);
+    expect(log.entries).toMatchObject([{ kind: "banner" }]);
+    const banner = log.entries[0];
+    if (banner?.kind === "banner") expect(banner.text).toContain("bad json");
   });
 
   it("includes max_turns banner and clears streaming", () => {
@@ -315,6 +386,59 @@ describe("logFromMessages", () => {
     }
   });
 
+  it("reloads a tool message preferring its full display over the cleaned content (#62)", () => {
+    const log = logFromMessages([
+      {
+        role: "tool",
+        content: "Tool `exec` returned (exit_code=0):\ndone",
+        tool_display: "Tool `exec` returned (exit_code=0):\ndone\n--- stderr ---\nERROR: boom",
+        tool_name: "exec",
+        tool_call_id: "c1",
+      },
+    ]);
+    const tool = log.entries[0];
+    if (tool?.kind === "tool_call") {
+      expect(tool.call.output).toContain("ERROR: boom");
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
+
+  it("carries citations from a persisted ask_knowledge_base tool message into the ToolCallView", () => {
+    // The BE attaches the KB sub-agent's resolved [n] citations onto the
+    // role=tool message produced by ask_knowledge_base. Hydration must
+    // surface them on the ToolCallView so the FE can render reference cards
+    // under the tool card (same UX as direct KB chat).
+    const log = logFromMessages([
+      {
+        role: "tool",
+        content: "answer with [1]",
+        tool_name: "ask_knowledge_base",
+        tool_call_id: "c1",
+        tool_args: { question: "why drift?" },
+        citations: [
+          {
+            marker: 1,
+            collection_id: "col",
+            document_id: "doc",
+            filename: "reflow-spec.md",
+            start: 0,
+            end: 50,
+            source_chunk_ids: ["ck"],
+            snippet: "Zone 3 setpoint…",
+          },
+        ],
+      },
+    ]);
+    const tool = log.entries[0];
+    if (tool?.kind === "tool_call") {
+      expect(tool.call.citations).toHaveLength(1);
+      expect(tool.call.citations?.[0]?.filename).toBe("reflow-spec.md");
+    } else {
+      throw new Error("expected tool_call");
+    }
+  });
+
   it("maps a role=mention message to a mention entry", () => {
     const log = logFromMessages([
       {
@@ -333,5 +457,44 @@ describe("logFromMessages", () => {
     } else {
       throw new Error("expected mention");
     }
+  });
+});
+
+describe("logFromMessages — persisted error markers (#37)", () => {
+  it("renders a saved error message as a banner so a reloaded thread shows the failure", () => {
+    const log = logFromMessages([
+      { role: "user", author: "alice", content: "diagnose" },
+      { role: "assistant", author: "RCA Agent", content: "Looking at the log" },
+      { role: "error", content: "APIConnectionError: refused", error_kind: "error" },
+    ]);
+    expect(log.entries).toHaveLength(3);
+    const last = log.entries[2];
+    if (last?.kind === "banner") {
+      expect(last.text).toContain("refused");
+    } else {
+      throw new Error("expected a banner entry for the error message");
+    }
+    // The partial answer before it survives.
+    expect(log.entries[1]?.kind).toBe("message");
+  });
+});
+
+describe("turnsFromEntry — undo math (#38)", () => {
+  it("counts user turns from a given entry to the end", () => {
+    const log = logFromMessages([
+      { role: "user", content: "q1" },
+      { role: "assistant", content: "a1" },
+      { role: "user", content: "q2" },
+      { role: "tool", content: "t", tool_name: "exec", tool_call_id: "c" },
+      { role: "assistant", content: "a2" },
+      { role: "user", content: "q3" },
+      { role: "assistant", content: "a3" },
+    ]);
+    // Entry indices: 0=user,1=asst,2=user,3=tool,4=asst,5=user,6=asst
+    expect(turnsFromEntry(log.entries, 5)).toBe(1); // last turn only
+    expect(turnsFromEntry(log.entries, 2)).toBe(2); // q2 + q3
+    expect(turnsFromEntry(log.entries, 0)).toBe(3); // all
+    // From a non-user entry (the tool at 3) it still counts later user turns.
+    expect(turnsFromEntry(log.entries, 3)).toBe(1);
   });
 });

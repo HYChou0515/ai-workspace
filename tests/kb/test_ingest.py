@@ -30,7 +30,7 @@ def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
     data = b"# Guide\none two three four five"
     ids = ingestor.ingest(collection_id=cid, user="alice", filename="guide.md", data=data)
 
-    assert ids == [encode_doc_id(cid, "alice", "guide.md")]
+    assert ids == [encode_doc_id(cid, "guide.md")]
     doc = spec.get_resource_manager(SourceDoc).get(ids[0]).data
     assert doc.path == "guide.md"
     assert doc.collection_id == cid
@@ -43,6 +43,27 @@ def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
     # chunk spans are verbatim slices of the (normalized) document text
     text = b"# Guide\none two three four five".decode()
     assert all(text[c.start : c.end] == c.text for c in chunks)
+    # #86: the converter text (here a noop decode+normalize) is persisted on
+    # SourceDoc.text so the wiki reads the whole clean source, not the chunks.
+    assert doc.text == text
+
+
+def test_ingest_canonicalizes_path_so_one_logical_doc_is_one_id(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # A leading slash (or other surface noise) must not split one logical doc
+    # into two: the stored path + id are the canonical relative form, so
+    # "/sub/g.md" and "sub/g.md" are the SAME shared doc.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    (slashed,) = ing.ingest(collection_id=cid, user="a", filename="/sub/g.md", data=b"alpha beta")
+
+    assert slashed == encode_doc_id(cid, "sub/g.md")
+    doc = spec.get_resource_manager(SourceDoc).get(slashed).data
+    assert doc.path == "sub/g.md"  # stored relative, leading slash gone
+
+    again = ing.ingest(collection_id=cid, user="a", filename="sub/g.md", data=b"alpha beta")
+    assert again == []  # same canonical id + identical bytes → no second doc
 
 
 def test_reingesting_identical_bytes_is_a_noop(
@@ -86,10 +107,10 @@ def test_ingest_zip_unpacks_text_members_and_skips_others(
         collection_id=cid, user="a", filename="docs.zip", data=buf.getvalue()
     )
     assert set(ids) == {
-        encode_doc_id(cid, "a", "docs/a.md"),
-        encode_doc_id(cid, "a", "docs/b.txt"),
+        encode_doc_id(cid, "docs/a.md"),
+        encode_doc_id(cid, "docs/b.txt"),
     }  # png skipped
-    a = spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "a", "docs/a.md")).data
+    a = spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "docs/a.md")).data
     assert a.path == "docs/a.md"  # archive-relative path preserved
 
 
@@ -109,7 +130,7 @@ def test_ingest_tar_gz_unpacks_text_members(
     ids = Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
         collection_id=cid, user="a", filename="notes.tar.gz", data=buf.getvalue()
     )
-    assert ids == [encode_doc_id(cid, "a", "notes/x.md")]
+    assert ids == [encode_doc_id(cid, "notes/x.md")]
 
 
 def test_ingest_unsupported_single_file_is_skipped(

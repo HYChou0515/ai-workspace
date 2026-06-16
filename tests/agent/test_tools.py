@@ -254,8 +254,9 @@ async def test_exec_after_write_file_sees_the_content(
 def test_build_tools_returns_the_workspace_set_by_default():
     tools = build_tools()
     names = {t.name for t in tools}
-    # file/exec tools + ask_knowledge_base (RCA consults the KB); NOT kb_search,
-    # which is the KB agent's own opt-in tool.
+    # file/exec tools + the two sub-agent bridges (`ask_knowledge_base` for
+    # KB lookups, `infer_modules` for process-module classification); NOT
+    # `kb_search`, which is the sub-agents' OWN opt-in tool.
     assert names == {
         "exec",
         "read_file",
@@ -265,6 +266,7 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "exists",
         "delete_file",
         "ask_knowledge_base",
+        "infer_modules",
         "mention_user",
     }
     assert "kb_search" not in names
@@ -276,25 +278,183 @@ def test_build_tools_filters_by_allowed_list():
     assert {t.name for t in tools} == {"exec", "read_file"}
 
 
+def test_kb_search_logs_underlying_exception_before_reraising(caplog):
+    """When the retriever errors (e.g. Ollama down, LiteLLM HTTP failure),
+    `kb_search_impl` previously let the exception go straight to the
+    agents-SDK tool-error wrapper without ever hitting the server log.
+    The operator saw a silent run; the LLM saw "An error occurred…"
+    and tended to synthesize a polite refusal.
+
+    Fix: log the exception with traceback before re-raising, so the
+    server-side `uvicorn` log shows the actual root cause."""
+    import logging
+
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, kb_search_impl
+
+    class _BrokenRetriever:
+        def search(self, query, collection_ids, on_progress, *, enhancements=None):
+            raise ConnectionRefusedError("Ollama at http://localhost:11434 not reachable")
+
+    ctx = RunContextWrapper(AgentToolContext(retriever=_BrokenRetriever()))
+    with caplog.at_level(logging.ERROR):
+        try:
+            kb_search_impl(ctx, "voids")
+        except ConnectionRefusedError:
+            pass  # re-raised so the SDK still wraps it for the agent
+        else:
+            raise AssertionError("kb_search should re-raise the underlying error")
+    # The server log got the message AND the traceback — operator can
+    # see the failing tool name and the underlying exception together.
+    matching = [r for r in caplog.records if "kb_search" in r.message.lower()]
+    assert matching, f"expected a kb_search log record, got {caplog.records}"
+    rec = matching[0]
+    assert rec.exc_info is not None, "log record should carry the exception info"
+    exc_text = str(rec.exc_info[1]).lower()
+    assert "ollama" in exc_text  # underlying cause is named
+
+
+class _RecordingRetriever:
+    """Captures the `enhancements` it was called with, returns no passages."""
+
+    def __init__(self):
+        self.enhancements = "UNSET"
+
+    def search(self, query, collection_ids, on_progress, *, enhancements=None):
+        self.enhancements = enhancements
+        return []
+
+
+def test_kb_search_caller_depth_overrides_llm_tool_args():
+    """#68: when the KB-chat user picks a depth (caller context sets
+    expand/hyde/rerank explicitly), the model's OWN kb_search args must
+    not override it. 'quick' (0/0/False) stays quick even when the model
+    asks for expand=5, hyde=5, rerank=True."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, kb_search_impl
+    from workspace_app.kb.retriever import Enhancements
+
+    retr = _RecordingRetriever()
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            retriever=retr,
+            kb_enhancements=Enhancements(expand=0, hyde=0, rerank=False),
+        )
+    )
+    kb_search_impl(ctx, "voids", expand=5, hyde=5, rerank=True)
+    assert retr.enhancements == Enhancements(expand=0, hyde=0, rerank=False)
+
+
+def test_kb_search_uses_llm_args_when_caller_leaves_depth_unset():
+    """#68 other half: 'standard' mode sends no depth payload (caller is
+    None), so the model's own kb_search args still tune the search."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, kb_search_impl
+    from workspace_app.kb.retriever import Enhancements
+
+    retr = _RecordingRetriever()
+    ctx = RunContextWrapper(AgentToolContext(retriever=retr))  # no kb_enhancements
+    kb_search_impl(ctx, "voids", expand=2, hyde=1, rerank=True)
+    assert retr.enhancements == Enhancements(expand=2, hyde=1, rerank=True)
+
+
+def test_kb_search_cascade_is_per_knob():
+    """#68: the override is per-knob. A caller that pins only `expand`
+    (others left None) keeps that knob authoritative while the model's
+    args still fill the knobs the caller didn't set."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, kb_search_impl
+    from workspace_app.kb.retriever import Enhancements
+
+    retr = _RecordingRetriever()
+    ctx = RunContextWrapper(
+        AgentToolContext(retriever=retr, kb_enhancements=Enhancements(expand=0))
+    )
+    kb_search_impl(ctx, "voids", expand=9, hyde=3, rerank=True)
+    assert retr.enhancements == Enhancements(expand=0, hyde=3, rerank=True)
+
+
 async def test_ask_knowledge_base_delegates_to_the_context_bridge():
     from agents import RunContextWrapper
 
     from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
+    from workspace_app.resources.conversation import Citation
 
     received: dict[str, object] = {}
 
-    async def fake_ask(question: str, emit: object, origin_id: object) -> str:
+    cite = Citation(
+        marker=1,
+        collection_id="c",
+        document_id="d",
+        filename="f.md",
+        start=0,
+        end=10,
+        source_chunk_ids=["ck"],
+    )
+
+    async def fake_run(
+        purpose: str, payload: str, emit: object, origin_id: object
+    ) -> tuple[str, list[Citation]]:
+        # The bridge returns BOTH the synthesized answer AND its resolved
+        # citations so the impl can stash them on ctx for the turn engine
+        # to attach to the persisted RCA tool message.
+        assert purpose == "kb_chat"
         received["emit"] = emit
         received["origin_id"] = origin_id
-        return f"KB answer to: {question}"
+        return f"KB answer to: {payload}", [cite]
 
     def sink(b: bytes) -> None: ...
 
-    ctx = RunContextWrapper(AgentToolContext(ask_kb=fake_ask, on_exec_output=sink))
+    actx = AgentToolContext(run_subagent=fake_run, on_exec_output=sink)
+    ctx = RunContextWrapper(actx)
     out = await ask_knowledge_base_impl(ctx, "why did zone three drift?")
+    # The tool itself still returns just the answer text (what the LLM sees) —
+    # citations are persisted via ctx, not echoed in the function tool's
+    # output (which would burn tokens + show as raw JSON in the tool card).
     assert out == "KB answer to: why did zone three drift?"
-    # the run's output sink is handed to the bridge so KB progress can stream
+    # The run's output sink is handed to the bridge so KB progress can stream.
     assert received["emit"] is sink
+    # Citations are stashed in CALL ORDER on the context, bucketed by
+    # tool name; the turn engine pairs them with each successive
+    # ask_knowledge_base tool message.
+    assert actx.subagent_citations["ask_knowledge_base"] == [[cite]]
+
+
+async def test_ask_knowledge_base_two_calls_stash_per_call_citations():
+    """Two ask_knowledge_base calls in one turn stash TWO citation lists, in
+    order, so the persist step can pair them with each tool message."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
+    from workspace_app.resources.conversation import Citation
+
+    def _cite(n: int) -> Citation:
+        return Citation(
+            marker=n,
+            collection_id="c",
+            document_id=f"d{n}",
+            filename=f"f{n}.md",
+            start=0,
+            end=10,
+            source_chunk_ids=[f"ck{n}"],
+        )
+
+    calls: list[str] = []
+
+    async def fake_run(purpose, payload, emit, origin_id):
+        assert purpose == "kb_chat"
+        calls.append(payload)
+        return f"a:{payload}", [_cite(len(calls))]
+
+    actx = AgentToolContext(run_subagent=fake_run)
+    ctx = RunContextWrapper(actx)
+    await ask_knowledge_base_impl(ctx, "q1")
+    await ask_knowledge_base_impl(ctx, "q2")
+    assert [cs[0].marker for cs in actx.subagent_citations["ask_knowledge_base"]] == [1, 2]
 
 
 async def test_mention_user_delegates_to_the_context_hook():
@@ -311,3 +471,17 @@ async def test_mention_user_delegates_to_the_context_hook():
     out = await mention_user_impl(ctx, "alice", "please review the SPC")
     assert "alice" in out
     assert calls == [("inv-1", ["alice"], "please review the SPC")]
+
+
+async def test_exec_output_is_capped_by_the_context_budget(
+    ctx: RunContextWrapper[AgentToolContext],
+):
+    """#44 — the exec tool truncates oversized output using the context's
+    exec_output_max_chars, so a `grep`-style flood can't blow up the
+    model's context. (echo of a long arg stands in for the big output.)"""
+    ctx.context.exec_output_max_chars = 500
+    flood = "A" * 5000 + " TAILMARK"
+    out = await exec_impl(ctx, ["echo", flood])
+    assert len(out) < 1000
+    assert "omitted" in out
+    assert "exit_code=0" in out

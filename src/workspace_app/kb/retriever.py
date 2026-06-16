@@ -14,11 +14,13 @@ the shared metric, so the dense order matches the stored vectors' geometry.
 from __future__ import annotations
 
 import posixpath
+from dataclasses import dataclass
 
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 from specstar.util.vector_distance import cosine_distance
 
+from ..config.schema import EnhancementSettings
 from ..resources.kb import DocChunk, RetrievedPassage, SourceDoc
 from .bm25 import bm25_rank
 from .embedder import Embedder
@@ -28,6 +30,58 @@ from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
 from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
+
+
+@dataclass(frozen=True)
+class Enhancements:
+    """Per-search override for the LLM-driven enhancements. Any field
+    set to `None` (the default) inherits from the operator's
+    `EnhancementSettings.<knob>.default`. The operator's `max` is the
+    final word — caller-set values are clamped, LLM-set tool args even
+    more so.
+
+    `expand` and `hyde` are integer counts: `0` disables; positive
+    values request that many alt queries / hypothetical docs. `rerank`
+    is a bool — `False` skips the rerank LLM call.
+    """
+
+    expand: int | None = None
+    hyde: int | None = None
+    rerank: bool | None = None
+
+
+@dataclass(frozen=True)
+class _ResolvedEnhancements:
+    expand: int
+    hyde: int
+    rerank: bool
+
+
+def _resolve_enhancements(
+    caller: Enhancements | None,
+    defaults: EnhancementSettings,
+) -> _ResolvedEnhancements:
+    """Merge caller-supplied overrides on top of operator defaults,
+    then clamp by the operator's max. Centralised so the search loop
+    reads three plain ints/bools and doesn't repeat the cascade."""
+    expand_raw = (
+        caller.expand
+        if caller is not None and caller.expand is not None
+        else defaults.expand.default
+    )
+    hyde_raw = (
+        caller.hyde if caller is not None and caller.hyde is not None else defaults.hyde.default
+    )
+    rerank_raw = (
+        caller.rerank
+        if caller is not None and caller.rerank is not None
+        else defaults.rerank.default
+    )
+    return _ResolvedEnhancements(
+        expand=min(max(0, expand_raw), defaults.expand.max),
+        hyde=min(max(0, hyde_raw), defaults.hyde.max),
+        rerank=bool(rerank_raw) and bool(defaults.rerank.max),
+    )
 
 
 def _chunk_vec(chunk: DocChunk) -> list[float]:
@@ -48,6 +102,7 @@ class Retriever:
         candidates: int = 20,
         top_k: int = 5,
         code_embedder: Embedder | None = None,
+        enhancement_defaults: EnhancementSettings | None = None,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
@@ -59,10 +114,26 @@ class Retriever:
         # both vector fields in parallel (one rank per field, RRF-merged).
         # None ⇒ retriever stays single-field (legacy `embedding` only).
         self._code_embedder = code_embedder
+        # Operator-level enhancement defaults + ceilings. None → bundled
+        # `EnhancementSettings()` (light: expand=1, hyde=0, rerank=on).
+        # Each `search` call's caller / LLM tool args resolve against
+        # these via `_resolve_enhancements`.
+        self._enhancement_defaults = enhancement_defaults or EnhancementSettings()
 
     def search(
-        self, query: str, collection_ids: list[str], on_progress: OnChunk | None = None
+        self,
+        query: str,
+        collection_ids: list[str],
+        on_progress: OnChunk | None = None,
+        *,
+        enhancements: Enhancements | None = None,
     ) -> list[RetrievedPassage]:
+        """`enhancements` is the per-call override: any field set to a
+        concrete value wins over the operator default for that knob,
+        then is clamped against the operator's `max`. Fields left
+        `None` (or the whole arg `None`) inherit from the operator
+        default. When the LLM isn't wired, all three are forced off
+        regardless of the resolved values."""
         chunks = self._load_chunks(collection_ids)  # {chunk_id: DocChunk}
         if not chunks:
             return []
@@ -71,11 +142,20 @@ class Retriever:
             if on_progress is not None:
                 on_progress(label, False)  # a step header (not model reasoning)
 
-        # Multi-query: an LLM (when given) widens recall with alternative phrasings;
-        # each variant contributes a dense + a sparse ranked list to the fusion.
-        if self._llm is not None:
+        resolved = _resolve_enhancements(enhancements, self._enhancement_defaults)
+        # An LLM-less retriever can't run any enhancement — force them
+        # off so the loop below behaves the same as when operator
+        # clamped everything to zero.
+        if self._llm is None:
+            resolved = _ResolvedEnhancements(expand=0, hyde=0, rerank=False)
+
+        # Multi-query: an LLM (when wired and `expand>0`) widens recall
+        # with alternative phrasings; each variant contributes a dense
+        # + a sparse ranked list to the fusion.
+        if resolved.expand > 0:
+            assert self._llm is not None  # resolved.expand>0 implies llm wired
             step("\n↻ expanding query\n")
-            queries = expand_queries(self._llm, query, on_progress=on_progress)
+            queries = expand_queries(self._llm, query, n=resolved.expand, on_progress=on_progress)
         else:
             queries = [query]
         corpus = [(cid, ch.text) for cid, ch in chunks.items()]
@@ -93,16 +173,26 @@ class Retriever:
                 )
             ranked_lists.append(bm25_rank(q, corpus))
 
-        # HyDE: embed a hypothetical answer (as a pseudo-document) and add it as
-        # one more dense probe, so we also match answer-shaped passages.
-        if self._llm is not None:
+        # HyDE: embed N hypothetical answers (as pseudo-documents); each
+        # adds another dense probe so retrieval matches answer-shaped
+        # text. `resolved.hyde` is the count (0 = skip).
+        if resolved.hyde > 0:
+            assert self._llm is not None
+            llm = self._llm
             step("\n↻ HyDE\n")
-            hyde = hypothetical_document(self._llm, query, on_progress=on_progress)
-            if hyde:
-                hv = self._embedder.embed_documents([hyde])[0]
+            hyde_docs = [
+                doc
+                for doc in (
+                    hypothetical_document(llm, query, on_progress=on_progress)
+                    for _ in range(resolved.hyde)
+                )
+                if doc
+            ]
+            for doc in hyde_docs:
+                hv = self._embedder.embed_documents([doc])[0]
                 ranked_lists.append(self._dense_order(collection_ids, hv, field="embedding"))
                 if self._code_embedder is not None:
-                    hv_alt = self._code_embedder.embed_documents([hyde])[0]
+                    hv_alt = self._code_embedder.embed_documents([doc])[0]
                     ranked_lists.append(
                         self._dense_order(collection_ids, hv_alt, field="embedding_alt")
                     )
@@ -141,8 +231,9 @@ class Retriever:
             for cid in order
         ]
         passages = merge_passages(scored, text_of=self._canonical_text)
-        # Final LLM rerank over the merged passages (when an LLM is wired).
-        if self._llm is not None:
+        # Final LLM rerank over the merged passages — bool knob.
+        if resolved.rerank:
+            assert self._llm is not None
             step("\n↻ rerank\n")
             passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
         return passages[: self._top_k]

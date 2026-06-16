@@ -23,6 +23,7 @@ import asyncio
 import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import tempfile
 import uuid
@@ -63,13 +64,48 @@ mount -t tmpfs tmpfs "$ROOT/tmp" 2>/dev/null || true
 for d in null zero full random urandom tty; do
   if [ -e "/dev/$d" ]; then : > "$ROOT/dev/$d"; mount --bind "/dev/$d" "$ROOT/dev/$d"; fi
 done
-# `python` → python3 shim: a Debian host's /usr/bin/python is often a legacy
-# python2 symlink, and the jail's PATH (no pyenv shims) would inherit it. Put a
-# python→python3 link first on PATH, on the ephemeral tmpfs so it never touches
-# the workspace.
+# `python` shim selection. Two-tier:
+#   1. If the `python-stack` venv carrier was provisioned (its prebuilt
+#      bundle bind-mounted at /.tools/python-stack with the data-science
+#      stack inside .venv/), prefer its launcher — the agent's raw
+#      `exec(["python", "script.py"])` then sees pandas / numpy / scipy /
+#      matplotlib for free, matching the SOP's "sandbox preinstalled
+#      data stack" promise without depending on the host's site-packages.
+#   2. Otherwise fall back to /usr/bin/python3 from the bind-mounted /usr.
+#      (A Debian host's /usr/bin/python is often the legacy python2
+#      symlink, so we always shim explicitly rather than inherit it.)
+# The shim lives on the ephemeral tmpfs so it never touches the workspace.
 mkdir -p "$ROOT/tmp/.jailbin"
-[ -e /usr/bin/python3 ] && ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python"
+# Shim BOTH `python` and `python3` (and the major-minor flavour names the
+# tools' bundled launchers might use): agents commonly type `python3 -` in
+# heredocs, and a bare `python` shim alone would let `python3` fall through
+# to /usr/bin/python3 — the host Python with no pandas/numpy/scipy/matplotlib.
+if [ -x "$ROOT/.tools/python-stack/launch" ]; then
+  for n in python python3 python3.10 python3.11 python3.12 python3.13; do
+    ln -sf /.tools/python-stack/launch "$ROOT/tmp/.jailbin/$n"
+  done
+elif [ -e /usr/bin/python3 ]; then
+  ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python"
+  ln -sf /usr/bin/python3 "$ROOT/tmp/.jailbin/python3"
+fi
 export PATH="/tmp/.jailbin:/usr/bin:/bin:/usr/sbin:/sbin"
+# IMPORTANT — login-shell PATH guard. The agent commonly runs commands as
+# `bash -lc "python3 -c …"`; the `-l` makes bash source /etc/profile, which
+# on Debian/Ubuntu hard-resets PATH to "/usr/local/sbin:/usr/local/bin:..."
+# and silently drops our /tmp/.jailbin first-on-PATH shim. The result was
+# ModuleNotFoundError on pandas because python3 then resolved to the host's
+# /usr/bin/python3 instead of our python-stack launcher. Overlay a tmpfs on
+# /etc/profile.d and drop a single script that re-prepends /tmp/.jailbin
+# so login shells inherit the shim. /etc is bind-mounted read-only from the
+# host, so we can't write into the real /etc/profile.d — the tmpfs overlay
+# is the workaround. Host's profile.d scripts are shadowed inside the jail,
+# which is fine (we don't need ssh-agent/locale-config setup in a sandbox).
+mount -t tmpfs tmpfs "$ROOT/etc/profile.d" 2>/dev/null || true
+cat > "$ROOT/etc/profile.d/jailbin.sh" <<'PROFILED'
+PATH="/tmp/.jailbin:$PATH"
+export PATH
+PROFILED
+chmod 644 "$ROOT/etc/profile.d/jailbin.sh"
 # The workspace is /root (the agent's ~/cwd); the sandbox root holds infra
 # (system overlays, provisioned tools) that the workspace walk never sees.
 exec /usr/sbin/chroot "$ROOT" /bin/sh -ec 'cd /root; export HOME=/root; exec "$@"' sh "$@"
@@ -119,12 +155,23 @@ _WORKSPACE = "root"
 _TOOLS = ".tools"
 
 
+def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
+    """SIGKILL the command's whole process group, then leave reaping to the
+    caller. `start_new_session=True` at spawn made the child a group leader, so
+    its pid IS the pgid — killing the group takes down any backgrounded
+    grandchildren too (#74). A `ProcessLookupError` just means the group
+    already exited between wait and kill — nothing left to do."""
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+
+
 class LocalProcessSandbox:
     def __init__(
         self,
         *,
         root_dir: Path | None = None,
         exec_timeout: float = 60.0,
+        log_timeout: float = 60.0,
         isolate: bool | None = None,
         tools_dir: Path | None = None,
     ) -> None:
@@ -135,9 +182,13 @@ class LocalProcessSandbox:
         # not. One shared dir for all sandboxes — no per-sandbox copy.
         self._tools_dir = tools_dir
         self._dirs: dict[str, Path] = {}
-        # Hard cap on a single command — a hung/interactive program (vim,
-        # top) is killed rather than blocking the request forever.
+        # Two peer timeouts (#70), each a hard cap; 0 disables that one:
+        #   exec_timeout — TOTAL wall-clock for the command (the original cap).
+        #   log_timeout  — IDLE cap: kill if no stdout/stderr output for this
+        #                  long (a long job that hangs stops emitting logs). A
+        #                  long job sets exec_timeout=0 and relies on log_timeout.
         self._exec_timeout = exec_timeout
+        self._log_timeout = log_timeout
         # Isolation: None → on iff the host supports unprivileged user
         # namespaces; otherwise honour the explicit choice.
         self._isolate = _userns_supported() if isolate is None else isolate
@@ -208,6 +259,11 @@ class LocalProcessSandbox:
                 # Unbuffer Python so a long-running script's prints stream live to
                 # on_output rather than sitting in a pipe buffer until it exits.
                 env=env,
+                # New session ⇒ the child leads its own process group (pgid==pid),
+                # so a timeout / cancel can SIGKILL the WHOLE group — the command
+                # plus any backgrounded grandchildren — instead of orphaning them
+                # in the background (#74).
+                start_new_session=True,
             )
         except FileNotFoundError:
             # `create_subprocess_exec` raises when the binary is missing.
@@ -232,12 +288,17 @@ class LocalProcessSandbox:
         assert proc.stdout is not None and proc.stderr is not None
         out_buf: list[bytes] = []
         err_buf: list[bytes] = []
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        last_output = start  # bumped on every chunk; drives the idle (#70) timeout
 
         async def _pump(stream: asyncio.StreamReader, buf: list[bytes], sink: OutputSink | None):
+            nonlocal last_output
             while True:
                 chunk = await stream.read(4096)
                 if not chunk:
                     break
+                last_output = loop.time()
                 buf.append(chunk)
                 if sink is not None:
                     sink(chunk)
@@ -249,19 +310,60 @@ class LocalProcessSandbox:
             # the end. The result still keeps stdout/stderr separate.
             _pump(proc.stderr, err_buf, on_output),
         )
-        timed_out = False
-        try:
-            await asyncio.wait_for(readers, self._exec_timeout)
-            await proc.wait()
-        except TimeoutError:
-            timed_out = True
+
+        async def _terminate() -> None:
+            """Stop the pump tasks and SIGKILL the command's whole process
+            group, then reap. Shared by the timeout and cancel paths."""
             readers.cancel()
             with contextlib.suppress(BaseException):
                 await readers
-            proc.kill()
+            _kill_process_group(proc)
             with contextlib.suppress(BaseException):
                 await proc.wait()
+
+        async def _watchdog() -> str:
+            """Return which deadline tripped: `exec` (total wall-clock) or `log`
+            (idle — no output for log_timeout). Parks forever if both are
+            disabled (0); the readers-vs-watchdog race below ends it when the
+            command exits on its own. Re-checks after each sleep so output that
+            arrives mid-wait pushes the idle deadline back (#70)."""
+            while True:
+                now = loop.time()
+                waits: list[float] = []
+                if self._exec_timeout > 0:
+                    waits.append(self._exec_timeout - (now - start))
+                if self._log_timeout > 0:
+                    waits.append(self._log_timeout - (now - last_output))
+                # Both timeouts disabled (0) ⇒ no deadline; park and re-check
+                # (the readers-vs-watchdog race ends this when the command exits).
+                delay = min(waits) if waits else 3600.0
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                    continue
+                now = loop.time()
+                if self._exec_timeout > 0 and now - start >= self._exec_timeout:
+                    return "exec"
+                return "log"
+
+        watchdog = asyncio.create_task(_watchdog())
+        timed_out: str | None = None
+        try:
+            done, _ = await asyncio.wait({readers, watchdog}, return_when=asyncio.FIRST_COMPLETED)
+            if readers in done:
+                await proc.wait()  # both streams hit EOF ⇒ the process exited
+            else:
+                timed_out = watchdog.result()  # a deadline tripped
+                await _terminate()
+        except asyncio.CancelledError:
+            # #74: when the awaiting turn is stopped, take the running command
+            # (and any grandchildren it spawned) down with it — don't leave it
+            # running in the background. Then re-raise so cancellation propagates.
+            await _terminate()
+            raise
         finally:
+            watchdog.cancel()
+            with contextlib.suppress(BaseException):
+                await watchdog
             # The jail leaves /dev device-node files behind (bind targets) at
             # the sandbox root; drop them. (They're outside the workspace now,
             # so they wouldn't reverse-sync anyway — belt and suspenders.)
@@ -269,10 +371,15 @@ class LocalProcessSandbox:
                 await asyncio.to_thread(shutil.rmtree, root / "dev", ignore_errors=True)
 
         stdout = b"".join(out_buf)
-        if timed_out:
+        if timed_out is not None:
             # Keep the partial output the command produced before the kill.
-            note = f"timed out after {self._exec_timeout:g}s and was killed\n".encode()
-            return ExecResult(exit_code=124, stdout=stdout, stderr=b"".join(err_buf) + note)
+            if timed_out == "exec":
+                note = f"timed out after {self._exec_timeout:g}s (total) and was killed\n"
+            else:
+                note = f"no output for {self._log_timeout:g}s; assumed hung and killed\n"
+            return ExecResult(
+                exit_code=124, stdout=stdout, stderr=b"".join(err_buf) + note.encode()
+            )
         return ExecResult(
             exit_code=proc.returncode if proc.returncode is not None else -1,
             stdout=stdout,

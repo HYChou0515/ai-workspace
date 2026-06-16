@@ -1,12 +1,10 @@
-from datetime import UTC, datetime
-
 import pytest
 from agents import RunContextWrapper
-from specstar import SpecStar
 
 from workspace_app.agent import AgentToolContext
 from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 from workspace_app.sync import SandboxSync
@@ -17,8 +15,7 @@ def ctx() -> RunContextWrapper[AgentToolContext]:
     """An RCA tool context wired like the real app: file ops go through a
     liveness-routing WorkspaceFiles facade, and the first exec wakes the
     sandbox (create + restore the snapshot into it)."""
-    spec = SpecStar()
-    spec.configure(default_user="test-user", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="test-user")
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)

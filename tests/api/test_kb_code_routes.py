@@ -8,17 +8,16 @@ file:// URLs so no network/auth.
 from __future__ import annotations
 
 import subprocess
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from specstar import SpecStar
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.li_pipeline import build_doc_pipeline
+from workspace_app.resources import make_spec
 from workspace_app.resources.kb import CODE_EMBED_DIM, EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
 
@@ -54,8 +53,7 @@ def remote(tmp_path: Path) -> str:
 
 @pytest.fixture
 def app(tmp_path: Path):
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     text = HashEmbedder(dim=EMBED_DIM)
     code = HashEmbedder(dim=CODE_EMBED_DIM, doc_prefix="code: ")
     return create_app(
@@ -108,7 +106,7 @@ def test_sync_endpoint_clones_and_ingests(app, remote: str):
     assert isinstance(body["git_last_sha"], str) and len(body["git_last_sha"]) == 40
     # Verify side-effect via the documents-list endpoint: the cloned files
     # made it into SourceDocs.
-    docs = client.get(f"/kb/collections/{cid}/documents").json()
+    docs = client.get(f"/kb/collections/{cid}/documents").json()["items"]
     paths = {d["path"] for d in docs}
     assert "a.py" in paths
     assert "README.md" in paths
@@ -134,8 +132,7 @@ def test_lifespan_runs_code_sync_sweeper(remote: str):
     import asyncio
     from datetime import timedelta
 
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     text = HashEmbedder(dim=EMBED_DIM)
     application = create_app(
         spec=spec,

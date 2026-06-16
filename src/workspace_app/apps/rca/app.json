@@ -1,0 +1,45 @@
+{
+  "slug": "rca",
+  "title": "Root Cause Analysis",
+  "description": "Structured failure investigations — SPC, Pareto, reports.",
+  "icon": "flame",
+  "color": "#F0502E",
+  "function": { "workspace": true, "sandbox": true, "terminal": true },
+  "agent": {
+    "prompt_file": "prompts/system.md",
+    "tools": [
+      "exec", "read_file", "write_file", "edit_file", "ls", "exists",
+      "delete_file", "ask_knowledge_base", "data-fetch", "csv-column-summary",
+      "rca-tools", "python-stack"
+    ],
+    "picker": [
+      { "preset": "qwen3-local", "name": "RCA · Qwen3 (local)" },
+      { "preset": "claude-opus", "name": "RCA · Claude Opus" },
+      { "preset": "openai-mini", "name": "RCA · GPT-4o-mini" }
+    ],
+    "suggestions": [
+      { "label": "SPC analysis", "prompt": "Show the SPC analysis" },
+      { "label": "Pareto", "prompt": "Run a Pareto of defect modes" },
+      { "label": "Draft report", "prompt": "Draft the report" }
+    ]
+  },
+  "item": {
+    "noun": "Investigation",
+    "noun_plural": "Investigations",
+    "create_label": "Start Investigation"
+  },
+  "layout": {
+    "breadcrumb": ["severity", "status"],
+    "statusbar": ["severity", "status", "product"],
+    "list": ["severity", "status", "product"],
+    "form": ["severity", "status", "topics", "product"],
+    "default_tabs": ["/SOP.md", "/brief.md"]
+  },
+  "lifecycle": { "status_field": "status", "closing_states": ["resolved", "abandoned"] },
+  "labels": { "severity": "Severity", "status": "Status", "product": "Product" },
+  "field_styles": {
+    "severity": { "P0": "err", "P1": "err", "P2": "warn", "P3": "ok", "P4": "ok" },
+    "status": { "triaging": "warn", "awaiting_review": "info", "resolved": "ok", "abandoned": "muted" }
+  },
+  "default_profile": "default"
+}

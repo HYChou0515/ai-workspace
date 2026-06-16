@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { ReplayDialog } from "../../components/ReplayDialog";
 import { kindIcon } from "./docKind";
 import { KbDocBody } from "./KbDocBody";
 import { blobHref, docHref } from "./kbLinks";
@@ -45,12 +46,21 @@ export function KbDocViewer({
   const [docId, setDocId] = useState(documentId);
   const [doc, setDoc] = useState<KbRenderedDoc | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [replayOpen, setReplayOpen] = useState(false);
 
   useEffect(() => {
     setDocId(documentId);
     setDoc(null);
     setConfirmRemove(false);
+    setReplayOpen(false);
   }, [documentId]);
+
+  // #51 P6: only documents whose ingestion ran an AI step can be
+  // replayed — chat exports (insight extraction) and images (vision
+  // description). Mirrors the BE's 409 gate.
+  const replayable =
+    doc != null &&
+    (doc.filename.endsWith(".chat.json") || doc.content_type.startsWith("image/"));
 
   // The collection name for the header eyebrow (cached; no extra round trip
   // when the collections grid was already visited).
@@ -113,6 +123,16 @@ export function KbDocViewer({
               <Icon name="download" size={13} /> Download
             </a>
           )}
+          {replayable && (
+            <button
+              type="button"
+              className="kb-btn kb-btn--sm"
+              title="Re-run the AI's processing of this file as a test — nothing is changed"
+              onClick={() => setReplayOpen(true)}
+            >
+              <Icon name="sparkle" size={13} /> Test AI
+            </button>
+          )}
           <span style={{ flex: 1 }} />
           <button
             type="button"
@@ -153,6 +173,12 @@ export function KbDocViewer({
           />
         </div>
       </aside>
+      {replayOpen && (
+        <ReplayDialog
+          request={{ kind: "doc", documentId: docId }}
+          onClose={() => setReplayOpen(false)}
+        />
+      )}
     </>
   );
 }

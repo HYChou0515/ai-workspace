@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import csv
+import io
+import json
+import logging
+import re
+from typing import TYPE_CHECKING
+
 from agents import FunctionTool, RunContextWrapper, function_tool
 
 from ..files import WorkspaceFiles
@@ -7,11 +15,69 @@ from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
 
+if TYPE_CHECKING:
+    from ..resources.conversation import Citation
 
-def _format_exec(r: ExecResult) -> str:
+_LOGGER = logging.getLogger(__name__)
+
+
+def _truncate_middle(text: str, max_chars: int) -> str:
+    """Cap `text` at `max_chars` keeping the HEAD and the TAIL (issue #44).
+
+    A `grep`/log dump's useful bits cluster at both ends — the first
+    matches up top, the count / error / summary at the bottom — so a
+    head-only cut throws away the punchline. We keep ~2/3 of the budget
+    for the head, ~1/3 for the tail, trim each to a line boundary, and
+    drop a marker in between that tells the agent to narrow its command.
+    """
+    if len(text) <= max_chars:
+        return text
+    head_budget = max_chars * 2 // 3
+    tail_budget = max_chars - head_budget
+    head = text[:head_budget]
+    nl = head.rfind("\n")
+    if nl > 0:  # cut on a line boundary so we don't split a line mid-token
+        head = head[:nl]
+    tail = text[len(text) - tail_budget :]
+    nl = tail.find("\n")
+    if nl != -1:
+        tail = tail[nl + 1 :]
+    omitted = len(text) - len(head) - len(tail)
+    marker = (
+        f"\n\n… [{omitted} chars omitted — narrow the command "
+        f"(e.g. grep/head/tail/wc) to see the part you need] …\n\n"
+    )
+    return head + marker + tail
+
+
+def _format_exec(
+    name: str, r: ExecResult, max_chars: int | None = None, *, keep_stderr: bool = False
+) -> str:
+    """Format an ExecResult. See tests/agent/test_format_exec.py for the
+    contract — name prefix anchors attribution; stderr is suppressed on
+    success; the body is capped head+tail at `max_chars` (issue #44 —
+    `None` disables the cap, e.g. in unit tests).
+
+    `keep_stderr` (#62) is the FE/display surface, decoupled from the
+    LLM-facing result: it keeps a *successful* command's stderr so the
+    error the user saw stream live doesn't vanish from the final tool
+    card. The default (LLM) still drops success-stderr as noise."""
     stdout = r.stdout.decode("utf-8", errors="replace")
-    stderr = r.stderr.decode("utf-8", errors="replace")
-    return f"exit_code={r.exit_code}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}"
+    header = f"Tool `{name}` returned (exit_code={r.exit_code}):"
+    # On failure stderr is where the error lives — always show it. On
+    # success it's by convention noise (progress logs, deprecation
+    # warnings) that misleads small models, so the LLM-facing form drops
+    # it; the display form (`keep_stderr`) keeps it when present.
+    if r.exit_code != 0 or (keep_stderr and r.stderr):
+        stderr = r.stderr.decode("utf-8", errors="replace")
+        body = f"{stdout}\n--- stderr ---\n{stderr}"
+    else:
+        body = stdout
+    if max_chars is not None:
+        # Cap the BODY only — the header (exit code) is tiny and must
+        # always survive so the model can read the outcome.
+        body = _truncate_middle(body, max_chars)
+    return f"{header}\n{body}"
 
 
 def _workspace(ctx: RunContextWrapper[AgentToolContext]) -> tuple[WorkspaceFiles, str]:
@@ -37,7 +103,20 @@ async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) ->
     # Stream stdout live (when the runner wired a sink) so a long-running
     # command's output shows up in run history as it happens.
     result = await ctx.context.sandbox.exec(handle, cmd, on_output=ctx.context.on_exec_output)
-    return _format_exec(result)
+    return _exec_result_text(ctx.context, "exec", result)
+
+
+def _exec_result_text(ctx: AgentToolContext, name: str, result: ExecResult) -> str:
+    """The cleaned, LLM-facing exec result — and, when it would differ,
+    record the FULL display result (success-stderr kept) on the context so
+    the runner can attach it to the ToolEnd (#62). Returns the cleaned form
+    (what the model and `history_items` consume)."""
+    cap = ctx.exec_output_max_chars
+    cleaned = _format_exec(name, result, max_chars=cap)
+    display = _format_exec(name, result, max_chars=cap, keep_stderr=True)
+    if display != cleaned:
+        ctx.tool_displays[cleaned] = display
+    return cleaned
 
 
 async def read_file_impl(
@@ -133,7 +212,119 @@ async def delete_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
     return f"deleted {path}"
 
 
-def kb_search_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
+# ── wiki agent tools (#50) ───────────────────────────────────────────
+
+
+async def search_wiki_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
+    """Search the wiki pages for `query` (case-insensitive substring) and
+    return matching lines as ``path:line: text`` — Karpathy's grep over the
+    wiki, sandbox-free (in-process over the FileStore). Use it to find which
+    existing pages mention a term before updating them, or to locate the
+    pages relevant to a question."""
+    from ..api.search import InvalidQuery, compile_query, search_text
+
+    fs, inv = _workspace(ctx)
+    try:
+        pattern = compile_query(query)
+    except InvalidQuery as exc:
+        return f"error: invalid search {query!r}: {exc}"
+    hits: list[str] = []
+    for path in sorted(await fs.ls(inv)):
+        try:
+            data = await fs.read(inv, path)
+        except FileNotFound:
+            continue
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        for m in search_text(text, pattern):
+            hits.append(f"{path}:{m.line}: {m.text}")
+    if not hits:
+        return f"no wiki pages match {query!r}"
+    body = "\n".join(hits)
+    cap = ctx.context.exec_output_max_chars
+    return _truncate_middle(body, cap) if len(body) > cap else body
+
+
+async def read_new_source_impl(ctx: RunContextWrapper[AgentToolContext]) -> str:
+    """Read the source document that triggered this wiki-maintenance run —
+    the new/changed material to fold into the wiki."""
+    src = ctx.context.wiki_new_source
+    if not src:
+        return "error: no new source for this run"
+    cap = ctx.context.exec_output_max_chars
+    return _truncate_middle(src, cap) if len(src) > cap else src
+
+
+async def list_sources_impl(ctx: RunContextWrapper[AgentToolContext]) -> list[str]:
+    """List the collection's raw source documents (read-only) so you can
+    re-read or cross-reference any of them while maintaining the wiki."""
+    sources = ctx.context.wiki_sources
+    return sources.list() if sources is not None else []
+
+
+_WIKI_SNIPPET_MAX = 1200  # citation snippet cap (the FE reference card excerpt)
+
+
+async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> str:
+    """Read one raw source document's text by its path (read-only). Use it to
+    verify a fact before writing it into a wiki page, to record a page's
+    ``Sources:`` provenance, and (as the reader) to ground an answer in the
+    real document — cite the returned [n].
+
+    On a reader run the result is a numbered ``[n] filename: text`` reference
+    (so you cite claims with the matching [n], like kb_search); on a maintainer
+    run it's the plain text."""
+    from ..resources.kb import RetrievedPassage
+
+    sources = ctx.context.wiki_sources
+    if sources is None:
+        return f"error: source not found: {path}"
+
+    if not ctx.context.wiki_cite_sources:
+        # Maintainer path: plain text for cross-referencing.
+        text = sources.read(path)
+        if text is None:
+            return f"error: source not found: {path}"
+        cap = ctx.context.exec_output_max_chars
+        return _truncate_middle(text, cap) if len(text) > cap else text
+
+    # Reader path: register the source as a citable passage (dedup by doc id,
+    # whole-document granularity) and hand it back numbered so [n] resolves to
+    # the underlying SourceDoc via parse_citations.
+    ref = sources.ref(path)
+    if ref is None:
+        return f"error: source not found: {path}"
+    registry = ctx.context.kb_passages
+    seen = {p.document_id: i for i, p in enumerate(registry)}
+    idx = seen.get(ref.document_id)
+    if idx is None:
+        idx = len(registry)
+        registry.append(
+            RetrievedPassage(
+                collection_id=ref.collection_id,
+                document_id=ref.document_id,
+                filename=ref.path.rsplit("/", 1)[-1],
+                start=0,
+                end=len(ref.text),
+                source_chunk_ids=[],
+                text=ref.text[:_WIKI_SNIPPET_MAX],
+                score=0.0,
+            )
+        )
+    cap = ctx.context.exec_output_max_chars
+    body = ref.text if len(ref.text) <= cap else _truncate_middle(ref.text, cap)
+    return f"[{idx + 1}] {ref.path.rsplit('/', 1)[-1]}: {body}"
+
+
+def kb_search_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    query: str,
+    expand: int | None = None,
+    hyde: int | None = None,
+    rerank: bool | None = None,
+) -> str:
     """Search the knowledge base; returns numbered passages to cite as [n].
 
     Call this whenever you need facts from the documents — and again, with a
@@ -141,11 +332,33 @@ def kb_search_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
     Each result is numbered globally across the turn; cite a claim with the
     matching [n]. Numbers persist across calls, so [1] always means the same
     passage.
+
+    The optional `expand` / `hyde` / `rerank` knobs override the operator's
+    retrieval enhancement defaults for THIS call only — set them when the
+    query needs more recall (raise `expand` / `hyde`) or when a quick lookup
+    doesn't need the rerank LLM round-trip. The operator's `max` clamps
+    whatever you pass, so requesting `expand=99` is safe.
     """
+    from ..kb.retriever import Enhancements
+
     retriever = ctx.context.retriever
     assert retriever is not None  # kb_search implies a KB context
     registry = ctx.context.kb_passages
     seen = {(p.document_id, p.start, p.end): i for i, p in enumerate(registry)}
+
+    # Resolution cascade: caller (context) > LLM tool args > retriever
+    # default (#68). When the KB-chat user picks a depth, the caller sets
+    # expand/hyde/rerank explicitly — that's authoritative, so a model that
+    # fills in its own deeper args can't quietly override the user's "quick".
+    # The model's args only take effect for knobs the caller left unset
+    # (e.g. "standard", which sends no depth payload). The retriever does
+    # the last step (default + operator-max clamp).
+    caller = ctx.context.kb_enhancements
+    effective = Enhancements(
+        expand=caller.expand if caller and caller.expand is not None else expand,
+        hyde=caller.hyde if caller and caller.hyde is not None else hyde,
+        rerank=caller.rerank if caller and caller.rerank is not None else rerank,
+    )
 
     # Stream the retriever's enhancement-LLM work (multi-query / HyDE / rerank)
     # as this tool's live output, so its thinking shows in the chat (issue #10).
@@ -153,14 +366,30 @@ def kb_search_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
     on_progress = (lambda text, _reasoning: sink(text.encode())) if sink is not None else None
 
     lines: list[str] = []
-    for passage in retriever.search(query, ctx.context.collection_ids, on_progress):
-        key = (passage.document_id, passage.start, passage.end)
-        idx = seen.get(key)
-        if idx is None:
-            idx = len(registry)
-            seen[key] = idx
-            registry.append(passage)
-        lines.append(f"[{idx + 1}] {passage.filename}: {passage.text}")
+    try:
+        for passage in retriever.search(
+            query,
+            ctx.context.collection_ids,
+            on_progress,
+            enhancements=effective,
+        ):
+            key = (passage.document_id, passage.start, passage.end)
+            idx = seen.get(key)
+            if idx is None:
+                idx = len(registry)
+                seen[key] = idx
+                registry.append(passage)
+            lines.append(f"[{idx + 1}] {passage.filename}: {passage.text}")
+    except Exception:
+        # Log the real cause (with traceback) to the server log so the
+        # operator sees what actually broke — connection refused,
+        # LiteLLM HTTP error, retrieval LLM down, etc. Without this the
+        # exception goes straight into the agents-SDK's tool-error
+        # wrapper as a one-line string and the server log stays silent.
+        # We re-raise so the SDK still surfaces the error to the agent
+        # (which `answer_question` then captures and surfaces upstream).
+        _LOGGER.exception("kb_search failed for query=%r", query)
+        raise
 
     if not lines:
         return "No matching passages in the knowledge base."
@@ -175,12 +404,195 @@ async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], ques
     synthesized answer with a Sources list. Phrase a focused question, not just
     keywords.
     """
-    ask_kb = ctx.context.ask_kb
-    assert ask_kb is not None  # the API layer wires this for RCA runs
-    # Hand the KB bridge this run's output sink (so the KB agent's searches and
-    # reasoning stream live under this tool call) + this investigation's id (so
-    # its KB citations are logged against it).
-    return await ask_kb(question, ctx.context.on_exec_output, ctx.context.investigation_id)
+    run = ctx.context.run_subagent
+    assert run is not None  # the API layer wires this for RCA runs
+    answer, citations = await run(
+        "kb_chat",
+        question,
+        ctx.context.on_exec_output,
+        ctx.context.investigation_id,
+    )
+    # Citations are bucketed by TOOL NAME (the surface that produced
+    # them), not by sub-agent purpose. persist() pairs the Nth bucket
+    # entry with the Nth tool message of that name.
+    ctx.context.subagent_citations.setdefault("ask_knowledge_base", []).append(citations)
+    return answer
+
+
+def _read_step_names(text: str, column: str) -> list[str]:
+    """Unique step names (input order) from `text`. If it parses as CSV
+    whose header contains `column`, read that column; otherwise treat each
+    non-empty line as one step name. ~1500 steps is normal, so the input
+    is a file, not an inline list (#66)."""
+    text = text.strip()
+    if not text:
+        return []
+    rows = list(csv.reader(io.StringIO(text)))
+    header = rows[0] if rows else []
+    seen: dict[str, None] = {}
+    if column in header:
+        idx = header.index(column)
+        for r in rows[1:]:
+            if idx < len(r) and (v := r[idx].strip()):
+                seen.setdefault(v, None)
+    else:
+        for line in text.splitlines():
+            if v := line.strip():
+                seen.setdefault(v, None)
+    return list(seen)
+
+
+def _parse_module_json(answer: str) -> tuple[str, str]:
+    """Extract `(module, reason)` from a per-step classifier reply. The
+    sub-agent is asked for a bare `{"module": ..., "reason": ...}` object;
+    we tolerate prose / code fences / a trailing Sources footer by pulling
+    the outermost `{...}`. Anything unparseable or an empty module →
+    `("unknown", reason)` so the caller writes `unknown` rather than
+    aborting the whole run."""
+    match = re.search(r"\{.*\}", answer, re.DOTALL)
+    if not match:
+        return "unknown", ""
+    try:
+        obj = json.loads(match.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return "unknown", ""
+    if not isinstance(obj, dict):
+        return "unknown", ""
+    module = obj.get("module")
+    reason = obj.get("reason")
+    reason = reason if isinstance(reason, str) else ""
+    if not isinstance(module, str) or not module.strip():
+        return "unknown", reason
+    return module.strip(), reason
+
+
+def _module_map_csv(rows: list[tuple[str, str, str]]) -> bytes:
+    """Render `(step_name, module, reason)` rows to a pandera-validated
+    module-map CSV (#66). The schema is the contract downstream `qtime-data`
+    + the agent rejoin on — step_name/module never null."""
+    import pandas as pd
+    import pandera.pandas as pa
+
+    df = pd.DataFrame(
+        {
+            "step_name": [r[0] for r in rows],
+            "module": [r[1] for r in rows],
+            "reason": [r[2] for r in rows],
+        }
+    )
+    schema = pa.DataFrameSchema(
+        {
+            "step_name": pa.Column(str, nullable=False),
+            "module": pa.Column(str, nullable=False),
+            "reason": pa.Column(str, nullable=True, coerce=True),
+        }
+    )
+    schema.validate(df)
+    return df.to_csv(index=False).encode("utf-8")
+
+
+def _infer_modules_summary(rows: list[tuple[str, str, str]], out: str) -> str:
+    """Compact, LLM-facing summary as a JSON object — counts only, never the
+    per-step names (which would bloat the turn at ~1500 steps). The full map
+    lives in the written CSV (`out`). Fields:
+
+      counts_topk   the top-5 real modules by count (high→low), {name: count}
+      total_counts  total steps classified
+      total_kind    number of distinct real modules (excl. Other / Unknown)
+      Others        count of steps the model placed in `Other`
+      Unknown       count of steps the tool couldn't classify (`unknown`)
+      out           where the per-step module-map CSV was written
+    """
+    counts: dict[str, int] = {}
+    for _step, module, _reason in rows:
+        counts[module] = counts.get(module, 0) + 1
+    others = counts.pop("Other", 0)
+    unknown = counts.pop("unknown", 0)
+    topk = dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:5])
+    return json.dumps(
+        {
+            "counts_topk": topk,
+            "total_counts": len(rows),
+            "total_kind": len(counts),
+            "Others": others,
+            "Unknown": unknown,
+            "out": out,
+        },
+        ensure_ascii=False,
+    )
+
+
+async def infer_modules_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    path: str,
+    column: str = "step_name",
+    out: str = "step2-data/module-map.csv",
+    defect_context: str | None = None,
+) -> str:
+    """Classify EVERY process step in a file into its fab-process module
+    (`STI` / `Gate` / `Contact` / `M1`–`M6` / `Pad` / `Pass` / `Other`, or
+    a KB-justified fab-specific name) and write the result to a CSV.
+
+    Use this after pulling wafer-history but BEFORE Q-Time analysis — the
+    module mapping is the structural backbone for both.
+
+    `path` is a workspace file (typically `wafer-history.csv`); the unique
+    values of its `column` (default `step_name`) are each classified by a
+    focused KB-backed sub-agent, ONE step at a time (run in parallel), so
+    nothing is skipped even at ~1500 steps. The tool writes `out` (default
+    `step2-data/module-map.csv`) with columns `step_name,module,reason` and
+    returns a short summary (per-module counts + any steps it couldn't
+    classify, which are written as `unknown`). A non-CSV file is read as a
+    plain one-step-per-line list.
+
+    Pass `defect_context` (e.g. the brief.md defect type) to bias the
+    classifier towards modules physically relevant to the defect when a
+    step is ambiguous.
+    """
+    fs, inv = _workspace(ctx)
+    try:
+        data = await fs.read(inv, path)
+    except FileNotFound:
+        return f"error: file not found: {path}"
+    steps = _read_step_names(data.decode("utf-8", errors="replace"), column)
+    if not steps:
+        return f"error: no step names found in {path} (looked for column {column!r})"
+
+    run = ctx.context.run_subagent
+    assert run is not None  # the API layer wires this for RCA runs
+    sink = ctx.context.on_exec_output
+    origin = ctx.context.investigation_id
+    sem = asyncio.Semaphore(max(1, ctx.context.infer_modules_parallelism))
+
+    async def classify(step: str) -> tuple[str, str, str, list[Citation]]:
+        payload = json.dumps(
+            {"step_name": step, "defect_context": defect_context}, ensure_ascii=False
+        )
+        try:
+            async with sem:
+                answer, cites = await run("infer_modules", payload, sink, origin)
+        except Exception as exc:  # noqa: BLE001 — one step failing must not sink the batch
+            return step, "unknown", f"classification error: {type(exc).__name__}: {exc}", []
+        module, reason = _parse_module_json(answer)
+        return step, module, reason, cites
+
+    results = await asyncio.gather(*(classify(s) for s in steps))
+
+    rows: list[tuple[str, str, str]] = []
+    all_cites: list[Citation] = []
+    for step, module, reason, cites in results:
+        rows.append((step, module, reason))
+        all_cites.extend(cites)
+
+    csv_bytes = _module_map_csv(rows)
+    # Overwrite: re-running a build replaces the map. create() refuses an
+    # existing path (returns its content), so delete first when present.
+    if await fs.create(inv, out, csv_bytes) is not None:
+        await fs.delete(inv, out)
+        await fs.create(inv, out, csv_bytes)
+
+    ctx.context.subagent_citations.setdefault("infer_modules", []).append(all_cites)
+    return _infer_modules_summary(rows, out)
 
 
 async def mention_user_impl(
@@ -209,15 +621,16 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     from — unknown name lists the available skills, body-cap exceeded
     explains the deployer should split the skill. Host-side only: never
     wakes the sandbox (skills are pure host markdown)."""
-    from ..rca.skills import SkillError, list_skills, load_skill
+    from ..apps.skills import SkillError, list_skills, load_skill
 
+    slug = ctx.context.app_slug
     profile = ctx.context.template_profile
-    if profile is None:
-        return "error: read_skill is only available in an RCA workspace turn"
+    if slug is None or profile is None:
+        return "error: read_skill is only available in an App workspace turn"
     try:
-        return load_skill(profile, name)
+        return load_skill(slug, profile, name)
     except SkillError as e:
-        avail = ", ".join(m.name for m in list_skills(profile)) or "(none)"
+        avail = ", ".join(m.name for m in list_skills(slug, profile)) or "(none)"
         return f"error: {e}. available skills: {avail}"
 
 
@@ -231,7 +644,14 @@ _IMPLS = {
     "delete_file": delete_file_impl,
     "mention_user": mention_user_impl,
     "ask_knowledge_base": ask_knowledge_base_impl,
+    "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
+    # Wiki agent tools (#50). Opt-in via the wiki presets' allowed_tools;
+    # not in _WORKSPACE_TOOLS (they need a wiki context).
+    "search_wiki": search_wiki_impl,
+    "read_new_source": read_new_source_impl,
+    "list_sources": list_sources_impl,
+    "read_source": read_source_impl,
     # `read_skill` is opt-in (#29 / §A): only registered when the active
     # template profile has any skills. `build_tools(profile=)` handles
     # the conditional injection — never present in `_WORKSPACE_TOOLS`.
@@ -251,6 +671,7 @@ _WORKSPACE_TOOLS = [
     "exists",
     "delete_file",
     "ask_knowledge_base",
+    "infer_modules",
     "mention_user",
 ]
 
@@ -258,23 +679,24 @@ _WORKSPACE_TOOLS = [
 def build_tools(
     allowed: list[str] | None = None,
     *,
+    app_slug: str | None = None,
     profile: str | None = None,
 ) -> list[FunctionTool]:
     """Build FunctionTool list for the Agent. If `allowed` is None, the
     workspace toolset (file/exec); otherwise exactly the named tools.
 
-    When `profile` is set and that template profile has any skills,
-    `read_skill` is appended (issue #29 / §A — "skill index + tool same
-    flag in/out"). Set per turn from `Investigation.template_profile`."""
+    When `app_slug` + `profile` are set and that App profile ships any skills,
+    `read_skill` is appended (issue #29 / §A — "skill index + tool same flag
+    in/out"). Set per turn from the item's App + profile."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
     # Skip names that aren't built-ins — they may be provisioned tool-package
     # commands (#21, #25), which the runner adds separately via
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     tools = [function_tool(_IMPLS[n], name_override=n) for n in names if n in _IMPLS]
-    if profile is not None:
-        from ..rca.skills import list_skills
+    if app_slug is not None and profile is not None:
+        from ..apps.skills import list_skills
 
-        if list_skills(profile):
+        if list_skills(app_slug, profile):
             tools.append(function_tool(_IMPLS["read_skill"], name_override="read_skill"))
     return tools

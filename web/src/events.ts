@@ -26,7 +26,11 @@ export type ToolStart = {
   args: Record<string, unknown>;
 };
 
-export type ToolEnd = { type: "tool_end"; call_id: string; output: string };
+// `display` (#62): the FULL result (a successful command's stderr kept) when
+// it differs from `output` (the cleaned, LLM-facing result). The FE renders
+// `display` when present so an error the user saw stream live doesn't vanish
+// from the final card; absent ⇒ render `output`.
+export type ToolEnd = { type: "tool_end"; call_id: string; output: string; display?: string };
 
 /** Incremental stdout from a still-running tool (e.g. a long exec). call_id
  * may be empty — then it attaches to the latest running tool. */
@@ -61,6 +65,25 @@ export type AgentMetrics = {
   elapsed_ms: number;
 };
 
+/** #43: a human message posted to a SHARED investigation, broadcast on the
+ * per-investigation stream so every viewer sees who said what — live, before
+ * the agent turn it triggers. Broadcast-only (GET /investigations/{id}/stream). */
+export type UserMessage = {
+  type: "user_message";
+  author: string;
+  content: string;
+  created_at: number;
+};
+
+/** #43: a workspace file changed (a human wrote/moved/deleted it), broadcast so
+ * other viewers refetch (last-write-wins). Broadcast-only. */
+export type FileChanged = {
+  type: "file_changed";
+  path: string;
+  by: string;
+  kind: "written" | "moved" | "copied" | "deleted" | "dir_created";
+};
+
 export type AgentEvent =
   | MessageDelta
   | ToolStart
@@ -72,7 +95,9 @@ export type AgentEvent =
   | SandboxKilledIdle
   | ToolCallParseError
   | MaxTurnsExceeded
-  | AgentMetrics;
+  | AgentMetrics
+  | UserMessage
+  | FileChanged;
 
 /** Terminal events close the SSE stream and re-enable the composer. */
 export function isTerminal(ev: AgentEvent): boolean {

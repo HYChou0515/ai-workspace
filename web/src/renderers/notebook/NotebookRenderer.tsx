@@ -13,7 +13,9 @@ import remarkMath from "remark-math";
 import { api } from "../../api";
 import { CellEditor } from "../../components/CellEditor";
 import { Icon } from "../../components/Icon";
+import { useOptionalAgent } from "../../hooks/useAgent";
 import { useFileBuffer } from "../../hooks/fileBuffer";
+import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { onRunAll } from "../../lib/editorEvents";
 import { CellOutput } from "./CellOutput";
 import {
@@ -30,13 +32,7 @@ import {
   parseNotebook,
 } from "./types";
 
-export function NotebookRenderer({
-  investigationId,
-  path,
-}: {
-  investigationId: string;
-  path: string;
-}) {
+export function NotebookRenderer({ path }: { path: string }) {
   const { entry, setText, save } = useFileBuffer(path);
 
   if (entry.status === "loading") return <Status>Loading {path}…</Status>;
@@ -60,7 +56,6 @@ export function NotebookRenderer({
 
   return (
     <NotebookBody
-      investigationId={investigationId}
       path={path}
       initial={nb}
       bufferText={entry.text}
@@ -71,20 +66,21 @@ export function NotebookRenderer({
 }
 
 function NotebookBody({
-  investigationId,
   path,
   initial,
   bufferText,
   onPersist,
   onSave,
 }: {
-  investigationId: string;
   path: string;
   initial: Notebook;
   bufferText: string;
   onPersist: (text: string) => void;
   onSave: () => Promise<void>;
 }) {
+  // The kernel lives on the investigation; null when rendered elsewhere.
+  const investigationId = useOptionalAgent()?.investigationId ?? null;
+  const slug = useWorkspaceSlug();
   const [nb, setNb] = useState<Notebook>(initial);
   // run state keyed by cell index; lives outside `cells` so re-renders
   // don't churn the underlying NbCell shape until cell_done persists.
@@ -135,6 +131,9 @@ function NotebookBody({
 
   const runCell = useCallback(
     async (idx: number) => {
+      // No kernel outside an investigation (e.g. a notebook opened in a KB
+      // collection) — render-only, cells don't run.
+      if (!investigationId) return;
       const cell = nbRef.current.cells[idx];
       if (!cell || cell.cell_type !== "code") return;
       const code = cellSource(cell);
@@ -151,6 +150,7 @@ function NotebookBody({
 
       try {
         for await (const ev of api.streamCellEvents({
+          slug,
           investigationId,
           notebookPath: path,
           cellIndex: idx,
@@ -191,9 +191,11 @@ function NotebookBody({
 
   const interruptCell = (idx: number) => {
     abortRefs.current.get(idx)?.abort();
+    if (!investigationId) return;
     // BE-side stop signal: the kernel keeps running the cell to
     // completion otherwise, even after we've stopped listening.
     void api.interruptCell({
+      slug,
       investigationId,
       notebookPath: path,
       cellIndex: idx,

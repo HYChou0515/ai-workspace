@@ -1,5 +1,5 @@
 /**
- * Bottom-panel Terminal — wires `POST /investigations/{id}/exec` to a
+ * Bottom-panel Terminal — wires `POST /a/{slug}/items/{id}/exec` to a
  * simple readline-shaped UI. Whitespace-tokenises the command (no
  * shell-quoting v1 — wrap in `sh -c '…'` when you need it).
  */
@@ -10,6 +10,7 @@ import { api } from "../../api";
 import type { ExecResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
+import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 
 type Entry = {
   prompt: string;
@@ -18,6 +19,7 @@ type Entry = {
 };
 
 export function TerminalPane({ investigationId }: { investigationId: string }) {
+  const slug = useWorkspaceSlug();
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<Entry[]>([]);
   const [historyIdx, setHistoryIdx] = useState<number | null>(null);
@@ -55,7 +57,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
     abortRef.current = controller;
     setRunning(true);
     try {
-      const result = await api.execShell(investigationId, tokens, controller.signal);
+      const result = await api.execShell(slug, investigationId, tokens, controller.signal);
       setHistory((h) => h.map((e) => (e === entry ? { ...e, result } : e)));
     } catch (err) {
       const aborted = err instanceof DOMException && err.name === "AbortError";

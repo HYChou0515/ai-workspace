@@ -276,6 +276,18 @@ function I({ name, size = 16, color = "currentColor", strokeWidth = 1.6, style }
     filter: <path d="M4 5 H20 L14 13 V19 L10 21 V13 Z" {...sp}/>,
     tag: <><path d="M3 13 L11 21 L21 11 L13 3 H5 Q3 3 3 5 Z" {...sp}/><circle cx="8" cy="8" r="1.5" {...sp}/></>,
     flame: <path d="M12 3 Q15 7 14 11 Q17 10 17 14 Q17 19 12 21 Q7 19 7 14 Q7 11 9 9 Q11 11 12 9 Q11 6 12 3 Z" {...sp}/>,
+    book: <><path d="M4 5 Q4 4 5 4 H11 V20 H5 Q4 20 4 19 Z" {...sp}/><path d="M20 5 Q20 4 19 4 H13 V20 H19 Q20 20 20 19 Z" {...sp}/></>,
+    link: <><path d="M10 14 A4 4 0 0 0 14 14 L17 11 A4 4 0 0 0 11 5 L9.5 6.5" {...sp}/><path d="M14 10 A4 4 0 0 0 10 10 L7 13 A4 4 0 0 0 13 19 L14.5 17.5" {...sp}/></>,
+    refresh: <><path d="M20 11 A8 8 0 0 0 6 6 L4 8 M4 4 V8 H8" {...sp}/><path d="M4 13 A8 8 0 0 0 18 18 L20 16 M20 20 V16 H16" {...sp}/></>,
+    node: <><circle cx="6" cy="6" r="2.5" {...sp}/><circle cx="18" cy="6" r="2.5" {...sp}/><circle cx="12" cy="18" r="2.5" {...sp}/><path d="M7.5 7.5 L11 15.5 M16.5 7.5 L13 15.5 M8 6 H16" {...sp}/></>,
+    collapse: <><path d="M8 6 L12 10 L16 6" {...sp}/><path d="M8 18 L12 14 L16 18" {...sp}/></>,
+    pencil: <><path d="M4 20 L4 16 L15 5 L19 9 L8 20 Z" {...sp}/><path d="M13 7 L17 11" {...sp}/></>,
+    trash: <><path d="M5 7 H19 M10 7 V5 A1 1 0 0 1 11 4 H13 A1 1 0 0 1 14 5 V7 M6 7 L7 20 A1 1 0 0 0 8 21 H16 A1 1 0 0 0 17 20 L18 7" {...sp}/><path d="M10 11 V17 M14 11 V17" {...sp}/></>,
+    save: <><path d="M5 4 H16 L20 8 V19 A1 1 0 0 1 19 20 H5 A1 1 0 0 1 4 19 V5 A1 1 0 0 1 5 4 Z" {...sp}/><path d="M8 4 V9 H15 V4 M8 20 V14 H16 V20" {...sp}/></>,
+    file_plus: <><path d="M6 3 H14 L18 7 V20 A1 1 0 0 1 17 21 H7 A1 1 0 0 1 6 20 Z" {...sp}/><path d="M14 3 V7 H18 M12 11 V17 M9 14 H15" {...sp}/></>,
+    folder_plus: <><path d="M3 7 V18 A1 1 0 0 0 4 19 H20 A1 1 0 0 0 21 18 V9 A1 1 0 0 0 20 8 H11 L9 5 H4 A1 1 0 0 0 3 6 Z" {...sp}/><path d="M12 11 V16 M9.5 13.5 H14.5" {...sp}/></>,
+    rename: <><rect x="3" y="6" width="18" height="12" rx="1.5" {...sp}/><path d="M7 9 V15 M5.5 9 H8.5 M5.5 15 H8.5 M12 8 V16" {...sp}/></>,
+    dots_v: <><circle cx="12" cy="5" r="1.4" fill={color} stroke="none"/><circle cx="12" cy="12" r="1.4" fill={color} stroke="none"/><circle cx="12" cy="19" r="1.4" fill={color} stroke="none"/></>,
   };
   return <svg viewBox="0 0 24 24" style={s}>{paths[name] || null}</svg>;
 }

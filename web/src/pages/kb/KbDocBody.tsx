@@ -8,23 +8,19 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown, {
-  type Components,
-  type Options,
-  defaultUrlTransform,
-} from "react-markdown";
+import ReactMarkdown, { type Components, type Options } from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
-import { parseKbDocHref } from "./kbLinks";
+import { baseAwareUrlTransform } from "../../renderers/mdUrlTransform";
+import { blobHref, parseKbDocHref } from "./kbLinks";
 import { rehypeHighlightSnippet } from "./rehypeHighlightSnippet";
 
-// Keep kb:// links intact (default sanitization would drop the unknown
-// scheme); everything else goes through the default.
-const urlTransform = (url: string) =>
-  url.startsWith("kb://") ? url : defaultUrlTransform(url);
+// Keep kb:// links intact for the in-app link handler; root-relative URLs the
+// BE emits (e.g. `/blobs/...` image siblings) get the deploy sub-path (#73).
+const urlTransform = baseAwareUrlTransform("kb://");
 
 export function KbDocBody({
   documentId,
@@ -152,7 +148,47 @@ export function KbDocBody({
           ))}
         </div>
       ) : (
-        doc && (
+        doc &&
+        // Issue #39: per-type file view. Browser-native types render the
+        // original blob (`<img>` for images; `<iframe>` for PDF — the
+        // browser's PDF viewer — and for HTML, sandboxed so uploaded
+        // pages can't run scripts). Structured types (json/csv/xlsx/docx)
+        // arrive as a markdown projection from the BE (kb.preview) and
+        // ride the normal ReactMarkdown path. Anything left with no body
+        // (pptx, unknown binary) points at Download; the Chunks tab still
+        // shows what got indexed.
+        (doc.content_type.startsWith("image/") ? (
+          <figure className="kb-docimage">
+            <img src={blobHref(doc.file_id)} alt={doc.filename} />
+          </figure>
+        ) : doc.content_type === "application/pdf" ? (
+          <iframe
+            className="kb-dociframe"
+            src={blobHref(doc.file_id)}
+            title={doc.filename}
+          />
+        ) : doc.content_type === "text/html" ? (
+          <iframe
+            className="kb-dociframe"
+            src={blobHref(doc.file_id)}
+            title={doc.filename}
+            sandbox=""
+          />
+        ) : doc.preview_file_id ? (
+          // A parser handed back a browser-displayable derivative
+          // (pptx → soffice-converted PDF) — render that instead of
+          // the original's undisplayable bytes.
+          <iframe
+            className="kb-dociframe"
+            src={blobHref(doc.preview_file_id)}
+            title={doc.filename}
+          />
+        ) : doc.markdown === "" ? (
+          <div className="kb-docbinary">
+            <Icon name="file" size={14} /> Preview isn&apos;t available for this file —
+            use Download to view it.
+          </div>
+        ) : (
           <article className="md-body">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -163,7 +199,7 @@ export function KbDocBody({
               {doc.markdown}
             </ReactMarkdown>
           </article>
-        )
+        ))
       )}
     </>
   );

@@ -7,9 +7,9 @@ import type { AgentEvent } from "../events";
  * Tolerates malformed JSON payloads (small models can emit junky tokens;
  * see plan-backend.md "small-model retry-with-feedback").
  */
-export async function* parseSseStream(
+export async function* parseSseStream<T = AgentEvent>(
   body: ReadableStream<Uint8Array>,
-): AsyncGenerator<AgentEvent> {
+): AsyncGenerator<T> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -25,7 +25,7 @@ export async function* parseSseStream(
       const payload = chunk.slice("data:".length).trim();
       if (!payload) continue;
       try {
-        yield JSON.parse(payload) as AgentEvent;
+        yield JSON.parse(payload) as T;
       } catch {
         // swallow malformed event
       }

@@ -10,18 +10,17 @@ adapter, and Ingestor maps the resulting LI `BaseNode`s back to our
 
 from __future__ import annotations
 
-import tempfile
-from collections.abc import Callable, Sequence
-from pathlib import Path
+from collections.abc import Sequence
 from typing import Any
 
 from llama_index.core.ingestion import IngestionPipeline
 from llama_index.core.node_parser import (
     CodeSplitter,
+    JSONNodeParser,
     MarkdownNodeParser,
     SentenceSplitter,
 )
-from llama_index.core.schema import BaseNode, Document, TextNode, TransformComponent
+from llama_index.core.schema import BaseNode, TextNode, TransformComponent
 
 from .embedder import Embedder
 
@@ -55,6 +54,11 @@ class DispatchSplitter(TransformComponent):
     # Default sub-splitters; overridable per instance for tests/tuning.
     sentence_splitter: SentenceSplitter
     markdown_parser: MarkdownNodeParser
+    # Issue #39 P7: JSON-aware splitter — one node per top-level array
+    # element, leaf lines rendered as "key path value" so the embedding
+    # carries ancestor-key context. SentenceSplitter would cut
+    # mid-record and orphan values from their keys.
+    json_parser: JSONNodeParser
     # Lazily filled cache of CodeSplitter(language=…) — instantiating eagerly
     # would import every tree-sitter grammar just to ingest a .md.
     code_splitters: dict[str, CodeSplitter]
@@ -71,6 +75,7 @@ class DispatchSplitter(TransformComponent):
                 chunk_overlap=sentence_overlap,
             ),
             markdown_parser=MarkdownNodeParser(),
+            json_parser=JSONNodeParser(),
             code_splitters={},
         )
 
@@ -80,7 +85,9 @@ class DispatchSplitter(TransformComponent):
             mime = str(node.metadata.get("mime", "")).lower()
             filename = str(node.metadata.get("filename", "")).lower()
             code_lang = _code_language_for(filename)
-            if mime == "text/markdown" or filename.endswith(".md"):
+            if mime == "application/json" or filename.endswith((".json", ".jsonl")):
+                out.extend(self.json_parser.get_nodes_from_documents([node]))
+            elif mime == "text/markdown" or filename.endswith(".md"):
                 sub = self.markdown_parser.get_nodes_from_documents([node])
                 # Prepend heading hierarchy to each chunk's text so the
                 # embedding sees the structural context, not just body lines.
@@ -151,64 +158,12 @@ class EmbedderAdapter(TransformComponent):
         return list(nodes)
 
 
-ReaderFn = Callable[[bytes], list[Document]]
-
-
-def reader_for(*, filename: str, mime: str) -> ReaderFn | None:
-    """Pick a LlamaIndex Reader for a binary upload (PDF / HTML / DOCX). The
-    Readers want a path on disk, so we wrap them as `bytes → list[Document]`
-    that materialise the bytes into a tempfile, call the Reader, and clean
-    up. Returns `None` when no Reader handles this type — the caller skips
-    the doc (logged) rather than crashing the pipeline."""
-    f = filename.lower()
-    if mime == "application/pdf" or f.endswith(".pdf"):
-        return _wrap_file_reader(_lazy_pdf_reader, suffix=".pdf")
-    if mime == "text/html" or f.endswith((".html", ".htm")):
-        return _wrap_file_reader(_lazy_html_reader, suffix=".html")
-    if (
-        mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        or f.endswith(".docx")
-    ):
-        return _wrap_file_reader(_lazy_docx_reader, suffix=".docx")
-    return None
-
-
-def _wrap_file_reader(get_reader: Callable[[], Any], *, suffix: str) -> ReaderFn:
-    """Materialise `bytes` to a tempfile so the Reader (which wants a path)
-    can run; clean up regardless of success."""
-
-    def _read(data: bytes) -> list[Document]:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
-            f.write(data)
-            p = Path(f.name)
-        try:
-            return get_reader().load_data(file=p)
-        finally:
-            p.unlink(missing_ok=True)
-
-    return _read
-
-
-# Lazy reader constructors — keep the module import light when only some
-# format families are exercised.
-def _lazy_pdf_reader() -> Any:
-    from llama_index.readers.file import PDFReader
-
-    return PDFReader()
-
-
-def _lazy_html_reader() -> Any:
-    from llama_index.readers.file import HTMLTagReader
-
-    # HTMLTagReader's default is "section"; for whole-page text we'd use
-    # the BS4-backed one. We don't need tag scoping yet — extract <body>.
-    return HTMLTagReader(tag="body")
-
-
-def _lazy_docx_reader() -> Any:
-    from llama_index.readers.file import DocxReader
-
-    return DocxReader()
+# Issue #39: `reader_for(filename, mime)`, the per-extension if/elif
+# chain that picked a LlamaIndex Reader for PDF/HTML/DOCX uploads, has
+# been superseded by `kb/parsers/llamaindex_readers.py` (the bundled
+# `PdfParser` / `HtmlParser` / `DocxParser` IParser wrappers) plus
+# `factories.get_parser_registry`. The Ingestor now dispatches via
+# the registry, so this module just builds the pipeline.
 
 
 def build_doc_pipeline(*, embedder: Embedder) -> IngestionPipeline:

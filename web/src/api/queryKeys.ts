@@ -19,18 +19,37 @@ export const qk = {
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
 
-  agentConfigs: ["agentConfigs"] as const,
-  templates: ["templates"] as const,
+  apps: ["apps"] as const,
+  appManifest: (slug: string) => ["appManifest", slug] as const,
+  appItems: (slug: string) => ["appItems", slug] as const,
+  appItem: (slug: string, id: string) => ["appItem", slug, id] as const,
+  health: ["health"] as const,
+  monitor: ["monitor"] as const,
+
+  sanity: {
+    meta: ["sanity", "meta"] as const,
+    results: (model: string) => ["sanity", "results", model] as const,
+  },
 
   kb: {
     all: ["kb"] as const,
     collections: ["kb", "collections"] as const,
     documents: (collectionId: string) =>
       ["kb", "documents", collectionId] as const,
+    // Per-page key for the paged endpoint — `invalidateQueries({queryKey:
+    // qk.kb.documents(id)})` still matches every page through React Query's
+    // prefix-match, so callers don't need to know which pages are loaded.
+    documentsPage: (collectionId: string, offset: number, limit: number) =>
+      ["kb", "documents", collectionId, offset, limit] as const,
     chats: ["kb", "chats"] as const,
     chat: (id: string) => ["kb", "chat", id] as const,
     agent: ["kb", "agent"] as const,
     doc: (id: string) => ["kb", "doc", id] as const,
     docChunks: (id: string) => ["kb", "doc-chunks", id] as const,
+    // Issue #50: the LLM wiki browser.
+    wikiPages: (collectionId: string) => ["kb", "wiki-pages", collectionId] as const,
+    wikiPage: (collectionId: string, path: string) =>
+      ["kb", "wiki-page", collectionId, path] as const,
+    wikiStatus: (collectionId: string) => ["kb", "wiki-status", collectionId] as const,
   },
 } as const;

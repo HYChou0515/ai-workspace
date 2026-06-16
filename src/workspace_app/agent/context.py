@@ -11,8 +11,10 @@ from ..sandbox.protocol import OutputSink, Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
 
 if TYPE_CHECKING:
-    from ..kb.retriever import Retriever
+    from ..kb.retriever import Enhancements, Retriever
+    from ..kb.wiki.sources import IWikiSources
     from ..resources import AgentConfig
+    from ..resources.conversation import Citation
     from ..resources.kb import RetrievedPassage
     from ..tooling.registry import PackageInfo
 
@@ -66,6 +68,11 @@ class AgentToolContext:
     # offset/limit. Defaults sized for a large-context model.
     read_file_max_lines: int = 2000
     read_file_max_chars: int = 200_000
+    # Exec/tool stdout+stderr cap (issue #44). A command (e.g. `grep` over a
+    # big file) whose output exceeds this is truncated head+tail with a
+    # notice, so one tool call can't flood the model's context. Smaller than
+    # the read_file cap because tool outputs accumulate across turns.
+    exec_output_max_chars: int = 30_000
     # Prior-turn dialogue as SDK input items ({role, content}) for cross-turn
     # memory (#17). Set per-turn by the API layer from the persisted thread; the
     # runner prepends it to this turn's message. Empty for a fresh thread.
@@ -81,32 +88,105 @@ class AgentToolContext:
     # ``packages`` is non-empty.
     prebuilt_dir: Path | None = None
 
+    # Per-run step-limit override (max LLM turns). None ⇒ the runner's
+    # configured default. The wiki maintainer/reader need MANY more turns than
+    # a chat reply: a maintenance pass reads the schema + source, searches,
+    # then writes several pages — well past the default ~10, after which the
+    # SDK yields MaxTurnsExceeded and the run ends having written nothing.
+    max_turns: int | None = None
+
     # Per-message reasoning effort from the UI selector ("low"/"medium"/"high");
     # None → the model's default. Threaded to the model's ModelSettings.
     reasoning_effort: str | None = None
 
-    # The investigation's template profile name (#29 / §A). When set, the
-    # runner exposes `read_skill` if the profile ships skills, and the
-    # read_skill tool reads from `templates/<profile>/.skill/...`. None
-    # for KB-flavour contexts (no template).
+    # #66: how many infer_modules per-step classifications run concurrently.
+    # The tool fans out one sub-agent call per unique step; this bounds the
+    # fan-out (operator-configured via agents.infer_modules[].parallelism).
+    # NB: real end-to-end concurrency also needs the LLM endpoint to allow it
+    # (e.g. Ollama OLLAMA_NUM_PARALLEL>1), else requests serialize server-side.
+    infer_modules_parallelism: int = 16
+
+    # The item's App slug + profile name (#29 / §A, #89). When both are set the
+    # runner exposes `read_skill` if the profile ships skills, and read_skill
+    # reads from `apps/<app_slug>/profiles/<template_profile>/.skill/...`. None
+    # for KB-flavour contexts (no App/profile).
+    app_slug: str | None = None
     template_profile: str | None = None
 
     # KB agent (kb_search tool).
     retriever: Retriever | None = None
     collection_ids: list[str] = field(default_factory=list)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
-    # RCA → KB bridge: when set (by the API layer), the RCA agent's
-    # `ask_knowledge_base` tool runs the KB agent via this callable and gets
-    # back a synthesized, cited answer. Wraps the KB agent (grill Q "Option 1").
-    # Args: (question, sink, origin_id). The sink is the RCA run's
-    # `on_exec_output` — the bridge relays the KB sub-agent's live progress to it
-    # so searches/reasoning show as tool-log lines under the ask_knowledge_base
-    # call. `origin_id` is this investigation's id, so the KB citations it
-    # produces are logged against it.
-    ask_kb: Callable[[str, OutputSink | None, str | None], Awaitable[str]] | None = None
+    # Per-turn enhancement override the *caller* (KB chat composer,
+    # ask_knowledge_base bridge, …) wants the kb_search tool to apply
+    # on top of the operator's retriever defaults. LLM-set tool args
+    # win over this; this wins over the operator default. `None` = no
+    # caller override.
+    kb_enhancements: Enhancements | None = None
+    # Per-query opt-in to the LLM-wiki retrieval path (#50 P6, the depth
+    # picker's "Search the wiki" advanced toggle). The WikiAwareRunner reads
+    # this together with each collection's use_rag/use_wiki to route the turn:
+    # off ⇒ pure chunk-RAG (unchanged); on + a use_wiki collection ⇒ wiki
+    # reader, and both ⇒ chunk + wiki answers merged.
+    wiki_query: bool = False
+    # RCA → sub-agent bridge: when set (by the API layer), the RCA
+    # agent's sub-agent-facing tools (`ask_knowledge_base`,
+    # `infer_modules`, future) reach their sub-agent via this single
+    # callable. Args: `(purpose, payload, sink, origin_id)` —
+    # `purpose` names the entry in `AgentConfigCatalog.configs_for(...)`
+    # (e.g. `"kb_chat"` or `"infer_modules"`); `payload` is the
+    # already-formatted question string (tool impls own the
+    # arg→string formatting); `sink` is the RCA turn's `on_exec_output`
+    # so the sub-agent's live work relays as tool-log lines under the
+    # calling tool; `origin_id` is this investigation's id so the KB
+    # citations the sub-agent produces are logged against it. Returns
+    # the answer text + the resolved citations — the tool impl stashes
+    # the citations into `subagent_citations` so the turn engine can
+    # attach them to the persisted tool message.
+    run_subagent: (
+        Callable[
+            [str, str, OutputSink | None, str | None],
+            Awaitable[tuple[str, list[Citation]]],
+        ]
+        | None
+    ) = None
+    # Per-call citation lists from this turn's sub-agent invocations,
+    # keyed by purpose. Per purpose, lists are in CALL ORDER — the
+    # persist step pairs the Nth list with the Nth tool message of
+    # that purpose. (RunContextWrapper-typed tool params don't expose
+    # the call id; the SDK runs tools sequentially within a turn, so
+    # per-purpose order pairing is unambiguous.)
+    subagent_citations: dict[str, list[list[Citation]]] = field(default_factory=dict)
+    # #62: a per-turn map from an exec tool's LLM-facing result (the cleaned
+    # `_format_exec`, which IS the ToolEnd.output) to the FULL display result
+    # (stderr kept even on success). The runner keys off ToolEnd.output to
+    # attach the display version, so the FE/persisted card can show the error
+    # the user saw stream live instead of a clean "exit_code=0". Only populated
+    # when the two differ (exit 0 with non-empty stderr), so it stays tiny.
+    # String-keyed, not call-id keyed: RunContextWrapper tool params don't
+    # expose a call id (see subagent_citations above), and the cleaned output
+    # is what the ToolEnd carries verbatim.
+    tool_displays: dict[str, str] = field(default_factory=dict)
     # RCA agent's `mention_user` tool reaches this to summon a human to the
     # investigation. Args: (investigation_id, user_ids, note). Wired by the API.
     mention: Callable[[str, list[str], str], None] | None = None
+
+    # Wiki agents (#50). A maintainer/reader run sets `filestore` to a
+    # WikiFileStore + `investigation_id` to the wiki workspace id, `sandbox`
+    # None — the file tools then operate on the wiki pages. These add the
+    # wiki-specific tools' data:
+    #   - `wiki_sources`: read-only access to the collection's raw source
+    #     docs (layer 1) for list_sources / read_source.
+    #   - `wiki_new_source`: the source doc text that triggered this
+    #     maintainer run (read_new_source).
+    #   - `wiki_cite_sources`: True on a READER run — read_source then
+    #     registers each read source into `kb_passages` and returns it
+    #     numbered ([n]), so the answer's [n] markers resolve back to the
+    #     underlying SourceDoc (option 2 citations). False on a maintainer
+    #     run (read_source returns plain text for cross-referencing).
+    wiki_sources: IWikiSources | None = None
+    wiki_new_source: str | None = None
+    wiki_cite_sources: bool = False
 
     async def ensure_sandbox(self) -> SandboxHandle:
         assert self.sandbox is not None  # file/exec tools imply an RCA context

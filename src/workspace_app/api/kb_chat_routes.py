@@ -12,6 +12,7 @@ reopening a thread shows the answer, its sources, and what the agent searched.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Literal
@@ -24,12 +25,12 @@ from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
 from ..agent.context import AgentToolContext
-from ..kb.agent import default_kb_agent_config
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
-from ..kb.retriever import Retriever
+from ..kb.retriever import Enhancements, Retriever
+from ..resources import AgentConfig
 from ..resources.kb import Citation, KbChat, KbMessage
-from .events import AgentEvent, MessageDelta, ToolLog, ToolStart
+from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolLog, ToolStart
 from .notifications import notify
 from .runner import AgentRunner
 from .turns import ChatTurnEngine, TurnMessage, history_items
@@ -57,6 +58,11 @@ async def answer_question(
     retriever: Retriever,
     collection_ids: list[str],
     question: str,
+    *,
+    agent_config: AgentConfig,
+    enhancements: Enhancements | None = None,
+    reasoning_effort: str | None = None,
+    wiki: bool = False,
     on_event: Callable[[AgentEvent], None] | None = None,
     on_citations: Callable[[list[Citation]], None] | None = None,
 ) -> str:
@@ -65,22 +71,70 @@ async def answer_question(
     `ask_knowledge_base` tool consults the KB — a synthesized, cited reply
     rather than raw passages.
 
-    `on_event` (when given) is fired for every KB event as it happens, so a
-    caller can surface the sub-agent's intermediate work (e.g. relay it into the
-    parent stream). `on_citations` (when given) receives the resolved citations
-    so the caller can log them (this path doesn't persist a KbMessage). The
-    return value is unchanged."""
+    `agent_config` is the resolved KB AgentConfig (built by the catalog from
+    `agents.kb_chat` in config.yaml — Q4 named-preset path). `on_event` (when
+    given) is fired for every KB event as it happens, so a caller can surface
+    the sub-agent's intermediate work (e.g. relay it into the parent stream).
+    `on_citations` (when given) receives the resolved citations so the caller
+    can log them (this path doesn't persist a KbMessage). The return value is
+    unchanged.
+
+    `wiki` opts the lookup into the LLM-wiki path (the caller passes a
+    wiki-aware runner) — the RCA composer's "Search the wiki" toggle forwarded
+    over the bridge."""
     ctx = AgentToolContext(
         retriever=retriever,
         collection_ids=collection_ids,
-        agent_config=default_kb_agent_config(),
+        agent_config=agent_config,
+        # Caller's knowledge-search depth (e.g. the RCA composer's pick,
+        # forwarded over the bridge) — kb_search's cascade consumes it.
+        kb_enhancements=enhancements,
+        # Caller's reasoning effort (#65) — the composer's effort pick rides
+        # the bridge so the KB sub-agent thinks at the depth the user chose,
+        # not its config default. None ⇒ the model/config default.
+        reasoning_effort=reasoning_effort,
+        # Route through the wiki/both path when the caller (a wiki-aware runner)
+        # opted in. Harmless when the runner isn't wiki-aware.
+        wiki_query=wiki,
     )
     parts: list[str] = []
+    # (tool_name, error_text) pairs captured from ToolEnd events whose
+    # output looks like the agents-SDK default error wrapper. When ALL
+    # of the sub-agent's tool calls failed this way, the LLM tends to
+    # synthesize a polite "I can't access the KB" recovery sentence that
+    # masks the real failure. We surface the errors verbatim instead so
+    # the operator's log and the RCA agent's tool-result message both
+    # show the root cause.
+    tool_errors: list[tuple[str, str]] = []
+    pending_tools: dict[str, str] = {}  # call_id → tool name
+    run_error: str | None = None
     async for ev in runner.run(question, ctx):
         if on_event is not None:
             on_event(ev)
         if isinstance(ev, MessageDelta) and not ev.reasoning:
             parts.append(ev.text)
+        elif isinstance(ev, ToolStart):
+            pending_tools[ev.call_id] = ev.name
+        elif isinstance(ev, ToolEnd) and _looks_like_tool_error(ev.output):
+            tool_name = pending_tools.pop(ev.call_id, "tool")
+            tool_errors.append((tool_name, ev.output))
+            _LOGGER.error("KB sub-agent tool %r returned error: %s", tool_name, ev.output)
+        elif isinstance(ev, RunError):
+            # The runner exhausted its retry budget. Don't return
+            # whatever partial MessageDelta text leaked before bailing —
+            # that's mid-stream LLM output the operator shouldn't have
+            # to interpret as an answer.
+            run_error = ev.message
+            _LOGGER.error("KB sub-agent runner emitted RunError: %s", ev.message)
+    if run_error is not None:
+        return f"KB sub-agent failed: {run_error}"
+    if tool_errors:
+        # The LLM's synthesised "I can't access" wording downstream is
+        # not what we want to give the RCA caller — return the actual
+        # errors. The RCA agent's ask_knowledge_base tool message then
+        # surfaces the root cause to both the operator (log + chat) and
+        # the LLM (so it can decide what to do, not hallucinate).
+        return "KB lookup failed:\n" + "\n".join(f"- {name}: {err}" for name, err in tool_errors)
     answer = "".join(parts)
     cites = parse_citations(answer, ctx.kb_passages)
     if on_citations is not None:
@@ -91,15 +145,67 @@ async def answer_question(
     return answer
 
 
+_LOGGER = logging.getLogger(__name__)
+# The agents-SDK's `default_tool_error_function` wraps tool exceptions
+# into a string starting with this prefix; matching it lets us surface
+# real tool failures instead of letting the LLM "recover" them with a
+# polite hallucination.
+_SDK_TOOL_ERROR_PREFIX = "An error occurred while running the tool"
+
+
+def _looks_like_tool_error(output: str) -> bool:
+    return output.startswith(_SDK_TOOL_ERROR_PREFIX)
+
+
 class _ChatBody(BaseModel):
     title: str = "New chat"
     collection_ids: list[str] = []
+
+
+class EnhancementsInput(BaseModel):
+    """Per-message enhancement override (Issue #33 follow-up). Any
+    field set to a concrete value overrides the operator's retriever
+    default for that knob; `None` (or omitted) inherits. The operator's
+    `max` clamps every value before the retriever runs."""
+
+    expand: int | None = None
+    hyde: int | None = None
+    rerank: bool | None = None
+    # Issue #50 P6: opt this query into the LLM-wiki path (depth picker's
+    # "Search the wiki" advanced toggle). NOT a retriever knob — it routes the
+    # turn (chunk / wiki / both), so it's read separately from the three
+    # retriever enhancements above (see to_caller_enhancements, which ignores it).
+    wiki: bool | None = None
+
+
+def to_caller_enhancements(body_enh: EnhancementsInput | None):
+    """Body override → the retriever's `Enhancements` (None = inherit
+    the operator default). Shared by the KB chat turn and the RCA turn
+    (whose ask_knowledge_base bridge forwards it to the KB sub-agent).
+
+    Only the three retriever knobs (expand/hyde/rerank) map here; the `wiki`
+    routing flag is handled at the turn level, not by the retriever."""
+    if body_enh is None:
+        return None
+    return Enhancements(expand=body_enh.expand, hyde=body_enh.hyde, rerank=body_enh.rerank)
 
 
 class _MsgBody(BaseModel):
     content: str
     # Per-message reasoning effort from the UI selector; None → model default.
     reasoning_effort: Literal["low", "medium", "high"] | None = None
+    # Per-message enhancement override. `None` (or all-null fields)
+    # inherits operator defaults; concrete values are clamped to the
+    # operator's `max` (so a FE sending `expand: 99` is safe — the
+    # retriever clamps before running). The Mode dropdown / Advanced
+    # sliders on the FE side translate to this structured payload;
+    # there is no separate `quick` bool any more.
+    enhancements: EnhancementsInput | None = None
+    # Issue #32: per-message picker — name of the kb_chat entry to use.
+    # None / unknown name → first entry (the default). Unknown names
+    # 404 the operator's request rather than silently falling back so
+    # a typo at the FE picker is loud.
+    agent_name: str | None = None
 
 
 class _ShareBody(BaseModel):
@@ -116,8 +222,18 @@ def register_kb_chat_routes(
     engine: ChatTurnEngine,
     retriever: Retriever,
     get_user_id: Callable[[], str],
+    *,
+    kb_agent_configs: list[AgentConfig],
     history_max_messages: int = 40,
+    history_max_context_tokens: int = 24_000,
 ) -> None:
+    """Register the KB chat surface.
+
+    `kb_agent_configs` (issue #32) is the catalog's `kb_chats()` list —
+    every entry shows up in the FE picker; the first is the default.
+    """
+    if not kb_agent_configs:
+        raise ValueError("kb_agent_configs must be non-empty")
     chat_rm = spec.get_resource_manager(KbChat)
 
     def _load_rev(chat_id: str) -> tuple[KbChat, str]:
@@ -140,11 +256,25 @@ def register_kb_chat_routes(
         return chat, owner
 
     @app.get("/kb/agent")
-    async def kb_agent_config() -> dict:
-        """The KB agent's display name + quick-prompt suggestions (the chat UI
-        renders these as chips — they live with the config, not the FE)."""
-        cfg = default_kb_agent_config()
-        return {"name": cfg.name, "suggestions": cfg.suggestions}
+    async def kb_agent_config_endpoint() -> list[dict]:
+        """The KB chat picker (issue #32): every declared KB agent in
+        `agents.kb_chat[]` is surfaced as a row of {name, model,
+        suggestions}. FE renders a model dropdown over this; the chat UI
+        also reads the suggestions chips from the chosen entry. First
+        entry is the visible default."""
+        return [
+            {
+                "name": cfg.name,
+                "model": cfg.model,
+                "description": cfg.description,
+                # Suggestion is a msgspec.Struct — FastAPI's default response
+                # encoder (Pydantic) doesn't know how to serialise it, so
+                # render each entry as a plain ``{label, prompt}`` dict at
+                # the boundary. See #91.
+                "suggestions": [{"label": s.label, "prompt": s.prompt} for s in cfg.suggestions],
+            }
+            for cfg in kb_agent_configs
+        ]
 
     @app.post("/kb/chats")
     async def create_chat(body: _ChatBody) -> dict:
@@ -245,14 +375,41 @@ def register_kb_chat_routes(
         chat.messages.append(KbMessage(role="user", content=body.content, created_at=_now_ms()))
         chat_rm.update(chat_id, chat)
 
+        # Issue #32: resolve the picker selection. Default = first
+        # entry; explicit unknown name → 422 (not a silent fallback).
+        if body.agent_name is None:
+            agent_config = kb_agent_configs[0]
+        else:
+            match = next((c for c in kb_agent_configs if c.name == body.agent_name), None)
+            if match is None:
+                avail = [c.name for c in kb_agent_configs]
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unknown agent_name={body.agent_name!r}; available: {avail}",
+                )
+            agent_config = match
+
+        # Resolve the caller-level enhancement override. FE depth
+        # picker translates to this structured payload; absence =
+        # inherit operator default.
+        caller_enh = to_caller_enhancements(body.enhancements)
+
         ctx = AgentToolContext(
             retriever=retriever,
             collection_ids=chat.collection_ids,
-            agent_config=default_kb_agent_config(),
+            agent_config=agent_config,
             # Cross-turn memory: prior dialogue (excludes the user msg just added).
-            history=history_items(chat.messages[:-1], max_messages=history_max_messages),
+            history=history_items(
+                chat.messages[:-1],
+                max_messages=history_max_messages,
+                max_tokens=history_max_context_tokens,
+            ),
             # Per-message reasoning effort from the UI selector.
             reasoning_effort=body.reasoning_effort,
+            kb_enhancements=caller_enh,
+            # Per-query opt-in to the wiki path (depth picker). The
+            # WikiAwareRunner gates it on the collections' use_wiki/use_rag.
+            wiki_query=bool(body.enhancements and body.enhancements.wiki),
         )
 
         def persist(produced: list[TurnMessage]) -> None:
@@ -269,6 +426,7 @@ def register_kb_chat_routes(
                     tool_args=m.tool_args,
                     created_at=m.created_at,
                     metrics=m.metrics,
+                    error_kind=m.error_kind,  # role=error (#37)
                 )
                 # Resolve [n] on answers against the passages this turn searched,
                 # and log each as a CitationEvent (powers the cited counts).
@@ -303,6 +461,7 @@ def _message_dict(m: KbMessage) -> dict:
         "tool_args": m.tool_args,
         "tool_call_id": m.tool_call_id,
         "created_at": m.created_at,
+        "error_kind": m.error_kind,  # role=error (#37)
         "metrics": (
             {
                 "prompt_tokens": m.metrics.prompt_tokens,

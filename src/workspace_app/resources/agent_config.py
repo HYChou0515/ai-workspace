@@ -1,16 +1,49 @@
 from msgspec import Struct, field
 
 
+class Suggestion(Struct):
+    """One quick-prompt chip in the agent panel.
+
+    ``label`` is the short text the button shows. ``prompt`` is what gets
+    sent verbatim as the user message when the chip is pressed. Split so
+    a chip can read as "SPC" while submitting the full
+    "Show me the SPC analysis with control charts and explain..." (#91).
+    """
+
+    label: str
+    prompt: str
+
+
 class AgentConfig(Struct):
     name: str
     model: str = "ollama_chat/qwen3:14b"
     system_prompt: str = ""
-    suggestions: list[str] = field(default_factory=list)
-    """Quick-prompt chips shown in the agent panel. Sent verbatim as the
-    user prompt when clicked — so the prompt library lives with the agent
-    config, not hardcoded in the FE."""
+    description: str = ""
+    """One-line picker blurb — the composer model picker renders it under
+    the entry name (handoff redesign). "" = no note shown."""
 
-    allowed_tools: list[str] = field(default_factory=list)
+    suggestions: list[Suggestion] = field(default_factory=list)
+    """Quick-prompt chips shown in the agent panel. Each entry has a
+    ``label`` (button text) and a ``prompt`` (sent verbatim as the user
+    message when the chip is pressed). The prompt library lives with the
+    agent config, not hardcoded in the FE."""
+
+    allowed_tools: list[str] | None = None
+    """Three states (Q4-followup of the config grill):
+
+    - ``None`` — "I haven't specified"; the runner exposes its default
+      workspace toolset. Bare ``AgentConfig(name=...)`` defaults here,
+      and bundled RCA presets carry it (so picking one yields the
+      standard agent).
+    - ``[]``    — "explicitly zero tools"; the runner exposes nothing.
+      This is what catches the KB-chat-pointed-at-RCA-preset footgun:
+      a preset that doesn't actually grant `kb_search` resolves with
+      `[]` and the catalog validator surfaces it loud.
+    - ``[...]`` — exactly these.
+
+    The runner-side fix (``litellm_runner._agent_for``) stops aliasing
+    ``[]`` to ``None`` so the three states stay distinguishable."""
+
     env: dict[str, str] = field(default_factory=dict)
     sandbox_image: str = "workspace-app/sandbox:py312-ds"
     """Default sandbox image built from `docker/Dockerfile.workspace`
@@ -21,3 +54,15 @@ class AgentConfig(Struct):
     idle_timeout_seconds: int = 28800
     """8 hours — per grill-me Q10 the RCA workflow expects long
     open-then-come-back sessions. Was 900 (15 min) for workspace-app."""
+
+    llm_base_url: str = ""
+    """Per-config LLM endpoint base URL. ``""`` falls back to the
+    runner's constructor default (set from top-level ``Settings.llm``)
+    so a deploy that uses a single endpoint everywhere doesn't need
+    to set this per-preset. The new config schema's
+    ``agents.presets.<name>.llm.base_url`` populates this at catalog
+    resolution; the runner consults it per turn."""
+
+    llm_api_key: str = ""
+    """Per-config LLM API key. Same fallback as ``llm_base_url`` —
+    empty means "use the runner's constructor default"."""

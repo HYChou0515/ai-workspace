@@ -20,20 +20,28 @@ function renderAt(path: string) {
 }
 
 describe("AppRoutes", () => {
-  it("renders the Home page at /", () => {
+  it("renders the App Launcher at /", () => {
     renderAt("/");
-    expect(screen.getByTestId("page-home")).toBeTruthy();
+    expect(screen.getByTestId("page-launcher")).toBeTruthy();
   });
 
-  it("renders the Investigation workspace at /investigations/:id", () => {
-    renderAt("/investigations/INC-2026-0142");
-    expect(screen.getByTestId("page-investigation")).toBeTruthy();
-    // The id surfaces in the breadcrumb (or loading copy before fetch).
-    expect(screen.getByText(/INC-2026-0142/)).toBeTruthy();
+  it("renders an App dashboard at /a/:slug", () => {
+    renderAt("/a/rca");
+    expect(screen.getByTestId("page-app-dashboard")).toBeTruthy();
   });
 
-  it("falls back to Home for unknown paths", () => {
+  it("renders the create flow at /a/:slug/new (static beats :itemId)", () => {
+    renderAt("/a/rca/new");
+    expect(screen.getByTestId("page-app-new")).toBeTruthy();
+  });
+
+  it("renders the item workspace at /a/:slug/:itemId", () => {
+    renderAt("/a/rca/rca-investigation%2F1");
+    expect(screen.getByTestId("page-app-workspace")).toBeTruthy();
+  });
+
+  it("falls back to the launcher for unknown paths", () => {
     renderAt("/totally-bogus");
-    expect(screen.getByTestId("page-home")).toBeTruthy();
+    expect(screen.getByTestId("page-launcher")).toBeTruthy();
   });
 });

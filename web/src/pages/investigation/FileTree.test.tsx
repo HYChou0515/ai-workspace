@@ -1,9 +1,10 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { type FileService, FileServiceProvider, investigationFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
 import { DialogProvider } from "../../components/Dialog";
 import { FileTree } from "./FileTree";
@@ -18,15 +19,16 @@ const files: FileInfo[] = [
 
 function renderTree(onOpen = vi.fn(), opts: { files?: FileInfo[]; dirs?: string[] } = {}) {
   render(
-    <DialogProvider>
-      <FileTree
-        investigationId="inv"
-        files={opts.files ?? files}
-        dirs={opts.dirs ?? []}
-        activePath={null}
-        onOpen={onOpen}
-      />
-    </DialogProvider>,
+    <FileServiceProvider value={investigationFileService("rca", "inv")}>
+      <DialogProvider>
+        <FileTree
+          files={opts.files ?? files}
+          dirs={opts.dirs ?? []}
+          activePath={null}
+          onOpen={onOpen}
+        />
+      </DialogProvider>
+    </FileServiceProvider>,
   );
   return { onOpen };
 }
@@ -66,12 +68,12 @@ describe("<FileTree /> multi-select", () => {
   it("prompts to replace when a move collides with an existing name", async () => {
     renderTree(vi.fn(), {
       files: [
-        { path: "/5-why.md", size: 1 },
-        { path: "/dst/5-why.md", size: 1 },
+        { path: "/notes.md", size: 1 },
+        { path: "/dst/notes.md", size: 1 },
       ],
     });
-    // drop the root 5-why.md onto the /dst folder, which already has one
-    fireEvent.drop(screen.getByText("dst"), dropPayload(["/5-why.md"]));
+    // drop the root notes.md onto the /dst folder, which already has one
+    fireEvent.drop(screen.getByText("dst"), dropPayload(["/notes.md"]));
     expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /replace/i })).toBeInTheDocument();
   });
@@ -93,5 +95,128 @@ describe("<FileTree /> multi-select", () => {
     await user.clear(input);
     await user.type(input, "b.md{Enter}");
     expect(await screen.findByText(/already exists/i)).toBeInTheDocument();
+  });
+});
+
+describe("<FileTree /> reindex (#98)", () => {
+  it("reindexes the whole selection from the context menu", async () => {
+    const user = userEvent.setup();
+    const onReindex = vi.fn();
+    render(
+      <FileServiceProvider value={investigationFileService("rca", "inv")}>
+        <DialogProvider>
+          <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} onReindex={onReindex} />
+        </DialogProvider>
+      </FileServiceProvider>,
+    );
+    await user.click(screen.getByText("a.md"));
+    await user.keyboard("{Control>}");
+    await user.click(screen.getByText("b.md"));
+    await user.keyboard("{/Control}");
+    fireEvent.contextMenu(screen.getByText("b.md"));
+    await user.click(await screen.findByRole("button", { name: /^reindex$/i }));
+    expect(onReindex).toHaveBeenCalledTimes(1);
+    expect([...onReindex.mock.calls[0]![0]].sort()).toEqual(["/a.md", "/b.md"]);
+  });
+
+  it("a multi-selection menu shows only selection-wide actions (no Rename/New/Copy)", async () => {
+    const user = userEvent.setup();
+    const onReindex = vi.fn();
+    render(
+      <FileServiceProvider value={investigationFileService("rca", "inv")}>
+        <DialogProvider>
+          <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} onReindex={onReindex} />
+        </DialogProvider>
+      </FileServiceProvider>,
+    );
+    await user.click(screen.getByText("a.md"));
+    await user.keyboard("{Control>}");
+    await user.click(screen.getByText("b.md"));
+    await user.keyboard("{/Control}");
+    fireEvent.contextMenu(screen.getByText("b.md"));
+    const menu = screen.getByTestId("tree-context-menu");
+    // selection-wide actions stay …
+    expect(within(menu).getByRole("button", { name: /delete/i })).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: /^reindex$/i })).toBeInTheDocument();
+    // … single-only actions are hidden
+    expect(within(menu).queryByRole("button", { name: /rename/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: /new file/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: /copy path/i })).not.toBeInTheDocument();
+  });
+
+  it("offers no Reindex item when the service can't reindex (onReindex omitted)", () => {
+    renderTree();
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    expect(screen.queryByRole("button", { name: /^reindex$/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("<FileTree /> context menu position (#99)", () => {
+  it("opens upward when the click is near the viewport bottom", () => {
+    Object.defineProperty(window, "innerHeight", { value: 300, configurable: true });
+    renderTree();
+    fireEvent.contextMenu(screen.getByText("a.md"), { clientX: 10, clientY: 285 });
+    const menu = screen.getByTestId("tree-context-menu");
+    // anchored from the bottom (opens upward), not pinned at top:285 which would
+    // run off-screen
+    expect(menu.style.top).toBe("");
+    expect(menu.style.bottom).not.toBe("");
+  });
+
+  it("anchors at the click when there's room below", () => {
+    Object.defineProperty(window, "innerHeight", { value: 1000, configurable: true });
+    renderTree();
+    fireEvent.contextMenu(screen.getByText("a.md"), { clientX: 10, clientY: 50 });
+    const menu = screen.getByTestId("tree-context-menu");
+    expect(menu.style.top).toBe("50px");
+  });
+});
+
+describe("<FileTree /> upload target", () => {
+  function spyService(over: Partial<FileService>): FileService {
+    return { ...investigationFileService("rca", "inv"), ...over };
+  }
+  function renderWith(svc: FileService, files: FileInfo[]) {
+    render(
+      <FileServiceProvider value={svc}>
+        <DialogProvider>
+          <FileTree files={files} dirs={[]} activePath={null} onOpen={vi.fn()} />
+        </DialogProvider>
+      </FileServiceProvider>,
+    );
+  }
+  const filesInput = () =>
+    document.querySelector('input[type="file"]:not([webkitdirectory])') as HTMLInputElement;
+
+  it("toolbar upload lands the file inside the selected folder", async () => {
+    const user = userEvent.setup();
+    const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir")); // anchor the folder
+    const file = new File(["x"], "up.md", { type: "text/markdown" });
+    fireEvent.change(filesInput(), { target: { files: [file] } });
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toBe("/mydir/up.md");
+  });
+
+  it("a folder's context menu uploads files into that folder", async () => {
+    const user = userEvent.setup();
+    const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    fireEvent.contextMenu(screen.getByText("mydir"));
+    await user.click(await screen.findByText(/upload files here/i));
+    const file = new File(["x"], "up.md", { type: "text/markdown" });
+    fireEvent.change(filesInput(), { target: { files: [file] } });
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toBe("/mydir/up.md");
+  });
+
+  it("toolbar upload with nothing selected lands the file at the root", async () => {
+    const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
+    const file = new File(["x"], "up.md", { type: "text/markdown" });
+    fireEvent.change(filesInput(), { target: { files: [file] } });
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toBe("/up.md");
   });
 });

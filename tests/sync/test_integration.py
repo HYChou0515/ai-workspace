@@ -9,10 +9,10 @@ reverse-before-kill), SandboxSync (the three move ops), MockSandbox
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from specstar import SpecStar
 
 from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxSpec
 from workspace_app.sync import SandboxSync
@@ -20,8 +20,7 @@ from workspace_app.sync import SandboxSync
 
 @pytest.fixture
 def stack():
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     sandbox = MockSandbox()
     filestore = SpecstarFileStore(spec)
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)

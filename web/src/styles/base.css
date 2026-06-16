@@ -108,29 +108,41 @@ select {
   }
 }
 
-/* ---- Rendered markdown (file preview + agent replies) ---- */
-.md-body { color: var(--text-paper); font-size: var(--text-body-lg); line-height: var(--leading-body-lg); max-width: 760px; }
-.md-body h1, .md-body h2, .md-body h3 { font-family: var(--font-display); font-weight: 800; letter-spacing: -0.02em; margin: 24px 0 8px; line-height: 1.15; }
-.md-body h1 { font-size: var(--text-display-md); }
-.md-body h2 { font-size: var(--text-display-sm); }
-.md-body h3 { font-size: 18px; }
-.md-body p { margin: 0 0 12px; }
-.md-body ul, .md-body ol { padding-left: 22px; margin: 0 0 12px; }
-.md-body li { margin: 4px 0; }
+/* ---- Rendered markdown (file preview + agent replies) ----
+   Sized to match the surrounding UI baseline (file tree 12px,
+   sidebars 13px) — the prior 18px body felt like a docs site
+   transplanted into a dense engineering workspace. Body sits one
+   step above sidebars (14px) so prose still reads as prose; the
+   compact chat variant drops to the sidebar 13px. */
+.md-body { color: var(--text-paper); font-size: var(--text-body); line-height: var(--leading-body); max-width: 760px; }
+.md-body h1, .md-body h2, .md-body h3 { font-family: var(--font-display); font-weight: 800; letter-spacing: -0.02em; margin: 18px 0 6px; line-height: 1.2; }
+.md-body h1 { font-size: 20px; }
+.md-body h2 { font-size: 16px; }
+.md-body h3 { font-size: 14px; }
+.md-body p { margin: 0 0 10px; }
+.md-body ul, .md-body ol { padding-left: 22px; margin: 0 0 10px; }
+.md-body li { margin: 3px 0; }
 .md-body code { font-family: var(--font-mono); background: var(--paper-2); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
-.md-body pre { font-family: var(--font-mono); background: var(--paper-2); padding: 12px; border-radius: 6px; overflow: auto; font-size: 13px; }
+.md-body pre { font-family: var(--font-mono); background: var(--paper-2); padding: 10px; border-radius: 6px; overflow: auto; font-size: 12px; }
 .md-body pre code { background: transparent; padding: 0; }
-.md-body table { border-collapse: collapse; width: 100%; margin: 0 0 12px; }
-.md-body th, .md-body td { border: 1px solid var(--paper-3); padding: 6px 10px; text-align: left; }
+.md-body table { border-collapse: collapse; width: 100%; margin: 0 0 10px; }
+.md-body th, .md-body td { border: 1px solid var(--paper-3); padding: 5px 8px; text-align: left; }
 .md-body th { background: var(--paper-2); font-weight: 600; }
-.md-body blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-paper-d); margin: 0 0 12px; }
+.md-body blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-paper-d); margin: 0 0 10px; }
 .md-body a { color: var(--accent-h); text-decoration: underline; }
-.md-body hr { border: 0; border-top: 1px solid var(--paper-3); margin: 24px 0; }
+.md-body hr { border: 0; border-top: 1px solid var(--paper-3); margin: 18px 0; }
 
-/* Compact variant for the agent chat — smaller type, tighter headings. */
-.md-body.md-compact { font-size: 13px; line-height: 1.5; max-width: none; }
-.md-body.md-compact h1 { font-size: 18px; }
-.md-body.md-compact h2 { font-size: 16px; }
-.md-body.md-compact h3 { font-size: 14px; }
-.md-body.md-compact h1, .md-body.md-compact h2, .md-body.md-compact h3 { margin: 12px 0 6px; }
-.md-body.md-compact p, .md-body.md-compact ul, .md-body.md-compact ol { margin: 0 0 8px; }
+/* Compact variant for the agent chat — matches sidebar baseline. */
+.md-body.md-compact { font-size: var(--text-body-sm); line-height: 1.5; max-width: none; }
+.md-body.md-compact h1 { font-size: 15px; }
+.md-body.md-compact h2 { font-size: 14px; }
+.md-body.md-compact h3 { font-size: 13px; }
+.md-body.md-compact h1, .md-body.md-compact h2, .md-body.md-compact h3 { margin: 10px 0 4px; }
+.md-body.md-compact p, .md-body.md-compact ul, .md-body.md-compact ol { margin: 0 0 6px; }
+.md-body.md-compact pre { font-size: 11px; padding: 8px; }
+
+/* Health indicator (#51): the header dot pulses while a probe round runs. */
+@keyframes health-dot-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
+}

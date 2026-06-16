@@ -28,8 +28,18 @@ ENV UV_COMPILE_BYTECODE=1 \
     APP_HOST=0.0.0.0 \
     APP_PORT=8000
 # libmagic1: specstar[magic] sniffs uploaded content types during KB ingest.
+# libreoffice-impress: headless `soffice --convert-to pdf` — the KB
+#   PptxParser's slide→PDF step (issue #39). Impress alone (not the full
+#   suite) keeps the layer as small as LibreOffice gets.
+# fonts-noto-cjk + fonts-liberation: the slim base ships no fonts; without
+#   them converted slides render CJK/Latin text as tofu — which also
+#   poisons what the VLM sees.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libmagic1 \
+    && apt-get install -y --no-install-recommends \
+        libmagic1 \
+        libreoffice-impress \
+        fonts-noto-cjk \
+        fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 

@@ -1,19 +1,16 @@
-"""The FE edits an investigation's metadata via specstar's auto JSON-Patch
-route (PATCH /investigation/{id}) — no custom endpoint. Guard that it works."""
-
-from datetime import UTC, datetime
+"""The FE edits an item's metadata via specstar's auto JSON-Patch route
+(PATCH /rca-investigation/{id}) — no custom endpoint. Guard that it works."""
 
 from fastapi.testclient import TestClient
-from specstar import SpecStar
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 
 def _client() -> TestClient:
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
@@ -23,14 +20,12 @@ def _client() -> TestClient:
     return TestClient(app)
 
 
-def test_patch_investigation_edits_metadata():
+def test_patch_item_edits_metadata():
     client = _client()
-    rid = client.post(
-        "/investigation", json={"title": "Old", "owner": "u", "topics": ["a"]}
-    ).json()["resource_id"]
+    rid = client.post("/a/rca/items", json={"title": "Old", "topics": ["a"]}).json()["resource_id"]
 
     r = client.patch(
-        f"/investigation/{rid}",
+        f"/rca-investigation/{rid}",
         json=[
             {"op": "replace", "path": "/title", "value": "New title"},
             {"op": "replace", "path": "/description", "value": "revised"},
@@ -41,7 +36,7 @@ def test_patch_investigation_edits_metadata():
     )
     assert r.status_code == 200
 
-    data = client.get(f"/investigation/{rid}").json()
+    data = client.get(f"/rca-investigation/{rid}").json()
     data = data.get("data", data)  # specstar entry wraps the struct in `data`
     assert data["title"] == "New title"
     assert data["topics"] == ["x", "y"]

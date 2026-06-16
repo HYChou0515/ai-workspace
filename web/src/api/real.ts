@@ -18,16 +18,17 @@ import { apiFetch } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
-  AgentConfigInfo,
+  AppItem,
+  AppManifest,
+  AppSummary,
   ApiClient,
   CellRef,
   CloseStatus,
   Conversation,
   ExecResult,
+  SearchParams,
   ExecuteCellArgs,
   FileInfo,
-  Investigation,
-  InvestigationInput,
   NotebookRef,
   NotificationItem,
   SearchOptions,
@@ -52,30 +53,10 @@ type SpecstarEntry<T> = {
   meta?: unknown;
 };
 
-type CreateResponse = {
-  resource_id: string;
-  created_time?: string;
-  updated_time?: string;
-};
-
-type InvestigationStruct = {
-  title: string;
-  owner: string;
-  description?: string;
-  severity?: Investigation["severity"];
-  status?: Investigation["status"];
-  product?: string;
-  members?: string[];
-  topics?: string[];
-  attached_agent_config_id?: string | null;
-};
-
 type ConversationStruct = {
   investigation_id: string;
   messages: Conversation["messages"];
 };
-
-type AgentConfigStruct = { name: string; model: string; suggestions?: string[] };
 
 async function json<T>(resp: Response): Promise<T> {
   if (!resp.ok) {
@@ -85,30 +66,25 @@ async function json<T>(resp: Response): Promise<T> {
   return resp.json() as Promise<T>;
 }
 
+/** Serialize SearchParams to a query string (arrays → repeated params, as the
+ * specstar list/count endpoints expect). Returns "" when there's nothing. */
+function toQuery(params?: SearchParams): string {
+  if (!params) return "";
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v == null) continue;
+    if (Array.isArray(v)) v.forEach((x) => sp.append(k, String(x)));
+    else sp.append(k, String(v));
+  }
+  const s = sp.toString();
+  return s ? `?${s}` : "";
+}
+
 class HttpError extends Error {
   constructor(public status: number, message: string) {
     super(message);
     this.name = "HttpError";
   }
-}
-
-function toInvestigation(e: SpecstarEntry<InvestigationStruct>): Investigation {
-  const d = e.data;
-  return {
-    resource_id: e.revision_info.resource_id,
-    created_time: e.revision_info.created_time,
-    updated_time: e.revision_info.updated_time,
-    created_by: e.revision_info.created_by,
-    title: d.title,
-    owner: d.owner,
-    description: d.description ?? "",
-    severity: d.severity ?? "P2",
-    status: d.status ?? "triaging",
-    product: d.product ?? "",
-    members: d.members ?? [],
-    topics: d.topics ?? [],
-    attached_agent_config_id: d.attached_agent_config_id ?? null,
-  };
 }
 
 function encodePath(path: string): string {
@@ -134,8 +110,8 @@ export const realApi: ApiClient = {
   async getUsers() {
     return json<User[]>(await apiFetch("/users"));
   },
-  async addMention(investigationId, userIds, note = "") {
-    await apiFetch(`/investigations/${encodeURIComponent(investigationId)}/mentions`, {
+  async addMention(slug: string, investigationId, userIds, note = "") {
+    await apiFetch(`/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/mentions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ user_ids: userIds, note }),
@@ -151,99 +127,60 @@ export const realApi: ApiClient = {
     await apiFetch(`/notifications/${encodeURIComponent(id)}/read`, { method: "POST" });
   },
 
-  async listInvestigations() {
-    const arr = await json<SpecstarEntry<InvestigationStruct>[]>(
-      await apiFetch("/investigation"),
-    );
-    return arr.map(toInvestigation);
+  async listApps() {
+    return json<AppSummary[]>(await apiFetch("/apps"));
   },
 
-  async getInvestigation(id: string) {
-    const entry = await json<SpecstarEntry<InvestigationStruct>>(
-      await apiFetch(`/investigation/${encodeURIComponent(id)}`),
-    );
-    return toInvestigation(entry);
+  async getAppManifest(slug: string) {
+    return json<AppManifest>(await apiFetch(`/apps/${encodeURIComponent(slug)}`));
   },
 
-  async createInvestigation(input: InvestigationInput) {
-    const resp = await apiFetch("/investigation", {
+  async listAppItems(resourceRoute: string, params?: SearchParams) {
+    const arr = await json<SpecstarEntry<Record<string, unknown>>[]>(
+      await apiFetch(`${resourceRoute}${toQuery(params)}`),
+    );
+    return arr.map(
+      (e): AppItem => ({
+        resource_id: e.revision_info.resource_id,
+        updated_time: e.revision_info.updated_time,
+        ...(e.data as { title: string; owner: string }),
+      }),
+    );
+  },
+
+  async countAppItems(resourceRoute: string, params?: SearchParams) {
+    return json<number>(await apiFetch(`${resourceRoute}/count${toQuery(params)}`));
+  },
+
+  async getAppItem(resourceRoute: string, id: string) {
+    const e = await json<SpecstarEntry<Record<string, unknown>>>(
+      await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}`),
+    );
+    return {
+      resource_id: e.revision_info.resource_id,
+      updated_time: e.revision_info.updated_time,
+      ...(e.data as { title: string; owner: string }),
+    } satisfies AppItem;
+  },
+
+  async createAppItem(slug: string, body: Record<string, unknown>) {
+    const resp = await apiFetch(`/a/${encodeURIComponent(slug)}/items`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        title: input.title,
-        owner: "default-user",
-        description: input.description ?? "",
-        severity: input.severity ?? "P2",
-        status: "triaging",
-        product: input.product ?? "",
-        members: [],
-        topics: input.topics ?? [],
-        attached_agent_config_id: null,
-        template_profile: input.templateProfile ?? "default",
-      }),
+      body: JSON.stringify(body),
     });
-    const created = await json<CreateResponse>(resp);
-    // Create only returns metadata — refetch to get the full record.
-    return this.getInvestigation(created.resource_id);
+    return json<{ resource_id: string }>(resp);
   },
 
-  async updateInvestigation(id: string, input: InvestigationInput) {
-    // specstar PATCH is RFC-6902 JSON Patch (same route attachAgentConfig uses).
-    const resp = await apiFetch(`/investigation/${encodeURIComponent(id)}`, {
-      method: "PATCH",
+  async updateAppItem(resourceRoute: string, id: string, data: Record<string, unknown>) {
+    // specstar PUT decodes into the model struct, ignoring non-model keys
+    // (resource_id / timestamps that ride along on the item we hold).
+    const resp = await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}`, {
+      method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify([
-        { op: "replace", path: "/title", value: input.title },
-        { op: "replace", path: "/description", value: input.description ?? "" },
-        { op: "replace", path: "/severity", value: input.severity ?? "P2" },
-        { op: "replace", path: "/product", value: input.product ?? "" },
-        { op: "replace", path: "/topics", value: input.topics ?? [] },
-      ]),
+      body: JSON.stringify(data),
     });
-    if (!resp.ok) {
-      throw new HttpError(resp.status, `update investigation failed: ${resp.status}`);
-    }
-  },
-
-  async listAgentConfigs(): Promise<AgentConfigInfo[]> {
-    try {
-      const arr = await json<SpecstarEntry<AgentConfigStruct>[]>(
-        await apiFetch("/agent-config"),
-      );
-      return arr.map((e) => ({
-        resource_id: e.revision_info.resource_id,
-        name: e.data.name,
-        model: e.data.model,
-        suggestions: e.data.suggestions ?? [],
-      }));
-    } catch {
-      return []; // BE older than the agent-config seeding
-    }
-  },
-
-  async attachAgentConfig(investigationId: string, configId: string | null) {
-    // specstar PATCH is RFC-6902 JSON Patch.
-    const resp = await apiFetch(
-      `/investigation/${encodeURIComponent(investigationId)}`,
-      {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify([
-          { op: "replace", path: "/attached_agent_config_id", value: configId },
-        ]),
-      },
-    );
-    if (!resp.ok) {
-      throw new HttpError(resp.status, `attach agent config failed: ${resp.status}`);
-    }
-  },
-
-  async listTemplates() {
-    try {
-      return await json<string[]>(await apiFetch("/templates"));
-    } catch {
-      return ["default"]; // BE older than the templates endpoint
-    }
+    return json<{ resource_id: string }>(resp);
   },
 
   async listActivity() {
@@ -254,9 +191,9 @@ export const realApi: ApiClient = {
     }
   },
 
-  async closeInvestigation(id: string, status: CloseStatus | null) {
+  async closeInvestigation(slug: string, id: string, status: CloseStatus | null) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(id)}/close`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(id)}/close`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -286,12 +223,12 @@ export const realApi: ApiClient = {
     }
   },
 
-  async listFiles(investigationId, prefix) {
+  async listFiles(slug: string, investigationId, prefix) {
     const qs = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
     try {
       return await json<FileInfo[]>(
         await apiFetch(
-          `/investigations/${encodeURIComponent(investigationId)}/files${qs}`,
+          `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files${qs}`,
         ),
       );
     } catch (err) {
@@ -304,12 +241,12 @@ export const realApi: ApiClient = {
     }
   },
 
-  async refreshFiles(investigationId) {
+  async refreshFiles(slug: string, investigationId) {
     // Server flushes sandbox → snapshot. Swallow 404/405 the same way as
     // listFiles for older backends.
     try {
       await apiFetch(
-        `/investigations/${encodeURIComponent(investigationId)}/files/refresh`,
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/refresh`,
         { method: "POST" },
       );
     } catch (err) {
@@ -320,9 +257,9 @@ export const realApi: ApiClient = {
     }
   },
 
-  async readFile(investigationId, path) {
+  async readFile(slug: string, investigationId, path) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
     );
     if (!resp.ok) throw new HttpError(resp.status, `read ${path} failed: ${resp.status}`);
     // Read raw bytes and decode losslessly so EVERY file is editable —
@@ -332,9 +269,9 @@ export const realApi: ApiClient = {
     return { kind: "text", path, text, size: bytes.length, encoding };
   },
 
-  async writeFile(investigationId, path, body) {
+  async writeFile(slug: string, investigationId, path, body) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
       { method: "PUT", body },
     );
     if (!resp.ok) {
@@ -342,17 +279,17 @@ export const realApi: ApiClient = {
     }
   },
 
-  async deleteFile(investigationId: string, path: string) {
+  async deleteFile(slug: string, investigationId: string, path: string) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,
       { method: "DELETE" },
     );
     if (!resp.ok) throw new HttpError(resp.status, `delete ${path} failed: ${resp.status}`);
   },
 
-  async mkdir(investigationId: string, path: string) {
+  async mkdir(slug: string, investigationId: string, path: string) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/files/mkdir`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/mkdir`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -365,10 +302,10 @@ export const realApi: ApiClient = {
     }
   },
 
-  async listDirs(investigationId: string) {
+  async listDirs(slug: string, investigationId: string) {
     try {
       return await json<string[]>(
-        await apiFetch(`/investigations/${encodeURIComponent(investigationId)}/dirs`),
+        await apiFetch(`/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/dirs`),
       );
     } catch (err) {
       // BE older than the dirs endpoint — degrade to inferred-only dirs.
@@ -377,9 +314,9 @@ export const realApi: ApiClient = {
     }
   },
 
-  async moveFile(investigationId: string, from: string, to: string) {
+  async moveFile(slug: string, investigationId: string, from: string, to: string) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/files/move`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/move`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -392,9 +329,9 @@ export const realApi: ApiClient = {
     }
   },
 
-  async copyFile(investigationId: string, from: string, to: string) {
+  async copyFile(slug: string, investigationId: string, from: string, to: string) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/files/copy`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/copy`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -407,25 +344,36 @@ export const realApi: ApiClient = {
     }
   },
 
-  async cancelMessage(investigationId: string) {
+  async cancelMessage(slug: string, investigationId: string) {
     // Idempotent on the BE; swallow network/404 noise so a double-click
     // on Stop doesn't surface a scary toast.
     await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/messages/current`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/messages/current`,
       { method: "DELETE" },
     ).catch(() => undefined);
   },
 
+  async undoTurns(slug: string, investigationId: string, turns: number) {
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/messages?turns=${turns}`,
+      { method: "DELETE" },
+    );
+    if (!resp.ok) {
+      throw new HttpError(resp.status, `undo failed: ${resp.status}`);
+    }
+    return (await resp.json()) as { message_count: number };
+  },
+
   async interruptCell(ref: CellRef) {
     await apiFetch(
-      `/investigations/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/cells/${ref.cellIndex}/execute`,
+      `/a/${encodeURIComponent(ref.slug)}/items/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/cells/${ref.cellIndex}/execute`,
       { method: "DELETE" },
     ).catch(() => undefined);
   },
 
   async restartKernel(ref: NotebookRef) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/kernel/restart`,
+      `/a/${encodeURIComponent(ref.slug)}/items/${encodeURIComponent(ref.investigationId)}/notebooks/${encodePath(ref.notebookPath)}/kernel/restart`,
       { method: "POST" },
     );
     if (!resp.ok) {
@@ -433,25 +381,47 @@ export const realApi: ApiClient = {
     }
   },
 
-  async *streamAgentEvents(args: SendMessageArgs): AsyncGenerator<AgentEvent> {
+  async sendMessage(args: SendMessageArgs): Promise<void> {
+    // #43: POST no longer streams — it enqueues the turn (202) and returns once
+    // accepted. The turn's events arrive on the shared broadcast stream. Don't
+    // read the body.
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(args.investigationId)}/messages`,
+      `/a/${encodeURIComponent(args.slug)}/items/${encodeURIComponent(args.investigationId)}/messages`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ content: args.content, reasoning_effort: args.reasoningEffort }),
+        body: JSON.stringify({
+          content: args.content,
+          reasoning_effort: args.reasoningEffort,
+          enhancements: args.enhancements,
+        }),
         signal: args.signal,
       },
     );
-    if (!resp.ok || !resp.body) {
+    if (!resp.ok) {
       throw new HttpError(resp.status, `messages failed: ${resp.status}`);
+    }
+  },
+
+  async *subscribeInvestigation(slug: string, 
+    investigationId: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    // #43: the long-lived per-investigation broadcast — every viewer subscribes
+    // and sees ALL turns live plus the broadcast-only user_message/file_changed.
+    const resp = await apiFetch(
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/stream`,
+      { signal },
+    );
+    if (!resp.ok || !resp.body) {
+      throw new HttpError(resp.status, `stream failed: ${resp.status}`);
     }
     yield* parseSseStream(resp.body) as AsyncGenerator<AgentEvent>;
   },
 
-  async execShell(investigationId: string, cmd: string[], signal?: AbortSignal): Promise<ExecResult> {
+  async execShell(slug: string, investigationId: string, cmd: string[], signal?: AbortSignal): Promise<ExecResult> {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/exec`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/exec`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -466,9 +436,9 @@ export const realApi: ApiClient = {
     return (await resp.json()) as ExecResult;
   },
 
-  async searchFiles(investigationId: string, query: string, opts: SearchOptions = {}) {
+  async searchFiles(slug: string, investigationId: string, query: string, opts: SearchOptions = {}) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/search`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/search`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -478,14 +448,14 @@ export const realApi: ApiClient = {
     return json<SearchResult[]>(resp);
   },
 
-  async replaceInFiles(
+  async replaceInFiles(slug: string, 
     investigationId: string,
     query: string,
     replacement: string,
     opts: SearchOptions = {},
   ) {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(investigationId)}/replace`,
+      `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/replace`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -498,7 +468,7 @@ export const realApi: ApiClient = {
 
   async *streamCellEvents(args: ExecuteCellArgs): AsyncGenerator<CellEvent> {
     const resp = await apiFetch(
-      `/investigations/${encodeURIComponent(args.investigationId)}/notebooks/${encodePath(args.notebookPath)}/cells/${args.cellIndex}/execute`,
+      `/a/${encodeURIComponent(args.slug)}/items/${encodeURIComponent(args.investigationId)}/notebooks/${encodePath(args.notebookPath)}/cells/${args.cellIndex}/execute`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },

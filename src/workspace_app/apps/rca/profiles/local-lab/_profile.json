@@ -1,0 +1,19 @@
+{
+  "title": "Local lab",
+  "description": "RCA SOP sandbox — wafer/defect history → rank-factors → KB-filter → report, against the provisioned in-house tools.",
+  "presets": ["qwen3-local"],
+  "default_preset": "qwen3-local",
+  "tools": [
+    "exec", "read_file", "write_file", "edit_file", "ls", "exists",
+    "delete_file", "ask_knowledge_base", "data-fetch", "csv-column-summary",
+    "rca-tools", "python-stack"
+  ],
+  "suggestions": [
+    { "label": "Pull wafer history + rank factors",
+      "prompt": "Use wafer-history to pull the history for these wafers: W25-12345-A07, A08, A09, A12, A15. Then run rank-factors-categorical with my defect counts." },
+    { "label": "Default lot → top suspects",
+      "prompt": "Pull a default lot via wafer-history, summarise it with csv-column-summary, then run rank-factors-categorical to surface the top suspect tools." },
+    { "label": "Walk me through the brief",
+      "prompt": "Walk me through filling /brief.md." }
+  ]
+}

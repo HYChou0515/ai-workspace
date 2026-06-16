@@ -2,16 +2,15 @@
 + the ABC's in-memory live feed."""
 
 import asyncio
-from datetime import UTC, datetime
 
 from specstar import SpecStar
 
 from workspace_app.monitor import IMonitor, SpecstarMonitor
+from workspace_app.resources import make_spec
 
 
 def _spec() -> SpecStar:
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     return spec
 
 

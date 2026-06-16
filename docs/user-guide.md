@@ -111,15 +111,19 @@ workspace 檔案視圖。
 
 ---
 
-## 8. RCA 報告（8D）
+## 8. RCA 報告
 
 - 報告以版本檔 `/report.vN.md` 存在，**最大 N 為現行版本**。
+- 報告版型固定三塊：**Problem statement** → **Findings (1..K)** → **Next steps**；
+  每個 finding 嚴格按 **a) 結論 → b) hypothesis → c) 數據+圖 → d) KB references** 寫，
+  findings 按 *physical priority* 排（不是 raw 統計分數）。詳見 system prompt
+  跟 `report-format` skill。
 - 報告檢視器有 **版本切換**、**Generate new version**（請 agent 依現有發現產生
   `v{N+1}`，舊版自動標為 superseded）、**Export PDF**（瀏覽器列印）。
 - 看舊版時會有「superseded」浮水印，並可一鍵跳到現行版。
 
 典型 RCA 流程：探索 `/data/*.csv` → 寫 brief / 5-Why / fishbone → 用 notebook 跑分析 →
-發現穩定後產出 8D 報告。
+發現穩定後產出最終報告。
 
 ---
 

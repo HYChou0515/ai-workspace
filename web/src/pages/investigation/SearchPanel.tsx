@@ -10,11 +10,18 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "../../api";
 import type { SearchOptions, SearchResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
+import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { basename, dirname } from "./renderer";
 
 type SearchClient = {
-  searchFiles: (id: string, query: string, opts?: SearchOptions) => Promise<SearchResult[]>;
+  searchFiles: (
+    slug: string,
+    id: string,
+    query: string,
+    opts?: SearchOptions,
+  ) => Promise<SearchResult[]>;
   replaceInFiles: (
+    slug: string,
     id: string,
     query: string,
     replacement: string,
@@ -35,6 +42,7 @@ export function SearchPanel({
   onOpenFile: OpenFileFn;
   client?: SearchClient;
 }) {
+  const slug = useWorkspaceSlug();
   const [query, setQuery] = useState("");
   const [replacement, setReplacement] = useState("");
   const [regex, setRegex] = useState(false);
@@ -62,7 +70,7 @@ export function SearchPanel({
     }
     setBusy(true);
     try {
-      const res = await client.searchFiles(investigationId, query, opts);
+      const res = await client.searchFiles(slug, investigationId, query, opts);
       setResults(res);
       setError(null);
     } catch (e) {
@@ -71,7 +79,7 @@ export function SearchPanel({
     } finally {
       setBusy(false);
     }
-  }, [client, investigationId, query, opts]);
+  }, [client, slug, investigationId, query, opts]);
 
   // Search-as-you-type, debounced.
   useEffect(() => {
@@ -83,14 +91,14 @@ export function SearchPanel({
     if (!query) return;
     setBusy(true);
     try {
-      await client.replaceInFiles(investigationId, query, replacement, opts);
+      await client.replaceInFiles(slug, investigationId, query, replacement, opts);
       await runSearch();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [client, investigationId, query, replacement, opts, runSearch]);
+  }, [client, slug, investigationId, query, replacement, opts, runSearch]);
 
   const totalMatches = results.reduce((n, r) => n + r.matches.length, 0);
 

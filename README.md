@@ -109,6 +109,39 @@ match **and re-upload** documents — existing vectors are stored at the old
 width. Without a real embedder the app falls back to a deterministic
 non-semantic `HashEmbedder` (offline/tests only).
 
+##### Turn off "thinking" on KB search (faster retrieval)
+
+`kb_search`'s query enhancements — multi-query, HyDE, rerank — run on the
+**retrieval LLM** (`kb.retrieval_llm`, default `qwen3:14b`). qwen3 emits a
+`<think>` block by default, which burns tokens and latency on these cheap helper
+calls. Turn it off with `reasoning_effort: none` on the `kb.retrieval_llm`
+**usage entry** in `configs/config.yaml`:
+
+```yaml
+kb:
+  retrieval_llm:
+    preset: kb-retrieval
+    reasoning_effort: none   # none → Ollama think=False; low|medium|high keep thinking
+```
+
+- Set it on the **`kb.retrieval_llm`** usage entry, *not* inside the
+  `kb-retrieval` preset — the factory reads `reasoning_effort` straight off the
+  usage entry, it isn't merged from the preset.
+- Leaving it unset (`""`) omits the param, so the model keeps its default — and
+  qwen3's default is to think. `none` maps to Ollama `think=False`.
+- This only quiets the retrieval helpers; the KB chat agent's own thinking is a
+  separate knob (its `kb_chat[]` preset).
+
+Different models package `think=False` differently, so verify yours with the
+live probe (needs a reachable Ollama — it drives the exact `LitellmLlm.stream`
+path kb_search uses):
+
+```bash
+uv run python scripts/check_kb_reasoning.py ollama_chat/qwen3:14b --base-url http://localhost:11434
+# verified: qwen3:14b & qwen3:8b → none = no-think, omit/low = THINKS.
+# A "THINKS" on none means that model ignores think=False (needs a model-specific disable).
+```
+
 Once the model is pulled, the previously-skipped live smoke test should
 pass:
 

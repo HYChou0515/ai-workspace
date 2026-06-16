@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
 from msgspec import Struct, field
-from specstar import OnDelete, Ref
 
 
 class MessageMetrics(Struct, frozen=True):
@@ -16,9 +15,32 @@ class MessageMetrics(Struct, frozen=True):
     elapsed_ms: int
 
 
+class Citation(Struct):
+    """A parsed ``[n]`` marker in an answer, resolved to its source. Lives on a
+    persisted message — both `KbMessage` (direct KB chat) and the RCA `Message`
+    produced by the `ask_knowledge_base` tool — so the FE can render reference
+    cards under the answer/tool card. Retrieved chunks get MERGED, so chunk-level
+    provenance is the SET of original chunk ids that composed the cited passage.
+
+    Lives in `conversation.py` (not `kb.py`) so RCA's `Message` can carry it
+    without circular import (kb.py already imports `MessageMetrics` from here).
+    """
+
+    marker: int  # the [n] in the answer
+    collection_id: str
+    document_id: str  # SourceDoc resource id (encoded natural key; see kb.doc_id)
+    filename: str  # display name = basename(path)
+    start: int  # merged span (min start) into canonical text
+    end: int  # max end
+    source_chunk_ids: list[str]  # original DocChunk ids merged
+    snippet: str = ""
+
+
 class Message(Struct):
     role: str
-    """One of `user` / `assistant` / `tool` / `system`."""
+    """One of `user` / `assistant` / `tool` / `system` / `error`.
+    `error` (issue #37) records a terminal turn failure so a reloaded
+    thread still shows it — see `error_kind`."""
 
     content: str
     """User-facing message body. Excludes the model's chain-of-thought
@@ -39,6 +61,13 @@ class Message(Struct):
     tool_name: str | None = None
     """Only set when role=tool — the tool that produced this output."""
 
+    error_kind: str | None = None
+    """Only set when role=error (issue #37) — why the turn failed:
+    `error` (system/model failure), `cancelled` (user interrupted),
+    `max_turns` (hit the step cap). Drives whether the failure re-enters
+    the next turn's LLM history (`api.turns.history_items`): `cancelled`
+    is replayed as a system note, the rest are human-only diagnostics."""
+
     tool_args: dict[str, Any] | None = None
     """Only set when role=tool — the tool call's arguments (captured from the
     ToolStart), so a reloaded log shows the full call, not just its output."""
@@ -56,10 +85,25 @@ class Message(Struct):
     """Only set when role=mention — the user ids summoned ("@ come look").
     A mention is a human-to-human event in the thread, NOT an agent turn."""
 
+    citations: list[Citation] = field(default_factory=list)
+    """Only set when role=tool AND tool_name="ask_knowledge_base" — the
+    KB sub-agent's resolved [n] citations for this tool's answer. Empty for
+    all other messages. Mirrors `KbMessage.citations`; lets the FE render
+    the same reference cards in RCA chat that direct KB chat already shows."""
+
+    tool_display: str = ""
+    """Only set when role=tool and it differs from `content` (#62) — the FULL
+    exec result with a successful command's stderr kept. `content` stays the
+    cleaned, LLM-facing form (fed back to the model via history_items); the FE
+    renders `tool_display` when present so the error the user saw stream live
+    doesn't vanish from the reloaded card. "" ⇒ render `content`."""
+
 
 class Conversation(Struct):
-    investigation_id: Annotated[str, Ref("investigation", on_delete=OnDelete.cascade)]
-    """Ref to the parent investigation. Deleting the investigation
-    cascades — the conversation goes with it."""
+    item_id: str
+    """Opaque, indexed handle to the owning item (any App's WorkItem
+    `resource_id`; #89). NOT a typed specstar `Ref` — Conversation must serve
+    every App's resource, and a `Ref` binds to a single model. Cleanup on item
+    deletion is a per-App on-delete event_handler, not declarative cascade."""
 
     messages: list[Message] = field(default_factory=list)

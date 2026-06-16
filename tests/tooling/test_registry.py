@@ -87,21 +87,19 @@ def test_discover_packages_loads_each_package_and_its_commands(tmp_path: Path):
     assert datalab.commands[0].params_json_schema["properties"]["csv"]["type"] == "string"
 
 
-def test_discover_packages_skips_subdirs_without_commands_json(tmp_path: Path):
-    """A half-built package (e.g. uv venv exists, schemas don't) is
-    silently ignored — never half-advertise a tool."""
+def test_discover_packages_raises_on_subdir_without_commands_json(tmp_path: Path):
+    """A half-built package (e.g. uv venv exists, schemas don't) is a
+    deploy bug — the old silent-skip caused tools to vanish at runtime
+    with no error (see the May-30 RCA): the agent listed only 7 base
+    tools instead of 14. Now: raise with the offender's path so the
+    operator knows to rerun prebuild_tools.py."""
     pre = tmp_path / "prebuilt"
     pre.mkdir()
     (pre / "halfbuilt").mkdir()
     (pre / "halfbuilt" / "schemas").mkdir()
     # commands.json missing.
-    _seed_package(
-        pre,
-        "good",
-        [_cmd("g", "ok", x={"type": "string"})],
-    )
-    pkgs = discover_packages(pre)
-    assert [p.name for p in pkgs] == ["good"]
+    with pytest.raises(RuntimeError, match="halfbuilt.*commands.json"):
+        discover_packages(pre)
 
 
 def test_discover_packages_ignores_stray_files_at_root(tmp_path: Path):
@@ -116,24 +114,25 @@ def test_discover_packages_ignores_stray_files_at_root(tmp_path: Path):
     assert [p.name for p in pkgs] == ["good"]
 
 
-def test_discover_packages_skips_subdir_without_schemas_dir(tmp_path: Path):
-    """commands.json present but `schemas/` missing → skipped (the
-    second condition in the same guard). Covers the half-built variant
-    where the bundle authoring stopped between writing commands.json
-    and writing the per-command schemas."""
+def test_discover_packages_raises_on_subdir_without_schemas_dir(tmp_path: Path):
+    """commands.json present but `schemas/` missing → raise. The
+    second half of the same half-built guard — bundle authoring
+    stopped between writing commands.json and writing per-command
+    schemas."""
     pre = tmp_path / "prebuilt"
     pre.mkdir()
     (pre / "halfbuilt").mkdir()
     (pre / "halfbuilt" / "commands.json").write_text("[]")  # exists, but no schemas/
-    _seed_package(pre, "good", [_cmd("g", "ok", x={"type": "string"})])
-    pkgs = discover_packages(pre)
-    assert [p.name for p in pkgs] == ["good"]
+    with pytest.raises(RuntimeError, match="halfbuilt.*schemas"):
+        discover_packages(pre)
 
 
-def test_discover_packages_skips_command_missing_schema_file(tmp_path: Path):
+def test_discover_packages_raises_on_command_missing_schema_file(tmp_path: Path):
     """commands.json lists a command but its `schemas/<name>.json` is
-    missing → that command is silently dropped (the package still loads
-    with the rest). Covers the per-command schema-missing branch."""
+    missing → raise. Per-command schema-missing branch — silently
+    dropping one command means the LLM sees a different toolset from
+    what commands.json advertised, which is exactly the inconsistency
+    that fail-fast prevents."""
     pre = tmp_path / "prebuilt"
     (pre / "datalab" / "schemas").mkdir(parents=True)
     (pre / "datalab" / "commands.json").write_text(
@@ -143,14 +142,18 @@ def test_discover_packages_skips_command_missing_schema_file(tmp_path: Path):
         '{"name":"summarise","description":"s","params_json_schema":{"type":"object","properties":{}}}'
     )
     # missing.json deliberately absent.
-    pkgs = discover_packages(pre)
-    assert [c.name for c in pkgs[0].commands] == ["summarise"]
+    with pytest.raises(RuntimeError, match="datalab.*missing.*schema"):
+        discover_packages(pre)
 
 
-def test_discover_packages_returns_empty_when_prebuilt_missing(tmp_path: Path):
-    """No prebuilt dir at all → empty list, not crash. Production startup
-    just `if available: ...`s; tests that don't set up prebuilt rely on this."""
-    assert discover_packages(tmp_path / "does-not-exist") == []
+def test_discover_packages_raises_when_prebuilt_dir_missing(tmp_path: Path):
+    """No prebuilt dir at all → raise FileNotFoundError. The May-30 RCA
+    showed silent-empty led to operators not noticing prebuild had never
+    run — a missing PREBUILT_DIR is a setup bug, not a "no packages
+    today" signal. Callers that genuinely don't want packages now gate
+    on their own registry being empty before calling (see __main__.py)."""
+    with pytest.raises(FileNotFoundError, match="prebuild_tools"):
+        discover_packages(tmp_path / "does-not-exist")
 
 
 def test_build_function_tools_expands_pkg_name_to_all_commands(tmp_path: Path):
@@ -191,14 +194,35 @@ def test_build_function_tools_colon_picks_single_command(tmp_path: Path):
     assert [t.name for t in tools] == ["plot"]
 
 
-def test_build_function_tools_allowed_none_returns_empty(tmp_path: Path):
-    """`allowed=None` is "no provisioned tools requested" — common case
-    for the default template. Returns empty (mirrors agent/tools.py
-    behaviour for unknown names — silently skipped)."""
+def test_build_function_tools_allowed_none_means_include_all_commands(tmp_path: Path):
+    """`allowed=None` means \"no restriction\" — include every command
+    from every discovered package. Symmetric with `build_tools(None)`
+    which exposes every workspace tool. The earlier asymmetric
+    behaviour (None ⇒ empty for packages, None ⇒ all for workspace)
+    caused the default AgentConfig (`allowed_tools=[]` → `or None`
+    in `_agent_for`) to get 9 workspace tools and ZERO package tools,
+    so 'what tools do you have?' missed the rca-tools / data-fetch
+    suite entirely."""
+    pre = tmp_path / "prebuilt"
+    _seed_package(
+        pre,
+        "datalab",
+        [_cmd("p", "Plot", x={"type": "string"}), _cmd("s", "Summarise", csv={"type": "string"})],
+    )
+    _seed_package(pre, "fetch", [_cmd("f", "Fetch", name={"type": "string"})])
+    pkgs = discover_packages(pre)
+    out = build_function_tools(pkgs, allowed=None)
+    names = {t.name for t in out}
+    assert names == {"p", "s", "f"}
+
+
+def test_build_function_tools_allowed_empty_list_returns_empty(tmp_path: Path):
+    """An EXPLICIT empty list still means \"nothing\" — distinguishes
+    'caller wants no packages' from 'caller didn't restrict'."""
     pre = tmp_path / "prebuilt"
     _seed_package(pre, "datalab", [_cmd("p", "Plot", x={"type": "string"})])
     pkgs = discover_packages(pre)
-    assert build_function_tools(pkgs, allowed=None) == []
+    assert build_function_tools(pkgs, allowed=[]) == []
 
 
 def test_build_function_tools_raises_on_cross_package_collision(tmp_path: Path):

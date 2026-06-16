@@ -1,9 +1,7 @@
-from datetime import UTC, datetime
-
 import pytest
-from specstar import SpecStar
 
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxSpec
 from workspace_app.sync import DEFAULT_IGNORES, SandboxSync, should_ignore
@@ -11,8 +9,7 @@ from workspace_app.sync import DEFAULT_IGNORES, SandboxSync, should_ignore
 
 @pytest.fixture
 def fs() -> SpecstarFileStore:
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     return SpecstarFileStore(spec)
 
 

@@ -22,8 +22,10 @@
 <script type="text/babel" src="design-canvas.jsx"></script>
 <script type="text/babel" src="rca/system.jsx"></script>
 <script type="text/babel" src="rca/design-system-page.jsx"></script>
+<script type="text/babel" src="rca/launcher.jsx"></script>
 <script type="text/babel" src="rca/home.jsx"></script>
 <script type="text/babel" src="rca/views/analyses.jsx"></script>
+<script type="text/babel" src="rca/views/doctree.jsx"></script>
 <script type="text/babel" src="rca/investigation.jsx"></script>
 
 <script type="text/babel">
@@ -34,6 +36,23 @@ function App() {
       <DCSection id="ds" title="Design System" subtitle="Tokens, components, principles.">
         <DCArtboard id="ds-page" label="RCA Design System · v1" width={1280} height={2440}>
           <DSScreen/>
+        </DCArtboard>
+      </DCSection>
+
+      <DCSection id="launcher" title="App Launcher · /" subtitle="The platform entry screen (multi-app). RCA is one app among several; / is where you pick which dashboard to enter. Chrome stays neutral — each card expresses its app color locally. Direction B (platform header) was chosen.">
+        <DCArtboard id="launcher" label="App Launcher · platform header" width={1280} height={760}>
+          <LauncherHeader width={1280} height={760} />
+        </DCArtboard>
+        <DCArtboard id="launcher-link" label="Open launcher prototype" width={600} height={760}>
+          <a href="App Launcher.html" target="_blank" rel="noopener" className="lnch" style={{ display: "flex", flexDirection: "column", justifyContent: "center", width: 600, height: 760, padding: 36, background: RCA.ink, color: RCA.textDark, borderRadius: 8, textDecoration: "none", gap: 14 }}>
+            <PlatformMark size={34} color={RCA.textDark} />
+            <h2 className="display" style={{ fontSize: 30, color: RCA.textDark, marginTop: 8 }}>
+              Open the launcher <span style={{ color: RCA.accent }}>→</span>
+            </h2>
+            <p style={{ fontSize: 13.5, color: RCA.textDarkD, margin: 0, lineHeight: 1.55 }}>
+              Clickable prototype. Bottom bar flips the four states: Normal · One app · Empty · Loading. Responsive 1 / 2 / 3-column reflow.
+            </p>
+          </a>
         </DCArtboard>
       </DCSection>
 

@@ -23,7 +23,7 @@ import sys
 
 from pydantic import ValidationError
 
-from .commands import COMMANDS
+from csv_column_summary.commands import COMMANDS
 
 
 def _list_payload() -> str:

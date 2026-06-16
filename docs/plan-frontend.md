@@ -237,9 +237,11 @@ Skip for v1: `application/vnd.jupyter.widget-view+json` (ipywidgets),
   (Inter Tight for headings, Inter for body) via CSS.
 - **Edit mode toggle**: pencil icon in the tab area; click → swap to a
   textarea (or Monaco) for editing; Save → PUT to FileStore.
-- v1: standalone markdown rendering is enough. The design's
-  **8-section 8D report** with `D1 · Define team` etc. is just
-  markdown headings — render as-is.
+- v1: standalone markdown rendering is enough. The report's
+  **Problem statement → Findings (a/b/c/d) → Next steps** structure
+  is just markdown headings — render as-is. (Design handoff still
+  shows the original 8D mockup; the agreed model overrides per
+  CLAUDE.md.)
 
 ### F11. Report view (`report.v*.md` file-naming convention)
 

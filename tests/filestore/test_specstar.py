@@ -1,18 +1,15 @@
-from datetime import UTC, datetime
-
 import pytest
-from specstar import SpecStar
 
 from workspace_app.filestore.protocol import FileNotFound
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
 
 
 async def test_second_instance_on_the_same_store_sees_the_files():
     """Multi-pod (#16): a fresh SpecstarFileStore on the same backing store (a
     second pod, with an empty cache) must see what another instance wrote — the
     workspace's resource id is derived from workspace_id, not held in memory."""
-    spec = SpecStar()
-    spec.configure(default_user="u", default_now=lambda: datetime.now(UTC))
+    spec = make_spec(default_user="u")
     pod1 = SpecstarFileStore(spec)
     await pod1.write("ws1", "/a.txt", b"hello")
     await pod1.mkdir("ws1", "/sub")

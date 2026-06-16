@@ -143,3 +143,38 @@ async def test_warm_mkdir_and_rmdir():
     assert await fs.exists(WS, "/d/f.txt") is False  # never touched the snapshot
     with pytest.raises(FileNotFound):
         await files.rmdir(WS, "/d")  # gone → FileNotFoundError mapped to FileNotFound
+
+
+# ─── path normalization (./, /, bare all map to same key) ──────────────
+
+
+async def test_paths_with_with_and_without_leading_dot_slash_target_same_file():
+    """`./brief.md`, `/brief.md`, `brief.md` all resolve to the same
+    file. Lets prompts use `./` (shell-conventional) while the underlying
+    store stays canonical."""
+    from workspace_app.files.facade import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    fs = WorkspaceFiles(MemoryFileStore())
+    await fs.write("inv-1", "./brief.md", b"hello")
+    # Reads with the other two forms see the same content.
+    assert await fs.read("inv-1", "/brief.md") == b"hello"
+    assert await fs.read("inv-1", "brief.md") == b"hello"
+    # exists agrees too.
+    assert await fs.exists("inv-1", "./brief.md")
+    assert await fs.exists("inv-1", "/brief.md")
+    assert await fs.exists("inv-1", "brief.md")
+
+
+async def test_normalize_helper_canonicalises_all_three_forms():
+    """Direct unit test on the helper — guards against subtle regressions
+    (e.g. someone using `lstrip('./')` which would also strip '.')."""
+    from workspace_app.files.facade import _norm
+
+    assert _norm("./brief.md") == "/brief.md"
+    assert _norm("/brief.md") == "/brief.md"
+    assert _norm("brief.md") == "/brief.md"
+    # Subdirs survive.
+    assert _norm("./data/x.csv") == "/data/x.csv"
+    # A bare `.brief.md` (no slash) keeps the leading dot — only `./` strips.
+    assert _norm(".brief.md") == "/.brief.md"

@@ -129,3 +129,51 @@ def test_conversation_to_extraction_doc_serialises_and_truncates():
     assert len(doc.text) < 1000
     assert doc.metadata["source_investigation"] == "inv-1"
     assert doc.metadata["source_title"] == "Reflow drift"
+
+
+def test_distillation_kinds_cover_terminology_context_and_assumptions():
+    """以終為始 (user, 2026-06-06): the point of ingesting a conversation
+    is distilling the USEFUL information — which includes domain
+    terminology, the user's situational context, and the implicit
+    assumptions the discussion leaned on. Those kinds must survive
+    extraction (not be dropped as "made_up" kinds)."""
+    llm = _FakeLlm(
+        '{"insights": ['
+        '  {"kind": "terminology", "title": "黑話: cutpoint",'
+        '   "markdown": "# cutpoint\\n\\nscan stage 前最後可疑製程的 step_number。"},'
+        '  {"kind": "context", "title": "User runs a logic fab on 28nm",'
+        '   "markdown": "# Context\\n\\nDefects observed on M6 Cu CMP, lot 25-W14."},'
+        '  {"kind": "assumption", "title": "Assumed scan covers all modules",'
+        '   "markdown": "# Assumption\\n\\nNever verified the scan stage covers Passiv."}'
+        "]}"
+    )
+    ex = InsightExtractor(llm=llm)
+    out = ex(
+        [
+            Document(
+                text="User: foo\nAssistant: bar",
+                metadata={"source_investigation": "inv-1", "source_title": "t"},
+            )
+        ]
+    )
+    assert [n.metadata["kind"] for n in out] == ["terminology", "context", "assumption"]
+
+
+def test_prompt_sandwiches_the_transcript_between_instructions():
+    """Regression (live qwen3:14b, 2026-06-06): with the conversation at
+    the END of the prompt, the model CONTINUED the dialogue (answered
+    the assistant's open question) instead of extracting insights —
+    classic role-confusion. The template must mark the transcript as
+    data and close with the extraction instruction (instruction
+    sandwich), so the last thing the model reads is its job, not an
+    open question to answer."""
+    from workspace_app.kb.insight_extractor import _DEFAULT_PROMPT
+
+    pos = _DEFAULT_PROMPT.find("{conversation}")
+    assert pos != -1
+    after = _DEFAULT_PROMPT[pos:]
+    # The transcript is fenced as data…
+    assert "<transcript>" in _DEFAULT_PROMPT and "</transcript>" in after
+    # …and a substantive instruction follows it (not a trailing newline).
+    tail = after.split("</transcript>", 1)[1]
+    assert "Do NOT continue" in tail and "JSON" in tail

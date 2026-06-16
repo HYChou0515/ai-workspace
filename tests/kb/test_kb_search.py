@@ -45,7 +45,7 @@ async def test_kb_search_returns_numbered_passages_and_fills_registry(
     assert "reflow" in out
     # the passage is recorded so a later [n] in the answer maps back to a Citation
     assert len(ctx.context.kb_passages) == 1
-    assert ctx.context.kb_passages[0].document_id == encode_doc_id(cid, "u", "reflow.md")
+    assert ctx.context.kb_passages[0].document_id == encode_doc_id(cid, "reflow.md")
 
 
 async def test_kb_search_on_empty_returns_no_results_message(

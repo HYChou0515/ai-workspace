@@ -1,0 +1,29 @@
+{
+  "slug": "_template",
+  "title": "My App",
+  "description": "One-line description shown on the launcher card.",
+  "icon": "flame",
+  "color": "#3B7DD8",
+  "function": { "workspace": true, "sandbox": false, "terminal": false },
+  "agent": {
+    "prompt_file": "prompts/system.md",
+    "tools": ["read_file", "write_file", "edit_file", "ls", "exists", "delete_file"],
+    "picker": [{ "preset": "qwen3-local", "name": "My App · Qwen3 (local)" }],
+    "suggestions": [{ "label": "Summarise", "prompt": "Summarise this item." }]
+  },
+  "item": { "noun": "Item", "noun_plural": "Items", "create_label": "New Item" },
+  "layout": {
+    "breadcrumb": ["priority"],
+    "statusbar": ["priority", "status"],
+    "list": ["priority", "status"],
+    "form": ["priority", "status"],
+    "default_tabs": ["/notes.md"]
+  },
+  "lifecycle": { "status_field": "status", "closing_states": ["done", "dropped"] },
+  "labels": { "priority": "Priority", "status": "Status" },
+  "field_styles": {
+    "priority": { "high": "err", "medium": "warn", "low": "ok" },
+    "status": { "open": "warn", "in_progress": "info", "done": "ok", "dropped": "muted" }
+  },
+  "default_profile": "default"
+}

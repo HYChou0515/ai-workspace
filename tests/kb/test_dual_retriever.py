@@ -72,13 +72,17 @@ def test_hyde_pass_also_fans_out_to_alt_field(spec: SpecStar):
         def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
             yield ("// some plausible code", False)
 
+    from workspace_app.kb.retriever import Enhancements
+
     cid, _ = _ingest_code(spec, "code-only-hyde")
     code_embedder = HashEmbedder(dim=CODE_EMBED_DIM, doc_prefix="code: ")
     text_embedder = HashEmbedder(dim=EMBED_DIM)
     retriever = Retriever(spec, embedder=text_embedder, code_embedder=code_embedder, llm=_FakeLlm())
-    # An LLM is wired → multi-query + HyDE + rerank fire; the alt-field HyDE
-    # branch is the one we're after. Just need it to not crash + return hits.
-    hits = retriever.search("authenticate user", collection_ids=[cid])
+    # Bundled defaults ship `hyde=0`; raise it explicitly so the alt-field
+    # HyDE branch this test covers actually fires.
+    hits = retriever.search(
+        "authenticate user", collection_ids=[cid], enhancements=Enhancements(hyde=1)
+    )
     assert hits
 
 

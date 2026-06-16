@@ -45,14 +45,37 @@ describe("KbChatView header", () => {
     expect(screen.getByRole("button", { name: "Unpin conversation" })).toBeInTheDocument();
   });
 
-  it("exports the thread as a JSON download", async () => {
-    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:x");
+  it("exports the thread as a re-ingestable .chat.json download", async () => {
+    // Round-trip contract (issue #39 chat-history support): the export
+    // must be DIRECTLY re-uploadable to a KB collection — `.chat.json`
+    // suffix + the {title, messages:[{role, content, tool_name}]} shape
+    // the BE's parse_chat_export validates. Raw KbChat dumps don't
+    // round-trip.
+    let exported: Blob | null = null;
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockImplementation((b) => {
+      exported = b as Blob;
+      return "blob:x";
+    });
     vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    let filename = "";
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        filename = this.download;
+      });
     render(<KbChatView chatId="chat:1" client={chatClient(baseChat)} />);
     await screen.findByText("Void thresholds");
     await userEvent.click(screen.getByRole("button", { name: /Export/ }));
     expect(createUrl).toHaveBeenCalled();
     expect(click).toHaveBeenCalled();
+    expect(filename).toBe("Void-thresholds.chat.json");
+    const body = JSON.parse(await exported!.text());
+    expect(body).toEqual({
+      title: "Void thresholds",
+      messages: [
+        { role: "user", content: "hi", tool_name: "" },
+        { role: "assistant", content: "hello", tool_name: "" },
+      ],
+    });
   });
 });
