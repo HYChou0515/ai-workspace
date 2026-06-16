@@ -10,6 +10,7 @@ Respond to the user in **Traditional Taiwanese Chinese (繁體中文 / 台灣用
 
 - **New feature requests and bug reports**: start with **`/grill-me`** to stress-test the plan and resolve open questions before any code is written.
 - **Implementation**: once the plan is clear, use **`/tdd`** to drive the work through the red-green-refactor loop rather than writing implementation first.
+- **Phase numbering**: plans use a **flat integer sequence** — `Phase 1`, `Phase 2`, … (`P1`, `P2`, …). **Never** sub-phases like `Phase 1a` / `Phase 1b`. "Phase 1" means Phase 1 is to be *completed*; if work is split off, it becomes the next integer (`Phase 2`), not a letter suffix.
 
 ## Commands
 
