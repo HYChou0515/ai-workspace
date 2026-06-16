@@ -16,6 +16,7 @@ import msgspec
 from msgspec import UNSET, Struct, UnsetType, field
 
 from ..resources.agent_config import Suggestion
+from ..workflow.manifest import WorkflowManifest
 
 _APPS_PKG = "workspace_app.apps"
 _PROFILES_DIR = "profiles"
@@ -31,6 +32,9 @@ class ProfileManifest(Struct):
     tools: list[str] | UnsetType = UNSET  # ⊆ app.tools; UNSET → inherit all
     presets: list[str] | UnsetType = UNSET  # ⊆ app.picker; UNSET → inherit all
     default_preset: str = ""
+    workflow: WorkflowManifest | None = None
+    """#100: present → this profile is a headless-triggerable workflow (manual §14).
+    Absent (the default) → an ordinary interactive profile."""
 
 
 def _profiles_root(app_slug: str):
@@ -54,6 +58,17 @@ def load_profile(app_slug: str, name: str) -> ProfileManifest:
     except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
         return ProfileManifest()
     return msgspec.json.decode(raw, type=ProfileManifest)
+
+
+def load_workflow_manifest(app_slug: str, name: str) -> WorkflowManifest | None:
+    """The profile's workflow declaration, or ``None`` if it is an ordinary
+    interactive profile (no ``workflow`` block in ``_profile.json``). #100."""
+    return load_profile(app_slug, name).workflow
+
+
+def workflow_profiles(app_slug: str) -> list[str]:
+    """Names of the App's profiles that carry a workflow (manual §14) — sorted."""
+    return [p for p in list_profiles(app_slug) if load_workflow_manifest(app_slug, p) is not None]
 
 
 def load_profile_appendix(app_slug: str, name: str) -> str:
