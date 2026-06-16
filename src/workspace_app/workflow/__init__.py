@@ -2,13 +2,38 @@
 
 See ``docs/workflows.md`` (the manual / spec) and ``docs/plan-workflows.md``.
 This package holds the platform machinery: the ``WorkflowRun`` resource, the
-filesystem-as-journal execution engine, and the step library. *How* any one
-workflow behaves lives in a profile's ``run.py`` (``apps/<slug>/profiles/...``),
-not here.
+filesystem-as-journal execution engine, the step library, and (later) the Run
+endpoint + orchestration driver. *How* any one workflow behaves lives in a
+profile's ``run.py`` (``apps/<slug>/profiles/...``), not here.
+
+The author-facing surface is ``agent_step`` / ``sandbox_node`` / ``check`` /
+``human_gate`` over a ``WorkflowHandle`` (``wf``); ``run_step`` is the engine
+primitive both adapters build on.
 """
 
 from __future__ import annotations
 
+from .checks import choice_in, file_nonempty
+from .engine import CheckResult, StepFailed, fail, run_step
+from .handle import WorkflowHandle
+from .manifest import WorkflowManifest, WorkflowPhase
 from .run import Failure, PhaseState, RunStatus, WorkflowRun
+from .steps import agent_step, sandbox_node
 
-__all__ = ["Failure", "PhaseState", "RunStatus", "WorkflowRun"]
+__all__ = [
+    "CheckResult",
+    "Failure",
+    "PhaseState",
+    "RunStatus",
+    "StepFailed",
+    "WorkflowHandle",
+    "WorkflowManifest",
+    "WorkflowPhase",
+    "WorkflowRun",
+    "agent_step",
+    "choice_in",
+    "fail",
+    "file_nonempty",
+    "run_step",
+    "sandbox_node",
+]

@@ -10,10 +10,19 @@ are layered on in later phases; this is the file/IO surface.
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
 from typing import Any
 
 from ..filestore.protocol import FileStore
+
+# How an agent node runs one turn: given the (feedback-augmented) prompt + the tool
+# subset, drive a ChatTurnEngine turn on the item and return a result summary. The
+# orchestration driver wires the real implementation (P4); tests inject a fake.
+DriveTurn = Callable[[str, list[str] | None], Awaitable[Any]]
+# How a deterministic node runs a command in the sandbox, returning (exit_code,
+# stdout). Wired by the driver; faked in tests.
+RunSandbox = Callable[[str], Awaitable[tuple[int, str]]]
 
 
 def _abs(path: str) -> str:
@@ -30,6 +39,8 @@ class WorkflowHandle:
         workspace_id: str,
         config: dict[str, Any] | None = None,
         user: str = "",
+        drive_turn: DriveTurn | None = None,
+        run_sandbox: RunSandbox | None = None,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -37,6 +48,10 @@ class WorkflowHandle:
         """The profile's config (manual §20 reads ``wf.config["collections"]``)."""
         self.user = user
         """The captured acting user (manual §15)."""
+        self.drive_turn = drive_turn
+        """Wired by the orchestration driver — runs one agent turn (manual §5.1)."""
+        self.run_sandbox = run_sandbox
+        """Wired by the orchestration driver — runs a sandbox command (manual §5.2)."""
 
     async def read(self, path: str) -> bytes:
         return await self._store.read(self._workspace_id, _abs(path))
