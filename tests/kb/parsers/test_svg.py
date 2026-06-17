@@ -85,7 +85,7 @@ def test_svg_parser_rasterizes_then_describes_via_vlm():
     (call,) = vlm.calls
     images = call["images"]
     assert isinstance(images, list) and len(images) == 1
-    img_bytes, img_mime = images[0]
+    img_bytes, img_mime = images[0]  # ty: ignore[not-iterable]
     assert img_mime == "image/png"
     assert img_bytes[:4] == b"\x89PNG"
     assert any("diagram.svg" in m for m in progress)
@@ -178,7 +178,7 @@ def test_svg_parser_feeds_the_vlm_a_cjk_forced_raster_not_tofu():
     (call,) = vlm.calls
     images = call["images"]
     assert isinstance(images, list)
-    img_bytes, img_mime = images[0]
+    img_bytes, img_mime = images[0]  # ty: ignore[not-iterable]
     assert img_mime == "image/png"
     assert img_bytes == forced  # parse() applied the CJK-font override...
     assert img_bytes != naive  # ...so the VLM never sees the tofu render

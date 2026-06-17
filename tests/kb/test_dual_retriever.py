@@ -106,7 +106,7 @@ def test_dense_pass_fans_out_to_both_vector_fields(spec: SpecStar):
         calls.append((field, len(vec)))
         return real(collection_ids, vec, field=field)
 
-    retriever._dense_order = spy  # type: ignore[method-assign]
+    retriever._dense_order = spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     retriever.search("authenticate user", collection_ids=[cid])
     # Exactly one query → one dense pass per field = 2 calls. Each call's
     # vector width matches the targeted field.

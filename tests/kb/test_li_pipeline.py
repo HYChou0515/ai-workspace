@@ -98,7 +98,7 @@ def test_markdown_chunks_carry_heading_breadcrumb_in_text(spec: SpecStar, embedd
     chunks = _chunks_of(spec, ids[0])
     assert len(chunks) >= 1
     # Every chunk is properly embedded at the right dim.
-    assert all(len(c.embedding) == EMBED_DIM for c in chunks)
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
     # At least one chunk for body content under "Docker" carries BOTH the H1
     # and the H2 in its text — that's the breadcrumb prepend.
     docker_chunks = [c for c in chunks if "Dockerfile" in c.text]
@@ -142,7 +142,7 @@ def test_ingests_pdf_via_pdfreader_into_chunks(spec: SpecStar, embedder: HashEmb
     assert len(chunks) >= 1
     # The extracted PDF text made it into at least one chunk.
     assert any("Hello PDF World" in c.text for c in chunks)
-    assert all(len(c.embedding) == EMBED_DIM for c in chunks)
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
 
 
 def test_ingests_html_via_reader_into_chunks(spec: SpecStar, embedder: HashEmbedder):
@@ -165,7 +165,7 @@ def test_ingests_html_via_reader_into_chunks(spec: SpecStar, embedder: HashEmbed
     # Body text survived the tag-strip; the script alert text did NOT
     # (HTMLTagReader pulls just the <body>'s rendered content).
     assert any("widgets" in c.text for c in chunks)
-    assert all(len(c.embedding) == EMBED_DIM for c in chunks)
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
 
 
 def test_reingesting_identical_bytes_does_not_churn(spec: SpecStar, embedder: HashEmbedder):
@@ -366,7 +366,7 @@ def test_ingest_json_end_to_end_tags_chunks_with_json_parser(
     assert len(chunks) >= 1
     assert all(c.parser_id == "JsonParser" for c in chunks)
     assert any("incident root_cause etch chamber drift" in c.text for c in chunks)
-    assert all(len(c.embedding) == EMBED_DIM for c in chunks)
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
 
 
 def test_ingest_csv_end_to_end_one_row_one_chunk_with_headers(
@@ -396,7 +396,7 @@ def test_get_doc_pipeline_factory_constructs():
     pipeline = get_doc_pipeline(settings, HashEmbedder(dim=EMBED_DIM))
     assert pipeline is not None
     # Two transformations: DispatchSplitter + EmbedderAdapter.
-    assert len(pipeline.transformations) == 2  # type: ignore[attr-defined]
+    assert len(pipeline.transformations) == 2  # ty: ignore[unresolved-attribute]
 
 
 def test_create_app_accepts_kb_pipeline():
@@ -455,7 +455,7 @@ def test_unknown_mime_falls_back_to_sentence_splitter(spec: SpecStar, embedder: 
     chunks = _chunks_of(spec, ids[0])
 
     assert len(chunks) >= 1
-    assert all(len(c.embedding) == EMBED_DIM for c in chunks)
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
     # The fallback did NOT prepend a markdown heading breadcrumb — text is
     # the raw sentence content.
     assert not any(c.text.startswith("# ") or " > " in c.text[:50] for c in chunks)

@@ -52,7 +52,7 @@ async def test_read_skill_returns_body_for_known_skill(isolated_apps: Path):
 
     _profile_with_skill(isolated_apps, "rca", "local-lab", "report-format", "fmt", "# Fmt\n\nbody.")
     ctx = AgentToolContext(app_slug="rca", template_profile="local-lab")
-    body = await read_skill_impl(RunContextWrapper(ctx), "report-format")  # ty: ignore[invalid-argument-type]
+    body = await read_skill_impl(RunContextWrapper(ctx), "report-format")
     assert body.startswith("# Fmt")
 
 
@@ -61,7 +61,7 @@ async def test_read_skill_unknown_name_returns_error_listing_available(isolated_
 
     _profile_with_skill(isolated_apps, "rca", "local-lab", "good", "ok", "body")
     ctx = AgentToolContext(app_slug="rca", template_profile="local-lab")
-    out = await read_skill_impl(RunContextWrapper(ctx), "nope")  # ty: ignore[invalid-argument-type]
+    out = await read_skill_impl(RunContextWrapper(ctx), "nope")
     assert "error:" in out
     assert "nope" in out
     assert "available" in out.lower()
@@ -76,10 +76,10 @@ async def test_read_skill_uses_app_slug_and_profile_from_context(isolated_apps: 
 
     _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "A-body")
     _profile_with_skill(isolated_apps, "rca", "smt", "fmt", "x", "B-body")
-    a = await read_skill_impl(  # ty: ignore[invalid-argument-type]
+    a = await read_skill_impl(
         RunContextWrapper(AgentToolContext(app_slug="rca", template_profile="local-lab")), "fmt"
     )
-    b = await read_skill_impl(  # ty: ignore[invalid-argument-type]
+    b = await read_skill_impl(
         RunContextWrapper(AgentToolContext(app_slug="rca", template_profile="smt")), "fmt"
     )
     assert a == "A-body"
@@ -110,7 +110,7 @@ async def test_read_skill_does_not_wake_sandbox(isolated_apps: Path):
         app_slug="rca",
         template_profile="local-lab",
     )
-    body = await read_skill_impl(RunContextWrapper(ctx), "fmt")  # ty: ignore[invalid-argument-type]
+    body = await read_skill_impl(RunContextWrapper(ctx), "fmt")
     assert body == "body"
 
 
@@ -120,7 +120,7 @@ async def test_read_skill_without_app_or_profile_returns_error():
     from workspace_app.agent.tools import read_skill_impl
 
     ctx = AgentToolContext(app_slug=None, template_profile=None)
-    out = await read_skill_impl(RunContextWrapper(ctx), "anything")  # ty: ignore[invalid-argument-type]
+    out = await read_skill_impl(RunContextWrapper(ctx), "anything")
     assert "error" in out
     assert "App workspace" in out
 

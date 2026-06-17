@@ -35,7 +35,7 @@ async def test_answer_question_sets_reasoning_effort_on_subagent_ctx():
     runner = _CaptureRunner()
     await answer_question(
         runner,  # type: ignore[arg-type] — test double satisfies the run() shape
-        retriever=None,  # type: ignore[arg-type] — _CaptureRunner never retrieves
+        retriever=None,  # ty: ignore[invalid-argument-type] — _CaptureRunner never retrieves
         collection_ids=[],
         question="q",
         agent_config=AgentConfig(name="KB"),
@@ -48,7 +48,7 @@ async def test_answer_question_defaults_reasoning_effort_to_none():
     runner = _CaptureRunner()
     await answer_question(
         runner,  # type: ignore[arg-type]
-        retriever=None,  # type: ignore[arg-type]
+        retriever=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         collection_ids=[],
         question="q",
         agent_config=AgentConfig(name="KB"),

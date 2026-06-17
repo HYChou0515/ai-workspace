@@ -71,7 +71,7 @@ def test_logger_best_effort_swallows_writer_error(tmp_path: Path):
         def write_summary(self, summary):
             raise RuntimeError("disk full")
 
-    logger = LlmCallLogger(BoomWriter())
+    logger = LlmCallLogger(BoomWriter())  # ty: ignore[invalid-argument-type]
     # Must not raise — a logging failure cannot be allowed to break a turn.
     asyncio.run(logger.async_log_success_event(_gen_kwargs(), _gen_resp(), _T0, _T1))
 
@@ -81,7 +81,7 @@ def test_logger_failure_event_is_best_effort(tmp_path: Path):
         def write_call(self, record):
             raise RuntimeError("disk full")
 
-    logger = LlmCallLogger(BoomWriter())
+    logger = LlmCallLogger(BoomWriter())  # ty: ignore[invalid-argument-type]
     kwargs = {**_gen_kwargs(), "exception": ValueError("boom")}
     # A failing writer on the failure path must also be swallowed.
     asyncio.run(logger.async_log_failure_event(kwargs, None, _T0, _T1))

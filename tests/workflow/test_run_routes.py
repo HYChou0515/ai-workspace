@@ -36,7 +36,7 @@ def _app(profile: str = "echo") -> tuple[FastAPI, SpecStar, str]:
 
 
 def _route(app: FastAPI, path: str):
-    return next(r.endpoint for r in app.routes if getattr(r, "path", None) == path)
+    return next(r.endpoint for r in app.routes if getattr(r, "path", None) == path)  # ty: ignore
 
 
 def _base(item_id: str) -> str:

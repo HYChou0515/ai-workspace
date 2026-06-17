@@ -44,7 +44,7 @@ def test_cited_counts_surface_on_collections_documents_and_chunks():
     cid = c.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
     files = {"file": ("guide.md", b"# Guide\none two three four five", "text/markdown")}
     docid = c.post(f"/kb/collections/{cid}/documents", files=files).json()["document_ids"][0]
-    c.app.state.index_coordinator.wait_idle()  # #82: indexing runs on the queue — drain it
+    c.app.state.index_coordinator.wait_idle()  # ty: ignore[unresolved-attribute] (#82 drain queue)
 
     # before any citation
     doc = next(

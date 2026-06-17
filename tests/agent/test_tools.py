@@ -297,7 +297,7 @@ def test_kb_search_logs_underlying_exception_before_reraising(caplog):
         def search(self, query, collection_ids, on_progress, *, enhancements=None):
             raise ConnectionRefusedError("Ollama at http://localhost:11434 not reachable")
 
-    ctx = RunContextWrapper(AgentToolContext(retriever=_BrokenRetriever()))
+    ctx = RunContextWrapper(AgentToolContext(retriever=_BrokenRetriever()))  # ty: ignore
     with caplog.at_level(logging.ERROR):
         try:
             kb_search_impl(ctx, "voids")
@@ -339,7 +339,7 @@ def test_kb_search_caller_depth_overrides_llm_tool_args():
     retr = _RecordingRetriever()
     ctx = RunContextWrapper(
         AgentToolContext(
-            retriever=retr,
+            retriever=retr,  # ty: ignore[invalid-argument-type]
             kb_enhancements=Enhancements(expand=0, hyde=0, rerank=False),
         )
     )
@@ -356,7 +356,7 @@ def test_kb_search_uses_llm_args_when_caller_leaves_depth_unset():
     from workspace_app.kb.retriever import Enhancements
 
     retr = _RecordingRetriever()
-    ctx = RunContextWrapper(AgentToolContext(retriever=retr))  # no kb_enhancements
+    ctx = RunContextWrapper(AgentToolContext(retriever=retr))  # no kb_enhancements  # ty: ignore
     kb_search_impl(ctx, "voids", expand=2, hyde=1, rerank=True)
     assert retr.enhancements == Enhancements(expand=2, hyde=1, rerank=True)
 
@@ -372,7 +372,7 @@ def test_kb_search_cascade_is_per_knob():
 
     retr = _RecordingRetriever()
     ctx = RunContextWrapper(
-        AgentToolContext(retriever=retr, kb_enhancements=Enhancements(expand=0))
+        AgentToolContext(retriever=retr, kb_enhancements=Enhancements(expand=0))  # ty: ignore
     )
     kb_search_impl(ctx, "voids", expand=9, hyde=3, rerank=True)
     assert retr.enhancements == Enhancements(expand=0, hyde=3, rerank=True)

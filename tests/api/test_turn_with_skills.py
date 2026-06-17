@@ -80,6 +80,6 @@ async def test_turn_agent_exposes_read_skill_pointing_at_the_shared_impl(isolate
     _profile_with_skill(isolated_apps, "rca", "local-lab")
     agent = _agent_for(AgentConfig(name="a"), app_slug="rca", template_profile="local-lab")
     read_skill_tool = next(t for t in agent.tools if t.name == "read_skill")
-    assert "name" in read_skill_tool.params_json_schema["properties"]
+    assert "name" in read_skill_tool.params_json_schema["properties"]  # ty: ignore
     assert "read_skill" in {t.name for t in build_tools(app_slug="rca", profile="local-lab")}
     assert _IMPLS["read_skill"] is read_skill_impl

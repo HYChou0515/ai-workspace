@@ -40,7 +40,7 @@ async def _seed_input(wf: WorkflowHandle) -> None:
 
 async def test_discovery_loads_the_intake_run():
     loaded = load_run_callable("playground", "intake")
-    assert callable(loaded) and loaded.__name__ == "run"
+    assert callable(loaded) and loaded.__name__ == "run"  # ty: ignore[unresolved-attribute]
 
 
 async def test_approve_classifies_then_ingests():

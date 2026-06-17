@@ -44,7 +44,7 @@ async def _stream(model) -> list:
 
 async def test_repairs_malformed_args_in_output_item_done():
     item = _fc('{"path": ./hello.md"}')  # the #76 missing-quote slip
-    out = await _stream(RepairingModel(_FakeInner([_done(item)])))
+    out = await _stream(RepairingModel(_FakeInner([_done(item)])))  # ty: ignore
     repaired = out[0].item.arguments
     assert json.loads(repaired) == json.loads(json.dumps(json.loads(repaired)))  # valid JSON
     assert "path" in json.loads(repaired)
@@ -52,7 +52,7 @@ async def test_repairs_malformed_args_in_output_item_done():
 
 async def test_leaves_valid_args_untouched():
     item = _fc('{"path": "ok.md"}')
-    out = await _stream(RepairingModel(_FakeInner([_done(item)])))
+    out = await _stream(RepairingModel(_FakeInner([_done(item)])))  # ty: ignore
     assert out[0].item.arguments == '{"path": "ok.md"}'  # byte-identical, no churn
 
 
@@ -64,7 +64,7 @@ async def test_unrepairable_args_become_a_valid_backstop_sentinel():
     from workspace_app.agent.arg_repair import malformed_raw
 
     item = _fc('{"a": 1}{"b": 2}')
-    out = await _stream(RepairingModel(_FakeInner([_done(item)])))
+    out = await _stream(RepairingModel(_FakeInner([_done(item)])))  # ty: ignore
     parsed = json.loads(out[0].item.arguments)  # MUST be valid JSON now
     assert malformed_raw(parsed) == '{"a": 1}{"b": 2}'  # raw preserved for transparency
 
@@ -78,32 +78,32 @@ async def test_backstop_sentinel_when_repair_is_disabled(monkeypatch):
 
     monkeypatch.setattr(rm, "repair_tool_args", lambda *_a, **_k: None)  # repair "off"
     item = _fc('{"path": ./hello.md"}')
-    out = await _stream(RepairingModel(_FakeInner([_done(item)])))
+    out = await _stream(RepairingModel(_FakeInner([_done(item)])))  # ty: ignore
     parsed = json.loads(out[0].item.arguments)
     assert malformed_raw(parsed) == '{"path": ./hello.md"}'
 
 
 async def test_repairs_malformed_args_in_response_completed():
     item = _fc('{"path": ./x"}')
-    out = await _stream(RepairingModel(_FakeInner([_completed([item])])))
+    out = await _stream(RepairingModel(_FakeInner([_completed([item])])))  # ty: ignore
     assert "path" in json.loads(out[0].response.output[0].arguments)
 
 
 async def test_ignores_non_function_call_items():
     msg = NS(type="message", content="hi")  # not a tool call → untouched
-    out = await _stream(RepairingModel(_FakeInner([_done(msg)])))
+    out = await _stream(RepairingModel(_FakeInner([_done(msg)])))  # ty: ignore
     assert out[0].item is msg
 
 
 async def test_passes_through_unrelated_events():
     delta = NS(type="response.output_text.delta", delta="hello")
-    out = await _stream(RepairingModel(_FakeInner([delta])))
+    out = await _stream(RepairingModel(_FakeInner([delta])))  # ty: ignore[invalid-argument-type]
     assert out[0] is delta
 
 
 async def test_get_response_delegates_to_inner():
     sentinel = NS(output=[])
-    resp = await RepairingModel(_FakeInner([], response=sentinel)).get_response(
+    resp = await RepairingModel(_FakeInner([], response=sentinel)).get_response(  # ty: ignore
         None, "in", None, [], None, [], None
     )
     assert resp is sentinel

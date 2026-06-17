@@ -11,13 +11,14 @@ without the single-blob write amplification of SpecstarFileStore.
 from __future__ import annotations
 
 import pytest
+from specstar import SpecStar
 
 from workspace_app.filestore.protocol import FileNotFound
 from workspace_app.kb.wiki.store import WikiFileStore
 from workspace_app.resources import Collection, WikiPage, make_spec
 
 
-def _spec_with_collection() -> tuple[object, str]:
+def _spec_with_collection() -> tuple[SpecStar, str]:
     spec = make_spec(default_user="u")
     cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
     return spec, cid
@@ -70,7 +71,7 @@ async def test_overwrite_uses_draft_modify_so_no_revision_bloat():
 
     rm = spec.get_resource_manager(WikiPage)
     [row] = rm.list_resources((QB["collection_id"] == cid).build())
-    revs = rm.list_revisions(row.info.resource_id)
+    revs = rm.list_revisions(row.info.resource_id)  # ty: ignore[unresolved-attribute]
     assert len(revs) == 1  # draft modify in place → one revision, not five
 
 

@@ -10,6 +10,7 @@ tools stay decoupled from specstar — a fake is injected in tests.
 from __future__ import annotations
 
 import abc
+import builtins
 from dataclasses import dataclass
 
 from specstar import QB, SpecStar
@@ -35,7 +36,7 @@ class IWikiSources(abc.ABC):
     """The collection's raw sources, addressed by their display path."""
 
     @abc.abstractmethod
-    def list(self) -> list[str]:
+    def list(self) -> builtins.list[str]:
         """Source paths (e.g. ``reflow-spec.pdf``) in the collection."""
 
     @abc.abstractmethod
@@ -70,7 +71,7 @@ class SpecstarWikiSources(IWikiSources):
             if isinstance(r.data, SourceDoc)
         ]
 
-    def list(self) -> list[str]:
+    def list(self) -> builtins.list[str]:
         # A path is one shared doc in the collection, so display labels are just
         # the bare paths (no per-uploader disambiguation needed any more).
         return sorted(r.data.path for r in self._resources())

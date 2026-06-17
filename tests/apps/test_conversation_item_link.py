@@ -16,4 +16,4 @@ def test_conversation_links_to_any_app_item_by_item_id(spec_instance: SpecStar):
 
     rows = [r.data for r in conv_rm.list_resources((QB["item_id"] == item.resource_id).build())]
     assert len(rows) == 1
-    assert rows[0].item_id == item.resource_id
+    assert rows[0].item_id == item.resource_id  # ty: ignore[unresolved-attribute]

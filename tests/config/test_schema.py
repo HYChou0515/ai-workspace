@@ -197,13 +197,13 @@ def test_enhancement_int_and_bool_are_frozen_dataclasses():
     e_int = EnhancementInt(default=1, max=3)
     e_bool = EnhancementBool(default=True, max=True)
     try:
-        e_int.default = 99  # type: ignore[misc]
+        e_int.default = 99  # type: ignore[misc]  # ty: ignore[invalid-assignment]
     except dataclasses.FrozenInstanceError:
         pass
     else:
         raise AssertionError("EnhancementInt must be frozen")
     try:
-        e_bool.default = False  # type: ignore[misc]
+        e_bool.default = False  # type: ignore[misc]  # ty: ignore[invalid-assignment]
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("EnhancementBool must be frozen")
@@ -311,7 +311,7 @@ def test_settings_is_frozen_so_top_level_reassignment_fails():
 
     s = Settings()
     try:
-        s.server = None  # type: ignore[misc]
+        s.server = None  # type: ignore[misc]  # ty: ignore[invalid-assignment]
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("Settings should be frozen")

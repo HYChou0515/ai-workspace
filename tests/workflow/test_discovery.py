@@ -15,7 +15,7 @@ from workspace_app.workflow.manifest import WorkflowManifest, WorkflowPhase
 
 def test_load_run_callable_returns_the_run():
     run = load_run_callable("playground", "echo")
-    assert callable(run) and run.__name__ == "run"
+    assert callable(run) and run.__name__ == "run"  # ty: ignore[unresolved-attribute]
 
 
 def test_load_run_callable_missing_run_py_raises():
@@ -45,7 +45,7 @@ def test_exec_run_loads_a_valid_run(tmp_path):
     good = tmp_path / "run.py"
     good.write_text("async def run(wf, inputs):\n    return inputs\n")
     fn = _exec_run(good, "label")
-    assert callable(fn) and fn.__name__ == "run"
+    assert callable(fn) and fn.__name__ == "run"  # ty: ignore[unresolved-attribute]
 
 
 def test_check_phase_ids_rejects_a_phase_missing_its_id():

@@ -47,7 +47,7 @@ class _FlakyCas:
 
 async def test_edit_retries_against_a_concurrent_writer():
     fake = _FlakyCas()
-    files = WorkspaceFiles(fake)  # type: ignore[arg-type] — duck-typed CAS store
+    files = WorkspaceFiles(fake)  # ty: ignore[invalid-argument-type] — duck-typed CAS store
     assert await files.edit("ws", "/p.md", "hello", "HELLO") is None
     assert fake.cas_calls == 2  # one failed attempt, one success
     assert fake.content == b"HELLO world"
@@ -65,7 +65,7 @@ class _AlwaysContended:
 
 
 async def test_edit_reports_a_conflict_under_persistent_contention():
-    files = WorkspaceFiles(_AlwaysContended())  # type: ignore[arg-type]
+    files = WorkspaceFiles(_AlwaysContended())  # ty: ignore[invalid-argument-type]
     # Exhausts retries → hands back the current content so the agent re-bases.
     assert await files.edit("ws", "/p.md", "hello", "HI") == "hello world"
 
@@ -79,5 +79,5 @@ class _MissingPage:
 
 
 async def test_edit_of_a_missing_page_returns_empty():
-    files = WorkspaceFiles(_MissingPage())  # type: ignore[arg-type]
+    files = WorkspaceFiles(_MissingPage())  # ty: ignore[invalid-argument-type]
     assert await files.edit("ws", "/gone.md", "a", "b") == ""

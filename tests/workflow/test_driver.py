@@ -68,7 +68,7 @@ async def test_failing_run_records_error_with_message(spec_instance: SpecStar):
     await run_workflow(spec_instance, run_id=rid, profile_run=run, wf=_wf(), inputs={})
     got = spec_instance.get_resource_manager(WorkflowRun).get(rid).data
     assert got.status is RunStatus.ERROR
-    assert "malformed" in got.result["error"]
+    assert "malformed" in got.result["error"]  # ty: ignore[not-subscriptable]
     assert got.ended is not None
 
 

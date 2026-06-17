@@ -40,8 +40,8 @@ def test_ask_knowledge_base_depth_reaches_kb_search():
 
     asyncio.run(
         answer_question(
-            _ToolCallingRunner(),
-            _RecordingRetriever(),
+            _ToolCallingRunner(),  # ty: ignore[invalid-argument-type]
+            _RecordingRetriever(),  # ty: ignore[invalid-argument-type]
             ["c1"],
             "what does the KB say about reflow",
             agent_config=AgentConfig(name="kb"),

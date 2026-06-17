@@ -20,14 +20,14 @@ class ActivityEntry:
     ts: str  # ISO-8601 UTC
     kind: str  # investigation_created | investigation_closed | file_written | ...
     text: str  # human-readable one-liner
-    ref: dict[str, str] = field(default_factory=dict)  # {investigation_id, path?}
+    ref: dict[str, str | int] = field(default_factory=dict)  # {investigation_id, path?, count?}
 
 
 class ActivityLog:
     def __init__(self, maxlen: int = 200) -> None:
         self._entries: deque[ActivityEntry] = deque(maxlen=maxlen)
 
-    def record(self, kind: str, text: str, ref: dict[str, str] | None = None) -> None:
+    def record(self, kind: str, text: str, ref: dict[str, str | int] | None = None) -> None:
         self._entries.appendleft(
             ActivityEntry(
                 ts=datetime.now(UTC).isoformat(),

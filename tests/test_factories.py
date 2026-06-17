@@ -54,7 +54,7 @@ def test_get_agent_config_catalog_exposes_kb_chat():
     catalog = get_agent_config_catalog(Settings(), config_dir=None)
     kb = catalog.kb_chat()
     assert kb is not None
-    assert "kb_search" in kb.allowed_tools
+    assert "kb_search" in kb.allowed_tools  # ty: ignore[unsupported-operator]
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────
@@ -270,7 +270,7 @@ def test_get_kb_llm_threads_the_configured_reasoning_effort():
     assert llm.reasoning_effort == "none"
 
     # default ref carries no effort ⇒ None (omit the param)
-    assert get_kb_llm(Settings()).reasoning_effort is None  # type: ignore[union-attr]
+    assert get_kb_llm(Settings()).reasoning_effort is None  # ty: ignore[unresolved-attribute]
 
 
 def test_get_kb_llm_threads_chat_endpoint_when_ref_creds_unset():
@@ -283,15 +283,15 @@ def test_get_kb_llm_threads_chat_endpoint_when_ref_creds_unset():
     )
     llm = get_kb_llm(s)
     assert llm is not None
-    assert llm._base_url == "http://x/v1"
-    assert llm._api_key == "k"
+    assert llm._base_url == "http://x/v1"  # ty: ignore[unresolved-attribute]
+    assert llm._api_key == "k"  # ty: ignore[unresolved-attribute]
 
     # Bare Settings: no top-level llm creds, ref creds empty too — the
     # LitellmLlm still constructs (LiteLLM falls back to provider env
     # / Ollama defaults), endpoint fields land as None.
     bare = get_kb_llm(Settings())
     assert bare is not None
-    assert bare._base_url is None and bare._api_key is None
+    assert bare._base_url is None and bare._api_key is None  # ty: ignore[unresolved-attribute]
 
 
 def test_get_kb_llm_ref_overrides_win_over_referenced_preset():
@@ -315,9 +315,9 @@ def test_get_kb_llm_ref_overrides_win_over_referenced_preset():
     )
     llm = get_kb_llm(s)
     assert llm is not None
-    assert llm._model == "openai/gpt-4o-mini"
-    assert llm._base_url == "http://retrieve/v1"
-    assert llm._api_key == "sk-retrieve"
+    assert llm._model == "openai/gpt-4o-mini"  # ty: ignore[unresolved-attribute]
+    assert llm._base_url == "http://retrieve/v1"  # ty: ignore[unresolved-attribute]
+    assert llm._api_key == "sk-retrieve"  # ty: ignore[unresolved-attribute]
 
 
 def test_get_kb_llm_ref_creds_win_over_top_level_llm():
@@ -341,8 +341,8 @@ def test_get_kb_llm_ref_creds_win_over_top_level_llm():
     )
     llm = get_kb_llm(s)
     assert llm is not None
-    assert llm._base_url == "http://retrieve/v1"
-    assert llm._api_key == "retrieve-key"
+    assert llm._base_url == "http://retrieve/v1"  # ty: ignore[unresolved-attribute]
+    assert llm._api_key == "retrieve-key"  # ty: ignore[unresolved-attribute]
 
 
 def test_get_kb_llm_inherits_endpoint_from_referenced_preset():
@@ -359,8 +359,8 @@ def test_get_kb_llm_inherits_endpoint_from_referenced_preset():
     s = replace(base, agents=replace(base.agents, presets=presets))
     llm = get_kb_llm(s)
     assert llm is not None
-    assert llm._base_url == "http://from-preset/v1"
-    assert llm._api_key == "preset-key"
+    assert llm._base_url == "http://from-preset/v1"  # ty: ignore[unresolved-attribute]
+    assert llm._api_key == "preset-key"  # ty: ignore[unresolved-attribute]
 
 
 # ─── runner ─────────────────────────────────────────────────────────────
@@ -376,9 +376,9 @@ def test_get_runner_threads_chat_endpoint_empty_is_none():
         llm=replace(Settings().llm, base_url="https://hosted/v1", api_key="sk-1"),
     )
     r = get_runner(with_endpoint)
-    assert r._base_url == "https://hosted/v1" and r._api_key == "sk-1"
+    assert r._base_url == "https://hosted/v1" and r._api_key == "sk-1"  # ty: ignore
     bare = get_runner(Settings())  # unset → None, not "" (LiteLLM defaults apply)
-    assert bare._base_url is None and bare._api_key is None
+    assert bare._base_url is None and bare._api_key is None  # ty: ignore[unresolved-attribute]
 
 
 # ─── load_settings (config.yaml entry point) ────────────────────────────

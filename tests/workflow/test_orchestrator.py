@@ -127,7 +127,7 @@ async def test_failing_step_records_error_phase_and_notifies(spec_instance: Spec
     await asyncio.sleep(0)
     got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
     assert got.status is RunStatus.ERROR
-    assert "missing.json" in got.result["error"]
+    assert "missing.json" in got.result["error"]  # ty: ignore[not-subscriptable]
     think = next(p for p in got.phases if p.phase == "think")
     assert think.status == "failed" and think.failed == 1
     assert len(fakes.notified) == 1  # in-app failure notification (§17)
@@ -269,7 +269,7 @@ async def test_wall_clock_timeout_aborts_to_error(spec_instance: SpecStar):
     await asyncio.sleep(0.05)
     got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
     assert got.status is RunStatus.ERROR
-    assert "wall-clock" in got.result["error"]
+    assert "wall-clock" in got.result["error"]  # ty: ignore[not-subscriptable]
     assert fakes.released == [("i9", True)]
 
 
@@ -284,7 +284,7 @@ async def test_max_steps_budget_aborts_to_error(spec_instance: SpecStar):
     await asyncio.sleep(0)
     got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
     assert got.status is RunStatus.ERROR
-    assert "max steps" in got.result["error"]
+    assert "max steps" in got.result["error"]  # ty: ignore[not-subscriptable]
 
 
 async def test_runs_with_default_collaborators(spec_instance: SpecStar):
@@ -353,7 +353,10 @@ async def test_keep_last_runs_prunes_old_terminal_runs(spec_instance: SpecStar):
     rm = spec_instance.get_resource_manager(WorkflowRun)
     from specstar import QB
 
-    kept = {r.info.resource_id for r in rm.list_resources((QB["item_id"] == "ik").build())}
+    kept = {
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["item_id"] == "ik").build())
+    }
     assert len(kept) == 2  # only the 2 newest survive (manual §16)
     assert ids[-1] in kept and ids[0] not in kept
 
@@ -369,7 +372,10 @@ async def test_keep_last_one_prunes_down_to_the_active_run(spec_instance: SpecSt
     from specstar import QB
 
     rm = spec_instance.get_resource_manager(WorkflowRun)
-    ids = [r.info.resource_id for r in rm.list_resources((QB["item_id"] == "ik1").build())]
+    ids = [
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["item_id"] == "ik1").build())
+    ]
     assert ids == [keep]  # the prior terminal run was pruned, the new one kept
 
 

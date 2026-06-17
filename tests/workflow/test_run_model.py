@@ -27,7 +27,7 @@ def test_runs_are_listable_by_item(spec_instance: SpecStar):
 
     runs = list(rm.list_resources((QB["item_id"] == "rca/a/1").build()))
     assert len(runs) == 2
-    assert all(r.data.item_id == "rca/a/1" for r in runs)
+    assert all(r.data.item_id == "rca/a/1" for r in runs)  # ty: ignore[unresolved-attribute]
 
 
 def test_active_runs_are_listable_by_status(spec_instance: SpecStar):
@@ -38,7 +38,7 @@ def test_active_runs_are_listable_by_status(spec_instance: SpecStar):
     rm.create(WorkflowRun(item_id="i/3", captured_user="a", status=RunStatus.RUNNING))
 
     running = list(rm.list_resources((QB["status"] == RunStatus.RUNNING).build()))
-    assert {r.data.item_id for r in running} == {"i/1", "i/3"}
+    assert {r.data.item_id for r in running} == {"i/1", "i/3"}  # ty: ignore[unresolved-attribute]
 
 
 def test_run_status_transitions_to_terminal_with_result(spec_instance: SpecStar):

@@ -26,7 +26,7 @@ async def test_enqueue_runs_queued_turns_in_fifo_order_without_cancelling():
             yield RunDone()
             order.append(("end", content))
 
-    engine = ChatTurnEngine(_Runner())
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
     results: list[list] = []
     both_done = asyncio.Event()
 
@@ -62,7 +62,7 @@ async def test_cancel_current_stops_only_the_running_turn_then_next_runs():
             yield MessageDelta(text=content)
             yield RunDone()
 
-    engine = ChatTurnEngine(_Runner())
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
 
     def oc_slow(msgs):
         results["slow"] = msgs
@@ -93,7 +93,7 @@ async def test_all_subscribers_receive_a_turns_broadcast_events():
             yield MessageDelta(text="hi")
             yield RunDone()
 
-    engine = ChatTurnEngine(_Runner())
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
     sub1 = engine.subscribe("inv")  # registers its queue synchronously
     sub2 = engine.subscribe("inv")
 
@@ -124,7 +124,7 @@ async def test_subscribe_sse_yields_sse_encoded_frames():
             yield MessageDelta(text="hi")
             yield RunDone()
 
-    engine = ChatTurnEngine(_Runner())
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
     frames = engine.subscribe_sse("inv")
 
     async def collect(n):
@@ -151,7 +151,7 @@ async def test_forget_on_an_unknown_key_is_a_noop():
         async def run(self, content, ctx):  # pragma: no cover — never invoked
             yield RunDone()
 
-    ChatTurnEngine(_Runner()).forget("never-touched")
+    ChatTurnEngine(_Runner()).forget("never-touched")  # ty: ignore[invalid-argument-type]
 
 
 async def test_cancel_current_when_idle_is_a_noop():
@@ -163,7 +163,7 @@ async def test_cancel_current_when_idle_is_a_noop():
             yield MessageDelta(text="done")
             yield RunDone()
 
-    engine = ChatTurnEngine(_Runner())
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
     finished = asyncio.Event()
     engine.enqueue("inv", "x", AgentToolContext(), on_complete=lambda m: finished.set())
     await asyncio.wait_for(finished.wait(), 3)

@@ -72,7 +72,7 @@ async def test_agent_step_requires_a_gate(wf: WorkflowHandle):
     """`check` is a required argument — an ungated agent node is not expressible
     (manual §5.1: avoid 'the agent thinks it's done but isn't')."""
     with pytest.raises(TypeError):
-        await agent_step(wf, prompt="x", phase="p")  # type: ignore[call-arg]
+        await agent_step(wf, prompt="x", phase="p")  # ty: ignore[missing-argument]
 
 
 async def test_agent_step_without_a_wired_driver_is_a_clear_error(wf: WorkflowHandle):

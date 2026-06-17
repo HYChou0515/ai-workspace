@@ -129,7 +129,7 @@ def test_replay_rca_turn_returns_fresh_output_and_the_original():
     from specstar import QB
 
     [row] = conv.list_resources((QB["item_id"] == rid).build())
-    assert len(row.data.messages) == 3
+    assert len(row.data.messages) == 3  # ty: ignore[unresolved-attribute]
 
 
 def test_replay_kb_chat_turn_uses_the_default_kb_agent():

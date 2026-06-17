@@ -397,7 +397,7 @@ async def test_build_status_phase_reflects_the_live_tool():
         async def run(self, prompt, ctx):
             yield ToolStart(call_id="c1", name="write_file", args={})
             # The coordinator's on_event has now processed the ToolStart.
-            self.phase_at_write = self.coord.status(self.cid).phase
+            self.phase_at_write = self.coord.status(self.cid).phase  # ty: ignore
             # A second tool in the SAME phase (edit_file is also "writing") —
             # the tracker must NOT re-write the status (phase unchanged).
             yield ToolStart(call_id="c2", name="edit_file", args={})
@@ -551,9 +551,9 @@ async def test_enqueued_jobs_are_partitioned_by_collection():
     jobs = list(spec.get_resource_manager(WikiMaintenanceJob).list_resources(QB.all().build()))
     assert len(jobs) == 1
     job = jobs[0].data
-    assert job.partition_key == cid  # ← the cross-pod serialisation key
-    assert job.payload.collection_id == cid
-    assert job.payload.source_path == "reflow.md"
+    assert job.partition_key == cid  # ← the cross-pod serialisation key  # ty: ignore
+    assert job.payload.collection_id == cid  # ty: ignore[unresolved-attribute]
+    assert job.payload.source_path == "reflow.md"  # ty: ignore[unresolved-attribute]
 
     # NOTE on multipod (#58): a true two-consumer test needs a SHARED backend
     # (in-memory specs don't share). The only test-friendly shared backend, the

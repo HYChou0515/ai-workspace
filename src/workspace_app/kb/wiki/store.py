@@ -66,6 +66,7 @@ class WikiFileStore:
         return [
             r.data.path
             for r in self._rm.list_resources((QB["collection_id"] == collection_id).build())
+            if isinstance(r.data, WikiPage)  # narrows Struct|Unset for ty
         ]
 
     async def read(self, workspace_id: str, path: str) -> bytes:

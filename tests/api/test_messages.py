@@ -825,7 +825,7 @@ def test_create_app_requires_explicit_spec():
     from workspace_app.sandbox.mock import MockSandbox
 
     with pytest.raises(TypeError, match="spec"):
-        create_app(
+        create_app(  # ty: ignore[missing-argument]
             sandbox=MockSandbox(),
             filestore=None,  # ty: ignore[invalid-argument-type]  # never reached
             runner=ScriptedAgentRunner([RunDone()]),

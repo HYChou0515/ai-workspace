@@ -162,7 +162,7 @@ def test_search_operator_max_clamps_caller_values(
     captured: list[int] = []
 
     class _RecordingLlm(_FakeLlm):
-        def collect(self, prompt: str, *, on_chunk=None) -> str:  # type: ignore[override]
+        def collect(self, prompt: str, *, on_chunk=None) -> str:  # ty: ignore
             if "alternative phrasings" in prompt:
                 # `expand_queries(n=X)` weaves N into the prompt — read it
                 # back so the test asserts the threaded value, not just

@@ -118,7 +118,7 @@ def test_dispatcher_command_handler_with_no_args_raises_typeerror():
     d = Dispatcher()
     with pytest.raises(TypeError, match="exactly one Args arg"):
 
-        @d.command("nullary", "no args at all")
+        @d.command("nullary", "no args at all")  # ty: ignore[invalid-argument-type]
         def _bad() -> None: ...
 
 

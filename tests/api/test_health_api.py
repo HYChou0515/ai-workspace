@@ -140,7 +140,7 @@ def test_check_runs_persist_for_history():
         rows = [r.data for r in rm.list_resources((QB["check_id"] == "conn").build())]
         # startup fast-sync + the async full round each ran it once.
         assert len(rows) >= 1
-        assert all(r.status == "pass" for r in rows)
+        assert all(r.status == "pass" for r in rows)  # ty: ignore[unresolved-attribute]
 
 
 def test_no_registry_serves_an_empty_panel():

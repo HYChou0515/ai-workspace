@@ -231,7 +231,7 @@ async def test_run_retries_when_only_reasoning_streamed_before_failure():
 
 def test_runner_constructs_with_custom_config():
     cfg = AgentConfig(name="custom", model="ollama/llama3:8b", system_prompt="Be terse.")
-    r = LitellmAgentRunner(cfg)
+    r = LitellmAgentRunner(cfg)  # ty: ignore[invalid-argument-type]
     assert r is not None
 
 
@@ -509,7 +509,11 @@ def test_emit_llm_trace_swallows_extraction_errors(caplog):
 
     with caplog.at_level(logging.DEBUG, logger="workspace_app.api.litellm_runner"):
         _emit_llm_trace(
-            _Boom(), AgentToolContext(), runner_base_url=None, tool_calls=0, content_text=""
+            _Boom(),  # ty: ignore[invalid-argument-type]
+            AgentToolContext(),
+            runner_base_url=None,
+            tool_calls=0,
+            content_text="",
         )
     assert any("trace" in r.message.lower() for r in caplog.records)
 

@@ -27,7 +27,7 @@ def register_rca_item(spec: SpecStar, **fields: object) -> str:
     return (
         spec.get_resource_manager(RcaInvestigation)
         .create(
-            RcaInvestigation(**data)  # ty: ignore[missing-argument]
+            RcaInvestigation(**data)  # ty: ignore[invalid-argument-type]
         )
         .resource_id
     )

@@ -430,7 +430,7 @@ def test_kb_chat_message_body_quick_mode_sends_structured_enhancements():
     )
     enh = captured["kb_enhancements"]
     assert enh is not None
-    assert enh.expand == 0 and enh.hyde == 0 and enh.rerank is False
+    assert enh.expand == 0 and enh.hyde == 0 and enh.rerank is False  # ty: ignore
 
     # Omitting `enhancements` → no caller override; operator default
     # applies.
@@ -481,8 +481,8 @@ def test_kb_chat_message_body_structured_enhancements_threads_to_ctx():
     )
     enh = captured["kb_enhancements"]
     assert enh is not None
-    assert enh.expand == 2 and enh.rerank is False
-    assert enh.hyde is None  # unset → inherits operator default
+    assert enh.expand == 2 and enh.rerank is False  # ty: ignore[unresolved-attribute]
+    assert enh.hyde is None  # unset → inherits operator default  # ty: ignore[unresolved-attribute]
 
 
 async def test_answer_question_surfaces_run_error_when_runner_gives_up(caplog):

@@ -69,7 +69,7 @@ def test_ingest_chat_writes_insights_as_sourcedocs(spec: SpecStar, embedder: Has
         chunks = chrm.list_resources((QB["source_doc_id"] == doc_id).build())
         chunks = [r.data for r in chunks]
         assert len(chunks) >= 1
-        assert all(len(c.embedding) == EMBED_DIM for c in chunks)
+        assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore
 
 
 def test_ingest_chat_with_no_insights_returns_empty(spec: SpecStar, embedder: HashEmbedder):
@@ -125,8 +125,8 @@ def test_re_ingest_chat_overwrites_in_place(spec: SpecStar, embedder: HashEmbedd
     assert ids_first == ids_second
     doc = spec.get_resource_manager(SourceDoc).get(ids_second[0]).data
     raw = spec.get_resource_manager(SourceDoc).restore_binary(doc).content.data
-    assert b"new updated" in raw
-    assert b"old" not in raw
+    assert b"new updated" in raw  # ty: ignore[unsupported-operator]
+    assert b"old" not in raw  # ty: ignore[unsupported-operator]
 
 
 def test_uploaded_chat_export_distills_into_chunks_of_the_chat_doc(
@@ -180,13 +180,16 @@ def test_uploaded_chat_export_distills_into_chunks_of_the_chat_doc(
     chunks = [r.data for r in chrm.list_resources((QB["source_doc_id"] == ids[0]).build())]
     # Insights landed as chunks of THIS doc, tagged with the parser.
     assert len(chunks) >= 2
-    assert all(c.parser_id == "ChatExportParser" for c in chunks)
-    texts = " ".join(c.text for c in chunks)
+    assert all(c.parser_id == "ChatExportParser" for c in chunks)  # ty: ignore
+    texts = " ".join(c.text for c in chunks)  # ty: ignore[unresolved-attribute]
     assert "cutpoint" in texts and "Thermocouple" in texts
     # JsonParser declined the file — no generic key-path chunks.
     assert '"role"' not in texts and '"messages"' not in texts
     # And no separate insight SourceDocs were created.
-    all_paths = {r.data.path for r in drm.list_resources((QB["collection_id"] == cid).build())}
+    all_paths = {
+        r.data.path  # ty: ignore[unresolved-attribute]
+        for r in drm.list_resources((QB["collection_id"] == cid).build())
+    }
     assert all_paths == {"inv-123.chat.json"}
 
 
