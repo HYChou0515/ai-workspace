@@ -634,6 +634,22 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
         return f"error: {e}. available skills: {avail}"
 
 
+def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) -> str:
+    """Resolve a collection id-or-name to its canonical {id, name} (JSON).
+
+    Use this when the user asks to add or switch a collection: pass the id or name
+    they gave, then write the returned {id, name} into `collections.json` yourself
+    with write_file / edit_file. Returns a JSON object whose `status` is `ok` (with
+    `id` + `name`), `ambiguous` (with `candidates`), or `not_found` (with the
+    `available` collections). This only LOOKS UP — it never edits the file."""
+    from ..kb.collections import resolve_collection
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: resolve_collection is only available in a Topic Hub turn"
+    return json.dumps(resolve_collection(spec, ref), ensure_ascii=False)
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -646,6 +662,8 @@ _IMPLS = {
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
+    # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
+    "resolve_collection": resolve_collection_impl,
     # Wiki agent tools (#50). Opt-in via the wiki presets' allowed_tools;
     # not in _WORKSPACE_TOOLS (they need a wiki context).
     "search_wiki": search_wiki_impl,

@@ -10,6 +10,7 @@ from .tools import (
     ls_impl,
     mention_user_impl,
     read_file_impl,
+    resolve_collection_impl,
     write_file_impl,
 )
 
@@ -26,4 +27,5 @@ __all__ = [
     "kb_search_impl",
     "ask_knowledge_base_impl",
     "mention_user_impl",
+    "resolve_collection_impl",
 ]

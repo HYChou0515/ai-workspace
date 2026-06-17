@@ -11,6 +11,8 @@ from ..sandbox.protocol import OutputSink, Sandbox, SandboxHandle, SandboxSpec
 from ..sync import SandboxSync
 
 if TYPE_CHECKING:
+    from specstar import SpecStar
+
     from ..kb.retriever import Enhancements, Retriever
     from ..kb.wiki.sources import IWikiSources
     from ..resources import AgentConfig
@@ -117,6 +119,10 @@ class AgentToolContext:
     retriever: Retriever | None = None
     collection_ids: list[str] = field(default_factory=list)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
+    # Topic Hub tools (`resolve_collection`, `lookup_glossary`) query specstar
+    # resources (Collection / ContextCard) directly. Set by the Topic Hub turn
+    # builder; None for RCA/KB-flavour contexts.
+    spec: SpecStar | None = None
     # Per-turn enhancement override the *caller* (KB chat composer,
     # ask_knowledge_base bridge, …) wants the kb_search tool to apply
     # on top of the operator's retriever defaults. LLM-set tool args
