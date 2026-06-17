@@ -58,5 +58,7 @@ export const qk = {
     wikiPage: (collectionId: string, path: string) =>
       ["kb", "wiki-page", collectionId, path] as const,
     wikiStatus: (collectionId: string) => ["kb", "wiki-status", collectionId] as const,
+    // #106: a collection's context cards (the lightweight glossary).
+    contextCards: (collectionId: string) => ["kb", "context-cards", collectionId] as const,
   },
 } as const;

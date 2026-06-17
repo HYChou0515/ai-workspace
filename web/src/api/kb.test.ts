@@ -83,4 +83,52 @@ describe("KB api (mock client)", () => {
     await kb.deleteChat(chat.resource_id);
     expect(await kb.listChats()).toEqual([]);
   });
+
+  it("creates and lists context cards, scoped to their collection", async () => {
+    const a = await kb.createCollection("a");
+    const b = await kb.createCollection("b");
+    await kb.createContextCard({
+      collection_id: a.resource_id,
+      keys: ["M4", "capping"],
+      title: "Metal-4 capping",
+      body: "The capping layer over metal 4.",
+    });
+    await kb.createContextCard({
+      collection_id: b.resource_id,
+      keys: ["X"],
+      title: "",
+      body: "other",
+    });
+
+    const cards = await kb.listContextCards(a.resource_id);
+    expect(cards).toHaveLength(1); // scoped — b's card excluded
+    expect(cards[0].keys).toEqual(["M4", "capping"]);
+    expect(cards[0].title).toBe("Metal-4 capping");
+    expect(cards[0].id).toBeTruthy();
+  });
+
+  it("updates a context card's keys/title/body", async () => {
+    const c = await kb.createCollection("c");
+    await kb.createContextCard({
+      collection_id: c.resource_id,
+      keys: ["M4"],
+      title: "t",
+      body: "b",
+    });
+    const [card] = await kb.listContextCards(c.resource_id);
+    await kb.updateContextCard(card.id, { keys: ["SiCN", "PECVD"], title: "t2", body: "b2" });
+
+    const [edited] = await kb.listContextCards(c.resource_id);
+    expect(edited.keys).toEqual(["SiCN", "PECVD"]);
+    expect(edited.title).toBe("t2");
+    expect(edited.body).toBe("b2");
+  });
+
+  it("deletes a context card", async () => {
+    const c = await kb.createCollection("c");
+    await kb.createContextCard({ collection_id: c.resource_id, keys: ["M4"], title: "", body: "" });
+    const [card] = await kb.listContextCards(c.resource_id);
+    await kb.deleteContextCard(card.id);
+    expect(await kb.listContextCards(c.resource_id)).toEqual([]);
+  });
 });

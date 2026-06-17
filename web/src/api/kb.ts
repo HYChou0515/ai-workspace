@@ -211,6 +211,27 @@ export type KbAgentConfig = {
   suggestions: import("./types").Suggestion[];
 };
 
+/** #106: a context card — several `keys` (a term + its surface forms) → a short
+ * markdown `body`, looked up deterministically by exact key. `id` is the
+ * specstar resource id; `norm_keys` is the server-derived lookup surface (the FE
+ * never sends it). */
+export type KbContextCard = {
+  id: string;
+  collection_id: string;
+  keys: string[];
+  norm_keys: string[];
+  title: string;
+  body: string;
+};
+
+/** Author input for create/update — no `norm_keys` (server-derived). */
+export type KbContextCardInput = {
+  collection_id: string;
+  keys: string[];
+  title: string;
+  body: string;
+};
+
 export interface KbApi {
   /** The KB agent picker (issue #32): an ARRAY of {name, model,
    * suggestions}. FE renders a dropdown; first entry is the default. */
@@ -274,6 +295,18 @@ export interface KbApi {
   rebuildWiki(collectionId: string): Promise<WikiRebuild>;
   /** Live build progress, polled while a wiki is being (re)built. */
   getWikiStatus(collectionId: string): Promise<WikiStatus>;
+
+  /** #106: a collection's context cards (the lightweight glossary). Lists via
+   * specstar's auto CRUD route, scoped on the indexed `collection_id`. */
+  listContextCards(collectionId: string): Promise<KbContextCard[]>;
+  /** Author a new card — POST the create custom action; the server derives
+   * `norm_keys` from `keys` in the same write. */
+  createContextCard(input: KbContextCardInput): Promise<void>;
+  /** Edit a card's keys/title/body — POST the update custom action (collection
+   * stays put; `norm_keys` re-derived server-side). */
+  updateContextCard(id: string, patch: Omit<KbContextCardInput, "collection_id">): Promise<void>;
+  /** Permanently remove a card — specstar's native hard delete. */
+  deleteContextCard(id: string): Promise<void>;
 
   listChats(): Promise<KbChatSummary[]>;
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
@@ -439,6 +472,42 @@ export const realKbApi: KbApi = {
   async getWikiStatus(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/status`;
     return (await ok(await apiFetch(url), "wiki status")).json();
+  },
+
+  async listContextCards(collectionId) {
+    // specstar auto CRUD list, filtered on the indexed collection_id; the
+    // response is the specstar envelope, so flatten data + the resource id.
+    const qb = `QB['collection_id'] == '${collectionId}'`;
+    const url = `/context-card?qb=${encodeURIComponent(qb)}`;
+    const rows: { data: Omit<KbContextCard, "id">; revision_info: { resource_id: string } }[] =
+      await (await ok(await apiFetch(url), "list context cards")).json();
+    return rows.map((r) => ({ id: r.revision_info.resource_id, ...r.data }));
+  },
+  async createContextCard(input) {
+    await ok(
+      await apiFetch("/context-card/author", {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify(input),
+      }),
+      "create context card",
+    );
+  },
+  async updateContextCard(id, patch) {
+    await ok(
+      await apiFetch(`/context-card/${encodeURIComponent(id)}/edit`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify(patch),
+      }),
+      "update context card",
+    );
+  },
+  async deleteContextCard(id) {
+    await ok(
+      await apiFetch(`/context-card/${encodeURIComponent(id)}/permanently`, { method: "DELETE" }),
+      "delete context card",
+    );
   },
 
   async listChats() {

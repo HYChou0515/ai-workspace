@@ -1987,3 +1987,43 @@
 }
 .kb-ide__status-state { text-transform: capitalize; }
 .kb-ide__status-meta { font-family: var(--font-mono); }
+
+/* #106 Context Cards tab — left list + center editor (mirrors the docs IDE). */
+.kb-cards { display: flex; gap: 12px; height: 100%; min-height: 0; }
+.kb-cards__list {
+  width: 220px; flex: 0 0 220px; display: flex; flex-direction: column; gap: 6px;
+  border-right: 1px solid var(--paper-3); padding-right: 10px; overflow-y: auto;
+}
+.kb-cards__list ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.kb-cards__new {
+  text-align: left; padding: 6px 8px; border: 1px dashed var(--paper-3);
+  border-radius: var(--radius-btn); background: transparent; color: var(--text-paper-d);
+  cursor: pointer;
+}
+.kb-cards__item {
+  display: block; width: 100%; text-align: left; padding: 6px 8px;
+  border: 1px solid transparent; border-radius: var(--radius-btn);
+  background: transparent; color: var(--text-paper); cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.kb-cards__item:hover { background: var(--paper-2); }
+.kb-cards__item.is-active { background: var(--paper-2); border-color: var(--paper-3); }
+.kb-cards__editor { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.kb-cards__empty { color: var(--text-paper-d2); padding: 24px; }
+.kb-cards__title {
+  padding: 8px 10px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
+  background: var(--paper); color: var(--text-paper); font-size: 15px; font-weight: 600;
+}
+.kb-cards__keys { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.kb-cards__chip {
+  display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px;
+  border-radius: var(--radius-chip); background: var(--paper-2); color: var(--text-paper);
+  font-size: 12px;
+}
+.kb-cards__chip button { border: 0; background: transparent; color: var(--text-paper-d); cursor: pointer; padding: 0 2px; }
+.kb-cards__term { flex: 1 1 120px; min-width: 120px; padding: 4px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); color: var(--text-paper); }
+.kb-cards__body { flex: 1 1 auto; min-height: 200px; }
+.kb-cards__actions { display: flex; gap: 8px; }
+.kb-cards__save, .kb-cards__delete { padding: 6px 14px; border-radius: var(--radius-btn); border: 1px solid var(--paper-3); cursor: pointer; }
+.kb-cards__save { background: var(--accent, var(--paper-2)); color: var(--text-paper); }
+.kb-cards__delete { background: transparent; color: var(--text-paper-d); }
