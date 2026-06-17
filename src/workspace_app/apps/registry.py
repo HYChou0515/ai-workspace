@@ -3,19 +3,44 @@
 Apps are **discovered by scanning** ``apps/`` for dirs that ship an ``app.json``
 (the App marker) + a ``model.py`` exposing ``MODEL`` (a ``WorkItemBase``
 subclass) + ``INDEXED_FIELDS``. Dropping a new ``apps/<slug>/`` registers it —
-no edit here. The App dir name is the slug, so it must be a valid Python package
-name (e.g. ``rca``). See ``apps/_template/`` + ``docs/adding-an-app.md``.
+no edit here. The App dir name is the slug; a valid Python package name (e.g.
+``rca``) is imported normally, while a hyphenated one (e.g. ``topic-hub``) has its
+``model.py`` loaded **by file path** (``_load_model_module``). See ``apps/_template/``
++ ``docs/adding-an-app.md``.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import re
+import sys
 from functools import cache
-from importlib import import_module
+from importlib import import_module, resources
 
 from specstar import SpecStar
 
 from .base import IndexedFields, WorkItemBase
+
+
+def _load_model_module(slug: str):
+    """Import a discovered App's ``model.py``.
+
+    Most slugs are valid Python package names → ``import_module`` (and their model
+    may use relative imports). A slug with a hyphen (e.g. ``topic-hub``) is **not**
+    an importable package, so its ``model.py`` is exec'd **by file path** — the same
+    mechanism as a workflow ``run.py`` (``workflow/discovery.py``). Such a model must
+    use **absolute imports** (it has no package context)."""
+    if slug.isidentifier():
+        return import_module(f"{__package__}.{slug}.model")
+    model_path = resources.files(__package__) / slug / "model.py"
+    mod_name = "_app_" + re.sub(r"\W", "_", slug) + "_model"
+    with resources.as_file(model_path) as p:
+        spec = importlib.util.spec_from_file_location(mod_name, p)
+        assert spec is not None and spec.loader is not None  # a real file yields a loader
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[mod_name] = mod  # so msgspec can resolve the Struct's annotations
+        spec.loader.exec_module(mod)
+    return mod
 
 
 @cache
@@ -26,7 +51,7 @@ def _app_models() -> dict[str, tuple[type[WorkItemBase], IndexedFields]]:
 
     out: dict[str, tuple[type[WorkItemBase], IndexedFields]] = {}
     for slug in discover_app_slugs():
-        mod = import_module(f"{__package__}.{slug}.model")
+        mod = _load_model_module(slug)
         model = mod.MODEL
         assert isinstance(model, type) and issubclass(model, WorkItemBase), (
             f"apps/{slug}/model.py: MODEL must be a WorkItemBase subclass"

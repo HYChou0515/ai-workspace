@@ -1,0 +1,28 @@
+{
+  "slug": "topic-hub",
+  "title": "Topic Hub",
+  "description": "A cross-collection workspace that accumulates memory on a subject over time.",
+  "icon": "flame",
+  "color": "#6B46C1",
+  "function": { "workspace": true, "sandbox": false, "terminal": false },
+  "agent": {
+    "prompt_file": "prompts/system.md",
+    "tools": ["read_file", "write_file", "edit_file", "ls", "exists", "delete_file"],
+    "picker": [{ "preset": "qwen3-local", "name": "Topic Hub · Qwen3 (local)" }],
+    "suggestions": [{ "label": "Summarise", "prompt": "Summarise what we know so far." }]
+  },
+  "item": { "noun": "Topic Hub", "noun_plural": "Topic Hubs", "create_label": "New Topic Hub" },
+  "layout": {
+    "breadcrumb": ["status"],
+    "statusbar": ["status"],
+    "list": ["status"],
+    "form": ["status"],
+    "default_tabs": ["/MEMORY.md"]
+  },
+  "lifecycle": { "status_field": "status", "closing_states": ["archived"] },
+  "labels": { "status": "Status" },
+  "field_styles": {
+    "status": { "active": "info", "archived": "muted" }
+  },
+  "default_profile": "default"
+}
