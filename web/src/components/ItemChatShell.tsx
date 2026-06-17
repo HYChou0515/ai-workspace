@@ -50,15 +50,31 @@ export function ItemChatShell({
   const active = chats.find((c) => c.chat_id === activeChatId) ?? null;
 
   return (
-    <div className="item-chat-shell" data-testid="item-chat-shell">
-      <div className="item-chat-shell__bar" style={{ display: "flex", gap: 8, alignItems: "center" }}>
+    <div
+      className="item-chat-shell"
+      data-testid="item-chat-shell"
+      style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
+    >
+      <div
+        className="item-chat-shell__bar"
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          flex: "0 0 auto",
+          padding: "4px 8px",
+          borderBottom: "1px solid var(--border, #2a2a2a)",
+        }}
+      >
         <ItemChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
         <NewChatPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
       </div>
       {active ? (
         <ItemChatPanel key={active.chat_id} slug={slug} itemId={itemId} chat={active} />
       ) : (
-        <p data-testid="no-chat">No chat open yet — start one above.</p>
+        <p data-testid="no-chat" style={{ padding: 16 }}>
+          No chat open yet — start one above.
+        </p>
       )}
     </div>
   );
@@ -88,8 +104,12 @@ function ItemChatPanel({
   };
 
   return (
-    <div className="item-chat-panel" data-testid="item-chat-panel">
-      <div className="item-chat-panel__log">
+    <div
+      className="item-chat-panel"
+      data-testid="item-chat-panel"
+      style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
+    >
+      <div className="item-chat-panel__log" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 8 }}>
         {log.entries.map((entry, i) => (
           <EntryView key={i} entry={entry} />
         ))}
@@ -101,7 +121,11 @@ function ItemChatPanel({
       </div>
 
       {gate && (
-        <div className="item-chat-panel__gate" data-testid="workflow-continue">
+        <div
+          className="item-chat-panel__gate"
+          data-testid="workflow-continue"
+          style={{ flex: "0 0 auto", display: "flex", gap: 8, alignItems: "center", padding: "6px 8px" }}
+        >
           <span>{gate.title}</span>
           {gate.allow.map((choice) => (
             <button
@@ -116,7 +140,10 @@ function ItemChatPanel({
         </div>
       )}
 
-      <div className="item-chat-panel__composer" style={{ display: "flex", gap: 8 }}>
+      <div
+        className="item-chat-panel__composer"
+        style={{ flex: "0 0 auto", display: "flex", gap: 8, padding: 8 }}
+      >
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}

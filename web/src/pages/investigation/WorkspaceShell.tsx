@@ -18,6 +18,7 @@ import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { AppIcon } from "../../components/AppIcon";
 import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
+import { ItemChatShell } from "../../components/ItemChatShell";
 import { WorkflowRunSection } from "../../components/WorkflowRunSection";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
@@ -373,30 +374,52 @@ function ShellBody({
             </>
           )}
           <div
-            style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              height: "100%",
+              minHeight: 0,
+              // The multi-chat shell takes no width prop (unlike AgentPanel), so the
+              // wrapper owns the resizable width in that mode.
+              width: manifest.slug === "topic-hub" ? agentW : undefined,
+            }}
           >
-            {/* #100: the run progress view sits above the chat (a run is a turn on
-                the item, so the agent's stream stays in the chat below). Renders
-                nothing for a non-workflow profile, so it's inert on ordinary items. */}
-            <WorkflowRunSection
-              slug={manifest.slug}
-              itemId={item.resource_id}
-              profile={String(item.profile ?? manifest.default_profile)}
-            />
-            <AgentPanel
-              investigationId={item.resource_id}
-              width={agentW}
-              fill={!manifest.function.workspace}
-              // #89 candidate 3: picker + suggestions come from the App manifest,
-              // not the global /agent-configs; attaching writes the item's preset.
-              picker={manifest.agent.picker}
-              attachedPreset={String(item.attached_preset ?? "")}
-              onAttachPreset={(preset) => setField("attached_preset", preset)}
-              suggestions={manifest.agent.suggestions}
-              appTitle={manifest.title}
-              appIcon={manifest.icon}
-              appColor={manifest.color}
-            />
+            {manifest.slug === "topic-hub" ? (
+              // topic-hub §3: the per-item multi-chat shell replaces the single
+              // AgentPanel. Gated to this App so RCA's full chat UI is untouched;
+              // multi-chat goes platform-wide once the shell reaches feature parity.
+              <ItemChatShell
+                slug={manifest.slug}
+                itemId={item.resource_id}
+                profile={String(item.profile ?? manifest.default_profile)}
+              />
+            ) : (
+              <>
+                {/* #100: the run progress view sits above the chat (a run is a turn
+                    on the item, so the agent's stream stays in the chat below).
+                    Renders nothing for a non-workflow profile, so it's inert on
+                    ordinary items. */}
+                <WorkflowRunSection
+                  slug={manifest.slug}
+                  itemId={item.resource_id}
+                  profile={String(item.profile ?? manifest.default_profile)}
+                />
+                <AgentPanel
+                  investigationId={item.resource_id}
+                  width={agentW}
+                  fill={!manifest.function.workspace}
+                  // #89 candidate 3: picker + suggestions come from the App manifest,
+                  // not the global /agent-configs; attaching writes the item's preset.
+                  picker={manifest.agent.picker}
+                  attachedPreset={String(item.attached_preset ?? "")}
+                  onAttachPreset={(preset) => setField("attached_preset", preset)}
+                  suggestions={manifest.agent.suggestions}
+                  appTitle={manifest.title}
+                  appIcon={manifest.icon}
+                  appColor={manifest.color}
+                />
+              </>
+            )}
           </div>
         </div>
 
