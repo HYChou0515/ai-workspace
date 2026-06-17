@@ -226,6 +226,23 @@ class _UndoOut(BaseModel):
     removed: int
 
 
+class _CreateChatBody(BaseModel):
+    # #topic-hub P7 (manual §3): open a new FREE chat in an item. Title is optional;
+    # a workflow chat is opened by the run endpoint (P8), not here.
+    title: str = ""
+
+
+class _ChatInfo(BaseModel):
+    """One chat in an item's multi-chat list (manual §3)."""
+
+    chat_id: str
+    title: str
+    run_id: str | None
+    created_ms: int | None
+    message_count: int
+    is_default: bool
+
+
 class _MentionBody(BaseModel):
     user_ids: list[str]
     note: str = ""
@@ -1165,6 +1182,30 @@ def create_app(
 
         return resolve_default_conversation(conv_rm, investigation_id)
 
+    def _engine_key(investigation_id: str, chat_id: str) -> str:
+        """The turn-engine / SSE key for a chat (manual §3). The DEFAULT chat keeps
+        the legacy ``item_id`` key so item-level endpoints, the workflow drive path,
+        and file-change broadcasts all share its stream; every other chat keys on its
+        own id. Read-only — never materialises the default."""
+        from .chats import find_default_conversation
+
+        default = find_default_conversation(conv_rm, investigation_id)
+        if default is not None and default[0] == chat_id:
+            return investigation_id
+        return chat_id
+
+    def _require_chat(slug: str, item_id: str, chat_id: str) -> tuple[str, Conversation]:
+        """Validate slug→item AND that ``chat_id`` is a chat OF that item; return
+        ``(chat_id, Conversation)`` or 404. Guards the chat-scoped endpoints (manual §3)."""
+        investigation_id = _require_item(slug, item_id)
+        try:
+            conv = conv_rm.get(chat_id).data
+        except ResourceIDNotFoundError:
+            raise HTTPException(status_code=404, detail=f"unknown chat: {chat_id!r}") from None
+        if not isinstance(conv, Conversation) or conv.item_id != investigation_id:
+            raise HTTPException(status_code=404, detail=f"unknown chat: {chat_id!r}")
+        return chat_id, conv
+
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so
     # these do their own lookups instead of reusing `_conversation_for`
@@ -1575,7 +1616,23 @@ def create_app(
     )
     async def send_message(slug: str, item_id: str, body: _MessageBody) -> Response:
         investigation_id = _require_item(slug, item_id)
+        # Item-level (no chat_id) → the implicit default chat, keyed on item_id so the
+        # workflow drive path + file-change broadcasts share its stream (manual §3).
         rid, conv = _conversation_for(investigation_id)
+        await _send_into(investigation_id, rid, conv, investigation_id, body)
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    async def _send_into(
+        investigation_id: str,
+        rid: str,
+        conv: Conversation,
+        engine_key: str,
+        body: _MessageBody,
+    ) -> None:
+        """Append the user message to conversation ``rid``, build the RCA turn ctx
+        from ITS history, and enqueue the turn on ``engine_key`` (item_id for the
+        default chat, the chat_id otherwise — manual §3). Shared by the item-level
+        and chat-scoped message endpoints."""
         # #43: stamp the sender so a shared workspace's chat shows who said what,
         # and broadcast the message to live viewers (below, before the turn runs).
         author = get_user_id()
@@ -1682,7 +1739,8 @@ def create_app(
             # Persist the agent's reply + tool outputs so re-entering the
             # workspace shows them, not just the user's own messages.
             if produced:
-                rid2, conv2 = _conversation_for(investigation_id)
+                conv2 = conv_rm.get(rid).data  # re-fetch THIS chat (not the default)
+                assert isinstance(conv2, Conversation)
                 # Citations live on `ctx.subagent_citations` — a dict
                 # keyed by TOOL NAME (the surface that produced them).
                 # Per name, lists are in CALL ORDER, so we keep one
@@ -1709,7 +1767,7 @@ def create_app(
                     elif tm.role == "assistant" and seen_subagent:
                         msg.citations = _bubble_kb_citations(tm.content, seen_subagent)
                     conv2.messages.append(msg)
-                conv_rm.update(rid2, conv2)
+                conv_rm.update(rid, conv2)
             activity.record(
                 "agent_turn_complete",
                 "Agent finished a turn",
@@ -1719,13 +1777,13 @@ def create_app(
         # #43: broadcast the human's message to every live viewer, then queue the
         # turn and await ITS completion. The queue serializes concurrent users on
         # the shared sandbox/files (a new message no longer cancels a running
-        # turn — Stop does). Live turn events reach all viewers via GET .../stream.
+        # turn — Stop does). Live turn events reach all viewers via GET .../stream
+        # (item-level / default chat) or the chat-scoped stream (other chats).
         turn_engine.publish(
-            investigation_id,
+            engine_key,
             UserMessage(author=author, content=body.content, created_at=created),
         )
-        await turn_engine.enqueue(investigation_id, body.content, ctx, on_complete=persist)
-        return Response(status_code=status.HTTP_202_ACCEPTED)
+        await turn_engine.enqueue(engine_key, body.content, ctx, on_complete=persist)
 
     @app.get("/a/{slug}/items/{item_id}/stream")
     async def stream_investigation(slug: str, item_id: str) -> StreamingResponse:
@@ -1774,6 +1832,91 @@ def create_app(
             {"investigation_id": investigation_id, "removed": removed},
         )
         return _UndoOut(message_count=len(conv.messages), removed=removed)
+
+    # ── Multi-chat (topic-hub P7, manual §3) ─────────────────────────────
+    # An item holds many chats. These chat-scoped endpoints address one chat by id;
+    # the item-level endpoints above keep hitting the implicit default chat.
+
+    def _chat_info(chat_id: str, conv: Conversation, default_id: str | None) -> _ChatInfo:
+        return _ChatInfo(
+            chat_id=chat_id,
+            title=conv.title,
+            run_id=conv.run_id,
+            created_ms=conv.created_ms,
+            message_count=len(conv.messages),
+            is_default=chat_id == default_id,
+        )
+
+    @app.get("/a/{slug}/items/{item_id}/chats")
+    async def list_chats(slug: str, item_id: str) -> list[_ChatInfo]:
+        """List the item's chats (free + workflow), default first (manual §3).
+        Read-only: the implicit default chat materialises on first use, not here."""
+        from .chats import find_default_conversation, list_item_conversations
+
+        investigation_id = _require_item(slug, item_id)
+        default = find_default_conversation(conv_rm, investigation_id)
+        default_id = default[0] if default else None
+        infos = [
+            _chat_info(rid, conv, default_id)
+            for rid, conv in list_item_conversations(conv_rm, investigation_id)
+        ]
+        # Default first, then by birth (unstamped legacy rows first), then id.
+        infos.sort(
+            key=lambda c: (
+                not c.is_default,
+                c.created_ms if c.created_ms is not None else -1,
+                c.chat_id,
+            )
+        )
+        return infos
+
+    @app.post("/a/{slug}/items/{item_id}/chats", status_code=status.HTTP_201_CREATED)
+    async def create_chat(slug: str, item_id: str, body: _CreateChatBody) -> _ChatInfo:
+        """Open a new FREE chat in the item (manual §3); returns its chat_id. A
+        workflow chat is opened by the run endpoint (P8), not here."""
+        from .chats import find_default_conversation
+
+        investigation_id = _require_item(slug, item_id)
+        rev = conv_rm.create(
+            Conversation(item_id=investigation_id, title=body.title, created_ms=_now_ms())
+        )
+        conv = conv_rm.get(rev.resource_id).data
+        assert isinstance(conv, Conversation)
+        default = find_default_conversation(conv_rm, investigation_id)
+        return _chat_info(rev.resource_id, conv, default[0] if default else None)
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/chats/{chat_id}/messages",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def send_chat_message(
+        slug: str, item_id: str, chat_id: str, body: _MessageBody
+    ) -> Response:
+        investigation_id = _require_item(slug, item_id)
+        rid, conv = _require_chat(slug, item_id, chat_id)
+        await _send_into(investigation_id, rid, conv, _engine_key(investigation_id, rid), body)
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/stream")
+    async def stream_chat(slug: str, item_id: str, chat_id: str) -> StreamingResponse:
+        """The chat's own live event stream (manual §3) — per-chat, unlike the
+        item-level stream which carries the default chat + item-wide events."""
+        investigation_id = _require_item(slug, item_id)
+        _require_chat(slug, item_id, chat_id)
+        return StreamingResponse(
+            turn_engine.subscribe_sse(_engine_key(investigation_id, chat_id)),
+            media_type="text/event-stream",
+        )
+
+    @app.delete(
+        "/a/{slug}/items/{item_id}/chats/{chat_id}/messages/current",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def cancel_chat_message(slug: str, item_id: str, chat_id: str) -> Response:
+        investigation_id = _require_item(slug, item_id)
+        _require_chat(slug, item_id, chat_id)
+        await turn_engine.cancel_current(_engine_key(investigation_id, chat_id))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
         "/a/{slug}/items/{item_id}/mentions",

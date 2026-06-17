@@ -34,14 +34,24 @@ def list_item_conversations(conv_rm, item_id: str) -> list[tuple[str, Conversati
     return out
 
 
-def resolve_default_conversation(conv_rm, item_id: str) -> tuple[str, Conversation]:
-    """The item's default chat (manual §3): the earliest-born **free** chat, created
-    if none exists. Workflow chats (``run_id`` set) are skipped; unstamped legacy rows
-    (``created_ms is None``) sort first, so they stay the default."""
+def find_default_conversation(conv_rm, item_id: str) -> tuple[str, Conversation] | None:
+    """The item's default chat (manual §3) — the earliest-born **free** chat — or
+    ``None`` if the item has no free chat yet. Read-only (never creates): workflow
+    chats (``run_id`` set) are skipped; unstamped legacy rows (``created_ms is None``)
+    sort first, so they stay the default."""
     free = [(rid, c) for rid, c in list_item_conversations(conv_rm, item_id) if c.run_id is None]
-    if free:
-        free.sort(key=lambda rc: (rc[1].created_ms if rc[1].created_ms is not None else -1, rc[0]))
-        return free[0]
+    if not free:
+        return None
+    free.sort(key=lambda rc: (rc[1].created_ms if rc[1].created_ms is not None else -1, rc[0]))
+    return free[0]
+
+
+def resolve_default_conversation(conv_rm, item_id: str) -> tuple[str, Conversation]:
+    """Like :func:`find_default_conversation` but **creates** the default free chat
+    when the item has none — for the item-level endpoints' get-or-create semantics."""
+    found = find_default_conversation(conv_rm, item_id)
+    if found is not None:
+        return found
     rev = conv_rm.create(Conversation(item_id=item_id, created_ms=_now_ms()))
     got = conv_rm.get(rev.resource_id).data
     assert isinstance(got, Conversation)
