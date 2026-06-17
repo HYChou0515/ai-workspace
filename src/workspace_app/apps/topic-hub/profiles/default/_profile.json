@@ -19,6 +19,12 @@
         { "id": "commit", "title": "Ingest + author cards" }
       ],
       "input_json": "inputs/input.json"
+    },
+    {
+      "id": "consolidate",
+      "title": "Consolidate memory",
+      "phases": [{ "id": "consolidate", "title": "Consolidate memory" }],
+      "input_json": "inputs/input.json"
     }
   ]
 }
