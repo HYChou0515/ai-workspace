@@ -6,6 +6,7 @@ import pytest
 from workspace_app.workflow.discovery import (
     WorkflowNotFound,
     _check_phase_ids,
+    _check_workflow_ids,
     _exec_run,
     load_run_callable,
     validate_workflow_profiles,
@@ -52,3 +53,45 @@ def test_check_phase_ids_rejects_a_phase_missing_its_id():
     bad = WorkflowManifest(phases=[WorkflowPhase(id="ok"), WorkflowPhase(id="")])
     with pytest.raises(ValueError, match="missing its 'id'"):
         _check_phase_ids(bad, "app/profile")
+
+
+# ── Phase 5: multiple workflows per profile (manual §4) ──────────────────
+
+
+def test_load_run_callable_loads_a_workflow_subdir_run():
+    """A list-form workflow's run.py lives at profiles/<name>/workflows/<id>/run.py
+    and is loaded by file path (the existing exec mechanism)."""
+    run = load_run_callable("playground", "multi", "alpha")
+    assert callable(run) and run.__name__ == "run"  # ty: ignore[unresolved-attribute]
+    run_beta = load_run_callable("playground", "multi", "beta")
+    assert callable(run_beta) and run_beta.__name__ == "run"  # ty: ignore[unresolved-attribute]
+
+
+def test_load_run_callable_missing_workflow_subdir_raises():
+    with pytest.raises(WorkflowNotFound):
+        load_run_callable("playground", "multi", "nope")
+
+
+def test_load_run_callable_legacy_root_run_still_loads():
+    """With no workflow_id (the legacy singular form), run.py is read from the
+    profile root — back-compat preserved."""
+    run = load_run_callable("playground", "echo")
+    assert callable(run) and run.__name__ == "run"  # ty: ignore[unresolved-attribute]
+
+
+def test_validate_workflow_profiles_validates_every_workflow_of_a_list_profile():
+    """The multi-workflow fixture (playground/multi) passes startup validation: both
+    workflows' run.py load + every phase carries an id."""
+    validate_workflow_profiles("playground")  # echo + intake (legacy) + multi (list)
+
+
+def test_check_workflow_ids_rejects_a_workflow_missing_its_id():
+    bad = [WorkflowManifest(id="ok"), WorkflowManifest(id="")]
+    with pytest.raises(ValueError, match="missing its 'id'"):
+        _check_workflow_ids(bad, "app/profile")
+
+
+def test_check_workflow_ids_rejects_duplicate_ids():
+    bad = [WorkflowManifest(id="dup"), WorkflowManifest(id="dup")]
+    with pytest.raises(ValueError, match="duplicate workflow id"):
+        _check_workflow_ids(bad, "app/profile")

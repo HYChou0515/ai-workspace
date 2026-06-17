@@ -1,12 +1,15 @@
 """``WorkflowManifest`` — the declarative part of a profile-level workflow (#100,
 manual §3 & §14).
 
-A profile carries a workflow by declaring a ``workflow`` block in its
-``_profile.json``. The block's *presence* is what makes a profile
-headless-triggerable; its content is just the phase skeleton (for the read-only
-progress diagram, manual §12) and where the run's ``input.json`` lives — the only
-thing the platform knows about inputs (manual §14). The orchestration itself is the
-profile's ``run.py`` (code), not data.
+A profile carries its workflows by declaring a ``workflows: [...]`` list in its
+``_profile.json`` (manual §4) — each entry a ``WorkflowManifest`` with a stable
+``id`` whose ``run.py`` lives at ``profiles/<name>/workflows/<id>/run.py``. The
+legacy singular ``workflow`` block (one workflow, ``run.py`` at the profile root)
+is still accepted and normalised to a one-element list. A profile's *having* a
+workflow is what makes it headless-triggerable; each manifest's content is just the
+phase skeleton (for the read-only progress diagram, manual §12) and where the run's
+``input.json`` lives — the only thing the platform knows about inputs (manual §14).
+The orchestration itself is the workflow's ``run.py`` (code), not data.
 """
 
 from __future__ import annotations
@@ -26,6 +29,11 @@ class WorkflowPhase(Struct):
 class WorkflowManifest(Struct):
     """A profile's workflow declaration (``_profile.json`` → ``workflow``)."""
 
+    id: str = ""
+    """Stable identifier within its profile (manual §4). In the new ``workflows: [...]``
+    list form every entry carries a non-empty, unique id and its ``run.py`` lives at
+    ``profiles/<name>/workflows/<id>/run.py``. The legacy singular ``workflow`` block
+    leaves it ``""`` — the sentinel for the profile-root ``run.py`` layout."""
     title: str = ""
     phases: list[WorkflowPhase] = field(default_factory=list)
     input_json: str = "inputs/input.json"

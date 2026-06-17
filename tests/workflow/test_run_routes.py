@@ -69,6 +69,23 @@ def test_profiles_endpoint_flags_workflow():
     assert profiles["default"]["has_workflow"] is False
 
 
+def test_profiles_endpoint_lists_each_profiles_workflows():
+    """Phase 5 (manual §4): a profile may offer several workflows; /profiles returns
+    each profile's `workflows` list, with a stable id + manifest per workflow."""
+    app, _spec, _iid = _app()
+    with TestClient(app) as client:
+        profiles = {p["name"]: p for p in client.get("/a/playground/profiles").json()}
+    # The list-form `multi` profile surfaces both workflows with their ids + phases.
+    multi = profiles["multi"]
+    assert multi["has_workflow"] is True
+    assert [w["id"] for w in multi["workflows"]] == ["alpha", "beta"]
+    assert multi["workflows"][1]["phases"][0]["id"] == "plan"
+    # A legacy singular profile still reports one workflow in the list (back-compat).
+    assert [w["id"] for w in profiles["echo"]["workflows"]] == [""]
+    # An interactive profile has an empty list.
+    assert profiles["default"]["workflows"] == []
+
+
 def test_unknown_app_profiles_404():
     app, _spec, _iid = _app()
     with TestClient(app) as client:

@@ -1394,23 +1394,26 @@ def create_app(
 
     @app.get("/a/{slug}/profiles")
     async def list_app_profiles(slug: str) -> list[dict]:
-        """#100 (manual §14): the App's profiles, flagging which carry a workflow +
-        returning each workflow MANIFEST so the FE can render the Run affordance."""
+        """#100 (manual §4 & §14): the App's profiles, each with its list of workflow
+        MANIFESTS so the FE's new-chat picker can offer every workflow type. Also keeps
+        the legacy singular ``workflow`` field for back-compat."""
         from ..apps.catalog import discover_app_slugs
-        from ..apps.profiles import list_profiles, load_profile
+        from ..apps.profiles import list_profiles, load_profile, normalize_workflows
 
         if slug not in discover_app_slugs():
             raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
         out: list[dict] = []
         for name in list_profiles(slug):
             p = load_profile(slug, name)
+            workflows = normalize_workflows(p)
             out.append(
                 {
                     "name": name,
                     "title": p.title or name,
                     "description": p.description,
-                    "has_workflow": p.workflow is not None,
+                    "has_workflow": bool(workflows),
                     "workflow": msgspec.to_builtins(p.workflow) if p.workflow else None,
+                    "workflows": [msgspec.to_builtins(wf) for wf in workflows],
                 }
             )
         return out
