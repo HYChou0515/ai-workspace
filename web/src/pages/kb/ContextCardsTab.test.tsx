@@ -24,7 +24,10 @@ const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper:
 
 describe("ContextCardsTab (#106)", () => {
   beforeEach(() => _resetKbMock());
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks(); // spies are per-test — don't let call counts bleed across tests
+  });
 
   it("lists a collection's cards by their label", async () => {
     await mockKbApi.createContextCard({
@@ -75,6 +78,27 @@ describe("ContextCardsTab (#106)", () => {
       title: "Reflow zone",
       body: "Zone 3 at 245C.",
     });
+  });
+
+  it("does not create duplicates when Save is pressed again after authoring", async () => {
+    const createSpy = vi.spyOn(mockKbApi, "createContextCard");
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /new/i }));
+    await userEvent.type(screen.getByLabelText("Title"), "Reflow");
+    await userEvent.type(screen.getByLabelText("Add a term"), "reflow{enter}");
+    await userEvent.type(screen.getByLabelText("Explanation"), "zone 3");
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    // wait for the create to land and the card to show in the list
+    expect(await screen.findByText("Reflow")).toBeInTheDocument();
+
+    // pressing Save again must NOT author a second card — the draft is now the
+    // saved card, so this is an update.
+    await userEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(await mockKbApi.listContextCards("col-1")).toHaveLength(1);
   });
 
   it("edits an existing card through updateContextCard", async () => {

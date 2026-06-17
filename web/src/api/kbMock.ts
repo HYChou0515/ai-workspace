@@ -346,8 +346,9 @@ export const mockKbApi: KbApi = {
   },
   async createContextCard(input) {
     const list = contextCards.get(input.collection_id) ?? [];
+    const id = nextId("card");
     list.push({
-      id: nextId("card"),
+      id,
       collection_id: input.collection_id,
       keys: input.keys,
       norm_keys: deriveNormKeys(input.keys),
@@ -355,6 +356,7 @@ export const mockKbApi: KbApi = {
       body: input.body,
     });
     contextCards.set(input.collection_id, list);
+    return id;
   },
   async updateContextCard(id, patch) {
     for (const [cid, list] of contextCards) {

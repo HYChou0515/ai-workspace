@@ -300,8 +300,9 @@ export interface KbApi {
    * specstar's auto CRUD route, scoped on the indexed `collection_id`. */
   listContextCards(collectionId: string): Promise<KbContextCard[]>;
   /** Author a new card — POST the create custom action; the server derives
-   * `norm_keys` from `keys` in the same write. */
-  createContextCard(input: KbContextCardInput): Promise<void>;
+   * `norm_keys` from `keys` in the same write. Returns the new card's id so the
+   * editor switches from "new" to "editing" (a second save updates, not dupes). */
+  createContextCard(input: KbContextCardInput): Promise<string>;
   /** Edit a card's keys/title/body — POST the update custom action (collection
    * stays put; `norm_keys` re-derived server-side). */
   updateContextCard(id: string, patch: Omit<KbContextCardInput, "collection_id">): Promise<void>;
@@ -484,7 +485,7 @@ export const realKbApi: KbApi = {
     return rows.map((r) => ({ id: r.revision_info.resource_id, ...r.data }));
   },
   async createContextCard(input) {
-    await ok(
+    const resp = await ok(
       await apiFetch("/context-card/author", {
         method: "POST",
         headers: jsonHeaders,
@@ -492,6 +493,9 @@ export const realKbApi: KbApi = {
       }),
       "create context card",
     );
+    // the create action responds with specstar's RevisionInfo — return the id.
+    const info: { resource_id: string } = await resp.json();
+    return info.resource_id;
   },
   async updateContextCard(id, patch) {
     await ok(

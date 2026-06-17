@@ -36,16 +36,24 @@ export function ContextCardsTab({
   const invalidate = () => qc.invalidateQueries({ queryKey: qk.kb.contextCards(collectionId) });
 
   const saveMut = useMutation({
-    mutationFn: (d: Draft) =>
-      d.id
-        ? client.updateContextCard(d.id, { keys: d.keys, title: d.title, body: d.body })
-        : client.createContextCard({
-            collection_id: collectionId,
-            keys: d.keys,
-            title: d.title,
-            body: d.body,
-          }),
-    onSuccess: () => void invalidate(),
+    mutationFn: async (d: Draft): Promise<string> => {
+      if (d.id) {
+        await client.updateContextCard(d.id, { keys: d.keys, title: d.title, body: d.body });
+        return d.id;
+      }
+      return client.createContextCard({
+        collection_id: collectionId,
+        keys: d.keys,
+        title: d.title,
+        body: d.body,
+      });
+    },
+    // Promote a just-authored draft to "editing the saved card" so a second
+    // Save updates it instead of creating a duplicate.
+    onSuccess: (id) => {
+      setDraft((cur) => (cur && cur.id === null ? { ...cur, id } : cur));
+      void invalidate();
+    },
   });
   const deleteMut = useMutation({
     mutationFn: (id: string) => client.deleteContextCard(id),
@@ -135,6 +143,7 @@ export function ContextCardsTab({
               <button
                 type="button"
                 className="kb-cards__save"
+                disabled={saveMut.isPending}
                 onClick={() => saveMut.mutate(draft)}
               >
                 Save
