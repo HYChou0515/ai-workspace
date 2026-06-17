@@ -8,6 +8,17 @@
         { "id": "index", "title": "Refresh MEMORY.md" }
       ],
       "input_json": "inputs/input.json"
+    },
+    {
+      "id": "collections",
+      "title": "File uploads into collections",
+      "phases": [
+        { "id": "classify", "title": "Classify + digest" },
+        { "id": "glossary", "title": "Collect glossary terms" },
+        { "id": "review", "title": "Review" },
+        { "id": "commit", "title": "Ingest + author cards" }
+      ],
+      "input_json": "inputs/input.json"
     }
   ]
 }
