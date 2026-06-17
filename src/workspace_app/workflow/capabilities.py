@@ -79,3 +79,43 @@ async def ingest_to_collection(
     receipt = json.dumps({"doc_id": doc_id, "collection": collection_id, "path": filename})
     await store.write(workspace_id, f"/step_ingest/{filename}.done", receipt.encode())
     return doc_id
+
+
+def create_context_card(
+    spec: SpecStar,
+    *,
+    collection: str,
+    keys: list[str],
+    title: str,
+    body: str,
+    user: str,
+) -> str:
+    """Create a ``ContextCard`` (#106) on an EXISTING collection as ``user`` (manual
+    §8) — the ``→collections`` workflow's reliable commit of a filled glossary entry.
+
+    Reuses #106's author logic: ``norm_keys`` is the derived, indexed lookup surface
+    (``derive_norm_keys``), and an entry with no usable key falls back to the title
+    (so it stays findable). Raises ``CollectionNotFound`` when the collection is
+    missing. Re-run idempotency is the deterministic node's job (the ``step_card``
+    receipt via ``WorkflowHandle.create_context_card``); this core just authors one
+    card. Returns the new card's resource id.
+    """
+    from ..kb.context_cards import derive_norm_keys
+    from ..resources.kb import ContextCard
+
+    collection_id = resolve_collection_id(spec, collection)
+    eff_keys = list(keys)
+    if not derive_norm_keys(eff_keys) and title.strip():
+        eff_keys = [title]
+    rm = spec.get_resource_manager(ContextCard)
+    with rm.using(user=user):
+        rev = rm.create(
+            ContextCard(
+                collection_id=collection_id,
+                keys=eff_keys,
+                norm_keys=derive_norm_keys(eff_keys),
+                title=title,
+                body=body,
+            )
+        )
+    return rev.resource_id

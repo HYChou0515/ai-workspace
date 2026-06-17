@@ -305,6 +305,41 @@ def test_capability_ingest_rejects_a_bad_token():
     assert r.status_code == 401
 
 
+def test_capability_context_card_creates_a_card():
+    app, spec, item_id = _app()
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    with TestClient(app) as client:
+        r = client.post(
+            f"{_base(item_id)}/capabilities/context-card",
+            json={"collection": cid, "keys": ["M4", "Metal 4"], "title": "Metal 4", "body": "L4"},
+        )
+    assert r.status_code == 200 and r.json()["card_id"]
+    from workspace_app.kb.context_cards import lookup
+
+    assert lookup(spec, cid, ["m4"])["m4"]  # the card is findable by exact key
+
+
+def test_capability_context_card_unknown_collection_404():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(
+            f"{_base(item_id)}/capabilities/context-card",
+            json={"collection": "no-such", "keys": ["x"], "body": "b"},
+        )
+    assert r.status_code == 404
+
+
+def test_capability_context_card_rejects_a_bad_token():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(
+            f"{_base(item_id)}/capabilities/context-card",
+            json={"collection": "c", "keys": ["x"], "body": "b"},
+            headers={"X-Workflow-Token": "forged"},
+        )
+    assert r.status_code == 401
+
+
 async def test_run_stream_endpoint_returns_an_sse_response():
     """The run stream reuses the item's broadcast SSE (manual §14). Invoke the
     handler directly — its body is the item's (never-ending) event stream, which the

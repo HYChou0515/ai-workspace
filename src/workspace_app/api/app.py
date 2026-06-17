@@ -46,7 +46,7 @@ from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tooling.registry import PackageInfo
 from ..users import MockUserDirectory, UserDirectory
-from ..workflow.capabilities import CollectionNotFound, ingest_to_collection
+from ..workflow.capabilities import CollectionNotFound, create_context_card, ingest_to_collection
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
 from ..workflow.handle import WorkflowHandle
@@ -295,6 +295,14 @@ class _IngestBody(BaseModel):
     # #100: a deterministic node's ingest capability call (manual §8).
     collection: str
     path: str
+
+
+class _CardBody(BaseModel):
+    # topic-hub P9: a deterministic node's create-context-card capability call (§8).
+    collection: str
+    keys: list[str] = Field(default_factory=list)
+    title: str = ""
+    body: str = ""
 
 
 async def _promote_chat_to_kb(
@@ -1352,6 +1360,14 @@ def create_app(
             user=captured_user,
         )
 
+    async def _wf_create_card(
+        captured_user: str, collection: str, keys: list[str], title: str, body: str
+    ) -> str:
+        """The create-context-card capability (§8) bound to this run's captured user."""
+        return create_context_card(
+            spec, collection=collection, keys=keys, title=title, body=body, user=captured_user
+        )
+
     async def _wf_collection_has(collection: str, path: str) -> bool:
         """Backs ``check.collection_has`` (§8): did ``path`` land in ``collection``
         (a name or id) as a ``ready`` doc? Read back from the KB at its natural-key id."""
@@ -1380,6 +1396,9 @@ def create_app(
         wf.run_sandbox = lambda run: _wf_run_sandbox(item_id, run, wf.credential)
         wf._ingest = lambda collection, path: _wf_ingest(item_id, captured_user, collection, path)
         wf._collection_has = _wf_collection_has
+        wf._create_card = lambda collection, keys, title, body: _wf_create_card(
+            captured_user, collection, keys, title, body
+        )
 
     def _wf_any_running(item_id: str) -> bool:
         """Is any run on this item still RUNNING? Used to decide whether the shared
@@ -1626,6 +1645,34 @@ def create_app(
                 status_code=404, detail=f"unknown collection: {body.collection!r}"
             ) from exc
         return {"doc_id": doc_id}
+
+    @app.post("/a/{slug}/items/{item_id}/capabilities/context-card")
+    async def capability_context_card(
+        slug: str,
+        item_id: str,
+        body: _CardBody,
+        x_workflow_token: str | None = Header(default=None),
+    ) -> dict:
+        """topic-hub P9 (manual §8): the create-context-card capability as an HTTP
+        endpoint — a deterministic node's sandbox script reaches it with the run-scoped
+        credential (manual §15). Same auth as ingest: a valid ``X-Workflow-Token`` acts
+        as its captured user, scoped to THIS item; no token → the session user."""
+        investigation_id = _require_item(slug, item_id)
+        actor = get_user_id()
+        if x_workflow_token is not None:
+            claims = workflow_credentials.resolve(x_workflow_token)
+            if claims is None or claims.item_id != investigation_id:
+                raise HTTPException(status_code=401, detail="invalid or expired workflow token")
+            actor = claims.user
+        try:
+            card_id = await _wf_create_card(
+                actor, body.collection, body.keys, body.title, body.body
+            )
+        except CollectionNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail=f"unknown collection: {body.collection!r}"
+            ) from exc
+        return {"card_id": card_id}
 
     @app.get("/a/{slug}/items/{item_id}/export")
     async def export_investigation(slug: str, item_id: str) -> Response:

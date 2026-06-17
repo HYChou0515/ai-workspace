@@ -12,7 +12,11 @@ from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.resources.kb import EMBED_DIM, Collection, SourceDoc
-from workspace_app.workflow.capabilities import CollectionNotFound, ingest_to_collection
+from workspace_app.workflow.capabilities import (
+    CollectionNotFound,
+    create_context_card,
+    ingest_to_collection,
+)
 from workspace_app.workflow.handle import WorkflowHandle
 
 
@@ -136,3 +140,82 @@ async def test_ingest_to_collection_without_capability_raises():
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws")
     with pytest.raises(RuntimeError, match="needs a capability"):
         await wf.ingest_to_collection("kb", "a.md")
+
+
+# ── create_context_card capability (topic-hub P9, manual §8) ─────────────
+
+
+def test_create_context_card_creates_a_card_with_derived_norm_keys(spec_instance: SpecStar):
+    from workspace_app.kb.context_cards import lookup
+    from workspace_app.resources.kb import ContextCard
+
+    cid = _collection(spec_instance)
+    card_id = create_context_card(
+        spec_instance,
+        collection=cid,
+        keys=["M4", "Metal 4"],
+        title="Metal 4",
+        body="The fourth metal layer.",
+        user="alice",
+    )
+    card = spec_instance.get_resource_manager(ContextCard).get(card_id).data
+    assert card.collection_id == cid
+    assert card.body == "The fourth metal layer."
+    # norm_keys is the derived, indexed lookup surface — so lookup finds it exactly.
+    assert lookup(spec_instance, cid, ["m4"])["m4"]  # exact-key membership
+    assert not lookup(spec_instance, cid, ["m40"])["m40"]  # but not a longer key
+
+
+def test_create_context_card_accepts_a_collection_name(spec_instance: SpecStar):
+    cid = spec_instance.get_resource_manager(Collection).create(Collection(name="kb-x")).resource_id
+    card_id = create_context_card(
+        spec_instance, collection="kb-x", keys=["t"], title="", body="b", user="u"
+    )
+    from workspace_app.resources.kb import ContextCard
+
+    assert spec_instance.get_resource_manager(ContextCard).get(card_id).data.collection_id == cid
+
+
+def test_create_context_card_falls_back_to_title_when_no_usable_key(spec_instance: SpecStar):
+    """Mirror the #106 author action: with no usable key, the title becomes the key
+    so the card is still findable."""
+    from workspace_app.kb.context_cards import lookup
+    from workspace_app.resources.kb import ContextCard
+
+    cid = _collection(spec_instance)
+    card_id = create_context_card(
+        spec_instance, collection=cid, keys=["   "], title="Reflow", body="b", user="u"
+    )
+    card = spec_instance.get_resource_manager(ContextCard).get(card_id).data
+    assert card.keys == ["Reflow"]
+    assert lookup(spec_instance, cid, ["reflow"])["reflow"]
+
+
+def test_create_context_card_unknown_collection_is_rejected(spec_instance: SpecStar):
+    with pytest.raises(CollectionNotFound):
+        create_context_card(
+            spec_instance, collection="no-such", keys=["x"], title="", body="b", user="u"
+        )
+
+
+async def test_wf_create_context_card_is_idempotent_on_rerun(spec_instance: SpecStar):
+    """Through the handle, a re-run skips the already-committed card (the
+    ``step_card/<key>`` receipt) — the capability runs once (manual §8/§9)."""
+    calls: list[tuple] = []
+
+    async def fake_create(collection, keys, title, body):
+        calls.append((collection, tuple(keys), title))
+        return f"context-card:{len(calls)}"
+
+    store = MemoryFileStore()
+    for _ in range(2):
+        wf = WorkflowHandle(store=store, workspace_id="ws", create_card=fake_create)
+        card_id = await wf.create_context_card("kb", ["M4"], title="Metal 4", body="b")
+        assert card_id == "context-card:1"  # the cached receipt id, re-run included
+    assert len(calls) == 1  # executed once; the re-run skipped
+
+
+async def test_wf_create_context_card_without_capability_raises():
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws")
+    with pytest.raises(RuntimeError, match="needs a capability"):
+        await wf.create_context_card("kb", ["x"], title="t", body="b")
