@@ -58,12 +58,15 @@ describe("ContextCardsTab (#106)", () => {
     render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
 
     await userEvent.click(await screen.findByText("Metal 4"));
-    // default = preview: the explanation is rendered, not an editable field
+    // default = preview: the explanation is rendered, not an editable field;
+    // Delete is hidden in preview.
     expect(await screen.findByText("The capping layer.")).toBeInTheDocument();
     expect(screen.queryByLabelText("Explanation")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
     expect(await screen.findByLabelText("Explanation")).toHaveValue("The capping layer.");
+    expect(screen.getByRole("button", { name: /delete/i })).toBeInTheDocument();
   });
 
   it("authors a new card and saves it through createContextCard", async () => {
@@ -168,6 +171,7 @@ describe("ContextCardsTab (#106)", () => {
     render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
 
     await userEvent.click(await screen.findByText("Metal 4"));
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" })); // Delete lives in Edit only
     await userEvent.click(screen.getByRole("button", { name: /delete/i }));
 
     expect(spy).toHaveBeenCalledWith(card.id);

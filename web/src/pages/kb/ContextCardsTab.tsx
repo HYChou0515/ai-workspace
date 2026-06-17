@@ -259,7 +259,7 @@ export function ContextCardsTab({
                   Save
                 </button>
               )}
-              {draft.id && (
+              {editing && draft.id && (
                 <button
                   type="button"
                   className="kb-cards__delete"
