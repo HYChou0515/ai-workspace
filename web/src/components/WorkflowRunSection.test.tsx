@@ -12,15 +12,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+const ECHO_WF = { id: "", title: "Echo", phases: [{ id: "think", title: "Think" }], input_json: "x" };
 const PROFILES = [
   {
     name: "echo",
     title: "Echo",
     description: "",
     has_workflow: true,
-    workflow: { title: "Echo", phases: [{ id: "think", title: "Think" }], input_json: "x" },
+    workflow: ECHO_WF,
+    workflows: [ECHO_WF],
   },
-  { name: "default", title: "Default", description: "", has_workflow: false, workflow: null },
+  {
+    name: "default",
+    title: "Default",
+    description: "",
+    has_workflow: false,
+    workflow: null,
+    workflows: [],
+  },
 ];
 
 const run = (over: Partial<WorkflowRunDTO> = {}): WorkflowRunDTO => ({
@@ -55,7 +64,7 @@ describe("WorkflowRunSection", () => {
     vi.spyOn(workflowApi, "getRun").mockResolvedValue(run());
     const start = vi
       .spyOn(workflowApi, "startRun")
-      .mockResolvedValue({ run_id: "r1", item_id: "i1" });
+      .mockResolvedValue({ run_id: "r1", item_id: "i1", chat_id: "conversation:c1" });
 
     renderWithQuery(<WorkflowRunSection slug="playground" itemId="i1" profile="echo" />);
     const btn = await screen.findByTestId("wf-run-button");

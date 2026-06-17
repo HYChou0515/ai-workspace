@@ -1,0 +1,116 @@
+/**
+ * Multi-chat API client (topic-hub §3) — an item holds many chats (free + workflow).
+ * These chat-scoped calls parallel the item-level ones in `real.ts`; the backend's
+ * default-chat reconciliation means addressing the default chat here streams on the
+ * item's broadcast stream, so the FE can treat every chat uniformly by its id.
+ *
+ * A turn uses the #43 broadcast model: `sendMessage` POSTs to ENQUEUE (202, no body),
+ * and the turn's events arrive on the long-lived `subscribe` stream — same as
+ * `useAgent`, just keyed on a chat id. `client` is injectable so hooks unit-test
+ * against a fake.
+ */
+
+import type { AgentEvent } from "../events";
+import { apiFetch } from "./http";
+import { parseSseStream } from "./sse";
+import type { Message } from "./types";
+
+const enc = encodeURIComponent;
+const base = (slug: string, itemId: string) => `/a/${enc(slug)}/items/${enc(itemId)}`;
+
+/** One chat in an item's list (GET /chats). */
+export type ItemChatSummary = {
+  chat_id: string;
+  title: string;
+  run_id: string | null;
+  created_ms: number | null;
+  message_count: number;
+  is_default: boolean;
+};
+
+/** A hydrated chat thread (persisted messages — carries resolved [n] citations). */
+export type ItemChat = {
+  chatId: string;
+  title: string;
+  runId: string | null;
+  messages: Message[];
+};
+
+type ConversationEnvelope = {
+  data: { title?: string; run_id?: string | null; messages?: Message[] };
+  revision_info: { resource_id: string };
+};
+
+async function jsonOrThrow<T>(r: Response, what: string): Promise<T> {
+  if (!r.ok) throw new Error(`${what} failed: ${r.status}`);
+  return r.json() as Promise<T>;
+}
+
+export const itemChatApi = {
+  async listChats(slug: string, itemId: string): Promise<ItemChatSummary[]> {
+    return jsonOrThrow(await apiFetch(`${base(slug, itemId)}/chats`), "list chats");
+  },
+
+  async createChat(slug: string, itemId: string, title = ""): Promise<ItemChatSummary> {
+    return jsonOrThrow(
+      await apiFetch(`${base(slug, itemId)}/chats`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title }),
+      }),
+      "create chat",
+    );
+  },
+
+  /** Hydrate a chat's persisted thread via the specstar single-resource route. */
+  async getChat(_slug: string, _itemId: string, chatId: string): Promise<ItemChat> {
+    const e = await jsonOrThrow<ConversationEnvelope>(
+      await apiFetch(`/conversation/${enc(chatId)}`),
+      "get chat",
+    );
+    return {
+      chatId: e.revision_info.resource_id,
+      title: e.data.title ?? "",
+      runId: e.data.run_id ?? null,
+      messages: e.data.messages ?? [],
+    };
+  },
+
+  async sendMessage(args: {
+    slug: string;
+    itemId: string;
+    chatId: string;
+    content: string;
+    reasoningEffort?: string;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    // #43 broadcast model: POST enqueues (202); events arrive on `subscribe`.
+    const r = await apiFetch(`${base(args.slug, args.itemId)}/chats/${enc(args.chatId)}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: args.content, reasoning_effort: args.reasoningEffort }),
+      signal: args.signal,
+    });
+    if (!r.ok) throw new Error(`send failed: ${r.status}`);
+  },
+
+  async *subscribe(
+    slug: string,
+    itemId: string,
+    chatId: string,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    const r = await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}/stream`, { signal });
+    if (!r.ok || !r.body) throw new Error(`stream failed: ${r.status}`);
+    yield* parseSseStream(r.body) as AsyncGenerator<AgentEvent>;
+  },
+
+  async cancelMessage(slug: string, itemId: string, chatId: string): Promise<void> {
+    // Idempotent on the BE; swallow noise so a double-click on Stop is quiet.
+    await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}/messages/current`, {
+      method: "DELETE",
+    }).catch(() => undefined);
+  },
+};
+
+export type ItemChatApi = typeof itemChatApi;

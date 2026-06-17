@@ -7,7 +7,7 @@ from agents import RunContextWrapper
 from fastapi.testclient import TestClient
 from specstar import QB
 
-from workspace_app.agent import lookup_glossary_impl
+from workspace_app.agent import AgentToolContext, lookup_glossary_impl
 from workspace_app.api import RunDone, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.context_cards import derive_norm_keys
@@ -21,7 +21,7 @@ class _Capture:
 
     def __init__(self) -> None:
         self.prompt: str | None = None
-        self.ctx = None
+        self.ctx: AgentToolContext | None = None
 
     async def run(self, prompt, ctx):
         self.prompt = prompt
@@ -44,11 +44,11 @@ def _hub(client: TestClient) -> tuple[str, list[str]]:
 
 def _conv(spec, iid: str) -> Conversation:
     rm = spec.get_resource_manager(Conversation)
-    return next(
-        r.data
-        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
-        if isinstance(r.data, Conversation) and r.data.item_id == iid
-    )
+    for r in rm.list_resources(QB.all()):
+        data = r.data
+        if isinstance(data, Conversation) and data.item_id == iid:
+            return data
+    raise AssertionError(f"no conversation for {iid}")
 
 
 def test_creating_a_hub_seeds_memory_and_collection_files():
@@ -97,9 +97,11 @@ def test_hub_turn_exposes_glossary_tools_and_scopes_to_collections_json():
         content=f'[{{"id": "{cid}", "name": "Defects"}}]'.encode(),
     )
     client.post(f"/a/topic-hub/items/{iid}/messages", json={"content": "hi"})
+    assert cap.ctx is not None
     assert cap.ctx.spec is not None  # the retriever-free tools can query specstar
     assert cap.ctx.collection_ids == [cid]  # scoped to the Hub's collection set
-    allowed = set(cap.ctx.agent_config.allowed_tools)
+    assert cap.ctx.agent_config is not None
+    allowed = set(cap.ctx.agent_config.allowed_tools or [])
     assert {"lookup_glossary", "resolve_collection", "ask_knowledge_base"} <= allowed
 
 
@@ -125,5 +127,6 @@ def test_hub_glossary_layer_answers_a_card_covered_term_without_rag():
         content=f'[{{"id": "{cid}", "name": "Defects"}}]'.encode(),
     )
     client.post(f"/a/topic-hub/items/{iid}/messages", json={"content": "what is M4?"})
+    assert cap.ctx is not None
     out = lookup_glossary_impl(RunContextWrapper(cap.ctx), "M4")
     assert "Metal layer 4." in out  # answered from the card, no knowledge-base search

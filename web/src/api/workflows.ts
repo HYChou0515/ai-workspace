@@ -14,6 +14,8 @@ import { apiFetch } from "./http";
 export type PhaseDef = { id: string; title?: string };
 
 export type WorkflowManifestDTO = {
+  /** Stable id within the profile (manual §4); "" for a legacy singular workflow. */
+  id: string;
   title: string;
   phases: PhaseDef[];
   input_json: string;
@@ -25,7 +27,10 @@ export type ProfileDTO = {
   title: string;
   description: string;
   has_workflow: boolean;
+  /** Legacy singular block — kept for back-compat; prefer `workflows`. */
   workflow: WorkflowManifestDTO | null;
+  /** topic-hub §4: every workflow the profile offers (the new-chat picker lists these). */
+  workflows: WorkflowManifestDTO[];
 };
 
 export type RunStatus =
@@ -135,11 +140,18 @@ export const workflowApi = {
     ) as Promise<ProfileDTO[]>;
   },
 
-  async startRun(slug: string, itemId: string): Promise<{ run_id: string; item_id: string }> {
+  async startRun(
+    slug: string,
+    itemId: string,
+    workflowId = "",
+  ): Promise<{ run_id: string; item_id: string; chat_id: string }> {
+    // topic-hub §3/§4: launching opens a workflow CHAT (returns its chat_id) and
+    // `workflow_id` picks which of the profile's workflows to run.
+    const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : "";
     return jsonOrThrow(
-      await apiFetch(`${base(slug, itemId)}/run`, { method: "POST" }),
+      await apiFetch(`${base(slug, itemId)}/run${qs}`, { method: "POST" }),
       "start run",
-    ) as Promise<{ run_id: string; item_id: string }>;
+    ) as Promise<{ run_id: string; item_id: string; chat_id: string }>;
   },
 
   async getRun(slug: string, itemId: string, runId: string): Promise<WorkflowRunDTO> {

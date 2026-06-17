@@ -24,6 +24,11 @@ export const qk = {
   appItems: (slug: string) => ["appItems", slug] as const,
   appItem: (slug: string, id: string) => ["appItem", slug, id] as const,
 
+  // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
+  itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
+  itemChat: (slug: string, itemId: string, chatId: string) =>
+    ["itemChat", slug, itemId, chatId] as const,
+
   // #100 workflows: per-App profiles (which carry a workflow) + an item's runs.
   workflowProfiles: (slug: string) => ["workflowProfiles", slug] as const,
   workflowRuns: (slug: string, itemId: string) =>

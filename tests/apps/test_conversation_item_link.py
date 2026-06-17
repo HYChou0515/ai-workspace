@@ -45,10 +45,11 @@ def test_item_can_hold_multiple_conversations_each_addressable_with_a_title(
         Conversation(item_id=item.resource_id, title="memory run", run_id="run-1", created_ms=2)
     )
 
-    rows = {
-        r.info.resource_id: r.data  # ty: ignore[unresolved-attribute]
-        for r in conv_rm.list_resources((QB["item_id"] == item.resource_id).build())
-    }
+    rows: dict[str, Conversation] = {}
+    for r in conv_rm.list_resources((QB["item_id"] == item.resource_id).build()):
+        data = r.data
+        assert isinstance(data, Conversation)  # narrow Struct | UnsetType for ty
+        rows[r.info.resource_id] = data  # ty: ignore[unresolved-attribute]
     assert len(rows) == 2
     assert free.resource_id != wf.resource_id
     assert sorted(c.title for c in rows.values()) == ["Free chat", "memory run"]
