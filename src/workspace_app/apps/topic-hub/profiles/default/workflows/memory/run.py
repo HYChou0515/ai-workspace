@@ -43,9 +43,10 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
             prompt=(
                 f"Read the file {f}. Write a concise memory note capturing the key facts, "
                 f"decisions, and open questions worth remembering long-term about this Topic "
-                f"Hub's subject. Save it as Markdown to {out} with write_file. Output nothing else."
+                f"Hub's subject. Save it as Markdown to {out} with write_file — if {out} already "
+                f"exists, use edit_file to replace its content instead. Output nothing else."
             ),
-            tools=["read_file", "write_file"],
+            tools=["read_file", "write_file", "edit_file"],
             check=file_nonempty(out),
             retries=2,
         )
@@ -59,10 +60,11 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
         prompt=(
             f"The Hub's deeper memory notes are: {notes}. Rewrite MEMORY.md so it is a short, "
             f"current index of what this Hub knows — a few bullets, each linking the relevant "
-            f"note. Keep it tight; detail stays in the notes. Save MEMORY.md with write_file. "
-            f"Output nothing else."
+            f"note. Keep it tight; detail stays in the notes. MEMORY.md already exists, so read "
+            f"it first, then use edit_file to replace its whole content (pass its current content "
+            f"as old_string and your new index as new_string). Output nothing else."
         ),
-        tools=["read_file", "write_file", "ls"],
+        tools=["read_file", "write_file", "edit_file", "ls"],
         check=file_nonempty("MEMORY.md"),
         retries=2,
     )

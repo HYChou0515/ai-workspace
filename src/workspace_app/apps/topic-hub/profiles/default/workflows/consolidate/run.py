@@ -34,10 +34,11 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
             f"Read the Hub's current memory: MEMORY.md and the notes {notes}.{context_line}\n"
             f"Consolidate it — merge duplicates, summarise verbosity, and DROP anything stale "
             f"or superseded. Rewrite MEMORY.md as the tightened, current index, and tidy the "
-            f"notes where useful. Use read_file / write_file (and delete_file for a note that is "
-            f"wholly obsolete). Output nothing else."
+            f"notes where useful. These files already exist, so use edit_file to rewrite them "
+            f"(read_file first), and delete_file for a note that is wholly obsolete. Output "
+            f"nothing else."
         ),
-        tools=["read_file", "write_file", "ls", "delete_file"],
+        tools=["read_file", "write_file", "edit_file", "ls", "delete_file"],
         check=file_nonempty("MEMORY.md"),
         retries=2,
     )

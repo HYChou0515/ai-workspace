@@ -101,9 +101,10 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
                 f"{collections}. Write a one-line digest. List the domain terms or "
                 f"abbreviations in it that a newcomer would not know. Then write a JSON "
                 f'object {{"collection": <one of {collections}>, "digest": <text>, '
-                f'"terms": [<term>, ...]}} to {out} with write_file. Output nothing else.'
+                f'"terms": [<term>, ...]}} to {out} with write_file (use edit_file if {out} '
+                f"already exists). Output nothing else."
             ),
-            tools=["read_file", "write_file"],
+            tools=["read_file", "write_file", "edit_file"],
             check=choice_in(out, key="collection", allowed=collections),
             retries=2,
         )
@@ -125,9 +126,10 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
         prompt=(
             f"These domain terms were collected while classifying: {terms}. Write a fill-in "
             f"glossary to {_GLOSSARY} — one '## <term>' section per term with an empty line "
-            f"under it for a human to write the definition. Use write_file. Output nothing else."
+            f"under it for a human to write the definition. Use write_file (or edit_file if "
+            f"{_GLOSSARY} already exists). Output nothing else."
         ),
-        tools=["read_file", "write_file"],
+        tools=["read_file", "write_file", "edit_file"],
         check=file_nonempty(_GLOSSARY),
         retries=2,
     )

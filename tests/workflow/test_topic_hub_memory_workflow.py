@@ -41,6 +41,31 @@ async def test_memory_workflow_digests_uploads_then_refreshes_the_index():
     assert len(calls) == 2  # one digest + one index turn
 
 
+async def test_memory_workflow_regen_nodes_can_overwrite_existing_files():
+    """Regression: MEMORY.md is seeded at Hub creation, and notes exist on re-run, so the
+    digest + index nodes must be able to OVERWRITE — write_file is create-only, so each
+    regen node needs ``edit_file`` in its tool list (else the agent has no tool to replace
+    the existing file and the run silently leaves it stale)."""
+    run = _run()
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    tools_per_call: list[list[str]] = []
+
+    async def drive_turn(prompt, tools):
+        tools_per_call.append(list(tools))
+        if len(tools_per_call) == 1:
+            await wf.write("memory/inputs_doc.md", "note")
+        else:
+            await wf.write("MEMORY.md", "# Memory")
+        return "done"
+
+    wf.drive_turn = drive_turn
+    await wf.write("inputs/doc.txt", b"content")
+    await wf.write("inputs/input.json", b"{}")
+    await run(wf, {})
+    assert "edit_file" in tools_per_call[0]  # digest node (a note can already exist)
+    assert "edit_file" in tools_per_call[-1]  # index node (MEMORY.md is always seeded)
+
+
 async def test_memory_workflow_rerun_skips_completed_steps():
     run = _run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
