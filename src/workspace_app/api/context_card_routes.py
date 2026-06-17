@@ -12,11 +12,11 @@ route builder introspects the handler signature at apply() time and can't resolv
 stringised ForwardRef body types, so the annotations must be real classes.
 """
 
-from fastapi import Body
+from fastapi import Body, FastAPI
 from pydantic import BaseModel
 from specstar import SpecStar
 
-from ..kb.context_cards import derive_norm_keys
+from ..kb.context_cards import derive_norm_keys, lookup
 from ..resources.kb import ContextCard
 
 
@@ -64,4 +64,41 @@ def register_context_card_actions(spec: SpecStar) -> None:
             norm_keys=derive_norm_keys(body.keys),
             title=body.title,
             body=body.body,
+        )
+
+
+class LookupBody(BaseModel):
+    """Batch lookup input — the terms an external caller's LLM extracted."""
+
+    terms: list[str]
+
+
+class CardOut(BaseModel):
+    """A card as returned to an external caller: the content its LLM stuffs into
+    its own context. No `norm_keys` (an internal detail) and no resource id."""
+
+    keys: list[str]
+    title: str
+    body: str
+
+
+class LookupOut(BaseModel):
+    """`results[term]` = the cards matching that ORIGINAL input term (empty list
+    on a miss). Same deterministic primitive as the internal pre-scan."""
+
+    results: dict[str, list[CardOut]]
+
+
+def register_context_card_routes(app: FastAPI, spec: SpecStar) -> None:
+    """Plain read routes (added AFTER `spec.apply`). The exposed `get(term)`:
+    deterministic, exact, batch, scoped to one collection."""
+
+    @app.post("/kb/collections/{collection_id}/context-cards/lookup")
+    def lookup_context_cards(collection_id: str, body: LookupBody) -> LookupOut:
+        hits = lookup(spec, collection_id, body.terms)
+        return LookupOut(
+            results={
+                term: [CardOut(keys=c.keys, title=c.title, body=c.body) for c in cards]
+                for term, cards in hits.items()
+            }
         )

@@ -76,7 +76,7 @@ from .kb_chat_routes import (
     register_kb_chat_routes,
     to_caller_enhancements,
 )
-from .context_card_routes import register_context_card_actions
+from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .kb_routes import register_kb_routes
 from .notifications import notify, register_notification_routes
 from .registry import InvestigationRegistry
@@ -905,6 +905,8 @@ def create_app(
         index_coordinator=index_coordinator,
         get_user_id=get_user_id,
     )
+    # #106: the exposed deterministic context-card lookup (read route, post-apply).
+    register_context_card_routes(app, spec)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
     # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.

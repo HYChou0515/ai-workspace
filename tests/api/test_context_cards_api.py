@@ -52,6 +52,29 @@ def test_edit_action_recomputes_norm_keys(harness):
     assert cards[0].collection_id == cid  # collection preserved across edit
 
 
+def test_external_lookup_returns_cards_keyed_by_term(harness):
+    cid = _collection(harness.spec)
+    harness.client.post(
+        "/context-card/author",
+        json={
+            "collection_id": cid,
+            "keys": ["M4", "Capping"],
+            "title": "Metal 4",
+            "body": "the cap",
+        },
+    )
+    r = harness.client.post(
+        f"/kb/collections/{cid}/context-cards/lookup",
+        json={"terms": ["m4", "nope"]},
+    )
+    assert r.status_code == 200
+    results = r.json()["results"]
+    assert results["m4"][0]["body"] == "the cap"
+    assert results["m4"][0]["keys"] == ["M4", "Capping"]
+    assert results["m4"][0]["title"] == "Metal 4"
+    assert results["nope"] == []  # a miss maps to an empty list, not an error
+
+
 def test_specstar_auto_route_lists_cards_scoped_to_a_collection(harness):
     # No hand-rolled list route — the FE lists a collection's cards through
     # specstar's auto CRUD route, filtered on the indexed `collection_id`.
