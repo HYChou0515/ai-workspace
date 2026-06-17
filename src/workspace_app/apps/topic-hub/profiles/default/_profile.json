@@ -1,0 +1,13 @@
+{
+  "workflows": [
+    {
+      "id": "memory",
+      "title": "Digest uploads into memory",
+      "phases": [
+        { "id": "digest", "title": "Digest uploads" },
+        { "id": "index", "title": "Refresh MEMORY.md" }
+      ],
+      "input_json": "inputs/input.json"
+    }
+  ]
+}
