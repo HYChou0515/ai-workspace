@@ -42,3 +42,9 @@ class WorkflowManifest(Struct):
     config: dict[str, Any] = field(default_factory=dict)
     """Profile-level config surfaced to ``run()`` as ``wf.config`` — pre-defined,
     not per-run (manual §20 reads ``wf.config["collections"]``)."""
+    description: str = ""
+    """One-line human description for the launcher card (FE Run-workflow picker)."""
+    tag: str = ""
+    """A short kind pill for the launcher card, e.g. ``"batch"`` | ``"single"``."""
+    hint: str = ""
+    """One-line inputs hint shown under the card (e.g. where to drop files)."""

@@ -1,72 +1,25 @@
-import { useState } from "react";
-
-import type { WorkflowManifestDTO } from "../api/workflows";
-
 /**
- * The "new chat" picker (topic-hub §3/§4): opening a chat is choosing **[Free chat]**
- * or one of the seed profile's **workflows**. A free chat is human-driven; a workflow
- * chat is run-driven (the orchestrator drives its turns). Presentational — the parent
- * wires the actual create / run.
+ * The "new chat" trigger (topic-hub §3): opening a FREE chat — a human-driven chat
+ * scoped to the item. Workflow launches now live in their own rich launcher
+ * (RunWorkflowPicker), so this is a plain primary affordance. Presentational — the
+ * parent wires the actual create.
  */
 export function NewChatPicker({
-  workflows,
   onFreeChat,
-  onWorkflow,
   disabled = false,
 }: {
-  workflows: WorkflowManifestDTO[];
   onFreeChat: () => void;
-  onWorkflow: (workflowId: string) => void;
   disabled?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-
-  const choose = (run: () => void) => {
-    setOpen(false);
-    run();
-  };
-
   return (
-    <div className="new-chat-picker" style={{ position: "relative", display: "inline-block" }}>
-      <button
-        type="button"
-        className="new-chat-picker__trigger"
-        aria-haspopup="menu"
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
-        data-testid="new-chat-button"
-      >
-        + New chat
-      </button>
-      {open && (
-        <div
-          role="menu"
-          className="new-chat-picker__menu"
-          data-testid="new-chat-menu"
-          style={{ position: "absolute", zIndex: 10 }}
-        >
-          <button
-            type="button"
-            role="menuitem"
-            className="new-chat-picker__item"
-            onClick={() => choose(onFreeChat)}
-          >
-            Free chat
-          </button>
-          {workflows.map((wf) => (
-            <button
-              key={wf.id}
-              type="button"
-              role="menuitem"
-              className="new-chat-picker__item"
-              onClick={() => choose(() => onWorkflow(wf.id))}
-            >
-              {wf.title || wf.id}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      className="new-chat-picker__trigger"
+      disabled={disabled}
+      onClick={() => onFreeChat()}
+      data-testid="new-chat-button"
+    >
+      + New chat
+    </button>
   );
 }

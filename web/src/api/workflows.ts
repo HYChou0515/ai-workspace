@@ -20,6 +20,12 @@ export type WorkflowManifestDTO = {
   phases: PhaseDef[];
   input_json: string;
   config?: Record<string, unknown>;
+  /** One-line human description for the launcher card. */
+  description?: string;
+  /** A short kind pill — e.g. "batch" | "single". */
+  tag?: string;
+  /** One-line inputs hint (e.g. where to drop files). */
+  hint?: string;
 };
 
 export type ProfileDTO = {
@@ -62,6 +68,9 @@ export type Failure = { key: string; error: string; phase: string };
 export type WorkflowRunDTO = {
   run_id: string;
   item_id: string;
+  /** Which of the profile's workflows this run executes (manual §4); "" for the
+   * legacy singular workflow. Durable on the run record (P8). */
+  workflow_id?: string;
   captured_user: string;
   status: RunStatus;
   current_phase: string;

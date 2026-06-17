@@ -4,13 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { type ItemChatSummary } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
 import type { Suggestion } from "../api/types";
-import { workflowApi } from "../api/workflows";
+import { phaseView, workflowApi, type WorkflowManifestDTO } from "../api/workflows";
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useDecide, useRun, useWorkflowProfiles } from "../hooks/useWorkflow";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
 import { ItemChatList } from "./ItemChatList";
 import { NewChatPicker } from "./NewChatPicker";
+import { RunWorkflowPicker } from "./RunWorkflowPicker";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
@@ -100,7 +101,8 @@ export function ItemChatShell({
         }}
       >
         <ItemChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
-        <NewChatPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
+        <NewChatPicker onFreeChat={onFreeChat} />
+        <RunWorkflowPicker workflows={workflows} onLaunch={onWorkflow} />
       </div>
       {active ? (
         <ItemChatPanel
@@ -108,6 +110,7 @@ export function ItemChatShell({
           slug={slug}
           itemId={itemId}
           chat={active}
+          workflows={workflows}
           picker={picker}
           suggestions={suggestions}
           appTitle={appTitle}
@@ -129,6 +132,7 @@ function ItemChatPanel({
   slug,
   itemId,
   chat,
+  workflows,
   picker,
   suggestions,
   appTitle,
@@ -140,6 +144,7 @@ function ItemChatPanel({
   slug: string;
   itemId: string;
   chat: ItemChatSummary;
+  workflows: WorkflowManifestDTO[];
 } & AgentChrome) {
   // The active chat drives the full RCA AgentPanel (AgentState shape) — the
   // model picker, suggestions, @mention, attach, undo and Cmd-Enter all work
@@ -149,6 +154,10 @@ function ItemChatPanel({
   const run = useRun(slug, itemId, chat.run_id ?? undefined);
   const decide = useDecide(slug, itemId, chat.run_id ?? "");
   const gate = run.data?.status === "awaiting_human" ? run.data.pending_decision : null;
+  // The real linear step bar: the run's workflow declares the phase skeleton,
+  // merged with its live per-phase progress. A free chat (no run_id) → no bar.
+  const declared = workflows.find((w) => w.id === run.data?.workflow_id)?.phases ?? [];
+  const phases = chat.run_id ? phaseView(declared, run.data) : undefined;
 
   return (
     <div
@@ -180,6 +189,7 @@ function ItemChatPanel({
         investigationId={itemId}
         agent={agent}
         fill
+        phases={phases}
         picker={picker}
         suggestions={suggestions}
         attachedPreset={attachedPreset}

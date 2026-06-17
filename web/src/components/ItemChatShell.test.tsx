@@ -85,15 +85,15 @@ const render = () =>
   );
 
 describe("ItemChatShell", () => {
-  it("renders a tab per chat and the new-chat picker with the profile's workflows", async () => {
+  it("renders a tab per chat, a New chat button, and the rich Run-workflow picker", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     render();
     await waitFor(() => expect(screen.getByTestId("chat-tab-conversation:c1")).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId("new-chat-button"));
-    expect(screen.getByRole("menuitem", { name: "Free chat" })).toBeInTheDocument();
-    // workflows arrive once listProfiles resolves — findBy retries.
+    expect(screen.getByTestId("new-chat-button")).toBeInTheDocument();
+    // The Run-workflow picker lists the profile's workflows once listProfiles resolves.
+    fireEvent.click(await screen.findByTestId("run-workflow-button"));
     expect(
-      await screen.findByRole("menuitem", { name: "Digest uploads into memory" }),
+      await screen.findByText("Digest uploads into memory"),
     ).toBeInTheDocument();
   });
 
@@ -118,26 +118,25 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
   });
 
-  it("opens a free chat via the picker (createChat) and selects it", async () => {
+  it("opens a free chat via the New chat button (createChat) and selects it", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     const created = summary({ chat_id: "conversation:free2", title: "side", is_default: false });
     const create = vi.spyOn(itemChatApi, "createChat").mockResolvedValue(created);
     render();
     await waitFor(() => expect(screen.getByTestId("new-chat-button")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("new-chat-button"));
-    fireEvent.click(screen.getByRole("menuitem", { name: "Free chat" }));
     await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
   });
 
-  it("launches a workflow via the picker (startRun with the workflow id)", async () => {
+  it("launches a workflow via the Run-workflow picker (startRun with the workflow id)", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     const start = vi
       .spyOn(workflowApi, "startRun")
       .mockResolvedValue({ run_id: "r1", item_id: "it", chat_id: "conversation:wf1" });
     render();
-    await waitFor(() => expect(screen.getByTestId("new-chat-button")).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId("new-chat-button"));
-    fireEvent.click(await screen.findByRole("menuitem", { name: "File uploads into collections" }));
+    await waitFor(() => expect(screen.getByTestId("run-workflow-button")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("run-workflow-button"));
+    fireEvent.click(await screen.findByTestId("run-workflow-card-collections"));
     await waitFor(() => expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections"));
   });
 

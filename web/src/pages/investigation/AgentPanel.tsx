@@ -55,6 +55,7 @@ export function AgentPanel({
   agent: agentProp,
   width = 380,
   fill = false,
+  phases,
   suggestions,
   picker,
   attachedPreset,
@@ -72,6 +73,9 @@ export function AgentPanel({
   /** When true (a workspace=false App), the panel fills the row instead of
    * sitting at its fixed resizable width — it's the only pane. */
   fill?: boolean;
+  /** The workflow run's phases (skeleton + live progress) for the linear step
+   * bar. Absent / empty → no bar (RCA has no run, so it never shows one). */
+  phases?: import("../../api/workflows").PhaseNode[];
   /** Quick-prompt chips from the App manifest (``agent.suggestions``). Each
    * entry has a ``label`` (button text) and a ``prompt`` (sent verbatim). */
   suggestions?: import("../../api/types").Suggestion[];
@@ -213,7 +217,7 @@ export function AgentPanel({
         appIcon={appIcon}
         appColor={appColor}
       />
-      <ProgressBar streaming={log.streaming} />
+      <ProgressBar phases={phases} />
 
       <div
         ref={chatScrollRef}
@@ -573,9 +577,33 @@ export function AgentHeader({
   );
 }
 
-function ProgressBar({ streaming }: { streaming: boolean }) {
+/** The color for one phase segment, keyed by its run status. */
+function phaseColor(status: string): string {
+  if (status === "passed") return "var(--ok)";
+  if (status === "running" || status === "awaiting_human") return "var(--accent)";
+  if (status === "failed") return "var(--err)";
+  return "var(--paper-3)"; // pending / skipped / unknown
+}
+
+/**
+ * The real linear step bar (topic-hub §12): one segment per workflow phase,
+ * colored by its live status, plus a `step n · <title>` label for the current /
+ * awaiting phase. No phases (e.g. a free chat, or RCA which has no run) → nothing.
+ */
+function ProgressBar({ phases }: { phases?: import("../../api/workflows").PhaseNode[] }) {
+  if (!phases?.length) return null;
+
+  // The "current" step: the phase the run is on, else the one awaiting a human,
+  // else the first not-yet-passed phase, else the last (all done).
+  let currentIdx = phases.findIndex((p) => p.current);
+  if (currentIdx < 0) currentIdx = phases.findIndex((p) => p.status === "awaiting_human");
+  if (currentIdx < 0) currentIdx = phases.findIndex((p) => p.status !== "passed");
+  if (currentIdx < 0) currentIdx = phases.length - 1;
+  const current = phases[currentIdx];
+
   return (
     <div
+      data-testid="progress-bar"
       style={{
         padding: "8px 14px",
         borderBottom: "1px solid var(--paper-3)",
@@ -585,26 +613,21 @@ function ProgressBar({ streaming }: { streaming: boolean }) {
       }}
     >
       <div style={{ display: "flex", gap: 4 }}>
-        {[0, 1, 2, 3, 4, 5].map((i) => (
+        {phases.map((p) => (
           <div
-            key={i}
+            key={p.id}
+            title={p.title}
             style={{
               flex: 1,
               height: 4,
               borderRadius: 2,
-              background: streaming
-                ? i < 4
-                  ? "var(--ok)"
-                  : i === 4
-                    ? "var(--accent)"
-                    : "var(--paper-3)"
-                : "var(--paper-3)",
+              background: phaseColor(p.status),
             }}
           />
         ))}
       </div>
       <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
-        {streaming ? "step 4 · finding correlations" : "no active run"}
+        step {currentIdx + 1} · {current.title}
       </div>
     </div>
   );

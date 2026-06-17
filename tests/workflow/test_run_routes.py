@@ -251,6 +251,17 @@ def test_cancel_running_gate_run():
         assert client.post(f"{_base(item_id)}/runs/{run_id}/cancel").status_code == 204
 
 
+def test_run_get_serializes_workflow_id():
+    """The run GET response carries the durable `workflow_id` (P8) so the FE can map
+    a run back to its profile's declared phases for the linear step bar."""
+    app, _spec, item_id = _app(profile="multi")
+    with TestClient(app) as client:
+        _put_input(client, item_id, "{}")
+        run_id = client.post(f"{_base(item_id)}/run?workflow_id=alpha").json()["run_id"]
+        data = _poll(client, item_id, run_id, "done")
+    assert data["workflow_id"] == "alpha"
+
+
 def test_get_unknown_run_is_404():
     app, _spec, item_id = _app()
     with TestClient(app) as client:
