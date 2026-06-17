@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from .checks import file_nonempty
 from .engine import Check, StepFailed, run_step
 from .handle import WorkflowHandle
 
@@ -64,6 +65,61 @@ async def agent_step(
         args={"prompt": prompt, "tools": tools, "phase": phase},
         execute=execute,
         check=check,
+        retries=retries,
+        cache=cache,
+    )
+
+
+async def agent_write_step(
+    wf: WorkflowHandle,
+    *,
+    prompt: str,
+    phase: str,
+    out: str,
+    name: str | None = None,
+    key: str = "",
+    tools: list[str] | None = None,
+    retries: int = 0,
+    cache: bool = True,
+    check: Check | None = None,
+) -> Any:
+    """Decision/action content step (issue #107): the agent PRODUCES the file's
+    content as its message output — it does NOT call ``write_file`` — then a
+    deterministic write commits that text to ``out``. This avoids routing long
+    content through a tool argument, which models (small *and* large) emit
+    unreliably: the call comes back as plain text and never executes, so the file
+    is silently left unwritten. Gated on the written file (``file_nonempty(out)``
+    by default). Journaled like any step (re-run skips); the input-hash covers the
+    prompt + tools + out, so editing any of them re-runs it (§9).
+
+    Give it read-only ``tools`` (e.g. ``["read_file"]``) — the agent reads what it
+    needs and answers with the content; the step writes it."""
+    if wf.drive_turn is None:
+        raise RuntimeError("agent_write_step needs a turn driver (wired by the run driver)")
+    drive_turn = wf.drive_turn
+
+    async def execute(feedback: str | None) -> Any:
+        coro = drive_turn(_retry_prompt(prompt, feedback), tools)
+        if wf.step_timeout_s is None:
+            text = await coro
+        else:
+            try:
+                text = await asyncio.wait_for(coro, wf.step_timeout_s)
+            except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
+                raise StepFailed(
+                    f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
+                ) from exc
+        await wf.write(out, text)
+        return {"out": out, "bytes": len(text)}
+
+    return await run_step(
+        wf,
+        name=name or phase,
+        key=key,
+        phase=phase,
+        args={"prompt": prompt, "tools": tools, "out": out, "phase": phase},
+        execute=execute,
+        check=check or file_nonempty(out),
         retries=retries,
         cache=cache,
     )

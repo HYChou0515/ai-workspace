@@ -19,7 +19,7 @@ from .gate import AwaitingHuman, Decision, human_gate, record_decision
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
 from .run import Failure, PendingDecision, PhaseState, RunStatus, WorkflowRun
-from .steps import agent_step, sandbox_node
+from .steps import agent_step, agent_write_step, sandbox_node
 
 __all__ = [
     "AwaitingHuman",
@@ -35,6 +35,7 @@ __all__ = [
     "WorkflowPhase",
     "WorkflowRun",
     "agent_step",
+    "agent_write_step",
     "choice_in",
     "collection_has",
     "fail",

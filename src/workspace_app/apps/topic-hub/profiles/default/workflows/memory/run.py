@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from workspace_app.workflow import agent_step, file_nonempty
+from workspace_app.workflow import agent_write_step
 from workspace_app.workflow.handle import WorkflowHandle
 
 
@@ -32,40 +32,41 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     if not files:
         return {"status": "empty", "notes": 0}
 
-    # Phase 1 — DIGEST: one memory note per upload (the agent must write it; gated).
+    # Phase 1 — DIGEST: one memory note per upload. The agent REPLIES with the note
+    # content (decision/action, #107) and the step writes it — no long write_file arg.
     notes: list[str] = []
     for f in files:
         out = f"memory/{_slug(f)}.md"
-        await agent_step(
+        await agent_write_step(
             wf,
             phase="digest",
             name=f"digest_{_slug(f)}",
+            out=out,
             prompt=(
                 f"Read the file {f}. Write a concise memory note capturing the key facts, "
                 f"decisions, and open questions worth remembering long-term about this Topic "
-                f"Hub's subject. Save it as Markdown to {out} with write_file — if {out} already "
-                f"exists, use edit_file to replace its content instead. Output nothing else."
+                f"Hub's subject. Reply with ONLY the note as Markdown — no preamble, no code "
+                f"fences. Your entire reply is saved verbatim as the note."
             ),
-            tools=["read_file", "write_file", "edit_file"],
-            check=file_nonempty(out),
+            tools=["read_file"],
             retries=2,
         )
         notes.append(out)
 
     # Phase 2 — INDEX: rewrite MEMORY.md (the always-in-context core) from the notes.
-    await agent_step(
+    # Same decision/action shape — the agent replies with the index, the step writes it.
+    await agent_write_step(
         wf,
         phase="index",
         name="refresh_index",
+        out="MEMORY.md",
         prompt=(
-            f"The Hub's deeper memory notes are: {notes}. Rewrite MEMORY.md so it is a short, "
-            f"current index of what this Hub knows — a few bullets, each linking the relevant "
-            f"note. Keep it tight; detail stays in the notes. MEMORY.md already exists, so read "
-            f"it first, then use edit_file to replace its whole content (pass its current content "
-            f"as old_string and your new index as new_string). Output nothing else."
+            f"The Hub's deeper memory notes are: {notes}. Write MEMORY.md as a short, current "
+            f"index of what this Hub knows — a few bullets, each linking the relevant note. Keep "
+            f"it tight; detail stays in the notes. Reply with ONLY the Markdown index content — "
+            f"no preamble, no code fences. Your entire reply is saved verbatim as MEMORY.md."
         ),
-        tools=["read_file", "write_file", "edit_file", "ls"],
-        check=file_nonempty("MEMORY.md"),
+        tools=["read_file", "ls"],
         retries=2,
     )
     return {"status": "done", "notes": len(notes)}

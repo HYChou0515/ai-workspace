@@ -23,12 +23,12 @@ async def test_memory_workflow_digests_uploads_then_refreshes_the_index():
     calls: list[str] = []
 
     async def drive_turn(prompt, tools):
+        # Decision/action (#107): the agent REPLIES with the content; the step writes
+        # it. The fake just returns the text — it must not write files itself.
         calls.append(prompt)
-        if len(calls) == 1:  # the single upload's digest node writes its note
-            await wf.write("memory/inputs_doc.md", "Key fact: the oven runs at 250C.")
-        else:  # the index node rewrites MEMORY.md
-            await wf.write("MEMORY.md", "# Memory\n- [oven](memory/inputs_doc.md)")
-        return "done"
+        if len(calls) == 1:  # the digest node's note content
+            return "Key fact: the oven runs at 250C."
+        return "# Memory\n- [oven](memory/inputs_doc.md)"  # the index content
 
     wf.drive_turn = drive_turn
     await wf.write("inputs/doc.txt", b"the oven runs at 250C during reflow")
@@ -41,29 +41,28 @@ async def test_memory_workflow_digests_uploads_then_refreshes_the_index():
     assert len(calls) == 2  # one digest + one index turn
 
 
-async def test_memory_workflow_regen_nodes_can_overwrite_existing_files():
-    """Regression: MEMORY.md is seeded at Hub creation, and notes exist on re-run, so the
-    digest + index nodes must be able to OVERWRITE — write_file is create-only, so each
-    regen node needs ``edit_file`` in its tool list (else the agent has no tool to replace
-    the existing file and the run silently leaves it stale)."""
+async def test_memory_workflow_overwrites_seeded_files_from_agent_reply():
+    """#107 decision/action: MEMORY.md is seeded at Hub creation, but the agent never
+    calls write_file (long-content tool args are unreliable). It REPLIES with the
+    content and the step writes it — so a seeded file is reliably overwritten, and the
+    content-producing nodes carry NO write tools (just read-only)."""
     run = _run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     tools_per_call: list[list[str]] = []
 
     async def drive_turn(prompt, tools):
-        tools_per_call.append(list(tools))
-        if len(tools_per_call) == 1:
-            await wf.write("memory/inputs_doc.md", "note")
-        else:
-            await wf.write("MEMORY.md", "# Memory")
-        return "done"
+        tools_per_call.append(list(tools or []))
+        return "fresh note" if len(tools_per_call) == 1 else "# Memory index\n- fresh"
 
     wf.drive_turn = drive_turn
+    await wf.write("MEMORY.md", "# Memory — STALE SEED")  # pre-existing → must be replaced
     await wf.write("inputs/doc.txt", b"content")
     await wf.write("inputs/input.json", b"{}")
     await run(wf, {})
-    assert "edit_file" in tools_per_call[0]  # digest node (a note can already exist)
-    assert "edit_file" in tools_per_call[-1]  # index node (MEMORY.md is always seeded)
+    assert await wf.read_text("MEMORY.md") == "# Memory index\n- fresh"  # overwritten
+    # the content-producing nodes never carry write tools — they reply with the content.
+    for tools in tools_per_call:
+        assert "write_file" not in tools and "edit_file" not in tools
 
 
 async def test_memory_workflow_rerun_skips_completed_steps():
@@ -73,11 +72,7 @@ async def test_memory_workflow_rerun_skips_completed_steps():
 
     async def drive_turn(prompt, tools):
         calls.append(prompt)
-        if len(calls) == 1:
-            await wf.write("memory/inputs_doc.md", "note")
-        else:
-            await wf.write("MEMORY.md", "# Memory")
-        return "done"
+        return "note" if len(calls) == 1 else "# Memory"
 
     wf.drive_turn = drive_turn
     await wf.write("inputs/doc.txt", b"content")

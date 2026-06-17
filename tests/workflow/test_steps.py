@@ -9,7 +9,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.checks import file_nonempty
 from workspace_app.workflow.engine import CheckResult, StepFailed
 from workspace_app.workflow.handle import WorkflowHandle
-from workspace_app.workflow.steps import agent_step, sandbox_node
+from workspace_app.workflow.steps import agent_step, agent_write_step, sandbox_node
 
 
 async def test_agent_step_per_step_timeout_aborts(wf: WorkflowHandle):
@@ -109,3 +109,46 @@ async def test_sandbox_node_gate_fails_on_nonzero_exit(wf: WorkflowHandle):
 async def test_sandbox_node_without_a_wired_runner_is_a_clear_error(wf: WorkflowHandle):
     with pytest.raises(RuntimeError, match="sandbox runner"):
         await sandbox_node(wf, run="echo", phase="p")
+
+
+async def test_agent_write_step_writes_the_reply_and_journals(wf: WorkflowHandle):
+    """Decision/action (#107): the agent REPLIES with the content (no write_file);
+    agent_write_step commits that text to `out`, gates on it, journals, and skips on
+    an identical re-run."""
+    turns: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        turns.append(prompt)
+        return "the produced note"
+
+    wf.drive_turn = drive_turn
+    await agent_write_step(wf, prompt="produce", phase="p", out="/note.md", tools=["read_file"])
+    assert await wf.read_text("/note.md") == "the produced note"
+    await agent_write_step(wf, prompt="produce", phase="p", out="/note.md", tools=["read_file"])
+    assert len(turns) == 1  # journaled → skipped on identical re-run
+
+
+async def test_agent_write_step_overwrites_an_existing_file(wf: WorkflowHandle):
+    """A pre-existing (seeded) file is replaced by the agent's reply — the write is
+    unconditional, so there is no create-only 'already exists' wall (#107)."""
+    await wf.write("/MEMORY.md", "STALE")
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return "FRESH"
+
+    wf.drive_turn = drive_turn
+    await agent_write_step(wf, prompt="rewrite", phase="p", out="/MEMORY.md", tools=["read_file"])
+    assert await wf.read_text("/MEMORY.md") == "FRESH"
+
+
+async def test_agent_write_step_per_step_timeout_aborts():
+    """The produce turn is subject to the same per-step cap as agent_step."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", step_timeout_s=0.01)
+
+    async def slow_turn(prompt: str, tools: list[str] | None) -> str:
+        await asyncio.sleep(5)
+        return "never"
+
+    wf.drive_turn = slow_turn
+    with pytest.raises(StepFailed, match="timed out"):
+        await agent_write_step(wf, prompt="p", phase="p", out="/x.md")
