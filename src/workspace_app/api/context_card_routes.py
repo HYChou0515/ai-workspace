@@ -45,10 +45,16 @@ def register_context_card_actions(spec: SpecStar) -> None:
 
     @spec.create_action("context-card", path="author", label="Add context card")
     def author_context_card(body: ContextCardBody = Body(...)) -> ContextCard:  # noqa: B008
+        # Fall back to the title as the key when no usable key was given (empty
+        # list or only blanks) — otherwise the card has no norm_keys and could
+        # never be found by lookup / match.
+        keys = body.keys
+        if not derive_norm_keys(keys) and (title := body.title.strip()):
+            keys = [title]
         return ContextCard(
             collection_id=body.collection_id,
-            keys=body.keys,
-            norm_keys=derive_norm_keys(body.keys),
+            keys=keys,
+            norm_keys=derive_norm_keys(keys),
             title=body.title,
             body=body.body,
         )

@@ -31,6 +31,30 @@ def test_author_action_derives_norm_keys(harness):
     assert cards[0].norm_keys == ["capping", "m4"]
 
 
+def test_author_falls_back_to_the_title_as_key_when_no_keys_given(harness):
+    cid = _collection(harness.spec)
+    # no usable keys (empty list) but a title → the title becomes the key, so the
+    # card is still findable by lookup / match.
+    harness.client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": [], "title": "Reflow Zone", "body": "b"},
+    )
+    cards = _cards(harness.spec, cid)
+    assert cards[0].keys == ["Reflow Zone"]
+    assert cards[0].norm_keys == ["reflow zone"]
+
+
+def test_author_falls_back_to_title_when_keys_are_only_blank(harness):
+    cid = _collection(harness.spec)
+    harness.client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["   "], "title": "M4", "body": "b"},
+    )
+    cards = _cards(harness.spec, cid)
+    assert cards[0].keys == ["M4"]
+    assert cards[0].norm_keys == ["m4"]
+
+
 def test_edit_action_recomputes_norm_keys(harness):
     cid = _collection(harness.spec)
     harness.client.post(
