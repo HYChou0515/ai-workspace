@@ -650,6 +650,23 @@ def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) 
     return json.dumps(resolve_collection(spec, ref), ensure_ascii=False)
 
 
+def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
+    """Look up the Hub's glossary (context cards) for a term or phrase.
+
+    Deterministic + instant — no knowledge-base search. Pass a term you don't
+    recognise (or the sentence containing it); returns any matching glossary entries
+    as authoritative context, or a short "not found" note. Prefer this BEFORE
+    ask_knowledge_base for jargon / abbreviations / domain terms."""
+    from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections, match
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: lookup_glossary is only available in a Topic Hub turn"
+    cards = cards_for_collections(spec, ctx.context.collection_ids)
+    block = card_context_block(match(query, build_vocab(cards)))
+    return block or f"No glossary entries found for: {query}"
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -664,6 +681,7 @@ _IMPLS = {
     "kb_search": kb_search_impl,
     # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
     "resolve_collection": resolve_collection_impl,
+    "lookup_glossary": lookup_glossary_impl,
     # Wiki agent tools (#50). Opt-in via the wiki presets' allowed_tools;
     # not in _WORKSPACE_TOOLS (they need a wiki context).
     "search_wiki": search_wiki_impl,

@@ -7,6 +7,7 @@ from .tools import (
     exec_impl,
     exists_impl,
     kb_search_impl,
+    lookup_glossary_impl,
     ls_impl,
     mention_user_impl,
     read_file_impl,
@@ -28,4 +29,5 @@ __all__ = [
     "ask_knowledge_base_impl",
     "mention_user_impl",
     "resolve_collection_impl",
+    "lookup_glossary_impl",
 ]
