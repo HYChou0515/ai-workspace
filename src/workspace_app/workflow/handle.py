@@ -16,7 +16,7 @@ from fnmatch import fnmatch
 from typing import Any
 
 from ..filestore.protocol import FileStore
-from .engine import StepFailed
+from .engine import StepFailed, run_step
 
 # How an agent node runs one turn: given the (feedback-augmented) prompt + the tool
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
@@ -25,6 +25,12 @@ DriveTurn = Callable[[str, list[str] | None], Awaitable[Any]]
 # How a deterministic node runs a command in the sandbox, returning (exit_code,
 # stdout). Wired by the driver; faked in tests.
 RunSandbox = Callable[[str], Awaitable[tuple[int, str]]]
+# The ingest capability bound to this run's workspace + captured user (manual §8):
+# (collection, path) -> the SourceDoc id. Wired by the driver; faked in tests.
+IngestCapability = Callable[[str, str], Awaitable[str]]
+# The "did this file land in the collection as ready?" check capability (manual §8):
+# (collection, path) -> bool. Wired by the driver; backs ``check.collection_has``.
+CollectionChecker = Callable[[str, str], Awaitable[bool]]
 
 
 def _abs(path: str) -> str:
@@ -43,6 +49,11 @@ class WorkflowHandle:
         user: str = "",
         drive_turn: DriveTurn | None = None,
         run_sandbox: RunSandbox | None = None,
+        emit: Callable[[object], None] | None = None,
+        ingest: IngestCapability | None = None,
+        collection_checker: CollectionChecker | None = None,
+        credential: str = "",
+        step_timeout_s: float | None = None,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -54,6 +65,21 @@ class WorkflowHandle:
         """Wired by the orchestration driver — runs one agent turn (manual §5.1)."""
         self.run_sandbox = run_sandbox
         """Wired by the orchestration driver — runs a sandbox command (manual §5.2)."""
+        self.emit = emit
+        """Wired by the orchestration driver — publishes a phase/step event on the
+        item's stream (manual §12). ``None`` ⇒ events are dropped (engine no-op)."""
+        self._ingest = ingest
+        """Wired by the orchestration driver — the ``ingest_to_collection`` capability
+        bound to this run's workspace + captured user (manual §8)."""
+        self._collection_has = collection_checker
+        """Wired by the orchestration driver — backs ``check.collection_has`` (§8)."""
+        self.credential = credential
+        """The run-scoped credential (manual §15) — injected into a deterministic
+        node's sandbox env so its script can auth capability HTTP calls. "" until
+        the orchestrator mints one for the run."""
+        self.step_timeout_s = step_timeout_s
+        """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
+        Exceeding it aborts the step (and so the run) to ``error``."""
 
     async def read(self, path: str) -> bytes:
         return await self._store.read(self._workspace_id, _abs(path))
@@ -93,6 +119,31 @@ class WorkflowHandle:
             ):
                 out.append(p)
         return sorted(out)
+
+    async def ingest_to_collection(
+        self, collection: str, path: str, *, phase: str = "ingest", cache: bool = True
+    ) -> str:
+        """Deterministic node (manual §8): ingest a workspace file into an existing
+        KB collection as the captured user. Journaled + skipped on re-run (§9);
+        idempotent (the SourceDoc id is the natural key, so a re-ingest upserts).
+        Returns the SourceDoc id."""
+        if self._ingest is None:
+            raise RuntimeError("ingest_to_collection needs a capability (wired by the run driver)")
+        ingest = self._ingest
+
+        async def execute(_feedback: str | None) -> dict[str, str]:
+            return {"doc_id": await ingest(collection, path)}
+
+        result = await run_step(
+            self,
+            name="ingest",
+            key=path.lstrip("/").replace("/", "_"),
+            phase=phase,
+            args={"collection": collection, "path": path},
+            execute=execute,
+            cache=cache,
+        )
+        return result["doc_id"]
 
     async def map(
         self,

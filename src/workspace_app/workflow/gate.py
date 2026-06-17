@@ -66,7 +66,12 @@ async def human_gate(
     raise AwaitingHuman(phase=phase, title=title, summary=_as_text(summary), allow=list(allow))
 
 
-async def record_decision(wf: WorkflowHandle, *, phase: str, choice: str, input: str = "") -> None:
+async def record_decision(
+    wf: WorkflowHandle, *, phase: str, choice: str, input: str = "", decided_by: str = ""
+) -> None:
     """Write the decision artifact (the decisions endpoint calls this); re-running
-    the workflow then finds it at the gate and continues (manual §10)."""
-    await wf.write_json(_decision_path(phase), {"choice": choice, "input": input})
+    the workflow then finds it at the gate and continues (manual §10). ``decided_by``
+    is recorded for audit (manual §15) — ``human_gate`` itself reads only choice/input."""
+    await wf.write_json(
+        _decision_path(phase), {"choice": choice, "input": input, "decided_by": decided_by}
+    )

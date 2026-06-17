@@ -13,7 +13,7 @@ primitive both adapters build on.
 
 from __future__ import annotations
 
-from .checks import choice_in, file_nonempty
+from .checks import choice_in, collection_has, file_nonempty
 from .engine import CheckResult, StepFailed, fail, run_step
 from .gate import AwaitingHuman, Decision, human_gate, record_decision
 from .handle import WorkflowHandle
@@ -36,6 +36,7 @@ __all__ = [
     "WorkflowRun",
     "agent_step",
     "choice_in",
+    "collection_has",
     "fail",
     "file_nonempty",
     "human_gate",

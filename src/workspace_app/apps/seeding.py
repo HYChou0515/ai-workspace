@@ -21,8 +21,10 @@ from ..filestore.protocol import FileStore
 _APPS_PKG = "workspace_app.apps"
 _PROFILES_DIR = "profiles"
 _TPL_SUFFIX = ".tpl"
-# Profile metadata + package noise — never seeded into the workspace.
-_SKIP = {"__init__.py", "__pycache__", "_profile.json", "_prompt.md", ".skill"}
+# Profile metadata + package noise — never seeded into the workspace. ``run.py``
+# is the workflow's orchestration code (#100), not a starter file — it runs on the
+# host, never in the item's workspace.
+_SKIP = {"__init__.py", "__pycache__", "_profile.json", "_prompt.md", ".skill", "run.py"}
 
 
 def case_from_item(item: Any) -> dict[str, str]:

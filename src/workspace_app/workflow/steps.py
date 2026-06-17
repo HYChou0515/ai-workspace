@@ -9,9 +9,10 @@ LLM-driven and **must** be gated; a deterministic node is author code with no LL
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from .engine import Check, run_step
+from .engine import Check, StepFailed, run_step
 from .handle import WorkflowHandle
 
 
@@ -45,12 +46,21 @@ async def agent_step(
     drive_turn = wf.drive_turn
 
     async def execute(feedback: str | None) -> Any:
-        return await drive_turn(_retry_prompt(prompt, feedback), tools)
+        coro = drive_turn(_retry_prompt(prompt, feedback), tools)
+        if wf.step_timeout_s is None:
+            return await coro
+        try:
+            return await asyncio.wait_for(coro, wf.step_timeout_s)
+        except TimeoutError as exc:  # per-step cap (manual §17) → abort the step
+            raise StepFailed(
+                f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
+            ) from exc
 
     return await run_step(
         wf,
         name=name or phase,
         key=key,
+        phase=phase,
         args={"prompt": prompt, "tools": tools, "phase": phase},
         execute=execute,
         check=check,
@@ -85,6 +95,7 @@ async def sandbox_node(
         wf,
         name=name or phase,
         key=key,
+        phase=phase,
         args={"run": run, "phase": phase},
         execute=execute,
         check=check,

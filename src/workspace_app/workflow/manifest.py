@@ -11,6 +11,8 @@ profile's ``run.py`` (code), not data.
 
 from __future__ import annotations
 
+from typing import Any
+
 from msgspec import Struct, field
 
 
@@ -29,3 +31,6 @@ class WorkflowManifest(Struct):
     input_json: str = "inputs/input.json"
     """Where the run's ``input.json`` lives — the platform surfaces it to ``run()``;
     its content + the file layout are the profile's business (manual §14)."""
+    config: dict[str, Any] = field(default_factory=dict)
+    """Profile-level config surfaced to ``run()`` as ``wf.config`` — pre-defined,
+    not per-run (manual §20 reads ``wf.config["collections"]``)."""

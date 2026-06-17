@@ -1,0 +1,34 @@
+{
+  "slug": "playground",
+  "title": "Playground",
+  "description": "A clean scratch App for poking at the workspace — files, terminal, and sandbox.",
+  "icon": "sparkle",
+  "color": "#0EA5A4",
+  "function": { "workspace": true, "sandbox": true, "terminal": true },
+  "agent": {
+    "prompt_file": "prompts/system.md",
+    "tools": [
+      "exec", "read_file", "write_file", "edit_file", "ls", "exists",
+      "delete_file", "ask_knowledge_base", "python-stack"
+    ],
+    "picker": [{ "preset": "qwen3-local", "name": "Playground · Qwen3 (local)" }],
+    "suggestions": [
+      { "label": "List files", "prompt": "List the files in the workspace." },
+      { "label": "Working dir", "prompt": "Run `pwd` and show me the working directory." }
+    ]
+  },
+  "item": { "noun": "Scratch", "noun_plural": "Scratches", "create_label": "New scratch" },
+  "layout": {
+    "breadcrumb": ["status"],
+    "statusbar": ["status"],
+    "list": ["status"],
+    "form": ["status", "topics"],
+    "default_tabs": ["/notes.md"]
+  },
+  "lifecycle": { "status_field": "status", "closing_states": ["done"] },
+  "labels": { "status": "Status", "topics": "Tags" },
+  "field_styles": {
+    "status": { "open": "info", "in_progress": "warn", "done": "ok" }
+  },
+  "default_profile": "default"
+}

@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import msgspec
 from agents.tracing import set_trace_processors
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -46,6 +46,16 @@ from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tooling.registry import PackageInfo
 from ..users import MockUserDirectory, UserDirectory
+from ..workflow.capabilities import CollectionNotFound, ingest_to_collection
+from ..workflow.credential import CredentialBroker
+from ..workflow.discovery import load_run_callable
+from ..workflow.handle import WorkflowHandle
+from ..workflow.orchestrator import (
+    ActiveRunExists,
+    NotAwaitingDecision,
+    WorkflowOrchestrator,
+)
+from ..workflow.run import WorkflowRun
 from .activity import ActivityLog
 from .events import (
     AgentEvent,
@@ -257,6 +267,19 @@ class _CloseItemBody(BaseModel):
     status: str | None = None
 
 
+class _DecisionBody(BaseModel):
+    # #100: a human's answer at a workflow `human_gate` (manual §10). `choice` ∈
+    # the gate's `allow` (e.g. approve/reject); `input` is an optional revision.
+    choice: str
+    input: str = ""
+
+
+class _IngestBody(BaseModel):
+    # #100: a deterministic node's ingest capability call (manual §8).
+    collection: str
+    path: str
+
+
 async def _promote_chat_to_kb(
     *,
     ingestor: Ingestor,
@@ -393,6 +416,16 @@ def create_app(
     kb_retrieval_enhancements: EnhancementSettings | None = None,
     packages: list[PackageInfo] | None = None,
     prebuilt_dir: Path | None = None,
+    # #100: workflow run limits (manual §16/§17). Global concurrency cap (runs
+    # queue as `pending` when full), a per-run max-steps budget (guards runaway
+    # loops), and an optional per-run wall-clock cap (None ⇒ no limit).
+    workflow_concurrency: int = 8,
+    workflow_max_steps: int = 1000,
+    workflow_run_timeout: timedelta | None = None,
+    workflow_step_timeout: timedelta | None = None,
+    # Per-item run-history retention (manual §16): keep at most this many runs, pruning
+    # the oldest terminal ones when a new run starts. 0 ⇒ keep all.
+    workflow_keep_last_runs: int = 0,
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -1181,6 +1214,325 @@ def create_app(
 
     register_replay_routes(app, service=replay_service, load_turn=_load_turn, load_doc=_load_doc)
 
+    # ── Workflows (#100) ─────────────────────────────────────────────
+    # A run is a turn on the item (§5.1): agent nodes stream into the item's chat
+    # and the orchestrator overlays phase/step events on the SAME broadcast stream.
+    from ..apps.profiles import load_workflow_manifest
+
+    async def _wf_drive_turn(
+        item_id: str, captured_user: str, prompt: str, tools: list[str] | None
+    ) -> str:
+        """Run one agent node as a turn on the item (§5.1): build the ctx, narrow
+        the tool ceiling to the step's subset, enqueue + await, persist the produced
+        messages under the captured user, and return the assistant text."""
+        _rid, conv = _conversation_for(item_id)
+        cfg = _resolve_agent_config(item_id)
+        if cfg is not None and tools is not None:
+            # tools= ⊆ the profile's tool ceiling (manual §5.1) — drop anything the
+            # profile doesn't already allow, so a step can't widen the boundary.
+            ceiling = cfg.allowed_tools or []
+            cfg = msgspec.structs.replace(cfg, allowed_tools=[t for t in tools if t in ceiling])
+        session = await registry.session(item_id)
+        ctx = AgentToolContext(
+            investigation_id=item_id,
+            sandbox=sandbox,
+            filestore=filestore,
+            files=files,
+            sync=sync,
+            sandbox_spec=SandboxSpec(),
+            handle=session.handle,
+            ensure_sandbox_via=lambda: registry.ensure_handle(session),
+            agent_config=cfg,
+            run_subagent=_run_subagent,
+            mention=_agent_mention,
+            read_file_max_lines=read_file_max_lines,
+            read_file_max_chars=read_file_max_chars,
+            exec_output_max_chars=exec_output_max_chars,
+            history=history_items(
+                conv.messages,
+                max_messages=history_max_messages,
+                max_tokens=history_max_context_tokens,
+            ),
+            packages=packages or [],
+            prebuilt_dir=prebuilt_dir,
+            app_slug=_item_slug(item_id),
+            template_profile=_item_profile(item_id),
+        )
+        answer: list[str] = []
+
+        def persist(produced: list[TurnMessage]) -> None:
+            if produced:
+                rid2, conv2 = _conversation_for(item_id)
+                # Background step → attribute the persisted turn to the captured
+                # user (§15, the job-pod acting-user pattern).
+                with conv_rm.using(user=captured_user):
+                    for tm in produced:
+                        conv2.messages.append(_to_rca_message(tm))
+                    conv_rm.update(rid2, conv2)
+            answer.extend(tm.content for tm in produced if tm.role == "assistant")
+
+        await turn_engine.enqueue(item_id, prompt, ctx, on_complete=persist)
+        return "\n".join(answer)
+
+    async def _wf_run_sandbox(item_id: str, run: str, credential: str) -> tuple[int, str]:
+        """Run a deterministic node's command in the item's sandbox (§5.2), with the
+        run-scoped credential injected into its env so a node script can auth
+        capability HTTP calls (manual §15)."""
+        session = await registry.session(item_id)
+        handle = await registry.ensure_handle(session)
+        import shlex
+
+        env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""
+        result = await sandbox.exec(handle, ["sh", "-lc", env + run])
+        with contextlib.suppress(Exception):
+            await registry.flush(item_id)
+        return result.exit_code, result.stdout.decode("utf-8", errors="replace")
+
+    async def _wf_ingest(item_id: str, captured_user: str, collection: str, path: str) -> str:
+        """The ingest capability (§8) bound to this run's workspace + captured user."""
+        return await ingest_to_collection(
+            spec,
+            ingestor,
+            files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
+            workspace_id=item_id,
+            collection=collection,
+            path=path,
+            user=captured_user,
+        )
+
+    async def _wf_collection_has(collection: str, path: str) -> bool:
+        """Backs ``check.collection_has`` (§8): did ``path`` land in ``collection``
+        (a name or id) as a ``ready`` doc? Read back from the KB at its natural-key id."""
+        from ..kb.doc_id import encode_doc_id
+        from ..workflow.capabilities import resolve_collection_id
+
+        try:
+            collection_id = resolve_collection_id(spec, collection)
+        except CollectionNotFound:
+            return False
+        doc_rm = spec.get_resource_manager(SourceDoc)
+        try:
+            doc = doc_rm.get(encode_doc_id(collection_id, path.lstrip("/"))).data
+        except ResourceIDNotFoundError:
+            return False
+        return isinstance(doc, SourceDoc) and doc.status == "ready"
+
+    def _wf_wire_handle(wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str) -> None:
+        wf.drive_turn = lambda prompt, tools: _wf_drive_turn(item_id, captured_user, prompt, tools)
+        wf.run_sandbox = lambda run: _wf_run_sandbox(item_id, run, wf.credential)
+        wf._ingest = lambda collection, path: _wf_ingest(item_id, captured_user, collection, path)
+        wf._collection_has = _wf_collection_has
+
+    async def _wf_release(item_id: str, terminal: bool) -> None:
+        """Free the run's sandbox (§16); on a terminal run also drop the turn
+        session. A human pause keeps the turn session so the stream + decision card
+        stay live until the human resumes."""
+        await registry.close_session(item_id)
+        if terminal:
+            turn_engine.forget(item_id)
+
+    def _wf_notify_failure(run: WorkflowRun) -> None:
+        """In-app failure notification to the item's owner (manual §17)."""
+        from ..apps.resolve import find_work_item
+
+        found = find_work_item(spec, run.item_id)
+        if found is None:  # pragma: no cover - a run always has a live item
+            return
+        slug, item = found
+        phase = run.current_phase or "?"
+        notify(
+            spec,
+            recipient=item.owner,
+            kind="status",
+            title=f"Workflow run failed at “{phase}”",
+            link=f"/a/{slug}/items/{run.item_id}",
+            actor=run.captured_user,
+        )
+
+    workflow_credentials = CredentialBroker()
+    workflow_orchestrator = WorkflowOrchestrator(
+        spec=spec,
+        store=files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
+        load_run=load_run_callable,
+        load_manifest=load_workflow_manifest,
+        wire_handle=_wf_wire_handle,
+        publish=turn_engine.publish,
+        release=_wf_release,
+        notify_failure=_wf_notify_failure,
+        credentials=workflow_credentials,
+        max_steps=workflow_max_steps,
+        run_timeout_s=(
+            workflow_run_timeout.total_seconds() if workflow_run_timeout is not None else None
+        ),
+        step_timeout_s=(
+            workflow_step_timeout.total_seconds() if workflow_step_timeout is not None else None
+        ),
+        concurrency=workflow_concurrency,
+        keep_last_runs=workflow_keep_last_runs,
+    )
+    app.state.workflow_orchestrator = workflow_orchestrator
+
+    def _workflow_manifest_or_404(slug: str, item_id: str):
+        """Validate the item belongs to the slug AND its profile carries a workflow;
+        return (investigation_id, profile, manifest)."""
+        investigation_id = _require_item(slug, item_id)
+        profile = _item_profile(investigation_id)
+        manifest = load_workflow_manifest(slug, profile)
+        if manifest is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"profile {profile!r} of app {slug!r} has no workflow",
+            )
+        return investigation_id, profile, manifest
+
+    @app.get("/a/{slug}/profiles")
+    async def list_app_profiles(slug: str) -> list[dict]:
+        """#100 (manual §14): the App's profiles, flagging which carry a workflow +
+        returning each workflow MANIFEST so the FE can render the Run affordance."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.profiles import list_profiles, load_profile
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        out: list[dict] = []
+        for name in list_profiles(slug):
+            p = load_profile(slug, name)
+            out.append(
+                {
+                    "name": name,
+                    "title": p.title or name,
+                    "description": p.description,
+                    "has_workflow": p.workflow is not None,
+                    "workflow": msgspec.to_builtins(p.workflow) if p.workflow else None,
+                }
+            )
+        return out
+
+    @app.post("/a/{slug}/items/{item_id}/run", status_code=status.HTTP_202_ACCEPTED)
+    async def run_workflow_item(slug: str, item_id: str) -> dict:
+        """#100 (manual §14): start the item's workflow. Inputs come from the
+        workspace (``MANIFEST.input_json``); at most one active run per item."""
+        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        try:
+            run_id = await workflow_orchestrator.start(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                captured_user=get_user_id(),
+            )
+        except ActiveRunExists as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        activity.record(
+            "workflow_started",
+            "Started a workflow run",
+            {"item_id": investigation_id, "run_id": run_id},
+        )
+        return {"run_id": run_id, "item_id": investigation_id}
+
+    @app.get("/a/{slug}/items/{item_id}/runs")
+    async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:
+        """#100: the item's run history (newest first), for the run-list view."""
+        investigation_id = _require_item(slug, item_id)
+        from specstar import QB
+
+        rm = spec.get_resource_manager(WorkflowRun)
+        out: list[dict] = []
+        for r in rm.list_resources((QB["item_id"] == investigation_id).build()):
+            assert isinstance(r.data, WorkflowRun)
+            out.append(
+                {
+                    "run_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                    **msgspec.to_builtins(r.data),
+                }
+            )
+        out.sort(key=lambda d: d.get("started") or 0, reverse=True)
+        return out
+
+    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}")
+    async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
+        """#100 (manual §14): poll a run — status + result + per-phase progress."""
+        _require_item(slug, item_id)
+        rm = spec.get_resource_manager(WorkflowRun)
+        try:
+            data = rm.get(run_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        assert isinstance(data, WorkflowRun)
+        return {"run_id": run_id, **msgspec.to_builtins(data)}
+
+    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
+    async def stream_workflow_run(slug: str, item_id: str, run_id: str) -> StreamingResponse:
+        """#100 (manual §14): the run's live SSE — reuses the item's broadcast
+        stream (agent events + phase/step events overlaid)."""
+        investigation_id = _require_item(slug, item_id)
+        return StreamingResponse(
+            turn_engine.subscribe_sse(investigation_id), media_type="text/event-stream"
+        )
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/cancel",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def cancel_workflow_run(slug: str, item_id: str, run_id: str) -> Response:
+        """#100 (manual §10): Stop a run — it goes terminal (cancelled) and the item
+        opens to interactive use. Idempotent (a no-op when nothing is running)."""
+        investigation_id = _require_item(slug, item_id)
+        await workflow_orchestrator.cancel(run_id, investigation_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/decisions",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def decide_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _DecisionBody
+    ) -> dict:
+        """#100 (manual §10): answer a `human_gate` — records the decision artifact
+        and resumes the run (completed steps skip; the gate reads the decision)."""
+        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        try:
+            await workflow_orchestrator.decide(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                choice=body.choice,
+                input=body.input,
+                decided_by=get_user_id(),
+            )
+        except NotAwaitingDecision as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"run_id": run_id, "resumed": True}
+
+    @app.post("/a/{slug}/items/{item_id}/capabilities/ingest")
+    async def capability_ingest(
+        slug: str,
+        item_id: str,
+        body: _IngestBody,
+        x_workflow_token: str | None = Header(default=None),
+    ) -> dict:
+        """#100 (manual §8): the ingest capability as an HTTP endpoint — a
+        deterministic node's sandbox script reaches it with the run-scoped
+        credential (manual §15). Idempotent (upsert by natural-key doc id).
+
+        Auth: a valid ``X-Workflow-Token`` acts as its captured user and must be
+        scoped to THIS item; an expired/forged token is 401. With no token the call
+        falls back to the session user (the in-app / FE path)."""
+        investigation_id = _require_item(slug, item_id)
+        actor = get_user_id()
+        if x_workflow_token is not None:
+            claims = workflow_credentials.resolve(x_workflow_token)
+            if claims is None or claims.item_id != investigation_id:
+                raise HTTPException(status_code=401, detail="invalid or expired workflow token")
+            actor = claims.user
+        try:
+            doc_id = await _wf_ingest(investigation_id, actor, body.collection, body.path)
+        except CollectionNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail=f"unknown collection: {body.collection!r}"
+            ) from exc
+        return {"doc_id": doc_id}
+
     @app.get("/a/{slug}/items/{item_id}/export")
     async def export_investigation(slug: str, item_id: str) -> Response:
         """Download the investigation's full conversation as JSON — every message
@@ -1743,9 +2095,7 @@ def create_app(
 
     # ---- Notebook cell execution (plan-backend §7.3) ----
 
-    @app.post(
-        "/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute"
-    )
+    @app.post("/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute")
     async def execute_cell(
         slug: str,
         item_id: str,

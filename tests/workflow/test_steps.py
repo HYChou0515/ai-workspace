@@ -1,12 +1,29 @@
 """Node adapters (manual §5) — agent_step (gated LLM turn) and sandbox_node
 (deterministic command), both on the filesystem-journal engine."""
 
+import asyncio
+
 import pytest
 
+from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.checks import file_nonempty
 from workspace_app.workflow.engine import CheckResult, StepFailed
 from workspace_app.workflow.handle import WorkflowHandle
 from workspace_app.workflow.steps import agent_step, sandbox_node
+
+
+async def test_agent_step_per_step_timeout_aborts(wf: WorkflowHandle):
+    """A turn that outruns the per-step cap (manual §17) aborts the step with a
+    StepFailed (which the driver surfaces as a terminal error)."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", step_timeout_s=0.01)
+
+    async def slow_turn(prompt: str, tools: list[str] | None) -> str:
+        await asyncio.sleep(5)
+        return "never"
+
+    wf.drive_turn = slow_turn
+    with pytest.raises(StepFailed, match="timed out"):
+        await agent_step(wf, prompt="p", phase="p", check=file_nonempty("/x"))
 
 
 async def test_agent_step_gates_then_journals_and_skips_on_rerun(wf: WorkflowHandle):
@@ -20,12 +37,8 @@ async def test_agent_step_gates_then_journals_and_skips_on_rerun(wf: WorkflowHan
         return "ok"
 
     wf.drive_turn = drive_turn
-    await agent_step(
-        wf, prompt="classify", phase="classify", check=file_nonempty("/plan.json")
-    )
-    await agent_step(
-        wf, prompt="classify", phase="classify", check=file_nonempty("/plan.json")
-    )
+    await agent_step(wf, prompt="classify", phase="classify", check=file_nonempty("/plan.json"))
+    await agent_step(wf, prompt="classify", phase="classify", check=file_nonempty("/plan.json"))
     assert len(turns) == 1  # second call skipped via the journal
 
 
@@ -40,9 +53,7 @@ async def test_agent_step_retries_with_feedback_until_the_gate_passes(wf: Workfl
         return "ok"
 
     wf.drive_turn = drive_turn
-    await agent_step(
-        wf, prompt="write out", phase="p", check=file_nonempty("/out.txt"), retries=2
-    )
+    await agent_step(wf, prompt="write out", phase="p", check=file_nonempty("/out.txt"), retries=2)
     assert len(prompts) == 2
     assert "did not pass" in prompts[1]  # the gate's reason was fed back
 
@@ -54,9 +65,7 @@ async def test_agent_step_aborts_after_exhausting_retries(wf: WorkflowHandle):
 
     wf.drive_turn = drive_turn
     with pytest.raises(StepFailed):
-        await agent_step(
-            wf, prompt="x", phase="p", check=file_nonempty("/out.txt"), retries=1
-        )
+        await agent_step(wf, prompt="x", phase="p", check=file_nonempty("/out.txt"), retries=1)
 
 
 async def test_agent_step_requires_a_gate(wf: WorkflowHandle):

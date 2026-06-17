@@ -47,3 +47,23 @@ def choice_in(path: str, *, key: str, allowed: list[Any]) -> Check:
         return CheckResult(True)
 
     return _check
+
+
+def collection_has(collection: str, path: str) -> Check:
+    """The deterministic ingest actually landed ``path`` in ``collection`` as a
+    ``ready`` doc (manual §8) — a hard guarantee on the reliable side-effect, read
+    back from the KB rather than trusting the node's exit code."""
+
+    async def _check(wf: WorkflowHandle, _result: Any) -> CheckResult:
+        if wf._collection_has is None:
+            return CheckResult(
+                False, "collection_has needs the KB capability (wired by the run driver)"
+            )
+        landed = await wf._collection_has(collection, path)
+        if not landed:
+            return CheckResult(
+                False, f"{path!r} did not land in collection {collection!r} as ready"
+            )
+        return CheckResult(True)
+
+    return _check

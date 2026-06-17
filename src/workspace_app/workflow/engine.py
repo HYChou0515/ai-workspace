@@ -21,6 +21,9 @@ from typing import TYPE_CHECKING, Any, NoReturn
 
 from msgspec import Struct
 
+from .events import StepFailed as StepFailedEv
+from .events import StepPassed, StepRetrying, StepSkipped, StepStarted
+
 if TYPE_CHECKING:
     from .handle import WorkflowHandle
 
@@ -64,11 +67,19 @@ def _artifact_path(name: str, key: str) -> str:
     return f"/step_{name}/{key or 'main'}.json"
 
 
+def _emit(wf: WorkflowHandle, event: object) -> None:
+    """Publish a phase/step observability event (manual §12) if the handle wired
+    an ``emit`` hook; a no-op otherwise (events are best-effort)."""
+    if wf.emit is not None:
+        wf.emit(event)
+
+
 async def run_step(
     wf: WorkflowHandle,
     *,
     name: str,
     key: str = "",
+    phase: str = "",
     args: Any,
     execute: Execute,
     check: Check | None = None,
@@ -79,24 +90,31 @@ async def run_step(
     exists with a matching input-hash and ``cache`` is set; otherwise executes,
     retrying on a failing gate up to ``retries`` times (feeding the failure reason
     back each time), then journals ``{hash, result}``. Raises ``StepFailed`` if the
-    gate never passes."""
+    gate never passes. Emits StepSkipped / StepStarted / StepRetrying / StepPassed /
+    StepFailed through the handle's ``emit`` hook (manual §12)."""
     path = _artifact_path(name, key)
     h = input_hash(args)
 
     if cache and await wf.exists(path):
         record = await wf.read_json(path)
         if isinstance(record, dict) and record.get("hash") == h:
+            _emit(wf, StepSkipped(phase=phase, name=name, key=key))
             return record.get("result")  # SKIP — cached, identical inputs
 
+    _emit(wf, StepStarted(phase=phase, name=name, key=key))
     feedback: str | None = None
     reason = ""
-    for _ in range(retries + 1):
+    for attempt in range(retries + 1):
         result = await execute(feedback)
         verdict = await check(wf, result) if check is not None else CheckResult(True)
         if verdict.ok:
             await wf.write_json(path, {"hash": h, "result": result})
+            _emit(wf, StepPassed(phase=phase, name=name, key=key))
             return result
         reason = verdict.reason
         feedback = verdict.reason
+        if attempt < retries:
+            _emit(wf, StepRetrying(phase=phase, name=name, reason=reason, key=key))
 
+    _emit(wf, StepFailedEv(phase=phase, name=name, reason=reason, key=key))
     raise StepFailed(reason or f"step {name!r} did not pass its gate")
