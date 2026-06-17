@@ -48,7 +48,7 @@ describe("ContextCardsTab (#106)", () => {
     expect(screen.getByText("SiCN")).toBeInTheDocument(); // titleless → first key
   });
 
-  it("opens a card's explanation in the editor when selected", async () => {
+  it("shows a selected card as a preview by default, editable via Edit", async () => {
     await mockKbApi.createContextCard({
       collection_id: "col-1",
       keys: ["M4"],
@@ -58,6 +58,11 @@ describe("ContextCardsTab (#106)", () => {
     render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
 
     await userEvent.click(await screen.findByText("Metal 4"));
+    // default = preview: the explanation is rendered, not an editable field
+    expect(await screen.findByText("The capping layer.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Explanation")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
     expect(await screen.findByLabelText("Explanation")).toHaveValue("The capping layer.");
   });
 
@@ -113,6 +118,7 @@ describe("ContextCardsTab (#106)", () => {
     render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
 
     await userEvent.click(await screen.findByText("Metal 4"));
+    await userEvent.click(screen.getByRole("tab", { name: "Edit" })); // preview → editor
     const body = await screen.findByLabelText("Explanation");
     await userEvent.clear(body);
     await userEvent.type(body, "new body");

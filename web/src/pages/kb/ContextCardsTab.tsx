@@ -1,13 +1,16 @@
 /**
  * Context Cards tab (#106) — author a collection's lightweight glossary. Left:
- * the card list + New. Center: the selected card's title, its terms (keys) as
- * chips, and a markdown editor for the explanation. Saving routes to the
- * create / update custom action (the server derives the lookup keys); the FE
- * never sends them.
+ * a compact, scrollable search + card list + New. Center: the selected card as
+ * a rendered markdown **preview** by default, with an Edit toggle into the
+ * title / terms (keys) chips / markdown editor. Saving routes to the create /
+ * update custom action (the server derives the lookup keys); the FE never
+ * sends them. A new card opens straight into Edit.
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { kbApi, type KbApi, type KbContextCard } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
@@ -34,6 +37,7 @@ export function ContextCardsTab({
     queryFn: () => client.listContextCards(collectionId),
   });
   const [draft, setDraft] = useState<Draft | null>(null);
+  const [editing, setEditing] = useState(false); // existing card → preview first; New → edit
   const [term, setTerm] = useState("");
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("name");
@@ -115,7 +119,14 @@ export function ContextCardsTab({
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
-        <button type="button" className="kb-cards__new" onClick={() => setDraft({ ...BLANK })}>
+        <button
+          type="button"
+          className="kb-cards__new"
+          onClick={() => {
+            setDraft({ ...BLANK });
+            setEditing(true); // a new card opens straight into the editor
+          }}
+        >
           + New card
         </button>
         <ul className="kb-cards__items">
@@ -127,9 +138,10 @@ export function ContextCardsTab({
                 <button
                   type="button"
                   className={`kb-cards__item${draft?.id === c.id ? " is-active" : ""}`}
-                  onClick={() =>
-                    setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body })
-                  }
+                  onClick={() => {
+                    setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body });
+                    setEditing(false); // existing card opens as a preview by default
+                  }}
                 >
                   {cardLabel(c)}
                 </button>
@@ -144,57 +156,109 @@ export function ContextCardsTab({
           <div className="kb-cards__empty">Select a card, or create a new one.</div>
         ) : (
           <>
-            <input
-              className="kb-cards__title"
-              aria-label="Title"
-              placeholder="Title"
-              value={draft.title}
-              onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-            />
-            <div className="kb-cards__keys">
-              {draft.keys.map((k) => (
-                <span key={k} className="kb-cards__chip">
-                  {k}
-                  <button
-                    type="button"
-                    aria-label={`Remove ${k}`}
-                    onClick={() => setDraft({ ...draft, keys: draft.keys.filter((x) => x !== k) })}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              <input
-                className="kb-cards__term"
-                aria-label="Add a term"
-                placeholder="Add a term…"
-                value={term}
-                onChange={(e) => setTerm(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === ",") {
-                    e.preventDefault();
-                    addTerm();
-                  }
-                }}
-                onBlur={addTerm}
-              />
-            </div>
-            <div className="kb-cards__body">
-              <MonacoEditor
-                value={draft.body}
-                onChange={(body) => setDraft({ ...draft, body })}
-                language="markdown"
-              />
-            </div>
-            <div className="kb-cards__actions">
+            <div className="kb-cards__viewtoggle" role="tablist" aria-label="View mode">
               <button
                 type="button"
-                className="kb-cards__save"
-                disabled={saveMut.isPending}
-                onClick={() => saveMut.mutate(draft)}
+                role="tab"
+                aria-selected={!editing}
+                className={`kb-cards__view${!editing ? " is-active" : ""}`}
+                onClick={() => setEditing(false)}
               >
-                Save
+                Preview
               </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={editing}
+                className={`kb-cards__view${editing ? " is-active" : ""}`}
+                onClick={() => setEditing(true)}
+              >
+                Edit
+              </button>
+            </div>
+
+            {editing ? (
+              <>
+                <input
+                  className="kb-cards__title"
+                  aria-label="Title"
+                  placeholder="Title"
+                  value={draft.title}
+                  onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                />
+                <div className="kb-cards__keys">
+                  {draft.keys.map((k) => (
+                    <span key={k} className="kb-cards__chip">
+                      {k}
+                      <button
+                        type="button"
+                        aria-label={`Remove ${k}`}
+                        onClick={() =>
+                          setDraft({ ...draft, keys: draft.keys.filter((x) => x !== k) })
+                        }
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <input
+                    className="kb-cards__term"
+                    aria-label="Add a term"
+                    placeholder="Add a term…"
+                    value={term}
+                    onChange={(e) => setTerm(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault();
+                        addTerm();
+                      }
+                    }}
+                    onBlur={addTerm}
+                  />
+                </div>
+                <div className="kb-cards__body">
+                  <MonacoEditor
+                    value={draft.body}
+                    onChange={(body) => setDraft({ ...draft, body })}
+                    language="markdown"
+                  />
+                </div>
+              </>
+            ) : (
+              <div className="kb-cards__preview">
+                <h2 className="kb-cards__preview-title">
+                  {draft.title || draft.keys[0] || "Untitled"}
+                </h2>
+                {draft.keys.length > 0 && (
+                  <div className="kb-cards__keys">
+                    {draft.keys.map((k) => (
+                      <span key={k} className="kb-cards__chip kb-cards__chip--ro">
+                        {k}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <article className="md-body kb-cards__preview-body">
+                  {draft.body.trim() ? (
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{draft.body}</ReactMarkdown>
+                  ) : (
+                    <p className="kb-cards__none">No explanation yet.</p>
+                  )}
+                </article>
+              </div>
+            )}
+
+            <div className="kb-cards__actions">
+              {editing && (
+                <button
+                  type="button"
+                  className="kb-cards__save"
+                  disabled={saveMut.isPending}
+                  onClick={() => saveMut.mutate(draft)}
+                >
+                  Save
+                </button>
+              )}
               {draft.id && (
                 <button
                   type="button"

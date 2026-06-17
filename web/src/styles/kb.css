@@ -1990,35 +1990,36 @@
 
 /* #106 Context Cards tab — left list + center editor (mirrors the docs IDE). */
 .kb-cards { display: flex; gap: 12px; height: 100%; min-height: 0; }
+/* compact, dense left column */
 .kb-cards__list {
-  width: 220px; flex: 0 0 220px; display: flex; flex-direction: column; gap: 6px;
-  border-right: 1px solid var(--paper-3); padding-right: 10px; min-height: 0;
+  width: 196px; flex: 0 0 196px; display: flex; flex-direction: column; gap: 4px;
+  border-right: 1px solid var(--paper-3); padding-right: 8px; min-height: 0;
 }
 /* only the card list scrolls — the search box + New stay pinned at the top */
 .kb-cards__items {
-  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px;
+  list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
   flex: 1 1 auto; min-height: 0; overflow-y: auto;
 }
-.kb-cards__search { display: flex; flex-direction: column; gap: 6px; }
-.kb-cards__modes { display: flex; gap: 4px; }
+.kb-cards__search { display: flex; flex-direction: column; gap: 4px; }
+.kb-cards__modes { display: flex; gap: 3px; }
 .kb-cards__mode {
-  flex: 1 1 0; padding: 4px 6px; font-size: 12px; cursor: pointer;
+  flex: 1 1 0; padding: 2px 4px; font-size: 11px; cursor: pointer;
   border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
   background: transparent; color: var(--text-paper-d);
 }
 .kb-cards__mode.is-active { background: var(--paper-2); color: var(--text-paper); border-color: var(--paper-3); }
 .kb-cards__search-input {
-  padding: 6px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
-  background: var(--paper); color: var(--text-paper); font-size: 13px; width: 100%; box-sizing: border-box;
+  padding: 4px 6px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
+  background: var(--paper); color: var(--text-paper); font-size: 12px; width: 100%; box-sizing: border-box;
 }
-.kb-cards__none { color: var(--text-paper-d2); font-size: 12px; padding: 8px; }
+.kb-cards__none { color: var(--text-paper-d2); font-size: 12px; padding: 6px; }
 .kb-cards__new {
-  text-align: left; padding: 6px 8px; border: 1px dashed var(--paper-3);
+  text-align: left; padding: 3px 6px; font-size: 12px; border: 1px dashed var(--paper-3);
   border-radius: var(--radius-btn); background: transparent; color: var(--text-paper-d);
   cursor: pointer;
 }
 .kb-cards__item {
-  display: block; width: 100%; text-align: left; padding: 6px 8px;
+  display: block; width: 100%; text-align: left; padding: 3px 6px; font-size: 12px; line-height: 1.4;
   border: 1px solid transparent; border-radius: var(--radius-btn);
   background: transparent; color: var(--text-paper); cursor: pointer;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -2041,6 +2042,21 @@
 .kb-cards__term { flex: 1 1 120px; min-width: 120px; padding: 4px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); color: var(--text-paper); }
 .kb-cards__body { flex: 1 1 auto; min-height: 200px; }
 .kb-cards__actions { display: flex; gap: 8px; }
+/* Preview / Edit toggle + the rendered preview pane */
+.kb-cards__viewtoggle { display: flex; gap: 4px; }
+.kb-cards__view {
+  padding: 3px 14px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
+  background: transparent; color: var(--text-paper-d);
+}
+.kb-cards__view.is-active { background: var(--paper-2); color: var(--text-paper); }
+.kb-cards__preview {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.kb-cards__preview-title { margin: 0; font-size: 18px; font-weight: 600; color: var(--text-paper); }
+.kb-cards__preview-body { flex: 1 1 auto; }
+.kb-cards__chip--ro { color: var(--text-paper-d); }
 .kb-cards__save, .kb-cards__delete { padding: 6px 14px; border-radius: var(--radius-btn); border: 1px solid var(--paper-3); cursor: pointer; }
 .kb-cards__save { background: var(--accent, var(--paper-2)); color: var(--text-paper); }
 .kb-cards__delete { background: transparent; color: var(--text-paper-d); }
