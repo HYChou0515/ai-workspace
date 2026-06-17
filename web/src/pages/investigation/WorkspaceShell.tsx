@@ -392,6 +392,15 @@ function ShellBody({
                 slug={manifest.slug}
                 itemId={item.resource_id}
                 profile={String(item.profile ?? manifest.default_profile)}
+                // Same manifest-derived chat chrome the RCA <AgentPanel> gets —
+                // the shell threads it through to each chat tab's panel.
+                picker={manifest.agent.picker}
+                suggestions={manifest.agent.suggestions}
+                appTitle={manifest.title}
+                appIcon={manifest.icon}
+                appColor={manifest.color}
+                attachedPreset={String(item.attached_preset ?? "")}
+                onAttachPreset={(preset) => setField("attached_preset", preset)}
               />
             ) : (
               <>

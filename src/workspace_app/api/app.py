@@ -2056,6 +2056,25 @@ def create_app(
         await turn_engine.cancel_current(_engine_key(investigation_id, chat_id))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.delete("/a/{slug}/items/{item_id}/chats/{chat_id}/messages")
+    async def undo_chat_turns(
+        slug: str,
+        item_id: str,
+        chat_id: str,
+        turns: int = Query(..., ge=1, description="How many whole turns to undo (≥1)."),
+    ) -> _UndoOut:
+        """Undo the last `turns` whole turns of ONE chat (manual §3 + issue #38),
+        the chat-scoped twin of `undo_turns`. A turn is the user's prompt plus
+        everything the agent produced for it; undoing removes them as a unit. The
+        workspace FILES are NOT reverted — undo edits the conversation only."""
+        _require_item(slug, item_id)
+        rid, conv = _require_chat(slug, item_id, chat_id)
+        cut = _undo_cut_index(conv.messages, turns)
+        removed = len(conv.messages) - cut
+        conv.messages = conv.messages[:cut]
+        conv_rm.update(rid, conv)
+        return _UndoOut(message_count=len(conv.messages), removed=removed)
+
     @app.post(
         "/a/{slug}/items/{item_id}/mentions",
         status_code=status.HTTP_204_NO_CONTENT,

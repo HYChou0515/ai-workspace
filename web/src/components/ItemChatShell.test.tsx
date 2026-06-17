@@ -8,6 +8,13 @@ import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workfl
 import { renderWithQuery } from "../test/queryWrapper";
 import { ItemChatShell } from "./ItemChatShell";
 
+// The active chat now renders the real RCA AgentPanel (model picker, kbApi, dialogs
+// …). Stub it so these tests stay focused on the multi-chat chrome (tab rail /
+// picker / workflow launch / Continue gate) — AgentPanel has its own tests.
+vi.mock("../pages/investigation/AgentPanel", () => ({
+  AgentPanel: () => <div data-testid="agent-panel-stub" />,
+}));
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -64,7 +71,18 @@ beforeEach(() => {
 });
 
 const render = () =>
-  renderWithQuery(<ItemChatShell slug="topic-hub" itemId="it" profile="default" />);
+  renderWithQuery(
+    <ItemChatShell
+      slug="topic-hub"
+      itemId="it"
+      profile="default"
+      picker={[]}
+      suggestions={[]}
+      appTitle="Topic Hub"
+      attachedPreset=""
+      onAttachPreset={() => {}}
+    />,
+  );
 
 describe("ItemChatShell", () => {
   it("renders a tab per chat and the new-chat picker with the profile's workflows", async () => {
@@ -95,9 +113,9 @@ describe("ItemChatShell", () => {
     const create = vi.spyOn(itemChatApi, "createChat").mockResolvedValue(created);
     render();
     // The shell creates the implicit default chat instead of stalling on the
-    // empty placeholder, and lands on a usable composer.
+    // empty placeholder, and lands on a usable chat panel.
     await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
-    await waitFor(() => expect(screen.getByTestId("chat-composer")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
   });
 
   it("opens a free chat via the picker (createChat) and selects it", async () => {

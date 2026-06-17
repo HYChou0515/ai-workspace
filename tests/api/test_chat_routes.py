@@ -9,7 +9,7 @@ from httpx import ASGITransport, AsyncClient
 
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.resources import Conversation, make_spec
+from workspace_app.resources import Conversation, Message, make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 from .conftest import register_rca_item
@@ -106,6 +106,58 @@ def test_chat_scoped_cancel_is_a_noop_when_idle():
     cid = client.post(f"/a/rca/items/{iid}/chats", json={"title": "c"}).json()["chat_id"]
     r = client.delete(f"/a/rca/items/{iid}/chats/{cid}/messages/current")
     assert r.status_code == 204
+
+
+def _seed_turns(rm, item_id: str, title: str = "c") -> str:
+    """Create a chat with two whole turns (user + assistant each) and return its id."""
+    rev = rm.create(Conversation(item_id=item_id, title=title, created_ms=1))
+    conv = rm.get(rev.resource_id).data
+    conv.messages = [
+        Message(role="user", content="q1"),
+        Message(role="assistant", content="a1"),
+        Message(role="user", content="q2"),
+        Message(role="assistant", content="a2"),
+    ]
+    rm.update(rev.resource_id, conv)
+    return rev.resource_id
+
+
+def test_chat_scoped_undo_drops_the_last_whole_turn():
+    client, spec, iid = _client()
+    rm = _convs(spec, iid)
+    cid = _seed_turns(rm, iid)
+    r = client.delete(f"/a/rca/items/{iid}/chats/{cid}/messages", params={"turns": 1})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["removed"] == 2  # the user prompt + its assistant reply
+    assert body["message_count"] == 2
+    left = [(m.role, m.content) for m in rm.get(cid).data.messages]
+    assert left == [("user", "q1"), ("assistant", "a1")]
+
+
+def test_chat_scoped_undo_more_turns_than_exist_clears_the_chat():
+    client, spec, iid = _client()
+    rm = _convs(spec, iid)
+    cid = _seed_turns(rm, iid)
+    r = client.delete(f"/a/rca/items/{iid}/chats/{cid}/messages", params={"turns": 9})
+    assert r.status_code == 200
+    assert r.json() == {"message_count": 0, "removed": 4}
+    assert rm.get(cid).data.messages == []
+
+
+def test_chat_scoped_undo_requires_a_positive_turns():
+    client, spec, iid = _client()
+    cid = _seed_turns(_convs(spec, iid), iid)
+    r = client.delete(f"/a/rca/items/{iid}/chats/{cid}/messages", params={"turns": 0})
+    assert r.status_code == 422  # turns >= 1
+
+
+def test_chat_scoped_undo_404s_for_an_unknown_chat():
+    client, _spec, iid = _client()
+    r = client.delete(
+        f"/a/rca/items/{iid}/chats/conversation:nope/messages", params={"turns": 1}
+    )
+    assert r.status_code == 404
 
 
 async def test_chat_scoped_stream_is_per_chat():

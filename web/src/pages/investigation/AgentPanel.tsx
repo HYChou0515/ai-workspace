@@ -23,7 +23,7 @@ import { AppIcon } from "../../components/AppIcon";
 import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
 import { docHref } from "../kb/kbLinks";
-import { useAgent } from "../../hooks/useAgent";
+import { type AgentState, useOptionalAgent } from "../../hooks/useAgent";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
@@ -52,6 +52,7 @@ function isTextFile(name: string): boolean {
 
 export function AgentPanel({
   investigationId,
+  agent: agentProp,
   width = 380,
   fill = false,
   suggestions,
@@ -63,6 +64,10 @@ export function AgentPanel({
   appColor,
 }: {
   investigationId: string;
+  /** The agent conversation state. Defaults to the surrounding
+   * `<AgentProvider>` (RCA's single chat); the multi-chat shell injects a
+   * per-chat `useItemChat()` here so one chat tab drives this panel. */
+  agent?: AgentState;
   width?: number;
   /** When true (a workspace=false App), the panel fills the row instead of
    * sitting at its fixed resizable width — it's the only pane. */
@@ -87,7 +92,10 @@ export function AgentPanel({
   const slug = useWorkspaceSlug();
   const chips = suggestions ?? [];
   const me = useCurrentUser();
-  const { log, send, mention, cancel, undo } = useAgent();
+  const ctxAgent = useOptionalAgent();
+  const agent = agentProp ?? ctxAgent;
+  if (!agent) throw new Error("AgentPanel needs an agent (prop or <AgentProvider>)");
+  const { log, send, mention, cancel, undo } = agent;
   const dialog = useDialog();
 
   // #38: "undo to here" on the user prompt at entry `i` — drop that turn

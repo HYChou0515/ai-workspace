@@ -3,30 +3,53 @@ import { useEffect, useRef, useState } from "react";
 
 import { type ItemChatSummary } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
+import type { Suggestion } from "../api/types";
 import { workflowApi } from "../api/workflows";
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useDecide, useRun, useWorkflowProfiles } from "../hooks/useWorkflow";
-import { EntryView } from "./AgentEntryView";
+import { AgentPanel } from "../pages/investigation/AgentPanel";
 import { ItemChatList } from "./ItemChatList";
 import { NewChatPicker } from "./NewChatPicker";
+
+/** What ItemChatShell feeds straight through to each chat's AgentPanel — the
+ * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
+ * RCA `<AgentPanel>`). The shell adds the multi-chat tab rail + workflow gate. */
+type AgentChrome = {
+  picker: { preset: string; name: string }[];
+  suggestions?: Suggestion[];
+  appTitle?: string;
+  appIcon?: string;
+  appColor?: string;
+  attachedPreset: string;
+  onAttachPreset: (preset: string) => void;
+};
 
 /**
  * The per-item multi-chat shell (topic-hub §3): a tab rail of the item's chats + a
  * new-chat picker ([Free chat] + the seed profile's workflows), with the active chat
- * rendered below. A free chat is created on demand; a workflow launch opens a
- * workflow chat (run-driven) and selects it. A paused workflow chat surfaces a
- * Continue affordance (the human_gate decision).
+ * rendered below as the full RCA `AgentPanel` (model picker, suggestions, @mention,
+ * attach, undo, Cmd-Enter — scoped to the active chat via `useItemChat`). A free chat
+ * is created on demand; a workflow launch opens a workflow chat (run-driven) and
+ * selects it. A paused workflow chat surfaces a Continue affordance (the human_gate
+ * decision) above the panel.
  */
 export function ItemChatShell({
   slug,
   itemId,
   profile,
+  picker,
+  suggestions,
+  appTitle,
+  appIcon,
+  appColor,
+  attachedPreset,
+  onAttachPreset,
 }: {
   slug: string;
   itemId: string;
   profile: string;
-}) {
+} & AgentChrome) {
   const qc = useQueryClient();
   const { chats, isLoading, createFreeChat } = useItemChats(slug, itemId);
   const profilesQ = useWorkflowProfiles(slug);
@@ -80,7 +103,19 @@ export function ItemChatShell({
         <NewChatPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
       </div>
       {active ? (
-        <ItemChatPanel key={active.chat_id} slug={slug} itemId={itemId} chat={active} />
+        <ItemChatPanel
+          key={active.chat_id}
+          slug={slug}
+          itemId={itemId}
+          chat={active}
+          picker={picker}
+          suggestions={suggestions}
+          appTitle={appTitle}
+          appIcon={appIcon}
+          appColor={appColor}
+          attachedPreset={attachedPreset}
+          onAttachPreset={onAttachPreset}
+        />
       ) : (
         <p className="item-chat-panel__empty" data-testid="no-chat">
           No chat open yet — start one above.
@@ -94,24 +129,26 @@ function ItemChatPanel({
   slug,
   itemId,
   chat,
+  picker,
+  suggestions,
+  appTitle,
+  appIcon,
+  appColor,
+  attachedPreset,
+  onAttachPreset,
 }: {
   slug: string;
   itemId: string;
   chat: ItemChatSummary;
-}) {
-  const { log, send, cancel } = useItemChat({ slug, itemId, chatId: chat.chat_id });
-  const [draft, setDraft] = useState("");
+} & AgentChrome) {
+  // The active chat drives the full RCA AgentPanel (AgentState shape) — the
+  // model picker, suggestions, @mention, attach, undo and Cmd-Enter all work
+  // per chat. Injected as a prop so AgentPanel needs no <AgentProvider> here.
+  const agent = useItemChat({ slug, itemId, chatId: chat.chat_id });
   // Poll the driving run only for a workflow chat — to surface its human gate.
   const run = useRun(slug, itemId, chat.run_id ?? undefined);
   const decide = useDecide(slug, itemId, chat.run_id ?? "");
   const gate = run.data?.status === "awaiting_human" ? run.data.pending_decision : null;
-
-  const submit = () => {
-    const text = draft.trim();
-    if (!text || log.streaming) return;
-    void send(text);
-    setDraft("");
-  };
 
   return (
     <div
@@ -119,17 +156,6 @@ function ItemChatPanel({
       data-testid="item-chat-panel"
       style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
     >
-      <div className="item-chat-panel__log" style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: 8 }}>
-        {log.entries.map((entry, i) => (
-          <EntryView key={i} entry={entry} />
-        ))}
-        {log.error && (
-          <p className="item-chat-panel__error" data-testid="chat-error">
-            {log.error}
-          </p>
-        )}
-      </div>
-
       {gate && (
         <div
           className="item-chat-panel__gate"
@@ -150,38 +176,18 @@ function ItemChatPanel({
         </div>
       )}
 
-      <div
-        className="item-chat-panel__composer"
-        style={{ flex: "0 0 auto", display: "flex", gap: 8, padding: 8 }}
-      >
-        <textarea
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          disabled={log.streaming}
-          aria-label="Message"
-          data-testid="chat-composer"
-        />
-        {log.streaming ? (
-          <button
-            type="button"
-            className="item-chat-panel__stop"
-            onClick={cancel}
-            data-testid="chat-stop"
-          >
-            Stop
-          </button>
-        ) : (
-          <button
-            type="button"
-            className="item-chat-panel__send"
-            onClick={submit}
-            disabled={!draft.trim()}
-            data-testid="chat-send"
-          >
-            Send
-          </button>
-        )}
-      </div>
+      <AgentPanel
+        investigationId={itemId}
+        agent={agent}
+        fill
+        picker={picker}
+        suggestions={suggestions}
+        attachedPreset={attachedPreset}
+        onAttachPreset={onAttachPreset}
+        appTitle={appTitle}
+        appIcon={appIcon}
+        appColor={appColor}
+      />
     </div>
   );
 }

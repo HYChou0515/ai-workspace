@@ -10,6 +10,7 @@
  * against a fake.
  */
 
+import type { BodyEnhancements } from "../lib/kbEnhancementMode";
 import type { AgentEvent } from "../events";
 import { apiFetch } from "./http";
 import { parseSseStream } from "./sse";
@@ -82,13 +83,21 @@ export const itemChatApi = {
     chatId: string;
     content: string;
     reasoningEffort?: string;
+    /** Knowledge-search depth + the "Search the wiki" toggle for this turn's
+     * ask_knowledge_base lookups — mirrors the item-level `api.sendMessage`. The
+     * chat-scoped backend forwards `body.enhancements`. */
+    enhancements?: BodyEnhancements;
     signal?: AbortSignal;
   }): Promise<void> {
     // #43 broadcast model: POST enqueues (202); events arrive on `subscribe`.
     const r = await apiFetch(`${base(args.slug, args.itemId)}/chats/${enc(args.chatId)}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ content: args.content, reasoning_effort: args.reasoningEffort }),
+      body: JSON.stringify({
+        content: args.content,
+        reasoning_effort: args.reasoningEffort,
+        enhancements: args.enhancements,
+      }),
       signal: args.signal,
     });
     if (!r.ok) throw new Error(`send failed: ${r.status}`);
@@ -110,6 +119,27 @@ export const itemChatApi = {
     await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}/messages/current`, {
       method: "DELETE",
     }).catch(() => undefined);
+  },
+
+  /** Undo the last `turns` whole turns of THIS chat (#38, chat-scoped twin of
+   * `api.undoTurns`); the FE re-snapshots the thread after. */
+  async undoTurns(slug: string, itemId: string, chatId: string, turns: number): Promise<void> {
+    const r = await apiFetch(
+      `${base(slug, itemId)}/chats/${enc(chatId)}/messages?turns=${turns}`,
+      { method: "DELETE" },
+    );
+    if (!r.ok) throw new Error(`undo failed: ${r.status}`);
+  },
+
+  /** @mention people to "come look" — notifies them, does NOT run the agent.
+   * Item-level (mentions are per-item, not per-chat); mirrors `api.addMention`. */
+  async mention(slug: string, itemId: string, userIds: string[], note: string): Promise<void> {
+    const r = await apiFetch(`${base(slug, itemId)}/mentions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user_ids: userIds, note }),
+    });
+    if (!r.ok) throw new Error(`mention failed: ${r.status}`);
   },
 };
 

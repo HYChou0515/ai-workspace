@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { itemChatApi, type ItemChatApi } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
 import { isTerminal } from "../events";
+import {
+  getKbWiki,
+  getStored as getKbEnhancementSelection,
+  toBodyEnhancements,
+  withWikiFlag,
+} from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import {
   EMPTY_LOG,
@@ -11,6 +17,8 @@ import {
   logFromMessages,
   reduceAgent,
 } from "../pages/investigation/agentLog";
+import type { AgentState } from "./useAgent";
+import { useCurrentUser } from "./useCurrentUser";
 
 /**
  * Drives ONE chat of an item (topic-hub §3) — a free chat or a workflow chat —
@@ -21,13 +29,13 @@ import {
  * the stream); on a terminal event the persisted thread is re-snapshotted (it
  * carries resolved `[n]` citations the stream doesn't). `client` is injectable so
  * the hook is unit-testable against a fake.
+ *
+ * Returns the same shape as `useAgent` (`AgentState`) so the full RCA `AgentPanel`
+ * can render against a chat — model picker, suggestions, @mention, attach, undo
+ * and Cmd-Enter all work per chat. `investigationId` is the item id (the file /
+ * attach / replay APIs are item-scoped, shared across the item's chats).
  */
-export type UseItemChat = {
-  chatId: string;
-  log: AgentLog;
-  send: (content: string) => Promise<void>;
-  cancel: () => void;
-};
+export type UseItemChat = AgentState & { chatId: string };
 
 export function useItemChat({
   slug,
@@ -41,6 +49,7 @@ export function useItemChat({
   client?: ItemChatApi;
 }): UseItemChat {
   const qc = useQueryClient();
+  const currentUser = useCurrentUser();
   const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
 
   // Hydrate the chat's persisted thread (staleTime 0 so each mount sees the turns
@@ -104,6 +113,9 @@ export function useItemChat({
           chatId,
           content: trimmed,
           reasoningEffort: getReasoningEffort() ?? undefined,
+          // Knowledge-search depth + the "Search the wiki" toggle → this turn's
+          // ask_knowledge_base lookups (same sticky selection useAgent sends).
+          enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
         });
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;
@@ -122,5 +134,35 @@ export function useItemChat({
     setLog((prev) => ({ ...prev, streaming: false }));
   }, [slug, itemId, chatId, client]);
 
-  return { chatId, log, send, cancel };
+  const undo = useCallback(
+    async (turns: number) => {
+      // #38: drop the last `turns` whole turns server-side (chat-scoped), then
+      // re-snapshot the thread (same hydration the post-send tail uses). Files
+      // aren't reverted — the AgentPanel confirm copy says so.
+      if (turns <= 0) return;
+      await client.undoTurns(slug, itemId, chatId, turns);
+      const fresh = await client.getChat(slug, itemId, chatId);
+      qc.setQueryData(qk.itemChat(slug, itemId, chatId), fresh);
+      setLog(logFromMessages(fresh.messages));
+    },
+    [slug, itemId, chatId, client, qc],
+  );
+
+  const mention = useCallback(
+    async (userIds: string[], note: string) => {
+      if (userIds.length === 0) return;
+      await client.mention(slug, itemId, userIds, note);
+      // Optimistic: a mention is its own log entry (not an agent turn).
+      setLog((prev) => ({
+        ...prev,
+        entries: [
+          ...prev.entries,
+          { kind: "mention", by: currentUser, users: userIds, note, at: Date.now() },
+        ],
+      }));
+    },
+    [slug, itemId, client, currentUser],
+  );
+
+  return { investigationId: itemId, chatId, log, send, mention, cancel, undo };
 }

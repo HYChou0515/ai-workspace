@@ -75,17 +75,12 @@
 }
 
 /* ── chat panel ──────────────────────────────────────────────────── */
-.item-chat-panel__log {
-  scrollbar-width: thin;
-}
+/* The active chat is rendered by the real RCA AgentPanel (its own styling owns
+ * the log / composer / send / stop), so the shell only styles the multi-chat
+ * chrome it adds: the empty placeholder + the workflow Continue gate. */
 .item-chat-panel__empty {
   margin: auto;
   color: var(--text-paper-d);
-  font-size: var(--text-body-sm);
-}
-.item-chat-panel__error {
-  color: var(--err, #c0392b);
-  padding: 8px;
   font-size: var(--text-body-sm);
 }
 
@@ -103,51 +98,4 @@
 }
 .item-chat-panel__gate button:hover {
   background: var(--paper);
-}
-
-/* composer — mirrors the AgentPanel composer for a consistent feel. */
-.item-chat-panel__composer {
-  border-top: 1px solid var(--paper-3);
-  background: var(--white);
-  align-items: flex-end;
-}
-.item-chat-panel__composer textarea {
-  flex: 1;
-  min-width: 0;
-  min-height: 40px;
-  max-height: 160px;
-  padding: 8px;
-  border: 1px solid var(--paper-3);
-  border-radius: var(--radius-btn);
-  background: var(--white);
-  color: var(--text-paper);
-  font: inherit;
-  font-size: 13px;
-  resize: vertical;
-  outline: none;
-}
-.item-chat-panel__composer textarea:disabled {
-  opacity: 0.6;
-}
-.item-chat-panel__send,
-.item-chat-panel__stop {
-  padding: 8px 16px;
-  border-radius: var(--radius-btn);
-  font-size: 13px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-.item-chat-panel__send {
-  background: var(--accent);
-  color: var(--white);
-}
-.item-chat-panel__send:disabled {
-  background: var(--paper-3);
-  color: var(--text-paper-d);
-  cursor: not-allowed;
-}
-.item-chat-panel__stop {
-  border: 1px solid var(--err, #c0392b);
-  color: var(--err, #c0392b);
-  background: transparent;
 }

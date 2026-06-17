@@ -20,6 +20,8 @@ function fakeClient(over: Partial<ItemChatApi> = {}): ItemChatApi {
       await new Promise<void>(() => {});
     },
     cancelMessage: vi.fn().mockResolvedValue(undefined),
+    undoTurns: vi.fn().mockResolvedValue(undefined),
+    mention: vi.fn().mockResolvedValue(undefined),
     ...over,
   } as ItemChatApi;
 }
@@ -61,7 +63,72 @@ describe("useItemChat", () => {
         content: "question",
       }),
     );
+    // KB enhancements (search depth + wiki flag) ride along on every turn, like
+    // useAgent — the call carries an `enhancements` key (value may be undefined
+    // when no selection is stored, as in this test's clean localStorage).
+    const sentBody = (client.sendMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect("enhancements" in sentBody).toBe(true);
     expect(result.current.log.streaming).toBe(true);
+  });
+
+  it("undo drops turns on THIS chat and re-snapshots the log", async () => {
+    const undone: ItemChat = {
+      ...CHAT,
+      messages: [{ role: "user", content: "kept" }],
+    };
+    const getChat = vi
+      .fn()
+      .mockResolvedValueOnce({ ...CHAT, messages: [{ role: "user", content: "old" }] })
+      .mockResolvedValue(undone); // re-snapshot after undo
+    const client = fakeClient({ getChat });
+    const { result } = render(client);
+    await waitFor(() => expect(result.current.log.entries.length).toBe(1));
+    await act(async () => {
+      await result.current.undo(1);
+    });
+    expect(client.undoTurns).toHaveBeenCalledWith("topic-hub", "it", "conversation:c1", 1);
+    await waitFor(() =>
+      expect(
+        result.current.log.entries.some(
+          (e) => e.kind === "message" && e.message.content === "kept",
+        ),
+      ).toBe(true),
+    );
+  });
+
+  it("undo is a no-op for a non-positive count", async () => {
+    const client = fakeClient();
+    const { result } = render(client);
+    await act(async () => {
+      await result.current.undo(0);
+    });
+    expect(client.undoTurns).not.toHaveBeenCalled();
+  });
+
+  it("mention notifies the item (not the chat) and adds an optimistic entry", async () => {
+    // Seed a prior message + wait for hydration so the mention's optimistic entry
+    // isn't clobbered by the on-mount re-snapshot (mirrors the real app order).
+    const client = fakeClient({
+      getChat: vi.fn().mockResolvedValue({ ...CHAT, messages: [{ role: "user", content: "prior" }] }),
+    });
+    const { result } = render(client);
+    await waitFor(() => expect(result.current.log.entries.length).toBe(1));
+    await act(async () => {
+      await result.current.mention(["bob"], "look at this");
+    });
+    expect(client.mention).toHaveBeenCalledWith("topic-hub", "it", ["bob"], "look at this");
+    expect(
+      result.current.log.entries.some((e) => e.kind === "mention"),
+    ).toBe(true);
+  });
+
+  it("mention is a no-op with no users", async () => {
+    const client = fakeClient();
+    const { result } = render(client);
+    await act(async () => {
+      await result.current.mention([], "note");
+    });
+    expect(client.mention).not.toHaveBeenCalled();
   });
 
   it("cancel tells the backend to stop THIS chat and clears streaming immediately", async () => {
