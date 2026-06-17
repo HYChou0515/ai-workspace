@@ -57,6 +57,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.run import WorkflowRun
 from .activity import ActivityLog
+from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .events import (
     AgentEvent,
     CellEvent,
@@ -76,7 +77,6 @@ from .kb_chat_routes import (
     register_kb_chat_routes,
     to_caller_enhancements,
 )
-from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .kb_routes import register_kb_routes
 from .notifications import notify, register_notification_routes
 from .registry import InvestigationRegistry
