@@ -18,14 +18,17 @@ import pytest
 from workspace_app.agent import AgentToolContext
 from workspace_app.api.events import MessageDelta, RunDone, RunError, ToolEnd, ToolStart
 from workspace_app.api.litellm_runner import (
+    _NONSTREAM_TOOL_EVENT,
     LitellmAgentRunner,
     ThinkSplitter,
     _approx_tokens,
     _delta_channel,
     _exact_usage,
     _final_tokens,
+    _ItemEvent,
     _map_event,
     _should_retry,
+    _stream_enabled,
     classify_retry_event,
     diagnose_error,
 )
@@ -897,3 +900,32 @@ def test_trace_workflow_name_distinguishes_run_flavours():
     # A retriever-bearing context is a KB-style lookup; the rest is the RCA turn.
     assert _trace_workflow_name(ctx(retriever=object())) == "KB chat"  # type: ignore[arg-type]
     assert _trace_workflow_name(ctx(investigation_id="inv-1")) == "RCA turn"
+
+
+# ---- non-streaming escape hatch (WORKSPACE_AGENT_STREAM) ----
+
+
+def test_stream_enabled_defaults_on_and_parses_off_values(monkeypatch):
+    monkeypatch.delenv("WORKSPACE_AGENT_STREAM", raising=False)
+    assert _stream_enabled() is True  # default: stream (observability)
+    for off in ("0", "false", "FALSE", "no", "off", "  Off  "):
+        monkeypatch.setenv("WORKSPACE_AGENT_STREAM", off)
+        assert _stream_enabled() is False, off
+    for on in ("1", "true", "yes", "anything"):
+        monkeypatch.setenv("WORKSPACE_AGENT_STREAM", on)
+        assert _stream_enabled() is True, on
+
+
+def test_item_event_adapts_run_items_for_map_event_reuse():
+    """The non-streaming path feeds completed RunItems through _map_event via
+    _ItemEvent; the RunItem.type → event-name table must hit tool start/end."""
+    assert _NONSTREAM_TOOL_EVENT["tool_call_item"] == "tool_called"
+    assert _NONSTREAM_TOOL_EVENT["tool_call_output_item"] == "tool_output"
+    call = _Item(raw_item=_RawToolCall(call_id="c1", name="ls", arguments=""))
+    start = _map_event(_ItemEvent("tool_called", call))
+    assert isinstance(start, ToolStart)
+    assert start.name == "ls" and start.call_id == "c1"
+    out = _Item(raw_item=_RawToolOutput(call_id="c1"), output="ok")
+    end = _map_event(_ItemEvent("tool_output", out))
+    assert isinstance(end, ToolEnd)
+    assert end.call_id == "c1" and "ok" in end.output
