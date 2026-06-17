@@ -36,11 +36,15 @@ def context_files_block(entries: list[tuple[str, str]]) -> str:
 
 async def build_context_block(filestore: FileStore, workspace_id: str, paths: list[str]) -> str:
     """Read each ``path`` from the FileStore (skipping ones that don't exist — the
-    workspace is hand-editable) and render them via :func:`context_files_block`."""
+    workspace is hand-editable) and render them via :func:`context_files_block`.
+
+    FileStore paths are absolute (``/MEMORY.md``); a declared path is normalised to
+    that for the read, but its as-declared form labels the block."""
     entries: list[tuple[str, str]] = []
     for path in paths:
+        read_path = path if path.startswith("/") else "/" + path
         try:
-            data = await filestore.read(workspace_id, path)
+            data = await filestore.read(workspace_id, read_path)
         except FileNotFound:
             continue
         entries.append((path, data.decode("utf-8", "replace")))

@@ -31,10 +31,10 @@ def test_context_files_block_is_empty_when_nothing_substantive():
 
 async def test_build_context_block_reads_live_filestore_and_skips_missing():
     fs = MemoryFileStore()
-    await fs.write("ws1", "MEMORY.md", b"# Mem\ncurrent")
+    await fs.write("ws1", "/MEMORY.md", b"# Mem\ncurrent")  # FileStore paths are absolute
     # 2nd file absent → skipped, not an error (hand-edited workspace).
     block = await build_context_block(fs, "ws1", ["MEMORY.md", "collections.json"])
-    assert "current" in block and "### MEMORY.md" in block
+    assert "current" in block and "### MEMORY.md" in block  # declared path labels it
     assert "collections.json" not in block
 
 

@@ -4,10 +4,21 @@
   "description": "A cross-collection workspace that accumulates memory on a subject over time.",
   "icon": "flame",
   "color": "#6B46C1",
-  "function": { "workspace": true, "sandbox": false, "terminal": false },
+  "function": { "workspace": true, "sandbox": true, "terminal": false },
   "agent": {
     "prompt_file": "prompts/system.md",
-    "tools": ["read_file", "write_file", "edit_file", "ls", "exists", "delete_file"],
+    "tools": [
+      "read_file",
+      "write_file",
+      "edit_file",
+      "ls",
+      "exists",
+      "delete_file",
+      "lookup_glossary",
+      "resolve_collection",
+      "ask_knowledge_base"
+    ],
+    "context_files": ["MEMORY.md", "collections.json"],
     "picker": [{ "preset": "qwen3-local", "name": "Topic Hub · Qwen3 (local)" }],
     "suggestions": [{ "label": "Summarise", "prompt": "Summarise what we know so far." }]
   },

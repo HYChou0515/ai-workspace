@@ -1213,6 +1213,31 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"unknown chat: {chat_id!r}")
         return chat_id, conv
 
+    async def _hub_collection_ids(item_id: str) -> list[str]:
+        """The item's collection set (topic-hub §5): the ids in its ``collections.json``
+        workspace file, or ``[]`` when it has none. Scopes ``lookup_glossary`` /
+        ``ask_knowledge_base`` for the turn. Tolerant of a hand-edited / malformed file."""
+        from ..kb.collections import collection_ids_from_json
+
+        try:
+            raw = await filestore.read(item_id, "/collections.json")
+        except FileNotFound:
+            return []
+        try:
+            return collection_ids_from_json(json.loads(raw))
+        except (ValueError, TypeError):
+            return []
+
+    def _app_context_files(item_id: str) -> list[str]:
+        """The App's declared per-turn context files (manual §6) — the workspace files
+        whose live content is injected each turn. Empty for most Apps."""
+        from ..apps.manifest import load_app_manifest
+
+        slug = _item_slug(item_id)
+        if slug is None:  # pragma: no cover - callers pass a validated item id
+            return []
+        return load_app_manifest(slug).agent.context_files
+
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so
     # these do their own lookups instead of reusing `_conversation_for`
@@ -1737,6 +1762,9 @@ def create_app(
         conv_rm.update(rid, conv)
 
         session = await registry.session(investigation_id)
+        # Topic Hub §5/§7: the Hub's collection set (collections.json) scopes the
+        # turn's deterministic glossary + KB tools. [] for Apps without the file.
+        hub_collection_ids = await _hub_collection_ids(investigation_id)
         # Composer knowledge-search depth: applies to this turn's KB
         # lookups. The bridge wrapper forwards it to the kb_chat
         # sub-agent only — infer_modules' focused classification probe
@@ -1827,6 +1855,10 @@ def create_app(
             # `read_skill` when the profile ships skills.
             app_slug=_item_slug(investigation_id),
             template_profile=_item_profile(investigation_id),
+            # Topic Hub §5/§7: spec + the Hub's collection set let the retriever-free
+            # `lookup_glossary` / `resolve_collection` tools query context cards.
+            spec=spec,
+            collection_ids=hub_collection_ids,
         )
 
         def persist(produced: list[TurnMessage]) -> None:
@@ -1868,6 +1900,18 @@ def create_app(
                 {"investigation_id": investigation_id},
             )
 
+        # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
+        # collections.json) as a labelled, authoritative block — re-derived fresh from
+        # the live FileStore each turn and handed ONLY to the agent. The persisted user
+        # message + the broadcast UserMessage stay clean (block never enters history),
+        # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
+        from ..apps.context_files import build_context_block
+
+        block = await build_context_block(
+            filestore, investigation_id, _app_context_files(investigation_id)
+        )
+        turn_content = f"{block}\n\n{body.content}" if block else body.content
+
         # #43: broadcast the human's message to every live viewer, then queue the
         # turn and await ITS completion. The queue serializes concurrent users on
         # the shared sandbox/files (a new message no longer cancels a running
@@ -1877,7 +1921,7 @@ def create_app(
             engine_key,
             UserMessage(author=author, content=body.content, created_at=created),
         )
-        await turn_engine.enqueue(engine_key, body.content, ctx, on_complete=persist)
+        await turn_engine.enqueue(engine_key, turn_content, ctx, on_complete=persist)
 
     @app.get("/a/{slug}/items/{item_id}/stream")
     async def stream_investigation(slug: str, item_id: str) -> StreamingResponse:
