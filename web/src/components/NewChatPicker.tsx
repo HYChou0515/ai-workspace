@@ -30,6 +30,7 @@ export function NewChatPicker({
     <div className="new-chat-picker" style={{ position: "relative", display: "inline-block" }}>
       <button
         type="button"
+        className="new-chat-picker__trigger"
         aria-haspopup="menu"
         aria-expanded={open}
         disabled={disabled}
@@ -39,8 +40,18 @@ export function NewChatPicker({
         + New chat
       </button>
       {open && (
-        <div role="menu" data-testid="new-chat-menu" style={{ position: "absolute", zIndex: 10 }}>
-          <button type="button" role="menuitem" onClick={() => choose(onFreeChat)}>
+        <div
+          role="menu"
+          className="new-chat-picker__menu"
+          data-testid="new-chat-menu"
+          style={{ position: "absolute", zIndex: 10 }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            className="new-chat-picker__item"
+            onClick={() => choose(onFreeChat)}
+          >
             Free chat
           </button>
           {workflows.map((wf) => (
@@ -48,6 +59,7 @@ export function NewChatPicker({
               key={wf.id}
               type="button"
               role="menuitem"
+              className="new-chat-picker__item"
               onClick={() => choose(() => onWorkflow(wf.id))}
             >
               {wf.title || wf.id}

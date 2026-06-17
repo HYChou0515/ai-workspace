@@ -27,6 +27,7 @@ export function ItemChatList({
           <button
             type="button"
             role="tab"
+            className="item-chat-list__tab"
             aria-selected={chat.chat_id === activeChatId}
             data-testid={`chat-tab-${chat.chat_id}`}
             onClick={() => onSelect(chat.chat_id)}

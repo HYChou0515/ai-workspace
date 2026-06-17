@@ -79,6 +79,27 @@ describe("ItemChatShell", () => {
     ).toBeInTheDocument();
   });
 
+  it("auto-opens a default free chat when the hub has none yet", async () => {
+    const created = summary({ chat_id: "conversation:auto", is_default: true });
+    // First load: empty hub. After createChat invalidates, the chat is listed.
+    vi.spyOn(itemChatApi, "listChats").mockResolvedValueOnce([]).mockResolvedValue([created]);
+    vi.spyOn(itemChatApi, "getChat").mockResolvedValue(thread({ chatId: "conversation:auto" }));
+    vi.spyOn(itemChatApi, "cancelMessage").mockResolvedValue();
+    vi.spyOn(itemChatApi, "sendMessage").mockResolvedValue();
+    vi.spyOn(itemChatApi, "subscribe").mockImplementation(
+      () =>
+        (async function* () {
+          await new Promise<void>(() => {});
+        })(),
+    );
+    const create = vi.spyOn(itemChatApi, "createChat").mockResolvedValue(created);
+    render();
+    // The shell creates the implicit default chat instead of stalling on the
+    // empty placeholder, and lands on a usable composer.
+    await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
+    await waitFor(() => expect(screen.getByTestId("chat-composer")).toBeInTheDocument());
+  });
+
   it("opens a free chat via the picker (createChat) and selects it", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     const created = summary({ chat_id: "conversation:free2", title: "side", is_default: false });

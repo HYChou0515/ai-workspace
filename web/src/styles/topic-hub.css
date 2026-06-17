@@ -1,0 +1,153 @@
+/* Topic Hub multi-chat shell (P14, §3).
+ *
+ * The shell components set their structural flex layout inline (fill height,
+ * scrollable log, pinned composer); this sheet gives them the app's look —
+ * matching the RCA AgentPanel composer + the FileTree dropdown menu — so the
+ * picker menu, tabs and composer aren't bare unstyled text. */
+
+/* ── new-chat picker ─────────────────────────────────────────────── */
+.new-chat-picker__trigger {
+  padding: 4px 10px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+}
+.new-chat-picker__trigger:hover:not(:disabled) {
+  background: var(--paper-2);
+}
+.new-chat-picker__trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.new-chat-picker__menu {
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 220px;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px 0;
+}
+.new-chat-picker__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 14px;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+  background: transparent;
+  white-space: nowrap;
+}
+.new-chat-picker__item:hover {
+  background: var(--paper-2);
+}
+
+/* ── chat tab rail ───────────────────────────────────────────────── */
+.item-chat-list {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.item-chat-list__tab {
+  padding: 3px 10px;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+}
+.item-chat-list__tab:hover {
+  background: var(--paper-2);
+}
+.item-chat-list__tab[aria-selected="true"] {
+  background: var(--accent-soft, var(--paper-2));
+  color: var(--text-paper);
+  font-weight: 600;
+}
+
+/* ── chat panel ──────────────────────────────────────────────────── */
+.item-chat-panel__log {
+  scrollbar-width: thin;
+}
+.item-chat-panel__empty {
+  margin: auto;
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+}
+.item-chat-panel__error {
+  color: var(--err, #c0392b);
+  padding: 8px;
+  font-size: var(--text-body-sm);
+}
+
+.item-chat-panel__gate {
+  background: var(--paper-2);
+  border-top: 1px solid var(--paper-3);
+  font-size: var(--text-body-sm);
+}
+.item-chat-panel__gate button {
+  padding: 4px 12px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+}
+.item-chat-panel__gate button:hover {
+  background: var(--paper);
+}
+
+/* composer — mirrors the AgentPanel composer for a consistent feel. */
+.item-chat-panel__composer {
+  border-top: 1px solid var(--paper-3);
+  background: var(--white);
+  align-items: flex-end;
+}
+.item-chat-panel__composer textarea {
+  flex: 1;
+  min-width: 0;
+  min-height: 40px;
+  max-height: 160px;
+  padding: 8px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  outline: none;
+}
+.item-chat-panel__composer textarea:disabled {
+  opacity: 0.6;
+}
+.item-chat-panel__send,
+.item-chat-panel__stop {
+  padding: 8px 16px;
+  border-radius: var(--radius-btn);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.item-chat-panel__send {
+  background: var(--accent);
+  color: var(--white);
+}
+.item-chat-panel__send:disabled {
+  background: var(--paper-3);
+  color: var(--text-paper-d);
+  cursor: not-allowed;
+}
+.item-chat-panel__stop {
+  border: 1px solid var(--err, #c0392b);
+  color: var(--err, #c0392b);
+  background: transparent;
+}

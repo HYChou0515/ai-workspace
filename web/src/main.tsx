@@ -20,6 +20,7 @@ import "./styles/tokens.css";
 import "./styles/base.css";
 import "./styles/kb.css";
 import "./styles/brand.css";
+import "./styles/topic-hub.css";
 
 initTheme();
 

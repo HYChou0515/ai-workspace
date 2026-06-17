@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { type ItemChatSummary } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
@@ -28,15 +28,25 @@ export function ItemChatShell({
   profile: string;
 }) {
   const qc = useQueryClient();
-  const { chats, createFreeChat } = useItemChats(slug, itemId);
+  const { chats, isLoading, createFreeChat } = useItemChats(slug, itemId);
   const profilesQ = useWorkflowProfiles(slug);
   const workflows = profilesQ.data?.find((p) => p.name === profile)?.workflows ?? [];
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const autoOpened = useRef(false);
 
   // Default to the first chat (the default chat lists first) once chats load.
   useEffect(() => {
     if (activeChatId == null && chats.length) setActiveChatId(chats[0].chat_id);
   }, [chats, activeChatId]);
+
+  // A brand-new Hub has no chats yet (the default chat materialises on first
+  // use, §3). Open one automatically so the item lands on a usable composer
+  // instead of an empty placeholder. Guarded so it fires at most once.
+  useEffect(() => {
+    if (autoOpened.current || isLoading || chats.length) return;
+    autoOpened.current = true;
+    void createFreeChat().then((c) => setActiveChatId(c.chat_id));
+  }, [isLoading, chats.length, createFreeChat]);
 
   const onFreeChat = async () => {
     setActiveChatId((await createFreeChat()).chat_id);
@@ -72,7 +82,7 @@ export function ItemChatShell({
       {active ? (
         <ItemChatPanel key={active.chat_id} slug={slug} itemId={itemId} chat={active} />
       ) : (
-        <p data-testid="no-chat" style={{ padding: 16 }}>
+        <p className="item-chat-panel__empty" data-testid="no-chat">
           No chat open yet — start one above.
         </p>
       )}
@@ -152,11 +162,22 @@ function ItemChatPanel({
           data-testid="chat-composer"
         />
         {log.streaming ? (
-          <button type="button" onClick={cancel} data-testid="chat-stop">
+          <button
+            type="button"
+            className="item-chat-panel__stop"
+            onClick={cancel}
+            data-testid="chat-stop"
+          >
             Stop
           </button>
         ) : (
-          <button type="button" onClick={submit} disabled={!draft.trim()} data-testid="chat-send">
+          <button
+            type="button"
+            className="item-chat-panel__send"
+            onClick={submit}
+            disabled={!draft.trim()}
+            data-testid="chat-send"
+          >
             Send
           </button>
         )}
