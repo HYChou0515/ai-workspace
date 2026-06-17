@@ -104,3 +104,38 @@ def match(text: str, vocab: dict[str, list[ContextCard]], *, cap: int = 10) -> l
                 seen.add(id(card))
                 out.append(card)
     return out[:cap]
+
+
+def cards_for_collections(spec: SpecStar, collection_ids: list[str]) -> list[ContextCard]:
+    """Load every card across the given collections — the corpus the internal
+    `match(text)` pre-scan builds its vocab from."""
+    rm = spec.get_resource_manager(ContextCard)
+    out: list[ContextCard] = []
+    for cid in collection_ids:
+        for r in rm.list_resources((QB["collection_id"] == cid).build()):
+            data = r.data
+            assert isinstance(data, ContextCard)  # narrow Struct|Unset for ty
+            out.append(data)
+    return out
+
+
+def card_context_block(cards: list[ContextCard]) -> str:
+    """Render matched cards as a labelled context block to inject into the KB
+    chat agent's turn — empty string when nothing matched (so the caller adds
+    nothing). Each entry leads with its term(s) so the model can attribute the
+    explanation, and the preamble tells it these are authoritative (no search
+    needed for them)."""
+    if not cards:
+        return ""
+    parts = [
+        "Internal glossary entries relevant to the question — treat them as "
+        "authoritative and do not search the knowledge base for these terms:"
+    ]
+    for c in cards:
+        label = c.title or (c.keys[0] if c.keys else "")
+        aliases = ", ".join(c.keys)
+        header = f"### {label}"
+        if aliases and aliases != label:
+            header += f" ({aliases})"
+        parts.append(f"{header}\n{c.body}")
+    return "\n\n".join(parts)

@@ -27,6 +27,8 @@ from specstar.types import ResourceIDNotFoundError
 from ..agent.context import AgentToolContext
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
+from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections
+from ..kb.context_cards import match as match_cards
 from ..kb.retriever import Enhancements, Retriever
 from ..resources import AgentConfig
 from ..resources.kb import Citation, KbChat, KbMessage
@@ -442,7 +444,18 @@ def register_kb_chat_routes(
                 fresh.messages.append(km)
             chat_rm.update(chat_id, fresh)
 
-        return await engine.stream(chat_id, body.content, ctx, on_complete=persist)
+        # #106: deterministic context-card pre-scan. Inject any cards whose keys
+        # appear in the message so a covered term is answered straight away,
+        # without a kb_search round-trip. The persisted user message (above)
+        # stays clean — only the content handed to the agent is augmented.
+        agent_content = body.content
+        if chat.collection_ids:
+            cards = cards_for_collections(spec, chat.collection_ids)
+            block = card_context_block(match_cards(body.content, build_vocab(cards)))
+            if block:
+                agent_content = f"{block}\n\n{body.content}"
+
+        return await engine.stream(chat_id, agent_content, ctx, on_complete=persist)
 
     @app.delete("/kb/chats/{chat_id}/messages/current", status_code=204)
     async def cancel_message(chat_id: str) -> Response:

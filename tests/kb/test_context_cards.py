@@ -1,4 +1,11 @@
-from workspace_app.kb.context_cards import build_vocab, derive_norm_keys, lookup, match, norm
+from workspace_app.kb.context_cards import (
+    build_vocab,
+    card_context_block,
+    derive_norm_keys,
+    lookup,
+    match,
+    norm,
+)
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, ContextCard
 
@@ -145,3 +152,27 @@ def test_match_caps_with_deterministic_order():
 def test_match_returns_empty_when_no_key_present():
     vocab = build_vocab([_mkcard(["M4"], "metal4")])
     assert match("nothing relevant here", vocab) == []
+
+
+def test_card_context_block_lists_cards_and_is_empty_when_none():
+    assert card_context_block([]) == ""
+    block = card_context_block([_mkcard(["M4", "Capping"], "the cap layer over metal 4")])
+    assert "the cap layer over metal 4" in block  # the explanation is present
+    assert "M4" in block  # and the term it answers
+
+
+def test_card_context_block_prefers_title_and_shows_keys_as_aliases():
+    c = ContextCard(collection_id="c", keys=["M4"], norm_keys=["m4"], title="Metal 4", body="b")
+    block = card_context_block([c])
+    assert "### Metal 4" in block  # the title is the heading
+    assert "(M4)" in block  # the key shown as an alias since it differs from the title
+
+
+def test_card_context_block_omits_alias_suffix_when_it_equals_the_label():
+    block = card_context_block([_mkcard(["M4"], "metal four")])  # no title, one key
+    assert "### M4\nmetal four" in block  # label = keys[0]; no redundant "(M4)"
+
+
+def test_card_context_block_handles_a_card_with_no_keys():
+    c = ContextCard(collection_id="c", keys=[], norm_keys=[], title="", body="orphan")
+    assert "orphan" in card_context_block([c])  # label falls back to "" but body still shows
