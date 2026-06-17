@@ -4,18 +4,22 @@ The status-only ``driver.run_workflow`` owns one run's terminal status; this own
 everything *around* a run, and is the single object the API routes call:
 
 - builds the run's ``WorkflowHandle`` (wiring drive_turn / run_sandbox / ingest / emit),
-- **one active run per item** (§14) + a **global concurrency cap** — excess runs sit
+- **one run per chat** (topic-hub §3): each run drives its own workflow chat, so many
+  may run in parallel on one item; the legacy ``chat_id``-less path keeps the
+  one-active-run-per-item rule (§14). A **global concurrency cap** sits excess runs
   ``pending`` until a slot frees (§16),
 - maps step events → ``WorkflowRun`` per-phase progress AND broadcasts them on the
-  item's stream (§12),
+  run's chat stream (§12, §3),
 - **per-run wall-clock timeout** + **max-steps budget** → ``error`` (§17),
 - **releases the sandbox** on terminal / ``awaiting_human`` (§16) + notifies on failure,
 - **Stop** (cancel, §10) and the **human-gate decide → resume** cycle (§10).
 
 It is deliberately App-agnostic: the API layer injects ``load_run`` / ``load_manifest``
-(profile discovery), ``wire_handle`` (attach the turn/sandbox/ingest drivers),
-``publish`` (broadcast on the item's stream), ``release`` (tear the sandbox down) and
-``notify_failure``. Tests inject fakes and drive it directly.
+(profile + workflow discovery), ``wire_handle`` (attach the turn/sandbox/ingest
+drivers, keyed on the run's chat), ``publish`` (broadcast on the run's chat stream),
+``release`` (tear the sandbox down) and ``notify_failure``. ``chat_id`` is just an
+opaque stream/turn key here — the Conversation overlay lives in the API layer. Tests
+inject fakes and drive it directly.
 """
 
 from __future__ import annotations
@@ -51,8 +55,10 @@ _ACTIVE = (RunStatus.PENDING, RunStatus.RUNNING, RunStatus.AWAITING_HUMAN)
 
 ProfileRun = Callable[[WorkflowHandle, Any], Awaitable[Any]]
 # Attach the run's leaf drivers (drive_turn / run_sandbox / ingest) to a freshly
-# built handle: (wf, run_id, item_id, captured_user).
-WireHandle = Callable[[WorkflowHandle, str, str, str], None]
+# built handle: (wf, run_id, item_id, captured_user, chat_key). ``chat_key`` is the
+# run's stream/turn key (its workflow chat, or item_id legacy) — drive_turn enqueues
+# + persists there; run_sandbox/ingest stay on item_id (the shared workspace).
+WireHandle = Callable[[WorkflowHandle, str, str, str, str], None]
 
 
 class ActiveRunExists(Exception):
@@ -80,18 +86,19 @@ def _noop_publish(_item_id: str, _event: Any) -> None:
 class WorkflowOrchestrator:
     spec: SpecStar
     store: FileStore
-    load_run: Callable[[str, str], ProfileRun]
-    load_manifest: Callable[[str, str], WorkflowManifest | None]
+    load_run: Callable[[str, str, str], ProfileRun]
+    load_manifest: Callable[[str, str, str], WorkflowManifest | None]
     wire_handle: WireHandle
-    # (item_id, event) — broadcast a phase/step event on the item's stream. Typed
-    # ``Any`` event so the API can pass ``turn_engine.publish`` (which accepts the
-    # narrower AgentEvent union) without a contravariance complaint.
+    # (chat_key, event) — broadcast a phase/step event on the run's stream (its
+    # workflow chat, or the item's broadcast stream legacy). Typed ``Any`` event so
+    # the API can pass ``turn_engine.publish`` (narrower AgentEvent union) cleanly.
     publish: Callable[[str, Any], None] = _noop_publish
-    # Release the item's resources (manual §16): ``release(item_id, terminal)``.
-    # ``terminal`` is True on done/error/cancelled (tear down sandbox + turn
+    # Release the run's resources (manual §16): ``release(item_id, terminal, chat_key)``.
+    # ``terminal`` is True on done/error/cancelled (tear down sandbox + the run's turn
     # session), False on an ``awaiting_human`` pause (free the sandbox but keep the
-    # stream alive for the decision card). Injected by the API layer; None ⇒ no-op.
-    release: Callable[[str, bool], Awaitable[None]] | None = None
+    # stream alive for the decision card). ``chat_key`` identifies the run's chat/turn
+    # session. Injected by the API layer; None ⇒ no-op.
+    release: Callable[[str, bool, str], Awaitable[None]] | None = None
     # In-app failure notification (manual §17). Injected by the API layer.
     notify_failure: Callable[[WorkflowRun], None] | None = None
     # Run-scoped credentials (manual §15): minted per run, injected into the
@@ -139,22 +146,43 @@ class WorkflowOrchestrator:
                 return r.info.resource_id
         return None
 
-    async def start(self, *, slug: str, item_id: str, profile: str, captured_user: str) -> str:
+    async def start(
+        self,
+        *,
+        slug: str,
+        item_id: str,
+        profile: str,
+        captured_user: str,
+        workflow_id: str = "",
+        chat_id: str = "",
+    ) -> str:
         """Create a ``WorkflowRun`` (capturing the user, §15) and kick the run off as
-        a background task. Rejects a second active run on the same item (§14)."""
-        existing = self.active_run(item_id)
-        if existing is not None:
-            raise ActiveRunExists(item_id, existing)
-        manifest = self.load_manifest(slug, profile)
+        a background task. ``workflow_id`` selects which of the profile's workflows to
+        run (manual §4); ``chat_id`` is the workflow chat it drives (manual §3). With a
+        ``chat_id``, runs are **per-chat** so many may run in parallel on one item
+        (§3); without one (legacy), the one-active-run-per-item rule still holds (§14)."""
+        if not chat_id:
+            existing = self.active_run(item_id)
+            if existing is not None:
+                raise ActiveRunExists(item_id, existing)
+        manifest = self.load_manifest(slug, profile, workflow_id)
         assert manifest is not None  # the route validated this is a workflow profile
         phases = [PhaseState(phase=p.id) for p in manifest.phases]
         run_id = (
             self._rm()
-            .create(WorkflowRun(item_id=item_id, captured_user=captured_user, phases=phases))
+            .create(
+                WorkflowRun(
+                    item_id=item_id,
+                    captured_user=captured_user,
+                    phases=phases,
+                    chat_id=chat_id,
+                    workflow_id=workflow_id,
+                )
+            )
             .resource_id
         )
         self._prune_runs(item_id, keep=run_id)
-        self._spawn(run_id, slug, item_id, profile, captured_user, manifest)
+        self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
         return run_id
 
     def _prune_runs(self, item_id: str, *, keep: str) -> None:
@@ -189,9 +217,13 @@ class WorkflowOrchestrator:
         profile: str,
         captured_user: str,
         manifest: WorkflowManifest,
+        workflow_id: str,
+        chat_id: str,
     ) -> None:
         task = asyncio.create_task(
-            self._drive(run_id, slug, item_id, profile, captured_user, manifest)
+            self._drive(
+                run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id
+            )
         )
         self._tasks[run_id] = task
         task.add_done_callback(lambda _t, rid=run_id: self._tasks.pop(rid, None))
@@ -204,10 +236,14 @@ class WorkflowOrchestrator:
         profile: str,
         captured_user: str,
         manifest: WorkflowManifest,
+        workflow_id: str,
+        chat_id: str,
     ) -> None:
         # Concurrency cap: the run stays `pending` until a slot frees (§16).
         async with self._semaphore():
-            await self._execute(run_id, slug, item_id, profile, captured_user, manifest)
+            await self._execute(
+                run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id
+            )
 
     async def _execute(
         self,
@@ -217,9 +253,12 @@ class WorkflowOrchestrator:
         profile: str,
         captured_user: str,
         manifest: WorkflowManifest,
+        workflow_id: str,
+        chat_id: str,
     ) -> None:
-        wf = self._build_handle(run_id, item_id, captured_user, manifest)
-        profile_run = self.load_run(slug, profile)
+        key = chat_id or item_id
+        wf = self._build_handle(run_id, item_id, captured_user, manifest, key)
+        profile_run = self.load_run(slug, profile, workflow_id)
         inputs = await self._read_inputs(wf, manifest)
         self._step_counts[run_id] = 0
         coro = run_workflow(
@@ -246,7 +285,7 @@ class WorkflowOrchestrator:
             )
         # On a real Stop the inner CancelledError propagates out of here (skipping the
         # post-run step); `cancel()` does the sandbox release for that path.
-        await self._post_run(run_id, item_id)
+        await self._post_run(run_id, item_id, key)
 
     async def _read_inputs(self, wf: WorkflowHandle, manifest: WorkflowManifest) -> Any:
         """Parsed ``input.json`` (manual §14) — ``{}`` when the file is absent so a
@@ -256,7 +295,12 @@ class WorkflowOrchestrator:
         return {}
 
     def _build_handle(
-        self, run_id: str, item_id: str, captured_user: str, manifest: WorkflowManifest | None
+        self,
+        run_id: str,
+        item_id: str,
+        captured_user: str,
+        manifest: WorkflowManifest | None,
+        key: str,
     ) -> WorkflowHandle:
         credential = ""
         if self.credentials is not None:
@@ -271,20 +315,20 @@ class WorkflowOrchestrator:
             workspace_id=item_id,
             config=dict(manifest.config) if manifest is not None else {},
             user=captured_user,
-            emit=lambda ev: self._on_event(run_id, item_id, ev),
+            emit=lambda ev: self._on_event(run_id, key, ev),
             credential=credential,
             step_timeout_s=self.step_timeout_s,
         )
-        self.wire_handle(wf, run_id, item_id, captured_user)
+        self.wire_handle(wf, run_id, item_id, captured_user, key)
         return wf
 
     # ── post-run lifecycle ────────────────────────────────────────────
-    async def _post_run(self, run_id: str, item_id: str) -> None:
+    async def _post_run(self, run_id: str, item_id: str, key: str) -> None:
         data = self._get(run_id)
         status = data.status
         if status is RunStatus.AWAITING_HUMAN and data.pending_decision is not None:
             self.publish(
-                item_id,
+                key,
                 AwaitingHumanEvent(
                     phase=data.pending_decision.phase, title=data.pending_decision.title
                 ),
@@ -304,13 +348,13 @@ class WorkflowOrchestrator:
         if terminal and self.credentials is not None:
             self.credentials.revoke(run_id)  # the run-scoped credential dies with the run (§15)
         if terminal or status is RunStatus.AWAITING_HUMAN:
-            await self._release(item_id, terminal)
+            await self._release(item_id, terminal, key)
         if status is RunStatus.ERROR and self.notify_failure is not None:
             self.notify_failure(self._get(run_id))
 
-    async def _release(self, item_id: str, terminal: bool) -> None:
+    async def _release(self, item_id: str, terminal: bool, key: str) -> None:
         if self.release is not None:
-            await self.release(item_id, terminal)
+            await self.release(item_id, terminal, key)
 
     # ── Stop & take over (§10) ────────────────────────────────────────
     async def cancel(self, run_id: str, item_id: str) -> bool:
@@ -320,10 +364,11 @@ class WorkflowOrchestrator:
         task = self._tasks.get(run_id)
         if task is None or task.done():
             return False
+        key = self._get(run_id).chat_id or item_id
         task.cancel()
         with contextlib.suppress(BaseException):
             await task
-        await self._release(item_id, terminal=True)
+        await self._release(item_id, terminal=True, key=key)
         return True
 
     # ── human gate (§10) ──────────────────────────────────────────────
@@ -345,18 +390,29 @@ class WorkflowOrchestrator:
         if data.status is not RunStatus.AWAITING_HUMAN or data.pending_decision is None:
             raise NotAwaitingDecision(run_id)
         phase = data.pending_decision.phase
-        manifest = self.load_manifest(slug, profile)
-        wf = self._build_handle(run_id, item_id, data.captured_user, manifest)
+        key = data.chat_id or item_id
+        manifest = self.load_manifest(slug, profile, data.workflow_id)
+        wf = self._build_handle(run_id, item_id, data.captured_user, manifest, key)
         await record_decision(wf, phase=phase, choice=choice, input=input, decided_by=decided_by)
         assert manifest is not None
         self._patch(run_id, status=RunStatus.RUNNING, pending_decision=None)
-        self._spawn(run_id, slug, item_id, profile, data.captured_user, manifest)
+        self._spawn(
+            run_id,
+            slug,
+            item_id,
+            profile,
+            data.captured_user,
+            manifest,
+            data.workflow_id,
+            data.chat_id,
+        )
 
     # ── event → progress (§12) ────────────────────────────────────────
-    def _on_event(self, run_id: str, item_id: str, ev: object) -> None:
-        """Map a step event to ``WorkflowRun`` progress + broadcast it on the item's
-        stream. Enforces the max-steps budget (§17) by aborting an over-budget run
-        before its step executes."""
+    def _on_event(self, run_id: str, key: str, ev: object) -> None:
+        """Map a step event to ``WorkflowRun`` progress + broadcast it on the run's
+        stream (``key`` = its workflow chat, or the item's broadcast stream legacy).
+        Enforces the max-steps budget (§17) by aborting an over-budget run before its
+        step executes."""
         if isinstance(ev, StepStarted):
             self._step_counts[run_id] = self._step_counts.get(run_id, 0) + 1
             if self._step_counts[run_id] > self.max_steps:
@@ -365,8 +421,8 @@ class WorkflowOrchestrator:
         phase = getattr(ev, "phase", "")
         entering = bool(phase) and not isinstance(ev, PhaseEntered) and data.current_phase != phase
         if entering:
-            self.publish(item_id, PhaseEntered(phase=phase))
-        self.publish(item_id, ev)
+            self.publish(key, PhaseEntered(phase=phase))
+        self.publish(key, ev)
         self._apply_progress(run_id, data, ev, entering)
 
     def _apply_progress(self, run_id: str, data: WorkflowRun, ev: object, entering: bool) -> None:

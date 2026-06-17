@@ -51,11 +51,10 @@ from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
 from ..workflow.handle import WorkflowHandle
 from ..workflow.orchestrator import (
-    ActiveRunExists,
     NotAwaitingDecision,
     WorkflowOrchestrator,
 )
-from ..workflow.run import WorkflowRun
+from ..workflow.run import RunStatus, WorkflowRun
 from .activity import ActivityLog
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .events import (
@@ -1259,17 +1258,25 @@ def create_app(
     register_replay_routes(app, service=replay_service, load_turn=_load_turn, load_doc=_load_doc)
 
     # ── Workflows (#100) ─────────────────────────────────────────────
-    # A run is a turn on the item (§5.1): agent nodes stream into the item's chat
-    # and the orchestrator overlays phase/step events on the SAME broadcast stream.
-    from ..apps.profiles import load_workflow_manifest
+    # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
+    # the orchestrator overlays phase/step events on the same per-chat stream.
+    from ..apps.profiles import load_profile_workflow
 
     async def _wf_drive_turn(
-        item_id: str, captured_user: str, prompt: str, tools: list[str] | None
+        item_id: str, chat_key: str, captured_user: str, prompt: str, tools: list[str] | None
     ) -> str:
-        """Run one agent node as a turn on the item (§5.1): build the ctx, narrow
-        the tool ceiling to the step's subset, enqueue + await, persist the produced
-        messages under the captured user, and return the assistant text."""
-        _rid, conv = _conversation_for(item_id)
+        """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
+        ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
+        (keeping the run's stream separate from the item's other chats). Builds the
+        ctx, narrows the tool ceiling to the step's subset, enqueues + awaits, persists
+        the produced messages under the captured user, and returns the assistant text."""
+        try:
+            rid = chat_key
+            got = conv_rm.get(rid).data
+            assert isinstance(got, Conversation)
+            conv = got
+        except (ResourceIDNotFoundError, AssertionError):
+            rid, conv = _conversation_for(item_id)  # legacy fallback (item's default chat)
         cfg = _resolve_agent_config(item_id)
         if cfg is not None and tools is not None:
             # tools= ⊆ the profile's tool ceiling (manual §5.1) — drop anything the
@@ -1306,16 +1313,17 @@ def create_app(
 
         def persist(produced: list[TurnMessage]) -> None:
             if produced:
-                rid2, conv2 = _conversation_for(item_id)
+                conv2 = conv_rm.get(rid).data  # re-fetch the workflow chat
+                assert isinstance(conv2, Conversation)
                 # Background step → attribute the persisted turn to the captured
                 # user (§15, the job-pod acting-user pattern).
                 with conv_rm.using(user=captured_user):
                     for tm in produced:
                         conv2.messages.append(_to_rca_message(tm))
-                    conv_rm.update(rid2, conv2)
+                    conv_rm.update(rid, conv2)
             answer.extend(tm.content for tm in produced if tm.role == "assistant")
 
-        await turn_engine.enqueue(item_id, prompt, ctx, on_complete=persist)
+        await turn_engine.enqueue(chat_key, prompt, ctx, on_complete=persist)
         return "\n".join(answer)
 
     async def _wf_run_sandbox(item_id: str, run: str, credential: str) -> tuple[int, str]:
@@ -1361,19 +1369,39 @@ def create_app(
             return False
         return isinstance(doc, SourceDoc) and doc.status == "ready"
 
-    def _wf_wire_handle(wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str) -> None:
-        wf.drive_turn = lambda prompt, tools: _wf_drive_turn(item_id, captured_user, prompt, tools)
+    def _wf_wire_handle(
+        wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
+    ) -> None:
+        # Agent turns drive the run's workflow CHAT (chat_key); sandbox / ingest stay
+        # on item_id (the workspace shared across the item's chats, §3.1).
+        wf.drive_turn = lambda prompt, tools: _wf_drive_turn(
+            item_id, chat_key, captured_user, prompt, tools
+        )
         wf.run_sandbox = lambda run: _wf_run_sandbox(item_id, run, wf.credential)
         wf._ingest = lambda collection, path: _wf_ingest(item_id, captured_user, collection, path)
         wf._collection_has = _wf_collection_has
 
-    async def _wf_release(item_id: str, terminal: bool) -> None:
-        """Free the run's sandbox (§16); on a terminal run also drop the turn
-        session. A human pause keeps the turn session so the stream + decision card
-        stay live until the human resumes."""
-        await registry.close_session(item_id)
+    def _wf_any_running(item_id: str) -> bool:
+        """Is any run on this item still RUNNING? Used to decide whether the shared
+        sandbox is still needed (§3.1) — the run being released is no longer RUNNING
+        (it is terminal / awaiting_human), so this counts only the OTHERS."""
+        from specstar import QB
+
+        rm = spec.get_resource_manager(WorkflowRun)
+        for r in rm.list_resources((QB["item_id"] == item_id).build()):
+            if isinstance(r.data, WorkflowRun) and r.data.status is RunStatus.RUNNING:
+                return True
+        return False
+
+    async def _wf_release(item_id: str, terminal: bool, chat_key: str) -> None:
+        """Free resources when a run ends/pauses (§16). The sandbox + workspace are
+        shared across the item's chats (§3.1), so tear the sandbox down only when no
+        OTHER run is still running — a parallel run keeps it alive (§3). On terminal,
+        drop the finished run's own chat turn session (never the item's other chats)."""
+        if not _wf_any_running(item_id):
+            await registry.close_session(item_id)
         if terminal:
-            turn_engine.forget(item_id)
+            turn_engine.forget(chat_key)
 
     def _wf_notify_failure(run: WorkflowRun) -> None:
         """In-app failure notification to the item's owner (manual §17)."""
@@ -1398,7 +1426,7 @@ def create_app(
         spec=spec,
         store=files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
         load_run=load_run_callable,
-        load_manifest=load_workflow_manifest,
+        load_manifest=load_profile_workflow,
         wire_handle=_wf_wire_handle,
         publish=turn_engine.publish,
         release=_wf_release,
@@ -1416,16 +1444,16 @@ def create_app(
     )
     app.state.workflow_orchestrator = workflow_orchestrator
 
-    def _workflow_manifest_or_404(slug: str, item_id: str):
-        """Validate the item belongs to the slug AND its profile carries a workflow;
-        return (investigation_id, profile, manifest)."""
+    def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str = ""):
+        """Validate the item belongs to the slug AND its profile carries the requested
+        workflow (manual §4); return (investigation_id, profile, manifest)."""
         investigation_id = _require_item(slug, item_id)
         profile = _item_profile(investigation_id)
-        manifest = load_workflow_manifest(slug, profile)
+        manifest = load_profile_workflow(slug, profile, workflow_id)
         if manifest is None:
             raise HTTPException(
                 status_code=422,
-                detail=f"profile {profile!r} of app {slug!r} has no workflow",
+                detail=f"profile {profile!r} of app {slug!r} has no workflow {workflow_id!r}",
             )
         return investigation_id, profile, manifest
 
@@ -1456,25 +1484,38 @@ def create_app(
         return out
 
     @app.post("/a/{slug}/items/{item_id}/run", status_code=status.HTTP_202_ACCEPTED)
-    async def run_workflow_item(slug: str, item_id: str) -> dict:
-        """#100 (manual §14): start the item's workflow. Inputs come from the
-        workspace (``MANIFEST.input_json``); at most one active run per item."""
-        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
-        try:
-            run_id = await workflow_orchestrator.start(
-                slug=slug,
-                item_id=investigation_id,
-                profile=profile,
-                captured_user=get_user_id(),
-            )
-        except ActiveRunExists as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    async def run_workflow_item(slug: str, item_id: str, workflow_id: str = Query("")) -> dict:
+        """#100 / topic-hub P8 (manual §3, §4, §14): launch a workflow. Opens a fresh
+        WORKFLOW CHAT (a `Conversation` with `run_id`) the run streams into, and returns
+        its `chat_id`. ``workflow_id`` selects which of the profile's workflows (§4);
+        runs are per-chat, so several may run in parallel on one item (§3). Inputs come
+        from the workspace (``MANIFEST.input_json``)."""
+        investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
+        # The chat overlay (manual §3): create it, start the run on it, then link the
+        # run_id back. This runs synchronously before the run task drives any turn, so
+        # the chat carries its run_id before it streams.
+        title = manifest.title or workflow_id or "Workflow"
+        chat_id = conv_rm.create(
+            Conversation(item_id=investigation_id, title=title, created_ms=_now_ms())
+        ).resource_id
+        run_id = await workflow_orchestrator.start(
+            slug=slug,
+            item_id=investigation_id,
+            profile=profile,
+            captured_user=get_user_id(),
+            workflow_id=workflow_id,
+            chat_id=chat_id,
+        )
+        chat = conv_rm.get(chat_id).data
+        assert isinstance(chat, Conversation)
+        chat.run_id = run_id
+        conv_rm.update(chat_id, chat)
         activity.record(
             "workflow_started",
             "Started a workflow run",
-            {"item_id": investigation_id, "run_id": run_id},
+            {"item_id": investigation_id, "run_id": run_id, "chat_id": chat_id},
         )
-        return {"run_id": run_id, "item_id": investigation_id}
+        return {"run_id": run_id, "item_id": investigation_id, "chat_id": chat_id}
 
     @app.get("/a/{slug}/items/{item_id}/runs")
     async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:
@@ -1509,12 +1550,18 @@ def create_app(
 
     @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
     async def stream_workflow_run(slug: str, item_id: str, run_id: str) -> StreamingResponse:
-        """#100 (manual §14): the run's live SSE — reuses the item's broadcast
-        stream (agent events + phase/step events overlaid)."""
+        """#100 / P8 (manual §3, §14): the run's live SSE — its WORKFLOW CHAT's stream
+        (agent events + phase/step events overlaid). Falls back to the item's broadcast
+        stream when the run / its chat can't be resolved (defensive)."""
         investigation_id = _require_item(slug, item_id)
-        return StreamingResponse(
-            turn_engine.subscribe_sse(investigation_id), media_type="text/event-stream"
-        )
+        key = investigation_id
+        try:
+            run = spec.get_resource_manager(WorkflowRun).get(run_id).data
+            if isinstance(run, WorkflowRun) and run.chat_id:
+                key = run.chat_id
+        except ResourceIDNotFoundError:
+            pass
+        return StreamingResponse(turn_engine.subscribe_sse(key), media_type="text/event-stream")
 
     @app.post(
         "/a/{slug}/items/{item_id}/runs/{run_id}/cancel",

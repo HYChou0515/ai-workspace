@@ -46,10 +46,10 @@ class _Fakes:
         self.released: list[tuple[str, bool]] = []
         self.notified: list[WorkflowRun] = []
 
-    def publish(self, item_id, ev):
-        self.events.append((item_id, ev))
+    def publish(self, key, ev):
+        self.events.append((key, ev))
 
-    async def release(self, item_id, terminal):
+    async def release(self, item_id, terminal, key=None):
         self.released.append((item_id, terminal))
 
     def notify(self, run):
@@ -65,8 +65,8 @@ def _orch(spec, run_fn, fakes=None, *, store=None, **kw):
         WorkflowOrchestrator(
             spec=spec,
             store=store or MemoryFileStore(),
-            load_run=lambda _s, _p: run_fn,
-            load_manifest=lambda _s, _p: MANIFEST,
+            load_run=lambda _s, _p, _w="": run_fn,
+            load_manifest=lambda _s, _p, _w="": MANIFEST,
             wire_handle=lambda *_a: None,
             publish=fakes.publish,
             release=fakes.release,
@@ -299,8 +299,8 @@ async def test_runs_with_default_collaborators(spec_instance: SpecStar):
     orch = WorkflowOrchestrator(
         spec=spec_instance,
         store=MemoryFileStore(),
-        load_run=lambda _s, _p: run,
-        load_manifest=lambda _s, _p: MANIFEST,
+        load_run=lambda _s, _p, _w="": run,
+        load_manifest=lambda _s, _p, _w="": MANIFEST,
         wire_handle=lambda *_a: None,
         now=_clock(),
     )

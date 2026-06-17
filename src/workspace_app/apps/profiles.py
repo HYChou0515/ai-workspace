@@ -89,6 +89,20 @@ def profile_workflows(app_slug: str, name: str) -> list[WorkflowManifest]:
     return normalize_workflows(load_profile(app_slug, name))
 
 
+def load_profile_workflow(
+    app_slug: str, name: str, workflow_id: str = ""
+) -> WorkflowManifest | None:
+    """The manifest of a SPECIFIC workflow in a profile (manual §4). With
+    ``workflow_id`` → that entry from the ``workflows`` list (None if absent). Without
+    → the legacy singular ``workflow``, else the first declared workflow (so a
+    single-workflow profile resolves with no id). Backs the orchestrator's per-run
+    manifest load + the run-route validation."""
+    wfs = profile_workflows(app_slug, name)
+    if workflow_id:
+        return next((w for w in wfs if w.id == workflow_id), None)
+    return wfs[0] if wfs else None
+
+
 def workflow_profiles(app_slug: str) -> list[str]:
     """Names of the App's profiles that carry ≥1 workflow (manual §4, §14) — sorted."""
     return [p for p in list_profiles(app_slug) if profile_workflows(app_slug, p)]

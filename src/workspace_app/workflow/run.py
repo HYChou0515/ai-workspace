@@ -69,6 +69,16 @@ class WorkflowRun(Struct):
     resume run under ``rm.using(user=captured_user)`` since they have no request
     context, so ``created_by`` / ingestion attribution / notifications stay right."""
 
+    chat_id: str = ""
+    """The workflow CHAT this run drives (topic-hub P8, manual §3) — the opaque
+    stream/turn key the orchestrator publishes + enqueues on. "" → the legacy path
+    (key falls back to ``item_id``: the item's default chat / broadcast stream)."""
+
+    workflow_id: str = ""
+    """Which of the profile's workflows this run executes (manual §4). "" → the
+    profile's legacy singular / sole workflow. Durable so resume (decide) reloads
+    the right ``run.py`` after a restart."""
+
     status: RunStatus = RunStatus.PENDING
     current_phase: str = ""
     phases: list[PhaseState] = field(default_factory=list)

@@ -16,7 +16,7 @@ from specstar import SpecStar
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
-from workspace_app.resources import make_spec
+from workspace_app.resources import Conversation, make_spec
 from workspace_app.resources.kb import Collection
 from workspace_app.sandbox.mock import MockSandbox
 
@@ -123,13 +123,72 @@ def test_run_requires_workflow_profile():
         assert client.post(f"{_base(item_id)}/run").status_code == 422
 
 
-def test_double_active_run_is_rejected():
+def test_parallel_runs_each_open_their_own_chat():
+    """Topic-hub P8 (manual §3): the one-active-run-per-item rule is lifted — a second
+    run launches in parallel, in its own workflow chat, even while the first is paused."""
     app, _spec, item_id = _app()
     with TestClient(app) as client:
         _put_input(client, item_id, '{"gate": true}')  # first run parks at the gate
-        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
-        _poll(client, item_id, run_id, "awaiting_human")
-        assert client.post(f"{_base(item_id)}/run").status_code == 409
+        first = client.post(f"{_base(item_id)}/run").json()
+        _poll(client, item_id, first["run_id"], "awaiting_human")
+        second = client.post(f"{_base(item_id)}/run")
+        assert second.status_code == 202
+        body = second.json()
+        assert body["run_id"] != first["run_id"]
+        assert body["chat_id"] != first["chat_id"]  # each run drives its own chat
+
+
+def test_run_drives_its_own_workflow_chat_and_persists_there():
+    """P8 (manual §3): a run opens a workflow chat (a Conversation with run_id) and its
+    agent node's turn persists THERE — not the item's default chat."""
+    app, spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 2}')
+        resp = client.post(f"{_base(item_id)}/run").json()
+        run_id, chat_id = resp["run_id"], resp["chat_id"]
+        _poll(client, item_id, run_id, "done")
+        chats = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
+    assert chat_id in chats
+    assert chats[chat_id]["run_id"] == run_id  # a workflow chat, not the default
+    assert chats[chat_id]["is_default"] is False
+    conv = spec.get_resource_manager(Conversation).get(chat_id).data
+    assert conv.run_id == run_id
+    assert any(m.role == "assistant" and m.content == "ack" for m in conv.messages)
+
+
+def test_two_parallel_runs_both_complete_sharing_the_filestore():
+    """P8 (manual §3, §3.1): two runs proceed concurrently in one item (two chats);
+    both reach done. Their shared note.json write is last-write-wins (no torn write)."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        r1 = client.post(f"{_base(item_id)}/run").json()
+        r2 = client.post(f"{_base(item_id)}/run").json()
+        assert r1["chat_id"] != r2["chat_id"]
+        d1 = _poll(client, item_id, r1["run_id"], "done")
+        d2 = _poll(client, item_id, r2["run_id"], "done")
+    assert d1["result"]["status"] == "done"
+    assert d2["result"]["status"] == "done"
+
+
+def test_free_chat_edit_unblocks_a_paused_workflow_via_shared_filestore():
+    """P8 (manual §3.1): while a workflow chat is paused at a human gate, the shared
+    FileStore is editable (the sandbox is freed during the pause); the edit lands and
+    the workflow resumes to done."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"gate": true}')
+        run = client.post(f"{_base(item_id)}/run").json()
+        _poll(client, item_id, run["run_id"], "awaiting_human")
+        # Edit the workspace file the paused run is "waiting on" (e.g. a glossary fill-in).
+        assert (
+            client.put(f"{_base(item_id)}/files/glossary.todo.md", content=b"done").status_code
+            == 204
+        )
+        assert client.get(f"{_base(item_id)}/files/glossary.todo.md").content == b"done"
+        client.post(f"{_base(item_id)}/runs/{run['run_id']}/decisions", json={"choice": "approve"})
+        data = _poll(client, item_id, run["run_id"], "done")
+    assert data["result"]["status"] == "approved"
 
 
 def test_run_list_newest_first():
