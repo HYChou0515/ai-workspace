@@ -77,10 +77,15 @@ FE authors through these actions. (These are CRUD-layer routes → P2.)
   roundtrip; cascade-delete with Collection.
 
 ### P2 — CRUD via custom actions + FE "Context Cards" tab
-- Backend: `@spec.create_action("context-card", …)` + `@spec.update_action("context-card",
-  mode="update")` whose handlers set `norm_keys=derive_norm_keys(keys)` (the only write
-  path the FE uses → derivation can't be bypassed). Auto-CRUD for list/get/delete; a
-  `list?collection_id=` query (collection_id indexed — a query, not a scan).
+- Backend: `@spec.create_action("context-card", path="author")` +
+  `@spec.update_action("context-card", path="edit", mode="update")` whose handlers set
+  `norm_keys=derive_norm_keys(keys)` (the only write path the FE uses → derivation can't
+  be bypassed). **No hand-rolled read route** — list/get/delete ride specstar's auto
+  CRUD; the FE lists a collection's cards via `GET /context-card?qb=QB['collection_id']
+  == '<cid>'` (collection_id indexed → a query, not a scan) and reads the specstar
+  envelope (`item.data`, `item.revision_info.resource_id`). The create-action module
+  must NOT use `from __future__ import annotations` (specstar resolves the action body
+  type at apply()-time and can't follow stringised ForwardRefs).
 - FE: a "Context Cards" tab on the collection page — left list (`useQuery`, key in
   `queryKeys.ts`), center **monaco** (reuse #87) for `body` + a keys **tag** editor +
   **New**; save = `useMutation` (POST the create/update action) + `invalidateQueries`.

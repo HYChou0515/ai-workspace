@@ -76,6 +76,7 @@ from .kb_chat_routes import (
     register_kb_chat_routes,
     to_caller_enhancements,
 )
+from .context_card_routes import register_context_card_actions
 from .kb_routes import register_kb_routes
 from .notifications import notify, register_notification_routes
 from .registry import InvestigationRegistry
@@ -800,6 +801,10 @@ def create_app(
     async def stream_monitor(group_id: str | None = None) -> StreamingResponse:
         """Live SSE feed of telemetry events as the SDK emits them."""
         return StreamingResponse(monitor.sse(group_id=group_id), media_type="text/event-stream")
+
+    # #106: context-card create/update custom actions must register on the spec
+    # BEFORE apply() so they materialise into routes (norm_keys derived in-write).
+    register_context_card_actions(spec)
 
     spec.apply(app)
 
