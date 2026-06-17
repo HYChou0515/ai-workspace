@@ -84,6 +84,55 @@ export type FileChanged = {
   kind: "written" | "moved" | "copied" | "deleted" | "dir_created";
 };
 
+/* ------------------------------------------------------------------ */
+/* Workflow run events (#100, manual §12) — phase/step observability.   */
+/* Ride the same per-item stream; the FE overlays them on the manifest  */
+/* phase skeleton. Mirrors workflow/events.py.                          */
+/* ------------------------------------------------------------------ */
+
+/** A new workflow phase began (the first step carrying this `phase` ran). */
+export type PhaseEntered = { type: "phase_entered"; phase: string };
+
+/** A step began executing (not a cache skip). `key` is the loop element. */
+export type StepStarted = { type: "step_started"; phase: string; name: string; key?: string };
+
+/** A step's gate passed; its artifact is journaled. */
+export type StepPassed = { type: "step_passed"; phase: string; name: string; key?: string };
+
+/** A step aborted — its gate failed after all retries (`reason` = why). */
+export type StepFailed = {
+  type: "step_failed";
+  phase: string;
+  name: string;
+  reason?: string;
+  key?: string;
+};
+
+/** A step was skipped — its artifact exists with a matching input-hash (§9). */
+export type StepSkipped = { type: "step_skipped"; phase: string; name: string; key?: string };
+
+/** A step's gate failed but retries remain — `reason` is fed back. */
+export type StepRetrying = {
+  type: "step_retrying";
+  phase: string;
+  name: string;
+  reason?: string;
+  key?: string;
+};
+
+/** The run suspended at a `human_gate` (manual §10) — the FE renders the
+ * decision card. Terminal for the run task (resumed via the decisions endpoint). */
+export type AwaitingHuman = { type: "awaiting_human"; phase: string; title: string };
+
+export type WorkflowEvent =
+  | PhaseEntered
+  | StepStarted
+  | StepPassed
+  | StepFailed
+  | StepSkipped
+  | StepRetrying
+  | AwaitingHuman;
+
 export type AgentEvent =
   | MessageDelta
   | ToolStart
@@ -97,7 +146,8 @@ export type AgentEvent =
   | MaxTurnsExceeded
   | AgentMetrics
   | UserMessage
-  | FileChanged;
+  | FileChanged
+  | WorkflowEvent;
 
 /** Terminal events close the SSE stream and re-enable the composer. */
 export function isTerminal(ev: AgentEvent): boolean {

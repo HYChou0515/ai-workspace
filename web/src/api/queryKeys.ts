@@ -23,6 +23,13 @@ export const qk = {
   appManifest: (slug: string) => ["appManifest", slug] as const,
   appItems: (slug: string) => ["appItems", slug] as const,
   appItem: (slug: string, id: string) => ["appItem", slug, id] as const,
+
+  // #100 workflows: per-App profiles (which carry a workflow) + an item's runs.
+  workflowProfiles: (slug: string) => ["workflowProfiles", slug] as const,
+  workflowRuns: (slug: string, itemId: string) =>
+    ["workflowRuns", slug, itemId] as const,
+  workflowRun: (slug: string, itemId: string, runId: string) =>
+    ["workflowRun", slug, itemId, runId] as const,
   health: ["health"] as const,
   monitor: ["monitor"] as const,
 
