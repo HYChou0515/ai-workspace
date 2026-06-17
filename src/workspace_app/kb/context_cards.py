@@ -11,6 +11,14 @@ indexed lookup surface materialised on write).
 from __future__ import annotations
 
 import unicodedata
+from typing import TYPE_CHECKING
+
+from specstar import QB
+
+from ..resources.kb import ContextCard
+
+if TYPE_CHECKING:
+    from specstar import SpecStar
 
 
 def norm(s: str) -> str:
@@ -27,3 +35,72 @@ def derive_norm_keys(keys: list[str]) -> list[str]:
     blanks dropped, deduped, and sorted so the stored list is deterministic
     (stable across re-authoring with the same keys in a different order)."""
     return sorted({n for k in keys if (n := norm(k))})
+
+
+def lookup(spec: SpecStar, collection_id: str, terms: list[str]) -> dict[str, list[ContextCard]]:
+    """Deterministic exact-key lookup, scoped to one collection. For each input
+    term, return every card whose `norm_keys` contains `norm(term)` — exact
+    element membership (so `"M4"` never matches a `"M40"` card). The result is
+    keyed by the ORIGINAL input term (terms that miss map to an empty list)."""
+    rm = spec.get_resource_manager(ContextCard)
+    out: dict[str, list[ContextCard]] = {}
+    for term in terms:
+        q = (QB["collection_id"] == collection_id) & QB["norm_keys"].contains(norm(term))
+        cards: list[ContextCard] = []
+        for r in rm.list_resources(q.build()):
+            data = r.data
+            assert isinstance(data, ContextCard)  # narrow Struct|Unset for ty
+            cards.append(data)
+        out[term] = cards
+    return out
+
+
+def build_vocab(cards: list[ContextCard]) -> dict[str, list[ContextCard]]:
+    """Index a collection's cards by normalised key → the cards carrying it, for
+    the internal `match(text)` pre-scan. One card lands under each of its
+    `norm_keys`; the SAME object instance is shared across its keys so `match`
+    can dedupe by identity."""
+    vocab: dict[str, list[ContextCard]] = {}
+    for card in cards:
+        for k in card.norm_keys:
+            vocab.setdefault(k, []).append(card)
+    return vocab
+
+
+def _word_ascii(ch: str) -> bool:
+    """The 'word-continuation' class for boundary checks: ASCII letters, digits
+    and underscore. CJK is deliberately NOT in it — Chinese has no word breaks,
+    so a CJK key must be allowed to match mid-sentence."""
+    return ch.isascii() and (ch.isalnum() or ch == "_")
+
+
+def _hits(nt: str, key: str) -> bool:
+    """Whether `key` occurs in the normalised text `nt` at least once WITHOUT
+    being glued into a longer ASCII word — rejecting `m4` inside `m40` or `etch`
+    inside `foobar_etch`, while letting CJK keys match embedded. `str.find`
+    returning -1 doubles as the "absent" check, so this is a single pass."""
+    start = 0
+    while (i := nt.find(key, start)) != -1:
+        j = i + len(key)
+        left_ok = i == 0 or not (_word_ascii(key[0]) and _word_ascii(nt[i - 1]))
+        right_ok = j == len(nt) or not (_word_ascii(key[-1]) and _word_ascii(nt[j]))
+        if left_ok and right_ok:
+            return True
+        start = i + 1
+    return False
+
+
+def match(text: str, vocab: dict[str, list[ContextCard]], *, cap: int = 10) -> list[ContextCard]:
+    """Deterministically scan free `text` for any card key in `vocab` and return
+    the matched cards (deduped, stable order, capped). Single pass: keys are
+    sorted for a stable order, each tested with `_hits`; cards are deduped by
+    identity (a card hit by several keys appears once)."""
+    nt = norm(text)
+    seen: set[int] = set()
+    out: list[ContextCard] = []
+    for k in sorted(k for k in vocab if _hits(nt, k)):
+        for card in vocab[k]:
+            if id(card) not in seen:
+                seen.add(id(card))
+                out.append(card)
+    return out[:cap]
