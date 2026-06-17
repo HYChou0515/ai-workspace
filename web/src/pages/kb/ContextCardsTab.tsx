@@ -12,6 +12,9 @@ import { useState } from "react";
 import { kbApi, type KbApi, type KbContextCard } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { MonacoEditor } from "../../components/MonacoEditor";
+import { lookupByName, scanPassage } from "./cardSearch";
+
+type SearchMode = "name" | "text";
 
 type Draft = { id: string | null; keys: string[]; title: string; body: string };
 const BLANK: Draft = { id: null, keys: [], title: "", body: "" };
@@ -32,6 +35,15 @@ export function ContextCardsTab({
   });
   const [draft, setDraft] = useState<Draft | null>(null);
   const [term, setTerm] = useState("");
+  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<SearchMode>("name");
+  // Two ways to find a card, mirroring the backend: "name" = exact key lookup;
+  // "text" = scan a pasted passage for mentioned cards. Empty query → browse all.
+  const shown = !query.trim()
+    ? cards
+    : mode === "name"
+      ? lookupByName(query, cards)
+      : scanPassage(query, cards);
 
   const invalidate = () => qc.invalidateQueries({ queryKey: qk.kb.contextCards(collectionId) });
 
@@ -72,23 +84,58 @@ export function ContextCardsTab({
   return (
     <div className="kb-cards">
       <aside className="kb-cards__list">
+        <div className="kb-cards__search" role="search">
+          <div className="kb-cards__modes" role="tablist" aria-label="How to search">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "name"}
+              className={`kb-cards__mode${mode === "name" ? " is-active" : ""}`}
+              onClick={() => setMode("name")}
+            >
+              Name
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "text"}
+              className={`kb-cards__mode${mode === "text" ? " is-active" : ""}`}
+              onClick={() => setMode("text")}
+            >
+              In text
+            </button>
+          </div>
+          <input
+            className="kb-cards__search-input"
+            aria-label="Search cards"
+            placeholder={
+              mode === "name" ? "Find a card by name…" : "Paste text to find cards in it…"
+            }
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
         <button type="button" className="kb-cards__new" onClick={() => setDraft({ ...BLANK })}>
           + New card
         </button>
-        <ul>
-          {cards.map((c) => (
-            <li key={c.id}>
-              <button
-                type="button"
-                className={`kb-cards__item${draft?.id === c.id ? " is-active" : ""}`}
-                onClick={() =>
-                  setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body })
-                }
-              >
-                {cardLabel(c)}
-              </button>
-            </li>
-          ))}
+        <ul className="kb-cards__items">
+          {shown.length === 0 ? (
+            <li className="kb-cards__none">No cards found.</li>
+          ) : (
+            shown.map((c) => (
+              <li key={c.id}>
+                <button
+                  type="button"
+                  className={`kb-cards__item${draft?.id === c.id ? " is-active" : ""}`}
+                  onClick={() =>
+                    setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body })
+                  }
+                >
+                  {cardLabel(c)}
+                </button>
+              </li>
+            ))
+          )}
         </ul>
       </aside>
 

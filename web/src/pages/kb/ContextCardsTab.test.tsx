@@ -125,6 +125,31 @@ describe("ContextCardsTab (#106)", () => {
     });
   });
 
+  it("filters the list to an exact name match (Name mode)", async () => {
+    await mockKbApi.createContextCard({ collection_id: "col-1", keys: ["M4"], title: "Metal 4", body: "a" });
+    await mockKbApi.createContextCard({ collection_id: "col-1", keys: ["SiCN"], title: "Nitride", body: "b" });
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+
+    expect(await screen.findByText("Metal 4")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Search cards"), "m4");
+
+    expect(screen.getByText("Metal 4")).toBeInTheDocument(); // case-insensitive exact hit
+    expect(screen.queryByText("Nitride")).not.toBeInTheDocument(); // filtered out
+  });
+
+  it("finds cards mentioned in a pasted passage (In text mode)", async () => {
+    await mockKbApi.createContextCard({ collection_id: "col-1", keys: ["M4"], title: "Metal 4", body: "a" });
+    await mockKbApi.createContextCard({ collection_id: "col-1", keys: ["SiCN"], title: "Nitride", body: "b" });
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+    await screen.findByText("Metal 4");
+
+    await userEvent.click(screen.getByRole("tab", { name: "In text" }));
+    await userEvent.type(screen.getByLabelText("Search cards"), "the M4 reflow step");
+
+    expect(screen.getByText("Metal 4")).toBeInTheDocument();
+    expect(screen.queryByText("Nitride")).not.toBeInTheDocument();
+  });
+
   it("deletes the selected card through deleteContextCard", async () => {
     await mockKbApi.createContextCard({
       collection_id: "col-1",
