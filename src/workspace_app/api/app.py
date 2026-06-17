@@ -1156,18 +1156,14 @@ def create_app(
         return resolve_item_agent_config(spec, app_catalog, item_id)
 
     def _conversation_for(investigation_id: str) -> tuple[str, Conversation]:
-        # Indexed lookup by investigation_id (indexed in register_all) — not a
-        # full scan.
-        from specstar import QB
+        # Item-level (no chat_id) endpoints operate on the item's DEFAULT chat — the
+        # earliest-born free chat, created on first use (manual §3). With multi-chat
+        # an item holds many conversations; this resolves the implicit default and
+        # never returns a workflow chat. Pre-multi-chat items have one (unstamped)
+        # conversation, which stays the default — byte-for-byte preserved.
+        from .chats import resolve_default_conversation
 
-        for r in conv_rm.list_resources((QB["item_id"] == investigation_id).build()):
-            data = r.data
-            assert isinstance(data, Conversation)
-            return r.info.resource_id, data  # ty: ignore[unresolved-attribute]
-        rev = conv_rm.create(Conversation(item_id=investigation_id))
-        got = conv_rm.get(rev.resource_id).data
-        assert isinstance(got, Conversation)
-        return rev.resource_id, got
+        return resolve_default_conversation(conv_rm, investigation_id)
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so

@@ -107,3 +107,19 @@ class Conversation(Struct):
     deletion is a per-App on-delete event_handler, not declarative cascade."""
 
     messages: list[Message] = field(default_factory=list)
+
+    title: str = ""
+    """Display title for the multi-chat list (manual §3). "" for the implicit
+    default chat (the FE labels it); set when a chat is named or launched."""
+
+    run_id: str | None = None
+    """Set when this conversation is a *workflow chat* — a `WorkflowRun` (run_id)
+    drives its turns (manual §3). None = a *free chat* (human-driven). The item's
+    default chat is always a free chat; workflow chats are never the default."""
+
+    created_ms: int | None = None
+    """App-level birth stamp (epoch ms) — the stable creation order used to pick the
+    default chat (the earliest-born free chat). Distinct from specstar's per-revision
+    `created_time` (which advances on every update, so it can't order births). None on
+    conversations written before multi-chat (manual §3) — they predate every stamped
+    chat, so they remain the default."""
