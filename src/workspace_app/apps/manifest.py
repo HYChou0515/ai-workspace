@@ -49,6 +49,10 @@ class AgentManifest(Struct):
     """App-level quick-prompt fallback — used when the chosen profile declares no
     suggestions of its own (decision 5b: suggestions are profile-level, App gives
     a fallback)."""
+    context_files: list[str] = field(default_factory=list)
+    """Topic Hub §6 — workspace files (e.g. ``MEMORY.md``, ``collections.json``)
+    whose live content is prepended to the agent's content each turn (deterministic
+    injection; never persisted). Empty ⇒ no injection (the default for most Apps)."""
 
 
 class Layout(Struct):
