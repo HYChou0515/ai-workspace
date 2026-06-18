@@ -499,7 +499,9 @@ def _stream_enabled() -> bool:
 def _decide_then_act_enabled() -> bool:
     """Opt into the structured decide-then-act Model (DecideThenActModel) — a
     provider-uniform replacement for native tool-calling + guess-based repair.
-    It is non-streaming (so the turn runs through the get_response path)."""
+    Only the tool-call generation (decision + args) is non-streaming; the final
+    text answer streams via DecideThenActModel.stream_response (so the turn runs
+    through the normal streaming path)."""
     return os.environ.get("WORKSPACE_AGENT_DECIDE_THEN_ACT", "").strip().lower() in {
         "1",
         "true",
@@ -617,10 +619,11 @@ class LitellmAgentRunner:
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
-        # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0) OR
-        # decide-then-act (which is structured/non-streaming by construction —
-        # its DecideThenActModel only implements get_response). Delegates entirely.
-        if not _stream_enabled() or _decide_then_act_enabled():
+        # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0).
+        # decide-then-act now uses the STREAMING path too — its
+        # DecideThenActModel.stream_response keeps only the tool-call generation
+        # (decision + args) non-streaming and streams the final text answer.
+        if not _stream_enabled():
             async for ev in self._run_once_nonstream(prompt, ctx, feedback):
                 yield ev
             return

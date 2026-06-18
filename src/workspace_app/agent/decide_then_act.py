@@ -23,30 +23,48 @@ calls (no loop rewrite, no monkey-patch):
 
 Provider-uniform: the decision + args calls are plain ``response_format`` json_schema
 completions, which vLLM enforces via guided decoding and Ollama via its native
-``format`` (verified both forward the param + return valid JSON). Non-streaming is
-deliberate (structured output is one whole object; the feedback_always_stream rule's
-accepted exception). Every sub-call still flows through litellm → the LlmCallLogger,
-so each step stays observable.
+``format`` (verified both forward the param + return valid JSON). Only the
+tool-call generation (decision + args) is non-streaming — that is the unreliable
+long-arg path the structured calls fix, and a tool call renders as a card (not
+token-streamed anyway). The **final text answer streams**: ``stream_response``
+delegates to the inner ``LitellmModel``'s native streaming (with tools stripped so
+it can only produce text), and a chosen tool call is emitted through
+``ChatCmplStreamHandler`` so the Runner executes it. Every sub-call still flows
+through litellm → the LlmCallLogger, so each step stays observable.
 """
 
 from __future__ import annotations
 
 import json
+import time
+from collections.abc import AsyncIterator
 from typing import Any
 
 import litellm
 from agents import FunctionTool
-from agents.items import ModelResponse
+from agents.items import ModelResponse, TResponseStreamEvent
 from agents.models.chatcmpl_converter import Converter
+from agents.models.chatcmpl_stream_handler import ChatCmplStreamHandler
+from agents.models.fake_id import FAKE_RESPONSES_ID
 from agents.models.interface import Model
 from agents.usage import Usage
-from openai.types.chat import ChatCompletionMessage
+from openai.types.chat import ChatCompletionChunk, ChatCompletionMessage
+from openai.types.chat.chat_completion_chunk import (
+    Choice as ChunkChoice,
+)
+from openai.types.chat.chat_completion_chunk import (
+    ChoiceDelta,
+    ChoiceDeltaToolCall,
+    ChoiceDeltaToolCallFunction,
+)
 from openai.types.chat.chat_completion_message_function_tool_call import (
     ChatCompletionMessageFunctionToolCall,
     Function,
 )
+from openai.types.responses import Response
 
 _FINAL = "final"
+_TOOL_CALL_ID = "call_dta_1"
 
 
 def _json_schema_format(schema: dict[str, Any], name: str) -> dict[str, Any]:
@@ -100,40 +118,16 @@ class DecideThenActModel(Model):
         )
         return resp.choices[0].message.content or ""
 
-    async def get_response(  # noqa: PLR0913 — matches the SDK Model interface
-        self,
-        system_instructions: str | None,
-        input: Any,
-        model_settings: Any,
-        tools: list[Any],
-        output_schema: Any,
-        handoffs: Any,
-        tracing: Any,
-        *,
-        previous_response_id: str | None = None,
-        conversation_id: str | None = None,
-        prompt: Any = None,
-        **kwargs: Any,
-    ) -> ModelResponse:
+    @staticmethod
+    def _prep(input: Any, system_instructions: str | None) -> list[Any]:
+        """Shared turn setup: input → messages with the system prompt prepended."""
         messages = Converter.items_to_messages(input)
         if system_instructions:
             messages = [{"role": "system", "content": system_instructions}, *messages]
+        return messages
 
-        fn_tools = {t.name: t for t in tools if isinstance(t, FunctionTool)}
-        if fn_tools:
-            msg = await self._decide_and_act(messages, fn_tools)
-        else:  # no tools → just answer
-            msg = ChatCompletionMessage(role="assistant", content=await self._free(messages))
-
-        return ModelResponse(
-            output=Converter.message_to_output_items(msg),
-            usage=Usage(),
-            response_id=None,
-        )
-
-    async def _decide_and_act(
-        self, messages: list[Any], fn_tools: dict[str, FunctionTool]
-    ) -> ChatCompletionMessage:
+    async def _decide(self, messages: list[Any], fn_tools: dict[str, FunctionTool]) -> str | None:
+        """The DECISION step (structured, non-stream): pick a tool name or ``final``."""
         names = list(fn_tools)
         decision = await self._structured(
             [
@@ -153,33 +147,163 @@ class DecideThenActModel(Model):
                 "additionalProperties": False,
             },
         )
-        action = decision.get("action") if isinstance(decision, dict) else None
+        return decision.get("action") if isinstance(decision, dict) else None
 
+    async def _tool_args_json(self, messages: list[Any], tool: FunctionTool, action: str) -> str:
+        """The ARGS step (structured, non-stream): valid JSON for ``action`` by construction."""
+        args = await self._structured(
+            [
+                *messages,
+                {"role": "user", "content": f"Produce the arguments for `{action}` as JSON."},
+            ],
+            dict(tool.params_json_schema),
+        )
+        return json.dumps(args)
+
+    async def get_response(  # noqa: PLR0913 — matches the SDK Model interface
+        self,
+        system_instructions: str | None,
+        input: Any,
+        model_settings: Any,
+        tools: list[Any],
+        output_schema: Any,
+        handoffs: Any,
+        tracing: Any,
+        *,
+        previous_response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt: Any = None,
+        **kwargs: Any,
+    ) -> ModelResponse:
+        messages = self._prep(input, system_instructions)
+        fn_tools = {t.name: t for t in tools if isinstance(t, FunctionTool)}
+
+        msg: ChatCompletionMessage
+        action = await self._decide(messages, fn_tools) if fn_tools else _FINAL
         if action in fn_tools:
-            tool = fn_tools[action]
-            args = await self._structured(
-                [
-                    *messages,
-                    {"role": "user", "content": f"Produce the arguments for `{action}` as JSON."},
-                ],
-                dict(tool.params_json_schema),
-            )
-            return ChatCompletionMessage(
+            args_json = await self._tool_args_json(messages, fn_tools[action], action)
+            msg = ChatCompletionMessage(
                 role="assistant",
                 content=None,
                 tool_calls=[
                     ChatCompletionMessageFunctionToolCall(
-                        id="call_dta_1",
+                        id=_TOOL_CALL_ID,
                         type="function",
-                        function=Function(name=action, arguments=json.dumps(args)),
+                        function=Function(name=action, arguments=args_json),
                     )
                 ],
             )
-        # action == "final" (or an unexpected value) → a free final answer.
-        return ChatCompletionMessage(role="assistant", content=await self._free(messages))
+        else:  # action == "final" / no tools / unexpected → a free final answer.
+            msg = ChatCompletionMessage(role="assistant", content=await self._free(messages))
 
-    def stream_response(self, *args: Any, **kwargs: Any) -> Any:
-        # Decide-then-act is non-streaming (structured output). The runner routes
-        # these turns through Runner.run (get_response); stream_response is never
-        # called. Implemented to satisfy the abstract base.
-        raise NotImplementedError("DecideThenActModel runs via get_response (non-streaming)")
+        return ModelResponse(
+            output=Converter.message_to_output_items(msg),
+            usage=Usage(),
+            response_id=None,
+        )
+
+    async def stream_response(  # noqa: PLR0913 — matches the SDK Model interface
+        self,
+        system_instructions: str | None,
+        input: Any,
+        model_settings: Any,
+        tools: list[Any],
+        output_schema: Any,
+        handoffs: Any,
+        tracing: Any,
+        *,
+        previous_response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt: Any = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[TResponseStreamEvent]:
+        """Stream a turn: DECISION + ARGS stay structured/non-stream (the unreliable
+        long-arg path), but the FINAL text answer streams.
+
+        - ``final`` / no tools → delegate to the inner ``LitellmModel``'s native
+          streaming so the answer streams token-by-token; tools are stripped so the
+          inner model can only produce text (it won't try a native tool call).
+        - a chosen tool → emit the function call via ``ChatCmplStreamHandler`` (a
+          one-chunk fake stream) so the function_call + ResponseCompletedEvent are
+          shaped exactly as the SDK Runner expects and the tool gets executed."""
+        messages = self._prep(input, system_instructions)
+        fn_tools = {t.name: t for t in tools if isinstance(t, FunctionTool)}
+
+        action = await self._decide(messages, fn_tools) if fn_tools else _FINAL
+
+        if action not in fn_tools:
+            # FINAL: stream the answer natively from the inner model. Pass tools=[]
+            # so it can only emit text (never a native tool_call we'd have to parse).
+            async for ev in self._inner.stream_response(  # type: ignore[attr-defined]
+                system_instructions,
+                input,
+                model_settings,
+                [],
+                output_schema,
+                handoffs,
+                tracing,
+                previous_response_id=previous_response_id,
+                conversation_id=conversation_id,
+                prompt=prompt,
+            ):
+                yield ev
+            return
+
+        # TOOL: structured ARGS, then replay the call through the shared stream
+        # handler so the Runner extracts + executes it just like a native tool_call.
+        args_json = await self._tool_args_json(messages, fn_tools[action], action)
+        initial = Response(
+            id=FAKE_RESPONSES_ID,
+            created_at=time.time(),
+            model=self._model,
+            object="response",
+            output=[],
+            tool_choice="auto",
+            top_p=None,
+            temperature=None,
+            tools=[],
+            parallel_tool_calls=False,
+        )
+
+        async def _fake_stream() -> AsyncIterator[ChatCompletionChunk]:
+            yield ChatCompletionChunk(
+                id=_TOOL_CALL_ID,
+                created=int(time.time()),
+                model=self._model,
+                object="chat.completion.chunk",
+                choices=[
+                    ChunkChoice(
+                        index=0,
+                        delta=ChoiceDelta(
+                            role="assistant",
+                            tool_calls=[
+                                ChoiceDeltaToolCall(
+                                    index=0,
+                                    id=_TOOL_CALL_ID,
+                                    type="function",
+                                    function=ChoiceDeltaToolCallFunction(
+                                        name=action, arguments=args_json
+                                    ),
+                                )
+                            ],
+                        ),
+                        finish_reason=None,
+                    )
+                ],
+            )
+            yield ChatCompletionChunk(
+                id=_TOOL_CALL_ID,
+                created=int(time.time()),
+                model=self._model,
+                object="chat.completion.chunk",
+                choices=[ChunkChoice(index=0, delta=ChoiceDelta(), finish_reason="tool_calls")],
+            )
+
+        # handle_stream only does `async for chunk in stream`, so a plain async
+        # generator is a fine substitute for the declared AsyncStream.
+        async for ev in ChatCmplStreamHandler.handle_stream(
+            initial,
+            _fake_stream(),  # ty: ignore[invalid-argument-type]
+            model=self._model,
+        ):
+            yield ev
