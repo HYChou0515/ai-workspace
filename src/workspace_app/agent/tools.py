@@ -665,7 +665,7 @@ def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -
 
     spec = ctx.context.spec
     if spec is None:
-        return "error: lookup_glossary is only available in a Topic Hub turn"
+        return "error: lookup_glossary needs a collection-scoped context (no spec on this turn)"
     cards = cards_for_collections(spec, ctx.context.collection_ids)
     block = card_context_block(match(query, build_vocab(cards)))
     return block or f"No glossary entries found for: {query}"

@@ -74,7 +74,9 @@ def test_lookup_glossary_reports_a_miss():
 
 def test_lookup_glossary_without_a_spec_errors():
     ctx = RunContextWrapper(AgentToolContext(collection_ids=["c1"]))
-    assert "Topic Hub turn" in lookup_glossary_impl(ctx, "x")
+    out = lookup_glossary_impl(ctx, "x")
+    assert out.startswith("error:")
+    assert "collection-scoped context" in out
 
 
 def test_lookup_glossary_is_a_buildable_tool():

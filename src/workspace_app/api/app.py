@@ -1078,6 +1078,7 @@ def create_app(
             ids,
             payload,
             agent_config=cfg,
+            spec=spec,
             enhancements=enhancements,
             reasoning_effort=reasoning_effort,
             wiki=wiki_query,

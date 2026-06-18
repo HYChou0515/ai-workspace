@@ -62,6 +62,7 @@ async def answer_question(
     question: str,
     *,
     agent_config: AgentConfig,
+    spec: SpecStar | None = None,
     enhancements: Enhancements | None = None,
     reasoning_effort: str | None = None,
     wiki: bool = False,
@@ -88,6 +89,11 @@ async def answer_question(
         retriever=retriever,
         collection_ids=collection_ids,
         agent_config=agent_config,
+        # specstar handle so a kb_chat agent granted `lookup_glossary` can read
+        # context cards on the bridge path too (RCA → ask_knowledge_base → KB
+        # sub-agent). None when the caller can't supply one (degrades to the
+        # tool's "needs a collection-scoped context" note, not a crash).
+        spec=spec,
         # Caller's knowledge-search depth (e.g. the RCA composer's pick,
         # forwarded over the bridge) — kb_search's cascade consumes it.
         kb_enhancements=enhancements,
@@ -400,6 +406,10 @@ def register_kb_chat_routes(
             retriever=retriever,
             collection_ids=chat.collection_ids,
             agent_config=agent_config,
+            # specstar handle so the agent's `lookup_glossary` tool (when granted)
+            # can read this collection's context cards — deterministic glossary
+            # path beside kb_search (unknown term → glossary, question → search).
+            spec=spec,
             # Cross-turn memory: prior dialogue (excludes the user msg just added).
             history=history_items(
                 chat.messages[:-1],

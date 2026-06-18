@@ -123,6 +123,30 @@ def test_agent_sees_prior_turns_as_history():
     ]
 
 
+class _SpecCapturingRunner:
+    """Records whether the KB chat turn handed the agent a specstar handle, so
+    its `lookup_glossary` tool can read the collection's context cards instead
+    of always falling through to the slow kb_search."""
+
+    def __init__(self) -> None:
+        self.seen_spec: object | None = None
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.seen_spec = ctx.spec
+        yield MessageDelta(text="ok")
+        yield RunDone()
+
+
+def test_kb_chat_turn_wires_spec_for_lookup_glossary():
+    runner = _SpecCapturingRunner()
+    client = _client(runner)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "what is M4?"})
+    # The standalone send-message path now sets ctx.spec, so a kb_chat agent
+    # granted lookup_glossary can read context cards (term → glossary).
+    assert runner.seen_spec is not None
+
+
 class _OrphanToolRunner:
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         yield ToolEnd(call_id="ghost", output="stray output")

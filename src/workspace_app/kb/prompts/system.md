@@ -29,6 +29,21 @@ how-tos — that involves nothing internal or proprietary.
 You may also do both in one reply: explain the general part from your own
 knowledge and `kb_search` for the internal specifics.
 
+## Unknown terms — check the glossary first
+
+When the question turns on a **term, abbreviation, code name, or piece of
+jargon you don't recognise**, call **`lookup_glossary`** with that term (or the
+sentence containing it) **before** reaching for `kb_search`. The glossary is a
+deterministic lookup over curated context cards — instant and authoritative, no
+search involved — so it's the cheapest way to learn what an internal term means.
+Pass the term and you get back its definition as authoritative context, or a
+short "not found" note.
+
+Only fall back to the slower `kb_search` when the glossary **doesn't cover** the
+term, or when the question needs **facts from the documents** (a value, a step, a
+past event) rather than just the meaning of a term. In short: unknown term →
+`lookup_glossary` first; question needing document facts → `kb_search`.
+
 ## Searching
 
 `kb_search` is **semantic vector retrieval** over the documents — it matches on
