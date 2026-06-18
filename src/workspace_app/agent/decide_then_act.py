@@ -63,6 +63,8 @@ from openai.types.chat.chat_completion_message_function_tool_call import (
 )
 from openai.types.responses import Response
 
+from .reasoning import reasoning_off_kwargs
+
 _FINAL = "final"
 _TOOL_CALL_ID = "call_dta_1"
 
@@ -85,14 +87,25 @@ class DecideThenActModel(Model):
         model: str,
         base_url: str | None,
         api_key: str | None,
+        reasoning_effort: str | None = None,
     ) -> None:
         self._inner = inner
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
+        # "none" is the OFF signal → splat the provider-correct disable param
+        # (Ollama think=False / others vLLM enable_thinking=False) into each
+        # sub-call. low|medium|high|None leave thinking at the model default.
+        self._reasoning_effort = reasoning_effort
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._inner, name)
+
+    def _reasoning_off(self) -> dict[str, Any]:
+        """Disable-thinking kwargs when the level is the OFF signal, else ``{}``."""
+        if self._reasoning_effort == "none":
+            return reasoning_off_kwargs(self._model)
+        return {}
 
     async def _structured(self, messages: list[Any], schema: dict[str, Any]) -> Any:
         """One non-streaming response_format json_schema completion → parsed object."""
@@ -104,6 +117,7 @@ class DecideThenActModel(Model):
             response_format=_json_schema_format(schema, "out"),
             stream=False,
             temperature=0,
+            **self._reasoning_off(),
         )
         return json.loads(resp.choices[0].message.content or "{}")
 
@@ -115,6 +129,7 @@ class DecideThenActModel(Model):
             base_url=self._base_url,
             api_key=self._api_key,
             stream=False,
+            **self._reasoning_off(),
         )
         return resp.choices[0].message.content or ""
 

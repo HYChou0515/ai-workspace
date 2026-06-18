@@ -260,14 +260,30 @@ def _agent_for(
     # (litellm `ollama_chat` → UnsupportedParamsError). The `args_recovery`
     # wrap below remains the single defence against the concatenated-args
     # streaming bug, so dropping the flag loses no safety.
-    model_settings = (
+    # Reasoning level → ModelSettings:
+    #   - low|medium|high ⇒ reasoning ON via Reasoning(effort=...).
+    #   - "none" (the OFF signal) ⇒ the OpenAI effort="none" only disables
+    #     thinking on Ollama, so set the provider-correct disable param: vLLM via
+    #     extra_body chat_template_kwargs enable_thinking=False; Ollama via
+    #     extra_args think=False (the SDK LitellmModel splats extra_args as
+    #     top-level completion kwargs and extra_body into the call's extra_body).
+    #   - None (unset) ⇒ leave the model's default.
+    if reasoning_effort == "none":
+        from ..agent.reasoning import reasoning_off_kwargs
+
+        off = reasoning_off_kwargs(config.model)
+        # think → extra_args (top-level kwarg); extra_body → extra_body.
+        model_settings = ModelSettings(
+            extra_args={"think": off["think"]} if "think" in off else None,
+            extra_body=off.get("extra_body"),
+        )
+    elif reasoning_effort:
         # effort is validated to low/medium/high by the request body.
-        ModelSettings(
+        model_settings = ModelSettings(
             reasoning=Reasoning(effort=reasoning_effort),  # ty: ignore[invalid-argument-type]
         )
-        if reasoning_effort
-        else ModelSettings()
-    )
+    else:
+        model_settings = ModelSettings()
     # Per-config LLM endpoint (new schema's agents.presets.<x>.llm) wins
     # over the runner's constructor default — empty strings mean
     # "inherit from runner" so a single-endpoint deploy still works.
@@ -281,7 +297,11 @@ def _agent_for(
         from ..agent.decide_then_act import DecideThenActModel
 
         model = DecideThenActModel(
-            model, model=config.model, base_url=eff_base_url, api_key=eff_api_key
+            model,
+            model=config.model,
+            base_url=eff_base_url,
+            api_key=eff_api_key,
+            reasoning_effort=reasoning_effort,
         )
     else:
         # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output

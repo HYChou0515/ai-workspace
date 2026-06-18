@@ -26,20 +26,29 @@ def _resp(content: str):
     return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content))])
 
 
-def _model() -> DecideThenActModel:
+def _model(reasoning_effort: str | None = None) -> DecideThenActModel:
     inner = SimpleNamespace(model="m")  # a fake Model — only `.model` is read via passthrough
     return DecideThenActModel(
         inner,  # ty: ignore[invalid-argument-type]
         model="ollama_chat/qwen3:14b",
         base_url=None,
         api_key=None,
+        reasoning_effort=reasoning_effort,
     )
 
 
 async def _get_response(model: DecideThenActModel, tools):
     return await model.get_response(
-        "sys", "do the task", None, tools, None, [], None,
-        previous_response_id=None, conversation_id=None, prompt=None,
+        "sys",
+        "do the task",
+        None,
+        tools,
+        None,
+        [],
+        None,
+        previous_response_id=None,
+        conversation_id=None,
+        prompt=None,
     )
 
 
@@ -91,6 +100,46 @@ async def test_no_tools_just_answers_unconstrained(monkeypatch):
     out = await _get_response(_model(), [])
     assert len(seen) == 1 and "response_format" not in seen[0]  # free completion, no schema
     assert any(getattr(i, "type", "") == "message" for i in out.output)
+
+
+async def test_reasoning_none_splats_provider_disable_param_into_every_subcall(monkeypatch):
+    """reasoning_effort="none" → Ollama model → think=False on the decision +
+    args sub-calls (this model id is ollama_chat/…)."""
+    calls: list[dict] = []
+
+    async def fake_acompletion(**kwargs):
+        calls.append(kwargs)
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        if "action" in schema["properties"]:
+            return _resp(json.dumps({"action": "write_file"}))
+        return _resp(json.dumps({"path": "x.md", "content": "n"}))
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    await _get_response(_model(reasoning_effort="none"), [write_file])
+
+    assert len(calls) == 2
+    assert all(c.get("think") is False for c in calls)
+
+
+@pytest.mark.parametrize("level", [None, "low", "medium", "high"])
+async def test_reasoning_on_or_unset_sends_no_disable_param(monkeypatch, level):
+    async def fake_acompletion(**kwargs):
+        return _resp(json.dumps({"action": "final"}))
+
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+    # capture the free-final call too
+    calls: list[dict] = []
+
+    async def cap(**kwargs):
+        calls.append(kwargs)
+        if kwargs.get("response_format"):
+            return _resp(json.dumps({"action": "final"}))
+        return _resp("done")
+
+    monkeypatch.setattr(litellm, "acompletion", cap)
+    await _get_response(_model(reasoning_effort=level), [write_file])
+    # never the disable param at low/medium/high/unset (reasoning stays on)
+    assert all("think" not in c and "extra_body" not in c for c in calls)
 
 
 @pytest.mark.parametrize(

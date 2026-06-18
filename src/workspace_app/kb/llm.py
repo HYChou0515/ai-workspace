@@ -58,10 +58,22 @@ class LitellmLlm(ILlm):
         # expansion / HyDE / rerank); low|medium|high ⇒ thinking on.
         self.reasoning_effort = reasoning_effort
 
-    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:  # pragma: no cover — live model
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         import litellm
 
-        extra = {} if self.reasoning_effort is None else {"reasoning_effort": self.reasoning_effort}
+        from ..agent.reasoning import reasoning_off_kwargs
+
+        # reasoning_effort: None ⇒ omit (model default); low|medium|high ⇒ pass
+        # through (thinking on). "none" is the OFF signal — but the OpenAI
+        # reasoning_effort="none" only disables thinking on Ollama, so instead
+        # send the provider-correct disable param (Ollama think=False / others
+        # vLLM enable_thinking=False) and drop the no-op reasoning_effort.
+        if self.reasoning_effort is None:
+            extra: dict[str, object] = {}
+        elif self.reasoning_effort == "none":
+            extra = reasoning_off_kwargs(self._model)
+        else:
+            extra = {"reasoning_effort": self.reasoning_effort}
         for chunk in litellm.completion(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
