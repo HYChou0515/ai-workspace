@@ -325,13 +325,17 @@ def kb_search_impl(
     hyde: int | None = None,
     rerank: bool | None = None,
 ) -> str:
-    """Search the knowledge base; returns numbered passages to cite as [n].
+    """Semantic search over the knowledge base; returns numbered passages to cite as [n].
 
-    Call this whenever you need facts from the documents — and again, with a
-    refined query, when an answer references something else worth looking up.
-    Each result is numbered globally across the turn; cite a claim with the
-    matching [n]. Numbers persist across calls, so [1] always means the same
-    passage.
+    This is VECTOR retrieval — it matches on MEANING, not keywords. Pass a
+    natural-language question or a short description of what you need (the way
+    you'd ask a person), NOT keywords or a Google-style query. One well-phrased
+    query usually returns the relevant passages; READ them before searching
+    again. Only search again for GENUINELY DIFFERENT information (a new
+    entity/term/sub-topic the results surfaced) — never re-run a reworded version
+    of the same question (it's slow and returns the same passages). Each result
+    is numbered globally across the turn; cite a claim with the matching [n].
+    Numbers persist across calls, so [1] always means the same passage.
 
     The optional `expand` / `hyde` / `rerank` knobs override the operator's
     retrieval enhancement defaults for THIS call only — set them when the
