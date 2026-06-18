@@ -23,6 +23,7 @@ from llama_index.core.node_parser import (
 from llama_index.core.schema import BaseNode, TextNode, TransformComponent
 
 from .embedder import Embedder
+from .markdown_table import find_markdown_tables, row_as_col_value
 
 # Map source-file extension → tree-sitter language name expected by
 # LI's CodeSplitter (which delegates to the `tree_sitter_languages` pack).
@@ -62,12 +63,17 @@ class DispatchSplitter(TransformComponent):
     # Lazily filled cache of CodeSplitter(language=…) — instantiating eagerly
     # would import every tree-sitter grammar just to ingest a .md.
     code_splitters: dict[str, CodeSplitter]
+    # Issue #116: a Markdown table with MORE than this many data rows is
+    # "large" → exploded into one `col: value` chunk per row (each spanning the
+    # whole table); at-or-below it stays one chunk. A re-tunable hyperparameter.
+    table_max_rows: int
 
     def __init__(
         self,
         *,
         sentence_max_tokens: int = 256,
         sentence_overlap: int = 32,
+        table_max_rows: int = 10,
     ) -> None:
         super().__init__(
             sentence_splitter=SentenceSplitter(
@@ -77,6 +83,7 @@ class DispatchSplitter(TransformComponent):
             markdown_parser=MarkdownNodeParser(),
             json_parser=JSONNodeParser(),
             code_splitters={},
+            table_max_rows=table_max_rows,
         )
 
     def __call__(self, nodes: Sequence[BaseNode], **_kw: Any) -> list[BaseNode]:  # type: ignore[override]
@@ -101,15 +108,61 @@ class DispatchSplitter(TransformComponent):
         return out
 
     def _split_markdown(self, node: BaseNode) -> list[BaseNode]:
-        """Run LI's `MarkdownNodeParser`, then prepend each chunk's heading
-        hierarchy ('H1 > H2') to its text so the embedding sees the structural
-        context, not just body lines."""
-        sub = self.markdown_parser.get_nodes_from_documents([node])
-        for n in sub:
+        """Run LI's `MarkdownNodeParser`, prepend each chunk's heading
+        hierarchy ('H1 > H2') so the embedding sees the structural context,
+        and (issue #116) row-explode any large Markdown table within a section
+        into `col: value` row chunks."""
+        out: list[BaseNode] = []
+        for n in self.markdown_parser.get_nodes_from_documents([node]):
+            assert isinstance(n, TextNode)  # MarkdownNodeParser only emits TextNodes
             breadcrumb = _heading_breadcrumb(n)
-            if breadcrumb and isinstance(n, TextNode):
-                n.text = f"{breadcrumb}\n\n{n.text}"
-        return sub
+            content = n.get_content()
+            # The heading line MarkdownNodeParser folds into the content is
+            # already captured by the breadcrumb; strip it (tracking its length
+            # so absolute offsets stay correct) before scanning for tables.
+            body, body_offset = _strip_leading_heading(content, n)
+            tables = find_markdown_tables(body)
+            if not tables:
+                if breadcrumb:
+                    n.text = f"{breadcrumb}\n\n{content}"
+                out.append(n)
+                continue
+            base = (n.start_char_idx or 0) + body_offset
+            out.extend(self._emit_table_segments(body, base, tables, breadcrumb))
+        return out
+
+    def _emit_table_segments(
+        self, body: str, base: int, tables: list, breadcrumb: str
+    ) -> list[BaseNode]:
+        """Walk a section body as alternating prose / table segments. Prose
+        stays one chunk; a small table stays one chunk (its Markdown); a large
+        table explodes into one `col: value` chunk per row — every row chunk
+        spanning the WHOLE table so the structural merge rebuilds it and
+        citations resolve. Char spans are absolute (offset by `base`)."""
+        out: list[BaseNode] = []
+        cursor = 0
+        for t in tables:
+            prose = body[cursor : t.start]
+            if prose.strip():
+                out.append(_table_node(breadcrumb, prose.strip(), base + cursor, base + t.start))
+            span_start, span_end = base + t.start, base + t.end
+            if len(t.rows) <= self.table_max_rows:
+                out.append(_table_node(breadcrumb, body[t.start : t.end], span_start, span_end))
+            else:
+                for row in t.rows:
+                    # Well-formed rows → col: value (column names travel);
+                    # ragged rows are kept raw, never dropped.
+                    rendered = (
+                        row_as_col_value(t.header, row)
+                        if len(row) == len(t.header)
+                        else " | ".join(row)
+                    )
+                    out.append(_table_node(breadcrumb, rendered, span_start, span_end))
+            cursor = t.end
+        tail = body[cursor:]
+        if tail.strip():
+            out.append(_table_node(breadcrumb, tail.strip(), base + cursor, base + len(body)))
+        return out
 
     def _split_code(self, node: BaseNode, language: str) -> list[BaseNode]:
         """Run LI's tree-sitter `CodeSplitter` for `language`, instantiating
@@ -143,6 +196,35 @@ def _heading_breadcrumb(node: BaseNode) -> str:
         if v:
             parts.append(str(v).strip())
     return " > ".join(parts)
+
+
+def _deepest_heading(node: BaseNode) -> str:
+    """The section's own heading text (the deepest Header_N MarkdownNodeParser
+    captured) — the line it folds into the node content."""
+    md = node.metadata
+    for i in range(6, 0, -1):
+        v = md.get(f"Header_{i}") or md.get(f"Header {i}") or md.get(f"header_{i}")
+        if v:
+            return str(v).strip()
+    return ""
+
+
+def _strip_leading_heading(content: str, node: BaseNode) -> tuple[str, int]:
+    """Drop the heading line MarkdownNodeParser folds into a section's content
+    (it's already in the breadcrumb). Returns (body, offset_of_body_in_content)
+    so absolute char spans can be reconstructed."""
+    heading = _deepest_heading(node)
+    if heading and content.startswith(heading):
+        stripped = content[len(heading) :].lstrip("\n")
+        return stripped, len(content) - len(stripped)
+    return content, 0
+
+
+def _table_node(breadcrumb: str, body: str, start: int, end: int) -> TextNode:
+    """A TextNode carrying the heading breadcrumb as context, with an explicit
+    char span into the canonical text (issue #116 row/table chunks)."""
+    text = f"{breadcrumb}\n\n{body}" if breadcrumb else body
+    return TextNode(text=text, start_char_idx=start, end_char_idx=end)
 
 
 class EmbedderAdapter(TransformComponent):
