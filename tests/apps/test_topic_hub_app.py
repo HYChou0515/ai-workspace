@@ -51,6 +51,19 @@ def _conv(spec, iid: str) -> Conversation:
     raise AssertionError(f"no conversation for {iid}")
 
 
+def test_hub_picker_offers_multiple_models_so_the_composer_choice_is_real():
+    """#110: a one-entry picker is a dropdown with nothing to choose. Offer the
+    same Qwen/Claude/GPT trio the RCA App does so the composer's model control is
+    actually usable — the Hub's own system prompt still wins (AppCatalog.resolve),
+    the chosen preset only swaps the model + credentials."""
+    app, _spec = _app(_Capture())
+    client = TestClient(app)
+    m = client.get("/apps/topic-hub").json()
+    presets = [p["preset"] for p in m["agent"]["picker"]]
+    assert presets == ["qwen3-local", "claude-opus", "openai-mini"]
+    assert len(presets) > 1  # the whole point: more than just the local default
+
+
 def test_creating_a_hub_seeds_memory_and_collection_files():
     app, _spec = _app(_Capture())
     client = TestClient(app)
