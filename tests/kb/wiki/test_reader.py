@@ -74,7 +74,7 @@ async def test_reader_answers_and_cites_back_to_the_source_doc():
 
     seen = []
     answer, cites = await answer_from_wiki(
-        _ReadingRunner(),
+        _ReadingRunner(),  # ty: ignore[invalid-argument-type]
         wiki_store=store,
         wiki_sources=sources,
         collection_id=cid,
@@ -99,7 +99,7 @@ async def test_reader_run_error_surfaces_and_yields_no_citations():
     store = await _seed(spec, cid)
 
     answer, cites = await answer_from_wiki(
-        _FailingRunner(),
+        _FailingRunner(),  # ty: ignore[invalid-argument-type]
         wiki_store=store,
         wiki_sources=_FakeSources(cid, {}),
         collection_id=cid,

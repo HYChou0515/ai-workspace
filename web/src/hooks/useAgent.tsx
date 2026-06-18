@@ -37,7 +37,7 @@ import { useWorkspaceSlug } from "./useWorkspaceSlug";
  * surfaces agent-log lines) read the same log.
  */
 
-type AgentState = {
+export type AgentState = {
   /** The investigation this agent context belongs to — the kernel/file APIs
    * (notebook cell execution) are scoped to it. */
   investigationId: string;

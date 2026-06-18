@@ -49,7 +49,7 @@ async def test_enqueued_doc_is_indexed_then_handed_to_the_wiki():
     cid = _collection(spec)
     doc_id = _doc(spec, cid)
     ing, wiki = _FakeIngestor(), _FakeWiki()
-    coord = IndexCoordinator(spec, ing, wiki_coordinator=wiki)
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=wiki)  # ty: ignore[invalid-argument-type]
 
     coord.enqueue(doc_id, cid)  # producer returns immediately
     await coord.aclose()  # drain the background consumer
@@ -63,7 +63,7 @@ async def test_indexing_without_a_wiki_coordinator_still_works():
     cid = _collection(spec)
     doc_id = _doc(spec, cid)
     ing = _FakeIngestor()
-    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore[invalid-argument-type]
 
     coord.enqueue(doc_id, cid)
     await coord.aclose()
@@ -81,7 +81,7 @@ async def test_wiki_hook_failure_does_not_fail_the_index_job():
             raise RuntimeError("wiki maintainer exploded")
 
     ing = _FakeIngestor()
-    coord = IndexCoordinator(spec, ing, wiki_coordinator=_BoomWiki())
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=_BoomWiki())  # ty: ignore
     coord.enqueue(doc_id, cid)
     await coord.aclose()
 
@@ -91,7 +91,7 @@ async def test_wiki_hook_failure_does_not_fail_the_index_job():
 async def test_aclose_is_a_noop_when_idle():
     spec = make_spec(default_user="u")
     # never enqueued, never consuming → aclose returns without spinning a thread
-    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
     await coord.aclose()
 
 
@@ -101,7 +101,7 @@ async def test_start_consuming_is_idempotent_and_accepts_a_factory():
     spec = make_spec(default_user="u")
     coord = IndexCoordinator(
         spec,
-        _FakeIngestor(),
+        _FakeIngestor(),  # ty: ignore[invalid-argument-type]
         wiki_coordinator=None,
         message_queue_factory=SimpleMessageQueueFactory(),
     )
@@ -118,18 +118,18 @@ async def test_enqueued_jobs_are_unpartitioned_so_workers_parallelize():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     d1, d2 = _doc(spec, cid, "a.md"), _doc(spec, cid, "b.md")
-    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
 
     coord.enqueue(d1, cid)
     coord.enqueue(d2, cid)
 
     rm = spec.get_resource_manager(IndexJob)
     jobs = list(rm.list_resources(QB["status"].eq(TaskStatus.PENDING).build()))
-    assert {j.data.payload.doc_id for j in jobs} == {d1, d2}
+    assert {j.data.payload.doc_id for j in jobs} == {d1, d2}  # ty: ignore[unresolved-attribute]
     # collection_id is still on the payload (wiki hook + observability need it)…
-    assert all(j.data.payload.collection_id == cid for j in jobs)
+    assert all(j.data.payload.collection_id == cid for j in jobs)  # ty: ignore
     # …but it is NOT the partition key, so the two jobs never block each other.
-    assert all(j.data.partition_key is None for j in jobs)
+    assert all(j.data.partition_key is None for j in jobs)  # ty: ignore[unresolved-attribute]
 
 
 async def test_a_failing_doc_does_not_wedge_the_queue():
@@ -147,7 +147,7 @@ async def test_a_failing_doc_does_not_wedge_the_queue():
                 raise RuntimeError("embed crashed")
 
     ing = _BoomOnFirst()
-    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore[invalid-argument-type]
     coord.enqueue(d1, cid)
     coord.enqueue(d2, cid)
     await coord.aclose()
@@ -199,7 +199,7 @@ async def test_doc_deleted_before_the_index_job_runs_is_a_graceful_noop():
     cid = _collection(spec)
     doc_id = _doc(spec, cid)
     ing = _FakeIngestor()
-    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore[invalid-argument-type]
 
     coord.enqueue(doc_id, cid)
     # The consumer starts on aclose, so delete first → it runs with the doc gone.
@@ -229,7 +229,7 @@ def test_patching_a_doc_enqueues_a_reindex():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc_id = _doc(spec, cid)
-    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
     coord.install_reindex_on_edit()
 
     # The FE edit lands as an RFC 7386 merge-patch on the doc's content.
@@ -245,7 +245,7 @@ def test_an_internal_update_does_not_trigger_a_reindex():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc_id = _doc(spec, cid)
-    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
     coord.install_reindex_on_edit()
 
     rm = spec.get_resource_manager(SourceDoc)
@@ -262,13 +262,13 @@ def test_reindex_trigger_swallows_enqueue_errors():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc_id = _doc(spec, cid)
-    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
     coord.install_reindex_on_edit()
 
     def boom(*_a, **_k) -> None:
         raise RuntimeError("queue down")
 
-    coord.enqueue = boom  # type: ignore[method-assign]
+    coord.enqueue = boom  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
 
     # The patch itself must still succeed (no exception bubbles to the caller).
     info = spec.get_resource_manager(SourceDoc).patch(doc_id, MergePatch({"text": "x"}))

@@ -33,7 +33,7 @@ def _xlsx(sheets: dict[str, list[dict[str, object]]]) -> bytes:
     import pandas as pd
 
     buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:  # ty: ignore[invalid-argument-type]
         for name, rows in sheets.items():
             pd.DataFrame(rows).to_excel(xw, sheet_name=name, index=False)
     return buf.getvalue()

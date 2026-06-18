@@ -21,7 +21,7 @@ def test_rca_ports_local_lab_and_smt_dropping_methodology():
 def test_local_lab_profile_narrows_tools_and_has_a_clean_appendix():
     p = load_profile("rca", "local-lab")
     assert p.presets == ["qwen3-local"]
-    assert "rca-tools" in p.tools  # local-lab needs the provisioned RCA tools
+    assert "rca-tools" in p.tools  # local-lab needs the provisioned RCA tools  # ty: ignore
     ap = load_profile_appendix("rca", "local-lab")
     assert ap  # ships a prompt appendix
     low = ap.lower()
@@ -52,6 +52,6 @@ def test_default_profile_inherits_the_app_ceiling_and_has_an_appendix():
 def test_tool_demo_profile_narrows_tools_and_presets_to_a_subset():
     p = load_profile("rca", "tool-demo")
     assert p.presets == ["qwen3-local"]
-    assert "data-fetch" in p.tools
-    assert "rca-tools" not in p.tools  # a strict subset of the App's ceiling
+    assert "data-fetch" in p.tools  # ty: ignore[unsupported-operator]
+    assert "rca-tools" not in p.tools  # a strict subset of the App's ceiling  # ty: ignore
     assert p.suggestions  # quick-prompt chips

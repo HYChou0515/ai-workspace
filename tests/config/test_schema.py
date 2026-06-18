@@ -197,13 +197,13 @@ def test_enhancement_int_and_bool_are_frozen_dataclasses():
     e_int = EnhancementInt(default=1, max=3)
     e_bool = EnhancementBool(default=True, max=True)
     try:
-        e_int.default = 99  # type: ignore[misc]
+        e_int.default = 99  # type: ignore[misc]  # ty: ignore[invalid-assignment]
     except dataclasses.FrozenInstanceError:
         pass
     else:
         raise AssertionError("EnhancementInt must be frozen")
     try:
-        e_bool.default = False  # type: ignore[misc]
+        e_bool.default = False  # type: ignore[misc]  # ty: ignore[invalid-assignment]
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("EnhancementBool must be frozen")
@@ -237,9 +237,10 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
     assert presets["claude-opus"].model == "claude-opus-4-7"
     assert presets["openai-mini"].model == "openai/gpt-4o-mini"
     assert presets["kb-default"].model == "ollama_chat/qwen3:14b"
-    # kb-default ships kb_search as its allowed tools so the KB chat
-    # works out of the box.
-    assert presets["kb-default"].allowed_tools == ["kb_search"]
+    # kb-default ships kb_search so the KB chat works out of the box, plus
+    # lookup_glossary (#106) so an unknown term resolves from the glossary
+    # before the slow kb_search.
+    assert presets["kb-default"].allowed_tools == ["kb_search", "lookup_glossary"]
 
 
 def test_bundled_kb_retrieval_preset_has_only_model():
@@ -311,7 +312,7 @@ def test_settings_is_frozen_so_top_level_reassignment_fails():
 
     s = Settings()
     try:
-        s.server = None  # type: ignore[misc]
+        s.server = None  # type: ignore[misc]  # ty: ignore[invalid-assignment]
     except dataclasses.FrozenInstanceError:
         return
     raise AssertionError("Settings should be frozen")

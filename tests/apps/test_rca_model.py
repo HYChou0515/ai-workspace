@@ -78,5 +78,5 @@ def test_rca_investigation_filters_by_indexed_severity(spec_instance: SpecStar):
     rm.create(RcaInvestigation(title="c", owner="alice", severity=Severity.P0))
 
     rows = [r.data for r in rm.list_resources((QB["severity"] == Severity.P0).build())]
-    assert {r.title for r in rows} == {"a", "c"}
-    assert all(r.severity is Severity.P0 for r in rows)
+    assert {r.title for r in rows} == {"a", "c"}  # ty: ignore[unresolved-attribute]
+    assert all(r.severity is Severity.P0 for r in rows)  # ty: ignore[unresolved-attribute]

@@ -311,6 +311,31 @@ def test_agent_for_threads_reasoning_effort_to_model_settings():
     assert _agent_for(AgentConfig(name="a")).model_settings.reasoning is None
 
 
+def test_agent_for_reasoning_off_ollama_sets_think_false_extra_args():
+    """ "none" on an Ollama model → ModelSettings.extra_args think=False (the SDK
+    splats extra_args as a top-level completion kwarg → litellm ollama think)."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    # default AgentConfig model is ollama_chat/qwen3:14b.
+    ms = _agent_for(AgentConfig(name="a"), reasoning_effort="none").model_settings
+    assert ms.reasoning is None  # reasoning OFF, not an effort level
+    assert ms.extra_args == {"think": False}
+    assert ms.extra_body is None
+
+
+def test_agent_for_reasoning_off_vllm_sets_enable_thinking_false_extra_body():
+    """ "none" on a non-Ollama (vLLM/openai-compatible) model → ModelSettings
+    extra_body chat_template_kwargs enable_thinking=False."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    ms = _agent_for(
+        AgentConfig(name="a", model="hosted_vllm/qwen3-32b"), reasoning_effort="none"
+    ).model_settings
+    assert ms.reasoning is None
+    assert ms.extra_body == {"chat_template_kwargs": {"enable_thinking": False}}
+    assert ms.extra_args is None
+
+
 # ─── function-tool on_invoke execs launch <cmd> '<args-json>' ─────────
 
 

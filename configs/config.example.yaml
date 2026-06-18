@@ -231,11 +231,11 @@
 #     claude-opus:           { model: claude-opus-4-7,        prompt: pkg:.../rca/prompts/system.md }
 #     openai-mini:           { model: openai/gpt-4o-mini,     prompt: pkg:.../rca/prompts/system.md }
 #     kb-default:            { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search] }
+#                              allowed_tools: [kb_search, lookup_glossary] }
 #     kb-claude:             { model: claude-opus-4-7,        prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search] }
+#                              allowed_tools: [kb_search, lookup_glossary] }
 #     kb-openai:             { model: openai/gpt-4o-mini,     prompt: pkg:.../kb/prompts/system.md,
-#                              allowed_tools: [kb_search] }
+#                              allowed_tools: [kb_search, lookup_glossary] }
 #     infer-modules-default: { model: ollama_chat/qwen3:14b,  prompt: pkg:.../kb/prompts/infer_modules.md,
 #                              allowed_tools: [kb_search] }
 #     kb-retrieval:          { model: ollama_chat/qwen3:14b }   # LLM-only — no prompt/tools
@@ -333,7 +333,10 @@
 #       model: claude-opus-4-7
 #       prompt_file: pkg:workspace_app.kb.prompts/system.md
 #       llm: { api_key: ${ANTHROPIC_API_KEY} }
-#       allowed_tools: [kb_search]                 # ← required for kb_chat
+#       allowed_tools: [kb_search, lookup_glossary]  # ← kb_search required; add
+#                                                    #   lookup_glossary so an
+#                                                    #   unknown term resolves from
+#                                                    #   the glossary before search
 #   kb_chat:
 #     - { preset: hosted-claude, name: "KB · Claude" }     # default
 #     - { preset: kb-default,    name: "KB · Qwen (local)" }

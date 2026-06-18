@@ -1,0 +1,18 @@
+{
+  "title": "Multi — several workflow types in one profile",
+  "description": "Exercises Phase 5: one profile that offers more than one workflow.",
+  "tools": ["read_file", "write_file"],
+  "workflows": [
+    {
+      "id": "alpha",
+      "title": "Alpha workflow",
+      "phases": [{ "id": "think", "title": "Think" }],
+      "input_json": "inputs/input.json"
+    },
+    {
+      "id": "beta",
+      "title": "Beta workflow",
+      "phases": [{ "id": "plan", "title": "Plan" }, { "id": "act", "title": "Act" }]
+    }
+  ]
+}

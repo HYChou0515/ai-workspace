@@ -38,6 +38,17 @@ def test_make_spec_registers_every_discovered_app_model():
         assert spec.get_resource_manager(app_model(slug)) is not None
 
 
+def test_a_hyphenated_slug_app_loads_via_file_path():
+    """Topic Hub's slug `topic-hub` has a hyphen, so `apps.topic-hub.model`
+    isn't `import_module`-able. The registry loads `model.py` by file path, so a
+    hyphenated-slug App still registers + resolves like any other."""
+    from workspace_app.apps.base import WorkItemBase
+
+    model = app_model("topic-hub")
+    assert issubclass(model, WorkItemBase)
+    assert resource_route("topic-hub").startswith("/")
+
+
 def test_template_scaffold_is_not_discovered_or_registered():
     """`apps/_template/` is `_`-prefixed → skipped: it must not register or show
     on the launcher (it's the copy-me scaffold, not a real App)."""

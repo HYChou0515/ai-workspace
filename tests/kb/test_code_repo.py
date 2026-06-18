@@ -128,7 +128,7 @@ def test_sync_skips_when_collection_has_no_git_url(spec: SpecStar):
     # Returns without raising; nothing got written.
     repo.sync(collection_id=cid, user="alice")
     sd_rm = spec.get_resource_manager(SourceDoc)
-    assert not list(sd_rm.list_resources(QB.all()))
+    assert not list(sd_rm.list_resources(QB.all()))  # ty: ignore[invalid-argument-type]
 
 
 def test_sync_with_explicit_branch_passes_through_to_git_clone(spec: SpecStar, tmp_path: Path):

@@ -1,0 +1,39 @@
+{
+  "workflows": [
+    {
+      "id": "memory",
+      "title": "Digest uploads into memory",
+      "tag": "batch",
+      "description": "Digest each uploaded file into the Hub's memory, then refresh MEMORY.md.",
+      "hint": "Drop files into inputs/ · digested into memory/.",
+      "phases": [
+        { "id": "digest", "title": "Digest uploads" },
+        { "id": "index", "title": "Refresh MEMORY.md" }
+      ],
+      "input_json": "inputs/input.json"
+    },
+    {
+      "id": "collections",
+      "title": "File uploads into collections",
+      "tag": "batch",
+      "description": "Classify & digest each dropped file, then file it into a KB collection — you approve the routing first.",
+      "hint": "Drop files into inputs/ · scope them in inputs/input.json.",
+      "phases": [
+        { "id": "classify", "title": "Classify + digest" },
+        { "id": "glossary", "title": "Collect glossary terms" },
+        { "id": "review", "title": "Review" },
+        { "id": "commit", "title": "Ingest + author cards" }
+      ],
+      "input_json": "inputs/input.json"
+    },
+    {
+      "id": "consolidate",
+      "title": "Consolidate memory",
+      "tag": "single",
+      "description": "Re-read current memory and recent chats, then rewrite the memory files — dedupe, merge, drop stale.",
+      "hint": "Runs on the Hub's existing memory — no inputs needed.",
+      "phases": [{ "id": "consolidate", "title": "Consolidate memory" }],
+      "input_json": "inputs/input.json"
+    }
+  ]
+}

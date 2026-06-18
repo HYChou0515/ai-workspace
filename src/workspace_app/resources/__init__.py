@@ -19,11 +19,12 @@ from specstar import BackendConfig, Schema, SpecStar
 from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
+from ..workflow.run import WorkflowRun
 from .agent_config import AgentConfig
 from .check_run import CheckRun
 from .citation_event import CitationEvent
 from .conversation import Conversation, Message
-from .kb import Collection, DocChunk, KbChat, SourceDoc, WikiBuildState, WikiPage
+from .kb import Collection, ContextCard, DocChunk, KbChat, SourceDoc, WikiBuildState, WikiPage
 from .notification import Notification
 from .sanity import SanityResult, sanity_result_id
 
@@ -31,6 +32,7 @@ __all__ = [
     "AgentConfig",
     "CitationEvent",
     "Collection",
+    "ContextCard",
     "Conversation",
     "DocChunk",
     "KbChat",
@@ -152,8 +154,17 @@ def _register_all(spec: SpecStar) -> None:
     # shared_with indexed so "chats shared with me" is a contains-query (owner
     # filtering uses the built-in created_by meta index).
     spec.add_model(KbChat, indexed_fields=["shared_with"])
+    # #106 context cards. collection_id indexed → list a collection's cards /
+    # load the match() vocab is a query; norm_keys indexed → get(term)'s exact
+    # element-membership lookup (same list-membership index as KbChat.shared_with).
+    spec.add_model(ContextCard, indexed_fields=["collection_id", "norm_keys"])
     # recipient indexed so "my notifications" is a query, not a full scan.
     spec.add_model(Notification, indexed_fields=["recipient"])
+    # #100: workflow runs. item_id indexed so "an item's runs" is a query; status
+    # so "active runs" (the concurrency cap) is a query, not a full scan. The
+    # filesystem is the journal (manual §9), so this resource holds status, not
+    # step results.
+    spec.add_model(WorkflowRun, indexed_fields=["item_id", "status"])
     # document_id + collection_id indexed so the "cited N×" tallies are a
     # group-by aggregate (`exp_aggregate_by` → {key: count}) instead of a full
     # scan of the append-only log on every list call. Schema("v2") + the None

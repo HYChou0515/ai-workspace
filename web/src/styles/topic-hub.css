@@ -1,0 +1,221 @@
+/* Topic Hub multi-chat shell (P14, §3).
+ *
+ * The shell components set their structural flex layout inline (fill height,
+ * scrollable log, pinned composer); this sheet gives them the app's look —
+ * matching the RCA AgentPanel composer + the FileTree dropdown menu — so the
+ * picker menu, tabs and composer aren't bare unstyled text. */
+
+/* ── run-workflow picker ─────────────────────────────────────────── */
+/* The headless, API-triggerable launcher gets the screen's single primary
+ * action (the red --accent button); the [Free chat] picker stays neutral. */
+.run-workflow-picker {
+  position: relative;
+  display: inline-block;
+}
+.run-workflow-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-btn);
+  background: var(--accent);
+  color: var(--white);
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.run-workflow-picker__trigger:hover:not(:disabled) {
+  background: var(--accent-h);
+  border-color: var(--accent-h);
+}
+.run-workflow-picker__trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.run-workflow-picker__menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  width: 320px;
+  max-width: 90vw;
+  z-index: 20;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 6px;
+}
+.run-workflow-picker__header {
+  padding: 4px 8px 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
+.run-workflow-picker__card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 8px;
+  border: none;
+  border-radius: var(--radius-btn);
+  background: transparent;
+  cursor: pointer;
+}
+.run-workflow-picker__card:hover {
+  background: var(--paper-2);
+}
+.run-workflow-picker__icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-btn);
+  background: var(--text-paper);
+}
+.run-workflow-picker__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.run-workflow-picker__titleRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.run-workflow-picker__title {
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  color: var(--text-paper);
+}
+.run-workflow-picker__tag {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-chip);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-paper-d);
+}
+.run-workflow-picker__desc {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-paper-d);
+}
+.run-workflow-picker__hint {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+.run-workflow-picker__footer {
+  margin-top: 4px;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--paper-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-paper-d);
+}
+
+/* ── new-chat picker ─────────────────────────────────────────────── */
+.new-chat-picker__trigger {
+  padding: 4px 10px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+}
+.new-chat-picker__trigger:hover:not(:disabled) {
+  background: var(--paper-2);
+}
+.new-chat-picker__trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.new-chat-picker__menu {
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 220px;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+  padding: 4px 0;
+}
+.new-chat-picker__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 14px;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+  background: transparent;
+  white-space: nowrap;
+}
+.new-chat-picker__item:hover {
+  background: var(--paper-2);
+}
+
+/* ── chat tab rail ───────────────────────────────────────────────── */
+.item-chat-list {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+.item-chat-list__tab {
+  padding: 3px 10px;
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+  white-space: nowrap;
+}
+.item-chat-list__tab:hover {
+  background: var(--paper-2);
+}
+.item-chat-list__tab[aria-selected="true"] {
+  background: var(--accent-soft, var(--paper-2));
+  color: var(--text-paper);
+  font-weight: 600;
+}
+
+/* ── chat panel ──────────────────────────────────────────────────── */
+/* The active chat is rendered by the real RCA AgentPanel (its own styling owns
+ * the log / composer / send / stop), so the shell only styles the multi-chat
+ * chrome it adds: the empty placeholder + the workflow Continue gate. */
+.item-chat-panel__empty {
+  margin: auto;
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+}
+
+.item-chat-panel__gate {
+  background: var(--paper-2);
+  border-top: 1px solid var(--paper-3);
+  font-size: var(--text-body-sm);
+}
+.item-chat-panel__gate button {
+  padding: 4px 12px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+}
+.item-chat-panel__gate button:hover {
+  background: var(--paper);
+}

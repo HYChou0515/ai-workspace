@@ -18,6 +18,7 @@ import { Popover } from "../../components/Popover";
 import { UserAvatar } from "../../components/UserChip";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { ContextCardsTab } from "./ContextCardsTab";
 import { KbDocIde } from "./KbDocIde";
 import { NewCollectionModal } from "./NewCollectionModal";
 import { RetrievalToggles, WikiBadge } from "./RetrievalToggles";
@@ -72,7 +73,7 @@ export function KbCollectionsPage({
   const qc = useQueryClient();
   const me = useCurrentUser();
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [collectionTab, setCollectionTab] = useState<"documents" | "wiki">("documents");
+  const [collectionTab, setCollectionTab] = useState<"documents" | "cards" | "wiki">("documents");
   const [showRetrieval, setShowRetrieval] = useState(false);
   const [newOpen, setNewOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("all");
@@ -215,9 +216,13 @@ export function KbCollectionsPage({
       ["Owner", selected.owner],
       ["Updated", fmtDate(selected.updated_at)],
     ];
-    // The Wiki tab only exists for collections that build one; otherwise the
-    // page is just the documents table.
-    const effectiveTab = selected.use_wiki && collectionTab === "wiki" ? "wiki" : "documents";
+    // Documents + Context Cards (#106) are always available; the Wiki tab only
+    // exists for collections that build one. A stale "wiki" selection on a
+    // non-wiki collection falls back to Documents.
+    const tabIds = (
+      selected.use_wiki ? ["documents", "cards", "wiki"] : ["documents", "cards"]
+    ) as ("documents" | "cards" | "wiki")[];
+    const effectiveTab = tabIds.includes(collectionTab) ? collectionTab : "documents";
     return (
       <section className="kb-colpage" aria-label="Collection">
         <input ref={fileRef} type="file" multiple accept={UPLOAD_ACCEPT} hidden onChange={(e) => upload(e.target.files)} />
@@ -446,22 +451,20 @@ export function KbCollectionsPage({
           </div>
         )}
 
-        {selected.use_wiki && (
-          <div className="kb-tabs" role="tablist" aria-label="Collection view">
-            {(["documents", "wiki"] as const).map((id) => (
-              <button
-                key={id}
-                type="button"
-                role="tab"
-                aria-selected={effectiveTab === id}
-                className={`kb-tab${effectiveTab === id ? " is-active" : ""}`}
-                onClick={() => setCollectionTab(id)}
-              >
-                {id === "documents" ? "Documents" : "Wiki"}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="kb-tabs" role="tablist" aria-label="Collection view">
+          {tabIds.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={effectiveTab === id}
+              className={`kb-tab${effectiveTab === id ? " is-active" : ""}`}
+              onClick={() => setCollectionTab(id)}
+            >
+              {id === "documents" ? "Documents" : id === "cards" ? "Context Cards" : "Wiki"}
+            </button>
+          ))}
+        </div>
 
         {effectiveTab === "wiki" ? (
           <div className="kb-colpage__docs">
@@ -473,6 +476,10 @@ export function KbCollectionsPage({
               maintainerGuidance={selected.wiki_maintainer_guidance}
               readerGuidance={selected.wiki_reader_guidance}
             />
+          </div>
+        ) : effectiveTab === "cards" ? (
+          <div className="kb-colpage__docs">
+            <ContextCardsTab collectionId={selected.resource_id} client={client} />
           </div>
         ) : (
           // Documents as a VSCode-shaped tree + editor (#87) — the same shell

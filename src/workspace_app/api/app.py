@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import msgspec
 from agents.tracing import set_trace_processors
-from fastapi import FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -46,7 +46,17 @@ from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tooling.registry import PackageInfo
 from ..users import MockUserDirectory, UserDirectory
+from ..workflow.capabilities import CollectionNotFound, create_context_card, ingest_to_collection
+from ..workflow.credential import CredentialBroker
+from ..workflow.discovery import load_run_callable
+from ..workflow.handle import WorkflowHandle
+from ..workflow.orchestrator import (
+    NotAwaitingDecision,
+    WorkflowOrchestrator,
+)
+from ..workflow.run import RunStatus, WorkflowRun
 from .activity import ActivityLog
+from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .events import (
     AgentEvent,
     CellEvent,
@@ -215,6 +225,23 @@ class _UndoOut(BaseModel):
     removed: int
 
 
+class _CreateChatBody(BaseModel):
+    # #topic-hub P7 (manual §3): open a new FREE chat in an item. Title is optional;
+    # a workflow chat is opened by the run endpoint (P8), not here.
+    title: str = ""
+
+
+class _ChatInfo(BaseModel):
+    """One chat in an item's multi-chat list (manual §3)."""
+
+    chat_id: str
+    title: str
+    run_id: str | None
+    created_ms: int | None
+    message_count: int
+    is_default: bool
+
+
 class _MentionBody(BaseModel):
     user_ids: list[str]
     note: str = ""
@@ -255,6 +282,27 @@ class _CloseItemBody(BaseModel):
     # null → pure close; a string must be one of the App manifest's
     # `lifecycle.closing_states` (validated against the manifest, not here).
     status: str | None = None
+
+
+class _DecisionBody(BaseModel):
+    # #100: a human's answer at a workflow `human_gate` (manual §10). `choice` ∈
+    # the gate's `allow` (e.g. approve/reject); `input` is an optional revision.
+    choice: str
+    input: str = ""
+
+
+class _IngestBody(BaseModel):
+    # #100: a deterministic node's ingest capability call (manual §8).
+    collection: str
+    path: str
+
+
+class _CardBody(BaseModel):
+    # topic-hub P9: a deterministic node's create-context-card capability call (§8).
+    collection: str
+    keys: list[str] = Field(default_factory=list)
+    title: str = ""
+    body: str = ""
 
 
 async def _promote_chat_to_kb(
@@ -393,6 +441,16 @@ def create_app(
     kb_retrieval_enhancements: EnhancementSettings | None = None,
     packages: list[PackageInfo] | None = None,
     prebuilt_dir: Path | None = None,
+    # #100: workflow run limits (manual §16/§17). Global concurrency cap (runs
+    # queue as `pending` when full), a per-run max-steps budget (guards runaway
+    # loops), and an optional per-run wall-clock cap (None ⇒ no limit).
+    workflow_concurrency: int = 8,
+    workflow_max_steps: int = 1000,
+    workflow_run_timeout: timedelta | None = None,
+    workflow_step_timeout: timedelta | None = None,
+    # Per-item run-history retention (manual §16): keep at most this many runs, pruning
+    # the oldest terminal ones when a new run starts. 0 ⇒ keep all.
+    workflow_keep_last_runs: int = 0,
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -768,6 +826,10 @@ def create_app(
         """Live SSE feed of telemetry events as the SDK emits them."""
         return StreamingResponse(monitor.sse(group_id=group_id), media_type="text/event-stream")
 
+    # #106: context-card create/update custom actions must register on the spec
+    # BEFORE apply() so they materialise into routes (norm_keys derived in-write).
+    register_context_card_actions(spec)
+
     spec.apply(app)
 
     # KB chatbot subsystem: ingestion + collection/document/render routes.
@@ -867,6 +929,8 @@ def create_app(
         index_coordinator=index_coordinator,
         get_user_id=get_user_id,
     )
+    # #106: the exposed deterministic context-card lookup (read route, post-apply).
+    register_context_card_routes(app, spec)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
     # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
@@ -1014,6 +1078,7 @@ def create_app(
             ids,
             payload,
             agent_config=cfg,
+            spec=spec,
             enhancements=enhancements,
             reasoning_effort=reasoning_effort,
             wiki=wiki_query,
@@ -1116,18 +1181,63 @@ def create_app(
         return resolve_item_agent_config(spec, app_catalog, item_id)
 
     def _conversation_for(investigation_id: str) -> tuple[str, Conversation]:
-        # Indexed lookup by investigation_id (indexed in register_all) — not a
-        # full scan.
-        from specstar import QB
+        # Item-level (no chat_id) endpoints operate on the item's DEFAULT chat — the
+        # earliest-born free chat, created on first use (manual §3). With multi-chat
+        # an item holds many conversations; this resolves the implicit default and
+        # never returns a workflow chat. Pre-multi-chat items have one (unstamped)
+        # conversation, which stays the default — byte-for-byte preserved.
+        from .chats import resolve_default_conversation
 
-        for r in conv_rm.list_resources((QB["item_id"] == investigation_id).build()):
-            data = r.data
-            assert isinstance(data, Conversation)
-            return r.info.resource_id, data  # ty: ignore[unresolved-attribute]
-        rev = conv_rm.create(Conversation(item_id=investigation_id))
-        got = conv_rm.get(rev.resource_id).data
-        assert isinstance(got, Conversation)
-        return rev.resource_id, got
+        return resolve_default_conversation(conv_rm, investigation_id)
+
+    def _engine_key(investigation_id: str, chat_id: str) -> str:
+        """The turn-engine / SSE key for a chat (manual §3). The DEFAULT chat keeps
+        the legacy ``item_id`` key so item-level endpoints, the workflow drive path,
+        and file-change broadcasts all share its stream; every other chat keys on its
+        own id. Read-only — never materialises the default."""
+        from .chats import find_default_conversation
+
+        default = find_default_conversation(conv_rm, investigation_id)
+        if default is not None and default[0] == chat_id:
+            return investigation_id
+        return chat_id
+
+    def _require_chat(slug: str, item_id: str, chat_id: str) -> tuple[str, Conversation]:
+        """Validate slug→item AND that ``chat_id`` is a chat OF that item; return
+        ``(chat_id, Conversation)`` or 404. Guards the chat-scoped endpoints (manual §3)."""
+        investigation_id = _require_item(slug, item_id)
+        try:
+            conv = conv_rm.get(chat_id).data
+        except ResourceIDNotFoundError:
+            raise HTTPException(status_code=404, detail=f"unknown chat: {chat_id!r}") from None
+        if not isinstance(conv, Conversation) or conv.item_id != investigation_id:
+            raise HTTPException(status_code=404, detail=f"unknown chat: {chat_id!r}")
+        return chat_id, conv
+
+    async def _hub_collection_ids(item_id: str) -> list[str]:
+        """The item's collection set (topic-hub §5): the ids in its ``collections.json``
+        workspace file, or ``[]`` when it has none. Scopes ``lookup_glossary`` /
+        ``ask_knowledge_base`` for the turn. Tolerant of a hand-edited / malformed file."""
+        from ..kb.collections import collection_ids_from_json
+
+        try:
+            raw = await filestore.read(item_id, "/collections.json")
+        except FileNotFound:
+            return []
+        try:
+            return collection_ids_from_json(json.loads(raw))
+        except (ValueError, TypeError):
+            return []
+
+    def _app_context_files(item_id: str) -> list[str]:
+        """The App's declared per-turn context files (manual §6) — the workspace files
+        whose live content is injected each turn. Empty for most Apps."""
+        from ..apps.manifest import load_app_manifest
+
+        slug = _item_slug(item_id)
+        if slug is None:  # pragma: no cover - callers pass a validated item id
+            return []
+        return load_app_manifest(slug).agent.context_files
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────
     # Read-only loaders: replay must never create/mutate anything, so
@@ -1181,6 +1291,415 @@ def create_app(
 
     register_replay_routes(app, service=replay_service, load_turn=_load_turn, load_doc=_load_doc)
 
+    # ── Workflows (#100) ─────────────────────────────────────────────
+    # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
+    # the orchestrator overlays phase/step events on the same per-chat stream.
+    from ..apps.profiles import load_profile_workflow
+
+    async def _wf_drive_turn(
+        item_id: str, chat_key: str, captured_user: str, prompt: str, tools: list[str] | None
+    ) -> str:
+        """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
+        ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
+        (keeping the run's stream separate from the item's other chats). Builds the
+        ctx, narrows the tool ceiling to the step's subset, enqueues + awaits, persists
+        the produced messages under the captured user, and returns the assistant text."""
+        try:
+            rid = chat_key
+            got = conv_rm.get(rid).data
+            assert isinstance(got, Conversation)
+            conv = got
+        except (ResourceIDNotFoundError, AssertionError):
+            rid, conv = _conversation_for(item_id)  # legacy fallback (item's default chat)
+        cfg = _resolve_agent_config(item_id)
+        if cfg is not None and tools is not None:
+            # tools= ⊆ the profile's tool ceiling (manual §5.1) — drop anything the
+            # profile doesn't already allow, so a step can't widen the boundary.
+            ceiling = cfg.allowed_tools or []
+            cfg = msgspec.structs.replace(cfg, allowed_tools=[t for t in tools if t in ceiling])
+        session = await registry.session(item_id)
+        ctx = AgentToolContext(
+            investigation_id=item_id,
+            sandbox=sandbox,
+            filestore=filestore,
+            files=files,
+            sync=sync,
+            sandbox_spec=SandboxSpec(),
+            handle=session.handle,
+            ensure_sandbox_via=lambda: registry.ensure_handle(session),
+            agent_config=cfg,
+            run_subagent=_run_subagent,
+            mention=_agent_mention,
+            read_file_max_lines=read_file_max_lines,
+            read_file_max_chars=read_file_max_chars,
+            exec_output_max_chars=exec_output_max_chars,
+            history=history_items(
+                conv.messages,
+                max_messages=history_max_messages,
+                max_tokens=history_max_context_tokens,
+            ),
+            packages=packages or [],
+            prebuilt_dir=prebuilt_dir,
+            app_slug=_item_slug(item_id),
+            template_profile=_item_profile(item_id),
+        )
+        answer: list[str] = []
+
+        def persist(produced: list[TurnMessage]) -> None:
+            if produced:
+                conv2 = conv_rm.get(rid).data  # re-fetch the workflow chat
+                assert isinstance(conv2, Conversation)
+                # Background step → attribute the persisted turn to the captured
+                # user (§15, the job-pod acting-user pattern).
+                with conv_rm.using(user=captured_user):
+                    for tm in produced:
+                        conv2.messages.append(_to_rca_message(tm))
+                    conv_rm.update(rid, conv2)
+            answer.extend(tm.content for tm in produced if tm.role == "assistant")
+
+        await turn_engine.enqueue(chat_key, prompt, ctx, on_complete=persist)
+        return "\n".join(answer)
+
+    async def _wf_run_sandbox(item_id: str, run: str, credential: str) -> tuple[int, str]:
+        """Run a deterministic node's command in the item's sandbox (§5.2), with the
+        run-scoped credential injected into its env so a node script can auth
+        capability HTTP calls (manual §15)."""
+        session = await registry.session(item_id)
+        handle = await registry.ensure_handle(session)
+        import shlex
+
+        env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""
+        result = await sandbox.exec(handle, ["sh", "-lc", env + run])
+        with contextlib.suppress(Exception):
+            await registry.flush(item_id)
+        return result.exit_code, result.stdout.decode("utf-8", errors="replace")
+
+    async def _wf_ingest(item_id: str, captured_user: str, collection: str, path: str) -> str:
+        """The ingest capability (§8) bound to this run's workspace + captured user."""
+        return await ingest_to_collection(
+            spec,
+            ingestor,
+            files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
+            workspace_id=item_id,
+            collection=collection,
+            path=path,
+            user=captured_user,
+        )
+
+    async def _wf_create_card(
+        captured_user: str, collection: str, keys: list[str], title: str, body: str
+    ) -> str:
+        """The create-context-card capability (§8) bound to this run's captured user."""
+        return create_context_card(
+            spec, collection=collection, keys=keys, title=title, body=body, user=captured_user
+        )
+
+    async def _wf_collection_has(collection: str, path: str) -> bool:
+        """Backs ``check.collection_has`` (§8): did ``path`` land in ``collection``
+        (a name or id) as a ``ready`` doc? Read back from the KB at its natural-key id."""
+        from ..kb.doc_id import encode_doc_id
+        from ..workflow.capabilities import resolve_collection_id
+
+        try:
+            collection_id = resolve_collection_id(spec, collection)
+        except CollectionNotFound:
+            return False
+        doc_rm = spec.get_resource_manager(SourceDoc)
+        try:
+            doc = doc_rm.get(encode_doc_id(collection_id, path.lstrip("/"))).data
+        except ResourceIDNotFoundError:
+            return False
+        return isinstance(doc, SourceDoc) and doc.status == "ready"
+
+    def _wf_wire_handle(
+        wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
+    ) -> None:
+        # Agent turns drive the run's workflow CHAT (chat_key); sandbox / ingest stay
+        # on item_id (the workspace shared across the item's chats, §3.1).
+        wf.drive_turn = lambda prompt, tools: _wf_drive_turn(
+            item_id, chat_key, captured_user, prompt, tools
+        )
+        wf.run_sandbox = lambda run: _wf_run_sandbox(item_id, run, wf.credential)
+        wf._ingest = lambda collection, path: _wf_ingest(item_id, captured_user, collection, path)
+        wf._collection_has = _wf_collection_has
+        wf._create_card = lambda collection, keys, title, body: _wf_create_card(
+            captured_user, collection, keys, title, body
+        )
+
+    def _wf_any_running(item_id: str) -> bool:
+        """Is any run on this item still RUNNING? Used to decide whether the shared
+        sandbox is still needed (§3.1) — the run being released is no longer RUNNING
+        (it is terminal / awaiting_human), so this counts only the OTHERS."""
+        from specstar import QB
+
+        rm = spec.get_resource_manager(WorkflowRun)
+        for r in rm.list_resources((QB["item_id"] == item_id).build()):
+            if isinstance(r.data, WorkflowRun) and r.data.status is RunStatus.RUNNING:
+                return True
+        return False
+
+    async def _wf_release(item_id: str, terminal: bool, chat_key: str) -> None:
+        """Free resources when a run ends/pauses (§16). The sandbox + workspace are
+        shared across the item's chats (§3.1), so tear the sandbox down only when no
+        OTHER run is still running — a parallel run keeps it alive (§3). On terminal,
+        drop the finished run's own chat turn session (never the item's other chats)."""
+        if not _wf_any_running(item_id):
+            await registry.close_session(item_id)
+        if terminal:
+            turn_engine.forget(chat_key)
+
+    def _wf_notify_failure(run: WorkflowRun) -> None:
+        """In-app failure notification to the item's owner (manual §17)."""
+        from ..apps.resolve import find_work_item
+
+        found = find_work_item(spec, run.item_id)
+        if found is None:  # pragma: no cover - a run always has a live item
+            return
+        slug, item = found
+        phase = run.current_phase or "?"
+        notify(
+            spec,
+            recipient=item.owner,
+            kind="status",
+            title=f"Workflow run failed at “{phase}”",
+            link=f"/a/{slug}/items/{run.item_id}",
+            actor=run.captured_user,
+        )
+
+    workflow_credentials = CredentialBroker()
+    workflow_orchestrator = WorkflowOrchestrator(
+        spec=spec,
+        store=files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
+        load_run=load_run_callable,
+        load_manifest=load_profile_workflow,
+        wire_handle=_wf_wire_handle,
+        publish=turn_engine.publish,
+        release=_wf_release,
+        notify_failure=_wf_notify_failure,
+        credentials=workflow_credentials,
+        max_steps=workflow_max_steps,
+        run_timeout_s=(
+            workflow_run_timeout.total_seconds() if workflow_run_timeout is not None else None
+        ),
+        step_timeout_s=(
+            workflow_step_timeout.total_seconds() if workflow_step_timeout is not None else None
+        ),
+        concurrency=workflow_concurrency,
+        keep_last_runs=workflow_keep_last_runs,
+    )
+    app.state.workflow_orchestrator = workflow_orchestrator
+
+    def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str = ""):
+        """Validate the item belongs to the slug AND its profile carries the requested
+        workflow (manual §4); return (investigation_id, profile, manifest)."""
+        investigation_id = _require_item(slug, item_id)
+        profile = _item_profile(investigation_id)
+        manifest = load_profile_workflow(slug, profile, workflow_id)
+        if manifest is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"profile {profile!r} of app {slug!r} has no workflow {workflow_id!r}",
+            )
+        return investigation_id, profile, manifest
+
+    @app.get("/a/{slug}/profiles")
+    async def list_app_profiles(slug: str) -> list[dict]:
+        """#100 (manual §4 & §14): the App's profiles, each with its list of workflow
+        MANIFESTS so the FE's new-chat picker can offer every workflow type. Also keeps
+        the legacy singular ``workflow`` field for back-compat."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.profiles import list_profiles, load_profile, normalize_workflows
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        out: list[dict] = []
+        for name in list_profiles(slug):
+            p = load_profile(slug, name)
+            workflows = normalize_workflows(p)
+            out.append(
+                {
+                    "name": name,
+                    "title": p.title or name,
+                    "description": p.description,
+                    "has_workflow": bool(workflows),
+                    "workflow": msgspec.to_builtins(p.workflow) if p.workflow else None,
+                    "workflows": [msgspec.to_builtins(wf) for wf in workflows],
+                }
+            )
+        return out
+
+    @app.post("/a/{slug}/items/{item_id}/run", status_code=status.HTTP_202_ACCEPTED)
+    async def run_workflow_item(slug: str, item_id: str, workflow_id: str = Query("")) -> dict:
+        """#100 / topic-hub P8 (manual §3, §4, §14): launch a workflow. Opens a fresh
+        WORKFLOW CHAT (a `Conversation` with `run_id`) the run streams into, and returns
+        its `chat_id`. ``workflow_id`` selects which of the profile's workflows (§4);
+        runs are per-chat, so several may run in parallel on one item (§3). Inputs come
+        from the workspace (``MANIFEST.input_json``)."""
+        investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
+        # The chat overlay (manual §3): create it, start the run on it, then link the
+        # run_id back. This runs synchronously before the run task drives any turn, so
+        # the chat carries its run_id before it streams.
+        title = manifest.title or workflow_id or "Workflow"
+        chat_id = conv_rm.create(
+            Conversation(item_id=investigation_id, title=title, created_ms=_now_ms())
+        ).resource_id
+        run_id = await workflow_orchestrator.start(
+            slug=slug,
+            item_id=investigation_id,
+            profile=profile,
+            captured_user=get_user_id(),
+            workflow_id=workflow_id,
+            chat_id=chat_id,
+        )
+        chat = conv_rm.get(chat_id).data
+        assert isinstance(chat, Conversation)
+        chat.run_id = run_id
+        conv_rm.update(chat_id, chat)
+        activity.record(
+            "workflow_started",
+            "Started a workflow run",
+            {"item_id": investigation_id, "run_id": run_id, "chat_id": chat_id},
+        )
+        return {"run_id": run_id, "item_id": investigation_id, "chat_id": chat_id}
+
+    @app.get("/a/{slug}/items/{item_id}/runs")
+    async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:
+        """#100: the item's run history (newest first), for the run-list view."""
+        investigation_id = _require_item(slug, item_id)
+        from specstar import QB
+
+        rm = spec.get_resource_manager(WorkflowRun)
+        out: list[dict] = []
+        for r in rm.list_resources((QB["item_id"] == investigation_id).build()):
+            assert isinstance(r.data, WorkflowRun)
+            out.append(
+                {
+                    "run_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                    **msgspec.to_builtins(r.data),
+                }
+            )
+        out.sort(key=lambda d: d.get("started") or 0, reverse=True)
+        return out
+
+    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}")
+    async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
+        """#100 (manual §14): poll a run — status + result + per-phase progress."""
+        _require_item(slug, item_id)
+        rm = spec.get_resource_manager(WorkflowRun)
+        try:
+            data = rm.get(run_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        assert isinstance(data, WorkflowRun)
+        return {"run_id": run_id, **msgspec.to_builtins(data)}
+
+    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
+    async def stream_workflow_run(slug: str, item_id: str, run_id: str) -> StreamingResponse:
+        """#100 / P8 (manual §3, §14): the run's live SSE — its WORKFLOW CHAT's stream
+        (agent events + phase/step events overlaid). Falls back to the item's broadcast
+        stream when the run / its chat can't be resolved (defensive)."""
+        investigation_id = _require_item(slug, item_id)
+        key = investigation_id
+        try:
+            run = spec.get_resource_manager(WorkflowRun).get(run_id).data
+            if isinstance(run, WorkflowRun) and run.chat_id:
+                key = run.chat_id
+        except ResourceIDNotFoundError:
+            pass
+        return StreamingResponse(turn_engine.subscribe_sse(key), media_type="text/event-stream")
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/cancel",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def cancel_workflow_run(slug: str, item_id: str, run_id: str) -> Response:
+        """#100 (manual §10): Stop a run — it goes terminal (cancelled) and the item
+        opens to interactive use. Idempotent (a no-op when nothing is running)."""
+        investigation_id = _require_item(slug, item_id)
+        await workflow_orchestrator.cancel(run_id, investigation_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/decisions",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def decide_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _DecisionBody
+    ) -> dict:
+        """#100 (manual §10): answer a `human_gate` — records the decision artifact
+        and resumes the run (completed steps skip; the gate reads the decision)."""
+        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        try:
+            await workflow_orchestrator.decide(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                choice=body.choice,
+                input=body.input,
+                decided_by=get_user_id(),
+            )
+        except NotAwaitingDecision as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return {"run_id": run_id, "resumed": True}
+
+    @app.post("/a/{slug}/items/{item_id}/capabilities/ingest")
+    async def capability_ingest(
+        slug: str,
+        item_id: str,
+        body: _IngestBody,
+        x_workflow_token: str | None = Header(default=None),
+    ) -> dict:
+        """#100 (manual §8): the ingest capability as an HTTP endpoint — a
+        deterministic node's sandbox script reaches it with the run-scoped
+        credential (manual §15). Idempotent (upsert by natural-key doc id).
+
+        Auth: a valid ``X-Workflow-Token`` acts as its captured user and must be
+        scoped to THIS item; an expired/forged token is 401. With no token the call
+        falls back to the session user (the in-app / FE path)."""
+        investigation_id = _require_item(slug, item_id)
+        actor = get_user_id()
+        if x_workflow_token is not None:
+            claims = workflow_credentials.resolve(x_workflow_token)
+            if claims is None or claims.item_id != investigation_id:
+                raise HTTPException(status_code=401, detail="invalid or expired workflow token")
+            actor = claims.user
+        try:
+            doc_id = await _wf_ingest(investigation_id, actor, body.collection, body.path)
+        except CollectionNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail=f"unknown collection: {body.collection!r}"
+            ) from exc
+        return {"doc_id": doc_id}
+
+    @app.post("/a/{slug}/items/{item_id}/capabilities/context-card")
+    async def capability_context_card(
+        slug: str,
+        item_id: str,
+        body: _CardBody,
+        x_workflow_token: str | None = Header(default=None),
+    ) -> dict:
+        """topic-hub P9 (manual §8): the create-context-card capability as an HTTP
+        endpoint — a deterministic node's sandbox script reaches it with the run-scoped
+        credential (manual §15). Same auth as ingest: a valid ``X-Workflow-Token`` acts
+        as its captured user, scoped to THIS item; no token → the session user."""
+        investigation_id = _require_item(slug, item_id)
+        actor = get_user_id()
+        if x_workflow_token is not None:
+            claims = workflow_credentials.resolve(x_workflow_token)
+            if claims is None or claims.item_id != investigation_id:
+                raise HTTPException(status_code=401, detail="invalid or expired workflow token")
+            actor = claims.user
+        try:
+            card_id = await _wf_create_card(
+                actor, body.collection, body.keys, body.title, body.body
+            )
+        except CollectionNotFound as exc:
+            raise HTTPException(
+                status_code=404, detail=f"unknown collection: {body.collection!r}"
+            ) from exc
+        return {"card_id": card_id}
+
     @app.get("/a/{slug}/items/{item_id}/export")
     async def export_investigation(slug: str, item_id: str) -> Response:
         """Download the investigation's full conversation as JSON — every message
@@ -1217,7 +1736,23 @@ def create_app(
     )
     async def send_message(slug: str, item_id: str, body: _MessageBody) -> Response:
         investigation_id = _require_item(slug, item_id)
+        # Item-level (no chat_id) → the implicit default chat, keyed on item_id so the
+        # workflow drive path + file-change broadcasts share its stream (manual §3).
         rid, conv = _conversation_for(investigation_id)
+        await _send_into(investigation_id, rid, conv, investigation_id, body)
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    async def _send_into(
+        investigation_id: str,
+        rid: str,
+        conv: Conversation,
+        engine_key: str,
+        body: _MessageBody,
+    ) -> None:
+        """Append the user message to conversation ``rid``, build the RCA turn ctx
+        from ITS history, and enqueue the turn on ``engine_key`` (item_id for the
+        default chat, the chat_id otherwise — manual §3). Shared by the item-level
+        and chat-scoped message endpoints."""
         # #43: stamp the sender so a shared workspace's chat shows who said what,
         # and broadcast the message to live viewers (below, before the turn runs).
         author = get_user_id()
@@ -1228,6 +1763,9 @@ def create_app(
         conv_rm.update(rid, conv)
 
         session = await registry.session(investigation_id)
+        # Topic Hub §5/§7: the Hub's collection set (collections.json) scopes the
+        # turn's deterministic glossary + KB tools. [] for Apps without the file.
+        hub_collection_ids = await _hub_collection_ids(investigation_id)
         # Composer knowledge-search depth: applies to this turn's KB
         # lookups. The bridge wrapper forwards it to the kb_chat
         # sub-agent only — infer_modules' focused classification probe
@@ -1318,13 +1856,18 @@ def create_app(
             # `read_skill` when the profile ships skills.
             app_slug=_item_slug(investigation_id),
             template_profile=_item_profile(investigation_id),
+            # Topic Hub §5/§7: spec + the Hub's collection set let the retriever-free
+            # `lookup_glossary` / `resolve_collection` tools query context cards.
+            spec=spec,
+            collection_ids=hub_collection_ids,
         )
 
         def persist(produced: list[TurnMessage]) -> None:
             # Persist the agent's reply + tool outputs so re-entering the
             # workspace shows them, not just the user's own messages.
             if produced:
-                rid2, conv2 = _conversation_for(investigation_id)
+                conv2 = conv_rm.get(rid).data  # re-fetch THIS chat (not the default)
+                assert isinstance(conv2, Conversation)
                 # Citations live on `ctx.subagent_citations` — a dict
                 # keyed by TOOL NAME (the surface that produced them).
                 # Per name, lists are in CALL ORDER, so we keep one
@@ -1351,23 +1894,35 @@ def create_app(
                     elif tm.role == "assistant" and seen_subagent:
                         msg.citations = _bubble_kb_citations(tm.content, seen_subagent)
                     conv2.messages.append(msg)
-                conv_rm.update(rid2, conv2)
+                conv_rm.update(rid, conv2)
             activity.record(
                 "agent_turn_complete",
                 "Agent finished a turn",
                 {"investigation_id": investigation_id},
             )
 
+        # Topic Hub §6: prepend the App's context_files (e.g. MEMORY.md +
+        # collections.json) as a labelled, authoritative block — re-derived fresh from
+        # the live FileStore each turn and handed ONLY to the agent. The persisted user
+        # message + the broadcast UserMessage stay clean (block never enters history),
+        # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
+        from ..apps.context_files import build_context_block
+
+        block = await build_context_block(
+            filestore, investigation_id, _app_context_files(investigation_id)
+        )
+        turn_content = f"{block}\n\n{body.content}" if block else body.content
+
         # #43: broadcast the human's message to every live viewer, then queue the
         # turn and await ITS completion. The queue serializes concurrent users on
         # the shared sandbox/files (a new message no longer cancels a running
-        # turn — Stop does). Live turn events reach all viewers via GET .../stream.
+        # turn — Stop does). Live turn events reach all viewers via GET .../stream
+        # (item-level / default chat) or the chat-scoped stream (other chats).
         turn_engine.publish(
-            investigation_id,
+            engine_key,
             UserMessage(author=author, content=body.content, created_at=created),
         )
-        await turn_engine.enqueue(investigation_id, body.content, ctx, on_complete=persist)
-        return Response(status_code=status.HTTP_202_ACCEPTED)
+        await turn_engine.enqueue(engine_key, turn_content, ctx, on_complete=persist)
 
     @app.get("/a/{slug}/items/{item_id}/stream")
     async def stream_investigation(slug: str, item_id: str) -> StreamingResponse:
@@ -1415,6 +1970,110 @@ def create_app(
             f"Undid {turns} turn(s)",
             {"investigation_id": investigation_id, "removed": removed},
         )
+        return _UndoOut(message_count=len(conv.messages), removed=removed)
+
+    # ── Multi-chat (topic-hub P7, manual §3) ─────────────────────────────
+    # An item holds many chats. These chat-scoped endpoints address one chat by id;
+    # the item-level endpoints above keep hitting the implicit default chat.
+
+    def _chat_info(chat_id: str, conv: Conversation, default_id: str | None) -> _ChatInfo:
+        return _ChatInfo(
+            chat_id=chat_id,
+            title=conv.title,
+            run_id=conv.run_id,
+            created_ms=conv.created_ms,
+            message_count=len(conv.messages),
+            is_default=chat_id == default_id,
+        )
+
+    @app.get("/a/{slug}/items/{item_id}/chats")
+    async def list_chats(slug: str, item_id: str) -> list[_ChatInfo]:
+        """List the item's chats (free + workflow), default first (manual §3).
+        Read-only: the implicit default chat materialises on first use, not here."""
+        from .chats import find_default_conversation, list_item_conversations
+
+        investigation_id = _require_item(slug, item_id)
+        default = find_default_conversation(conv_rm, investigation_id)
+        default_id = default[0] if default else None
+        infos = [
+            _chat_info(rid, conv, default_id)
+            for rid, conv in list_item_conversations(conv_rm, investigation_id)
+        ]
+        # Default first, then by birth (unstamped legacy rows first), then id.
+        infos.sort(
+            key=lambda c: (
+                not c.is_default,
+                c.created_ms if c.created_ms is not None else -1,
+                c.chat_id,
+            )
+        )
+        return infos
+
+    @app.post("/a/{slug}/items/{item_id}/chats", status_code=status.HTTP_201_CREATED)
+    async def create_chat(slug: str, item_id: str, body: _CreateChatBody) -> _ChatInfo:
+        """Open a new FREE chat in the item (manual §3); returns its chat_id. A
+        workflow chat is opened by the run endpoint (P8), not here."""
+        from .chats import find_default_conversation
+
+        investigation_id = _require_item(slug, item_id)
+        rev = conv_rm.create(
+            Conversation(item_id=investigation_id, title=body.title, created_ms=_now_ms())
+        )
+        conv = conv_rm.get(rev.resource_id).data
+        assert isinstance(conv, Conversation)
+        default = find_default_conversation(conv_rm, investigation_id)
+        return _chat_info(rev.resource_id, conv, default[0] if default else None)
+
+    @app.post(
+        "/a/{slug}/items/{item_id}/chats/{chat_id}/messages",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def send_chat_message(
+        slug: str, item_id: str, chat_id: str, body: _MessageBody
+    ) -> Response:
+        investigation_id = _require_item(slug, item_id)
+        rid, conv = _require_chat(slug, item_id, chat_id)
+        await _send_into(investigation_id, rid, conv, _engine_key(investigation_id, rid), body)
+        return Response(status_code=status.HTTP_202_ACCEPTED)
+
+    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/stream")
+    async def stream_chat(slug: str, item_id: str, chat_id: str) -> StreamingResponse:
+        """The chat's own live event stream (manual §3) — per-chat, unlike the
+        item-level stream which carries the default chat + item-wide events."""
+        investigation_id = _require_item(slug, item_id)
+        _require_chat(slug, item_id, chat_id)
+        return StreamingResponse(
+            turn_engine.subscribe_sse(_engine_key(investigation_id, chat_id)),
+            media_type="text/event-stream",
+        )
+
+    @app.delete(
+        "/a/{slug}/items/{item_id}/chats/{chat_id}/messages/current",
+        status_code=status.HTTP_204_NO_CONTENT,
+    )
+    async def cancel_chat_message(slug: str, item_id: str, chat_id: str) -> Response:
+        investigation_id = _require_item(slug, item_id)
+        _require_chat(slug, item_id, chat_id)
+        await turn_engine.cancel_current(_engine_key(investigation_id, chat_id))
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.delete("/a/{slug}/items/{item_id}/chats/{chat_id}/messages")
+    async def undo_chat_turns(
+        slug: str,
+        item_id: str,
+        chat_id: str,
+        turns: int = Query(..., ge=1, description="How many whole turns to undo (≥1)."),
+    ) -> _UndoOut:
+        """Undo the last `turns` whole turns of ONE chat (manual §3 + issue #38),
+        the chat-scoped twin of `undo_turns`. A turn is the user's prompt plus
+        everything the agent produced for it; undoing removes them as a unit. The
+        workspace FILES are NOT reverted — undo edits the conversation only."""
+        _require_item(slug, item_id)
+        rid, conv = _require_chat(slug, item_id, chat_id)
+        cut = _undo_cut_index(conv.messages, turns)
+        removed = len(conv.messages) - cut
+        conv.messages = conv.messages[:cut]
+        conv_rm.update(rid, conv)
         return _UndoOut(message_count=len(conv.messages), removed=removed)
 
     @app.post(
@@ -1743,9 +2402,7 @@ def create_app(
 
     # ---- Notebook cell execution (plan-backend §7.3) ----
 
-    @app.post(
-        "/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute"
-    )
+    @app.post("/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute")
     async def execute_cell(
         slug: str,
         item_id: str,

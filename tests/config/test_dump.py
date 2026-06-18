@@ -124,9 +124,9 @@ def test_emit_writes_revealed_0600_file_and_prints_masked(tmp_path: Path):
     written = emit_config_dump(settings, prov, config_dir=tmp_path, stream=out)
 
     assert written == tmp_path / "config.resolved.yaml"
-    file_text = written.read_text(encoding="utf-8")
+    file_text = written.read_text(encoding="utf-8")  # ty: ignore[unresolved-attribute]
     assert "sk-realsecret" in file_text  # real value in the 0600 file
-    assert oct(stat.S_IMODE(written.stat().st_mode)) == "0o600"
+    assert oct(stat.S_IMODE(written.stat().st_mode)) == "0o600"  # ty: ignore[unresolved-attribute]
 
     printed = out.getvalue()
     assert "sk-realsecret" not in printed  # masked on stdout
@@ -145,7 +145,7 @@ def test_emit_falls_back_to_cwd_when_no_config_dir(tmp_path: Path, monkeypatch):
     written = emit_config_dump(settings, prov, config_dir=None, stream=out)
 
     assert written == tmp_path / "config.resolved.yaml"
-    assert written.is_file()
+    assert written.is_file()  # ty: ignore[unresolved-attribute]
 
 
 def test_emit_never_raises_when_file_unwritable(tmp_path: Path):

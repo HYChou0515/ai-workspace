@@ -29,7 +29,7 @@ class _FakeSources(IWikiSources):
     def __init__(self, docs: dict[str, str]) -> None:
         self._docs = docs
 
-    def list(self) -> list[str]:
+    def list(self) -> list[str]:  # ty: ignore[invalid-type-form]
         return sorted(self._docs)
 
     def read(self, path: str) -> str | None:

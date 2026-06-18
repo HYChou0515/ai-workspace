@@ -138,7 +138,7 @@ def _drain(client: TestClient) -> None:
     """#82: indexing now runs on a background job-queue consumer (not a
     TestClient-run BackgroundTask), so block until it drains before asserting
     post-index state (status=ready / chunks)."""
-    client.app.state.index_coordinator.wait_idle()
+    client.app.state.index_coordinator.wait_idle()  # ty: ignore[unresolved-attribute]
 
 
 def test_upload_document_and_list():
@@ -675,7 +675,7 @@ def test_delete_routes_through_the_wiki_unfold_hook():
     _drain(client)
 
     calls: list[str] = []
-    coord = client.app.state.wiki_coordinator
+    coord = client.app.state.wiki_coordinator  # ty: ignore[unresolved-attribute]
     original = coord.on_doc_deleted
 
     async def spy(did: str) -> None:

@@ -85,11 +85,15 @@ def discover_app_slugs() -> list[str]:
 
 
 def validate_all_apps() -> None:
-    """Run ``validate_function_coherence`` over every discovered App. Called at
-    startup so an incoherent ``app.json`` (e.g. ``exec`` in tools but
-    ``sandbox:false``) fails the boot loud (decision 11)."""
+    """Run ``validate_function_coherence`` over every discovered App + the #100
+    workflow-profile coherence check. Called at startup so an incoherent
+    ``app.json`` (e.g. ``exec`` in tools but ``sandbox:false``) or a broken
+    workflow ``run.py`` fails the boot loud (decision 11; manual §3/§12)."""
+    from ..workflow.discovery import validate_workflow_profiles
+
     for slug in discover_app_slugs():
         validate_function_coherence(load_app_manifest(slug))
+        validate_workflow_profiles(slug)
 
 
 def _read_app_text(app_slug: str, rel: str) -> str:

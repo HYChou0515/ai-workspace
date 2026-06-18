@@ -520,7 +520,7 @@ def test_build_package_removes_existing_dst_before_rebuilding(tmp_path: Path, mo
     bundled.parent.mkdir()
     bundled.write_text("")
 
-    class _FakePath(type(dst / ".venv" / "bin" / "python")):
+    class _FakePath(type(dst / ".venv" / "bin" / "python")):  # ty: ignore[unsupported-base]
         def resolve(self):
             return bundled
 

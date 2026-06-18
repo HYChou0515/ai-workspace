@@ -259,6 +259,27 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     )
 
 
+class ContextCard(Struct):  # → resource "context-card"
+    """Issue #106: a lightweight glossary card — several ``keys`` (a term and
+    its surface forms) → a short ``body`` explanation, looked up deterministically
+    by exact key membership. No embedding, no chunking: the cheap path alongside
+    SourceDoc/DocChunk.
+
+    key ↔ card is many-to-many — one card carries several ``keys``; one key may
+    resolve to several cards. ``norm_keys`` is the DERIVED, indexed lookup
+    surface (``kb.context_cards.derive_norm_keys``): server-owned, materialised on
+    write by the create/update custom actions, never hand-edited. Callers query
+    ``QB["norm_keys"].contains(norm(q))`` — exact element membership, the same
+    index path as ``KbChat.shared_with``.
+    """
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    keys: list[str]  # author surface forms: ["M4", "Metal 4", "capping"]
+    norm_keys: list[str] = field(default_factory=list)  # derived + indexed; server-set
+    title: str = ""  # display name (FE list/detail); "" → keys[0]
+    body: str = ""  # markdown explanation
+
+
 # ─────────────────── value structs (nested / payloads) ───────────────────
 
 

@@ -4,6 +4,19 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+# #100: workflow phase/step events live in the `workflow` package (so the step
+# engine can emit them without importing the API layer) and are folded into the
+# AgentEvent union below — they ride the same per-item broadcast stream (§12).
+from ..workflow.events import (
+    AwaitingHumanEvent,
+    PhaseEntered,
+    StepFailed,
+    StepPassed,
+    StepRetrying,
+    StepSkipped,
+    StepStarted,
+)
+
 
 @dataclass(frozen=True)
 class MessageDelta:
@@ -140,6 +153,13 @@ AgentEvent = (
     | AgentMetrics
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)
+    | PhaseEntered  # #100: workflow phase/step observability (manual §12)
+    | StepStarted
+    | StepPassed
+    | StepFailed
+    | StepSkipped
+    | StepRetrying
+    | AwaitingHumanEvent
 )
 
 

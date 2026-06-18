@@ -38,7 +38,7 @@ def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
 
     chunks = _chunks_of(spec, ids[0])
     assert len(chunks) >= 1
-    assert all(len(c.embedding) == EMBED_DIM for c in chunks)
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
     assert all(c.collection_id == cid and c.source_doc_id == ids[0] for c in chunks)
     # chunk spans are verbatim slices of the (normalized) document text
     text = b"# Guide\none two three four five".decode()

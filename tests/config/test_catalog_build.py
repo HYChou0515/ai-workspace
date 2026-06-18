@@ -38,9 +38,9 @@ def test_kb_chat_resolves_to_a_single_typed_agent_config_with_kb_tools():
     kb = cat.kb_chat()
     # kb-default preset ships kb_search as its allowed tool — the
     # resolved AgentConfig carries it.
-    assert "kb_search" in kb.allowed_tools
+    assert "kb_search" in kb.allowed_tools  # ty: ignore[unresolved-attribute, unsupported-operator]
     # The KB prompt is the knowledge-base body (not a file ref).
-    assert "knowledge base" in kb.system_prompt.lower()
+    assert "knowledge base" in kb.system_prompt.lower()  # ty: ignore[unresolved-attribute]
 
 
 def test_kb_chat_missing_kb_search_in_allowed_tools_raises_at_catalog_build(tmp_path: Path):
@@ -97,7 +97,7 @@ def test_kb_chat_with_kb_search_added_to_usage_overrides_passes(tmp_path: Path):
     )
     settings = load(config_path=cfg_file, env={})
     cat = build_catalog(settings, config_dir=tmp_path)
-    assert "kb_search" in cat.kb_chat().allowed_tools
+    assert "kb_search" in cat.kb_chat().allowed_tools  # ty: ignore
 
 
 def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
@@ -109,10 +109,10 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     settings = load(config_path=None, env={})
     cat = build_catalog(settings, config_dir=None)
     kb = cat.kb_chat()
-    assert kb.allowed_tools == ["kb_search"]
-    assert "knowledge base" in kb.system_prompt.lower()
-    assert "[n]" in kb.system_prompt
-    assert kb.suggestions  # quick-prompt chips ship with the config
+    assert kb.allowed_tools == ["kb_search"]  # ty: ignore[unresolved-attribute]
+    assert "knowledge base" in kb.system_prompt.lower()  # ty: ignore[unresolved-attribute]
+    assert "[n]" in kb.system_prompt  # ty: ignore[unresolved-attribute]
+    assert kb.suggestions  # quick-prompt chips ship with the config  # ty: ignore
 
 
 def test_usage_entry_overrides_take_precedence_over_preset(tmp_path: Path):
@@ -155,8 +155,8 @@ def test_resolved_config_carries_per_preset_llm_endpoint(tmp_path: Path):
     settings = load(config_path=cfg_file, env={})
     cat = build_catalog(settings, config_dir=tmp_path)
     cfg = cat.kb_chat()
-    assert cfg.llm_base_url == "https://my-ollama:11434"
-    assert cfg.llm_api_key == "secret"
+    assert cfg.llm_base_url == "https://my-ollama:11434"  # ty: ignore[unresolved-attribute]
+    assert cfg.llm_api_key == "secret"  # ty: ignore[unresolved-attribute]
 
 
 def test_description_flows_from_preset_to_resolved_config(tmp_path: Path):
@@ -226,8 +226,8 @@ def test_catalog_build_carries_suggestions_as_structured_objects():
     settings = load(config_path=None, env={})
     cat = build_catalog(settings, config_dir=None)
     kb = cat.kb_chat()
-    assert kb.suggestions, "expected the bundled kb-chat suggestions to flow through"
-    for s in kb.suggestions:
+    assert kb.suggestions, "expected the bundled kb-chat suggestions to flow through"  # ty: ignore
+    for s in kb.suggestions:  # ty: ignore[unresolved-attribute]
         assert isinstance(s, Suggestion), (
             f"suggestion should be a Suggestion struct after catalog build; got {type(s).__name__}"
         )

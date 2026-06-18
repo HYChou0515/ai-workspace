@@ -58,8 +58,8 @@ def _build_harness(llm_response: str) -> tuple[TestClient, SpecStar, str]:
     rm = spec.get_resource_manager(Collection)
     [insights] = [
         r.info.resource_id  # ty: ignore[unresolved-attribute]
-        for r in rm.list_resources(QB.all())  # type: ignore[arg-type]
-        if r.data.name == "Investigations Knowledge"
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if r.data.name == "Investigations Knowledge"  # ty: ignore[unresolved-attribute]
     ]
     return client, spec, insights
 
@@ -174,7 +174,7 @@ def test_ensure_insights_collection_reuses_existing(spec_factory):
     cols = [
         c
         for c in spec.get_resource_manager(Collection).list_resources(QB.all())  # type: ignore[arg-type]
-        if c.data.name == "MyCollection"  # ty: ignore[unresolved-attribute]
+        if c.data.name == "MyCollection"
     ]
     assert len(cols) == 1
 

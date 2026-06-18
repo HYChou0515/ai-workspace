@@ -117,6 +117,6 @@ def test_doc_collection_default_routing_unchanged(spec: SpecStar):
     chunks = _chunks_of(spec, encode_doc_id(cid, "x.md"))
     assert chunks
     for c in chunks:
-        assert len(c.embedding) == EMBED_DIM
+        assert len(c.embedding) == EMBED_DIM  # ty: ignore[invalid-argument-type]
         # Default collection → no alt vector written.
         assert c.embedding_alt in (None, [])

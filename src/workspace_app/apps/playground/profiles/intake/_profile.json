@@ -1,0 +1,15 @@
+{
+  "title": "Intake — classify & file uploads",
+  "description": "Produce → review → commit: classify dropped files, a human approves, then ingest into KB collections.",
+  "tools": ["read_file", "write_file", "ls", "exists"],
+  "workflow": {
+    "title": "Classify & file uploads into collections",
+    "phases": [
+      { "id": "classify", "title": "Classify + digest" },
+      { "id": "review", "title": "Review" },
+      { "id": "ingest", "title": "Ingest to collection" }
+    ],
+    "input_json": "inputs/input.json",
+    "config": { "collections": ["kb-docs", "kb-logs"] }
+  }
+}

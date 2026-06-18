@@ -23,6 +23,18 @@ export const qk = {
   appManifest: (slug: string) => ["appManifest", slug] as const,
   appItems: (slug: string) => ["appItems", slug] as const,
   appItem: (slug: string, id: string) => ["appItem", slug, id] as const,
+
+  // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
+  itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
+  itemChat: (slug: string, itemId: string, chatId: string) =>
+    ["itemChat", slug, itemId, chatId] as const,
+
+  // #100 workflows: per-App profiles (which carry a workflow) + an item's runs.
+  workflowProfiles: (slug: string) => ["workflowProfiles", slug] as const,
+  workflowRuns: (slug: string, itemId: string) =>
+    ["workflowRuns", slug, itemId] as const,
+  workflowRun: (slug: string, itemId: string, runId: string) =>
+    ["workflowRun", slug, itemId, runId] as const,
   health: ["health"] as const,
   monitor: ["monitor"] as const,
 
@@ -51,5 +63,7 @@ export const qk = {
     wikiPage: (collectionId: string, path: string) =>
       ["kb", "wiki-page", collectionId, path] as const,
     wikiStatus: (collectionId: string) => ["kb", "wiki-status", collectionId] as const,
+    // #106: a collection's context cards (the lightweight glossary).
+    contextCards: (collectionId: string) => ["kb", "context-cards", collectionId] as const,
   },
 } as const;

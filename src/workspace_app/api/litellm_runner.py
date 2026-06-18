@@ -12,13 +12,23 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any, Literal
 
 import litellm
-from agents import Agent, FunctionTool, Model, ModelSettings, RunConfig, Runner
+from agents import (
+    Agent,
+    FunctionTool,
+    ItemHelpers,
+    MessageOutputItem,
+    Model,
+    ModelSettings,
+    RunConfig,
+    Runner,
+)
 from agents import MaxTurnsExceeded as _AgentsMaxTurnsExceeded
 from agents.extensions.models.litellm_model import LitellmModel
 from openai.types.shared import Reasoning
@@ -250,26 +260,56 @@ def _agent_for(
     # (litellm `ollama_chat` → UnsupportedParamsError). The `args_recovery`
     # wrap below remains the single defence against the concatenated-args
     # streaming bug, so dropping the flag loses no safety.
-    model_settings = (
+    # Reasoning level → ModelSettings:
+    #   - low|medium|high ⇒ reasoning ON via Reasoning(effort=...).
+    #   - "none" (the OFF signal) ⇒ the OpenAI effort="none" only disables
+    #     thinking on Ollama, so set the provider-correct disable param: vLLM via
+    #     extra_body chat_template_kwargs enable_thinking=False; Ollama via
+    #     extra_args think=False (the SDK LitellmModel splats extra_args as
+    #     top-level completion kwargs and extra_body into the call's extra_body).
+    #   - None (unset) ⇒ leave the model's default.
+    if reasoning_effort == "none":
+        from ..agent.reasoning import reasoning_off_kwargs
+
+        off = reasoning_off_kwargs(config.model)
+        # think → extra_args (top-level kwarg); extra_body → extra_body.
+        model_settings = ModelSettings(
+            extra_args={"think": off["think"]} if "think" in off else None,
+            extra_body=off.get("extra_body"),
+        )
+    elif reasoning_effort:
         # effort is validated to low/medium/high by the request body.
-        ModelSettings(
+        model_settings = ModelSettings(
             reasoning=Reasoning(effort=reasoning_effort),  # ty: ignore[invalid-argument-type]
         )
-        if reasoning_effort
-        else ModelSettings()
-    )
+    else:
+        model_settings = ModelSettings()
     # Per-config LLM endpoint (new schema's agents.presets.<x>.llm) wins
     # over the runner's constructor default — empty strings mean
     # "inherit from runner" so a single-endpoint deploy still works.
     eff_base_url = config.llm_base_url or base_url
     eff_api_key = config.llm_api_key or api_key
     model: Model = LitellmModel(model=config.model, base_url=eff_base_url, api_key=eff_api_key)
-    # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
-    # boundary so a probabilistic small model can't crash/poison/abort the turn.
-    # Leave this line on. To toggle the *self-repair* layer (recovering the
-    # model's intent), comment the marked `repair_tool_args(...)` line inside
-    # agent/repairing_model.py — the backstop still sanitizes either way.
-    model = RepairingModel(model)
+    if _decide_then_act_enabled():
+        # Structured decide-then-act (WORKSPACE_AGENT_DECIDE_THEN_ACT): replace the
+        # native-tool-call path (+ guess-based repair) with grammar-constrained
+        # structured output — valid by construction, no fabrication. Provider-uniform.
+        from ..agent.decide_then_act import DecideThenActModel
+
+        model = DecideThenActModel(
+            model,
+            model=config.model,
+            base_url=eff_base_url,
+            api_key=eff_api_key,
+            reasoning_effort=reasoning_effort,
+        )
+    else:
+        # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
+        # boundary so a probabilistic small model can't crash/poison/abort the turn.
+        # Leave this line on. To toggle the *self-repair* layer (recovering the
+        # model's intent), comment the marked `repair_tool_args(...)` line inside
+        # agent/repairing_model.py — the backstop still sanitizes either way.
+        model = RepairingModel(model)
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
@@ -459,6 +499,56 @@ def _should_retry(*, progress_made: bool, attempt: int, max_retries: int) -> boo
     return attempt <= max_retries
 
 
+# ── non-streaming escape hatch (WORKSPACE_AGENT_STREAM=0) ─────────────────────
+# The streaming aggregator (LiteLLM merging tool_call deltas) can corrupt or drop
+# the tool_call so the model "emits the call as plain text" and the turn loops to
+# MaxTurns. Measured against qwen3:14b on the same classify prompt: 0/4 streamed
+# trials produced a real tool call vs 3/4 non-streamed (the #69 'replay works,
+# live emits text' gap). Set WORKSPACE_AGENT_STREAM=0 to fetch the whole response
+# in one shot (get_response) instead — a clean structured tool_call at the cost of
+# live token output. Default stays streamed (observability; feedback_always_stream).
+def _stream_enabled() -> bool:
+    return os.environ.get("WORKSPACE_AGENT_STREAM", "1").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+def _decide_then_act_enabled() -> bool:
+    """Opt into the structured decide-then-act Model (DecideThenActModel) — a
+    provider-uniform replacement for native tool-calling + guess-based repair.
+    Only the tool-call generation (decision + args) is non-streaming; the final
+    text answer streams via DecideThenActModel.stream_response (so the turn runs
+    through the normal streaming path)."""
+    return os.environ.get("WORKSPACE_AGENT_DECIDE_THEN_ACT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+class _ItemEvent:
+    """Adapt a completed ``RunItem`` to the ``run_item_stream_event`` shape that
+    ``_map_event`` expects, so the non-streaming path reuses the SAME tool
+    start/end mapping as the streamed path."""
+
+    type = "run_item_stream_event"
+
+    def __init__(self, name: str, item: Any) -> None:
+        self.name = name
+        self.item = item
+
+
+# RunItem.type → the stream-event name _map_event keys on.
+_NONSTREAM_TOOL_EVENT = {
+    "tool_call_item": "tool_called",
+    "tool_call_output_item": "tool_output",
+}
+
+
 class LitellmAgentRunner:
     """Runs one user turn through agents-SDK + LiteLLM, retrying once on
     recognised small-model failures and surfacing the diagnosis to the
@@ -549,6 +639,14 @@ class LitellmAgentRunner:
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
+        # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0).
+        # decide-then-act now uses the STREAMING path too — its
+        # DecideThenActModel.stream_response keeps only the tool-call generation
+        # (decision + args) non-streaming and streams the final text answer.
+        if not _stream_enabled():
+            async for ev in self._run_once_nonstream(prompt, ctx, feedback):
+                yield ev
+            return
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
@@ -692,3 +790,89 @@ class LitellmAgentRunner:
             # retry/terminal handling still fires.
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+    async def _run_once_nonstream(  # pragma: no cover — exercised only by the live Ollama test
+        self, prompt: str, ctx: AgentToolContext, feedback: str | None
+    ) -> AsyncIterator[AgentEvent]:
+        """One turn with the model NOT streaming (WORKSPACE_AGENT_STREAM=0): fetch
+        the whole response in a single ``Runner.run`` (``get_response``), then emit
+        the tool calls + final message from the completed result. Trades live token
+        output (and live exec logs) for a clean structured tool_call — the streaming
+        aggregator's tool_call corruption can't happen on a one-shot response.
+
+        Same retry/terminal contract as the streamed path: this raises (MaxTurns,
+        recovery errors) straight up to ``run()`` which maps them as usual. The
+        RepairingModel + args_recovery backstops still apply (``_agent_for``)."""
+        assert ctx.agent_config is not None
+        agent = _agent_for(
+            ctx.agent_config,
+            ctx.packages,
+            extra_instructions=feedback,
+            base_url=self._base_url,
+            api_key=self._api_key,
+            reasoning_effort=ctx.reasoning_effort,
+            app_slug=ctx.app_slug,
+            template_profile=ctx.template_profile,
+        )
+        t0 = time.monotonic()
+        prompt_tok = _approx_tokens(len(prompt))
+        # No stream → exec stdout can't interleave live; it still lands in the
+        # tool's result. Swallow mid-turn pushes so a long exec doesn't error.
+        ctx.on_exec_output = lambda b: None
+        yield AgentMetrics(phase="up", prompt_tokens=prompt_tok, elapsed_ms=0)
+        run_config = RunConfig(
+            workflow_name=_trace_workflow_name(ctx), group_id=ctx.investigation_id
+        )
+        result = await Runner.run(
+            agent,
+            input=_build_input(ctx.history, prompt),  # ty: ignore[invalid-argument-type]
+            context=ctx,
+            max_turns=ctx.max_turns or self._max_turns,
+            run_config=run_config,
+        )
+        content_buf: list[str] = []
+        tool_calls_seen = 0
+        splitter = ThinkSplitter()  # split any inline <think> out of the content
+        for item in result.new_items:
+            itype = getattr(item, "type", "")
+            if itype in _NONSTREAM_TOOL_EVENT:
+                mapped = _map_event(_ItemEvent(_NONSTREAM_TOOL_EVENT[itype], item))
+                if mapped is None:
+                    continue
+                if isinstance(mapped, ToolStart):
+                    tool_calls_seen += 1
+                if isinstance(mapped, ToolEnd):
+                    disp = ctx.tool_displays.get(mapped.output, "")
+                    if disp:
+                        mapped = replace(mapped, display=disp)
+                yield mapped
+            elif isinstance(item, MessageOutputItem):
+                content, reasoning = splitter.feed(ItemHelpers.text_message_output(item))
+                if reasoning:
+                    yield MessageDelta(text=reasoning, reasoning=True)
+                if content:
+                    content_buf.append(content)
+                    yield MessageDelta(text=content)
+        tail_content, tail_reasoning = splitter.flush()
+        if tail_reasoning:
+            yield MessageDelta(text=tail_reasoning, reasoning=True)
+        if tail_content:
+            content_buf.append(tail_content)
+            yield MessageDelta(text=tail_content)
+        if trace_enabled():
+            _emit_llm_trace(
+                agent,
+                ctx,
+                runner_base_url=self._base_url,
+                tool_calls=tool_calls_seen,
+                content_text="".join(content_buf),
+            )
+        prompt_final, completion_final = _final_tokens(
+            _exact_usage(result), prompt_tok, len("".join(content_buf))
+        )
+        yield AgentMetrics(
+            phase="final",
+            prompt_tokens=prompt_final,
+            completion_tokens=completion_final,
+            elapsed_ms=round((time.monotonic() - t0) * 1000),
+        )

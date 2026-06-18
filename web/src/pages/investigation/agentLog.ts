@@ -320,5 +320,10 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // #43: a workspace file changed — a side effect handled in the hook
       // (refetch the file tree), not folded into the agent log.
       return log;
+
+    default:
+      // #100: workflow phase/step events ride the same item stream but are
+      // rendered by the run progress view (WorkflowRunSection), not the chat log.
+      return log;
   }
 }

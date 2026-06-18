@@ -49,7 +49,7 @@ async def test_answer_question_with_wiki_true_answers_from_the_wiki_and_cites_th
     runner = WikiAwareRunner(_WikiAnsweringBase(), spec)
     answer = await answer_question(
         runner,
-        retriever=None,  # type: ignore[arg-type] — wiki-only path never touches it
+        retriever=None,  # ty: ignore[invalid-argument-type] — wiki-only path never touches it
         collection_ids=[cid],
         question="what is the zone 3 setpoint?",
         agent_config=AgentConfig(name="KB"),
@@ -74,7 +74,7 @@ async def test_answer_question_without_wiki_does_not_take_the_wiki_path():
     runner = WikiAwareRunner(_WikiAnsweringBase(), spec)
     answer = await answer_question(
         runner,
-        retriever=None,  # type: ignore[arg-type]
+        retriever=None,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         collection_ids=[cid],
         question="q",
         agent_config=AgentConfig(name="KB"),

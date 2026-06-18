@@ -27,6 +27,8 @@ from specstar.types import ResourceIDNotFoundError
 from ..agent.context import AgentToolContext
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
+from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections
+from ..kb.context_cards import match as match_cards
 from ..kb.retriever import Enhancements, Retriever
 from ..resources import AgentConfig
 from ..resources.kb import Citation, KbChat, KbMessage
@@ -60,6 +62,7 @@ async def answer_question(
     question: str,
     *,
     agent_config: AgentConfig,
+    spec: SpecStar | None = None,
     enhancements: Enhancements | None = None,
     reasoning_effort: str | None = None,
     wiki: bool = False,
@@ -86,6 +89,11 @@ async def answer_question(
         retriever=retriever,
         collection_ids=collection_ids,
         agent_config=agent_config,
+        # specstar handle so a kb_chat agent granted `lookup_glossary` can read
+        # context cards on the bridge path too (RCA → ask_knowledge_base → KB
+        # sub-agent). None when the caller can't supply one (degrades to the
+        # tool's "needs a collection-scoped context" note, not a crash).
+        spec=spec,
         # Caller's knowledge-search depth (e.g. the RCA composer's pick,
         # forwarded over the bridge) — kb_search's cascade consumes it.
         kb_enhancements=enhancements,
@@ -398,6 +406,10 @@ def register_kb_chat_routes(
             retriever=retriever,
             collection_ids=chat.collection_ids,
             agent_config=agent_config,
+            # specstar handle so the agent's `lookup_glossary` tool (when granted)
+            # can read this collection's context cards — deterministic glossary
+            # path beside kb_search (unknown term → glossary, question → search).
+            spec=spec,
             # Cross-turn memory: prior dialogue (excludes the user msg just added).
             history=history_items(
                 chat.messages[:-1],
@@ -442,7 +454,18 @@ def register_kb_chat_routes(
                 fresh.messages.append(km)
             chat_rm.update(chat_id, fresh)
 
-        return await engine.stream(chat_id, body.content, ctx, on_complete=persist)
+        # #106: deterministic context-card pre-scan. Inject any cards whose keys
+        # appear in the message so a covered term is answered straight away,
+        # without a kb_search round-trip. The persisted user message (above)
+        # stays clean — only the content handed to the agent is augmented.
+        agent_content = body.content
+        if chat.collection_ids:
+            cards = cards_for_collections(spec, chat.collection_ids)
+            block = card_context_block(match_cards(body.content, build_vocab(cards)))
+            if block:
+                agent_content = f"{block}\n\n{body.content}"
+
+        return await engine.stream(chat_id, agent_content, ctx, on_complete=persist)
 
     @app.delete("/kb/chats/{chat_id}/messages/current", status_code=204)
     async def cancel_message(chat_id: str) -> Response:

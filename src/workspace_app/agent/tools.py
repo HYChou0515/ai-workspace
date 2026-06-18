@@ -325,13 +325,17 @@ def kb_search_impl(
     hyde: int | None = None,
     rerank: bool | None = None,
 ) -> str:
-    """Search the knowledge base; returns numbered passages to cite as [n].
+    """Semantic search over the knowledge base; returns numbered passages to cite as [n].
 
-    Call this whenever you need facts from the documents — and again, with a
-    refined query, when an answer references something else worth looking up.
-    Each result is numbered globally across the turn; cite a claim with the
-    matching [n]. Numbers persist across calls, so [1] always means the same
-    passage.
+    This is VECTOR retrieval — it matches on MEANING, not keywords. Pass a
+    natural-language question or a short description of what you need (the way
+    you'd ask a person), NOT keywords or a Google-style query. One well-phrased
+    query usually returns the relevant passages; READ them before searching
+    again. Only search again for GENUINELY DIFFERENT information (a new
+    entity/term/sub-topic the results surfaced) — never re-run a reworded version
+    of the same question (it's slow and returns the same passages). Each result
+    is numbered globally across the turn; cite a claim with the matching [n].
+    Numbers persist across calls, so [1] always means the same passage.
 
     The optional `expand` / `hyde` / `rerank` knobs override the operator's
     retrieval enhancement defaults for THIS call only — set them when the
@@ -634,6 +638,39 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
         return f"error: {e}. available skills: {avail}"
 
 
+def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) -> str:
+    """Resolve a collection id-or-name to its canonical {id, name} (JSON).
+
+    Use this when the user asks to add or switch a collection: pass the id or name
+    they gave, then write the returned {id, name} into `collections.json` yourself
+    with write_file / edit_file. Returns a JSON object whose `status` is `ok` (with
+    `id` + `name`), `ambiguous` (with `candidates`), or `not_found` (with the
+    `available` collections). This only LOOKS UP — it never edits the file."""
+    from ..kb.collections import resolve_collection
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: resolve_collection is only available in a Topic Hub turn"
+    return json.dumps(resolve_collection(spec, ref), ensure_ascii=False)
+
+
+def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -> str:
+    """Look up the Hub's glossary (context cards) for a term or phrase.
+
+    Deterministic + instant — no knowledge-base search. Pass a term you don't
+    recognise (or the sentence containing it); returns any matching glossary entries
+    as authoritative context, or a short "not found" note. Prefer this BEFORE
+    ask_knowledge_base for jargon / abbreviations / domain terms."""
+    from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections, match
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: lookup_glossary needs a collection-scoped context (no spec on this turn)"
+    cards = cards_for_collections(spec, ctx.context.collection_ids)
+    block = card_context_block(match(query, build_vocab(cards)))
+    return block or f"No glossary entries found for: {query}"
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -646,6 +683,9 @@ _IMPLS = {
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
+    # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
+    "resolve_collection": resolve_collection_impl,
+    "lookup_glossary": lookup_glossary_impl,
     # Wiki agent tools (#50). Opt-in via the wiki presets' allowed_tools;
     # not in _WORKSPACE_TOOLS (they need a wiki context).
     "search_wiki": search_wiki_impl,

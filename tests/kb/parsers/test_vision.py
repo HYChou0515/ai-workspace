@@ -168,7 +168,7 @@ def test_pdf_sparse_page_goes_through_the_vlm():
     assert "etch chamber wafer map" in docs[0].text
     (call,) = vlm.calls
     # A real PNG render reached the VLM.
-    img, mime = call["images"][0]  # type: ignore[index]
+    img, mime = call["images"][0]  # type: ignore[index]  # ty: ignore[not-subscriptable]
     assert isinstance(img, bytes) and img[:8] == b"\x89PNG\r\n\x1a\n"
     assert mime == "image/png"
     assert "page 1 of deck.pdf" in str(call["prompt"])

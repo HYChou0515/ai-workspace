@@ -12,6 +12,7 @@ import type {
   KbChatMessage,
   KbChatSummary,
   KbCollection,
+  KbContextCard,
   KbDocChunk,
   KbDocument,
   KbRenderedDoc,
@@ -25,6 +26,14 @@ const collections = new Map<string, KbCollection>();
 const documents = new Map<string, KbDocument[]>();
 const docChunks = new Map<string, KbDocChunk[]>();
 const chats = new Map<string, KbChatDetail>();
+// collectionId → its context cards (#106), keyed by collection like documents.
+const contextCards = new Map<string, KbContextCard[]>();
+
+/** Faithful mirror of the BE `norm()` — NFKC, casefold, collapse whitespace —
+ * then deduped + sorted, so the mock's `norm_keys` look like production's. */
+const normKey = (s: string) => s.normalize("NFKC").toLowerCase().split(/\s+/).filter(Boolean).join(" ");
+const deriveNormKeys = (keys: string[]) =>
+  [...new Set(keys.map(normKey).filter(Boolean))].sort();
 // collectionId → (page path → markdown). The LLM wiki, mocked.
 const wikiPages = new Map<string, Map<string, string>>();
 // collectionId → live build status (the "Updating…" UI polls this).
@@ -332,6 +341,39 @@ export const mockKbApi: KbApi = {
       }
     );
   },
+  async listContextCards(collectionId) {
+    return [...(contextCards.get(collectionId) ?? [])];
+  },
+  async createContextCard(input) {
+    const list = contextCards.get(input.collection_id) ?? [];
+    const id = nextId("card");
+    list.push({
+      id,
+      collection_id: input.collection_id,
+      keys: input.keys,
+      norm_keys: deriveNormKeys(input.keys),
+      title: input.title,
+      body: input.body,
+    });
+    contextCards.set(input.collection_id, list);
+    return id;
+  },
+  async updateContextCard(id, patch) {
+    for (const [cid, list] of contextCards) {
+      const i = list.findIndex((c) => c.id === id);
+      if (i !== -1) {
+        list[i] = { ...list[i], ...patch, norm_keys: deriveNormKeys(patch.keys) };
+        contextCards.set(cid, list);
+        return;
+      }
+    }
+  },
+  async deleteContextCard(id) {
+    for (const [cid, list] of contextCards) {
+      const next = list.filter((c) => c.id !== id);
+      if (next.length !== list.length) contextCards.set(cid, next);
+    }
+  },
   async cancelMessage(_chatId) {
     // No server turn to cancel in the mock; the FE aborts the stream locally.
   },
@@ -430,5 +472,6 @@ export const _resetKbMock = () => {
   chats.clear();
   wikiPages.clear();
   wikiStatus.clear();
+  contextCards.clear();
   seq = 0;
 };

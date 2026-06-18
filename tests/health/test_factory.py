@@ -9,11 +9,13 @@ import dataclasses
 
 import pytest
 
+from workspace_app.apps.catalog import discover_app_slugs
 from workspace_app.config.schema import Settings
 from workspace_app.factories import get_check_registry
 from workspace_app.health import CheckResult, ISanityCheck
 
-_BUNDLED_IDS = [
+# The fixed (non-App) bundled probes, in registration order.
+_FIXED_IDS = [
     "embedder-default",
     "embedder-code",
     "insight-extraction",
@@ -23,8 +25,15 @@ _BUNDLED_IDS = [
     "agent-infer-modules",
     "agent-wiki-reader",
     "agent-wiki-maintainer",
-    "agent-rca",  # #89: one probe per registered App's default agent
 ]
+
+
+def _bundled_ids() -> list[str]:
+    """The fixed probes plus one ``agent-<slug>`` per discovered App (#89 P8 T5).
+    Derived from ``discover_app_slugs()`` — the same source the factory iterates —
+    so a drop-in App (rca, playground, …) is reflected automatically instead of
+    breaking a hardcoded list."""
+    return _FIXED_IDS + [f"agent-{slug}" for slug in discover_app_slugs()]
 
 
 class HelloCheck(ISanityCheck):
@@ -39,7 +48,7 @@ class HelloCheck(ISanityCheck):
 
 def test_default_settings_register_all_bundled_checks():
     reg = get_check_registry(Settings())
-    assert [c.check_id for c in reg.checks()] == _BUNDLED_IDS
+    assert [c.check_id for c in reg.checks()] == _bundled_ids()
 
 
 def test_app_agent_probe_targets_the_resolved_app_default_model():
@@ -81,7 +90,7 @@ def test_checks_disabled_filters_and_validates():
         health=dataclasses.replace(base.health, checks_disabled=["vlm-describe"]),
     )
     ids = [c.check_id for c in get_check_registry(s).checks()]
-    assert "vlm-describe" not in ids and len(ids) == len(_BUNDLED_IDS) - 1
+    assert "vlm-describe" not in ids and len(ids) == len(_bundled_ids()) - 1
 
     bad = dataclasses.replace(
         base,

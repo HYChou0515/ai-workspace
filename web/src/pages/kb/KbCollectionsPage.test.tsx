@@ -168,7 +168,11 @@ describe("KbCollectionsPage", () => {
     render(<KbCollectionsPage client={client} />);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open Reflow SOPs" }));
-    const banner = (await screen.findByText("Documents")).closest(".kb-colpage__stats")!;
+    // "Documents" now appears as both a stats label and a view tab (#106); pick
+    // the one inside the stats banner.
+    const banner = (await screen.findAllByText("Documents"))
+      .map((el) => el.closest(".kb-colpage__stats"))
+      .find(Boolean)!;
     expect(banner.querySelector(".kb-stat")).toHaveTextContent("2"); // doc_count
     expect(banner).toHaveTextContent("5×"); // cited
     expect(banner).toHaveTextContent("alice"); // owner
