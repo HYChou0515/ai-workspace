@@ -274,12 +274,22 @@ def _agent_for(
     eff_base_url = config.llm_base_url or base_url
     eff_api_key = config.llm_api_key or api_key
     model: Model = LitellmModel(model=config.model, base_url=eff_base_url, api_key=eff_api_key)
-    # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
-    # boundary so a probabilistic small model can't crash/poison/abort the turn.
-    # Leave this line on. To toggle the *self-repair* layer (recovering the
-    # model's intent), comment the marked `repair_tool_args(...)` line inside
-    # agent/repairing_model.py — the backstop still sanitizes either way.
-    model = RepairingModel(model)
+    if _decide_then_act_enabled():
+        # Structured decide-then-act (WORKSPACE_AGENT_DECIDE_THEN_ACT): replace the
+        # native-tool-call path (+ guess-based repair) with grammar-constrained
+        # structured output — valid by construction, no fabrication. Provider-uniform.
+        from ..agent.decide_then_act import DecideThenActModel
+
+        model = DecideThenActModel(
+            model, model=config.model, base_url=eff_base_url, api_key=eff_api_key
+        )
+    else:
+        # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
+        # boundary so a probabilistic small model can't crash/poison/abort the turn.
+        # Leave this line on. To toggle the *self-repair* layer (recovering the
+        # model's intent), comment the marked `repair_tool_args(...)` line inside
+        # agent/repairing_model.py — the backstop still sanitizes either way.
+        model = RepairingModel(model)
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
@@ -486,6 +496,18 @@ def _stream_enabled() -> bool:
     }
 
 
+def _decide_then_act_enabled() -> bool:
+    """Opt into the structured decide-then-act Model (DecideThenActModel) — a
+    provider-uniform replacement for native tool-calling + guess-based repair.
+    It is non-streaming (so the turn runs through the get_response path)."""
+    return os.environ.get("WORKSPACE_AGENT_DECIDE_THEN_ACT", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class _ItemEvent:
     """Adapt a completed ``RunItem`` to the ``run_item_stream_event`` shape that
     ``_map_event`` expects, so the non-streaming path reuses the SAME tool
@@ -595,9 +617,10 @@ class LitellmAgentRunner:
         self, prompt: str, ctx: AgentToolContext, feedback: str | None
     ) -> AsyncIterator[AgentEvent]:
         assert ctx.agent_config is not None  # run() guards None before _run_once
-        # Escape hatch: non-streaming turn (avoids the streaming tool_call
-        # corruption — see _stream_enabled). Delegates entirely; no stream setup.
-        if not _stream_enabled():
+        # Non-streaming path: the escape hatch (WORKSPACE_AGENT_STREAM=0) OR
+        # decide-then-act (which is structured/non-streaming by construction —
+        # its DecideThenActModel only implements get_response). Delegates entirely.
+        if not _stream_enabled() or _decide_then_act_enabled():
             async for ev in self._run_once_nonstream(prompt, ctx, feedback):
                 yield ev
             return
