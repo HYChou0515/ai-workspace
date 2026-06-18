@@ -202,12 +202,21 @@ export function AgentPanel({
     <aside
       data-testid="agent-panel"
       style={{
-        ...(fill ? { flex: 1, minWidth: 0 } : { width, flexShrink: 0 }),
+        // The panel always sits in a flex COLUMN (ItemChatPanel for a Hub chat,
+        // the chat wrapper in WorkspaceShell for RCA), so it must grow on the main
+        // (vertical) axis to fill that column's height — otherwise it collapses to
+        // its content height and the message list below never becomes a bounded,
+        // scrollable region (#109: single-chat workspace had no scrollbar once the
+        // panel was wrapped in a column instead of being a direct row child).
+        // `fill` only selects the WIDTH behaviour: stretch to the row (chat-only
+        // Apps + each Hub chat) vs a fixed, resizable width (RCA's side panel).
+        flex: 1,
+        minHeight: 0,
+        ...(fill ? { minWidth: 0 } : { width, flexShrink: 0 }),
         background: "var(--paper)",
         borderLeft: "1px solid var(--paper-3)",
         display: "flex",
         flexDirection: "column",
-        minHeight: 0,
       }}
     >
       <AgentHeader

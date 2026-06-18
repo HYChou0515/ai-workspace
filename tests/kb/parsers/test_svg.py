@@ -89,6 +89,10 @@ def test_svg_parser_rasterizes_then_describes_via_vlm():
     assert img_mime == "image/png"
     assert img_bytes[:4] == b"\x89PNG"
     assert any("diagram.svg" in m for m in progress)
+    # Issue #115: the VLM emits Markdown → flag it so DispatchSplitter routes
+    # the SVG description through the heading-aware Markdown path.
+    assert docs[0].metadata["content_format"] == "markdown"
+    assert docs[0].metadata["mime"] == "image/svg+xml"  # source mime stays honest
 
 
 def test_svg_parser_degrades_to_zero_chunks_on_unrasterizable_input():

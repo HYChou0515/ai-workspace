@@ -185,6 +185,11 @@
 #     # model: openai/gpt-4o                # ← optional inline override (hosted vision model)
 #   # vlm_llm: null                         # ← off switch: image uploads store with zero chunks
 #   #                                       #   until a VLM is configured + the doc is reindexed
+#   # vlm_format_llm:                       # issue #115: text LLM that re-emits the VLM's output as
+#   #   preset: kb-retrieval                #   clean Markdown so the chunker splits on structure
+#   #                                       #   instead of truncating tables/sections. Same usage-entry
+#   #                                       #   shape as the others. OMIT = reuse retrieval_llm; both
+#   #                                       #   off = stage 2 skipped (raw VLM text used as-is).
 #   wiki:                                   # issue #56: the LLM wiki (maintainer / reader / merge)
 #     llm:                                  # ← which model drives the wiki agents. SAME preset-ref
 #       preset: wiki-default                #   shape as retrieval_llm / vlm_llm. The agents own

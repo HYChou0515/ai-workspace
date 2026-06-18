@@ -265,6 +265,12 @@ class KbSettings:
     vlm_llm: RetrievalLlmRef | None = field(
         default_factory=lambda: RetrievalLlmRef(preset="kb-vlm"),
     )
+    # Issue #115: the text LLM that re-formats the VLM's output into clean
+    # Markdown (small VLMs read images well but often emit free text the
+    # chunker then truncates). `None` (the default) = reuse `retrieval_llm`;
+    # both off = stage 2 skipped (the raw VLM text is used as-is). Same
+    # usage-entry shape as `retrieval_llm` / `vlm_llm`.
+    vlm_format_llm: RetrievalLlmRef | None = None
     # Issue #56: wiki-agent LLM (preset ref) + step budgets. `wiki.llm:
     # null` disables the wiki subsystem.
     wiki: WikiSettings = field(default_factory=WikiSettings)

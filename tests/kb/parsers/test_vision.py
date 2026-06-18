@@ -139,6 +139,23 @@ def test_image_parser_one_image_one_document_via_vlm():
     assert any("wafer.png" in m for m in progress)
 
 
+def test_image_parser_tags_document_as_markdown_content():
+    """Issue #115: the VLM emits Markdown, but the source mime is image/png.
+    The parser flags the output `content_format='markdown'` so DispatchSplitter
+    routes it through the Markdown path (heading-aware, tables kept whole)
+    instead of the SentenceSplitter that truncates mid-structure."""
+    _, d = _describer()
+    docs = list(
+        VlmImageParser(d).parse(
+            _input(_MIN_PNG, "wafer.png"), filename="wafer.png", mime="image/png"
+        )
+    )
+    assert docs[0].metadata["content_format"] == "markdown"
+    # Source mime stays truthful — we route on content_format, never by lying
+    # about what the original file was.
+    assert docs[0].metadata["mime"] == "image/png"
+
+
 # ── PdfParser v2 ─────────────────────────────────────────────────────
 
 
@@ -172,6 +189,28 @@ def test_pdf_sparse_page_goes_through_the_vlm():
     assert isinstance(img, bytes) and img[:8] == b"\x89PNG\r\n\x1a\n"
     assert mime == "image/png"
     assert "page 1 of deck.pdf" in str(call["prompt"])
+
+
+def test_pdf_visual_page_tagged_markdown_text_page_is_not():
+    """Issue #115: a page whose body came from the VLM is Markdown → tagged
+    content_format='markdown' so it splits on structure. A plain text-layer
+    page is prose → NOT tagged, so it stays on the SentenceSplitter (tagging it
+    markdown would make MarkdownNodeParser emit one giant heading-less node)."""
+    _, d = _describer()
+    visual = list(
+        PdfParser(d).parse(
+            _input(_SPARSE_PDF, "deck.pdf"), filename="deck.pdf", mime="application/pdf"
+        )
+    )
+    assert visual[0].metadata["content_format"] == "markdown"
+
+    _, d2 = _describer()
+    text_only = list(
+        PdfParser(d2, sparse_text_threshold=5).parse(
+            _input(_TEXT_PDF, "paper.pdf"), filename="paper.pdf", mime="application/pdf"
+        )
+    )
+    assert text_only[0].metadata.get("content_format") != "markdown"
 
 
 def test_pdf_without_vlm_degrades_to_text_only():

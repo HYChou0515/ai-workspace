@@ -349,6 +349,269 @@ def test_dispatch_splitter_routes_json_to_json_node_parser(embedder: HashEmbedde
     assert "name Amy" in nodes[1].get_content()
 
 
+def test_dispatch_splitter_routes_content_format_markdown_to_markdown_parser():
+    """Issue #115: parsers that emit Markdown (VLM image / PDF visual page /
+    PPTX output) tag the Document with metadata['content_format']='markdown'.
+    Even though the source mime is image/png, DispatchSplitter must route it
+    through MarkdownNodeParser (structure-aware + heading breadcrumb) — NOT the
+    SentenceSplitter fallback, which chops the structured text into raw token
+    windows that sever sections from headings and cut tables mid-row."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    doc = Document(
+        text=(
+            "## Visual description\n\nA bar chart of weekly etch yield.\n\n"
+            "## Tables and chart data\n\n"
+            "| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n"
+        ),
+        # Source is a PNG — the OLD routing (mime/extension only) would send
+        # this to the SentenceSplitter. The content_format hint overrides that.
+        metadata={"filename": "chart.png", "mime": "image/png", "content_format": "markdown"},
+    )
+    nodes = DispatchSplitter()([doc])
+    # Split on heading boundaries → the two H2 sections are separate nodes.
+    # (The SentenceSplitter would keep this short text as ONE node.)
+    assert len(nodes) >= 2
+    # The Markdown table lands whole inside ONE node (never split mid-row)…
+    table_nodes = [n for n in nodes if "| W1 | 92% |" in n.get_content()]
+    assert len(table_nodes) == 1
+    assert "| W2 | 95% |" in table_nodes[0].get_content()
+    # …and that node carries its heading as a breadcrumb prefix (structure-aware
+    # embedding) — proof it went through the Markdown path, not the fallback.
+    assert "Tables and chart data" in table_nodes[0].get_content()
+
+
+def test_dispatch_splitter_explodes_large_table_into_rows_spanning_the_table():
+    """Issue #116: a LARGE Markdown table (> table_max_rows) becomes one chunk
+    per row, each embedded as `col: value` (column names travel) — and every
+    row chunk's char span is the WHOLE table, so the structural parent-doc
+    merge re-extracts the full table at generation and citations stay valid."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    text = (
+        "## Tables and chart data\n\n"
+        "| week | yield |\n| --- | --- |\n"
+        "| W1 | 92% |\n| W2 | 95% |\n| W3 | 90% |\n| W4 | 88% |\n"
+    )
+    doc = Document(
+        text=text,
+        metadata={"filename": "chart.png", "mime": "image/png", "content_format": "markdown"},
+    )
+    # threshold 2 → the 4-row table is "large".
+    nodes = DispatchSplitter(table_max_rows=2)([doc])
+    row_nodes = [n for n in nodes if "week: W" in n.get_content()]
+    assert len(row_nodes) == 4
+    assert any("week: W3\nyield: 90%" in n.get_content() for n in row_nodes)
+    # Every row chunk spans the WHOLE table (one shared span).
+    spans = {(n.start_char_idx, n.end_char_idx) for n in row_nodes}
+    assert len(spans) == 1
+    (s, e) = next(iter(spans))
+    assert text[s:e].startswith("| week | yield |")
+    assert text[s:e].rstrip().endswith("| W4 | 88% |")
+
+
+def _md_image_doc(text: str):
+    from llama_index.core.schema import Document
+
+    return Document(
+        text=text,
+        metadata={"filename": "x.png", "mime": "image/png", "content_format": "markdown"},
+    )
+
+
+def test_dispatch_splitter_keeps_small_table_as_one_markdown_chunk():
+    """Issue #116: a SMALL table (≤ table_max_rows) stays one chunk preserving
+    the Markdown table — explosion only helps large tables; tiny tables read
+    best whole."""
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    text = (
+        "## Tables and chart data\n\n"
+        "| metric | value |\n| --- | --- |\n| yield | 92% |\n| defects | 3 |\n"
+    )
+    nodes = DispatchSplitter(table_max_rows=10)([_md_image_doc(text)])  # 2 rows ≤ 10
+    joined = "\n".join(n.get_content() for n in nodes)
+    assert "| yield | 92% |" in joined  # markdown table preserved
+    assert "metric: yield" not in joined  # NOT exploded into col: value
+    whole = [
+        n
+        for n in nodes
+        if "| yield | 92% |" in n.get_content() and "| defects | 3 |" in n.get_content()
+    ]
+    assert len(whole) == 1
+
+
+def test_large_table_row_chunks_carry_the_section_breadcrumb():
+    """Each row chunk leads with the section heading as context (the lightweight
+    contextual-retrieval the research recommends)."""
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    text = (
+        "## Q3 yield\n\n| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n| W3 | 90% |\n"
+    )
+    nodes = DispatchSplitter(table_max_rows=2)([_md_image_doc(text)])
+    row_nodes = [n for n in nodes if "week: W1" in n.get_content()]
+    assert row_nodes and row_nodes[0].get_content().startswith("Q3 yield")
+
+
+def test_section_with_prose_and_table_keeps_prose_and_explodes_table():
+    """A section mixing prose + a large table: the prose survives as its own
+    chunk AND the table row-explodes — no content lost."""
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    text = (
+        "## Tables and chart data\n\n"
+        "Yield improved across the quarter.\n\n"
+        "| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n| W3 | 90% |\n\n"
+        "See appendix for raw counts.\n"
+    )
+    nodes = DispatchSplitter(table_max_rows=2)([_md_image_doc(text)])
+    joined = "\n".join(n.get_content() for n in nodes)
+    assert "Yield improved across the quarter." in joined  # prose before the table
+    assert "See appendix for raw counts." in joined  # prose after the table
+    assert any("week: W2\nyield: 95%" in n.get_content() for n in nodes)  # table exploded
+
+
+def test_multiple_tables_in_one_section_handled_independently():
+    """一圖多表: several tables in one section are detected and processed
+    separately — large ones explode, small ones stay whole, each with its own
+    span."""
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    text = (
+        "## Tables and chart data\n\n"
+        "| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n\n"
+        "| x | y |\n| --- | --- |\n| 7 | 8 |\n"
+    )
+    nodes = DispatchSplitter(table_max_rows=2)([_md_image_doc(text)])
+    joined = "\n".join(n.get_content() for n in nodes)
+    assert any("a: 1\nb: 2" in n.get_content() for n in nodes)  # 3-row table exploded
+    assert "| 7 | 8 |" in joined  # 1-row table kept whole
+    # The two tables occupy different spans.
+    table_spans = {
+        (n.start_char_idx, n.end_char_idx)
+        for n in nodes
+        if "a: 1" in n.get_content() or "| 7 | 8 |" in n.get_content()
+    }
+    assert len(table_spans) == 2
+
+
+def test_ingest_large_table_writes_row_chunks_spanning_the_table(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    """Issue #116 end-to-end: ingesting a VLM image whose Markdown holds a large
+    table writes one `col: value` DocChunk per row, ALL sharing the table's char
+    span — and that span re-slices to the table in the SourceDoc canonical text,
+    so the existing structural parent-doc merge rebuilds the whole table and
+    citations resolve. Also exercises the tunable table_max_rows."""
+    from llama_index.core.ingestion import IngestionPipeline
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter, EmbedderAdapter
+    from workspace_app.kb.parsers import IParser, ParserRegistry
+    from workspace_app.resources.kb import SourceDoc
+
+    md = (
+        "## Tables and chart data\n\n"
+        "| week | yield |\n| --- | --- |\n"
+        "| W1 | 92% |\n| W2 | 95% |\n| W3 | 90% |\n| W4 | 88% |\n"
+    )
+
+    class MdTableParser(IParser):
+        def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
+            return filename.endswith(".png")
+
+        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+            return [
+                Document(
+                    text=md,
+                    metadata={
+                        "filename": filename,
+                        "mime": "image/png",
+                        "content_format": "markdown",
+                    },
+                )
+            ]
+
+    registry = ParserRegistry().register(MdTableParser())
+    pipeline = IngestionPipeline(
+        transformations=[DispatchSplitter(table_max_rows=2), EmbedderAdapter(embedder)]
+    )
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder, parser_registry=registry)
+    cid = _new_collection(spec)
+    ids = ingestor.ingest(collection_id=cid, user="alice", filename="chart.png", data=b"\x89PNG")
+    chunks = _chunks_of(spec, ids[0])
+
+    row_chunks = [c for c in chunks if "week: W" in c.text]
+    assert len(row_chunks) == 4
+    assert all(len(c.embedding) == EMBED_DIM for c in row_chunks)  # ty: ignore[invalid-argument-type]
+    # Every row chunk shares ONE span = the whole table.
+    spans = {(c.start, c.end) for c in row_chunks}
+    assert len(spans) == 1
+    # That span re-slices to the Markdown table in the canonical SourceDoc text.
+    sd = spec.get_resource_manager(SourceDoc).get(ids[0]).data
+    assert isinstance(sd, SourceDoc)
+    (s, e) = next(iter(spans))
+    assert sd.text is not None
+    sliced = sd.text[s:e]
+    assert sliced.startswith("| week | yield |")
+    assert sliced.rstrip().endswith("| W4 | 88% |")
+
+
+def test_vlm_markdown_image_chunks_split_on_structure_not_truncated(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    """Issue #115 end-to-end: a parser that emits Markdown tagged
+    content_format='markdown' (the VLM image / PDF visual page / PPTX shape) is
+    chunked on its heading structure — the table lands WHOLE in one chunk with
+    its heading breadcrumb, instead of being token-windowed mid-row by the
+    SentenceSplitter that fired when routing keyed off the image/png mime."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.parsers import IParser, ParserRegistry
+
+    md = (
+        "## Visual description\n\nWeekly etch yield trend, rising.\n\n"
+        "## Tables and chart data\n\n"
+        "| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n"
+    )
+
+    class MdImageParser(IParser):
+        def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
+            return filename.endswith(".png")
+
+        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+            return [
+                Document(
+                    text=md,
+                    metadata={
+                        "filename": filename,
+                        "mime": "image/png",
+                        "content_format": "markdown",
+                    },
+                )
+            ]
+
+    registry = ParserRegistry().register(MdImageParser())
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder, parser_registry=registry)
+    cid = _new_collection(spec)
+    ids = ingestor.ingest(collection_id=cid, user="alice", filename="chart.png", data=b"\x89PNG")
+    chunks = _chunks_of(spec, ids[0])
+    # The two H2 sections become separate chunks (a 256-token SentenceSplitter
+    # would have kept this short text as ONE chunk).
+    assert len(chunks) >= 2
+    # The Markdown table is intact in a single chunk, carrying its breadcrumb.
+    table_chunks = [c for c in chunks if "| W1 | 92% |" in c.text]
+    assert len(table_chunks) == 1
+    assert "| W2 | 95% |" in table_chunks[0].text
+    assert "Tables and chart data" in table_chunks[0].text
+
+
 def test_ingest_json_end_to_end_tags_chunks_with_json_parser(
     spec: SpecStar, embedder: HashEmbedder
 ):
