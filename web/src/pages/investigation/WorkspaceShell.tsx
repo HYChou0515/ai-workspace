@@ -149,7 +149,13 @@ function ShellBody({
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
   // toggle the sidebar / bottom panel.
   const [sidebarW, setSidebarW] = usePersistentNumber("rca:layout:sidebar", 260, 180, 560);
-  const [agentW, setAgentW] = usePersistentNumber("rca:layout:agent", 380, 280, 680);
+  // #108: the chat panel must be draggable to (near) full width. The editor area
+  // is `minWidth: 0`, so it yields, and the divider physically stops at the row's
+  // left edge — making the viewport width the only real ceiling. The old hard 680
+  // cap stopped the drag long before that. (Server-render guard: jsdom defines
+  // window, so tests get its default width; SSR — which we don't use — falls back.)
+  const agentMaxW = typeof window === "undefined" ? 2000 : window.innerWidth;
+  const [agentW, setAgentW] = usePersistentNumber("rca:layout:agent", 380, 280, agentMaxW);
   const [bottomH, setBottomH] = usePersistentNumber("rca:layout:bottom", 200, 80, 600);
   // Snapshot panel sizes at drag start so each pointermove computes
   // `start + delta` (anchored). See ResizeDivider docs.
