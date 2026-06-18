@@ -358,7 +358,9 @@ def get_parser_registry(settings: Settings):  # -> ParserRegistry
     # is disabled — VlmImageParser then never matches; PdfParser /
     # PptxParser degrade to text-layer-only pages).
     vlm = get_kb_vlm(settings)
-    describer = VlmDescriber(vlm) if vlm is not None else None
+    describer = (
+        VlmDescriber(vlm, formatter=get_kb_vlm_formatter(settings)) if vlm is not None else None
+    )
     # Bundled parsers — fixed order, most-specific extensions first.
     # `kb.parsers_disabled` (class names) skips bundled entries: with
     # all-matching dispatch (Q8b) a custom parser runs ALONGSIDE a
@@ -418,6 +420,27 @@ def get_kb_llm(settings: Settings) -> ILlm | None:
         api_key=api_key,
         # "" (unset) ⇒ None so the param is omitted (model default); none|low|
         # medium|high pass through (none → Ollama think=False).
+        reasoning_effort=ref.reasoning_effort or None,
+    )
+
+
+def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
+    """Stage-2 formatter for vision parsers (issue #115): the text LLM that
+    re-emits the VLM's output as clean Markdown so the chunker splits it on
+    structure instead of truncating it.
+
+    Resolution: `kb.vlm_format_llm` if set, else reuse `kb.retrieval_llm` (a
+    small reformat job — sharing the retrieval model is fine), else `None`
+    (stage 2 skipped; the raw VLM text is used as-is)."""
+    ref = settings.kb.vlm_format_llm or settings.kb.retrieval_llm
+    model, base_url, api_key = _resolve_llm_ref(settings, ref)
+    if model is None:
+        return None
+    assert ref is not None  # model resolved ⇒ the ref is present
+    return LitellmLlm(
+        model,
+        base_url=base_url,
+        api_key=api_key,
         reasoning_effort=ref.reasoning_effort or None,
     )
 
@@ -730,7 +753,9 @@ def get_replay_service(settings: Settings, kb_llm: ILlm | None):  # -> health.Re
     vlm = get_kb_vlm(settings)
     return ReplayService(
         kb_llm=kb_llm,
-        describer=VlmDescriber(vlm) if vlm is not None else None,
+        describer=(
+            VlmDescriber(vlm, formatter=get_kb_vlm_formatter(settings)) if vlm is not None else None
+        ),
         default_base_url=settings.llm.base_url or None,
         default_api_key=settings.llm.api_key or None,
     )

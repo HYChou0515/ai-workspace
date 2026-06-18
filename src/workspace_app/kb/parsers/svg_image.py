@@ -122,4 +122,11 @@ class SvgParser(IParser):
         except Exception as exc:  # noqa: BLE001 — VLM choke on a featureless SVG → 0 chunks
             _LOGGER.warning("SvgParser: VLM describe failed for %s: %s", filename, exc)
             return []
-        return [Document(text=text, metadata={"filename": filename, "mime": mime})]
+        # content_format flags the VLM Markdown for the heading-aware splitter
+        # path (issue #115); source mime stays the original image/svg+xml.
+        return [
+            Document(
+                text=text,
+                metadata={"filename": filename, "mime": mime, "content_format": "markdown"},
+            )
+        ]

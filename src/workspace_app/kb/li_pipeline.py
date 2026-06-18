@@ -84,23 +84,32 @@ class DispatchSplitter(TransformComponent):
         for node in nodes:
             mime = str(node.metadata.get("mime", "")).lower()
             filename = str(node.metadata.get("filename", "")).lower()
+            # Parsers whose OUTPUT text format differs from the source file
+            # (VLM image/PDF/PPTX → Markdown, issue #115) declare it via
+            # `content_format`. It wins over mime/extension: a PNG's Markdown
+            # description must split on headings, not as raw token windows.
+            content_format = str(node.metadata.get("content_format", "")).lower()
             code_lang = _code_language_for(filename)
-            if mime == "application/json" or filename.endswith((".json", ".jsonl")):
+            if content_format == "markdown" or mime == "text/markdown" or filename.endswith(".md"):
+                out.extend(self._split_markdown(node))
+            elif mime == "application/json" or filename.endswith((".json", ".jsonl")):
                 out.extend(self.json_parser.get_nodes_from_documents([node]))
-            elif mime == "text/markdown" or filename.endswith(".md"):
-                sub = self.markdown_parser.get_nodes_from_documents([node])
-                # Prepend heading hierarchy to each chunk's text so the
-                # embedding sees the structural context, not just body lines.
-                for n in sub:
-                    breadcrumb = _heading_breadcrumb(n)
-                    if breadcrumb and isinstance(n, TextNode):
-                        n.text = f"{breadcrumb}\n\n{n.text}"
-                out.extend(sub)
             elif code_lang is not None:
                 out.extend(self._split_code(node, code_lang))
             else:
                 out.extend(self.sentence_splitter.get_nodes_from_documents([node]))
         return out
+
+    def _split_markdown(self, node: BaseNode) -> list[BaseNode]:
+        """Run LI's `MarkdownNodeParser`, then prepend each chunk's heading
+        hierarchy ('H1 > H2') to its text so the embedding sees the structural
+        context, not just body lines."""
+        sub = self.markdown_parser.get_nodes_from_documents([node])
+        for n in sub:
+            breadcrumb = _heading_breadcrumb(n)
+            if breadcrumb and isinstance(n, TextNode):
+                n.text = f"{breadcrumb}\n\n{n.text}"
+        return sub
 
     def _split_code(self, node: BaseNode, language: str) -> list[BaseNode]:
         """Run LI's tree-sitter `CodeSplitter` for `language`, instantiating

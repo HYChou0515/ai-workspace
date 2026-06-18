@@ -273,6 +273,38 @@ def test_get_kb_llm_threads_the_configured_reasoning_effort():
     assert get_kb_llm(Settings()).reasoning_effort is None  # ty: ignore[unresolved-attribute]
 
 
+def test_get_kb_vlm_formatter_falls_back_to_retrieval_then_off():
+    """Issue #115 stage-2 formatter: use `kb.vlm_format_llm` if set, else reuse
+    `kb.retrieval_llm`, else None (stage 2 skipped → raw VLM text). Default
+    Settings() has no dedicated formatter but a bundled retrieval preset, so the
+    fallback yields a LitellmLlm."""
+    from workspace_app.factories import get_kb_vlm_formatter
+
+    assert isinstance(get_kb_vlm_formatter(Settings()), LitellmLlm)
+
+    both_off = replace(
+        Settings(), kb=replace(Settings().kb, retrieval_llm=None, vlm_format_llm=None)
+    )
+    assert get_kb_vlm_formatter(both_off) is None
+
+
+def test_get_kb_vlm_formatter_prefers_dedicated_config():
+    """A dedicated `kb.vlm_format_llm` wins over the retrieval-LLM fallback."""
+    from workspace_app.config.schema import RetrievalLlmRef
+    from workspace_app.factories import get_kb_vlm_formatter
+
+    s = replace(
+        Settings(),
+        kb=replace(
+            Settings().kb,
+            vlm_format_llm=RetrievalLlmRef(preset="kb-retrieval", model="dedicated-formatter"),
+        ),
+    )
+    llm = get_kb_vlm_formatter(s)
+    assert isinstance(llm, LitellmLlm)
+    assert llm._model == "dedicated-formatter"
+
+
 def test_get_kb_llm_threads_chat_endpoint_when_ref_creds_unset():
     """When the ref's own `llm.base_url` / `api_key` are empty (the
     default), fall back to the top-level `llm.*` endpoint —

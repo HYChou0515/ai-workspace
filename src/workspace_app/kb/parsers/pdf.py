@@ -96,9 +96,13 @@ def pdf_pages_to_documents(
                 "%s: %s %d of %s has no content — skipped", parser_label, page_word, i + 1, filename
             )
             continue
-        docs.append(
-            Document(text=body, metadata={"filename": filename, "mime": mime, "page": i + 1})
-        )
+        meta: dict[str, object] = {"filename": filename, "mime": mime, "page": i + 1}
+        # A page whose body includes VLM output is Markdown → flag it so
+        # DispatchSplitter splits on its structure (issue #115). A pure
+        # text-layer page is prose and stays on the SentenceSplitter.
+        if vlm_md:
+            meta["content_format"] = "markdown"
+        docs.append(Document(text=body, metadata=meta))
     return docs
 
 

@@ -55,4 +55,12 @@ class VlmImageParser(IParser):
             mime if mime in _IMAGE_MIMES else "image/png",
             context=f"the uploaded image {filename}",
         )
-        return [Document(text=text, metadata={"filename": filename, "mime": mime})]
+        # content_format flags the text as Markdown so DispatchSplitter routes
+        # it through the heading-aware Markdown path (issue #115) — the source
+        # mime stays the original raster type for honest provenance.
+        return [
+            Document(
+                text=text,
+                metadata={"filename": filename, "mime": mime, "content_format": "markdown"},
+            )
+        ]

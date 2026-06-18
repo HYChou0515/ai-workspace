@@ -349,6 +349,90 @@ def test_dispatch_splitter_routes_json_to_json_node_parser(embedder: HashEmbedde
     assert "name Amy" in nodes[1].get_content()
 
 
+def test_dispatch_splitter_routes_content_format_markdown_to_markdown_parser():
+    """Issue #115: parsers that emit Markdown (VLM image / PDF visual page /
+    PPTX output) tag the Document with metadata['content_format']='markdown'.
+    Even though the source mime is image/png, DispatchSplitter must route it
+    through MarkdownNodeParser (structure-aware + heading breadcrumb) — NOT the
+    SentenceSplitter fallback, which chops the structured text into raw token
+    windows that sever sections from headings and cut tables mid-row."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    doc = Document(
+        text=(
+            "## Visual description\n\nA bar chart of weekly etch yield.\n\n"
+            "## Tables and chart data\n\n"
+            "| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n"
+        ),
+        # Source is a PNG — the OLD routing (mime/extension only) would send
+        # this to the SentenceSplitter. The content_format hint overrides that.
+        metadata={"filename": "chart.png", "mime": "image/png", "content_format": "markdown"},
+    )
+    nodes = DispatchSplitter()([doc])
+    # Split on heading boundaries → the two H2 sections are separate nodes.
+    # (The SentenceSplitter would keep this short text as ONE node.)
+    assert len(nodes) >= 2
+    # The Markdown table lands whole inside ONE node (never split mid-row)…
+    table_nodes = [n for n in nodes if "| W1 | 92% |" in n.get_content()]
+    assert len(table_nodes) == 1
+    assert "| W2 | 95% |" in table_nodes[0].get_content()
+    # …and that node carries its heading as a breadcrumb prefix (structure-aware
+    # embedding) — proof it went through the Markdown path, not the fallback.
+    assert "Tables and chart data" in table_nodes[0].get_content()
+
+
+def test_vlm_markdown_image_chunks_split_on_structure_not_truncated(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    """Issue #115 end-to-end: a parser that emits Markdown tagged
+    content_format='markdown' (the VLM image / PDF visual page / PPTX shape) is
+    chunked on its heading structure — the table lands WHOLE in one chunk with
+    its heading breadcrumb, instead of being token-windowed mid-row by the
+    SentenceSplitter that fired when routing keyed off the image/png mime."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.parsers import IParser, ParserRegistry
+
+    md = (
+        "## Visual description\n\nWeekly etch yield trend, rising.\n\n"
+        "## Tables and chart data\n\n"
+        "| week | yield |\n| --- | --- |\n| W1 | 92% |\n| W2 | 95% |\n"
+    )
+
+    class MdImageParser(IParser):
+        def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
+            return filename.endswith(".png")
+
+        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+            return [
+                Document(
+                    text=md,
+                    metadata={
+                        "filename": filename,
+                        "mime": "image/png",
+                        "content_format": "markdown",
+                    },
+                )
+            ]
+
+    registry = ParserRegistry().register(MdImageParser())
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder, parser_registry=registry)
+    cid = _new_collection(spec)
+    ids = ingestor.ingest(collection_id=cid, user="alice", filename="chart.png", data=b"\x89PNG")
+    chunks = _chunks_of(spec, ids[0])
+    # The two H2 sections become separate chunks (a 256-token SentenceSplitter
+    # would have kept this short text as ONE chunk).
+    assert len(chunks) >= 2
+    # The Markdown table is intact in a single chunk, carrying its breadcrumb.
+    table_chunks = [c for c in chunks if "| W1 | 92% |" in c.text]
+    assert len(table_chunks) == 1
+    assert "| W2 | 95% |" in table_chunks[0].text
+    assert "Tables and chart data" in table_chunks[0].text
+
+
 def test_ingest_json_end_to_end_tags_chunks_with_json_parser(
     spec: SpecStar, embedder: HashEmbedder
 ):
