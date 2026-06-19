@@ -164,6 +164,23 @@ function ShellBody({
   const bottomStart = useRef(bottomH);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bottomOpen, setBottomOpen] = useState(true);
+  // Chat focus mode: fold the whole workspace (activity bar + tree + editor +
+  // bottom panel) away so the chat fills the row — toggled by the chevron on the
+  // editor/chat divider (and an expand handle on the collapsed edge). The
+  // editor keeps a min width while open, so dragging the divider can't squeeze
+  // it into a broken sliver; full-chat is this explicit fold, not a drag.
+  // Transient (not persisted) — resets to the normal split on reload.
+  const [chatMaximized, setChatMaximized] = useState(false);
+  // Cap the chat width so the editor always keeps a usable minimum. The chat is
+  // fixed-width (flexShrink:0), so an over-wide agentW would otherwise squeeze
+  // the editor into a broken sliver (the #108 regression). Dragging stops at
+  // this cap; truly full chat is the explicit fold, not an unbounded drag.
+  const EDITOR_MIN_W = 360;
+  const ACTIVITY_BAR_W = 50;
+  const viewportW = typeof window === "undefined" ? 1440 : window.innerWidth;
+  const chromeW = ACTIVITY_BAR_W + (sidebarOpen ? sidebarW : 0);
+  const maxChatW = Math.max(280, viewportW - chromeW - EDITOR_MIN_W);
+  const effectiveAgentW = Math.min(agentW, maxChatW);
 
   const recentFiles = usePersistentDeque(
     `rca:recent-files:${item.resource_id}`,
@@ -318,7 +335,7 @@ function ShellBody({
               terminal tab inside is further gated on `function.terminal` —
               sandbox's only human UI surface (exec/package are backend tools,
               gated by allowed_tools), so there is no separate sandbox pane. */}
-          {manifest.function.workspace && (
+          {manifest.function.workspace && !chatMaximized && (
             <>
           <ActivityBar
             mode={activityMode}
@@ -373,11 +390,40 @@ function ShellBody({
             orientation="vertical"
             ariaLabel="resize agent panel"
             onResizeStart={() => {
-              agentStart.current = agentW;
+              agentStart.current = effectiveAgentW;
             }}
-            onResize={(d) => setAgentW(agentStart.current - d)}
+            onResize={(d) => setAgentW(Math.min(maxChatW, agentStart.current - d))}
+            collapse={{
+              label: "Collapse workspace",
+              icon: "chev_l",
+              onToggle: () => setChatMaximized(true),
+            }}
           />
             </>
+          )}
+          {manifest.function.workspace && chatMaximized && (
+            // Collapsed edge: a thin handle to bring the workspace back.
+            <button
+              type="button"
+              aria-label="Show workspace"
+              title="Show workspace"
+              onClick={() => setChatMaximized(false)}
+              style={{
+                flexShrink: 0,
+                width: 16,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: 0,
+                cursor: "pointer",
+                border: "none",
+                borderRight: "1px solid var(--paper-3)",
+                background: "var(--paper-1, var(--paper))",
+                color: "var(--text-paper-d)",
+              }}
+            >
+              <Icon name="chev_r" size={14} />
+            </button>
           )}
           <div
             style={{
@@ -385,9 +431,12 @@ function ShellBody({
               flexDirection: "column",
               height: "100%",
               minHeight: 0,
+              // Maximized: grow to fill the whole row (workspace is unmounted).
+              ...(chatMaximized ? { flex: 1, minWidth: 0 } : {}),
               // The multi-chat shell takes no width prop (unlike AgentPanel), so the
               // wrapper owns the resizable width in that mode.
-              width: manifest.slug === "topic-hub" ? agentW : undefined,
+              width:
+                manifest.slug === "topic-hub" && !chatMaximized ? effectiveAgentW : undefined,
             }}
           >
             {manifest.slug === "topic-hub" ? (
@@ -421,8 +470,8 @@ function ShellBody({
                 />
                 <AgentPanel
                   investigationId={item.resource_id}
-                  width={agentW}
-                  fill={!manifest.function.workspace}
+                  width={effectiveAgentW}
+                  fill={!manifest.function.workspace || chatMaximized}
                   // #89 candidate 3: picker + suggestions come from the App manifest,
                   // not the global /agent-configs; attaching writes the item's preset.
                   picker={manifest.agent.picker}
