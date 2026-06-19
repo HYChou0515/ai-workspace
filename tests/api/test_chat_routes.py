@@ -154,9 +154,7 @@ def test_chat_scoped_undo_requires_a_positive_turns():
 
 def test_chat_scoped_undo_404s_for_an_unknown_chat():
     client, _spec, iid = _client()
-    r = client.delete(
-        f"/a/rca/items/{iid}/chats/conversation:nope/messages", params={"turns": 1}
-    )
+    r = client.delete(f"/a/rca/items/{iid}/chats/conversation:nope/messages", params={"turns": 1})
     assert r.status_code == 404
 
 

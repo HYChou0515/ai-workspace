@@ -224,7 +224,9 @@ def test_upsert_context_card_falls_back_to_title_when_no_usable_key(spec_instanc
     from workspace_app.workflow.capabilities import upsert_context_card
 
     cid = _collection(spec_instance)
-    upsert_context_card(spec_instance, collection=cid, keys=[""], title="Reflow", body="b", user="u")
+    upsert_context_card(
+        spec_instance, collection=cid, keys=[""], title="Reflow", body="b", user="u"
+    )
     assert lookup(spec_instance, cid, ["reflow"])["reflow"]
 
 
