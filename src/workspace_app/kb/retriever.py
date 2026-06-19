@@ -31,6 +31,11 @@ from .merge import ScoredChunk, merge_passages
 from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
 
+# Shown in place of a legacy binary doc that has no extracted text — so the
+# LLM (and the user) see a clear "nothing to read here" note instead of a
+# wall of U+FFFD replacement characters (#114).
+_NO_EXTRACTABLE_TEXT = "(no extractable text; this file has only raw binary content)"
+
 
 @dataclass(frozen=True)
 class Enhancements:
@@ -284,6 +289,19 @@ class Retriever:
         except ResourceIDNotFoundError:  # pragma: no cover — chunk implies its doc exists
             return ""
         assert isinstance(doc, SourceDoc)
+        # Chunk offsets index into the parser's extracted text (persisted on
+        # `doc.text`), so THAT is the canonical text — never the raw bytes.
+        # Decoding `content` for an image / pdf / docx yields binary garbage
+        # (U+FFFD) that would poison the LLM's context with gibberish (#114).
+        if doc.text is not None:
+            return doc.text
+        # Legacy rows predating stored `text`: decode the raw bytes only when
+        # they are clean UTF-8 (a plain-text upload). A binary blob with no
+        # extracted text gets a readable marker, not replacement-char garbage —
+        # reindex such a doc to recover real content.
         raw = rm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)
-        return normalize_text(raw.decode("utf-8", errors="replace"))
+        try:
+            return normalize_text(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return _NO_EXTRACTABLE_TEXT

@@ -158,9 +158,26 @@ export function KbDocBody({
         // (pptx, unknown binary) points at Download; the Chunks tab still
         // shows what got indexed.
         (doc.content_type.startsWith("image/") ? (
-          <figure className="kb-docimage">
-            <img src={blobHref(doc.file_id)} alt={doc.filename} />
-          </figure>
+          // #114: show the image AND, when the doc was VLM-parsed at ingest,
+          // the extracted text the chat actually cited — so the viewer matches
+          // what the retriever saw instead of leaving the body blank.
+          <>
+            <figure className="kb-docimage">
+              <img src={blobHref(doc.file_id)} alt={doc.filename} />
+            </figure>
+            {doc.markdown !== "" && (
+              <article className="md-body">
+                <ReactMarkdown
+                  remarkPlugins={[remarkGfm]}
+                  rehypePlugins={rehypePlugins}
+                  urlTransform={urlTransform}
+                  components={components}
+                >
+                  {doc.markdown}
+                </ReactMarkdown>
+              </article>
+            )}
+          </>
         ) : doc.content_type === "application/pdf" ? (
           <iframe
             className="kb-dociframe"

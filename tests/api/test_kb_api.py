@@ -444,6 +444,39 @@ def test_render_document_rewrites_crossrefs_and_returns_markdown():
     assert "[Gone](./gone.md)" in body["markdown"]  # missing → left as-is
 
 
+def test_render_image_doc_returns_parsed_text_as_markdown():
+    """#114: an image SourceDoc carries the VLM-parsed markdown on `text`.
+    The viewer must surface that text (alongside the image the FE loads from
+    the blob), not an empty body."""
+    import msgspec
+    from specstar.types import Binary
+
+    from workspace_app.resources.kb import SourceDoc
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("diagram.png", b"placeholder", "text/markdown")},
+    )
+    rm = spec.get_resource_manager(SourceDoc)
+    doc_id = encode_doc_id(cid, "diagram.png")
+    doc = rm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    rm.update(
+        doc_id,
+        msgspec.structs.replace(
+            doc,
+            content=Binary(data=b"\x89PNG\r\n", content_type="image/png"),
+            text="# Diagram\nalpha beta gamma",
+        ),
+    )
+
+    body = client.get("/kb/documents", params={"id": doc_id}).json()
+    assert body["content_type"] == "image/png"
+    assert "alpha beta gamma" in body["markdown"]
+
+
 def test_render_document_via_raw_url_with_percent_encoded_division_slash():
     """The FE composes the URL as `/kb/documents?id=` + encodeURIComponent(doc_id).
     A real doc_id contains U+2215 (`∕`, division slash) wherever the natural

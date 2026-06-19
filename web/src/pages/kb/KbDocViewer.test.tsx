@@ -150,6 +150,23 @@ describe("KbDocViewer binary documents (issue #39 bug)", () => {
     expect(img).toHaveAttribute("src", "/blobs/blob-png-1");
   });
 
+  it("shows the VLM-parsed text below the image when the doc carries one (#114)", async () => {
+    const client = fakeClient({
+      "col-1/u/diagram.png": mkDoc({
+        filename: "diagram.png",
+        markdown: "# Diagram\n\nReflow oven zone three drifted.",
+        content_type: "image/png",
+        file_id: "blob-png-2",
+      }),
+    });
+    render(<KbDocViewer documentId="col-1/u/diagram.png" onClose={() => {}} client={client} />);
+    // the image is still rendered from the blob
+    const img = await screen.findByRole("img", { name: "diagram.png" });
+    expect(img).toHaveAttribute("src", "/blobs/blob-png-2");
+    // AND the parsed text the chat actually saw is shown alongside it
+    expect(await screen.findByText(/Reflow oven zone three drifted/)).toBeInTheDocument();
+  });
+
   it("renders a download notice for undisplayable binary docs (pptx)", async () => {
     const client = fakeClient({
       "col-1/u/deck.pptx": mkDoc({

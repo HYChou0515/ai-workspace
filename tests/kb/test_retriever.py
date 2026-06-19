@@ -1,6 +1,8 @@
 from collections.abc import Iterator
 
+import msgspec
 from specstar import SpecStar
+from specstar.types import Binary
 
 from workspace_app.config.schema import (
     EnhancementBool,
@@ -13,7 +15,7 @@ from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.llm import ILlm
 from workspace_app.kb.retriever import Enhancements, Retriever
-from workspace_app.resources.kb import Collection
+from workspace_app.resources.kb import Collection, SourceDoc
 
 
 def _ingest(spec, chunker, embedder, name, text):
@@ -48,6 +50,70 @@ def test_hybrid_search_surfaces_the_keyword_matching_document(
     # keyword-matching doc on top
     assert passages[0].document_id == encode_doc_id(cid, "reflow.md")
     assert "reflow" in passages[0].text
+
+
+def test_image_doc_passage_uses_parsed_text_not_raw_bytes(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#114: an image SourceDoc keeps its raw (non-UTF-8) bytes on `content`
+    but the chunk offsets index into the parser's extracted `text`. The
+    retriever must slice that stored text, never `content.decode(...)` — else
+    the LLM gets U+FFFD image-byte garbage instead of the parsed markdown."""
+    cid = _ingest(spec, chunker, embedder, "diagram.png", "alpha beta gamma delta epsilon")
+    rm = spec.get_resource_manager(SourceDoc)
+    doc_id = encode_doc_id(cid, "diagram.png")
+    doc = rm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    # swap the stored bytes for real image bytes (invalid UTF-8); `text` stays
+    png = b"\x89PNG\r\n\x1a\n\xff\xd8\xff\xe0\x00\x10garbage\x80\x81\x82"
+    rm.update(
+        doc_id,
+        msgspec.structs.replace(doc, content=Binary(data=png, content_type="image/png")),
+    )
+
+    passages = Retriever(spec, embedder=embedder).search("alpha", [cid])
+    assert passages, "expected a passage for the image doc"
+    assert "�" not in passages[0].text
+    assert "alpha" in passages[0].text
+
+
+def test_legacy_doc_without_stored_text_decodes_clean_utf8_bytes(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """A row predating stored `text` (text=None) but holding clean UTF-8 bytes
+    still resolves its passage by decoding `content` — plain-text uploads keep
+    working without a reindex."""
+    cid = _ingest(spec, chunker, embedder, "legacy.md", "alpha beta gamma delta epsilon")
+    rm = spec.get_resource_manager(SourceDoc)
+    doc_id = encode_doc_id(cid, "legacy.md")
+    doc = rm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    rm.update(doc_id, msgspec.structs.replace(doc, text=None))
+
+    passages = Retriever(spec, embedder=embedder).search("alpha", [cid])
+    assert passages
+    assert "alpha" in passages[0].text
+
+
+def test_legacy_binary_doc_without_text_shows_marker_not_byte_garbage(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """A legacy binary row with no extracted text (text=None, non-UTF-8 bytes)
+    surfaces a readable marker, never U+FFFD replacement-char garbage (#114)."""
+    cid = _ingest(spec, chunker, embedder, "old.png", "alpha beta gamma delta epsilon")
+    rm = spec.get_resource_manager(SourceDoc)
+    doc_id = encode_doc_id(cid, "old.png")
+    doc = rm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    png = b"\x89PNG\r\n\x1a\n\xff\xd8\xff\xe0\x00\x10garbage\x80\x81\x82"
+    rm.update(
+        doc_id,
+        msgspec.structs.replace(doc, text=None, content=Binary(data=png, content_type="image/png")),
+    )
+
+    passages = Retriever(spec, embedder=embedder).search("alpha", [cid])
+    assert passages
+    assert "�" not in passages[0].text
 
 
 def test_search_over_empty_collection_returns_nothing(spec: SpecStar, embedder: HashEmbedder):
