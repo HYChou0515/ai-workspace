@@ -33,19 +33,22 @@ IngestCapability = Callable[[str, str], Awaitable[str]]
 # The "did this file land in the collection as ready?" check capability (manual §8):
 # (collection, path) -> bool. Wired by the driver; backs ``check.collection_has``.
 CollectionChecker = Callable[[str, str], Awaitable[bool]]
-# The create-context-card capability (manual §8): (collection, keys, title, body) ->
-# the new card's id. Wired by the driver; faked in tests.
-CreateCardCapability = Callable[[str, list[str], str, str], Awaitable[str]]
+# The upsert-context-card capability (manual §8, #111): (collection, keys, title, body)
+# -> the card's id. Create-or-update by key (‘有就更新、沒才新增’). Wired by the driver;
+# faked in tests.
+UpsertCardCapability = Callable[[str, list[str], str, str], Awaitable[str]]
 
 
-def _card_step_key(keys: list[str], title: str) -> str:
+def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
     """A stable, path-safe ``step_card/<key>`` receipt key for one card (manual §8/§9).
-    Derived from the card's identity (sorted keys, else the title) so a re-run with the
-    same content hits the same receipt and skips. The hash suffix keeps it unique even
-    when the keys sanitise to nothing (e.g. CJK-only or symbol keys)."""
+    The readable prefix comes from the card's identity (sorted keys, else the title); the
+    hash suffix folds in the ``body`` too (#111) so a re-run with the SAME content skips,
+    but an edited definition re-fires and upserts the card to the new text rather than
+    being masked as already-done. The suffix also keeps the key unique when the prefix
+    sanitises to nothing (e.g. CJK-only or symbol keys)."""
     basis = " ".join(sorted(keys)) or title
     safe = re.sub(r"[^0-9a-z]+", "_", basis.casefold()).strip("_")[:48]
-    digest = hashlib.sha1(basis.encode()).hexdigest()[:8]
+    digest = hashlib.sha1(f"{basis}\x00{body}".encode()).hexdigest()[:8]
     return f"{safe}_{digest}" if safe else digest
 
 
@@ -68,7 +71,7 @@ class WorkflowHandle:
         emit: Callable[[object], None] | None = None,
         ingest: IngestCapability | None = None,
         collection_checker: CollectionChecker | None = None,
-        create_card: CreateCardCapability | None = None,
+        upsert_card: UpsertCardCapability | None = None,
         credential: str = "",
         step_timeout_s: float | None = None,
     ) -> None:
@@ -90,9 +93,9 @@ class WorkflowHandle:
         bound to this run's workspace + captured user (manual §8)."""
         self._collection_has = collection_checker
         """Wired by the orchestration driver — backs ``check.collection_has`` (§8)."""
-        self._create_card = create_card
-        """Wired by the orchestration driver — the ``create_context_card`` capability
-        bound to this run's captured user (manual §8)."""
+        self._upsert_card = upsert_card
+        """Wired by the orchestration driver — the ``upsert_context_card`` capability
+        (create-or-update by key, #111) bound to this run's captured user (manual §8)."""
         self.credential = credential
         """The run-scoped credential (manual §15) — injected into a deterministic
         node's sandbox env so its script can auth capability HTTP calls. "" until
@@ -165,7 +168,7 @@ class WorkflowHandle:
         )
         return result["doc_id"]
 
-    async def create_context_card(
+    async def upsert_context_card(
         self,
         collection: str,
         keys: list[str],
@@ -175,22 +178,23 @@ class WorkflowHandle:
         phase: str = "commit",
         cache: bool = True,
     ) -> str:
-        """Deterministic node (manual §8): author a ``ContextCard`` on an existing KB
-        collection as the captured user — the ``→collections`` workflow's commit of a
-        filled glossary entry. Journaled + skipped on re-run (§9); the ``step_card``
-        receipt key is the card's identity, so a re-run with the same content is a
-        no-op. Returns the card's resource id."""
-        if self._create_card is None:
-            raise RuntimeError("create_context_card needs a capability (wired by the run driver)")
-        create_card = self._create_card
+        """Deterministic node (manual §8, #111): create-or-update a ``ContextCard`` on an
+        existing KB collection as the captured user — the ``→collections`` workflow's
+        commit of a filled glossary entry. An existing card for the key is overwritten
+        (‘有就更新、沒才新增’), so re-classifying the same term doesn't duplicate it.
+        Journaled + skipped on re-run (§9); the ``step_card`` receipt key is the card's
+        identity, so a re-run with the same content is a no-op. Returns the card id."""
+        if self._upsert_card is None:
+            raise RuntimeError("upsert_context_card needs a capability (wired by the run driver)")
+        upsert_card = self._upsert_card
 
         async def execute(_feedback: str | None) -> dict[str, str]:
-            return {"card_id": await create_card(collection, keys, title, body)}
+            return {"card_id": await upsert_card(collection, keys, title, body)}
 
         result = await run_step(
             self,
             name="card",
-            key=_card_step_key(keys, title),
+            key=_card_step_key(keys, title, body),
             phase=phase,
             args={"collection": collection, "keys": list(keys), "title": title},
             execute=execute,

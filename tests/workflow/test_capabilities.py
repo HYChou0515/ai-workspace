@@ -198,24 +198,179 @@ def test_create_context_card_unknown_collection_is_rejected(spec_instance: SpecS
         )
 
 
-async def test_wf_create_context_card_is_idempotent_on_rerun(spec_instance: SpecStar):
+def test_update_context_card_falls_back_to_title_when_no_usable_key(spec_instance: SpecStar):
+    """Mirror create: a blank-keys edit keeps the card findable by reusing the title."""
+    from workspace_app.kb.context_cards import lookup
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import update_context_card
+
+    cid = _collection(spec_instance)
+    card_id = create_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="", body="b", user="u"
+    )
+    update_context_card(
+        spec_instance, card_id=card_id, keys=["   "], title="Reflow", body="b2", user="u"
+    )
+    card = spec_instance.get_resource_manager(ContextCard).get(card_id).data
+    assert card.keys == ["Reflow"]
+    assert lookup(spec_instance, cid, ["reflow"])["reflow"]
+
+
+# ── upsert_context_card capability (#111 — the workflow commit path) ──────
+
+
+def test_upsert_context_card_falls_back_to_title_when_no_usable_key(spec_instance: SpecStar):
+    from workspace_app.kb.context_cards import lookup
+    from workspace_app.workflow.capabilities import upsert_context_card
+
+    cid = _collection(spec_instance)
+    upsert_context_card(spec_instance, collection=cid, keys=[""], title="Reflow", body="b", user="u")
+    assert lookup(spec_instance, cid, ["reflow"])["reflow"]
+
+
+def test_upsert_context_card_creates_when_no_card_has_the_key(spec_instance: SpecStar):
+    from workspace_app.kb.context_cards import find_cards_by_key
+    from workspace_app.workflow.capabilities import upsert_context_card
+
+    cid = _collection(spec_instance)
+    card_id = upsert_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="M4", body="four", user="u"
+    )
+    hits = find_cards_by_key(spec_instance, cid, "m4")
+    assert [(i, c.body) for i, c in hits] == [(card_id, "four")]
+
+
+def test_upsert_context_card_updates_the_existing_card_for_an_existing_key(spec_instance: SpecStar):
+    """#111 ‘有就更新、沒才新增’: a second upsert for the same key overwrites the same
+    card instead of creating a duplicate."""
+    from workspace_app.kb.context_cards import find_cards_by_key
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import upsert_context_card
+
+    cid = _collection(spec_instance)
+    first = upsert_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="M4", body="old", user="u"
+    )
+    second = upsert_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="M4", body="new", user="u"
+    )
+    assert second == first  # same card, updated
+    assert len(find_cards_by_key(spec_instance, cid, "m4")) == 1  # no duplicate
+    assert spec_instance.get_resource_manager(ContextCard).get(first).data.body == "new"
+
+
+def test_upsert_context_card_unknown_collection_is_rejected(spec_instance: SpecStar):
+    from workspace_app.workflow.capabilities import upsert_context_card
+
+    with pytest.raises(CollectionNotFound):
+        upsert_context_card(
+            spec_instance, collection="no-such", keys=["x"], title="", body="b", user="u"
+        )
+
+
+async def test_wf_upsert_context_card_is_idempotent_on_rerun(spec_instance: SpecStar):
     """Through the handle, a re-run skips the already-committed card (the
     ``step_card/<key>`` receipt) — the capability runs once (manual §8/§9)."""
     calls: list[tuple] = []
 
-    async def fake_create(collection, keys, title, body):
+    async def fake_upsert(collection, keys, title, body):
         calls.append((collection, tuple(keys), title))
         return f"context-card:{len(calls)}"
 
     store = MemoryFileStore()
     for _ in range(2):
-        wf = WorkflowHandle(store=store, workspace_id="ws", create_card=fake_create)
-        card_id = await wf.create_context_card("kb", ["M4"], title="Metal 4", body="b")
+        wf = WorkflowHandle(store=store, workspace_id="ws", upsert_card=fake_upsert)
+        card_id = await wf.upsert_context_card("kb", ["M4"], title="Metal 4", body="b")
         assert card_id == "context-card:1"  # the cached receipt id, re-run included
     assert len(calls) == 1  # executed once; the re-run skipped
 
 
-async def test_wf_create_context_card_without_capability_raises():
+async def test_wf_upsert_context_card_without_capability_raises():
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws")
     with pytest.raises(RuntimeError, match="needs a capability"):
-        await wf.create_context_card("kb", ["x"], title="t", body="b")
+        await wf.upsert_context_card("kb", ["x"], title="t", body="b")
+
+
+# ── update_context_card capability (#111, manual §8) ─────────────────────
+
+
+def test_update_context_card_overwrites_by_id_and_re_derives_norm_keys(spec_instance: SpecStar):
+    """#111: a full overwrite by id — new keys/title/body replace the old ones and
+    ``norm_keys`` is re-derived so lookup follows the new keys, not the old."""
+    from workspace_app.kb.context_cards import lookup
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import update_context_card
+
+    cid = _collection(spec_instance)
+    card_id = create_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="Metal 4", body="old", user="alice"
+    )
+    update_context_card(
+        spec_instance,
+        card_id=card_id,
+        keys=["M5", "Metal 5"],
+        title="Metal 5",
+        body="new body",
+        user="bob",
+    )
+    card = spec_instance.get_resource_manager(ContextCard).get(card_id).data
+    assert card.collection_id == cid  # collection is immutable across edits
+    assert card.keys == ["M5", "Metal 5"]
+    assert card.title == "Metal 5"
+    assert card.body == "new body"
+    assert lookup(spec_instance, cid, ["m5"])["m5"]  # follows the new keys
+    assert not lookup(spec_instance, cid, ["m4"])["m4"]  # old key no longer resolves
+
+
+def test_update_context_card_missing_id_raises_card_not_found(spec_instance: SpecStar):
+    from workspace_app.workflow.capabilities import CardNotFound, update_context_card
+
+    with pytest.raises(CardNotFound):
+        update_context_card(
+            spec_instance, card_id="no-such-card", keys=["x"], title="", body="b", user="u"
+        )
+
+
+def test_update_context_card_stale_expected_body_raises_conflict(spec_instance: SpecStar):
+    """#111 concurrency guard: when the caller passes the body it believes is current
+    and it no longer matches what's stored, the update is blocked — forcing the AI to
+    re-read before overwriting."""
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import CardConflict, update_context_card
+
+    cid = _collection(spec_instance)
+    card_id = create_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="", body="current", user="u"
+    )
+    with pytest.raises(CardConflict):
+        update_context_card(
+            spec_instance,
+            card_id=card_id,
+            keys=["M4"],
+            title="",
+            body="new",
+            user="u",
+            expected_body="STALE — not what is stored",
+        )
+    # the stored card is untouched by the blocked update
+    assert spec_instance.get_resource_manager(ContextCard).get(card_id).data.body == "current"
+
+
+def test_update_context_card_matching_expected_body_succeeds(spec_instance: SpecStar):
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow.capabilities import update_context_card
+
+    cid = _collection(spec_instance)
+    card_id = create_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="", body="current", user="u"
+    )
+    update_context_card(
+        spec_instance,
+        card_id=card_id,
+        keys=["M4"],
+        title="",
+        body="new",
+        user="u",
+        expected_body="current",  # matches → allowed
+    )
+    assert spec_instance.get_resource_manager(ContextCard).get(card_id).data.body == "new"

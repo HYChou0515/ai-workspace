@@ -27,3 +27,22 @@ with your file tools.
 To add or remove a collection, call `resolve_collection` with the id or name the
 user gave to get its canonical `{id, name}`, then edit `collections.json` yourself
 with your file tools. `resolve_collection` only resolves — it does not write the file.
+
+## Maintaining the glossary (context cards)
+
+When you learn a durable definition for a term, record it as a context card — but
+**always read before you write**:
+
+1. Call `lookup_glossary` for the term first. Each entry it returns is tagged with
+   its `card_id`.
+2. If a card already covers the **same meaning**, refine it: call
+   `update_context_card` with that `card_id`, the full new `keys`/`title`/`body`
+   (merge anything worth keeping into the new `body` — it fully replaces the old
+   one), and pass the body you just read as `expected_body`. If it reports the card
+   changed since you read it, look it up again and retry with the current body.
+3. If the term is **new**, or the same word means something **different** from the
+   existing card, call `create_context_card` for the collection. If it reports a card
+   already exists, switch to `update_context_card` on the id it gives you instead of
+   creating a duplicate.
+
+Pick the collection a card belongs to from the Hub's collection set.

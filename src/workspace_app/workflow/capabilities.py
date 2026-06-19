@@ -25,6 +25,17 @@ class CollectionNotFound(LookupError):
     auto-create; creating collections is a separate admin action)."""
 
 
+class CardNotFound(LookupError):
+    """The target context card id does not exist (#111) — update operates on an
+    existing card; a missing id is an error, never a silent create."""
+
+
+class CardConflict(ValueError):
+    """The caller's view of the card's current body no longer matches what's stored
+    (#111) — a read-before-write guard that blocks an overwrite based on a stale read,
+    forcing the AI to re-read the card first."""
+
+
 def _abs(path: str) -> str:
     return path if path.startswith("/") else "/" + path
 
@@ -91,13 +102,15 @@ def create_context_card(
     user: str,
 ) -> str:
     """Create a ``ContextCard`` (#106) on an EXISTING collection as ``user`` (manual
-    §8) — the ``→collections`` workflow's reliable commit of a filled glossary entry.
+    §8). Used by the agent's ``create_context_card`` tool (after its own exists-check)
+    and as the create half of ``upsert_context_card`` (the ``→collections`` workflow's
+    reliable commit of a filled glossary entry).
 
     Reuses #106's author logic: ``norm_keys`` is the derived, indexed lookup surface
     (``derive_norm_keys``), and an entry with no usable key falls back to the title
     (so it stays findable). Raises ``CollectionNotFound`` when the collection is
     missing. Re-run idempotency is the deterministic node's job (the ``step_card``
-    receipt via ``WorkflowHandle.create_context_card``); this core just authors one
+    receipt via ``WorkflowHandle.upsert_context_card``); this core just authors one
     card. Returns the new card's resource id.
     """
     from ..kb.context_cards import derive_norm_keys
@@ -119,3 +132,87 @@ def create_context_card(
             )
         )
     return rev.resource_id
+
+
+def update_context_card(
+    spec: SpecStar,
+    *,
+    card_id: str,
+    keys: list[str],
+    title: str,
+    body: str,
+    user: str,
+    expected_body: str | None = None,
+) -> str:
+    """Full overwrite of an EXISTING ``ContextCard`` by id (#111) as ``user`` — the
+    update counterpart of ``create_context_card``. New ``keys``/``title``/``body``
+    replace the old ones; ``norm_keys`` is re-derived so lookup follows the new keys.
+    The ``collection_id`` is immutable (a card stays in its collection). Empty/blank
+    keys fall back to the title (mirror create) so the card stays findable. Returns
+    the (unchanged) card id.
+
+    ``expected_body`` is an optional read-before-write guard: when given, it must equal
+    the card's currently-stored ``body`` or a ``CardConflict`` is raised (the agent
+    surface passes the body it read so a stale read can't silently overwrite a newer
+    one; the deterministic workflow surface passes ``None`` = last-write-wins)."""
+    from specstar.types import ResourceIDNotFoundError
+
+    from ..kb.context_cards import derive_norm_keys
+    from ..resources.kb import ContextCard
+
+    rm = spec.get_resource_manager(ContextCard)
+    try:
+        existing = rm.get(card_id).data
+    except ResourceIDNotFoundError as exc:
+        raise CardNotFound(card_id) from exc
+    assert isinstance(existing, ContextCard)  # narrow Struct|Unset for ty
+    if expected_body is not None and expected_body != existing.body:
+        raise CardConflict(card_id)
+    eff_keys = list(keys)
+    if not derive_norm_keys(eff_keys) and title.strip():
+        eff_keys = [title]
+    with rm.using(user=user):
+        rm.update(
+            card_id,
+            ContextCard(
+                collection_id=existing.collection_id,  # immutable across edits
+                keys=eff_keys,
+                norm_keys=derive_norm_keys(eff_keys),
+                title=title,
+                body=body,
+            ),
+        )
+    return card_id
+
+
+def upsert_context_card(
+    spec: SpecStar,
+    *,
+    collection: str,
+    keys: list[str],
+    title: str,
+    body: str,
+    user: str,
+) -> str:
+    """Create-or-update a ``ContextCard`` by key (#111) — the workflow commit path's
+    ‘有就更新、沒才新增’. Resolve the collection, then for the first usable key that
+    already names a card in it, overwrite that card (last-write-wins, no read guard);
+    if no key matches, create a new card. Idempotent by key, so a re-run updates rather
+    than duplicating. Returns the card id. (The *agent* surface keeps the stricter
+    create-refuses-on-conflict / update-with-read-guard pair; this is the deterministic
+    node's reliable commit.)"""
+    from ..kb.context_cards import derive_norm_keys, find_cards_by_key
+
+    collection_id = resolve_collection_id(spec, collection)
+    eff_keys = list(keys)
+    if not derive_norm_keys(eff_keys) and title.strip():
+        eff_keys = [title]
+    for key in eff_keys:
+        existing = find_cards_by_key(spec, collection_id, key)
+        if existing:
+            return update_context_card(
+                spec, card_id=existing[0][0], keys=eff_keys, title=title, body=body, user=user
+            )
+    return create_context_card(
+        spec, collection=collection_id, keys=eff_keys, title=title, body=body, user=user
+    )

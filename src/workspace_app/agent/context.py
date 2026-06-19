@@ -123,6 +123,10 @@ class AgentToolContext:
     # resources (Collection / ContextCard) directly. Set by the Topic Hub turn
     # builder; None for RCA/KB-flavour contexts.
     spec: SpecStar | None = None
+    # The acting user for agent-driven specstar writes (#111: create/update
+    # context cards stamp `created_by`/`updated_by` as this user). Set per-turn
+    # from the message author; empty for contexts with no card-write tools.
+    acting_user: str = ""
     # Per-turn enhancement override the *caller* (KB chat composer,
     # ask_knowledge_base bridge, …) wants the kb_search tool to apply
     # on top of the operator's retriever defaults. LLM-set tool args

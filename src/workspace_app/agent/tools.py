@@ -659,16 +659,110 @@ def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -
 
     Deterministic + instant — no knowledge-base search. Pass a term you don't
     recognise (or the sentence containing it); returns any matching glossary entries
-    as authoritative context, or a short "not found" note. Prefer this BEFORE
+    as authoritative context (each tagged with its ``card_id`` so you can update it
+    via update_context_card), or a short "not found" note. Prefer this BEFORE
     ask_knowledge_base for jargon / abbreviations / domain terms."""
-    from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections, match
+    from ..kb.context_cards import (
+        card_context_block,
+        cards_with_ids_for_collections,
+        match_with_ids,
+    )
 
     spec = ctx.context.spec
     if spec is None:
         return "error: lookup_glossary needs a collection-scoped context (no spec on this turn)"
-    cards = cards_for_collections(spec, ctx.context.collection_ids)
-    block = card_context_block(match(query, build_vocab(cards)))
+    pairs = cards_with_ids_for_collections(spec, ctx.context.collection_ids)
+    hits = match_with_ids(query, pairs)
+    block = card_context_block([c for _, c in hits], ids=[rid for rid, _ in hits])
     return block or f"No glossary entries found for: {query}"
+
+
+def update_context_card_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    card_id: str,
+    keys: list[str],
+    title: str,
+    body: str,
+    expected_body: str,
+) -> str:
+    """Update an EXISTING glossary card (#111), overwriting it with new content.
+
+    Read the card FIRST with lookup_glossary — copy its `card_id` here, and pass the
+    body you just read as `expected_body` so a stale edit can't clobber a newer one.
+    `keys`/`title`/`body` fully REPLACE the card's current values (merge any content you
+    want to keep into `body` yourself). Use this when a term already has a card and you
+    mean the SAME thing; for a same-term-different-meaning entry, use create_context_card
+    instead. Returns a confirmation, or an `error:` note (re-read and retry on a clash)."""
+    from ..workflow.capabilities import CardConflict, CardNotFound, update_context_card
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: update_context_card needs a collection-scoped context (no spec on this turn)"
+    try:
+        update_context_card(
+            spec,
+            card_id=card_id,
+            keys=keys,
+            title=title,
+            body=body,
+            user=ctx.context.acting_user,
+            expected_body=expected_body,
+        )
+    except CardNotFound:
+        return f"error: no glossary card with id {card_id!r} (it may have been deleted) — re-read"
+    except CardConflict:
+        return (
+            f"error: card {card_id!r} changed since you read it — re-read it with "
+            "lookup_glossary and retry with the current body as expected_body"
+        )
+    return f"Updated glossary card {card_id}."
+
+
+def create_context_card_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    collection: str,
+    keys: list[str],
+    title: str,
+    body: str,
+) -> str:
+    """Create a NEW glossary card in a collection (#111).
+
+    Use this only for a term that has NO card yet, or a same-term-DIFFERENT-meaning
+    entry. If an exact key already exists in the collection, this REFUSES and returns
+    the existing card id — update that card with update_context_card instead (read it
+    first). `collection` is an id or name. Returns a confirmation or an `error:` note."""
+    from ..kb.context_cards import find_cards_by_key
+    from ..workflow.capabilities import (
+        CollectionNotFound,
+        create_context_card,
+        resolve_collection_id,
+    )
+
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: create_context_card needs a collection-scoped context (no spec on this turn)"
+    try:
+        collection_id = resolve_collection_id(spec, collection)
+    except CollectionNotFound:
+        return f"error: unknown collection {collection!r}"
+    for key in keys:
+        existing = find_cards_by_key(spec, collection_id, key)
+        if existing:
+            ids = ", ".join(rid for rid, _ in existing)
+            return (
+                f"error: a card for key {key!r} already exists in this collection "
+                f"(card_id: {ids}) — update it with update_context_card instead of "
+                "creating a duplicate (read it first with lookup_glossary)"
+            )
+    card_id = create_context_card(
+        spec,
+        collection=collection_id,
+        keys=keys,
+        title=title,
+        body=body,
+        user=ctx.context.acting_user,
+    )
+    return f"Created glossary card {card_id}."
 
 
 _IMPLS = {
@@ -686,6 +780,8 @@ _IMPLS = {
     # Topic Hub tools — query specstar resources via ctx.spec (no retriever).
     "resolve_collection": resolve_collection_impl,
     "lookup_glossary": lookup_glossary_impl,
+    "update_context_card": update_context_card_impl,
+    "create_context_card": create_context_card_impl,
     # Wiki agent tools (#50). Opt-in via the wiki presets' allowed_tools;
     # not in _WORKSPACE_TOOLS (they need a wiki context).
     "search_wiki": search_wiki_impl,
