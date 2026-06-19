@@ -300,6 +300,12 @@ class PresetLlmSettings:
 
     base_url: str = ""
     api_key: str = ""
+    # #113 Layer 1 (anti-repetition sampling). All None = inherit the model
+    # default. Honoured by vLLM; silently dropped by Ollama's Go runner — the
+    # stream-side guard is the backend-independent backstop.
+    frequency_penalty: float | None = None
+    presence_penalty: float | None = None
+    repetition_penalty: float | None = None
 
 
 @dataclass(frozen=True)

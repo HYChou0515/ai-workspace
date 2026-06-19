@@ -158,17 +158,25 @@ the model on backends that honour them.
 
 **Changes.**
 - Add optional `frequency_penalty` / `presence_penalty` / `repetition_penalty` to the
-  `AgentConfig` preset schema (default `None` = inherit, mirroring the `base_url` /
-  `api_key` "empty = inherit" convention).
+  `AgentConfig` resource Struct (default `None` = inherit, mirroring the `llm_base_url`
+  / `llm_api_key` "empty = inherit" convention).
 - `_agent_for()` (`litellm_runner.py:286`): map `frequency_penalty` /
   `presence_penalty` to native `ModelSettings` fields; `repetition_penalty` into
-  `extra_body`. Code comment documenting the **Ollama Go-runner silent-drop** caveat
-  and why L2/L3 remain the real guard.
+  `extra_body` (merged with the reasoning-off `extra_body`). Code comment documenting
+  the **Ollama Go-runner silent-drop** caveat and why L2/L3 remain the real guard.
+- **Config surface** (the real operator path is `config.yaml`, not the resource API):
+  add the three fields to the loader's `PresetLlmSettings` schema (`config/schema.py`)
+  so the strict validator accepts `agents.presets.<x>.llm.{frequency,presence,
+  repetition}_penalty`; read them in `_build_preset` (`config/loader.py`) and map them
+  in `catalog_build.py`. Document under the per-preset `llm` block in
+  `configs/config.example.yaml`.
 
 **DoD / tests (TDD).**
 - A preset with `frequency_penalty` set produces a `ModelSettings` carrying it; the
-  `repetition_penalty` path lands in `extra_body`.
+  `repetition_penalty` path lands in `extra_body` (and merges with reasoning-off).
 - Unset penalties leave `ModelSettings` at the model default (no spurious params).
+- Penalties set under a preset's `llm:` block in `config.yaml` flow through to the
+  resolved `AgentConfig`.
 
 ---
 

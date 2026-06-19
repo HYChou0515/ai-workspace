@@ -268,6 +268,17 @@ def _agent_for(
     #     extra_args think=False (the SDK LitellmModel splats extra_args as
     #     top-level completion kwargs and extra_body into the call's extra_body).
     #   - None (unset) ⇒ leave the model's default.
+    # #113 Layer 1: per-config anti-repetition sampling penalties. freq/presence
+    # are native ModelSettings fields; repetition_penalty is non-standard so it
+    # rides extra_body (litellm forwards it). All default None = inherit (the SDK
+    # omits None params); honoured by vLLM, silently dropped by Ollama's Go
+    # runner — the stream guard is the backend-independent backstop.
+    freq, pres = config.frequency_penalty, config.presence_penalty
+    rep_body = (
+        {"repetition_penalty": config.repetition_penalty}
+        if config.repetition_penalty is not None
+        else {}
+    )
     if reasoning_effort == "none":
         from ..agent.reasoning import reasoning_off_kwargs
 
@@ -275,15 +286,24 @@ def _agent_for(
         # think → extra_args (top-level kwarg); extra_body → extra_body.
         model_settings = ModelSettings(
             extra_args={"think": off["think"]} if "think" in off else None,
-            extra_body=off.get("extra_body"),
+            extra_body={**(off.get("extra_body") or {}), **rep_body} or None,
+            frequency_penalty=freq,
+            presence_penalty=pres,
         )
     elif reasoning_effort:
         # effort is validated to low/medium/high by the request body.
         model_settings = ModelSettings(
             reasoning=Reasoning(effort=reasoning_effort),  # ty: ignore[invalid-argument-type]
+            extra_body=rep_body or None,
+            frequency_penalty=freq,
+            presence_penalty=pres,
         )
     else:
-        model_settings = ModelSettings()
+        model_settings = ModelSettings(
+            extra_body=rep_body or None,
+            frequency_penalty=freq,
+            presence_penalty=pres,
+        )
     # Per-config LLM endpoint (new schema's agents.presets.<x>.llm) wins
     # over the runner's constructor default — empty strings mean
     # "inherit from runner" so a single-endpoint deploy still works.

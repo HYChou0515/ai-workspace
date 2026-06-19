@@ -66,3 +66,21 @@ class AgentConfig(Struct):
     llm_api_key: str = ""
     """Per-config LLM API key. Same fallback as ``llm_base_url`` —
     empty means "use the runner's constructor default"."""
+
+    frequency_penalty: float | None = None
+    """#113 Layer 1 (anti-repetition). OpenAI-style: >0 discourages tokens by
+    how often they've appeared. ``None`` = inherit the model default (don't
+    send the param). Honoured by vLLM; **silently dropped by Ollama's newer Go
+    runner** — which is why the stream-side repetition guard, not this, is the
+    real backstop."""
+
+    presence_penalty: float | None = None
+    """#113 Layer 1. OpenAI-style: >0 discourages tokens that have appeared at
+    all (regardless of count). ``None`` = inherit. Same Ollama caveat as
+    ``frequency_penalty``."""
+
+    repetition_penalty: float | None = None
+    """#113 Layer 1. Non-standard (HF/vLLM): >1 divides the logit of seen
+    tokens. Sent via ``extra_body`` (litellm forwards it). ``None`` = inherit.
+    Same Ollama caveat. Don't crank it on reasoning models — it can *cause*
+    loops; prefer modest values (~1.05–1.1)."""

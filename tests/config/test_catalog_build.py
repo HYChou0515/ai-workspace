@@ -115,6 +115,33 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     assert kb.suggestions  # quick-prompt chips ship with the config  # ty: ignore
 
 
+def test_preset_llm_sampling_penalties_flow_to_agent_config(tmp_path: Path):
+    """#113 Layer 1: anti-repetition sampling penalties set under a preset's
+    `llm:` block reach the resolved AgentConfig (and thence the runner's
+    ModelSettings)."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "agents:\n"
+        "  presets:\n"
+        "    my-rca:\n"
+        '      model: "openai/gpt-4o-mini"\n'
+        '      prompt_file: "pkg:workspace_app.kb.prompts/system.md"\n'
+        "      llm:\n"
+        "        frequency_penalty: 0.3\n"
+        "        presence_penalty: 0.2\n"
+        "        repetition_penalty: 1.1\n"
+        "  kb_chat:\n"
+        "    preset: my-rca\n"
+        "    allowed_tools: [kb_search]\n",
+        encoding="utf-8",
+    )
+    settings = load(config_path=cfg_file, env={})
+    kb = build_catalog(settings, config_dir=tmp_path).kb_chat()
+    assert kb.frequency_penalty == 0.3
+    assert kb.presence_penalty == 0.2
+    assert kb.repetition_penalty == 1.1
+
+
 def test_usage_entry_overrides_take_precedence_over_preset(tmp_path: Path):
     """A usage entry that overrides allowed_tools wins over its preset's
     value (list-replace semantics from Q5). Tested on kb_chat — the override

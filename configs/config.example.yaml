@@ -112,6 +112,14 @@
 # llm:
 #   base_url: ""
 #   api_key: ${LLM_API_KEY}
+#   # #113 anti-repetition sampling penalties (per-preset, under
+#   # agents.presets.<name>.llm). Omit = inherit the model default. Honoured by
+#   # vLLM; Ollama's Go runner SILENTLY DROPS them — the in-stream repetition
+#   # guard is the real, backend-independent backstop, this is a cheap first line.
+#   frequency_penalty: 0.3      # OpenAI-style, >0 discourages by token frequency
+#   presence_penalty: 0.2       # OpenAI-style, >0 discourages tokens seen at all
+#   repetition_penalty: 1.1     # HF/vLLM-style, >1 divides seen-token logits
+#                               # (keep modest on reasoning models — can cause loops)
 
 # ─── read_file caps (sandbox tool) ──────────────────────────────────
 # read_file:
