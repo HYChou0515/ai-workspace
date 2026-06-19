@@ -100,6 +100,18 @@ class MaxTurnsExceeded:
 
 
 @dataclass(frozen=True)
+class RepetitionStopped:
+    """#113: the model degenerated into a repetition loop and we stopped the
+    turn. The repeated text already streamed live (so the user sees the model
+    misbehaved); the persisted message is truncated by `loop_length` trailing
+    chars on `channel` ("content" or "reasoning"). A RunDone follows."""
+
+    loop_length: int
+    channel: Literal["content", "reasoning"] = "content"
+    type: Literal["repetition_stopped"] = "repetition_stopped"
+
+
+@dataclass(frozen=True)
 class UserMessage:
     """#43: a human message posted to a SHARED investigation, broadcast on the
     per-investigation stream so every viewer sees who said what — live, before
@@ -150,6 +162,7 @@ AgentEvent = (
     | RunCancelled
     | ToolCallParseError
     | MaxTurnsExceeded
+    | RepetitionStopped  # #113: model degenerated into a repetition loop
     | AgentMetrics
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)

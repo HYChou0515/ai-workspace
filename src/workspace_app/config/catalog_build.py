@@ -195,4 +195,8 @@ def resolve_usage(
         idle_timeout_seconds=merged.get("idle_timeout_seconds", 28800),
         llm_base_url=llm.get("base_url", ""),
         llm_api_key=llm.get("api_key", ""),
+        # #113 Layer 1: anti-repetition sampling penalties (None = inherit).
+        frequency_penalty=llm.get("frequency_penalty"),
+        presence_penalty=llm.get("presence_penalty"),
+        repetition_penalty=llm.get("repetition_penalty"),
     )

@@ -54,6 +54,16 @@ export type ToolCallParseError = {
 
 export type MaxTurnsExceeded = { type: "max_turns_exceeded"; turns: number };
 
+/** #113: the model degenerated into a repetition loop and the turn was stopped.
+ * The repeated text already streamed live (the user sees the model misbehaved);
+ * the persisted message is truncated by `loop_length` trailing chars on
+ * `channel`. A `done` follows. Mirrors api/events.py RepetitionStopped. */
+export type RepetitionStopped = {
+  type: "repetition_stopped";
+  loop_length: number;
+  channel: "content" | "reasoning";
+};
+
 /** Live token telemetry for the turn. phase: "up" sending the prompt,
  * "down" streaming the reply (counts tick live, approx), "final" exact
  * usage on completion. Mirrors api/events.py AgentMetrics. */
@@ -144,6 +154,7 @@ export type AgentEvent =
   | SandboxKilledIdle
   | ToolCallParseError
   | MaxTurnsExceeded
+  | RepetitionStopped
   | AgentMetrics
   | UserMessage
   | FileChanged

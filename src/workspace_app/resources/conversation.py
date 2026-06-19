@@ -68,6 +68,12 @@ class Message(Struct):
     the next turn's LLM history (`api.turns.history_items`): `cancelled`
     is replayed as a system note, the rest are human-only diagnostics."""
 
+    stopped_reason: str | None = None
+    """#113: `repetition` when role=assistant was stopped mid-stream for a
+    degenerate repetition loop and `content`/`reasoning` was truncated to before
+    it. The FE renders a notice so a reloaded thread doesn't read the truncated
+    answer as normal. None for an ordinary answer."""
+
     tool_args: dict[str, Any] | None = None
     """Only set when role=tool — the tool call's arguments (captured from the
     ToolStart), so a reloaded log shows the full call, not just its output."""

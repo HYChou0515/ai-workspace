@@ -183,3 +183,33 @@ describe("EntryView — undo affordance (#38)", () => {
     expect(screen.queryByRole("button", { name: /undo/i })).not.toBeInTheDocument();
   });
 });
+
+describe("EntryView — repetition stop notice (#113)", () => {
+  it("shows a notice on an assistant answer truncated for repetition", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", at: 0, message: { role: "assistant", content: "Good answer.", stopped_reason: "repetition" } }}
+      />,
+    );
+    expect(screen.getByText("Good answer.")).toBeInTheDocument();
+    expect(screen.getByText(/重複/)).toBeInTheDocument();
+  });
+
+  it("shows a thinking-loop notice when the model never produced an answer", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", at: 0, message: { role: "assistant", content: "", stopped_reason: "repetition" } }}
+      />,
+    );
+    expect(screen.getByText(/思考/)).toBeInTheDocument();
+  });
+
+  it("renders no notice for a normal answer", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", at: 0, message: { role: "assistant", content: "All good." } }}
+      />,
+    );
+    expect(screen.queryByText(/重複/)).not.toBeInTheDocument();
+  });
+});

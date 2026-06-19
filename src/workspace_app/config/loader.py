@@ -714,5 +714,8 @@ def _build_preset(d: dict[str, Any]) -> Preset:
         llm=PresetLlmSettings(
             base_url=d.get("llm", {}).get("base_url", ""),
             api_key=d.get("llm", {}).get("api_key", ""),
+            frequency_penalty=d.get("llm", {}).get("frequency_penalty"),
+            presence_penalty=d.get("llm", {}).get("presence_penalty"),
+            repetition_penalty=d.get("llm", {}).get("repetition_penalty"),
         ),
     )

@@ -30,12 +30,14 @@ from .events import (
     AgentMetrics,
     MaxTurnsExceeded,
     MessageDelta,
+    RepetitionStopped,
     RunCancelled,
     RunError,
     ToolEnd,
     ToolStart,
     to_sse,
 )
+from .repetition_guard import guard_repetition
 from .runner import AgentRunner
 
 
@@ -178,6 +180,9 @@ class TurnMessage:
     created_at: int = field(default_factory=_now_ms)
     metrics: MessageMetrics | None = None
     error_kind: str | None = None  # role=error: error | cancelled | max_turns
+    # #113: "repetition" when the turn was stopped for a degenerate loop — the
+    # FE renders a notice and `content`/`reasoning` is truncated to before it.
+    stopped_reason: str | None = None
 
 
 def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMessage:
@@ -246,6 +251,20 @@ class _TurnReducer:
                         elapsed_ms=item.elapsed_ms,
                     )
                     break
+        elif isinstance(item, RepetitionStopped):
+            # #113 decision "b": the repeats already streamed live; here we
+            # truncate ONLY the persisted message back to before the loop (so
+            # the looped text isn't fed into the next turn's context) and flag
+            # it so a reloaded thread still shows the notice.
+            for msg in reversed(self.produced):
+                if msg.role != "assistant":
+                    continue
+                if item.channel == "reasoning":
+                    msg.reasoning = (msg.reasoning or "")[: -item.loop_length] or None
+                else:
+                    msg.content = msg.content[: -item.loop_length]
+                msg.stopped_reason = "repetition"
+                break
         elif isinstance(item, (RunError, RunCancelled, MaxTurnsExceeded)):
             # Issue #37: a terminal failure is persisted as an error message so a
             # reloaded thread still shows it. Any partial output already in
@@ -293,9 +312,17 @@ class ChatTurnEngine:
     def __init__(self, runner: AgentRunner) -> None:
         self._runner = runner
         self._sessions: dict[str, _TurnSession] = {}
+        # #113: every turn's event stream is wrapped so a degenerate repetition
+        # loop is stopped (and the persisted message truncated) — see _events.
         # #43: collaborative per-investigation queue/worker sessions, separate
         # from the per-requester `stream()` sessions KB chat uses.
         self._ws_sessions: dict[str, _WorkspaceSession] = {}
+
+    def _events(self, content: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        """The runner's event stream, wrapped by the #113 repetition guard so a
+        within-response degeneration loop is stopped and marked. Used by every
+        turn driver so the guard lives in exactly one place."""
+        return guard_repetition(self._runner.run(content, ctx))
 
     def _session(self, key: str) -> _TurnSession:
         return self._sessions.setdefault(key, _TurnSession())
@@ -368,7 +395,7 @@ class ChatTurnEngine:
         (and broadcast) and the (partial) result is always persisted."""
         reducer = _TurnReducer()
         try:
-            async for ev in self._runner.run(content, ctx):
+            async for ev in self._events(content, ctx):
                 reducer.add(ev)
                 publish(ev)
         except asyncio.CancelledError:
@@ -451,7 +478,7 @@ class ChatTurnEngine:
         any other failure into a terminal event so the subscriber stream always
         closes cleanly."""
         try:
-            async for ev in self._runner.run(content, ctx):
+            async for ev in self._events(content, ctx):
                 await queue.put(ev)
         except asyncio.CancelledError:
             await queue.put(RunCancelled())

@@ -246,6 +246,9 @@ function MessageBlock({
             {message.content}
           </ReactMarkdown>
         </div>
+        {message.stopped_reason === "repetition" && (
+          <RepetitionNotice answered={message.content.trim().length > 0} />
+        )}
         {message.citations && message.citations.length > 0 && (
           <div className="kb-cites" style={{ marginLeft: 28 }}>
             <div className="kb-cites__label">Sources</div>
@@ -274,6 +277,26 @@ function MessageBlock({
   return (
     <div style={{ fontSize: 12, color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)" }}>
       {message.content}
+    </div>
+  );
+}
+
+// #113: the model degenerated into a repetition loop and the turn was stopped.
+// Copy describes the outcome only (no internals) — a distinct line when the
+// model looped while thinking and never produced an answer.
+function RepetitionNotice({ answered }: { answered: boolean }) {
+  return (
+    <div
+      role="note"
+      style={{
+        marginLeft: 28,
+        marginTop: 4,
+        fontSize: 12,
+        color: "var(--text-paper-d2)",
+        fontStyle: "italic",
+      }}
+    >
+      {answered ? "偵測到模型重複輸出,已為你收尾。" : "模型在思考時陷入重複,已中止。"}
     </div>
   );
 }

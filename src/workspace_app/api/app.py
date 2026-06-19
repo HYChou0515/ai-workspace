@@ -96,6 +96,7 @@ def _to_rca_message(m: TurnMessage) -> Message:
             reasoning=m.reasoning,
             created_at=m.created_at,
             metrics=m.metrics,
+            stopped_reason=m.stopped_reason,  # #113: repetition-stop notice survives reload
         )
     if m.role == "error":
         # Issue #37: a terminal failure, persisted so a reloaded thread
