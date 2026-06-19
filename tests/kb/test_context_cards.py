@@ -176,3 +176,27 @@ def test_card_context_block_omits_alias_suffix_when_it_equals_the_label():
 def test_card_context_block_handles_a_card_with_no_keys():
     c = ContextCard(collection_id="c", keys=[], norm_keys=[], title="", body="orphan")
     assert "orphan" in card_context_block([c])  # label falls back to "" but body still shows
+
+
+# ── #111: find cards by exact key, WITH their resource ids ────────────────
+
+
+def test_find_cards_by_key_returns_id_card_pairs_for_exact_matches():
+    from workspace_app.kb.context_cards import find_cards_by_key
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rid = _card(spec, cid, ["M4", "Metal 4"], body="four")
+    hits = find_cards_by_key(spec, cid, "m4")  # normalised, exact membership
+    assert [(i, c.body) for i, c in hits] == [(rid, "four")]
+
+
+def test_find_cards_by_key_is_membership_not_substring_and_scoped():
+    from workspace_app.kb.context_cards import find_cards_by_key
+
+    spec = make_spec(default_user="u")
+    a, b = _collection(spec, "a"), _collection(spec, "b")
+    _card(spec, a, ["M40"], body="forty")
+    assert find_cards_by_key(spec, a, "M4") == []  # "m4" is not the element "m40"
+    _card(spec, a, ["M4"], body="in-a")
+    assert find_cards_by_key(spec, b, "m4") == []  # other collection excluded

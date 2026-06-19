@@ -17,6 +17,8 @@
       "delete_file",
       "lookup_glossary",
       "resolve_collection",
+      "create_context_card",
+      "update_context_card",
       "ask_knowledge_base"
     ],
     "context_files": ["MEMORY.md", "collections.json"],

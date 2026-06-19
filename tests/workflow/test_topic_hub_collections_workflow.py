@@ -40,7 +40,7 @@ def _handle() -> tuple[WorkflowHandle, list, list, list[str]]:
         ingested.append((coll, path))
         return f"doc:{coll}:{path}"
 
-    async def create_card(coll, keys, title, body):
+    async def upsert_card(coll, keys, title, body):
         cards.append((coll, list(keys), title, body))
         return f"card:{title}"
 
@@ -49,7 +49,7 @@ def _handle() -> tuple[WorkflowHandle, list, list, list[str]]:
 
     wf.drive_turn = drive_turn
     wf._ingest = ingest
-    wf._create_card = create_card
+    wf._upsert_card = upsert_card
     wf._collection_has = landed
     return wf, ingested, cards, calls
 
@@ -101,6 +101,31 @@ async def test_human_fills_glossary_then_approve_ingests_and_authors_cards():
     assert result == {"status": "approved", "ingested": 1, "cards": 1}
     assert ingested == [("Defects", "/inputs/a.txt")]
     assert cards == [("Defects", ["M4"], "M4", "The fourth metal layer.")]
+
+
+async def test_rerun_with_an_edited_definition_upserts_the_card_again():
+    """#111: if the human refines a definition and re-runs, the commit re-fires for that
+    term (the step receipt reflects the body) so the card is upserted to the new text —
+    not skipped as already-done. Other completed steps still replay from the journal."""
+    run = _run()
+    wf, ingested, cards, _calls = _handle()
+    await _seed(wf)
+    with pytest.raises(AwaitingHuman):
+        await run(wf, {})
+    await wf.write("glossary.todo.md", "## M4\nThe fourth metal layer.")
+    await record_decision(wf, phase="review", choice="approve")
+    await run(wf, {})
+    assert cards == [("Defects", ["M4"], "M4", "The fourth metal layer.")]
+    # The human refines the definition and re-runs the (approved) workflow.
+    await wf.write("glossary.todo.md", "## M4\nThe fourth metal interconnect layer.")
+    await run(wf, {})
+    # The card commit re-fired with the new body (upsert → same card, new text); ingest
+    # (unchanged) replayed from its receipt, so it did NOT run a second time.
+    assert cards == [
+        ("Defects", ["M4"], "M4", "The fourth metal layer."),
+        ("Defects", ["M4"], "M4", "The fourth metal interconnect layer."),
+    ]
+    assert ingested == [("Defects", "/inputs/a.txt")]  # ingest stayed idempotent
 
 
 async def test_reject_commits_nothing():

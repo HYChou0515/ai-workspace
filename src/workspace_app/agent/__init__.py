@@ -2,6 +2,7 @@ from .context import AgentToolContext
 from .tools import (
     ask_knowledge_base_impl,
     build_tools,
+    create_context_card_impl,
     delete_file_impl,
     edit_file_impl,
     exec_impl,
@@ -13,6 +14,7 @@ from .tools import (
     read_file_impl,
     read_image_impl,
     resolve_collection_impl,
+    update_context_card_impl,
     write_file_impl,
 )
 
@@ -32,4 +34,6 @@ __all__ = [
     "mention_user_impl",
     "resolve_collection_impl",
     "lookup_glossary_impl",
+    "update_context_card_impl",
+    "create_context_card_impl",
 ]

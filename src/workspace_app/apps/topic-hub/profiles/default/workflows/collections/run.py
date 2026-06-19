@@ -12,8 +12,10 @@ the human fills the definitions in the IDE (or opens a sibling chat to have the 
 help; shared FileStore, §3.1), then approves.
 
 COMMIT (deterministic, idempotent): ``ingest_to_collection`` files each upload and
-``create_context_card`` (§8) authors a context card for each filled glossary entry.
-Re-run replays completed steps (§9); nothing reaches a collection before approval.
+``upsert_context_card`` (§8, #111) authors a context card for each filled glossary
+entry — create-or-update by key, so re-classifying a term updates its card instead of
+duplicating it. Re-run replays completed steps (§9); nothing reaches a collection
+before approval.
 
 Loaded by file path (hyphenated slug) → absolute imports only.
 """
@@ -162,7 +164,7 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
 
     cards = 0
     for term, body in _parse_glossary(await wf.read_text(_GLOSSARY)):
-        await wf.create_context_card(
+        await wf.upsert_context_card(
             term_collection.get(term, collections[0]),
             [term],
             title=term,

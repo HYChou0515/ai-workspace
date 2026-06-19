@@ -118,6 +118,21 @@ def test_hub_turn_exposes_glossary_tools_and_scopes_to_collections_json():
     assert {"lookup_glossary", "resolve_collection", "ask_knowledge_base"} <= allowed
 
 
+def test_hub_turn_exposes_card_write_tools_and_stamps_acting_user():
+    """#111: the Hub agent can create/update glossary cards in chat, stamped as the
+    message author."""
+    cap = _Capture()
+    app, _ = _app(cap)
+    client = TestClient(app)
+    iid, _ = _hub(client)
+    client.post(f"/a/topic-hub/items/{iid}/messages", json={"content": "hi"})
+    assert cap.ctx is not None
+    assert cap.ctx.acting_user  # the write tools have a user to stamp
+    assert cap.ctx.agent_config is not None
+    allowed = set(cap.ctx.agent_config.allowed_tools or [])
+    assert {"create_context_card", "update_context_card"} <= allowed
+
+
 def test_hub_glossary_layer_answers_a_card_covered_term_without_rag():
     """Retrieval layering §11: a card-covered term is answered by the deterministic
     glossary (layer 2) — no retriever / RAG — using the real turn ctx's collection scope."""

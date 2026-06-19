@@ -47,7 +47,7 @@ from ..sandbox.protocol import OutputSink, Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tooling.registry import PackageInfo
 from ..users import MockUserDirectory, UserDirectory
-from ..workflow.capabilities import CollectionNotFound, create_context_card, ingest_to_collection
+from ..workflow.capabilities import CollectionNotFound, ingest_to_collection, upsert_context_card
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
 from ..workflow.handle import WorkflowHandle
@@ -1394,11 +1394,13 @@ def create_app(
             user=captured_user,
         )
 
-    async def _wf_create_card(
+    async def _wf_upsert_card(
         captured_user: str, collection: str, keys: list[str], title: str, body: str
     ) -> str:
-        """The create-context-card capability (§8) bound to this run's captured user."""
-        return create_context_card(
+        """The upsert-context-card capability (§8, #111) bound to this run's captured
+        user — create-or-update by key, so re-classifying a term updates its card
+        instead of duplicating it."""
+        return upsert_context_card(
             spec, collection=collection, keys=keys, title=title, body=body, user=captured_user
         )
 
@@ -1430,7 +1432,7 @@ def create_app(
         wf.run_sandbox = lambda run: _wf_run_sandbox(item_id, run, wf.credential)
         wf._ingest = lambda collection, path: _wf_ingest(item_id, captured_user, collection, path)
         wf._collection_has = _wf_collection_has
-        wf._create_card = lambda collection, keys, title, body: _wf_create_card(
+        wf._upsert_card = lambda collection, keys, title, body: _wf_upsert_card(
             captured_user, collection, keys, title, body
         )
 
@@ -1687,10 +1689,12 @@ def create_app(
         body: _CardBody,
         x_workflow_token: str | None = Header(default=None),
     ) -> dict:
-        """topic-hub P9 (manual §8): the create-context-card capability as an HTTP
+        """topic-hub P9 / #111 (manual §8): the upsert-context-card capability as an HTTP
         endpoint — a deterministic node's sandbox script reaches it with the run-scoped
-        credential (manual §15). Same auth as ingest: a valid ``X-Workflow-Token`` acts
-        as its captured user, scoped to THIS item; no token → the session user."""
+        credential (manual §15). Idempotent: create-or-update by key, so a re-run updates
+        the card instead of duplicating it. Same auth as ingest: a valid
+        ``X-Workflow-Token`` acts as its captured user, scoped to THIS item; no token →
+        the session user."""
         investigation_id = _require_item(slug, item_id)
         actor = get_user_id()
         if x_workflow_token is not None:
@@ -1699,7 +1703,7 @@ def create_app(
                 raise HTTPException(status_code=401, detail="invalid or expired workflow token")
             actor = claims.user
         try:
-            card_id = await _wf_create_card(
+            card_id = await _wf_upsert_card(
                 actor, body.collection, body.keys, body.title, body.body
             )
         except CollectionNotFound as exc:
@@ -1869,6 +1873,8 @@ def create_app(
             # `lookup_glossary` / `resolve_collection` tools query context cards.
             spec=spec,
             collection_ids=hub_collection_ids,
+            # #111: card create/update agent tools stamp this user on the write.
+            acting_user=author,
         )
 
         def persist(produced: list[TurnMessage]) -> None:
