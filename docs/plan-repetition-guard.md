@@ -65,12 +65,17 @@
   multiple model generations (tool call → result → generate again). The detector
   **resets on each `ToolStart` / message boundary** so it only ever sees *one*
   response — this is what keeps us in "case 1" and out of cross-step "case 2".
-- **CJK-aware.** Normalization and "truncate to a complete sentence boundary" must
-  recognise `。！？；` as well as latin `.!?` — model output is Chinese with no spaces.
-- **Detect on normalized text, truncate on raw text.** Normalization (collapse
-  whitespace runs, casefold) is for *judging* only; the actual truncation must land on
-  a raw-buffer offset, so keep a normalized→raw offset mapping (or restrict
-  normalization to reversible whitespace-collapsing).
+- **Truncate exactly at the loop start (no sentence-boundary snapping).** The
+  detector reports `loop_length` — the trailing run of repeated chars — and the caller
+  drops exactly that, keeping all clean text up to where the loop began (even if that
+  ends mid-sentence; the notice already flags it). Snapping back to the last sentence
+  boundary was considered and **dropped** (loses the informative partial sentence) —
+  see v2. Reported as a *tail length*, not an absolute offset, so it stays correct
+  under the sliding window.
+- **Exact (byte-identical) matching, no text normalization (v1).** Real degeneration
+  is byte-identical, so v1 matches raw chars — no whitespace-collapse / casefold. This
+  avoids the normalized→raw offset-mapping complexity. Near-repeats with varying
+  whitespace/casing are deferred to v2.
 - **L3 live behaviour = keep the repeats (decision "b").** We do **not** retract the
   already-streamed deltas. The user sees the repeated text + a notice — deliberate
   transparency that *this LLM has a problem*. Truncation is applied **only** to the
@@ -188,6 +193,10 @@ repetition, both live and on reload.
 ## Open for v2 (explicitly deferred)
 
 - Cross-step / cross-turn repetition (case 2).
+- **Text normalization** (whitespace-collapse / casefold) to catch near-repeats that
+  vary in whitespace or casing — needs a normalized→raw offset map.
+- **Sentence-boundary snapping** of the truncation point (CJK `。！？；` + latin),
+  for cleaner partial output at the cost of dropping the loop's leading partial sentence.
 - Mid-stream **retry** with bumped sampling params (needs the `progress_made` gate
   reworked, #26).
 - **DRY** sampler / `no_repeat_ngram_size` (backend support gaps).
