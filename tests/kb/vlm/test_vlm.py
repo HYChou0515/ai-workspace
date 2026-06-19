@@ -137,6 +137,34 @@ def test_describer_keeps_raw_when_formatter_drops_content():
     assert out == raw.strip()
 
 
+def test_describer_answer_uses_question_as_prompt_and_skips_formatter():
+    """`answer` (the interactive read_image path, #112) sends the caller's
+    question straight to the VLM as the prompt — not the layered describe
+    template — and never runs the formatter (it's an answer, not OCR to
+    restructure). The VLM's non-reasoning content is returned."""
+    vlm = FakeVlm([("the error is ", False), ("OOMKilled", False)])
+    formatter = FakeLlm([("## should not be used", False)])
+    out = VlmDescriber(vlm, formatter=formatter).answer(
+        b"png", "image/png", question="what error is in this screenshot?"
+    )
+    assert out == "the error is OOMKilled"
+    (call,) = vlm.calls
+    assert call["prompt"] == "what error is in this screenshot?"
+    assert call["images"] == [(b"png", "image/png")]
+    assert formatter.calls == []
+
+
+def test_describer_answer_forwards_chunks_to_on_chunk():
+    """`answer` streams live like every other VLM call — reasoning + content
+    chunks reach on_chunk so the tool card shows progress."""
+    vlm = FakeVlm([("thinking…", True), ("answer", False)])
+    seen: list[tuple[str, bool]] = []
+    VlmDescriber(vlm).answer(
+        b"png", "image/png", question="q", on_chunk=lambda t, r: seen.append((t, r))
+    )
+    assert seen == [("thinking…", True), ("answer", False)]
+
+
 def test_describer_skips_formatter_when_vlm_returns_nothing():
     """An empty VLM result (a featureless image the model couldn't read) is
     returned as-is — we never hand the formatter empty input to hallucinate

@@ -8,7 +8,7 @@
   "agent": {
     "prompt_file": "prompts/system.md",
     "tools": [
-      "exec", "read_file", "write_file", "edit_file", "ls", "exists",
+      "exec", "read_file", "read_image", "write_file", "edit_file", "ls", "exists",
       "delete_file", "ask_knowledge_base", "data-fetch", "csv-column-summary",
       "rca-tools", "python-stack"
     ],

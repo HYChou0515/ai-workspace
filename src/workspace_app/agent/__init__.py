@@ -11,6 +11,7 @@ from .tools import (
     ls_impl,
     mention_user_impl,
     read_file_impl,
+    read_image_impl,
     resolve_collection_impl,
     write_file_impl,
 )
@@ -20,6 +21,7 @@ __all__ = [
     "build_tools",
     "exec_impl",
     "read_file_impl",
+    "read_image_impl",
     "write_file_impl",
     "edit_file_impl",
     "ls_impl",

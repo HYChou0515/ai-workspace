@@ -481,6 +481,19 @@ def test_get_kb_vlm_enabled_via_bundled_ref_disabled_via_none():
     assert get_kb_vlm(disabled) is None
 
 
+def test_get_kb_describer_shares_the_vlm_and_disables_with_it():
+    """#112: the read_image tool and the ingestion parsers share one describer.
+    Default Settings (kb.vlm_llm wired) → a VlmDescriber; vlm_llm=None → None,
+    so read_image reports it's unavailable rather than failing."""
+    from workspace_app.factories import get_kb_describer
+    from workspace_app.kb.vlm import VlmDescriber
+
+    assert isinstance(get_kb_describer(Settings()), VlmDescriber)
+
+    disabled = replace(Settings(), kb=replace(Settings().kb, vlm_llm=None))
+    assert get_kb_describer(disabled) is None
+
+
 def test_get_kb_vlm_resolves_endpoint_like_get_kb_llm():
     """Same resolution cascade as get_kb_llm: ref.* over preset.* over
     top-level llm.*."""

@@ -33,6 +33,7 @@ from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
 from ..kb.llm import ILlm
 from ..kb.retriever import Enhancements, Retriever
+from ..kb.vlm import VlmDescriber
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..resources import (
@@ -392,6 +393,11 @@ def create_app(
     sanity_models: list[str] | None = None,
     insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
+    # #112: the VLM describer the `read_image` agent tool uses to read a
+    # workspace image. None ⇒ no VLM configured; `read_image` reports it's
+    # unavailable. __main__ passes factories.get_kb_describer(settings) — the
+    # same describer KB ingestion's VLM parsers use.
+    vlm_describer: VlmDescriber | None = None,
     get_user_id: Callable[[], str] | None = None,
     users: UserDirectory | None = None,
     monitor: IMonitor | None = None,
@@ -1330,6 +1336,7 @@ def create_app(
             agent_config=cfg,
             run_subagent=_run_subagent,
             mention=_agent_mention,
+            describer=vlm_describer,
             read_file_max_lines=read_file_max_lines,
             read_file_max_chars=read_file_max_chars,
             exec_output_max_chars=exec_output_max_chars,
@@ -1826,6 +1833,7 @@ def create_app(
             # (ask_knowledge_base, infer_modules, future ones). The tool
             # impls each pass their own purpose name + formatted payload.
             run_subagent=_run_subagent_with_depth,
+            describer=vlm_describer,
             # The turn's depth override also rides the ctx so any direct
             # kb tool on the RCA agent applies the same cascade.
             kb_enhancements=caller_enh,

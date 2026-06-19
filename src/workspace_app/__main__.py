@@ -33,6 +33,7 @@ from workspace_app.factories import (
     get_embedder,
     get_filestore,
     get_infer_modules_run_config,
+    get_kb_describer,
     get_kb_llm,
     get_parser_registry,
     get_replay_service,
@@ -192,6 +193,9 @@ def main() -> None:
         # P2: chat → knowledge insight extraction (None when no KB llm wired).
         kb_chat_pipeline=get_chat_pipeline(settings, embedder, kb_llm),
         kb_llm=kb_llm,
+        # #112: the VLM describer the read_image agent tool uses (shared with
+        # the VLM-backed ingestion parsers); None when kb.vlm_llm is unset.
+        vlm_describer=get_kb_describer(settings),
         kb_retrieval_enhancements=settings.kb.retrieval.enhancements,
         monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
         root_path=settings.server.root_path,

@@ -63,6 +63,20 @@ class VlmDescriber:
             return raw
         return self._format(raw, on_chunk=on_chunk)
 
+    def answer(
+        self,
+        image: bytes,
+        mime: str,
+        *,
+        question: str,
+        on_chunk: OnChunk | None = None,
+    ) -> str:
+        """Answer ``question`` about one image (issue #112, the interactive
+        ``read_image`` tool). Unlike ``describe``, the caller's question IS the
+        prompt — no layered OCR template — and the formatter is skipped: this
+        is a focused answer, not raw OCR to restructure into Markdown."""
+        return self._vlm.collect(question, images=[(image, mime)], on_chunk=on_chunk).strip()
+
     def _format(self, raw: str, *, on_chunk: OnChunk | None) -> str:
         """Stage 2: re-emit ``raw`` as clean Markdown via the text LLM. The
         raw text is appended after the instruction (not interpolated) so its
