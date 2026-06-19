@@ -403,10 +403,14 @@ def kb_search_impl(
 async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
     """Ask the knowledge-base agent a question about the in-house documents.
 
-    Use this when the investigation needs facts, procedures, or history that
-    live in the knowledge base rather than in the workspace files. Returns a
+    Use this ONLY when answering needs facts, procedures, or history that live
+    in the in-house knowledge base rather than in the workspace files. Returns a
     synthesized answer with a Sources list. Phrase a focused question, not just
     keywords.
+
+    Do NOT use for: greetings, small-talk, the agent's own name or identity,
+    meta-questions about this assistant, or general knowledge you already know.
+    For any of those, answer directly without calling this tool.
     """
     run = ctx.context.run_subagent
     assert run is not None  # the API layer wires this for RCA runs
