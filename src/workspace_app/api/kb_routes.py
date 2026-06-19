@@ -622,6 +622,12 @@ def register_kb_routes(
             content_type=ct if isinstance(ct, str) else "application/octet-stream",
             raw=raw,
         )
+        # #114: browser-native types (image/pdf) project to "" — the FE shows the
+        # blob itself. But for an image VLM-parsed at ingest, the extracted text
+        # on `doc.text` is exactly what the retriever cited; surface it below the
+        # image so the viewer matches what the chat saw, instead of a blank body.
+        if not text and doc.text:
+            text = doc.text
 
         def resolve(rid: str) -> str | None:
             """Map a sibling SourceDoc id to the URL to embed in the
