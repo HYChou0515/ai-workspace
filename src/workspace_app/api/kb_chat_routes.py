@@ -439,6 +439,7 @@ def register_kb_chat_routes(
                     created_at=m.created_at,
                     metrics=m.metrics,
                     error_kind=m.error_kind,  # role=error (#37)
+                    stopped_reason=m.stopped_reason,  # #113: repetition-stop notice survives reload
                 )
                 # Resolve [n] on answers against the passages this turn searched,
                 # and log each as a CitationEvent (powers the cited counts).
@@ -485,6 +486,7 @@ def _message_dict(m: KbMessage) -> dict:
         "tool_call_id": m.tool_call_id,
         "created_at": m.created_at,
         "error_kind": m.error_kind,  # role=error (#37)
+        "stopped_reason": m.stopped_reason,  # #113
         "metrics": (
             {
                 "prompt_tokens": m.metrics.prompt_tokens,

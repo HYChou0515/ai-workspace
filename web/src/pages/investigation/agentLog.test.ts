@@ -498,3 +498,18 @@ describe("turnsFromEntry — undo math (#38)", () => {
     expect(turnsFromEntry(log.entries, 3)).toBe(1);
   });
 });
+
+describe("repetition stop (#113)", () => {
+  it("flags the current assistant message so the FE shows a notice", () => {
+    let log: AgentLog = EMPTY_LOG;
+    log = reduceAgent(log, { type: "message_delta", text: "Good answer. loopy loopy loopy" });
+    log = reduceAgent(log, { type: "repetition_stopped", loop_length: 18, channel: "content" });
+    const last = log.entries[log.entries.length - 1];
+    expect(last.kind).toBe("message");
+    if (last.kind === "message") {
+      // Decision "b": the repeats stay visible live; only the flag is added.
+      expect(last.message.content).toContain("loopy");
+      expect(last.message.stopped_reason).toBe("repetition");
+    }
+  });
+});

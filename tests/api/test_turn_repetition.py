@@ -91,3 +91,12 @@ def test_a_stray_marker_with_no_assistant_answer_is_a_harmless_noop():
     r.add(ToolEnd(call_id="c", output="ok"))
     r.add(RepetitionStopped(loop_length=5))
     assert all(m.stopped_reason is None for m in r.produced)
+
+
+def test_rca_mapper_persists_stopped_reason_so_a_reload_shows_the_notice():
+    from workspace_app.api.app import _to_rca_message
+
+    msg = _to_rca_message(
+        TurnMessage(role="assistant", content="partial", stopped_reason="repetition")
+    )
+    assert msg.stopped_reason == "repetition"

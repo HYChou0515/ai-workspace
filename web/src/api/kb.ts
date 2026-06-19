@@ -155,6 +155,8 @@ export type KbChatMessage = {
   citations: KbCitation[];
   /** role=error only (#37) — error | cancelled | max_turns. */
   error_kind?: string | null;
+  /** #113 — "repetition" when the answer was stopped + truncated for a loop. */
+  stopped_reason?: string | null;
 };
 
 export type KbChatSummary = {

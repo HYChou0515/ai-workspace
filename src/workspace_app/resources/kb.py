@@ -298,6 +298,7 @@ class KbMessage(Struct):
     created_at: int | None = None  # epoch ms
     metrics: MessageMetrics | None = None  # assistant answers: final token usage (survives reload)
     error_kind: str | None = None  # role=error (#37): error | cancelled | max_turns
+    stopped_reason: str | None = None  # #113: "repetition" → truncated + FE notice on reload
 
 
 class KbChat(Struct):  # → resource "kb-chat"

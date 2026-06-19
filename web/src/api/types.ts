@@ -49,6 +49,10 @@ export type Message = {
   /** role=error only (#37) — why the turn failed: error | cancelled |
    * max_turns. The thread renders the failure as a banner on reload. */
   error_kind?: string | null;
+  /** #113 — "repetition" when role=assistant was stopped mid-stream for a
+   * degenerate loop and the answer was truncated to before it. The view shows
+   * a notice so a reloaded thread doesn't read the truncated answer as normal. */
+  stopped_reason?: string | null;
 };
 
 /** A resolved [n] citation marker — points at a span of a source document. */

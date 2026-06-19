@@ -291,6 +291,22 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       });
       return { ...log, entries };
 
+    case "repetition_stopped": {
+      // #113: the model degenerated into a loop. Decision "b" — the repeats
+      // already streamed and stay visible; we only flag the current assistant
+      // message so the view shows a notice (live and, via the persisted flag,
+      // on reload). A `done` follows to close the stream.
+      const idx = lastAssistantIdx(entries);
+      const last = idx >= 0 ? entries[idx] : undefined;
+      if (last && last.kind === "message" && last.message.role === "assistant") {
+        entries[idx] = {
+          ...last,
+          message: { ...last.message, stopped_reason: "repetition" },
+        };
+      }
+      return { ...log, entries };
+    }
+
     case "max_turns_exceeded":
       entries.push({ kind: "banner", at: now, text: `max turns (${ev.turns}) exceeded` });
       return { ...log, entries, streaming: false, error: "max turns exceeded" };
