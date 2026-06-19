@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from specstar import SpecStar
 
     from ..kb.retriever import Enhancements, Retriever
+    from ..kb.vlm import VlmDescriber
     from ..kb.wiki.sources import IWikiSources
     from ..resources import AgentConfig
     from ..resources.conversation import Citation
@@ -114,6 +115,12 @@ class AgentToolContext:
     # for KB-flavour contexts (no App/profile).
     app_slug: str | None = None
     template_profile: str | None = None
+
+    # #112: the VLM describer the `read_image` tool uses to read a workspace
+    # image. Set by the API layer from `get_kb_vlm`/`VlmDescriber` (shared with
+    # KB ingestion). None when the deployment configured no VLM (`kb.vlm_llm`
+    # unset) — `read_image` then reports it's unavailable instead of failing.
+    describer: VlmDescriber | None = None
 
     # KB agent (kb_search tool).
     retriever: Retriever | None = None

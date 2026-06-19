@@ -61,6 +61,7 @@ __all__ = [
     "get_chat_pipeline",
     "get_kb_llm",
     "get_kb_vlm",
+    "get_kb_describer",
     "get_wiki_endpoint",
     "get_infer_modules_run_config",
     "InferModulesRunConfig",
@@ -327,7 +328,6 @@ def get_parser_registry(settings: Settings):  # -> ParserRegistry
     from .kb.parsers.svg_image import SvgParser
     from .kb.parsers.tabular import CsvParser, ExcelParser
     from .kb.parsers.vlm_image import VlmImageParser
-    from .kb.vlm import VlmDescriber
 
     registry = ParserRegistry()
     # Custom first — operator's declared order is preserved (multiple
@@ -357,10 +357,7 @@ def get_parser_registry(settings: Settings):  # -> ParserRegistry
     # Vision wiring: one shared VlmDescriber (or None when kb.vlm_llm
     # is disabled — VlmImageParser then never matches; PdfParser /
     # PptxParser degrade to text-layer-only pages).
-    vlm = get_kb_vlm(settings)
-    describer = (
-        VlmDescriber(vlm, formatter=get_kb_vlm_formatter(settings)) if vlm is not None else None
-    )
+    describer = get_kb_describer(settings)
     # Bundled parsers — fixed order, most-specific extensions first.
     # `kb.parsers_disabled` (class names) skips bundled entries: with
     # all-matching dispatch (Q8b) a custom parser runs ALONGSIDE a
@@ -528,6 +525,19 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
     if model is None:
         return None
     return LitellmVlm(model, base_url=base_url, api_key=api_key)
+
+
+def get_kb_describer(settings: Settings):  # -> VlmDescriber | None
+    """The shared `VlmDescriber` over `kb.vlm_llm` (+ the `kb.vlm_format_llm`
+    formatter), or None when no VLM is configured. Used both by the
+    VLM-backed ingestion parsers and the interactive `read_image` agent tool
+    (#112), so a deployment wires its vision model once."""
+    from .kb.vlm import VlmDescriber
+
+    vlm = get_kb_vlm(settings)
+    if vlm is None:
+        return None
+    return VlmDescriber(vlm, formatter=get_kb_vlm_formatter(settings))
 
 
 def get_wiki_endpoint(settings: Settings) -> tuple[str | None, str | None, str | None]:

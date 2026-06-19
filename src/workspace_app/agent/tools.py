@@ -8,6 +8,7 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
+import magic
 from agents import FunctionTool, RunContextWrapper, function_tool
 
 from ..files import WorkspaceFiles
@@ -153,6 +154,44 @@ async def read_file_impl(
     if notices:
         body += f"\n\n[truncated: {'; '.join(notices)} — use offset/limit to read more]"
     return body
+
+
+async def read_image_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    path: str,
+    question: str | None = None,
+) -> str:
+    """Look at an image file in the workspace and get a text answer about it.
+
+    Use this for screenshots, charts, photos, or diagrams — `read_file`
+    returns raw bytes for these and is useless. `path` is the workspace path
+    to the image. `question` optionally focuses the read (e.g. "what error is
+    in this screenshot?"); omit it for a full description of everything
+    visible.
+    """
+    describer = ctx.context.describer
+    if describer is None:
+        return (
+            "error: image reading is not available — this deployment has no "
+            "vision model configured. Do not retry."
+        )
+    fs, inv = _workspace(ctx)
+    try:
+        data = await fs.read(inv, path)
+    except FileNotFound:
+        return f"error: file not found: {path}"
+
+    mime = magic.from_buffer(data, mime=True)
+    if not mime.startswith("image/"):
+        return f"error: not an image file: {path} (detected {mime})"
+
+    sink = ctx.context.on_exec_output
+    on_chunk = (lambda t, _r: sink(t.encode("utf-8"))) if sink is not None else None
+    if question:
+        out = describer.answer(data, mime, question=question, on_chunk=on_chunk)
+    else:
+        out = describer.describe(data, mime, on_chunk=on_chunk)
+    return _truncate_middle(out, ctx.context.read_file_max_chars)
 
 
 async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, content: str) -> str:
@@ -678,6 +717,7 @@ def lookup_glossary_impl(ctx: RunContextWrapper[AgentToolContext], query: str) -
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
+    "read_image": read_image_impl,
     "write_file": write_file_impl,
     "edit_file": edit_file_impl,
     "ls": ls_impl,

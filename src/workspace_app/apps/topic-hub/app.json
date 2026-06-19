@@ -9,6 +9,7 @@
     "prompt_file": "prompts/system.md",
     "tools": [
       "read_file",
+      "read_image",
       "write_file",
       "edit_file",
       "ls",
