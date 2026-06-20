@@ -36,6 +36,13 @@ describe("pickRenderer", () => {
     expect(pickRenderer("/page.htm")).toBe("html");
   });
 
+  // #117: a .pdf must get its own iframe preview, not fall through to the
+  // catch-all text editor (which dumped the raw bytes as mojibake).
+  it("routes .pdf to the pdf renderer (not the catch-all text editor)", () => {
+    expect(pickRenderer("/docs/manual.pdf")).toBe("pdf");
+    expect(pickRenderer("/SCAN.PDF")).toBe("pdf");
+  });
+
   it("falls back to plain text for unknown extensions", () => {
     expect(pickRenderer("/data/log.txt")).toBe("text");
     expect(pickRenderer("/Makefile")).toBe("text");
@@ -56,7 +63,7 @@ describe("isRawEditorView", () => {
     }
   });
   it("editToggle types are full-bleed only while editing", () => {
-    for (const k of ["markdown", "image", "csv", "html"]) {
+    for (const k of ["markdown", "image", "csv", "html", "pdf"]) {
       expect(isRawEditorView(k, false)).toBe(false);
       expect(isRawEditorView(k, true)).toBe(true);
     }
@@ -70,7 +77,7 @@ describe("isRawEditorView", () => {
 
 describe("hasEditToggle", () => {
   it("is true for preview⇄edit types, false for the rest", () => {
-    for (const k of ["markdown", "image", "csv", "html"]) expect(hasEditToggle(k)).toBe(true);
+    for (const k of ["markdown", "image", "csv", "html", "pdf"]) expect(hasEditToggle(k)).toBe(true);
     for (const k of ["text", "json", "notebook", "report"]) {
       expect(hasEditToggle(k)).toBe(false);
     }

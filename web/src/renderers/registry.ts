@@ -18,6 +18,7 @@ import { HtmlRenderer } from "./HtmlRenderer";
 import { ImageRenderer } from "./ImageRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
+import { PdfRenderer } from "./PdfRenderer";
 import { ReportRenderer } from "./report/ReportRenderer";
 import { TextRenderer } from "./TextRenderer";
 
@@ -54,6 +55,9 @@ export const RENDERERS: RendererDef[] = [
   { key: "notebook", match: ext("ipynb"), Component: NotebookRenderer },
   { key: "csv", match: ext("csv", "tsv"), Component: CsvRenderer, editToggle: true },
   { key: "html", match: ext("html", "htm"), Component: HtmlRenderer, editToggle: true },
+  // #117: a .pdf gets the browser's native PDF viewer in an iframe — without
+  // this it fell through to the catch-all text editor and showed raw bytes.
+  { key: "pdf", match: ext("pdf"), Component: PdfRenderer, editToggle: true },
   {
     key: "image",
     match: ext("png", "jpg", "jpeg", "gif", "svg", "webp", "bmp"),
