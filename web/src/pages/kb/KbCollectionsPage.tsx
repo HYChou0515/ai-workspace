@@ -11,6 +11,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
+import { mapWithConcurrency } from "../../api/concurrency";
 import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
@@ -24,19 +25,23 @@ import { NewCollectionModal } from "./NewCollectionModal";
 import { RetrievalToggles, WikiBadge } from "./RetrievalToggles";
 import { WikiBrowser } from "./WikiBrowser";
 
-/** Every type the #39 parser registry ingests (or at least displays):
- * text/markdown + archives (expanded server-side), documents (pdf /
- * html / docx / pptx), structured data (json / jsonl / csv / tsv /
- * xlsx), images (VLM-described; gif/svg display-only), and the code
- * extensions DispatchSplitter routes through tree-sitter. Keep in sync
- * with the bundled parsers in `factories.get_parser_registry`. */
-const UPLOAD_ACCEPT = [
-  ".md", ".txt", ".zip", ".tar", ".gz", ".tgz",
-  ".pdf", ".html", ".htm", ".docx", ".pptx",
-  ".json", ".jsonl", ".csv", ".tsv", ".xlsx",
-  ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg",
-  ".py", ".ts", ".tsx", ".js", ".jsx",
-].join(",");
+// The file picker deliberately has NO `accept` filter. An extension-only
+// allow-list (which is all the BE could enforce anyway — it sniffs + stores
+// every type) made macOS grey out valid files: its picker maps each extension
+// to a UTI and chokes on unusual ones (.jsonl/.tsv/.tgz/.tsx) and formats not
+// in the list (.heic), so even images couldn't be selected. The server accepts
+// anything, so the soft hint isn't worth the cross-platform breakage.
+
+/** The destination path for one uploaded file. A folder pick carries each
+ * file's `webkitRelativePath` (so the tree structure is preserved); fall back
+ * to the bare name when it's empty — e.g. a single file chosen in the folder
+ * dialog, which otherwise produced an empty path. Mirrors FileTree's rule. */
+export function uploadDocPath(
+  file: { name: string; webkitRelativePath?: string },
+  asFolder: boolean,
+): string {
+  return (asFolder && file.webkitRelativePath) || file.name;
+}
 
 const ICON_OPTIONS: IconName[] = [
   "layers", "file", "folder", "flame", "bug", "check",
@@ -144,15 +149,12 @@ export function KbCollectionsPage({
   });
 
   const uploadMut = useMutation({
+    // Bounded concurrency: a folder pick can be hundreds of files — firing them
+    // all at once froze the tab and flushed nothing. A small pool keeps the UI
+    // alive while still uploading everything.
     mutationFn: (vars: { files: File[]; asFolder: boolean }) =>
-      Promise.all(
-        vars.files.map((file) =>
-          client.uploadDocument(
-            selectedId as string,
-            file,
-            vars.asFolder ? file.webkitRelativePath : undefined,
-          ),
-        ),
+      mapWithConcurrency(vars.files, 4, (file) =>
+        client.uploadDocument(selectedId as string, file, uploadDocPath(file, vars.asFolder)),
       ),
     onSuccess: () => {
       if (selectedId) void qc.invalidateQueries({ queryKey: qk.kb.documents(selectedId) });
@@ -166,7 +168,14 @@ export function KbCollectionsPage({
     if (!files || !selectedId || busy) return;
     uploadMut.mutate(
       { files: Array.from(files), asFolder },
-      { onSettled: () => fileRef.current && (fileRef.current.value = "") },
+      {
+        // Clear both inputs so re-picking the SAME file/folder fires onChange
+        // again (a value left in place would suppress the next selection).
+        onSettled: () => {
+          if (fileRef.current) fileRef.current.value = "";
+          if (folderRef.current) folderRef.current.value = "";
+        },
+      },
     );
   };
 
@@ -225,7 +234,7 @@ export function KbCollectionsPage({
     const effectiveTab = tabIds.includes(collectionTab) ? collectionTab : "documents";
     return (
       <section className="kb-colpage" aria-label="Collection">
-        <input ref={fileRef} type="file" multiple accept={UPLOAD_ACCEPT} hidden onChange={(e) => upload(e.target.files)} />
+        <input ref={fileRef} type="file" multiple hidden onChange={(e) => upload(e.target.files)} />
         <input ref={folderInputRef} type="file" multiple hidden onChange={(e) => upload(e.target.files, true)} />
 
         <button type="button" className="kb-nav__back" onClick={() => setSelectedId(null)}>

@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
 import type { KbDocumentsPage } from "../../api/kb";
-import { KbCollectionsPage } from "./KbCollectionsPage";
+import { KbCollectionsPage, uploadDocPath } from "./KbCollectionsPage";
 
 type Client = Parameters<typeof KbCollectionsPage>[0]["client"];
 
@@ -35,6 +35,18 @@ function col(over: Record<string, unknown>) {
     ...over,
   };
 }
+
+describe("uploadDocPath", () => {
+  it("preserves a folder pick's relative path", () => {
+    expect(uploadDocPath({ name: "a.png", webkitRelativePath: "trip/a.png" }, true)).toBe("trip/a.png");
+  });
+  it("falls back to the name for a single file in the folder picker (empty path)", () => {
+    expect(uploadDocPath({ name: "a.png", webkitRelativePath: "" }, true)).toBe("a.png");
+  });
+  it("uses the name for a plain (non-folder) upload", () => {
+    expect(uploadDocPath({ name: "a.png", webkitRelativePath: "ignored/a.png" }, false)).toBe("a.png");
+  });
+});
 
 describe("KbCollectionsPage", () => {
   beforeEach(() => _resetKbMock());
@@ -337,7 +349,7 @@ describe("KbCollectionsPage", () => {
     });
   });
 
-  it("upload picker accepts every #39-supported file type", async () => {
+  it("upload picker has no `accept` filter (macOS greys out valid files otherwise)", async () => {
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
       listDocuments: async () => page([]),
@@ -345,16 +357,31 @@ describe("KbCollectionsPage", () => {
     const { container } = render(<KbCollectionsPage client={client} />);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const input = container.querySelector('input[type="file"]:not([webkitdirectory])')!;
-    const accept = input.getAttribute("accept") ?? "";
-    for (const ext of [
-      ".md", ".txt", ".zip", ".tar", ".gz", ".tgz",
-      ".pdf", ".html", ".docx", ".pptx",
-      ".json", ".jsonl", ".csv", ".tsv", ".xlsx",
-      ".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg",
-      ".py", ".ts", ".tsx", ".js", ".jsx",
-    ]) {
-      expect(accept.split(",")).toContain(ext);
-    }
+    // No extension allow-list: macOS maps extensions to UTIs and disabled valid
+    // files (images included). The BE accepts + sniffs every type anyway.
+    expect(input.getAttribute("accept")).toBeNull();
+  });
+
+  it("uploading a single file via the folder picker keeps its name (empty relative path)", async () => {
+    // The exact repro: open "Upload folder", pick ONE image. Its
+    // webkitRelativePath is "" — the old code sent that empty path straight
+    // through; now it falls back to the file name.
+    const uploadDocument = vi.fn(async () => ["c1/me/cat.png"]);
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+      uploadDocument,
+    } as unknown as Client;
+    const { container } = render(<KbCollectionsPage client={client} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+
+    const folderInput = container.querySelector("input[webkitdirectory]") as HTMLInputElement;
+    const img = new File([new Uint8Array([0x89, 0x50])], "cat.png", { type: "image/png" });
+    await userEvent.upload(folderInput, img);
+
+    await waitFor(() =>
+      expect(uploadDocument).toHaveBeenCalledWith("c1", img, "cat.png"),
+    );
   });
 
   it("edits a collection's retrieval modes from the settings menu (#50)", async () => {
