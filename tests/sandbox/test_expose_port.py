@@ -53,6 +53,7 @@ async def test_mock_expose_port_is_idempotent_for_pre_declared_ports():
 # ---------------- LocalProcessSandbox ----------------
 
 
+@pytest.mark.integration
 async def test_local_expose_port_is_passthrough():
     """Sandbox is the host — exposing a port is conceptually a noop;
     we just hand back ("127.0.0.1", container_port)."""
@@ -107,6 +108,7 @@ async def docker_sandbox():
 
 
 @needs_docker
+@pytest.mark.integration
 async def test_docker_expose_port_returns_dynamic_host_port(docker_sandbox: DockerSandbox):
     """Ports pre-declared in SandboxSpec.exposed_ports get published to
     a random host port at create-time; expose_port surfaces the mapping."""
@@ -118,6 +120,7 @@ async def test_docker_expose_port_returns_dynamic_host_port(docker_sandbox: Dock
 
 
 @needs_docker
+@pytest.mark.integration
 async def test_docker_expose_port_unknown_port_raises(docker_sandbox: DockerSandbox):
     """If the port wasn't pre-declared we can't add it to a running
     container — surface that as a clear error instead of hanging."""
@@ -127,6 +130,7 @@ async def test_docker_expose_port_unknown_port_raises(docker_sandbox: DockerSand
 
 
 @needs_docker
+@pytest.mark.integration
 async def test_docker_expose_port_multiple_ports_distinct_mappings(docker_sandbox: DockerSandbox):
     h = await docker_sandbox.create(SandboxSpec(image=_IMAGE, exposed_ports=(9001, 9002, 9003)))
     p1 = await docker_sandbox.expose_port(h, 9001)

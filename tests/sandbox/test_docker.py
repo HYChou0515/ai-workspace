@@ -23,7 +23,10 @@ def _docker_available() -> bool:
         return False
 
 
-pytestmark = pytest.mark.skipif(not _docker_available(), reason="docker daemon unavailable")
+pytestmark = [
+    pytest.mark.skipif(not _docker_available(), reason="docker daemon unavailable"),
+    pytest.mark.integration,
+]
 
 
 # debian:12-slim is already pulled on the test host; switch via env var if
