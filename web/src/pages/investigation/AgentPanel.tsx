@@ -210,9 +210,13 @@ export function AgentPanel({
         // panel was wrapped in a column instead of being a direct row child).
         // `fill` only selects the WIDTH behaviour: stretch to the row (chat-only
         // Apps + each Hub chat) vs a fixed, resizable width (RCA's side panel).
-        flex: 1,
+        // Longhand flex props (not the `flex` shorthand) so toggling `fill` at
+        // runtime doesn't trip React's shorthand/longhand-conflict warning.
+        flexGrow: 1,
+        flexShrink: fill ? 1 : 0,
+        flexBasis: "0%",
         minHeight: 0,
-        ...(fill ? { minWidth: 0 } : { width, flexShrink: 0 }),
+        ...(fill ? { minWidth: 0 } : { width }),
         background: "var(--paper)",
         borderLeft: "1px solid var(--paper-3)",
         display: "flex",

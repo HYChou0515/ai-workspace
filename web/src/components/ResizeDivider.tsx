@@ -13,6 +13,8 @@
 
 import { useRef, useState } from "react";
 
+import { Icon, type IconName } from "./Icon";
+
 const HIT = 12;
 const HALF = HIT / 2;
 
@@ -22,6 +24,7 @@ export function ResizeDivider({
   onResizeStart,
   onResizeEnd,
   ariaLabel,
+  collapse,
 }: {
   orientation: "vertical" | "horizontal"; // vertical = resizes width, horizontal = resizes height
   onResize: (deltaFromStart: number) => void;
@@ -30,6 +33,10 @@ export function ResizeDivider({
   /** Cleanup hook (fired on pointerup). */
   onResizeEnd?: () => void;
   ariaLabel?: string;
+  /** Optional collapse chevron centered on the divider — clicking it folds the
+   * adjacent panel away. The drag still works on the rest of the hit area
+   * (the button stops its own pointer events from starting a resize). */
+  collapse?: { label: string; icon: IconName; onToggle: () => void };
 }) {
   // Where the drag started, in viewport coords along the active axis.
   const startCoord = useRef<number | null>(null);
@@ -97,6 +104,35 @@ export function ResizeDivider({
               }),
         }}
       />
+      {collapse && vertical && (
+        <button
+          type="button"
+          aria-label={collapse.label}
+          title={collapse.label}
+          // Don't let a click/drag on the chevron start a resize.
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={collapse.onToggle}
+          style={{
+            position: "absolute",
+            top: 18,
+            left: "50%",
+            transform: "translateX(-50%)",
+            width: 18,
+            height: 30,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 0,
+            cursor: "pointer",
+            borderRadius: "var(--radius-chip, 6px)",
+            border: "1px solid var(--paper-3)",
+            background: "var(--paper-1, var(--paper))",
+            color: "var(--text-paper-d)",
+          }}
+        >
+          <Icon name={collapse.icon} size={14} />
+        </button>
+      )}
     </div>
   );
 }
