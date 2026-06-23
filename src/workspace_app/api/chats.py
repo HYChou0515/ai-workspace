@@ -23,11 +23,18 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+def _item_chats_query(item_id: str):
+    """Indexed lookup of an item's **live** chats — its ``item_id`` rows minus any
+    soft-deleted ones (#132), so a deleted chat never resurfaces (as the default or
+    in the list)."""
+    return ((QB["item_id"] == item_id) & (QB.is_deleted() == False)).build()  # noqa: E712
+
+
 def list_item_conversations(conv_rm, item_id: str) -> list[tuple[str, Conversation]]:
-    """``(resource_id, Conversation)`` for every chat of an item, by indexed
+    """``(resource_id, Conversation)`` for every live chat of an item, by indexed
     ``item_id`` lookup (a bounded per-item set, not a global scan)."""
     out: list[tuple[str, Conversation]] = []
-    for r in conv_rm.list_resources((QB["item_id"] == item_id).build()):
+    for r in conv_rm.list_resources(_item_chats_query(item_id)):
         data = r.data
         assert isinstance(data, Conversation)
         out.append((r.info.resource_id, data))

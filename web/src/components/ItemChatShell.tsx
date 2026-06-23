@@ -9,13 +9,13 @@ import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useDecide, useRun, useWorkflowProfiles } from "../hooks/useWorkflow";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
-import { ItemChatList } from "./ItemChatList";
-import { NewChatPicker } from "./NewChatPicker";
-import { RunWorkflowPicker } from "./RunWorkflowPicker";
+import { ChatSwitcher } from "./ChatSwitcher";
+import { ManageChatsModal } from "./ManageChatsModal";
+import { NewItemPicker } from "./NewItemPicker";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
- * RCA `<AgentPanel>`). The shell adds the multi-chat tab rail + workflow gate. */
+ * RCA `<AgentPanel>`). The shell adds the multi-chat switcher + workflow gate. */
 type AgentChrome = {
   picker: { preset: string; name: string }[];
   suggestions?: Suggestion[];
@@ -27,13 +27,14 @@ type AgentChrome = {
 };
 
 /**
- * The per-item multi-chat shell (topic-hub §3): a tab rail of the item's chats + a
- * new-chat picker ([Free chat] + the seed profile's workflows), with the active chat
- * rendered below as the full RCA `AgentPanel` (model picker, suggestions, @mention,
- * attach, undo, Cmd-Enter — scoped to the active chat via `useItemChat`). A free chat
- * is created on demand; a workflow launch opens a workflow chat (run-driven) and
- * selects it. A paused workflow chat surfaces a Continue affordance (the human_gate
- * decision) above the panel.
+ * The per-item multi-chat shell (topic-hub §3, redesigned in #132): a compact chat
+ * switcher dropdown + a single `+ New` picker ([Free chat] + the seed profile's
+ * workflows) + a manage-all-chats modal (rename / delete / search), with the active
+ * chat rendered below as the full RCA `AgentPanel` (model picker, suggestions,
+ * @mention, attach, undo, Cmd-Enter — scoped to the active chat via `useItemChat`).
+ * A free chat is created on demand; a workflow launch opens a workflow chat
+ * (run-driven) and selects it. A paused workflow chat surfaces a Continue affordance
+ * (the human_gate decision) above the panel.
  */
 export function ItemChatShell({
   slug,
@@ -52,23 +53,33 @@ export function ItemChatShell({
   profile: string;
 } & AgentChrome) {
   const qc = useQueryClient();
-  const { chats, isLoading, createFreeChat } = useItemChats(slug, itemId);
+  const { chats, isLoading, createFreeChat, renameChat, deleteChat } = useItemChats(slug, itemId);
   const profilesQ = useWorkflowProfiles(slug);
   const workflows = profilesQ.data?.find((p) => p.name === profile)?.workflows ?? [];
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
-  const autoOpened = useRef(false);
+  const [managing, setManaging] = useState(false);
+  const reopening = useRef(false);
 
-  // Default to the first chat (the default chat lists first) once chats load.
+  // Keep a valid selection: when nothing is active, or the active chat was just
+  // deleted, fall back to the most-recent chat (chats are activity-sorted, §132).
   useEffect(() => {
-    if (activeChatId == null && chats.length) setActiveChatId(chats[0].chat_id);
+    if (!chats.length) return;
+    if (activeChatId == null || !chats.some((c) => c.chat_id === activeChatId)) {
+      setActiveChatId(chats[0].chat_id);
+    }
   }, [chats, activeChatId]);
 
-  // A brand-new Hub has no chats yet (the default chat materialises on first
-  // use, §3). Open one automatically so the item lands on a usable composer
-  // instead of an empty placeholder. Guarded so it fires at most once.
+  // A Hub with no chats (brand-new, or every chat deleted, §132) auto-opens one so
+  // the item lands on a usable composer instead of an empty placeholder. `reopening`
+  // suppresses a double-create across the create→refetch gap; it clears only once a
+  // chat is actually listed, so a later "delete the last chat" re-arms it.
   useEffect(() => {
-    if (autoOpened.current || isLoading || chats.length) return;
-    autoOpened.current = true;
+    if (chats.length) {
+      reopening.current = false;
+      return;
+    }
+    if (isLoading || reopening.current) return;
+    reopening.current = true;
     void createFreeChat().then((c) => setActiveChatId(c.chat_id));
   }, [isLoading, chats.length, createFreeChat]);
 
@@ -100,10 +111,24 @@ export function ItemChatShell({
           borderBottom: "1px solid var(--border, #2a2a2a)",
         }}
       >
-        <ItemChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
-        <NewChatPicker onFreeChat={onFreeChat} />
-        <RunWorkflowPicker workflows={workflows} onLaunch={onWorkflow} />
+        <ChatSwitcher
+          chats={chats}
+          activeChatId={activeChatId}
+          onSelect={setActiveChatId}
+          onManage={() => setManaging(true)}
+        />
+        <NewItemPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
       </div>
+      {managing && (
+        <ManageChatsModal
+          chats={chats}
+          activeChatId={activeChatId}
+          onClose={() => setManaging(false)}
+          onSelect={setActiveChatId}
+          onRename={(id, title) => void renameChat(id, title)}
+          onDelete={(id) => void deleteChat(id)}
+        />
+      )}
       {active ? (
         <ItemChatPanel
           key={active.chat_id}

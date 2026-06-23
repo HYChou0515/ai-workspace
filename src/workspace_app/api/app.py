@@ -185,6 +185,11 @@ def _now_ms() -> int:
     return round(datetime.now(UTC).timestamp() * 1000)
 
 
+def _dt_ms(dt: datetime) -> int:
+    """A specstar revision time (`updated_time`/`created_time`) → epoch ms."""
+    return round(dt.timestamp() * 1000)
+
+
 class _SpaStaticFiles(StaticFiles):
     """Serve the built SPA with an HTML5 history fallback: any path that
     isn't a real file resolves to index.html, so refreshing a client-side
@@ -233,6 +238,11 @@ class _CreateChatBody(BaseModel):
     title: str = ""
 
 
+class _RenameChatBody(BaseModel):
+    # #132: manual rename of a chat from the manage modal.
+    title: str
+
+
 class _ChatInfo(BaseModel):
     """One chat in an item's multi-chat list (manual §3)."""
 
@@ -242,6 +252,25 @@ class _ChatInfo(BaseModel):
     created_ms: int | None
     message_count: int
     is_default: bool
+    name_hint: str = ""
+    """First user message (whitespace-collapsed, truncated) so the FE can label an
+    unnamed chat without fetching its thread (#132). "" until the first user turn."""
+    status: str | None = None
+    """The driving `WorkflowRun.status` for a workflow chat (running / awaiting_human /
+    done / …), so the list shows a status badge without per-run polling (#132). None
+    for a free chat."""
+    last_activity_ms: int | None = None
+    """Epoch ms of the chat's last write (specstar `updated_time`) — the recency sort
+    key for the list (#132). None only if the revision time is unavailable."""
+
+
+def _chat_name_hint(conv: Conversation, *, limit: int = 60) -> str:
+    """First user message of a chat, whitespace-collapsed and truncated — the FE's
+    fallback display name for an unnamed chat (#132). "" when no user turn yet."""
+    for m in conv.messages:
+        if m.role == "user" and m.content.strip():
+            return " ".join(m.content.split())[:limit]
+    return ""
 
 
 class _MentionBody(BaseModel):
@@ -1991,7 +2020,14 @@ def create_app(
     # An item holds many chats. These chat-scoped endpoints address one chat by id;
     # the item-level endpoints above keep hitting the implicit default chat.
 
-    def _chat_info(chat_id: str, conv: Conversation, default_id: str | None) -> _ChatInfo:
+    def _chat_info(
+        chat_id: str,
+        conv: Conversation,
+        default_id: str | None,
+        *,
+        status: str | None = None,
+        last_activity_ms: int | None = None,
+    ) -> _ChatInfo:
         return _ChatInfo(
             chat_id=chat_id,
             title=conv.title,
@@ -1999,29 +2035,58 @@ def create_app(
             created_ms=conv.created_ms,
             message_count=len(conv.messages),
             is_default=chat_id == default_id,
+            name_hint=_chat_name_hint(conv),
+            status=status,
+            last_activity_ms=last_activity_ms,
         )
+
+    def _chat_info_from_resource(
+        r, default_id: str | None, run_status: dict[str, str]
+    ) -> _ChatInfo:
+        """Build a `_ChatInfo` from a fetched conversation resource — fills the run
+        status + last-activity stamp the bare `_chat_info` can't derive (#132)."""
+        conv = r.data
+        assert isinstance(conv, Conversation)
+        return _chat_info(
+            r.info.resource_id,
+            conv,
+            default_id,
+            status=run_status.get(conv.run_id) if conv.run_id else None,
+            last_activity_ms=_dt_ms(r.info.updated_time),
+        )
+
+    def _item_run_status(investigation_id: str) -> dict[str, str]:
+        """``run_id → status`` for the item's workflow runs — one bounded per-item
+        query so the chat list shows each workflow chat's badge without polling each
+        run (#132)."""
+        from specstar import QB
+
+        out: dict[str, str] = {}
+        for r in spec.get_resource_manager(WorkflowRun).list_resources(
+            (QB["item_id"] == investigation_id).build()
+        ):
+            if isinstance(r.data, WorkflowRun):
+                out[r.info.resource_id] = str(r.data.status)  # ty: ignore[unresolved-attribute]
+        return out
 
     @app.get("/a/{slug}/items/{item_id}/chats")
     async def list_chats(slug: str, item_id: str) -> list[_ChatInfo]:
-        """List the item's chats (free + workflow), default first (manual §3).
-        Read-only: the implicit default chat materialises on first use, not here."""
-        from .chats import find_default_conversation, list_item_conversations
+        """List the item's chats (free + workflow), **most-recent-activity first**
+        (#132 — no "main chat" privilege). Each workflow chat carries its driving
+        run's status; every chat carries a name hint + last-activity stamp. Read-only:
+        the implicit default chat materialises on first use, not here."""
+        from .chats import _item_chats_query, find_default_conversation
 
         investigation_id = _require_item(slug, item_id)
         default = find_default_conversation(conv_rm, investigation_id)
         default_id = default[0] if default else None
+        run_status = _item_run_status(investigation_id)
         infos = [
-            _chat_info(rid, conv, default_id)
-            for rid, conv in list_item_conversations(conv_rm, investigation_id)
+            _chat_info_from_resource(r, default_id, run_status)
+            for r in conv_rm.list_resources(_item_chats_query(investigation_id))
         ]
-        # Default first, then by birth (unstamped legacy rows first), then id.
-        infos.sort(
-            key=lambda c: (
-                not c.is_default,
-                c.created_ms if c.created_ms is not None else -1,
-                c.chat_id,
-            )
-        )
+        # Most-recent activity first; chat_id breaks ties for a stable order.
+        infos.sort(key=lambda c: (-(c.last_activity_ms or 0), c.chat_id))
         return infos
 
     @app.post("/a/{slug}/items/{item_id}/chats", status_code=status.HTTP_201_CREATED)
@@ -2034,10 +2099,39 @@ def create_app(
         rev = conv_rm.create(
             Conversation(item_id=investigation_id, title=body.title, created_ms=_now_ms())
         )
-        conv = conv_rm.get(rev.resource_id).data
-        assert isinstance(conv, Conversation)
         default = find_default_conversation(conv_rm, investigation_id)
-        return _chat_info(rev.resource_id, conv, default[0] if default else None)
+        return _chat_info_from_resource(
+            conv_rm.get(rev.resource_id), default[0] if default else None, {}
+        )
+
+    @app.patch("/a/{slug}/items/{item_id}/chats/{chat_id}")
+    async def rename_chat(
+        slug: str, item_id: str, chat_id: str, body: _RenameChatBody
+    ) -> _ChatInfo:
+        """Rename a chat (#132) — set its display title from the manage modal."""
+        from .chats import find_default_conversation
+
+        investigation_id = _require_item(slug, item_id)
+        rid, conv = _require_chat(slug, item_id, chat_id)
+        conv.title = body.title
+        conv_rm.update(rid, conv)
+        default = find_default_conversation(conv_rm, investigation_id)
+        return _chat_info_from_resource(
+            conv_rm.get(rid), default[0] if default else None, _item_run_status(investigation_id)
+        )
+
+    @app.delete("/a/{slug}/items/{item_id}/chats/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
+    async def delete_chat(slug: str, item_id: str, chat_id: str) -> Response:
+        """Delete a chat (#132). A workflow chat's driving run is **cancelled first**
+        (delete also cancels the run); then any in-flight turn / SSE is torn down and
+        the conversation removed. Idempotent cancel — a no-op for a terminal run."""
+        investigation_id = _require_item(slug, item_id)
+        rid, conv = _require_chat(slug, item_id, chat_id)
+        if conv.run_id:
+            await workflow_orchestrator.cancel(conv.run_id, investigation_id)
+        turn_engine.forget(_engine_key(investigation_id, rid))
+        conv_rm.delete(rid)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.post(
         "/a/{slug}/items/{item_id}/chats/{chat_id}/messages",
