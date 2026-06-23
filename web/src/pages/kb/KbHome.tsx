@@ -14,6 +14,7 @@ import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { useBreadcrumbs } from "../../hooks/breadcrumbs";
+import { useT } from "../../lib/i18n";
 import { AskAgentLauncher } from "./AskAgentLauncher";
 import { KbChatsPage } from "./KbChatsPage";
 import { KbChatView } from "./KbChatView";
@@ -26,6 +27,7 @@ type Viewer = { documentId: string; snippet?: string };
 type Selected = string | null | undefined;
 
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
+  const t = useT();
   const qc = useQueryClient();
   const [params] = useSearchParams();
   useBreadcrumbs([{ label: "Home", to: "/" }, { label: "Knowledge base" }]);
@@ -51,27 +53,27 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
   return (
     <div className="kb-shell">
       <aside className="kb-nav">
-        <div className="kb-nav__brand">Knowledge base</div>
+        <div className="kb-nav__brand">{t("kb.brand")}</div>
         <button
           type="button"
           className={`kb-nav__item${tab === "collections" ? " is-active" : ""}`}
           onClick={() => setTab("collections")}
         >
-          <Icon name="layers" size={15} /> Collections
+          <Icon name="layers" size={15} /> {t("kb.collections")}
         </button>
         <button
           type="button"
           className={`kb-nav__item${tab === "chats" ? " is-active" : ""}`}
           onClick={() => setTab("chats")}
         >
-          <Icon name="chat" size={15} /> Chats
+          <Icon name="chat" size={15} /> {t("kb.chats")}
         </button>
       </aside>
 
       <main className="kb-main">
         <header className="kb-topbar">
           <span className="kb-topbar__title">
-            {tab === "collections" ? "Collections" : "Conversations"}
+            {tab === "collections" ? t("kb.collections") : t("kb.conversations")}
           </span>
           {/* Same component Home uses — switches our own tab on
               manage/history and reuses our viewer for citations. */}
@@ -97,9 +99,7 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
               />
               <div className="kb-chats-split__view">
                 {chatId === undefined ? (
-                  <div className="kb-chats-split__empty">
-                    Select a conversation, or start a new one.
-                  </div>
+                  <div className="kb-chats-split__empty">{t("kb.empty")}</div>
                 ) : (
                   // Keyed by viewKey (not chatId) so a fresh thread getting its
                   // id mid-turn doesn't remount and kill the stream.

@@ -70,7 +70,13 @@ describe("Launcher", () => {
 
   it("renders a fixed Knowledge Base link card → /kb (KB is not an App)", () => {
     renderLauncher();
-    expect(screen.getByRole("link", { name: /Knowledge Base/ })).toHaveAttribute("href", "/kb");
+    expect(screen.getByRole("link", { name: /知識庫/ })).toHaveAttribute("href", "/kb");
+  });
+
+  it("#160: does not print the raw /a/:slug route on the card face", () => {
+    renderLauncher();
+    expect(screen.queryByText("/a/rca")).not.toBeInTheDocument();
+    expect(screen.queryByText("/a/yield")).not.toBeInTheDocument();
   });
 
   it("auto-shows the platform welcome on first visit", () => {

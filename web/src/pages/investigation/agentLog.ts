@@ -10,6 +10,7 @@
 
 import type { AgentEvent } from "../../events";
 import type { Message, MessageCitation } from "../../api/types";
+import { initialLocale, translate } from "../../lib/i18n";
 
 export type ToolCallView = {
   call_id: string;
@@ -346,7 +347,7 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       entries.push({
         kind: "banner",
         at: now,
-        text: "sandbox went idle — restarting on next exec",
+        text: translate(initialLocale(), "banner.sandboxIdle"),
       });
       return { ...log, entries };
 
@@ -366,12 +367,14 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       return { ...log, entries };
     }
 
-    case "max_turns_exceeded":
-      entries.push({ kind: "banner", at: now, text: `max turns (${ev.turns}) exceeded` });
-      return { ...log, entries, streaming: false, error: "max turns exceeded" };
+    case "max_turns_exceeded": {
+      const text = translate(initialLocale(), "banner.maxTurns", { turns: ev.turns });
+      entries.push({ kind: "banner", at: now, text });
+      return { ...log, entries, streaming: false, error: text };
+    }
 
     case "run_cancelled":
-      entries.push({ kind: "banner", at: now, text: "run cancelled" });
+      entries.push({ kind: "banner", at: now, text: translate(initialLocale(), "banner.cancelled") });
       return { ...log, entries, streaming: false };
 
     case "error":

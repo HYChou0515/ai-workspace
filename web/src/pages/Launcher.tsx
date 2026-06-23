@@ -19,6 +19,7 @@ import { useApps } from "../hooks/useResources";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { PLATFORM_ONBOARDING, PLATFORM_SCOPE } from "../lib/platformOnboarding";
+import { useT } from "../lib/i18n";
 import type { AppSummary } from "../api/types";
 
 function softOf(hex: string): string {
@@ -63,9 +64,6 @@ function AppCard({ app }: { app: AppSummary }) {
           <span style={{ display: "block", fontSize: 13, color: "var(--text-paper-d)" }}>
             {app.description}
           </span>
-          <span style={{ display: "block", fontSize: 11, fontFamily: "monospace", color: "var(--text-paper-d2)" }}>
-            /a/{app.slug}
-          </span>
         </span>
         <Icon name="arrow_r" size={16} color="var(--text-paper-d2)" />
       </div>
@@ -74,6 +72,7 @@ function AppCard({ app }: { app: AppSummary }) {
 }
 
 function KbCard() {
+  const t = useT();
   return (
     <Link
       to="/kb"
@@ -104,9 +103,11 @@ function KbCard() {
         <Icon name="layers" size={24} color="var(--text-paper-d)" />
       </span>
       <span style={{ flex: 1 }}>
-        <span style={{ display: "block", fontWeight: 700, fontSize: 18 }}>Knowledge Base</span>
+        <span style={{ display: "block", fontWeight: 700, fontSize: 18 }}>
+          {t("launcher.kb.title")}
+        </span>
         <span style={{ display: "block", fontSize: 13, color: "var(--text-paper-d)" }}>
-          Shared docs, wikis, and the KB chat.
+          {t("launcher.kb.desc")}
         </span>
       </span>
       <Icon name="external" size={16} color="var(--text-paper-d2)" />
@@ -116,6 +117,7 @@ function KbCard() {
 
 export function Launcher() {
   const apps = useApps();
+  const t = useT();
   const me = useCurrentUser();
   const ob = useOnboarding(me, PLATFORM_SCOPE, PLATFORM_ONBOARDING);
   // The launcher is "home" — its own title bar is now redundant with the global
@@ -132,10 +134,10 @@ export function Launcher() {
       )}
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
         <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
-          APPS
+          {t("launcher.appsEyebrow")}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0 24px" }}>
-          <h1 style={{ fontSize: 40, margin: 0 }}>Your apps</h1>
+          <h1 style={{ fontSize: 40, margin: 0 }}>{t("launcher.yourApps")}</h1>
           <HelpButton onClick={ob.reopen} label="About this workspace" />
         </div>
         <div
@@ -146,7 +148,7 @@ export function Launcher() {
           }}
         >
           {apps.length === 0 && (
-            <div style={{ fontSize: 13, color: "var(--text-paper-d2)" }}>No apps yet.</div>
+            <div style={{ fontSize: 13, color: "var(--text-paper-d2)" }}>{t("launcher.noApps")}</div>
           )}
           {apps.map((a) => (
             <AppCard key={a.slug} app={a} />

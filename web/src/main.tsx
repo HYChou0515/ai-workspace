@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { queryClient } from "./api/queryClient";
 import { initTheme } from "./hooks/theme";
+import { LocaleProvider } from "./lib/i18n";
 // Self-hosted fonts (Fontsource) — bundled into dist, no runtime CDN. The
 // family names match the --font-* tokens in tokens.css (Inter Tight / Inter /
 // JetBrains Mono), at the weights the UI actually uses.
@@ -29,7 +30,9 @@ if (!root) throw new Error("root element missing");
 createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <App />
+      <LocaleProvider>
+        <App />
+      </LocaleProvider>
     </QueryClientProvider>
   </StrictMode>,
 );

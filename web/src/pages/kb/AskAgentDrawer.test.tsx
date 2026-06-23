@@ -41,8 +41,10 @@ describe("AskAgentDrawer (fast chat)", () => {
     await waitFor(() =>
       expect(screen.getByText(/reflow zone three drifted/i)).toBeInTheDocument(),
     );
-    // tool use renders RCA-style as a kb_search(…) call card
-    expect(await screen.findByText(/kb_search/)).toBeInTheDocument();
+    // tool use renders as a de-jargoned call card (#160): the friendly label,
+    // never the raw `kb_search` tool name.
+    expect(await screen.findByText("搜尋知識庫")).toBeInTheDocument();
+    expect(screen.queryByText(/kb_search/)).not.toBeInTheDocument();
 
     const cite = await screen.findByRole("button", { name: /reflow\.md/i });
     await userEvent.click(cite);

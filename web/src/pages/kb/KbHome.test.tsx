@@ -45,7 +45,7 @@ describe("KbHome shell", () => {
     // collections surface (the "New collection" action) is visible first
     expect(screen.getByRole("button", { name: /new collection/i })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^對話$/ }));
     // the chats surface is up — its New-chat action is unique to it
     expect(screen.getByRole("button", { name: /new chat/i })).toBeInTheDocument();
   });
@@ -71,8 +71,8 @@ describe("KbHome shell", () => {
   it("opens a NEW chat as a full-page view, not a drawer", async () => {
     await mockKbApi.createCollection("kb");
     renderShell();
-    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
-    expect(screen.getByText(/Select a conversation/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^對話$/ }));
+    expect(screen.getByText(/選擇一個對話/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /new chat/i }));
     // the in-page conversation composer appears…
@@ -86,7 +86,7 @@ describe("KbHome shell", () => {
   it("shows a newly started chat in the conversations list right away", async () => {
     await mockKbApi.createCollection("kb");
     renderShell();
-    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^對話$/ }));
     expect(screen.queryByRole("button", { name: /msgs/ })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /new chat/i }));

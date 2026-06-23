@@ -13,7 +13,9 @@ import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
+import { useT } from "../../lib/i18n";
 import { modCombo } from "../../lib/platform";
+import { LanguageToggle } from "../../components/LanguageToggle";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { CrossHandle } from "../../components/CrossHandle";
@@ -509,23 +511,29 @@ function ShellBody({
           onClose={() => setSettingsOpen(false)}
           theme={theme}
           onTheme={setTheme}
+          productName={manifest.title}
         />
       </div>
     </RequestCloseContext.Provider>
   );
 }
 
-function SettingsModal({
+export function SettingsModal({
   open,
   onClose,
   theme,
   onTheme,
+  productName,
 }: {
   open: boolean;
   onClose: () => void;
   theme: "system" | "light" | "dark";
   onTheme: (t: "system" | "light" | "dark") => void;
+  /** The current App's display name (manifest-driven, #160) — replaces the
+   * old hardcoded "RCA 3.0". */
+  productName: string;
 }) {
+  const t = useT();
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -575,7 +583,7 @@ function SettingsModal({
           }}
         >
           <Icon name="settings" size={14} />
-          <strong style={{ fontSize: 13, flex: 1 }}>Settings</strong>
+          <strong style={{ fontSize: 13, flex: 1 }}>{t("settings.title")}</strong>
           <button
             type="button"
             aria-label="close settings"
@@ -587,33 +595,36 @@ function SettingsModal({
         </div>
 
 
-        <SettingsSection label="Theme">
+        <SettingsSection label={t("settings.theme")}>
           <div style={{ display: "flex", gap: 6 }}>
-            {(["system", "light", "dark"] as const).map((t) => (
+            {(["system", "light", "dark"] as const).map((mode) => (
               <button
-                key={t}
+                key={mode}
                 type="button"
-                onClick={() => onTheme(t)}
+                onClick={() => onTheme(mode)}
                 style={{
                   padding: "6px 12px",
                   border: "1px solid var(--paper-3)",
                   borderRadius: "var(--radius-btn)",
                   fontSize: 12,
-                  background: t === theme ? "var(--accent-soft)" : "var(--white)",
-                  color: t === theme ? "var(--accent-h)" : "var(--text-paper)",
-                  textTransform: "capitalize",
+                  background: mode === theme ? "var(--accent-soft)" : "var(--white)",
+                  color: mode === theme ? "var(--accent-h)" : "var(--text-paper)",
                 }}
               >
-                {t}
+                {t(`theme.${mode}`)}
               </button>
             ))}
           </div>
           <p style={{ marginTop: 6, fontSize: 11, color: "var(--text-paper-d)" }}>
-            “System” follows your OS appearance.
+            {t("settings.theme.note")}
           </p>
         </SettingsSection>
 
-        <SettingsSection label="About">
+        <SettingsSection label={t("settings.language")}>
+          <LanguageToggle />
+        </SettingsSection>
+
+        <SettingsSection label={t("settings.about")}>
           <dl
             style={{
               margin: 0,
@@ -624,16 +635,15 @@ function SettingsModal({
               fontSize: 12,
             }}
           >
-            <dt style={{ color: "var(--text-paper-d)" }}>Product</dt>
-            <dd style={{ margin: 0 }}>RCA 3.0</dd>
-            <dt style={{ color: "var(--text-paper-d)" }}>Auth</dt>
-            <dd style={{ margin: 0 }}>single-user demo (no sign-in)</dd>
-            <dt style={{ color: "var(--text-paper-d)" }}>API</dt>
+            <dt style={{ color: "var(--text-paper-d)" }}>{t("about.product")}</dt>
+            <dd style={{ margin: 0 }}>{productName}</dd>
+            <dt style={{ color: "var(--text-paper-d)" }}>{t("about.signin")}</dt>
+            <dd style={{ margin: 0 }}>{t("about.signin.value")}</dd>
+            <dt style={{ color: "var(--text-paper-d)" }}>{t("about.docs")}</dt>
             <dd style={{ margin: 0 }}>
               <a href="/docs" target="_blank" rel="noreferrer">
-                Swagger /docs
-              </a>{" "}
-              · <code style={{ fontSize: 11 }}>contract.md</code>
+                {t("about.docs.link")}
+              </a>
             </dd>
           </dl>
         </SettingsSection>
