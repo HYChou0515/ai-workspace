@@ -5,10 +5,12 @@ Mirrors ``WikiMaintenanceCoordinator`` (#59): the upload/reindex/sync routes
 (``start_consume(block=False)``) drains it in its OWN thread — off the
 request-serving event loop and off the shared ``asyncio.to_thread`` pool — so a
 slow synchronous embedder call can no longer starve other requests (the bug the
-in-process ``_index_sem`` + ``to_thread`` couldn't fix). Jobs carry NO
-``partition_key`` (unconstrained), so any worker claims any pending job;
-embedder throughput is scaled by running more worker pods (k8s replicas / HPA),
-each a single consumer doing one job at a time — not by per-collection serial.
+in-process ``_index_sem`` + ``to_thread`` couldn't fix). Jobs carry
+``partition_key = doc_id`` (#134): the same doc never indexes twice at once (no
+torn chunk set, and it lets a reindex coalesce on a cheap indexed lookup), but
+the key is per-DOC not per-collection, so different docs still spread across
+workers — embedder throughput is scaled by running more worker pods (k8s
+replicas / HPA), each a single consumer doing one job at a time.
 
 After indexing a doc, it hands the doc to the wiki coordinator (the same
 index → wiki chain the old ``_index_and_maintain`` did), so enabling the wiki
@@ -66,9 +68,9 @@ class IndexCoordinator:
             from specstar.message_queue import SimpleMessageQueueFactory
 
             message_queue_factory = SimpleMessageQueueFactory()
-        # `status` is queried by the consumer (`pop`) + `_active_count`.
-        # `partition_key` is indexed but left unset (enqueue passes none) — kept
-        # so re-introducing partitioning later needs no index change/migration.
+        # `status` is queried by the consumer (`pop`) + `_active_count`;
+        # `partition_key` (= the doc id, #134) by `pop`'s per-key serialization
+        # and by `_has_pending_job`'s coalesce lookup.
         spec.add_model(
             Schema(IndexJob, "v1"),
             job_handler=self._handle,
@@ -79,21 +81,47 @@ class IndexCoordinator:
         self._consuming = False
 
     # ── enqueue (producer) ───────────────────────────────────────────
-    def enqueue(self, doc_id: str, collection_id: str) -> None:
+    def enqueue(self, doc_id: str, collection_id: str) -> bool:
         """Queue ``doc_id`` for indexing and return immediately — the work runs
-        in the background consumer (this or another pod).
+        in the background consumer (this or another pod). Returns ``True`` if a
+        job was created, ``False`` if it coalesced onto one already pending.
 
-        No ``partition_key``: index jobs are unconstrained, so any worker can
-        claim any pending job (specstar's ``pop()`` blocks only same-key peers;
-        a ``None`` key never blocks). Parallelism therefore scales with the
-        number of worker processes/pods (k8s replicas / HPA) — one pod runs one
-        consumer and processes one job at a time, so embedder load is bounded by
-        pod count, NOT by serializing a collection's docs. ``collection_id``
-        stays on the payload (the wiki hook + observability read it); it's just
-        not the partition key."""
+        ``partition_key = doc_id`` (#134): the queue's ``pop()`` never runs two
+        jobs that share a key at once, so the SAME doc is never indexed twice
+        concurrently — concurrent ``_delete_chunks`` + chunk re-create would
+        otherwise race to a torn / duplicated chunk set. It's a per-DOC key, NOT
+        per-collection, so different docs still carry different keys and any
+        worker claims them freely: embedder throughput still scales by pod count
+        (k8s replicas / HPA), which is why index jobs avoided a per-*collection*
+        key in the first place. ``collection_id`` rides on the payload (the wiki
+        hook + observability read it).
+
+        Coalesce (#134): if a reindex for this doc is already PENDING, don't pile
+        on another. Mashing the reindex button (or rapid edits) otherwise
+        enqueues N full re-index jobs — each re-chunks, re-embeds and re-triggers
+        the wiki — and holds the doc at status="indexing" until all N drain, so
+        it looks permanently stuck. The single queued job re-reads the doc when
+        it runs, so it picks up the latest content regardless. A job already
+        PROCESSING does NOT block a new enqueue: it may have read stale content
+        before an edit landed, so that edit still needs its own rerun (coalescing
+        collapses only the *pending* tail, never the in-flight run)."""
+        if self._has_pending_job(doc_id):
+            return False
         self._job_rm.create(
-            IndexJob(payload=IndexJobPayload(doc_id=doc_id, collection_id=collection_id))
+            IndexJob(
+                payload=IndexJobPayload(doc_id=doc_id, collection_id=collection_id),
+                partition_key=doc_id,
+            )
         )
+        return True
+
+    def _has_pending_job(self, doc_id: str) -> bool:
+        """True if an unclaimed index job already targets ``doc_id``. An indexed
+        ``(status, partition_key)`` count — ``partition_key`` IS ``doc_id`` — so
+        coalescing is a cheap point lookup, never a scan of the whole queue (the
+        upload route enqueues one job per archive member on the event loop)."""
+        pending_for_doc = QB["status"].eq(TaskStatus.PENDING) & (QB["partition_key"] == doc_id)
+        return self._job_rm.count_resources(pending_for_doc.build()) > 0
 
     # ── reindex-on-edit trigger (#87) ────────────────────────────────
     def install_reindex_on_edit(self) -> None:
