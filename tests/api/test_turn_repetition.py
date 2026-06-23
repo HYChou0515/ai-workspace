@@ -30,7 +30,7 @@ def _run_turn(runner) -> tuple[list[TurnMessage], list[str]]:
             "k", "q", AgentToolContext(), on_complete=lambda p: captured.append(p)
         )
         async for f in resp.body_iterator:
-            frames.append(f)
+            frames.append(f)  # ty: ignore[invalid-argument-type]
 
     asyncio.run(go())
     return captured[0], frames

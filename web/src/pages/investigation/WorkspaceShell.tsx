@@ -1416,8 +1416,8 @@ function SidebarFrame({
             </FootMeta>
           );
         })}
-        <FootMeta label="Owner">{(item.created_by as string | undefined) ?? item.owner}</FootMeta>
-        <FootMeta label="Opened">{ymd(String(item.created_time ?? ""))}</FootMeta>
+        <FootMeta label="Owner">{item.created_by}</FootMeta>
+        <FootMeta label="Opened">{ymd(item.created_time)}</FootMeta>
       </footer>
     </aside>
   );
@@ -2611,6 +2611,32 @@ function PanelBody({
               ts={fmtTs(e.at)}
               kind="warn"
               text={`summoned ${e.users.join(", ")}${e.note ? ` — ${e.note}` : ""}`}
+            />
+          );
+        }
+        if (e.kind === "phase") {
+          // #100: a workflow phase boundary in the log view.
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
+        }
+        if (e.kind === "step") {
+          // #100: a workflow step's live line (deterministic-phase movement).
+          const glyph =
+            e.step.status === "passed"
+              ? "✓"
+              : e.step.status === "failed"
+                ? "✗"
+                : e.step.status === "skipped"
+                  ? "⤳"
+                  : e.step.status === "retrying"
+                    ? "↻"
+                    : "▸";
+          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
+          return (
+            <LogLine
+              key={i}
+              ts={fmtTs(e.at)}
+              kind={e.step.status === "failed" ? "warn" : "muted"}
+              text={`${glyph} ${e.step.name}${detail}`}
             />
           );
         }

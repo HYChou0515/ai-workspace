@@ -24,5 +24,19 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.{ts,tsx}"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "lcov"],
+      // Honest denominator: count every source file, even ones no test imports,
+      // so the badge reflects the whole frontend — not just the tested files.
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.d.ts",
+        "src/main.tsx",
+        "src/test/**",
+        "**/*.config.*",
+      ],
+    },
   },
 });

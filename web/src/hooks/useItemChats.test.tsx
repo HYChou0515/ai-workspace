@@ -13,12 +13,17 @@ const DEFAULT_CHAT: ItemChatSummary = {
   created_ms: null,
   message_count: 2,
   is_default: true,
+  name_hint: "",
+  status: null,
+  last_activity_ms: null,
 };
 
 function fakeClient(over: Partial<ItemChatApi> = {}): ItemChatApi {
   return {
     listChats: vi.fn().mockResolvedValue([DEFAULT_CHAT]),
     createChat: vi.fn(),
+    renameChat: vi.fn().mockResolvedValue(DEFAULT_CHAT),
+    deleteChat: vi.fn().mockResolvedValue(undefined),
     getChat: vi.fn(),
     sendMessage: vi.fn(),
     subscribe: vi.fn(),
@@ -51,5 +56,25 @@ describe("useItemChats", () => {
     });
     expect(client.createChat).toHaveBeenCalledWith("topic-hub", "it", "side");
     expect(out?.chat_id).toBe("conversation:c2");
+  });
+
+  it("renameChat patches a chat's title", async () => {
+    const client = fakeClient();
+    const { result } = render(client);
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () => {
+      await result.current.renameChat("conversation:c1", "Yield study");
+    });
+    expect(client.renameChat).toHaveBeenCalledWith("topic-hub", "it", "conversation:c1", "Yield study");
+  });
+
+  it("deleteChat removes a chat", async () => {
+    const client = fakeClient();
+    const { result } = render(client);
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await act(async () => {
+      await result.current.deleteChat("conversation:c1");
+    });
+    expect(client.deleteChat).toHaveBeenCalledWith("topic-hub", "it", "conversation:c1");
   });
 });

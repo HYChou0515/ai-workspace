@@ -22,7 +22,7 @@ def test_penalties_are_injected_into_model_settings():
     assert ms.frequency_penalty == 0.3
     assert ms.presence_penalty == 0.2
     # repetition_penalty is non-standard → extra_body (forwarded by litellm).
-    assert (ms.extra_body or {}).get("repetition_penalty") == 1.1
+    assert (ms.extra_body or {}).get("repetition_penalty") == 1.1  # ty: ignore[unresolved-attribute]
 
 
 def test_unset_penalties_leave_model_settings_at_default():
@@ -40,5 +40,5 @@ def test_repetition_penalty_merges_with_reasoning_off_extra_body():
         reasoning_effort="none",
     )
     body = agent.model_settings.extra_body or {}
-    assert body.get("repetition_penalty") == 1.1
-    assert body["chat_template_kwargs"] == {"enable_thinking": False}
+    assert body.get("repetition_penalty") == 1.1  # ty: ignore[unresolved-attribute]
+    assert body["chat_template_kwargs"] == {"enable_thinking": False}  # ty: ignore[not-subscriptable]

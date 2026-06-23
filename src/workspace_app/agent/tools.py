@@ -503,7 +503,9 @@ def _parse_module_json(answer: str) -> tuple[str, str]:
         obj = json.loads(match.group(0))
     except (json.JSONDecodeError, ValueError):
         return "unknown", ""
-    if not isinstance(obj, dict):
+    if not isinstance(obj, dict):  # pragma: no cover — `re.search(r"\{.*\}")` only
+        # matches a substring starting with `{`; valid JSON so anchored is always
+        # an object, so json.loads here can never yield a non-dict (it raises first).
         return "unknown", ""
     module = obj.get("module")
     reason = obj.get("reason")

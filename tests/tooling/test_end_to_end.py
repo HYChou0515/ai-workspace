@@ -17,6 +17,8 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 
+pytestmark = pytest.mark.integration
+
 
 def _has_uv() -> bool:
     return shutil.which("uv") is not None

@@ -33,6 +33,21 @@ def _convs(spec, item_id):
     return rm
 
 
+def test_get_conversation_wire_field_is_item_id():
+    """#139: the FE hydrates the shared RCA chat by listing ``GET /conversation``
+    and matching the owning item on the ``item_id`` field (was ``investigation_id``
+    pre-#89). Lock the wire contract so a future struct rename can't silently
+    leave the FE matching nothing — which made the whole chat history (everyone's,
+    not just other users') fail to load on reload."""
+    client, _spec, iid = _client()
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "q"})
+    entries = client.get("/conversation").json()
+    assert entries, "the message should have created the item's default conversation"
+    data = entries[0]["data"]
+    assert data["item_id"] == iid
+    assert "investigation_id" not in data
+
+
 def test_chats_list_is_empty_then_shows_the_default_after_a_message():
     client, _spec, iid = _client()
     assert client.get(f"/a/rca/items/{iid}/chats").json() == []  # read-only: no chat yet
@@ -154,10 +169,125 @@ def test_chat_scoped_undo_requires_a_positive_turns():
 
 def test_chat_scoped_undo_404s_for_an_unknown_chat():
     client, _spec, iid = _client()
-    r = client.delete(
-        f"/a/rca/items/{iid}/chats/conversation:nope/messages", params={"turns": 1}
-    )
+    r = client.delete(f"/a/rca/items/{iid}/chats/conversation:nope/messages", params={"turns": 1})
     assert r.status_code == 404
+
+
+# ── Multi-chat list UX (issue #132) ──────────────────────────────────────────
+
+
+def test_chat_list_carries_a_name_hint_from_the_first_user_message():
+    """An unnamed free chat shows the first user message (truncated) so the FE can
+    label it without fetching the thread (#132 — first-message-snippet naming)."""
+    client, _spec, iid = _client()
+    cid = client.post(f"/a/rca/items/{iid}/chats", json={}).json()["chat_id"]
+    assert client.get(f"/a/rca/items/{iid}/chats").json()[0]["name_hint"] == ""
+    client.post(
+        f"/a/rca/items/{iid}/chats/{cid}/messages",
+        json={"content": "  Compare Q3 and Q4 yield rates please  "},
+    )
+    info = next(c for c in client.get(f"/a/rca/items/{iid}/chats").json() if c["chat_id"] == cid)
+    assert info["name_hint"] == "Compare Q3 and Q4 yield rates please"
+
+
+def test_chat_list_carries_the_driving_run_status_for_a_workflow_chat():
+    """A workflow chat surfaces its `WorkflowRun.status` so the list can show a
+    badge (●running / ⏸awaiting / ✓done) without polling each run (#132). A free
+    chat has no status."""
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    client, spec, iid = _client()
+    run = spec.get_resource_manager(WorkflowRun).create(
+        WorkflowRun(item_id=iid, captured_user="u", status=RunStatus.RUNNING)
+    )
+    spec.get_resource_manager(Conversation).create(
+        Conversation(item_id=iid, run_id=run.resource_id, title="→memory", created_ms=5)
+    )
+    free = client.post(f"/a/rca/items/{iid}/chats", json={}).json()["chat_id"]
+    by_id = {c["chat_id"]: c for c in client.get(f"/a/rca/items/{iid}/chats").json()}
+    wf = next(c for c in by_id.values() if c["run_id"] == run.resource_id)
+    assert wf["status"] == "running"
+    assert by_id[free]["status"] is None
+
+
+def test_chat_list_orders_by_recent_activity_and_does_not_pin_the_default():
+    """The list is most-recent-activity first; the (still-flagged) default chat is
+    NOT pinned to the top (#132 — no "main chat" privilege)."""
+    client, _spec, iid = _client()
+    a = client.post(f"/a/rca/items/{iid}/chats", json={"title": "A"}).json()["chat_id"]
+    b = client.post(f"/a/rca/items/{iid}/chats", json={"title": "B"}).json()["chat_id"]
+    # B is born after A → newest. A is the earliest free chat → the default, but the
+    # default no longer leads the list.
+    listed = client.get(f"/a/rca/items/{iid}/chats").json()
+    assert listed[0]["chat_id"] == b
+    assert next(c for c in listed if c["chat_id"] == a)["is_default"] is True
+    # Activity (updated_time), not birth, drives order: touch A → A leads.
+    client.post(f"/a/rca/items/{iid}/chats/{a}/messages", json={"content": "hi"})
+    assert client.get(f"/a/rca/items/{iid}/chats").json()[0]["chat_id"] == a
+
+
+def test_rename_chat_sets_its_title():
+    """Manual rename (#132): PATCH a chat's title; the new title shows in the list."""
+    client, _spec, iid = _client()
+    cid = client.post(f"/a/rca/items/{iid}/chats", json={}).json()["chat_id"]
+    r = client.patch(f"/a/rca/items/{iid}/chats/{cid}", json={"title": "Yield study"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "Yield study"
+    info = next(c for c in client.get(f"/a/rca/items/{iid}/chats").json() if c["chat_id"] == cid)
+    assert info["title"] == "Yield study"
+
+
+def test_rename_chat_404s_for_a_chat_of_another_item():
+    client, spec, iid = _client()
+    other = register_rca_item(spec)
+    foreign = spec.get_resource_manager(Conversation).create(
+        Conversation(item_id=other, created_ms=1)
+    )
+    r = client.patch(f"/a/rca/items/{iid}/chats/{foreign.resource_id}", json={"title": "x"})
+    assert r.status_code == 404
+
+
+def test_delete_free_chat_removes_it_from_the_list():
+    """Delete a chat from the manage modal (#132)."""
+    client, _spec, iid = _client()
+    cid = client.post(f"/a/rca/items/{iid}/chats", json={"title": "x"}).json()["chat_id"]
+    assert client.delete(f"/a/rca/items/{iid}/chats/{cid}").status_code == 204
+    assert cid not in [c["chat_id"] for c in client.get(f"/a/rca/items/{iid}/chats").json()]
+
+
+def test_delete_workflow_chat_cancels_its_run_then_removes_it():
+    """Deleting a workflow chat cancels its driving run first (#132 — delete also
+    cancels the run), then drops the conversation."""
+    from workspace_app.workflow.run import RunStatus, WorkflowRun
+
+    client, spec, iid = _client()
+    run = spec.get_resource_manager(WorkflowRun).create(
+        WorkflowRun(item_id=iid, captured_user="u", status=RunStatus.RUNNING)
+    )
+    cid = (
+        spec.get_resource_manager(Conversation)
+        .create(Conversation(item_id=iid, run_id=run.resource_id, created_ms=5))
+        .resource_id
+    )
+    calls: list = []
+
+    async def spy(run_id, item_id):
+        calls.append((run_id, item_id))
+        return True
+
+    client.app.state.workflow_orchestrator.cancel = spy
+    assert client.delete(f"/a/rca/items/{iid}/chats/{cid}").status_code == 204
+    assert calls == [(run.resource_id, iid)]
+    assert cid not in [c["chat_id"] for c in client.get(f"/a/rca/items/{iid}/chats").json()]
+
+
+def test_delete_chat_404s_for_a_chat_of_another_item():
+    client, spec, iid = _client()
+    other = register_rca_item(spec)
+    foreign = spec.get_resource_manager(Conversation).create(
+        Conversation(item_id=other, created_ms=1)
+    )
+    assert client.delete(f"/a/rca/items/{iid}/chats/{foreign.resource_id}").status_code == 404
 
 
 async def test_chat_scoped_stream_is_per_chat():

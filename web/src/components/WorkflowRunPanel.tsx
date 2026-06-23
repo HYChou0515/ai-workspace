@@ -56,6 +56,12 @@ export function WorkflowRunPanel({
 
   const terminal = isRunTerminal(run.status);
   const nodes = phaseView(declaredPhases, run);
+  // #100 observability: a run can finish `done` having executed nothing (e.g. a
+  // precondition no-op). That used to look identical to a fresh/idle run. Flag it,
+  // and surface the workflow's human-readable reason instead of a raw status token.
+  const ranNothing =
+    run.status === "done" && run.phases.every((p) => p.done === 0 && p.failed === 0);
+  const message = typeof run.result?.message === "string" ? run.result.message : null;
 
   return (
     <section
@@ -98,7 +104,38 @@ export function WorkflowRunPanel({
         />
       )}
 
-      {terminal && run.result && (
+      {ranNothing && (
+        <div
+          data-testid="wf-noop"
+          style={{
+            padding: "8px 10px",
+            background: "var(--paper-2)",
+            borderLeft: "2px solid var(--text-paper-d2)",
+            borderRadius: 6,
+            fontSize: 12,
+            color: "var(--text-paper)",
+          }}
+        >
+          已完成，但未執行任何步驟{message ? `：${message}` : "。"}
+        </div>
+      )}
+
+      {!ranNothing && terminal && message && (
+        <div
+          data-testid="wf-run-message"
+          style={{
+            padding: "8px 10px",
+            background: "var(--paper-2)",
+            borderRadius: 6,
+            fontSize: 12,
+            color: "var(--text-paper)",
+          }}
+        >
+          {message}
+        </div>
+      )}
+
+      {!ranNothing && terminal && run.result && !message && (
         <pre
           data-testid="wf-run-result"
           style={{

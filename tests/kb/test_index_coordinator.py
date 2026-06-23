@@ -110,10 +110,10 @@ async def test_start_consuming_is_idempotent_and_accepts_a_factory():
     await coord.aclose()
 
 
-async def test_enqueued_jobs_are_unpartitioned_so_workers_parallelize():
-    """Index jobs carry NO partition_key, so any worker may claim any pending
-    job (specstar blocks only same-key peers). Two docs in ONE collection are
-    therefore independent — embedder load is bounded by the number of worker
+async def test_enqueued_jobs_are_partitioned_per_doc_so_workers_parallelize():
+    """Index jobs are partitioned by DOC id (#134), so specstar serializes only
+    same-doc peers — two docs in ONE collection carry DIFFERENT keys and any
+    worker may claim either. Embedder load is bounded by the number of worker
     pods (k8s replicas), not by per-collection serialization."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
@@ -128,8 +128,9 @@ async def test_enqueued_jobs_are_unpartitioned_so_workers_parallelize():
     assert {j.data.payload.doc_id for j in jobs} == {d1, d2}  # ty: ignore[unresolved-attribute]
     # collection_id is still on the payload (wiki hook + observability need it)…
     assert all(j.data.payload.collection_id == cid for j in jobs)  # ty: ignore
-    # …but it is NOT the partition key, so the two jobs never block each other.
-    assert all(j.data.partition_key is None for j in jobs)  # ty: ignore[unresolved-attribute]
+    # …but the partition key is the DOC id, so different docs never block each
+    # other while the same doc is serialized against concurrent re-indexing.
+    assert {j.data.partition_key for j in jobs} == {d1, d2}  # ty: ignore[unresolved-attribute]
 
 
 async def test_a_failing_doc_does_not_wedge_the_queue():
@@ -274,3 +275,65 @@ def test_reindex_trigger_swallows_enqueue_errors():
     info = spec.get_resource_manager(SourceDoc).patch(doc_id, MergePatch({"text": "x"}))
     assert info is not None
     assert spec.get_resource_manager(SourceDoc).get(doc_id).data.text == "x"
+
+
+# ── reindex coalescing (#134) ─────────────────────────────────────────────
+# Pressing reindex N times used to flip status→"indexing" and enqueue N full
+# re-index jobs; the doc then sat at "indexing" until every redundant job
+# drained (each one re-chunks + re-embeds + re-triggers the wiki), so it looked
+# permanently stuck. `enqueue` now coalesces: while a reindex for a doc is
+# already PENDING, repeat enqueues for that SAME doc are no-ops.
+
+
+def test_reindex_is_coalesced_while_a_job_is_pending():
+    """#134: mashing reindex must not pile up N jobs. A second enqueue for a doc
+    that already has a PENDING job is a no-op — the queued job will index the
+    latest content when it runs."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue(doc_id, cid) is True  # first click queues a job
+    assert coord.enqueue(doc_id, cid) is False  # mash → coalesced onto the pending one
+    assert coord.enqueue(doc_id, cid) is False
+
+    assert _pending_jobs(spec) == [doc_id]  # exactly ONE pending job, not three
+
+
+def test_enqueue_does_not_coalesce_across_different_docs():
+    """Coalescing is per-doc: a different doc's reindex always gets its own job
+    (unpartitioned jobs still parallelize across workers)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1, d2 = _doc(spec, cid, "a.md"), _doc(spec, cid, "b.md")
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue(d1, cid) is True
+    assert coord.enqueue(d2, cid) is True  # different doc → its own job, not coalesced
+    assert sorted(_pending_jobs(spec)) == sorted([d1, d2])
+
+
+def test_a_processing_job_does_not_block_a_fresh_reindex():
+    """Only PENDING jobs coalesce. A job already PROCESSING may have read stale
+    content before an edit landed, so a reindex arriving mid-flight still needs
+    its own rerun — otherwise the edit would never be indexed."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
+
+    assert coord.enqueue(doc_id, cid) is True
+    # Flip the queued job to PROCESSING, as the consumer does when it claims it.
+    jrm = spec.get_resource_manager(IndexJob)
+    job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
+    data = job.data
+    assert isinstance(data, IndexJob)
+    jrm.update(
+        job.info.resource_id,  # ty: ignore[unresolved-attribute]
+        msgspec.structs.replace(data, status=TaskStatus.PROCESSING),
+    )
+
+    # A fresh reindex must still enqueue (it can't ride on the in-flight job).
+    assert coord.enqueue(doc_id, cid) is True
+    assert _pending_jobs(spec) == [doc_id]

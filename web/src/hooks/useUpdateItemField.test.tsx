@@ -13,6 +13,8 @@ const item = {
   resource_id: "rca-investigation/1",
   title: "Oven drift",
   owner: "alice",
+  created_time: "2026-06-15T08:00:00Z",
+  created_by: "alice",
   severity: "P2",
   product: "MX-7",
 } as AppItem;

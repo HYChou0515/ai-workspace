@@ -17,9 +17,12 @@ Respond to the user in **Traditional Taiwanese Chinese (繁體中文 / 台灣用
 Backend (Python 3.12, uv-managed):
 
 - Install: `uv sync --all-extras` (the `process-sandbox` extra — pandera / scipy / scikit-learn / seaborn — is needed by the tabular parser + data-analysis tools; a bare `uv sync` leaves `test_infer_modules` failing)
-- Run all tests + coverage: `uv run coverage run -m pytest && uv run coverage report`
+- Run all tests + coverage (the **authoritative 100% gate** — full suite, needs docker / uv / etc. available locally): `uv run coverage run -m pytest && uv run coverage combine && uv run coverage report --fail-under=100`
   - Use `coverage.py` directly — **do not** add `pytest-cov`.
+  - `coverage` runs in **`parallel` mode** (so CI's xdist workers each record their own data), which means a `coverage combine` step is now **required** before `report` — even for a serial local run.
+  - **CI runs UNIT tests only** — `pytest -m "not integration" -n auto` (parallel), ~97% coverage, **not** gated at 100%. **integration** tests (real docker / subprocess sandbox / jupyter kernel / uv / ollama; tagged `@pytest.mark.integration`) fill a CI runner's disk and take ~90 min, so they only run in the **full local suite** above — which is where the 100% gate lives.
 - Run a single test: `uv run pytest tests/path/to/test_file.py::test_name`
+- Run the fast unit subset locally (what CI runs): `COVERAGE_PROCESS_START=pyproject.toml PYTHONPATH=. uv run pytest -m "not integration" -n auto && uv run coverage combine && uv run coverage report`
 - Lint + format: `uv run ruff check && uv run ruff format --check`
 - Type check: `uv run ty check`
 - Run the app: `uv run python -m workspace_app` (serves API + SPA on 127.0.0.1:8000)

@@ -40,6 +40,39 @@ from workspace_app.workflow.handle import WorkflowHandle
 _GLOSSARY = "glossary.todo.md"
 _WARN = "⚠️"
 
+# Human-readable reasons for the "did nothing" outcomes (#100 observability). A
+# no-op used to return a bare status token the UI showed as raw JSON; these are
+# surfaced as the run's message so the user sees WHY nothing happened, and how to
+# fix it. zh-TW per the app's UI language; refer to collections.json by the name
+# the user edits it under (README §5).
+_MSG_NO_COLLECTIONS = (
+    "這個 Hub 還沒有設定任何知識庫，沒有可歸檔的目標。"
+    "請先在知識庫清單（collections.json）加入至少一個知識庫，再重新執行。"
+)
+_MSG_MALFORMED_COLLECTIONS = (
+    "知識庫清單（collections.json）有內容，但格式不正確、讀不到任何知識庫。"
+    '每一項應為物件，例如 [{"id": "…", "name": "…"}]。請修正後再重新執行。'
+)
+_MSG_NO_FILES = "沒有找到要歸檔的檔案，已跳過。請把要歸檔的檔案放進 inputs/ 後再執行。"
+
+
+async def _no_collections_result(wf: WorkflowHandle) -> dict[str, Any]:
+    """Why did the collection set come back empty? Distinguish "no list yet"
+    (empty / missing) from "list present but unparseable" (malformed) so the user
+    gets a fixable reason instead of a silent no-op (#100)."""
+    raw: Any = None
+    malformed = False
+    if await wf.exists("collections.json"):
+        try:
+            raw = await wf.read_json("collections.json")
+        except ValueError:
+            malformed = True  # not even valid JSON
+    # A non-empty list that _read_collections still parsed to zero means every
+    # entry was the wrong shape (e.g. bare strings) → malformed, not empty.
+    if malformed or (isinstance(raw, list) and len(raw) > 0):
+        return {"status": "malformed_collections", "message": _MSG_MALFORMED_COLLECTIONS}
+    return {"status": "no_collections", "message": _MSG_NO_COLLECTIONS}
+
 
 def _safe(f: str) -> str:
     return f.lstrip("/").replace("/", "_")
@@ -227,13 +260,13 @@ async def _assemble_step(
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     collections = await _read_collections(wf)
     if not collections:
-        return {"status": "no_collections"}
+        return await _no_collections_result(wf)
     files = await wf.glob(
         inputs.get("files", ["inputs/*"]),
         exclude=inputs.get("except", ["inputs/input.json"]),
     )
     if not files:
-        return {"status": "empty", "files": 0}
+        return {"status": "empty", "files": 0, "message": _MSG_NO_FILES}
 
     # PRODUCE → REVIEW, looping on `revise` so each round regenerates the drafts.
     feedback = ""

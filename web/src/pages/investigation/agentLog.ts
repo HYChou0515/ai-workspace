@@ -38,10 +38,25 @@ export type AgentMetricsState = {
   elapsedMs: number;
 };
 
+/** One workflow step's live state in the chat feed (#100 observability). A
+ * deterministic phase (e.g. commit: ingest each file) emits these so it shows
+ * movement instead of looking frozen; a step transitions running → its terminal
+ * status in place, mirroring ToolCallView. */
+export type StepView = {
+  phase: string;
+  name: string;
+  key?: string;
+  status: "running" | "passed" | "failed" | "skipped" | "retrying";
+  /** Why a step failed / is retrying — surfaced on the line. */
+  reason?: string;
+};
+
 export type AgentEntry =
   | { kind: "message"; message: Message; at?: number }
   | { kind: "tool_call"; call: ToolCallView }
   | { kind: "mention"; by: string; users: string[]; note: string; at?: number }
+  | { kind: "step"; step: StepView; at?: number }
+  | { kind: "phase"; phase: string; at?: number }
   | { kind: "banner"; text: string; at?: number };
 
 export type AgentLog = {
@@ -128,6 +143,32 @@ export function isToolRunning(log: AgentLog): boolean {
   return log.entries.some((e) => e.kind === "tool_call" && e.call.status === "running");
 }
 
+/** The waiting-state of an in-flight turn, derived purely from the folded log
+ * (no extra events). Splits the opaque "working…" wait into legible phases so a
+ * long hang shows WHERE it's stuck — and lets a viewer infer backend-slow
+ * (`prep`) vs LLM-slow (`waiting`/`thinking`) from which phase lingers:
+ *  - idle:      no turn in flight
+ *  - prep:      streaming, but the backend hasn't emitted its first metrics yet
+ *               (it's still building the turn / handing off to the model)
+ *  - waiting:   the prompt is with the model, but not one token has streamed
+ *               (cold-load / prefill / a busy LLM service — the long blank gap)
+ *  - thinking:  the model is streaming reasoning, no answer content yet
+ *  - answering: the model is streaming the visible answer */
+export type TurnPhase = "idle" | "prep" | "waiting" | "thinking" | "answering";
+
+export function turnPhase(log: AgentLog): TurnPhase {
+  if (!log.streaming) return "idle";
+  if (!log.metrics) return "prep";
+  // The trailing assistant message is this turn's live output (a user prompt or
+  // tool call ends the run, so a fresh turn has none yet — see lastAssistantIdx).
+  const idx = lastAssistantIdx(log.entries);
+  const entry = idx >= 0 ? log.entries[idx] : undefined;
+  const msg = entry && entry.kind === "message" ? entry.message : undefined;
+  if (msg && msg.content.trim().length > 0) return "answering";
+  if (msg && (msg.reasoning ?? "").length > 0) return "thinking";
+  return "waiting";
+}
+
 /** Claude-Code-style one-liner: ↑ prompt while sending, ↓ completion +
  * tok/s while/after receiving. While a tool runs (`toolRunning`), generation is
  * paused and no fresh metrics arrive, so keep the cumulative ↑/↓ tokens but drop
@@ -162,6 +203,24 @@ function liveCallIdx(entries: AgentEntry[], call_id: string): number {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
     if (e && e.kind === "tool_call" && e.call.status === "running") return i;
+  }
+  return -1;
+}
+
+/** Index of the running step matching (phase, name, key) — so a terminal step
+ * event updates the line started earlier instead of pushing a duplicate. */
+function findStep(entries: AgentEntry[], phase: string, name: string, key?: string): number {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const e = entries[i];
+    if (
+      e &&
+      e.kind === "step" &&
+      e.step.phase === phase &&
+      e.step.name === name &&
+      e.step.key === key
+    ) {
+      return i;
+    }
   }
   return -1;
 }
@@ -337,9 +396,56 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // (refetch the file tree), not folded into the agent log.
       return log;
 
+    case "step_started":
+      // #100 observability: show deterministic-phase movement in the feed (these
+      // events arrive on the same SSE; previously dropped). The step transitions
+      // in place to its terminal status, like a tool call.
+      entries.push({
+        kind: "step",
+        at: now,
+        step: { phase: ev.phase, name: ev.name, key: ev.key, status: "running" },
+      });
+      return { ...log, entries };
+
+    case "step_passed":
+    case "step_failed":
+    case "step_retrying": {
+      // Transition the matching running step in place (one line per step). A
+      // terminal event with no preceding start (shouldn't happen, but be safe)
+      // pushes its own line so nothing is silently dropped.
+      const status =
+        ev.type === "step_passed" ? "passed" : ev.type === "step_failed" ? "failed" : "retrying";
+      const reason = ev.type === "step_passed" ? undefined : ev.reason;
+      const idx = findStep(entries, ev.phase, ev.name, ev.key);
+      const e = idx >= 0 ? entries[idx] : undefined;
+      if (e && e.kind === "step") {
+        entries[idx] = { ...e, step: { ...e.step, status, reason } };
+      } else {
+        entries.push({
+          kind: "step",
+          at: now,
+          step: { phase: ev.phase, name: ev.name, key: ev.key, status, reason },
+        });
+      }
+      return { ...log, entries };
+    }
+
+    case "step_skipped":
+      // A cache hit (#9) — no preceding StepStarted, so it's always its own line.
+      entries.push({
+        kind: "step",
+        at: now,
+        step: { phase: ev.phase, name: ev.name, key: ev.key, status: "skipped" },
+      });
+      return { ...log, entries };
+
+    case "phase_entered":
+      entries.push({ kind: "phase", at: now, phase: ev.phase });
+      return { ...log, entries };
+
     default:
-      // #100: workflow phase/step events ride the same item stream but are
-      // rendered by the run progress view (WorkflowRunSection), not the chat log.
+      // Anything not folded into the feed (e.g. awaiting_human → the run
+      // progress view's decision card) leaves the log unchanged.
       return log;
   }
 }

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  fetchChatExport,
   isRunTerminal,
   phaseView,
   type PhaseDef,
@@ -86,5 +87,39 @@ describe("isRunTerminal", () => {
     expect(isRunTerminal("running")).toBe(false);
     expect(isRunTerminal("awaiting_human")).toBe(false);
     expect(isRunTerminal("pending")).toBe(false);
+  });
+});
+
+describe("fetchChatExport (#100 — export fail-loud)", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("hits the app-scoped export route, not the removed /investigations one", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string): Promise<Response> =>
+        new Response('{"title":"x","messages":[]}', {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchChatExport("topic-hub", "topic-hub:1");
+    const url = fetchMock.mock.calls[0][0];
+    expect(url).toContain("/a/topic-hub/items/topic-hub%3A1/export-chat");
+    expect(url).not.toContain("/investigations/");
+  });
+
+  it("throws (no silent HTML download) when the response is the SPA shell, not the chat", async () => {
+    // The old bug: a misrouted GET falls through to the SPA → text/html 200,
+    // which the browser saved as export-chat.html. Now it's a loud error.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response("<!doctype html><html></html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+      ),
+    );
+    await expect(fetchChatExport("topic-hub", "topic-hub:1")).rejects.toThrow(/匯出/);
   });
 });

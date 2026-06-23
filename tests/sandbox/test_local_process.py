@@ -5,6 +5,8 @@ import pytest
 from workspace_app.sandbox.local_process import LocalProcessSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 def sandbox(tmp_path) -> LocalProcessSandbox:

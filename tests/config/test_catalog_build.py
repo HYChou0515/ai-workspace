@@ -104,12 +104,12 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     """Locks in the contract previously asserted by the old
     `default_kb_agent_config` test: the kb_chat config must carry
     a knowledge-base prompt with the `[n]` citation convention,
-    `kb_search` as its only tool, and non-empty quick-prompt
-    suggestions."""
+    `kb_search` plus the `lookup_glossary` (#106) context-card tool, and
+    non-empty quick-prompt suggestions."""
     settings = load(config_path=None, env={})
     cat = build_catalog(settings, config_dir=None)
     kb = cat.kb_chat()
-    assert kb.allowed_tools == ["kb_search"]  # ty: ignore[unresolved-attribute]
+    assert kb.allowed_tools == ["kb_search", "lookup_glossary"]  # ty: ignore[unresolved-attribute]
     assert "knowledge base" in kb.system_prompt.lower()  # ty: ignore[unresolved-attribute]
     assert "[n]" in kb.system_prompt  # ty: ignore[unresolved-attribute]
     assert kb.suggestions  # quick-prompt chips ship with the config  # ty: ignore
@@ -137,9 +137,9 @@ def test_preset_llm_sampling_penalties_flow_to_agent_config(tmp_path: Path):
     )
     settings = load(config_path=cfg_file, env={})
     kb = build_catalog(settings, config_dir=tmp_path).kb_chat()
-    assert kb.frequency_penalty == 0.3
-    assert kb.presence_penalty == 0.2
-    assert kb.repetition_penalty == 1.1
+    assert kb.frequency_penalty == 0.3  # ty: ignore[unresolved-attribute]
+    assert kb.presence_penalty == 0.2  # ty: ignore[unresolved-attribute]
+    assert kb.repetition_penalty == 1.1  # ty: ignore[unresolved-attribute]
 
 
 def test_usage_entry_overrides_take_precedence_over_preset(tmp_path: Path):

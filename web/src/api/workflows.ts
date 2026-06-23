@@ -141,6 +141,35 @@ async function jsonOrThrow(r: Response, what: string): Promise<unknown> {
 const base = (slug: string, itemId: string) =>
   `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}`;
 
+/** Fetch the conversation as the re-ingestable `.chat.json` (issue #39), via the
+ * app-scoped route (#95). Validates it's actually the chat file: a misrouted GET
+ * falls through to the SPA and returns `text/html` 200, which the browser used to
+ * save silently as `export-chat.html`. We surface that as a loud error instead of
+ * a download of the app shell (#100). */
+export async function fetchChatExport(slug: string, itemId: string): Promise<Blob> {
+  const res = await apiFetch(`${base(slug, itemId)}/export-chat`);
+  const contentType = res.headers.get("content-type") ?? "";
+  if (!res.ok || !contentType.includes("application/json")) {
+    throw new Error("匯出失敗：伺服器沒有回傳對話檔，請稍後再試或回報問題。");
+  }
+  return res.blob();
+}
+
+/** Browser download wrapper around {@link fetchChatExport} — triggers the save
+ * once the response is validated, so a failure shows an error rather than saving
+ * the SPA's HTML. */
+export async function downloadChatExport(slug: string, itemId: string): Promise<void> {
+  const blob = await fetchChatExport(slug, itemId);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${itemId}.chat.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
 export const workflowApi = {
   async listProfiles(slug: string): Promise<ProfileDTO[]> {
     return jsonOrThrow(

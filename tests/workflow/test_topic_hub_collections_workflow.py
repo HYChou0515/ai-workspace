@@ -90,13 +90,58 @@ async def test_collections_workflow_is_discovered_and_coherent():
     assert callable(fn) and fn.__name__ == "run"
 
 
-async def test_no_collection_set_short_circuits():
+async def test_no_collection_set_short_circuits_with_a_human_reason():
     run = _run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     await wf.write("inputs/a.txt", b"x")
     await wf.write("inputs/input.json", b"{}")
     await wf.write("collections.json", b"[]")  # empty set → nothing to classify into
-    assert await run(wf, {}) == {"status": "no_collections"}
+    result = await run(wf, {})
+    assert result["status"] == "no_collections"
+    # The silent no-op is now self-explaining: a human-readable reason the FE shows.
+    assert "知識庫" in result["message"]
+
+
+async def test_malformed_collections_is_distinguished_from_empty():
+    """The exact incident: collections.json is a list of strings, not [{id,name}]
+    objects, so _read_collections parses zero — but the file is NOT empty. The run
+    must say the file is malformed (a fixable format error), not 'no collections'."""
+    run = _run()
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await wf.write("inputs/a.txt", b"x")
+    await wf.write("inputs/input.json", b"{}")
+    await wf.write("collections.json", b'["collection-id-123"]')  # strings, wrong shape
+    result = await run(wf, {})
+    assert result["status"] == "malformed_collections"
+    assert "格式" in result["message"]
+
+
+async def test_invalid_json_collections_is_malformed():
+    run = _run()
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await wf.write("collections.json", b"{ not json")  # unparseable
+    result = await run(wf, {})
+    assert result["status"] == "malformed_collections"
+
+
+async def test_absent_collections_file_reports_no_collections():
+    run = _run()
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    # No collections.json at all.
+    result = await run(wf, {})
+    assert result["status"] == "no_collections"
+    assert "知識庫" in result["message"]
+
+
+async def test_no_files_to_archive_is_a_visible_skip():
+    run = _run()
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
+    # Only the spec file is present → nothing to classify.
+    await wf.write("inputs/input.json", b"{}")
+    result = await run(wf, {})
+    assert result["status"] == "empty"
+    assert result["message"]
 
 
 async def test_classify_drafts_definitions_then_suspends_committing_nothing():
