@@ -1416,8 +1416,8 @@ function SidebarFrame({
             </FootMeta>
           );
         })}
-        <FootMeta label="Owner">{(item.created_by as string | undefined) ?? item.owner}</FootMeta>
-        <FootMeta label="Opened">{ymd(String(item.created_time ?? ""))}</FootMeta>
+        <FootMeta label="Owner">{item.created_by}</FootMeta>
+        <FootMeta label="Opened">{ymd(item.created_time)}</FootMeta>
       </footer>
     </aside>
   );

@@ -84,7 +84,7 @@ function delay(ms: number): Promise<void> {
 // listAppItems / getAppItem / closeInvestigation read it). Seeded with demo
 // rows so a fresh mock dashboard isn't empty. Typed AppItem — the extra
 // domain fields (severity/status/product/…) ride the index signature.
-const _mockAppItems: AppItem[] = [
+const _mockAppItemSeed = [
   {
     resource_id: "INC-2026-0142",
     title: "Reflow zone-3 drift on MX-7 board",
@@ -283,6 +283,13 @@ const _mockAppItems: AppItem[] = [
     updated_time: nowIso(60),
   },
 ];
+
+// `owner` is the creator's user id, so the mock mirrors real specstar where
+// `created_by` == `owner` at creation time (revision metadata, always present).
+const _mockAppItems: AppItem[] = _mockAppItemSeed.map((it) => ({
+  ...it,
+  created_by: it.owner,
+}));
 
 const conversations = new Map<string, Conversation>();
 
@@ -603,6 +610,8 @@ export const mockApi: ApiClient = {
         resource_id: id,
         title: "Mock item",
         owner: "default-user",
+        created_time: nowIso(0),
+        created_by: "default-user",
         severity: "P2",
         status: "triaging",
         product: "",
@@ -617,6 +626,8 @@ export const mockApi: ApiClient = {
       resource_id,
       title: String(body.title ?? ""),
       owner: "default-user",
+      created_time: nowIso(0),
+      created_by: "default-user",
       severity: body.severity ?? "P2",
       status: "triaging",
       product: body.product ?? "",
