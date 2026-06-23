@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { BrandIntro } from "./components/BrandIntro";
+import { GlobalProgressBar } from "./components/GlobalProgressBar";
 import { AppDashboard } from "./pages/AppDashboard";
 import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
@@ -42,6 +43,7 @@ export function App() {
     // basename = the deploy sub-path (Vite's BASE_URL), so client routing works
     // under e.g. company.com/my-svc/rca. Defaults to "/".
     <BrowserRouter basename={import.meta.env.BASE_URL}>
+      <GlobalProgressBar />
       <AppRoutes />
       <BrandIntro />
     </BrowserRouter>

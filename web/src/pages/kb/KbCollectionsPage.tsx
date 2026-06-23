@@ -16,6 +16,7 @@ import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
+import { Skeleton } from "../../components/Skeleton";
 import { UserAvatar } from "../../components/UserChip";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
@@ -102,7 +103,7 @@ export function KbCollectionsPage({
     }
   };
 
-  const { data: collections = [] } = useQuery({
+  const { data: collections = [], isPending: collectionsLoading } = useQuery({
     queryKey: qk.kb.collections,
     queryFn: () => client.listCollections(),
   });
@@ -404,7 +405,7 @@ export function KbCollectionsPage({
             {confirmDel && (
               <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm delete collection">
                 <span>Delete “{selected.name}”?</span>
-                <button type="button" className="kb-btn kb-btn--danger" onClick={() => deleteMut.mutate()}>
+                <button type="button" className="kb-btn kb-btn--danger" disabled={deleteMut.isPending} onClick={() => deleteMut.mutate()}>
                   Delete
                 </button>
                 <button type="button" className="kb-btn" onClick={() => setConfirmDel(false)}>
@@ -608,7 +609,15 @@ export function KbCollectionsPage({
         }
       />
 
-      {collections.length === 0 ? (
+      {collectionsLoading ? (
+        <div className="kb-grid" aria-busy="true" data-testid="kb-cols-loading">
+          {Array.from({ length: 6 }, (_, i) => (
+            <div key={i} className="kb-card-wrap">
+              <Skeleton className="kb-skel--card" />
+            </div>
+          ))}
+        </div>
+      ) : collections.length === 0 ? (
         <p className="kb-cols__empty">No collections yet — create one to start adding documents.</p>
       ) : shownCols.length === 0 ? (
         <p className="kb-cols__empty">No collections match the current filters.</p>

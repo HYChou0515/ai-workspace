@@ -11,6 +11,7 @@ import { kbApi, type KbApi, type KbChatSummary } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
+import { Skeleton } from "../../components/Skeleton";
 import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -33,7 +34,11 @@ export function KbChatsPage({
   onNewChat?: () => void;
 }) {
   const qc = useQueryClient();
-  const { data: chats = [], refetch } = useQuery({
+  const {
+    data: chats = [],
+    refetch,
+    isPending,
+  } = useQuery({
     queryKey: qk.kb.chats,
     queryFn: () => client.listChats(),
   });
@@ -145,6 +150,7 @@ export function KbChatsPage({
               type="button"
               className="kb-iconbtn"
               aria-label={`Delete ${c.title}`}
+              disabled={removeMut.isPending && removeMut.variables === c.resource_id}
               onClick={() => removeMut.mutate(c.resource_id)}
             >
               <Icon name="x" size={14} />
@@ -184,7 +190,15 @@ export function KbChatsPage({
         ))}
       </div>
 
-      {chats.length === 0 ? (
+      {isPending ? (
+        <ul className="kb-chats__rows" aria-busy="true" data-testid="kb-chats-loading">
+          {Array.from({ length: 5 }, (_, i) => (
+            <li key={i} className="kb-chats__row kb-chats__row--skeleton">
+              <Skeleton className="kb-skel--chat-row" />
+            </li>
+          ))}
+        </ul>
+      ) : chats.length === 0 ? (
         <p className="kb-cols__empty">No conversations yet — ask the agent something.</p>
       ) : shown.length === 0 ? (
         <p className="kb-cols__empty">No conversations in this view.</p>
