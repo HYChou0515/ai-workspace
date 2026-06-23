@@ -112,14 +112,23 @@
 # llm:
 #   base_url: ""
 #   api_key: ${LLM_API_KEY}
-#   # #113 anti-repetition sampling penalties (per-preset, under
+#   # #113/#146 anti-repetition sampling penalties (per-preset, under
 #   # agents.presets.<name>.llm). Omit = inherit the model default. Honoured by
 #   # vLLM; Ollama's Go runner SILENTLY DROPS them — the in-stream repetition
 #   # guard is the real, backend-independent backstop, this is a cheap first line.
-#   frequency_penalty: 0.3      # OpenAI-style, >0 discourages by token frequency
-#   presence_penalty: 0.2       # OpenAI-style, >0 discourages tokens seen at all
-#   repetition_penalty: 1.1     # HF/vLLM-style, >1 divides seen-token logits
-#                               # (keep modest on reasoning models — can cause loops)
+#   # Every surface here (RCA / KB / wiki) is diagnosis/structured, where some
+#   # repetition is legitimate (component names, symptoms, table cells). So keep
+#   # penalties gentle and add them one at a time, testing after each (#146).
+#   frequency_penalty: 0.3      # OpenAI-style additive — the main lever and the
+#                               # safest on reasoning models. Start with this alone.
+#   # repetition_penalty: 1.1   # HF/vLLM-style (>1 divides seen-token logits).
+#                               # Add ONLY if frequency_penalty leaves loops, and
+#                               # cap ~1.1 — higher CAUSES loops on reasoning models.
+#   # presence_penalty: 0.2     # Open-ended generation only; it pushes the model
+#                               # off its own terms, so leave it unset for diagnosis.
+#   # no_repeat_ngram_size is intentionally NOT wired: it hard-bans repeated
+#   # n-grams (open-ended-only — it wrecks legitimate term/table repetition in
+#   # diagnosis/JSON), and this tool has no open-ended surface (#146).
 
 # ─── read_file caps (sandbox tool) ──────────────────────────────────
 # read_file:
