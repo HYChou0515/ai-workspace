@@ -1295,7 +1295,8 @@
 .kb-shell {
   display: grid;
   grid-template-columns: 220px 1fr;
-  height: 100vh;
+  /* Fill the global layout's content area (#158); the global bar owns 40px. */
+  height: 100%;
   background: var(--paper);
   color: var(--text-paper);
 }
@@ -1636,7 +1637,7 @@
 .kb-docpage {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  height: 100%;
   background: var(--paper);
   color: var(--text-paper);
 }
