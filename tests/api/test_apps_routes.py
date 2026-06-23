@@ -106,6 +106,17 @@ def test_get_app_manifest_includes_the_profile_list():
     assert m["default_profile"] == "default"
 
 
+def test_get_app_manifest_carries_onboarding_teaching():
+    """#161 — the per-App welcome teaching flows to the FE through the manifest
+    endpoint (version + title + read-only points)."""
+    ob = _client().get("/apps/rca").json()["onboarding"]
+    assert ob is not None
+    assert ob["version"]
+    assert ob["title"]
+    assert len(ob["points"]) >= 2
+    assert all(p["title"] and p["body"] for p in ob["points"])
+
+
 def test_get_app_manifest_unknown_slug_404():
     assert _client().get("/apps/nope").status_code == 404
 

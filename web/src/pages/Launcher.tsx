@@ -11,9 +11,14 @@
 import { Link } from "react-router-dom";
 
 import { AppIcon } from "../components/AppIcon";
+import { HelpButton } from "../components/HelpButton";
 import { Icon } from "../components/Icon";
+import { OnboardingModal } from "../components/OnboardingModal";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
+import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useOnboarding } from "../hooks/useOnboarding";
+import { PLATFORM_ONBOARDING, PLATFORM_SCOPE } from "../lib/platformOnboarding";
 import type { AppSummary } from "../api/types";
 
 function softOf(hex: string): string {
@@ -111,16 +116,28 @@ function KbCard() {
 
 export function Launcher() {
   const apps = useApps();
+  const me = useCurrentUser();
+  const ob = useOnboarding(me, PLATFORM_SCOPE, PLATFORM_ONBOARDING);
   // The launcher is "home" — its own title bar is now redundant with the global
   // bar's brand (#158); publish a single Home crumb instead.
   useBreadcrumbs([{ label: "Home" }]);
   return (
     <div data-testid="page-launcher" style={{ minHeight: "100%", background: "var(--paper)" }}>
+      {ob.open && ob.content && (
+        <OnboardingModal
+          content={ob.content}
+          onGotIt={ob.gotIt}
+          onDontShowAgain={ob.dontShowAgain}
+        />
+      )}
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
         <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
           APPS
         </div>
-        <h1 style={{ fontSize: 40, margin: "4px 0 24px" }}>Your apps</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0 24px" }}>
+          <h1 style={{ fontSize: 40, margin: 0 }}>Your apps</h1>
+          <HelpButton onClick={ob.reopen} label="About this workspace" />
+        </div>
         <div
           style={{
             display: "grid",

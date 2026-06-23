@@ -4,6 +4,15 @@
   "description": "One-line description shown on the launcher card.",
   "icon": "flame",
   "color": "#3B7DD8",
+  "onboarding": {
+    "version": "1",
+    "title": "Welcome to My App",
+    "intro": "One or two sentences on what this App helps people do.",
+    "points": [
+      { "title": "First step", "body": "Describe the first thing a new user should do here." },
+      { "title": "Second step", "body": "Describe the next key capability they should know about." }
+    ]
+  },
   "function": { "workspace": true, "sandbox": false, "terminal": false },
   "agent": {
     "prompt_file": "prompts/system.md",

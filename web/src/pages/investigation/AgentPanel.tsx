@@ -25,6 +25,8 @@ import { UserPicker } from "../../components/UserPicker";
 import { docHref } from "../kb/kbLinks";
 import { type AgentState, useOptionalAgent } from "../../hooks/useAgent";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { chatEmptyHint } from "../../lib/chatCopy";
+import { modCombo } from "../../lib/platform";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { TurnStatus } from "../../components/TurnStatus";
@@ -249,8 +251,7 @@ export function AgentPanel({
       >
         {log.entries.length === 0 && !log.streaming && (
           <div style={{ color: "var(--text-paper-d)", fontSize: 13 }}>
-            Ask the agent anything — it can read evidence, run notebooks,
-            and draft the brief, analyses, and report.
+            {chatEmptyHint(chips.length > 0)}
           </div>
         )}
         {log.entries.map((e, i) => (
@@ -465,7 +466,7 @@ export function AgentPanel({
               color: "var(--text-paper-d2)",
             }}
           >
-            ⌘↵
+            {modCombo("↵")}
           </span>
           {log.streaming ? (
             <button

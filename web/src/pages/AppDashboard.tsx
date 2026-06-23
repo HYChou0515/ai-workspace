@@ -29,11 +29,14 @@ import type { AppItem, FieldSpec } from "../api/types";
 import { summarize } from "../api/types";
 import { AppIcon } from "../components/AppIcon";
 import { DomainField } from "../components/DomainField";
+import { HelpButton } from "../components/HelpButton";
 import { Icon, type IconName } from "../components/Icon";
+import { OnboardingModal } from "../components/OnboardingModal";
 import { type ChipTone, chipStyle } from "../components/StatusChip";
 import { UserAvatar } from "../components/UserChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useOnboarding } from "../hooks/useOnboarding";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
 import { useAppItems, useAppManifest } from "../hooks/useResources";
 import { useUser, useUsers } from "../hooks/useUsers";
@@ -65,6 +68,7 @@ export function AppDashboard() {
   const users = useUsers();
   const me = useCurrentUser();
   const meUser = useUser(me);
+  const ob = useOnboarding(me, slug, manifest?.onboarding);
   const [view, setView] = useState("all");
   const [sev, setSev] = useState("any");
   const [owner, setOwner] = useState("any");
@@ -141,6 +145,18 @@ export function AppDashboard() {
   const createLabel = manifest.item.create_label ?? `New ${manifest.item.noun}`;
   const themed = { "--accent": manifest.color } as CSSProperties;
   const noun = manifest.item.noun_plural;
+  // Two kinds of empty (#161): a brand-new App with zero items (show a
+  // "create your first" hero, never a zeroed "0 open · 0 critical" counter)
+  // vs. filters that happen to hide everything (offer Clear filters, not a
+  // dead end). The first only ever greets the first user; the second recurs.
+  const isEmpty = items.length === 0;
+  const clearFilters = () => {
+    setView("all");
+    setSev("any");
+    setOwner("any");
+    setTopic("any");
+    setAge("any");
+  };
 
   const nav: { key: string; icon: IconName; label: string; count?: number }[] = [
     { key: "all", icon: "bug", label: "All open", count: openItems.length },
@@ -251,6 +267,55 @@ export function AppDashboard() {
 
       {/* MAIN */}
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+        {isEmpty ? (
+          <>
+            <div style={{ display: "flex", justifyContent: "flex-end", padding: "16px 24px 0" }}>
+              {manifest.onboarding && (
+                <HelpButton onClick={ob.reopen} label={`About ${manifest.title}`} />
+              )}
+            </div>
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                textAlign: "center",
+                gap: 14,
+                padding: 28,
+              }}
+            >
+              <AppIcon icon={manifest.icon} color={manifest.color} />
+              <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
+                No {noun.toLowerCase()} yet
+              </h1>
+              <p style={{ color: "var(--text-paper-d)", fontSize: 14, margin: 0, maxWidth: 420 }}>
+                {manifest.description || `Create your first ${manifest.item.noun.toLowerCase()} to get started.`}
+              </p>
+              <Link
+                to={`/a/${slug}/new`}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  height: 38,
+                  padding: "0 18px",
+                  borderRadius: "var(--radius-btn)",
+                  background: "var(--accent)",
+                  color: "var(--white)",
+                  fontSize: 14,
+                  fontWeight: 600,
+                  textDecoration: "none",
+                }}
+              >
+                <Icon name="plus" size={14} color="var(--white)" />
+                {createLabel}
+              </Link>
+            </div>
+          </>
+        ) : (
+          <>
         {/* page header */}
         <div style={{ padding: "28px 28px 18px", display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 24, borderBottom: "1px solid var(--paper-3)" }}>
           <div>
@@ -262,10 +327,13 @@ export function AppDashboard() {
               All {noun.toLowerCase()} are visible to your org. Pin the ones you own.
             </p>
           </div>
-          <div style={{ display: "flex", gap: 28 }}>
+          <div style={{ display: "flex", gap: 28, alignItems: "flex-end" }}>
             <Metric label="Open" value={String(openCount)} sub={noun.toLowerCase()} />
             <Metric label="Critical · open" value={String(criticalCount)} sub="need attention" />
             {closing[0] && <Metric label={`${pretty(closing[0])} · 30d`} value={String(closed30d)} sub="last 30d" />}
+            {manifest.onboarding && (
+              <HelpButton onClick={ob.reopen} label={`About ${manifest.title}`} />
+            )}
           </div>
         </div>
 
@@ -313,7 +381,25 @@ export function AppDashboard() {
             </div>
 
             {visible.length === 0 && (
-              <div style={{ padding: 24, color: "var(--text-paper-d2)" }}>No {noun.toLowerCase()} here.</div>
+              <div style={{ padding: 24, color: "var(--text-paper-d2)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <span>No {noun.toLowerCase()} match these filters.</span>
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  style={{
+                    height: 28,
+                    padding: "0 12px",
+                    borderRadius: "var(--radius-btn)",
+                    border: "1px solid var(--paper-3)",
+                    background: "var(--white)",
+                    color: "var(--text-paper)",
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  Clear filters
+                </button>
+              </div>
             )}
             {visible.map((it, i) => (
               <ItemRow
@@ -338,7 +424,17 @@ export function AppDashboard() {
             </div>
           </div>
         </div>
+          </>
+        )}
       </main>
+
+      {ob.open && ob.content && (
+        <OnboardingModal
+          content={ob.content}
+          onGotIt={ob.gotIt}
+          onDontShowAgain={ob.dontShowAgain}
+        />
+      )}
 
       {/* Nested create route (`/a/:slug/new`) renders here as a modal overlay. */}
       <Outlet />

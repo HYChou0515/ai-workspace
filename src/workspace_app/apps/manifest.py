@@ -93,11 +93,32 @@ class ItemNouns(Struct):
     create_label: str | UnsetType = UNSET  # omitted → "New {noun}"
 
 
+class OnboardingPoint(Struct):
+    """One read-only step/highlight in an App's welcome teaching (#161)."""
+
+    title: str
+    body: str
+
+
+class Onboarding(Struct):
+    """Versioned, read-only welcome teaching shown when entering the App (#161).
+
+    The FE pops it until the user permanently dismisses *this* ``version``; bumping
+    ``version`` re-shows it for everyone. Content is per-App (this block); the
+    platform-level welcome lives as a FE constant, not here."""
+
+    version: str  # hand-bumped when the teaching changes (NOT a release version)
+    title: str
+    intro: str = ""
+    points: list[OnboardingPoint] = field(default_factory=list)
+
+
 class AppManifest(Struct):
     slug: str
     title: str
     agent: AgentManifest
     item: ItemNouns
+    onboarding: Onboarding | None = None
     description: str = ""
     icon: str = ""  # "icon.svg" (file) | emoji | named-icon key
     color: str = ""  # hex → --accent trio (full re-theme inside the App)
