@@ -1,7 +1,8 @@
 """``human_gate`` — produce → review → commit (#100, manual §10).
 
-The decision *is* an artifact (``step_<phase>/decision.json``), so the gate fits the
-filesystem-journal exactly: on first reach there is no decision, so the gate raises
+The decision *is* an artifact (``<wf.journal_dir>/step_<phase>/decision.json`` — the
+run's per-workflow journal folder, #136), so the gate fits the filesystem-journal
+exactly: on first reach there is no decision, so the gate raises
 ``AwaitingHuman`` and the driver suspends the run (status ``awaiting_human``, sandbox
 released). A human responds via the decisions endpoint (``record_decision`` writes
 the artifact); re-running the workflow replays completed steps, reaches the gate
@@ -40,8 +41,8 @@ class AwaitingHuman(Exception):
         super().__init__(f"awaiting human decision at phase {phase!r}")
 
 
-def _decision_path(phase: str) -> str:
-    return f"/step_{phase}/decision.json"
+def _decision_path(wf: WorkflowHandle, phase: str) -> str:
+    return f"{wf.journal_dir}/step_{phase}/decision.json"
 
 
 def _as_text(summary: Any) -> str:
@@ -59,7 +60,7 @@ async def human_gate(
     """Pause for a human decision. Returns the recorded ``Decision`` once one exists;
     otherwise raises ``AwaitingHuman`` (the run suspends). ``summary`` is what the
     human reviews — a string, or any JSON-able value (e.g. a routing plan)."""
-    path = _decision_path(phase)
+    path = _decision_path(wf, phase)
     if await wf.exists(path):
         rec = await wf.read_json(path)
         return Decision(choice=rec["choice"], input=rec.get("input", ""))
@@ -73,5 +74,5 @@ async def record_decision(
     the workflow then finds it at the gate and continues (manual §10). ``decided_by``
     is recorded for audit (manual §15) — ``human_gate`` itself reads only choice/input."""
     await wf.write_json(
-        _decision_path(phase), {"choice": choice, "input": input, "decided_by": decided_by}
+        _decision_path(wf, phase), {"choice": choice, "input": input, "decided_by": decided_by}
     )

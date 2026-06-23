@@ -27,6 +27,15 @@ async def test_gate_returns_the_recorded_decision(wf: WorkflowHandle):
     assert decision.input == "ship it"
 
 
+async def test_decision_artifact_lives_under_per_workflow_dir():
+    """#136: the gate decision is a journal artifact, so it lives under the run's
+    /.workflow/<workflow_id>/ folder too — not scattered at the workspace root."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", workflow_id="collections")
+    await record_decision(wf, phase="review", choice="approve")
+    assert await wf.exists("/.workflow/collections/step_review/decision.json")
+    assert not await wf.exists("/step_review/decision.json")
+
+
 def _run(spec: SpecStar) -> str:
     return (
         spec.get_resource_manager(WorkflowRun)

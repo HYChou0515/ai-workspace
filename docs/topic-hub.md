@@ -138,7 +138,8 @@ get-or-create by `item_id`) and a workflow run drives that sole conversation
 - **No special cross-chat concurrency control.** Two runs slamming the *same* file at
   the same instant should not happen in normal use; if it does, let it fail. The
   durable record stays consistent because the writeback is atomic.
-- **Step namespaces stay disjoint.** Parallel workflows write their artifacts under
+- **Step namespaces stay disjoint.** Each workflow's journal lives in its **own
+  folder** `/.workflow/<workflow_id>/` (#136), and within it parallel writes land under
   their own `step_<name>/<key>` namespaces (workflows.md §9); only **intentionally
   shared** files (e.g. `memory/`, `collections.json`, a glossary fill-in file)
   overlap, and there last-write-wins is the *intended* behaviour. Authors keep this in

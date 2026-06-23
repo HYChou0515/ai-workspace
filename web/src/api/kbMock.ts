@@ -186,6 +186,39 @@ export const mockKbApi: KbApi = {
     documents.set(collectionId, list);
     return [id];
   },
+  async prepareCollectionDownload(collectionId) {
+    const c = collections.get(collectionId);
+    const base = (c?.name ?? "collection").replace(/[^\w.\- ]+/g, "_") || "collection";
+    return { download_id: "mockdl00000000000000000000000000", filename: `${base}.zip`, size: 1024 };
+  },
+  streamCollectionDownloadUrl(collectionId, downloadId) {
+    return `/kb/collections/${collectionId}/download/${downloadId}`;
+  },
+  async importCollectionNew(file) {
+    // Simulate a new collection materialised from the uploaded zip, named after
+    // the file (mirrors the BE manifest-less fallback the tests exercise).
+    const name = file.name.replace(/\.zip$/i, "") || "imported";
+    const c: KbCollection = {
+      resource_id: nextId("col"),
+      name,
+      description: "",
+      icon: "layers",
+      cited: 0,
+      doc_count: 0,
+      size: 0,
+      updated_at: Date.now(),
+      owner: "me",
+      use_rag: true,
+      use_wiki: false,
+      wiki_maintainer_guidance: "",
+      wiki_reader_guidance: "",
+    };
+    collections.set(c.resource_id, c);
+    return { collection_id: c.resource_id, document_ids: [], status: "indexing" };
+  },
+  async importCollectionInto(collectionId, _file, _mode) {
+    return { collection_id: collectionId, document_ids: [], status: "indexing" };
+  },
   async renderDocument(documentId): Promise<KbRenderedDoc> {
     const filename = documentId.split("/").pop() ?? documentId;
     const collection_id = documentId.split("/")[0] ?? "";

@@ -4,7 +4,8 @@
 input-hash from its arguments, and if the step's artifact already exists with a
 matching hash it returns the cached result without re-executing (no LLM, no sandbox,
 no chat re-post). Otherwise it executes — with retry-with-feedback on a failing gate
-— and records ``{hash, result}`` to ``step_<name>/<key>.json``.
+— and records ``{hash, result}`` to ``<wf.journal_dir>/step_<name>/<key>.json`` — the
+run's per-workflow journal folder (#136), not the workspace root.
 
 This module is deliberately decoupled from *how* a step does its work: the caller
 passes an ``execute`` coroutine (an agent turn, a sandbox command, a capability
@@ -63,8 +64,8 @@ def input_hash(args: Any) -> str:
     ).hexdigest()
 
 
-def _artifact_path(name: str, key: str) -> str:
-    return f"/step_{name}/{key or 'main'}.json"
+def _artifact_path(wf: WorkflowHandle, name: str, key: str) -> str:
+    return f"{wf.journal_dir}/step_{name}/{key or 'main'}.json"
 
 
 def _emit(wf: WorkflowHandle, event: object) -> None:
@@ -92,7 +93,7 @@ async def run_step(
     back each time), then journals ``{hash, result}``. Raises ``StepFailed`` if the
     gate never passes. Emits StepSkipped / StepStarted / StepRetrying / StepPassed /
     StepFailed through the handle's ``emit`` hook (manual §12)."""
-    path = _artifact_path(name, key)
+    path = _artifact_path(wf, name, key)
     h = input_hash(args)
 
     if cache and await wf.exists(path):
