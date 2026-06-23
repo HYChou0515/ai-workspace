@@ -65,7 +65,7 @@ function Msg({ children, tone = "muted" }: { children: ReactNode; tone?: "muted"
     <div
       data-testid="page-app-workspace"
       style={{
-        height: "100vh",
+        height: "100%",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

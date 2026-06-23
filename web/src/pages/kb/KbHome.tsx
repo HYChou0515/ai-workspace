@@ -8,12 +8,12 @@
 
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
-import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
+import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { useT } from "../../lib/i18n";
 import { AskAgentLauncher } from "./AskAgentLauncher";
 import { KbChatsPage } from "./KbChatsPage";
@@ -27,10 +27,10 @@ type Viewer = { documentId: string; snippet?: string };
 type Selected = string | null | undefined;
 
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
-  const navigate = useNavigate();
   const t = useT();
   const qc = useQueryClient();
   const [params] = useSearchParams();
+  useBreadcrumbs([{ label: "Home", to: "/" }, { label: "Knowledge base" }]);
   const [tab, setTab] = useState<Tab>(params.get("tab") === "chats" ? "chats" : "collections");
   const [chatId, setChatId] = useState<Selected>(undefined);
   const [viewKey, setViewKey] = useState(0);
@@ -68,9 +68,6 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
         >
           <Icon name="chat" size={15} /> {t("kb.chats")}
         </button>
-        <button type="button" className="kb-nav__back" onClick={() => navigate("/")}>
-          <Icon name="chev_l" size={13} /> {t("kb.back")}
-        </button>
       </aside>
 
       <main className="kb-main">
@@ -78,7 +75,6 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
           <span className="kb-topbar__title">
             {tab === "collections" ? t("kb.collections") : t("kb.conversations")}
           </span>
-          <HealthDot />
           {/* Same component Home uses — switches our own tab on
               manage/history and reuses our viewer for citations. */}
           <AskAgentLauncher

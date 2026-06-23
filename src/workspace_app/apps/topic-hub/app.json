@@ -4,6 +4,16 @@
   "description": "A cross-collection workspace that accumulates memory on a subject over time.",
   "icon": "flame",
   "color": "#6B46C1",
+  "onboarding": {
+    "version": "1",
+    "title": "Welcome to Topic Hub",
+    "intro": "A workspace that builds lasting knowledge on a subject across your collections.",
+    "points": [
+      { "title": "Pick your collections", "body": "Choose which knowledge collections this hub draws from." },
+      { "title": "Ask across everything", "body": "Question the agent and it searches every collection at once, with citations." },
+      { "title": "It remembers", "body": "Findings accumulate as memory, so each session builds on the last." }
+    ]
+  },
   "function": { "workspace": true, "sandbox": true, "terminal": false },
   "agent": {
     "prompt_file": "prompts/system.md",
@@ -27,7 +37,11 @@
       { "preset": "claude-opus", "name": "Topic Hub · Claude Opus" },
       { "preset": "openai-mini", "name": "Topic Hub · GPT-4o-mini" }
     ],
-    "suggestions": [{ "label": "Summarise", "prompt": "Summarise what we know so far." }]
+    "suggestions": [
+      { "label": "Summarise", "prompt": "Summarise what we know so far." },
+      { "label": "Open questions", "prompt": "What are the biggest open questions on this topic?" },
+      { "label": "Across collections", "prompt": "What do the collections agree and disagree on?" }
+    ]
   },
   "item": { "noun": "Topic Hub", "noun_plural": "Topic Hubs", "create_label": "New Topic Hub" },
   "layout": {

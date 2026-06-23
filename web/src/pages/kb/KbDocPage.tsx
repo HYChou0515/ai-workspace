@@ -9,6 +9,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi } from "../../api/kb";
 import { Icon } from "../../components/Icon";
+import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { KbDocBody } from "./KbDocBody";
 import { docPath } from "./kbLinks";
 
@@ -19,6 +20,11 @@ export function KbDocPage({ client = kbApi }: { client?: KbApi }) {
   const documentId = params["*"] ?? "";
   const snippet = sp.get("hl") ?? undefined;
   const [filename, setFilename] = useState<string | null>(null);
+  useBreadcrumbs([
+    { label: "Home", to: "/" },
+    { label: "Knowledge base", to: "/kb" },
+    { label: filename ?? "Document" },
+  ]);
 
   return (
     <div className="kb-docpage">

@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { ExecResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
+import { modCombo } from "../../lib/platform";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 
@@ -139,7 +140,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
         {history.length === 0 && (
           <div style={{ color: "var(--text-paper-d)" }}>
             Run shell commands in the sandbox. Try <kbd>ls</kbd>,{" "}
-            <kbd>echo hi</kbd>, <kbd>cat brief.md</kbd>. ⌘L clears.
+            <kbd>echo hi</kbd>, <kbd>cat brief.md</kbd>. {modCombo("L")} clears.
           </div>
         )}
         {history.map((e, i) => (

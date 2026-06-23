@@ -163,7 +163,7 @@ export function ItemChatShell({
         />
       ) : (
         <p className="item-chat-panel__empty" data-testid="no-chat">
-          No chat open yet — start one above.
+          No conversation open yet — start one from the menu above to begin.
         </p>
       )}
     </div>
