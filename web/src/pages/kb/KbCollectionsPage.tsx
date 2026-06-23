@@ -12,7 +12,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { mapWithConcurrency } from "../../api/concurrency";
-import { kbApi, type KbApi } from "../../api/kb";
+import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
@@ -21,7 +21,7 @@ import { UserAvatar } from "../../components/UserChip";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { ContextCardsTab } from "./ContextCardsTab";
-import { KbDocIde } from "./KbDocIde";
+import { fetchAllDocs, KbDocIde } from "./KbDocIde";
 import { NewCollectionModal } from "./NewCollectionModal";
 import { RetrievalToggles, WikiBadge } from "./RetrievalToggles";
 import { WikiBrowser } from "./WikiBrowser";
@@ -66,6 +66,15 @@ function fmtCount(n: number): string {
   if (n >= 1_000) return `${Math.round(n / 1_000)} K`;
   return String(n);
 }
+
+// One-line "what + when" blurb under the collection tabs (#162) — orient the
+// reader on Documents / Context Cards / Wiki at the point of use. No system
+// nouns (chunk / embed / index internals) — describe the outcome.
+const TAB_BLURB: Record<"documents" | "cards" | "wiki", string> = {
+  documents: "The files you've uploaded. Search reads these to answer questions.",
+  cards: "A glossary you write by hand — exact terms the assistant uses verbatim when they come up.",
+  wiki: "An AI-built, cross-linked summary the assistant reads for the big picture. Updates as you upload.",
+};
 
 type Tab = "all" | "mine" | "pinned";
 
@@ -112,6 +121,23 @@ export function KbCollectionsPage({
     queryKey: qk.kb.collections,
     queryFn: () => client.listCollections(),
   });
+
+  // Open collection's doc statuses, for the index-status strip (#162). Shares
+  // the exact query (key + fetcher) KbDocIde uses, so the two dedupe into one
+  // fetch + one poll; this observer keeps the strip live even on the Cards/Wiki
+  // tabs where KbDocIde isn't mounted. Disabled on the grid (no open collection).
+  const docStatusQuery = useQuery({
+    queryKey: qk.kb.documents(selectedId ?? "__none__"),
+    enabled: selectedId != null,
+    queryFn: () => fetchAllDocs(client, selectedId as string),
+    refetchInterval: (q) =>
+      (q.state.data as KbDocument[] | undefined)?.some((d) => d.status === "indexing")
+        ? 1500
+        : false,
+  });
+  const statusDocs = (docStatusQuery.data ?? []) as KbDocument[];
+  const indexingCount = statusDocs.filter((d) => d.status === "indexing").length;
+  const erroredCount = statusDocs.filter((d) => d.status === "error").length;
 
   // Reset the open collection's transient UI when switching away. (The doc
   // tree + editor own their own state inside KbDocIde.)
@@ -520,6 +546,32 @@ export function KbCollectionsPage({
           ))}
         </div>
 
+        {/* Index-status strip (#162): visible on every tab so the upload →
+            indexing → ready/error transition is never invisible. Hidden once
+            nothing is uploading / indexing / errored. */}
+        {(busy || indexingCount > 0 || erroredCount > 0) && (
+          <div
+            className={`kb-index-status${erroredCount > 0 && indexingCount === 0 && !busy ? " is-error" : ""}`}
+            data-testid="kb-index-status"
+            role="status"
+          >
+            <Icon
+              name={erroredCount > 0 && indexingCount === 0 && !busy ? "x" : "refresh"}
+              size={13}
+              color={erroredCount > 0 && indexingCount === 0 && !busy ? "var(--err)" : "var(--accent-h)"}
+            />
+            <span>
+              {[
+                busy ? "Uploading…" : null,
+                indexingCount > 0 ? `Indexing ${indexingCount}…` : null,
+                erroredCount > 0 ? `${erroredCount} failed to index` : null,
+              ]
+                .filter(Boolean)
+                .join(" · ")}
+            </span>
+          </div>
+        )}
+
         {showRetrieval && (
           <div
             style={{
@@ -570,6 +622,8 @@ export function KbCollectionsPage({
             </button>
           ))}
         </div>
+
+        <p className="kb-tabs__blurb">{TAB_BLURB[effectiveTab]}</p>
 
         {effectiveTab === "wiki" ? (
           <div className="kb-colpage__docs">

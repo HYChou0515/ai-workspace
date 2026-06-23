@@ -166,6 +166,10 @@ export function KbChatsPage({
       <header className="kb-chats__head">
         <div>
           <h2 className="kb-chats__heading">Conversations</h2>
+          {/* What Chats are + when to use (#162) — purpose, above the counts. */}
+          <p className="kb-chats__lead">
+            Ask questions across your collections. Every answer cites the documents it came from.
+          </p>
           <p className="kb-chats__sub">
             {chats.length} {chats.length === 1 ? "chat" : "chats"}
             {sharedCount === 0 ? " · private to you" : ` · ${sharedCount} shared with you`}
