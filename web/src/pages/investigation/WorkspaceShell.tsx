@@ -13,6 +13,7 @@ import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
+import { modCombo } from "../../lib/platform";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { AppIcon } from "../../components/AppIcon";
@@ -812,7 +813,7 @@ function TopBar({
       <button
         type="button"
         onClick={onCommandPalette}
-        title="Go to file (⌘P)"
+        title={`Go to file (${modCombo("P")})`}
         style={{
           width: 320,
           height: 28,
@@ -830,7 +831,7 @@ function TopBar({
         <Icon name="search" size={13} />
         <span>Go to file, symbol, command…</span>
         <span style={{ flex: 1 }} />
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>⌘P</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{modCombo("P")}</span>
       </button>
 
 
@@ -2383,7 +2384,7 @@ function BottomPanel({
         <button
           type="button"
           onClick={onToggle}
-          title={open ? "Collapse panel (⌘J)" : "Expand panel (⌘J)"}
+          title={`${open ? "Collapse" : "Expand"} panel (${modCombo("J")})`}
           aria-label="toggle bottom panel"
           style={{ color: "var(--text-paper-d)", padding: 4 }}
         >

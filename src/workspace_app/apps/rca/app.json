@@ -4,6 +4,16 @@
   "description": "Structured failure investigations — SPC, Pareto, reports.",
   "icon": "flame",
   "color": "#F0502E",
+  "onboarding": {
+    "version": "1",
+    "title": "Welcome to Root Cause Analysis",
+    "intro": "Investigate failures end to end — from raw evidence to a report you can share.",
+    "points": [
+      { "title": "Add your evidence", "body": "Upload logs, datasets, and images, then ask the agent to dig into them." },
+      { "title": "Ask the agent", "body": "Pull histories, rank suspect factors, and run SPC or Pareto from plain questions." },
+      { "title": "Draft the report", "body": "Turn findings into a structured report you can export and hand off." }
+    ]
+  },
   "function": { "workspace": true, "sandbox": true, "terminal": true },
   "agent": {
     "prompt_file": "prompts/system.md",

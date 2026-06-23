@@ -11,8 +11,13 @@
 import { Link } from "react-router-dom";
 
 import { AppIcon } from "../components/AppIcon";
+import { HelpButton } from "../components/HelpButton";
 import { Icon } from "../components/Icon";
+import { OnboardingModal } from "../components/OnboardingModal";
 import { useApps } from "../hooks/useResources";
+import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useOnboarding } from "../hooks/useOnboarding";
+import { PLATFORM_ONBOARDING, PLATFORM_SCOPE } from "../lib/platformOnboarding";
 import type { AppSummary } from "../api/types";
 
 function softOf(hex: string): string {
@@ -110,6 +115,8 @@ function KbCard() {
 
 export function Launcher() {
   const apps = useApps();
+  const me = useCurrentUser();
+  const ob = useOnboarding(me, PLATFORM_SCOPE, PLATFORM_ONBOARDING);
   return (
     <div data-testid="page-launcher" style={{ minHeight: "100vh", background: "var(--paper)" }}>
       <header
@@ -117,13 +124,22 @@ export function Launcher() {
           height: 60,
           display: "flex",
           alignItems: "center",
+          gap: 12,
           padding: "0 24px",
           borderBottom: "1px solid var(--paper-3)",
           fontWeight: 800,
         }}
       >
-        Workspace
+        <span style={{ flex: 1 }}>Workspace</span>
+        <HelpButton onClick={ob.reopen} label="About this workspace" />
       </header>
+      {ob.open && ob.content && (
+        <OnboardingModal
+          content={ob.content}
+          onGotIt={ob.gotIt}
+          onDontShowAgain={ob.dontShowAgain}
+        />
+      )}
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
         <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
           APPS

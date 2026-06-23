@@ -15,6 +15,7 @@ import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
 import { useKbAgentName } from "../../lib/kbAgent";
+import { modCombo } from "../../lib/platform";
 import { useKbChat } from "../../hooks/useKbChat";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { TurnStatus } from "../../components/TurnStatus";
@@ -164,7 +165,7 @@ export function KbChatPanel({
             }}
           />
           <div className="kb-composer__row">
-            <span className="kb-composer__hint">⌘↵ to send</span>
+            <span className="kb-composer__hint">{modCombo("↵")} to send</span>
             {/* Handoff 3.0: one combined chip replaces the three
                 separate model / depth / effort controls. Model pick
                 stays per-message (sticky), same semantics as before. */}

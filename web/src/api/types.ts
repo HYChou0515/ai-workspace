@@ -114,6 +114,19 @@ export type FieldSpec = {
   options?: string[];
 };
 
+/** One read-only step/highlight in a welcome teaching (#161). */
+export type OnboardingPoint = { title: string; body: string };
+
+/** Versioned, read-only welcome teaching (#161) — used both per-App (from the
+ * manifest) and platform-level (a FE constant). The modal pops until the user
+ * dismisses *this* `version`; bumping `version` re-shows it. */
+export type Onboarding = {
+  version: string;
+  title: string;
+  intro: string;
+  points: OnboardingPoint[];
+};
+
 /** The full App manifest (GET /apps/:slug) the dashboard + workspace drive off
  * (#89). `fields` carries each domain field's render kind + enum options (from
  * the model); `layout` + `labels` are the display overlay. */
@@ -137,6 +150,9 @@ export type AppManifest = AppSummary & {
   /** Close/resolve workflow; absent → the shell shows no Close affordance. */
   lifecycle?: { status_field: string; closing_states: string[] };
   default_profile: string;
+  /** Versioned, read-only welcome teaching shown when entering the App (#161).
+   * Absent → no per-App welcome. */
+  onboarding?: Onboarding;
   /** The App's profiles (starter-content bundles) — the create flow offers a
    * picker when there's more than one. */
   profiles: { name: string; title: string; description: string }[];

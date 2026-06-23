@@ -138,6 +138,17 @@ describe("AppDashboard", () => {
     expect(screen.queryByRole("link", { name: /Oven drift/ })).not.toBeInTheDocument();
   });
 
+  it("when filters hide everything, offers Clear filters (not a dead 'none here')", () => {
+    renderDash();
+    // No item is P3 → the filtered list is empty.
+    fireEvent.change(screen.getByLabelText("Filter by severity"), { target: { value: "P3" } });
+    expect(screen.getByText(/match these filters/i)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Oven drift/ })).not.toBeInTheDocument();
+    // Clearing restores the open items.
+    fireEvent.click(screen.getByRole("button", { name: /clear filters/i }));
+    expect(screen.getByRole("link", { name: /Oven drift/ })).toBeInTheDocument();
+  });
+
   it("pins an item from its row and reflects it in the Pinned filter", () => {
     renderDash();
     fireEvent.click(screen.getByRole("button", { name: /Pin Oven drift/ }));
