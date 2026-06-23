@@ -27,6 +27,12 @@ export type ItemChatSummary = {
   created_ms: number | null;
   message_count: number;
   is_default: boolean;
+  /** First user message (truncated) — the display fallback for an unnamed chat (#132). */
+  name_hint: string;
+  /** The driving workflow run's status for a workflow chat, else null (#132). */
+  status: string | null;
+  /** Epoch ms of the chat's last write — the recency sort key (#132). */
+  last_activity_ms: number | null;
 };
 
 /** A hydrated chat thread (persisted messages — carries resolved [n] citations). */
@@ -61,6 +67,29 @@ export const itemChatApi = {
       }),
       "create chat",
     );
+  },
+
+  /** Rename a chat (#132) — set its display title from the manage modal. */
+  async renameChat(
+    slug: string,
+    itemId: string,
+    chatId: string,
+    title: string,
+  ): Promise<ItemChatSummary> {
+    return jsonOrThrow(
+      await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ title }),
+      }),
+      "rename chat",
+    );
+  },
+
+  /** Delete a chat (#132) — the backend also cancels a running workflow first. */
+  async deleteChat(slug: string, itemId: string, chatId: string): Promise<void> {
+    const r = await apiFetch(`${base(slug, itemId)}/chats/${enc(chatId)}`, { method: "DELETE" });
+    if (!r.ok) throw new Error(`delete chat failed: ${r.status}`);
   },
 
   /** Hydrate a chat's persisted thread via the specstar single-resource route. */

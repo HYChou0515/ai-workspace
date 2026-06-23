@@ -4,10 +4,12 @@ import type { AgentEvent } from "../../events";
 import {
   EMPTY_LOG,
   type AgentLog,
+  type AgentMetricsState,
   formatMetrics,
   isToolRunning,
   logFromMessages,
   turnsFromEntry,
+  turnPhase,
   reduceAgent,
   tokensPerSec,
 } from "./agentLog";
@@ -31,6 +33,50 @@ describe("metrics formatting", () => {
     expect(line).toContain("↓ 40 tok");
     expect(line).toContain("running");
     expect(line).not.toContain("tok/s"); // paused — no misleading rate during the tool gap
+  });
+});
+
+describe("turnPhase (wait-state selector)", () => {
+  const upMetrics: AgentMetricsState = { phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0 };
+  const streaming = (over: Partial<AgentLog> = {}): AgentLog => ({ ...EMPTY_LOG, streaming: true, ...over });
+
+  const downMetrics: AgentMetricsState = { phase: "down", promptTokens: 256, completionTokens: 3, elapsedMs: 500 };
+
+  it("is 'prep' while streaming before any metrics arrive (backend hand-off)", () => {
+    expect(turnPhase(streaming())).toBe("prep");
+  });
+
+  it("is 'thinking' once the model streams reasoning but no answer content yet", () => {
+    const base = fold([{ type: "message_delta", text: "Let me think", reasoning: true }]);
+    expect(turnPhase({ ...base, streaming: true, metrics: downMetrics })).toBe("thinking");
+  });
+
+  it("is 'idle' when no turn is in flight", () => {
+    expect(turnPhase(EMPTY_LOG)).toBe("idle");
+    expect(turnPhase({ ...EMPTY_LOG, metrics: downMetrics })).toBe("idle");
+  });
+
+  it("is 'waiting' when the prompt is with the model but no token has streamed", () => {
+    expect(turnPhase(streaming({ metrics: upMetrics }))).toBe("waiting");
+  });
+
+  it("is 'answering' once visible answer content streams", () => {
+    const base = fold([
+      { type: "message_delta", text: "Thinking", reasoning: true },
+      { type: "message_delta", text: "Here is the answer" },
+    ]);
+    expect(turnPhase({ ...base, streaming: true, metrics: downMetrics })).toBe("answering");
+  });
+
+  it("stays 'waiting' on a fresh turn even if a previous answer is in the log", () => {
+    const base = fold([{ type: "message_delta", text: "old answer" }]);
+    const fresh: AgentLog = {
+      ...base,
+      streaming: true,
+      metrics: upMetrics,
+      entries: [...base.entries, { kind: "message", message: { role: "user", content: "new q" } }],
+    };
+    expect(turnPhase(fresh)).toBe("waiting");
   });
 });
 
@@ -511,5 +557,77 @@ describe("repetition stop (#113)", () => {
       expect(last.message.content).toContain("loopy");
       expect(last.message.stopped_reason).toBe("repetition");
     }
+  });
+});
+
+describe("workflow step events in the feed (#100 observability)", () => {
+  it("renders step_started as a visible running step entry", () => {
+    // Deterministic phases (e.g. commit: ingest each file) used to look frozen:
+    // these events arrived on the SSE but the reducer dropped them. Now they
+    // show live movement.
+    const log = fold([{ type: "step_started", phase: "commit", name: "ingest", key: "report.md" }]);
+    const last = log.entries[log.entries.length - 1];
+    expect(last.kind).toBe("step");
+    if (last.kind === "step") {
+      expect(last.step.phase).toBe("commit");
+      expect(last.step.name).toBe("ingest");
+      expect(last.step.key).toBe("report.md");
+      expect(last.step.status).toBe("running");
+    }
+  });
+
+  it("step_passed transitions the matching running step in place (one entry)", () => {
+    const log = fold([
+      { type: "step_started", phase: "commit", name: "ingest", key: "a.md" },
+      { type: "step_passed", phase: "commit", name: "ingest", key: "a.md" },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1); // updated in place, not a second line
+    const s = steps[0];
+    if (s.kind === "step") expect(s.step.status).toBe("passed");
+  });
+
+  it("step_failed transitions in place and carries the reason", () => {
+    const log = fold([
+      { type: "step_started", phase: "classify", name: "classify_a", key: "a.md" },
+      { type: "step_failed", phase: "classify", name: "classify_a", key: "a.md", reason: "bad collection" },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1);
+    const s = steps[0];
+    if (s.kind === "step") {
+      expect(s.step.status).toBe("failed");
+      expect(s.step.reason).toBe("bad collection");
+    }
+  });
+
+  it("step_skipped (cached, no preceding started) renders its own line", () => {
+    // Cache hits emit StepSkipped directly without StepStarted (engine.py).
+    const log = fold([{ type: "step_skipped", phase: "commit", name: "ingest", key: "a.md" }]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1);
+    const s = steps[0];
+    if (s.kind === "step") expect(s.step.status).toBe("skipped");
+  });
+
+  it("step_retrying flags the running step with its reason (then a later pass updates it)", () => {
+    const log = fold([
+      { type: "step_started", phase: "glossary", name: "glossary", key: "" },
+      { type: "step_retrying", phase: "glossary", name: "glossary", key: "", reason: "empty file" },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1);
+    const s = steps[0];
+    if (s.kind === "step") {
+      expect(s.step.status).toBe("retrying");
+      expect(s.step.reason).toBe("empty file");
+    }
+  });
+
+  it("phase_entered renders a phase divider in the feed", () => {
+    const log = fold([{ type: "phase_entered", phase: "commit" }]);
+    const last = log.entries[log.entries.length - 1];
+    expect(last.kind).toBe("phase");
+    if (last.kind === "phase") expect(last.phase).toBe("commit");
   });
 });

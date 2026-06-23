@@ -30,6 +30,9 @@ const summary = (over: Partial<ItemChatSummary>): ItemChatSummary => ({
   created_ms: null,
   message_count: 0,
   is_default: true,
+  name_hint: "",
+  status: null,
+  last_activity_ms: null,
   ...over,
 });
 
@@ -103,16 +106,14 @@ const render = () =>
   );
 
 describe("ItemChatShell", () => {
-  it("renders a tab per chat, a New chat button, and the rich Run-workflow picker", async () => {
+  it("renders the chat switcher and a single New picker listing the profile's workflows", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     render();
-    await waitFor(() => expect(screen.getByTestId("chat-tab-conversation:c1")).toBeInTheDocument());
-    expect(screen.getByTestId("new-chat-button")).toBeInTheDocument();
-    // The Run-workflow picker lists the profile's workflows once listProfiles resolves.
-    fireEvent.click(await screen.findByTestId("run-workflow-button"));
-    expect(
-      await screen.findByText("Digest uploads into memory"),
-    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toBeInTheDocument());
+    // The merged "+ New" picker offers Free chat + the profile's workflows.
+    fireEvent.click(await screen.findByTestId("new-item-button"));
+    expect(screen.getByTestId("new-item-free")).toBeInTheDocument();
+    expect(await screen.findByText("Digest uploads into memory")).toBeInTheDocument();
   });
 
   it("auto-opens a default free chat when the hub has none yet", async () => {
@@ -136,25 +137,26 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
   });
 
-  it("opens a free chat via the New chat button (createChat) and selects it", async () => {
+  it("opens a free chat via the New picker (createChat) and selects it", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     const created = summary({ chat_id: "conversation:free2", title: "side", is_default: false });
     const create = vi.spyOn(itemChatApi, "createChat").mockResolvedValue(created);
     render();
-    await waitFor(() => expect(screen.getByTestId("new-chat-button")).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId("new-chat-button"));
+    await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("new-item-button"));
+    fireEvent.click(screen.getByTestId("new-item-free"));
     await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
   });
 
-  it("launches a workflow via the Run-workflow picker (startRun with the workflow id)", async () => {
+  it("launches a workflow via the New picker (startRun with the workflow id)", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     const start = vi
       .spyOn(workflowApi, "startRun")
       .mockResolvedValue({ run_id: "r1", item_id: "it", chat_id: "conversation:wf1" });
     render();
-    await waitFor(() => expect(screen.getByTestId("run-workflow-button")).toBeInTheDocument());
-    fireEvent.click(screen.getByTestId("run-workflow-button"));
-    fireEvent.click(await screen.findByTestId("run-workflow-card-collections"));
+    await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("new-item-button"));
+    fireEvent.click(await screen.findByTestId("new-item-workflow-collections"));
     await waitFor(() => expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections"));
   });
 
@@ -174,6 +176,24 @@ describe("ItemChatShell", () => {
     render();
     await waitFor(() =>
       expect(screen.getByTestId("collections-button")).toHaveTextContent("知識庫 (2)"),
+    );
+  });
+
+  it("opens the manage modal from the switcher and deletes a chat", async () => {
+    stubChatApi([
+      summary({ chat_id: "conversation:c1", is_default: true }),
+      summary({ chat_id: "conversation:c2", title: "Side", is_default: false }),
+    ]);
+    const del = vi.spyOn(itemChatApi, "deleteChat").mockResolvedValue();
+    render();
+    await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId("chat-switcher-trigger"));
+    fireEvent.click(screen.getByTestId("chat-switcher-manage"));
+    expect(await screen.findByTestId("manage-chats-modal")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("manage-delete-conversation:c2"));
+    fireEvent.click(screen.getByTestId("manage-delete-confirm-conversation:c2"));
+    await waitFor(() =>
+      expect(del).toHaveBeenCalledWith("topic-hub", "it", "conversation:c2"),
     );
   });
 

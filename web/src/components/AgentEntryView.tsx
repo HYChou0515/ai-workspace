@@ -6,14 +6,14 @@
  * rendered as clickable source cards.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
 import type { Message, MessageCitation } from "../api/types";
-import type { AgentEntry, ToolCallView } from "../pages/investigation/agentLog";
+import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
@@ -55,6 +55,12 @@ export function EntryView({
   }
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
+  }
+  if (entry.kind === "phase") {
+    return <PhaseDivider phase={entry.phase} />;
+  }
+  if (entry.kind === "step") {
+    return <StepLine step={entry.step} />;
   }
   return (
     <MessageBlock
@@ -142,6 +148,76 @@ function MentionLine({ by, users, note }: { by: string; users: string[]; note: s
         </span>
       ))}
       {note && <span style={{ color: "var(--text-paper)" }}>— {note}</span>}
+    </div>
+  );
+}
+
+/** A new workflow phase began — a subtle divider so the feed shows the run
+ * moving from one phase to the next (#100 observability). */
+function PhaseDivider({ phase }: { phase: string }) {
+  return (
+    <div
+      data-testid="wf-phase"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 10px 2px",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        color: "var(--text-paper-d)",
+      }}
+    >
+      <span style={{ flex: 1, height: 1, background: "var(--paper-3)" }} />
+      <span>{phase}</span>
+      <span style={{ flex: 1, height: 1, background: "var(--paper-3)" }} />
+    </div>
+  );
+}
+
+const STEP_GLYPH: Record<StepView["status"], string> = {
+  running: "▸",
+  passed: "✓",
+  failed: "✗",
+  skipped: "⤳",
+  retrying: "↻",
+};
+
+const STEP_COLOR: Record<StepView["status"], string> = {
+  running: "var(--text-paper-d)",
+  passed: "var(--text-paper-d)",
+  failed: "var(--err)",
+  skipped: "var(--text-paper-d2)",
+  retrying: "var(--warn, var(--text-paper-d))",
+};
+
+/** One workflow step's live line — so a deterministic phase (commit: ingest each
+ * file) shows movement instead of looking frozen (#100 observability). The line
+ * transitions in place as `step.status` advances (running → passed/failed/…). */
+function StepLine({ step }: { step: StepView }) {
+  const color = STEP_COLOR[step.status];
+  return (
+    <div
+      data-testid="wf-step"
+      data-status={step.status}
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 6,
+        padding: "3px 10px",
+        fontSize: 12,
+        color: "var(--text-paper-d)",
+        fontFamily: "var(--font-mono, monospace)",
+      }}
+    >
+      <span aria-hidden style={{ color }}>
+        {STEP_GLYPH[step.status]}
+      </span>
+      <span style={{ color: "var(--text-paper)" }}>{step.name}</span>
+      {step.key && <span style={{ color: "var(--text-paper-d)" }}>· {step.key}</span>}
+      {step.reason && <span style={{ color }}>— {step.reason}</span>}
     </div>
   );
 }
@@ -240,7 +316,9 @@ function MessageBlock({
           <span>{message.author ?? "Agent"}</span>
           {onReplay && <ReplayButton onReplay={onReplay} />}
         </div>
-        {message.reasoning && <ReasoningBlock text={message.reasoning} />}
+        {message.reasoning && (
+          <ReasoningBlock text={message.reasoning} answered={message.content.trim().length > 0} />
+        )}
         <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
           <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
             {message.content}
@@ -301,19 +379,39 @@ function RepetitionNotice({ answered }: { answered: boolean }) {
   );
 }
 
-function ReasoningBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+function ReasoningBlock({ text, answered = false }: { text: string; answered?: boolean }) {
+  // Auto-expand the live thinking so the page isn't blank while the model is
+  // mid-reasoning (the wait would otherwise look stuck), then auto-collapse the
+  // moment the visible answer starts. The user can still toggle freely after.
+  const [open, setOpen] = useState(!answered);
+  const wasAnswered = useRef(answered);
+  // How long the model thought — measured live (mount ≈ the first reasoning
+  // delta; frozen at the answer's first token). Absent on a reloaded thread,
+  // where the answer was already present, so the summary is just "已思考".
+  const startRef = useRef<number | null>(answered ? null : Date.now());
+  const [thinkSec, setThinkSec] = useState<number | null>(null);
+  useEffect(() => {
+    if (answered && !wasAnswered.current) {
+      setOpen(false);
+      if (startRef.current != null) {
+        setThinkSec(Math.max(0, Math.floor((Date.now() - startRef.current) / 1000)));
+      }
+    }
+    wasAnswered.current = answered;
+  }, [answered]);
   // Follow the reasoning as it streams (same rule as the chat) — bounded so a
   // long chain doesn't shove the answer off-screen.
   const preRef = useStickToBottom<HTMLPreElement>(text);
+  const summary = answered ? (thinkSec != null ? `已思考 ${thinkSec}s` : "已思考") : "思考中…";
   return (
     <details
+      open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
       style={{ marginLeft: 28, marginTop: 4, fontSize: 12, color: "var(--text-paper-d)" }}
     >
       <summary style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
         <Icon name={open ? "chev_d" : "chev_r"} size={11} />
-        Show thinking
+        {summary}
       </summary>
       <pre
         ref={preRef}

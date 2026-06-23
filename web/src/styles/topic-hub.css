@@ -5,193 +5,350 @@
  * matching the RCA AgentPanel composer + the FileTree dropdown menu — so the
  * picker menu, tabs and composer aren't bare unstyled text. */
 
-/* ── run-workflow picker ─────────────────────────────────────────── */
-/* The headless, API-triggerable launcher gets the screen's single primary
- * action (the red --accent button); the [Free chat] picker stays neutral. */
-.run-workflow-picker {
+/* ── chat switcher (#132) ────────────────────────────────────────── */
+/* A compact dropdown replaces the wrapping tab rail: the trigger shows the
+ * active chat, the menu lists every chat (most-recent first) with a status
+ * badge on workflow chats, plus a footer that opens the manage modal. */
+.chat-switcher {
   position: relative;
-  display: inline-block;
+  flex: 1;
+  min-width: 0;
 }
-.run-workflow-picker__trigger {
+.chat-switcher__trigger {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
   padding: 4px 10px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--paper-3);
   border-radius: var(--radius-btn);
-  background: var(--accent);
-  color: var(--white);
+  background: var(--white);
+  color: var(--text-paper);
   font-size: var(--text-body-sm);
-  font-weight: 600;
+}
+.chat-switcher__trigger:hover {
+  background: var(--paper-2);
+}
+.chat-switcher__current {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
 }
-.run-workflow-picker__trigger:hover:not(:disabled) {
-  background: var(--accent-h);
-  border-color: var(--accent-h);
-}
-.run-workflow-picker__trigger:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.run-workflow-picker__menu {
+.chat-switcher__menu {
   position: absolute;
   top: 100%;
-  right: 0;
+  left: 0;
   margin-top: 4px;
-  width: 320px;
+  width: 300px;
   max-width: 90vw;
   z-index: 20;
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-  padding: 6px;
+  padding: 4px;
 }
-.run-workflow-picker__header {
-  padding: 4px 8px 6px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text-paper-d);
+.chat-switcher__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 360px;
+  overflow-y: auto;
 }
-.run-workflow-picker__card {
+.chat-switcher__item {
   display: flex;
-  align-items: flex-start;
-  gap: 10px;
+  align-items: center;
+  gap: 6px;
   width: 100%;
   text-align: left;
-  padding: 8px;
+  padding: 6px 8px;
   border: none;
   border-radius: var(--radius-btn);
   background: transparent;
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
   cursor: pointer;
 }
-.run-workflow-picker__card:hover {
+.chat-switcher__item:hover {
   background: var(--paper-2);
 }
-.run-workflow-picker__icon {
+.chat-switcher__item[aria-checked="true"] {
+  background: var(--accent-soft, var(--paper-2));
+  font-weight: 600;
+}
+.chat-switcher__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-switcher__time {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-paper-d);
+}
+.chat-switcher__manage {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 8px;
+  border: none;
+  border-top: 1px solid var(--paper-3);
+  background: transparent;
+  text-align: left;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  cursor: pointer;
+}
+.chat-switcher__manage:hover {
+  color: var(--text-paper);
+}
+
+/* status badge — shared shape for the switcher row + the modal cell */
+.chat-switcher__badge,
+.manage-chats__badge {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-btn);
-  background: var(--text-paper);
-}
-.run-workflow-picker__body {
-  display: flex;
-  flex-direction: column;
   gap: 3px;
-  min-width: 0;
-}
-.run-workflow-picker__titleRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.run-workflow-picker__title {
-  font-size: var(--text-body-sm);
-  font-weight: 600;
-  color: var(--text-paper);
-}
-.run-workflow-picker__tag {
-  flex: 0 0 auto;
-  padding: 1px 6px;
-  border: 1px solid var(--paper-3);
+  padding: 0 6px;
   border-radius: var(--radius-chip);
   font-family: var(--font-mono);
   font-size: 10px;
-  color: var(--text-paper-d);
+  white-space: nowrap;
 }
-.run-workflow-picker__desc {
-  font-size: 12px;
-  line-height: 1.35;
-  color: var(--text-paper-d);
-}
-.run-workflow-picker__hint {
-  font-family: var(--font-mono);
-  font-size: 11px;
+.chat-switcher__badge--active,
+.manage-chats__badge--active {
+  background: var(--accent-soft, var(--paper-2));
   color: var(--accent);
 }
-.run-workflow-picker__footer {
-  margin-top: 4px;
-  padding: 6px 8px 2px;
-  border-top: 1px solid var(--paper-3);
-  font-family: var(--font-mono);
-  font-size: 10px;
+.chat-switcher__badge--wait,
+.manage-chats__badge--wait {
+  background: var(--paper-2);
+  color: var(--text-paper);
+}
+.chat-switcher__badge--ok,
+.manage-chats__badge--ok {
+  background: var(--paper-2);
   color: var(--text-paper-d);
 }
+.chat-switcher__badge--bad,
+.manage-chats__badge--bad {
+  background: var(--paper-2);
+  color: var(--accent);
+}
 
-/* ── new-chat picker ─────────────────────────────────────────────── */
-.new-chat-picker__trigger {
+/* ── new-item picker (#132) ──────────────────────────────────────── */
+/* One menu opens a free chat OR launches one of the profile's workflows. */
+.new-item-picker {
+  position: relative;
+  display: inline-block;
+}
+.new-item-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   padding: 4px 10px;
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-btn);
   background: var(--white);
   color: var(--text-paper);
   font-size: var(--text-body-sm);
+  font-weight: 600;
   white-space: nowrap;
 }
-.new-chat-picker__trigger:hover:not(:disabled) {
+.new-item-picker__trigger:hover:not(:disabled) {
   background: var(--paper-2);
 }
-.new-chat-picker__trigger:disabled {
+.new-item-picker__trigger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-
-.new-chat-picker__menu {
+.new-item-picker__menu {
+  position: absolute;
   top: 100%;
-  left: 0;
+  right: 0;
   margin-top: 4px;
-  min-width: 220px;
+  width: 280px;
+  max-width: 90vw;
+  z-index: 20;
   background: var(--white);
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
-  padding: 4px 0;
+  padding: 4px;
 }
-.new-chat-picker__item {
-  display: block;
+.new-item-picker__free,
+.new-item-picker__workflow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
   width: 100%;
   text-align: left;
-  padding: 7px 14px;
-  font-size: var(--text-body-sm);
-  color: var(--text-paper);
+  padding: 8px;
+  border: none;
+  border-radius: var(--radius-btn);
   background: transparent;
-  white-space: nowrap;
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
 }
-.new-chat-picker__item:hover {
+.new-item-picker__free:hover,
+.new-item-picker__workflow:hover {
   background: var(--paper-2);
 }
-
-/* ── chat tab rail ───────────────────────────────────────────────── */
-.item-chat-list {
+.new-item-picker__divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--paper-3);
+}
+.new-item-picker__wf-body {
   display: flex;
-  gap: 4px;
-  align-items: center;
-  flex-wrap: wrap;
-  flex: 1;
+  flex-direction: column;
+  gap: 2px;
   min-width: 0;
 }
-.item-chat-list__tab {
-  padding: 3px 10px;
-  border-radius: var(--radius-chip);
-  background: transparent;
+.new-item-picker__wf-title {
+  font-weight: 600;
+}
+.new-item-picker__wf-desc {
+  font-size: 12px;
+  line-height: 1.35;
   color: var(--text-paper-d);
+}
+
+/* ── manage-chats modal (#132) ───────────────────────────────────── */
+.manage-chats__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 24px;
+}
+.manage-chats__dialog {
+  display: flex;
+  flex-direction: column;
+  width: 720px;
+  max-width: 100%;
+  max-height: 80vh;
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.24);
+  padding: 16px;
+}
+.manage-chats__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.manage-chats__title {
+  margin: 0;
+  font-size: var(--text-body);
+  font-weight: 700;
+  color: var(--text-paper);
+}
+.manage-chats__close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  padding: 4px;
+}
+.manage-chats__search {
+  margin: 12px 0;
+  padding: 6px 10px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
   font-size: var(--text-body-sm);
+}
+.manage-chats__tableWrap {
+  overflow-y: auto;
+}
+.manage-chats__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-body-sm);
+}
+.manage-chats__table th {
+  position: sticky;
+  top: 0;
+  background: var(--white);
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--paper-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
+.manage-chats__table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--paper-2);
+  vertical-align: middle;
+}
+.manage-chats__row--active td {
+  background: var(--accent-soft, var(--paper-2));
+}
+.manage-chats__name {
+  font-weight: 600;
+  color: var(--text-paper);
+}
+.manage-chats__rename {
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  font-size: var(--text-body-sm);
+}
+.manage-chats__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-paper-d);
+}
+.manage-chats__activity,
+.manage-chats__count {
+  color: var(--text-paper-d);
   white-space: nowrap;
 }
-.item-chat-list__tab:hover {
+.manage-chats__actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+.manage-chats__actions button {
+  padding: 3px 10px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+.manage-chats__actions button:hover {
   background: var(--paper-2);
 }
-.item-chat-list__tab[aria-selected="true"] {
-  background: var(--accent-soft, var(--paper-2));
-  color: var(--text-paper);
-  font-weight: 600;
+.manage-chats__danger {
+  color: var(--accent);
+}
+.manage-chats__confirm-note {
+  font-size: 12px;
+  color: var(--text-paper-d);
+}
+.manage-chats__empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
 }
 
 /* ── chat panel ──────────────────────────────────────────────────── */
