@@ -15,6 +15,7 @@ import remarkGfm from "remark-gfm";
 import { kbApi, type KbApi, type KbContextCard } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { MonacoEditor } from "../../components/MonacoEditor";
+import { Skeleton } from "../../components/Skeleton";
 import { lookupByName, scanPassage } from "./cardSearch";
 
 type SearchMode = "name" | "text";
@@ -32,7 +33,7 @@ export function ContextCardsTab({
   client?: KbApi;
 }) {
   const qc = useQueryClient();
-  const { data: cards = [] } = useQuery({
+  const { data: cards = [], isPending } = useQuery({
     queryKey: qk.kb.contextCards(collectionId),
     queryFn: () => client.listContextCards(collectionId),
   });
@@ -130,7 +131,13 @@ export function ContextCardsTab({
           + New card
         </button>
         <ul className="kb-cards__items">
-          {shown.length === 0 ? (
+          {isPending ? (
+            <li className="kb-cards__none" aria-busy="true" data-testid="kb-cards-loading">
+              <Skeleton className="kb-skel--chat-row" />
+              <Skeleton className="kb-skel--chat-row" />
+              <Skeleton className="kb-skel--chat-row" />
+            </li>
+          ) : shown.length === 0 ? (
             <li className="kb-cards__none">No cards found.</li>
           ) : (
             shown.map((c) => (

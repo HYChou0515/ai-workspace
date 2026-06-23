@@ -36,6 +36,12 @@ function col(over: Record<string, unknown>) {
   };
 }
 
+function makeDeferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
 describe("uploadDocPath", () => {
   it("preserves a folder pick's relative path", () => {
     expect(uploadDocPath({ name: "a.png", webkitRelativePath: "trip/a.png" }, true)).toBe("trip/a.png");
@@ -51,6 +57,20 @@ describe("uploadDocPath", () => {
 describe("KbCollectionsPage", () => {
   beforeEach(() => _resetKbMock());
   afterEach(cleanup);
+
+  it("shows a loading placeholder while collections are still fetching — not the empty copy", () => {
+    const client = { listCollections: () => new Promise(() => {}) } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+    expect(screen.getByTestId("kb-cols-loading")).toBeInTheDocument();
+    expect(screen.queryByText(/No collections yet/)).not.toBeInTheDocument();
+  });
+
+  it("shows the empty copy only once loading resolves with no collections", async () => {
+    const client = { listCollections: async () => [] } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+    expect(await screen.findByText(/No collections yet/)).toBeInTheDocument();
+    expect(screen.queryByTestId("kb-cols-loading")).not.toBeInTheDocument();
+  });
 
   it("creates a collection card; opening it shows the upload affordances", async () => {
     render(<KbCollectionsPage client={mockKbApi} />);
@@ -240,6 +260,24 @@ describe("KbCollectionsPage", () => {
     expect(deleteCollection).toHaveBeenCalledWith("c1");
     // returns to the grid landing
     expect(await screen.findByRole("button", { name: /new collection/i })).toBeInTheDocument();
+  });
+
+  it("disables the confirm Delete button while the collection delete is in flight (no double-submit)", async () => {
+    const d = makeDeferred<void>();
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+      deleteCollection: () => d.promise,
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete collection" }));
+    const del = screen.getByRole("button", { name: "Delete" });
+    await userEvent.click(del);
+    await waitFor(() => expect(del).toBeDisabled());
+    d.resolve(); // settle the in-flight mutation so nothing dangles
   });
 
   it("creates a collection with a description through the modal", async () => {

@@ -146,3 +146,59 @@ select {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.45; transform: scale(0.8); }
 }
+
+/*
+ * Global HTTP progress bar (#151): a thin indeterminate bar pinned to the very
+ * top edge, shown by GlobalProgressBar whenever any request is in flight. Sits
+ * above every surface (modals 100, brand splash 200) so loading is always
+ * legible. pointer-events:none so it never eats clicks.
+ */
+.global-progress {
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 2px;
+  z-index: 300;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--accent-soft);
+}
+.global-progress__bar {
+  height: 100%;
+  width: 35%;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  animation: global-progress-slide 1.05s ease-in-out infinite;
+}
+@keyframes global-progress-slide {
+  0% { transform: translateX(-110%); }
+  60% { transform: translateX(190%); }
+  100% { transform: translateX(310%); }
+}
+/* Reduced motion: hold a calm full-width pulse instead of the sliding sweep. */
+@media (prefers-reduced-motion: reduce) {
+  .global-progress__bar {
+    width: 100%;
+    animation: health-dot-pulse 1.4s ease-in-out infinite;
+  }
+}
+
+/*
+ * Skeleton placeholder (#151): a shimmering block stood in for content that is
+ * still loading. Sizing is the caller's job (modifier classes); this owns only
+ * the shimmer. Decorative — the Skeleton component marks it aria-hidden.
+ */
+.skeleton {
+  display: block;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--paper-2) 25%, var(--paper-3) 37%, var(--paper-2) 63%);
+  background-size: 400% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; opacity: 0.65; }
+}

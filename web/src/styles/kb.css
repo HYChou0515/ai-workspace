@@ -2060,3 +2060,10 @@
 .kb-cards__save, .kb-cards__delete { padding: 6px 14px; border-radius: var(--radius-btn); border: 1px solid var(--paper-3); cursor: pointer; }
 .kb-cards__save { background: var(--accent, var(--paper-2)); color: var(--text-paper); }
 .kb-cards__delete { background: transparent; color: var(--text-paper-d); }
+
+/* #151 loading placeholders — sized to roughly match the real card / chat row
+ * they stand in for, so the list doesn't jump when data arrives. */
+.kb-skel--card { height: 132px; border-radius: 12px; }
+.kb-chats__row--skeleton { padding: 0; border: 0; background: none; }
+.kb-skel--chat-row { height: 38px; border-radius: 8px; }
+.kb-cards__none[aria-busy="true"] { display: flex; flex-direction: column; gap: 6px; }

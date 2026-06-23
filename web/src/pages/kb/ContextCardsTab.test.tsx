@@ -4,6 +4,7 @@ import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { KbContextCard } from "../../api/kb";
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
 import { QueryWrap } from "../../test/queryWrapper";
 import { ContextCardsTab } from "./ContextCardsTab";
@@ -27,6 +28,22 @@ describe("ContextCardsTab (#106)", () => {
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks(); // spies are per-test — don't let call counts bleed across tests
+  });
+
+  it("shows a loading placeholder while cards are still fetching — not the empty copy", () => {
+    const client = {
+      ...mockKbApi,
+      listContextCards: () => new Promise<KbContextCard[]>(() => {}),
+    } as typeof mockKbApi;
+    render(<ContextCardsTab collectionId="col-1" client={client} />);
+    expect(screen.getByTestId("kb-cards-loading")).toBeInTheDocument();
+    expect(screen.queryByText(/No cards found/)).not.toBeInTheDocument();
+  });
+
+  it("shows the empty copy only once loading resolves with no cards", async () => {
+    render(<ContextCardsTab collectionId="empty-col" client={mockKbApi} />);
+    expect(await screen.findByText(/No cards found/)).toBeInTheDocument();
+    expect(screen.queryByTestId("kb-cards-loading")).not.toBeInTheDocument();
   });
 
   it("lists a collection's cards by their label", async () => {
