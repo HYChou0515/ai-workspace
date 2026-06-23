@@ -1,14 +1,18 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { investigationFileService } from "../api/fileService";
 import { type ItemChatSummary } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
 import type { Suggestion } from "../api/types";
 import { phaseView, workflowApi, type WorkflowManifestDTO } from "../api/workflows";
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
+import { useItemCollections } from "../hooks/useItemCollections";
 import { useDecide, useRun, useWorkflowProfiles } from "../hooks/useWorkflow";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
+import { CollectionsButton } from "./CollectionsButton";
+import { CollectionsPickerModal } from "./CollectionsPickerModal";
 import { ItemChatList } from "./ItemChatList";
 import { NewChatPicker } from "./NewChatPicker";
 import { RunWorkflowPicker } from "./RunWorkflowPicker";
@@ -58,6 +62,13 @@ export function ItemChatShell({
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const autoOpened = useRef(false);
 
+  // The item's collection set (topic-hub §5, #142) is a workspace file shared by
+  // every chat + the agent, so the picker lives at the shell level, not per chat.
+  const fileService = useMemo(() => investigationFileService(slug, itemId), [slug, itemId]);
+  const collections = useItemCollections(fileService);
+  const collectionCount = collections.data?.selectedIds.length ?? 0;
+  const [pickerOpen, setPickerOpen] = useState(false);
+
   // Default to the first chat (the default chat lists first) once chats load.
   useEffect(() => {
     if (activeChatId == null && chats.length) setActiveChatId(chats[0].chat_id);
@@ -103,7 +114,12 @@ export function ItemChatShell({
         <ItemChatList chats={chats} activeChatId={activeChatId} onSelect={setActiveChatId} />
         <NewChatPicker onFreeChat={onFreeChat} />
         <RunWorkflowPicker workflows={workflows} onLaunch={onWorkflow} />
+        <div style={{ flex: 1 }} />
+        <CollectionsButton count={collectionCount} onClick={() => setPickerOpen(true)} />
       </div>
+      {pickerOpen && (
+        <CollectionsPickerModal fileService={fileService} onClose={() => setPickerOpen(false)} />
+      )}
       {active ? (
         <ItemChatPanel
           key={active.chat_id}

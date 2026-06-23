@@ -24,6 +24,11 @@ export const qk = {
   appItems: (slug: string) => ["appItems", slug] as const,
   appItem: (slug: string, id: string) => ["appItem", slug, id] as const,
 
+  // topic-hub §5 (#142): the parsed `collections.json` of one Hub item — the
+  // collection-set picker's badge + modal read it; saving the picker invalidates
+  // this AND `qk.file(id, "/collections.json")` (so an open Monaco tab refreshes).
+  itemCollections: (scopeId: string) => ["itemCollections", scopeId] as const,
+
   // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
   itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
   itemChat: (slug: string, itemId: string, chatId: string) =>
