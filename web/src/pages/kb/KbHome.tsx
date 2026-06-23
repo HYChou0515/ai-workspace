@@ -16,6 +16,7 @@ import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { useBreadcrumbs } from "../../hooks/breadcrumbs";
+import { useT } from "../../lib/i18n";
 import { AskAgentLauncher } from "./AskAgentLauncher";
 import { KbDocViewer } from "./KbDocViewer";
 
@@ -32,6 +33,7 @@ export function useKbOutlet(): KbOutletCtx {
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const t = useT();
   const qc = useQueryClient();
   useBreadcrumbs([{ label: "Home", to: "/" }, { label: "Knowledge base" }]);
   // The citation/doc overlay is the URL (#93): any /kb/... path may carry
@@ -63,26 +65,26 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
   return (
     <div className="kb-shell">
       <aside className="kb-nav">
-        <div className="kb-nav__brand">Knowledge base</div>
+        <div className="kb-nav__brand">{t("kb.brand")}</div>
         <button
           type="button"
           className={`kb-nav__item${onChats ? "" : " is-active"}`}
           onClick={() => navigate("/kb/collections")}
         >
-          <Icon name="layers" size={15} /> Collections
+          <Icon name="layers" size={15} /> {t("kb.collections")}
         </button>
         <button
           type="button"
           className={`kb-nav__item${onChats ? " is-active" : ""}`}
           onClick={() => navigate("/kb/chats")}
         >
-          <Icon name="chat" size={15} /> Chats
+          <Icon name="chat" size={15} /> {t("kb.chats")}
         </button>
       </aside>
 
       <main className="kb-main">
         <header className="kb-topbar">
-          <span className="kb-topbar__title">{onChats ? "Conversations" : "Collections"}</span>
+          <span className="kb-topbar__title">{onChats ? t("kb.conversations") : t("kb.collections")}</span>
           {/* Same component Home uses — routes our own surface on
               manage/history and reuses our viewer for citations. */}
           <AskAgentLauncher

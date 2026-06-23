@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { kbApi, type KbApi } from "../../api/kb";
+import { useT } from "../../lib/i18n";
 import { KbChatsPage } from "./KbChatsPage";
 import { KbChatView } from "./KbChatView";
 import { useKbOutlet } from "./KbHome";
@@ -20,6 +21,7 @@ const NEW_CHAT = "new";
 
 export function KbChatsSurface({ client = kbApi }: { client?: KbApi }) {
   const { openCite } = useKbOutlet();
+  const t = useT();
   const navigate = useNavigate();
   const { chatId: param } = useParams();
   // undefined = nothing selected; null = a new chat; string = an existing one.
@@ -56,7 +58,7 @@ export function KbChatsSurface({ client = kbApi }: { client?: KbApi }) {
       />
       <div className="kb-chats-split__view">
         {chatId === undefined ? (
-          <div className="kb-chats-split__empty">Select a conversation, or start a new one.</div>
+          <div className="kb-chats-split__empty">{t("kb.empty")}</div>
         ) : (
           <KbChatView
             key={mountKey}

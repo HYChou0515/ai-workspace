@@ -1,23 +1,26 @@
 /**
- * ModelEffortPicker — the composer's combined model + effort control
- * (design handoff 3.0). One chip in the input row (`✨ name | effort ▾`)
- * opening an upward popover:
+ * ModelEffortPicker — the composer's combined model + reasoning-depth control.
+ * One chip in the input row (`✨ name | depth ▾`) opening an upward popover:
  *
  *   - **Model** — every picker entry with its one-line blurb
- *     (`AgentConfig.description`); the first entry is the deploy's
- *     default. Selection SEMANTICS belong to the caller: the RCA
- *     surface persists the pick onto the investigation, the KB surface
- *     sends it per message — this component only reports the click.
- *   - **Reasoning effort** — the shared sticky value
- *     (`lib/reasoningEffort`) both surfaces read at send time. "Auto"
- *     = don't send the param (model's own default).
+ *     (`AgentConfig.description`); the first entry is the deploy's default.
+ *     The raw model id is NOT shown (#160) — operators name the entry. Selection
+ *     SEMANTICS belong to the caller: the RCA surface persists the pick onto the
+ *     investigation, the KB surface sends it per message — this component only
+ *     reports the click.
+ *   - **Reasoning depth** — the shared sticky value (`lib/reasoningEffort`) both
+ *     surfaces read at send time. Three levels (low/medium/high), lightest by
+ *     default; #160 removed the old "Auto" option.
  *   - **Knowledge search depth** (KB surface, `retrieval` prop) — the
  *     quick/standard/thorough dial from `lib/kbEnhancementMode`.
+ *
+ * All user-facing copy is routed through `lib/i18n` (#160).
  */
 
 import { useState } from "react";
 
 import type { ReasoningEffort } from "../api/types";
+import { useT } from "../lib/i18n";
 import {
   PRESETS,
   useKbEnhancementMode,
@@ -35,24 +38,6 @@ export type PickerEntry = {
   description?: string;
 };
 
-const EFFORTS: { id: ReasoningEffort | null; label: string; note: string }[] = [
-  { id: null, label: "Auto", note: "The model's own default" },
-  { id: "low", label: "Low", note: "Quick answer, lighter thinking" },
-  { id: "medium", label: "Med", note: "Balanced depth" },
-  { id: "high", label: "High", note: "Exhaustive — slower, more thorough" },
-];
-
-const DEPTHS: { id: Exclude<EnhancementMode, "custom">; label: string; note: string }[] = [
-  { id: "quick", label: "Quick", note: "Fastest — searches your words as-is" },
-  { id: "standard", label: "Standard", note: "Light query expansion (recommended)" },
-  { id: "thorough", label: "Thorough", note: "Widest search — slowest, highest recall" },
-];
-
-function chipEffortLabel(effort: ReasoningEffort | null): string {
-  if (effort === null) return "auto";
-  return effort === "medium" ? "med" : effort;
-}
-
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div
@@ -65,7 +50,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 /** Handoff-style segmented control (dark active segment). */
-function Segments<T extends string | null>({
+function Segments<T extends string>({
   options,
   value,
   onPick,
@@ -113,15 +98,15 @@ function Segments<T extends string | null>({
         })}
       </div>
       <div style={{ fontSize: 11, color: "var(--text-paper-d)", marginTop: 6, lineHeight: 1.4 }}>
-        {active.note}.
+        {active.note}
       </div>
     </>
   );
 }
 
-/** The old depth picker's Advanced disclosure, preserved: exact
- * expand / hyde / rerank values. Editing one auto-flips the mode to
- * "custom" (or snaps back when it matches a preset) — lib logic. */
+/** The advanced search knobs (formerly raw expand / hyde / rerank), now in
+ * plain language (#160). Editing one auto-flips the mode to "custom" (or snaps
+ * back when it matches a preset) — lib logic. */
 function DepthSliders({
   sel,
   onSlider,
@@ -129,6 +114,7 @@ function DepthSliders({
   sel: EnhancementSelection;
   onSlider: (knob: keyof CustomEnhancements, value: number | boolean) => void;
 }) {
+  const t = useT();
   const display: CustomEnhancements =
     sel.mode === "custom" && sel.custom
       ? sel.custom
@@ -152,32 +138,32 @@ function DepthSliders({
     >
       {(
         [
-          { knob: "expand", title: "Alternative query phrasings to generate (0 = off)" },
-          { knob: "hyde", title: "Hypothetical-document probes to embed (0 = off)" },
+          { knob: "expand", label: t("depth.expand"), title: t("depth.expand.title") },
+          { knob: "hyde", label: t("depth.hyde"), title: t("depth.hyde.title") },
         ] as const
-      ).map(({ knob, title }) => (
+      ).map(({ knob, label, title }) => (
         <span key={knob} style={row}>
-          <span title={title}>{knob}</span>
+          <span title={title}>{label}</span>
           <input
             type="range"
             min={0}
             max={10}
             step={1}
             value={Math.min(10, Math.max(0, display[knob]))}
-            aria-label={`${knob} value`}
+            aria-label={label}
             title={title}
             onChange={(e) => onSlider(knob, Number(e.target.value))}
           />
           <span style={{ minWidth: 18, textAlign: "right" }}>{display[knob]}</span>
         </span>
       ))}
-      <span title="LLM-rerank the merged candidate set">rerank</span>
+      <span title={t("depth.rerank.title")}>{t("depth.rerank")}</span>
       <span />
       <input
         type="checkbox"
         checked={display.rerank}
-        aria-label="rerank on"
-        title="LLM-rerank the merged candidate set"
+        aria-label={t("depth.rerank")}
+        title={t("depth.rerank.title")}
         onChange={(e) => onSlider("rerank", e.target.checked)}
       />
     </div>
@@ -202,6 +188,7 @@ export function ModelEffortPicker({
    * nothing. */
   wikiAvailable?: boolean;
 }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [effort, setEffort] = useReasoningEffort();
@@ -211,11 +198,22 @@ export function ModelEffortPicker({
   if (models.length === 0) return null;
   const active = models.find((m) => m.name === selectedName) ?? models[0]!;
 
+  const EFFORTS: { id: ReasoningEffort; label: string; note: string }[] = [
+    { id: "low", label: t("effort.low"), note: t("effort.low.note") },
+    { id: "medium", label: t("effort.medium"), note: t("effort.medium.note") },
+    { id: "high", label: t("effort.high"), note: t("effort.high.note") },
+  ];
+  const DEPTHS: { id: Exclude<EnhancementMode, "custom">; label: string; note: string }[] = [
+    { id: "quick", label: t("depth.quick"), note: t("depth.quick.note") },
+    { id: "standard", label: t("depth.standard"), note: t("depth.standard.note") },
+    { id: "thorough", label: t("depth.thorough"), note: t("depth.thorough.note") },
+  ];
+
   return (
     <div style={{ position: "relative" }}>
       <button
         type="button"
-        aria-label="Model and effort"
+        aria-label={t("picker.aria")}
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
         style={{
@@ -232,13 +230,9 @@ export function ModelEffortPicker({
         }}
       >
         <Icon name="sparkle" size={13} color="var(--accent)" />
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 12, color: "var(--ink)" }}>
-          {active.name}
-        </span>
+        <span style={{ fontSize: 12, color: "var(--ink)" }}>{active.name}</span>
         <span style={{ width: 1, height: 14, background: "var(--paper-3)" }} />
-        <span style={{ fontSize: 12, color: "var(--text-paper-d)" }}>
-          {chipEffortLabel(effort)}
-        </span>
+        <span style={{ fontSize: 12, color: "var(--text-paper-d)" }}>{t(`effort.${effort}`)}</span>
         <Icon name="chev_d" size={11} color="var(--text-paper-d)" />
       </button>
 
@@ -251,7 +245,7 @@ export function ModelEffortPicker({
           />
           <div
             role="dialog"
-            aria-label="Model and effort options"
+            aria-label={t("picker.aria")}
             style={{
               position: "absolute",
               bottom: "calc(100% + 8px)",
@@ -266,7 +260,7 @@ export function ModelEffortPicker({
             }}
           >
             <div style={{ padding: "10px 12px 4px" }}>
-              <SectionLabel>Model</SectionLabel>
+              <SectionLabel>{t("picker.model")}</SectionLabel>
             </div>
             <div
               style={{
@@ -310,7 +304,6 @@ export function ModelEffortPicker({
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span
                           style={{
-                            fontFamily: "var(--font-mono)",
                             fontSize: 12.5,
                             color: "var(--ink)",
                             fontWeight: on ? 600 : 400,
@@ -329,21 +322,10 @@ export function ModelEffortPicker({
                               fontWeight: 600,
                             }}
                           >
-                            default
+                            {t("picker.default")}
                           </span>
                         )}
                         <span style={{ flex: 1 }} />
-                        <span
-                          style={{
-                            fontSize: 11,
-                            color: "var(--text-paper-d2)",
-                            overflow: "hidden",
-                            textOverflow: "ellipsis",
-                            maxWidth: 120,
-                          }}
-                        >
-                          {m.model}
-                        </span>
                       </div>
                       {m.description && (
                         <div
@@ -364,14 +346,14 @@ export function ModelEffortPicker({
             </div>
 
             <div style={{ borderTop: "1px solid var(--paper-3)", padding: "10px 12px" }}>
-              <SectionLabel>Reasoning effort</SectionLabel>
+              <SectionLabel>{t("picker.effort")}</SectionLabel>
               <Segments options={EFFORTS} value={effort} onPick={setEffort} />
             </div>
 
             {retrieval && (
               <div style={{ borderTop: "1px solid var(--paper-3)", padding: "10px 12px" }}>
                 <div style={{ display: "flex", alignItems: "baseline" }}>
-                  <SectionLabel>Knowledge search depth</SectionLabel>
+                  <SectionLabel>{t("picker.depth")}</SectionLabel>
                   <span style={{ flex: 1 }} />
                   <button
                     type="button"
@@ -386,7 +368,8 @@ export function ModelEffortPicker({
                       padding: 0,
                     }}
                   >
-                    {advanced ? "▾ Advanced" : "▸ Advanced"}
+                    <span aria-hidden>{advanced ? "▾ " : "▸ "}</span>
+                    {t("picker.advanced")}
                   </button>
                 </div>
                 <Segments
@@ -400,10 +383,8 @@ export function ModelEffortPicker({
                   onPick={(id) => setDepthMode(id)}
                 />
                 {depthSel.mode === "custom" && (
-                  <div
-                    style={{ fontSize: 11, color: "var(--text-paper-d)", marginTop: 4 }}
-                  >
-                    Customised below — picking a level above replaces it.
+                  <div style={{ fontSize: 11, color: "var(--text-paper-d)", marginTop: 4 }}>
+                    {t("depth.custom.note")}
                   </div>
                 )}
                 {advanced && <DepthSliders sel={depthSel} onSlider={setDepthSlider} />}
@@ -417,14 +398,14 @@ export function ModelEffortPicker({
                       fontSize: 13,
                       cursor: "pointer",
                     }}
-                    title="Also consult the AI-maintained wiki for this question"
+                    title={t("picker.wiki.title")}
                   >
                     <input
                       type="checkbox"
                       checked={searchWiki}
                       onChange={(e) => setSearchWiki(e.target.checked)}
                     />
-                    Search the wiki
+                    {t("picker.wiki")}
                   </label>
                 )}
               </div>
@@ -442,11 +423,7 @@ export function ModelEffortPicker({
             >
               <Icon name="clock" size={11} color="var(--text-paper-d2)" />
               <span style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
-                {effort === "high"
-                  ? "Slower, more thorough"
-                  : effort === "low"
-                    ? "Fastest, lighter"
-                    : "Balanced latency"}
+                {t(`picker.footer.${effort}`)}
               </span>
               <span style={{ flex: 1 }} />
               <button
@@ -462,7 +439,7 @@ export function ModelEffortPicker({
                   padding: 0,
                 }}
               >
-                Done
+                {t("picker.done")}
               </button>
             </div>
           </div>

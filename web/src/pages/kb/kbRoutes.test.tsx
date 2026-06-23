@@ -149,7 +149,7 @@ describe("KB routes", () => {
   it("clicking a conversation row routes to its own URL", async () => {
     const chat = await mockKbApi.createChat("Reflow thread", []);
     renderAt("/kb/chats");
-    expect(await screen.findByText(/Select a conversation/i)).toBeInTheDocument();
+    expect(await screen.findByText(/選擇一個對話/)).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: /^Reflow thread/ }));
     expect(screen.getByTestId("loc")).toHaveTextContent(
       `/kb/chats/${encodeURIComponent(chat.resource_id)}`,

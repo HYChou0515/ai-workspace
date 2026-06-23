@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+// happy-dom (not node) so the locale is deterministic: the reducer localizes
+// banners via initialLocale(), which reads navigator.language — present and
+// varying across Node versions/CI, absent locally. Pin it explicitly below so
+// these assertions don't depend on the ambient environment (#160).
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { AgentEvent } from "../../events";
 import {
@@ -13,6 +18,10 @@ import {
   reduceAgent,
   tokensPerSec,
 } from "./agentLog";
+
+// Pin the locale so banner assertions are environment-independent (the reducer
+// reads it via initialLocale()).
+beforeEach(() => localStorage.setItem("ws.locale", "zh-TW"));
 
 describe("metrics formatting", () => {
   it("computes tok/s from completion tokens over elapsed", () => {
@@ -316,7 +325,16 @@ describe("reduceAgent", () => {
   it("includes max_turns banner and clears streaming", () => {
     const log = fold([{ type: "max_turns_exceeded", turns: 12 }], { ...EMPTY_LOG, streaming: true });
     expect(log.streaming).toBe(false);
-    expect(log.entries.some((e) => e.kind === "banner" && /max turns \(12\)/.test(e.text))).toBe(true);
+    // #160: de-jargoned ("turns" → 回合) and localized, still carries the count.
+    expect(log.entries.some((e) => e.kind === "banner" && /回合上限（12）/.test(e.text))).toBe(true);
+  });
+
+  it("#160: the idle-restart banner describes behavior, not sandbox/exec internals", () => {
+    const log = fold([{ type: "sandbox_killed_idle" }]);
+    const b = log.entries.find((e) => e.kind === "banner");
+    if (b?.kind !== "banner") throw new Error("expected a banner entry");
+    expect(b.text).not.toMatch(/sandbox|exec/i);
+    expect(b.text).toMatch(/工作環境|workspace/);
   });
 
   it("starts a new assistant message after a tool call returns", () => {

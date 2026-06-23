@@ -42,68 +42,81 @@ describe("ModelEffortPicker", () => {
       <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={onSelect} />,
     );
     // selectedName=null → the first entry is the active default.
-    const chip = screen.getByRole("button", { name: /model and effort/i });
+    const chip = screen.getByRole("button", { name: /模型與思考深度/ });
     expect(chip).toHaveTextContent("qwen3-local");
 
     await userEvent.click(chip);
     expect(screen.getByText("claude-opus")).toBeInTheDocument();
     expect(screen.getByText(/deepest reasoning/i)).toBeInTheDocument();
-    expect(screen.getByText("default")).toBeInTheDocument(); // first-entry chip
+    expect(screen.getByText("預設")).toBeInTheDocument(); // first-entry chip
 
     await userEvent.click(screen.getByText("claude-opus"));
     expect(onSelect).toHaveBeenCalledWith("claude-opus");
   });
 
-  it("effort segments persist the shared sticky value and show on the chip", async () => {
+  it("#160: never exposes the raw model id", async () => {
+    renderWithQuery(
+      <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+    expect(screen.queryByText("ollama_chat/qwen3:14b")).not.toBeInTheDocument();
+    expect(screen.queryByText("claude-opus-4-7")).not.toBeInTheDocument();
+  });
+
+  it("#160: effort is three segments defaulting to the lightest (Auto removed)", async () => {
     renderWithQuery(
       <ModelEffortPicker models={MODELS} selectedName="claude-opus" onSelectModel={() => {}} />,
     );
-    const chip = screen.getByRole("button", { name: /model and effort/i });
-    expect(chip).toHaveTextContent("auto"); // no stored effort → model default
+    const chip = screen.getByRole("button", { name: /模型與思考深度/ });
+    expect(chip).toHaveTextContent("快速"); // default low, no "auto"
+    expect(chip).not.toHaveTextContent(/auto/i);
 
     await userEvent.click(chip);
-    await userEvent.click(screen.getByRole("button", { name: /^high$/i }));
+    expect(screen.queryByRole("button", { name: /^auto$/i })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "深入" }));
 
     expect(getReasoningEffort()).toBe("high");
-    expect(chip).toHaveTextContent("high");
+    expect(chip).toHaveTextContent("深入");
   });
 
   it("knowledge-search depth section only renders for the KB surface", async () => {
     const { unmount } = renderWithQuery(
       <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /model and effort/i }));
-    expect(screen.queryByText(/search depth/i)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+    expect(screen.queryByText("知識搜尋深度")).not.toBeInTheDocument();
     unmount();
 
     renderWithQuery(
       <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} retrieval />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /model and effort/i }));
-    expect(screen.getByText(/search depth/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+    expect(screen.getByText("知識搜尋深度")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /thorough/i }));
+    await userEvent.click(screen.getByRole("button", { name: "徹底" }));
     expect(getStored().mode).toBe("thorough");
   });
 
-  it("advanced sliders survive the redesign — tweaking one flips to custom", async () => {
-    // The old depth picker's Advanced disclosure (expand / hyde /
-    // rerank) must not be lost in the new popover: power users tune
-    // exact values, and the mode auto-flips to custom.
+  it("advanced sliders survive the redesign with plain-language labels", async () => {
+    // The old expand / hyde / rerank knobs must not be lost — power users
+    // still tune exact values (mode auto-flips to custom) — but the labels
+    // are now de-jargoned (#160).
     renderWithQuery(
       <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} retrieval />,
     );
-    await userEvent.click(screen.getByRole("button", { name: /model and effort/i }));
-    await userEvent.click(screen.getByRole("button", { name: /advanced/i }));
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+    await userEvent.click(screen.getByRole("button", { name: "進階" }));
 
-    const expand = screen.getByRole("slider", { name: /expand/i });
+    // No raw hyperparameter nouns leak into the UI.
+    expect(screen.queryByText(/\bhyde\b/i)).not.toBeInTheDocument();
+
+    const expand = screen.getByRole("slider", { name: /換句話多問幾種/ });
     expect(expand).toBeInTheDocument();
     fireEvent.change(expand, { target: { value: "3" } });
 
     const stored = getStored();
     expect(stored.mode).toBe("custom");
     expect(stored.custom?.expand).toBe(3);
-    // rerank toggle is there too.
-    expect(screen.getByRole("checkbox", { name: /rerank/i })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: /重新排序/ })).toBeInTheDocument();
   });
 });

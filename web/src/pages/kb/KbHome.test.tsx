@@ -48,8 +48,8 @@ describe("KbHome shell", () => {
     // /kb redirects to the collections surface (its New-collection action)…
     expect(await screen.findByRole("button", { name: /new collection/i })).toBeInTheDocument();
 
-    // …clicking the Chats nav routes to the chats surface (its New-chat action)
-    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
+    // …clicking the Chats nav (i18n'd label) routes to the chats surface
+    await userEvent.click(screen.getByRole("button", { name: /^對話$/ }));
     expect(await screen.findByRole("button", { name: /new chat/i })).toBeInTheDocument();
   });
 
@@ -71,7 +71,7 @@ describe("KbHome shell", () => {
   it("opens a NEW chat as a full-page view, not a drawer", async () => {
     await mockKbApi.createCollection("kb");
     renderShell("/kb/chats");
-    expect(await screen.findByText(/Select a conversation/i)).toBeInTheDocument();
+    expect(await screen.findByText(/選擇一個對話/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /new chat/i }));
     // the in-page conversation composer appears…
