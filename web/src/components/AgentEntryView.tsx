@@ -15,9 +15,63 @@ import remarkMath from "remark-math";
 import type { Message, MessageCitation } from "../api/types";
 import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
 import { useStickToBottom } from "../hooks/useStickToBottom";
+import { useT, type MsgKey } from "../lib/i18n";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
 import { UserChip } from "./UserChip";
+
+// #160: present each tool as a behavior, never its raw name(args). A friendly
+// label (localized) + the single most meaningful argument in plain text.
+// Unmapped tools fall back to a generic label — the raw name never reaches the UI.
+const TOOL_LABEL: Record<string, MsgKey> = {
+  exec: "tool.exec",
+  read_file: "tool.read_file",
+  read_image: "tool.read_image",
+  write_file: "tool.write_file",
+  edit_file: "tool.edit_file",
+  delete_file: "tool.delete_file",
+  ask_knowledge_base: "tool.ask_knowledge_base",
+  kb_search: "tool.kb_search",
+  search_wiki: "tool.search_wiki",
+  resolve_collection: "tool.resolve_collection",
+  lookup_glossary: "tool.lookup_glossary",
+  update_context_card: "tool.update_context_card",
+  create_context_card: "tool.create_context_card",
+  read_new_source: "tool.read_new_source",
+  list_sources: "tool.list_sources",
+  read_source: "tool.read_source",
+  read_skill: "tool.read_skill",
+};
+
+// The single argument worth showing per tool (others stay in the expandable body).
+const TOOL_ARG: Record<string, string> = {
+  exec: "cmd",
+  read_file: "path",
+  read_image: "path",
+  write_file: "path",
+  edit_file: "path",
+  delete_file: "path",
+  read_source: "path",
+  search_wiki: "query",
+  kb_search: "query",
+  lookup_glossary: "query",
+  ask_knowledge_base: "question",
+  read_skill: "name",
+  resolve_collection: "ref",
+  update_context_card: "title",
+  create_context_card: "title",
+};
+
+/** A short, plain-text rendering of a tool's primary argument (empty if none). */
+function toolArgHint(name: string, args: Record<string, unknown>): string {
+  const key = TOOL_ARG[name];
+  if (!key) return "";
+  const v = args[key];
+  if (v == null) return "";
+  const s = Array.isArray(v) ? v.join(" ") : typeof v === "string" ? v : JSON.stringify(v);
+  if (!s) return "";
+  return s.length > 48 ? `${s.slice(0, 48)}…` : s;
+}
 
 export function EntryView({
   entry,
@@ -74,11 +128,12 @@ export function EntryView({
 
 /** Subtle per-entry trigger for the replay diagnostic (#51 P6). */
 function ReplayButton({ onReplay }: { onReplay: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
-      aria-label="Replay this step with the current AI"
-      title="Replay this step with the current AI"
+      aria-label={t("entry.replay")}
+      title={t("entry.replay")}
       onClick={(e) => {
         // Inside a <summary>: don't toggle the tool card open/closed.
         e.preventDefault();
@@ -102,11 +157,12 @@ function ReplayButton({ onReplay }: { onReplay: () => void }) {
 
 /** Per-turn "undo to here" trigger on a user message (#38). */
 function UndoButton({ onUndo }: { onUndo: () => void }) {
+  const t = useT();
   return (
     <button
       type="button"
-      aria-label="Undo this turn and everything after it"
-      title="Undo this turn and everything after it"
+      aria-label={t("entry.undo")}
+      title={t("entry.undo")}
       onClick={onUndo}
       style={{
         border: "none",
@@ -124,6 +180,7 @@ function UndoButton({ onUndo }: { onUndo: () => void }) {
 }
 
 function MentionLine({ by, users, note }: { by: string; users: string[]; note: string }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -139,8 +196,8 @@ function MentionLine({ by, users, note }: { by: string; users: string[]; note: s
       }}
     >
       <Icon name="user" size={13} color="var(--text-paper-d)" />
-      {by ? <UserChip userId={by} size={18} /> : <span>The agent</span>}
-      <span>summoned</span>
+      {by ? <UserChip userId={by} size={18} /> : <span>{t("mention.agent")}</span>}
+      <span>{t("mention.summoned")}</span>
       {users.map((u, i) => (
         <span key={u} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           <UserChip userId={u} size={18} />
@@ -233,6 +290,7 @@ function MessageBlock({
   onReplay?: () => void;
   onUndo?: () => void;
 }) {
+  const t = useT();
   if (message.role === "user") {
     return (
       <div>
@@ -329,7 +387,7 @@ function MessageBlock({
         )}
         {message.citations && message.citations.length > 0 && (
           <div className="kb-cites" style={{ marginLeft: 28 }}>
-            <div className="kb-cites__label">Sources</div>
+            <div className="kb-cites__label">{t("entry.sources")}</div>
             {message.citations.map((c) => (
               <button
                 key={`${c.marker}:${c.document_id}#${c.start}`}
@@ -363,6 +421,7 @@ function MessageBlock({
 // Copy describes the outcome only (no internals) — a distinct line when the
 // model looped while thinking and never produced an answer.
 function RepetitionNotice({ answered }: { answered: boolean }) {
+  const t = useT();
   return (
     <div
       role="note"
@@ -374,12 +433,13 @@ function RepetitionNotice({ answered }: { answered: boolean }) {
         fontStyle: "italic",
       }}
     >
-      {answered ? "偵測到模型重複輸出,已為你收尾。" : "模型在思考時陷入重複,已中止。"}
+      {answered ? t("repetition.answered") : t("repetition.thinking")}
     </div>
   );
 }
 
 function ReasoningBlock({ text, answered = false }: { text: string; answered?: boolean }) {
+  const t = useT();
   // Auto-expand the live thinking so the page isn't blank while the model is
   // mid-reasoning (the wait would otherwise look stuck), then auto-collapse the
   // moment the visible answer starts. The user can still toggle freely after.
@@ -402,7 +462,11 @@ function ReasoningBlock({ text, answered = false }: { text: string; answered?: b
   // Follow the reasoning as it streams (same rule as the chat) — bounded so a
   // long chain doesn't shove the answer off-screen.
   const preRef = useStickToBottom<HTMLPreElement>(text);
-  const summary = answered ? (thinkSec != null ? `已思考 ${thinkSec}s` : "已思考") : "思考中…";
+  const summary = answered
+    ? thinkSec != null
+      ? `${t("reasoning.thought")} ${thinkSec}s`
+      : t("reasoning.thought")
+    : t("reasoning.thinking");
   return (
     <details
       open={open}
@@ -443,12 +507,15 @@ function ToolCallCard({
   onOpenCitation?: (c: MessageCitation) => void;
   onReplay?: () => void;
 }) {
+  const t = useT();
   // While running, show whatever stdout has streamed so far; once done, the
   // final formatted output supersedes it. Auto-expand a streaming tool.
   const body = call.status === "done" ? call.output : (call.liveOutput ?? call.output);
   const streamingLive = call.status === "running" && !!call.liveOutput;
   // Follow streaming stdout to the bottom unless the user scrolls up.
   const preRef = useStickToBottom<HTMLPreElement>(body);
+  const labelKey = TOOL_LABEL[call.name];
+  const hint = toolArgHint(call.name, call.args);
   return (
     <details
       open={streamingLive}
@@ -477,19 +544,24 @@ function ToolCallCard({
         ) : (
           <Icon name="play" size={11} color="var(--accent)" />
         )}
-        <span>
-          {call.name}({summarizeArgs(call.args)})
-        </span>
+        <span>{labelKey ? t(labelKey) : t("tool.fallback")}</span>
+        {hint && (
+          <span style={{ color: "var(--text-paper-d)" }}>
+            {t("tool.argSep")}
+            {hint}
+          </span>
+        )}
         {body !== undefined && (
           <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>
-            · {streamingLive ? "streaming…" : "result"}
+            · {streamingLive ? t("tool.running") : t("tool.result")}
           </span>
         )}
         {onReplay && <ReplayButton onReplay={onReplay} />}
       </summary>
       {call.parseError && (
         <div style={{ color: "var(--warn)", fontSize: 11, marginTop: 4 }}>
-          retry: {call.parseError}
+          {t("entry.retry")}
+          {call.parseError}
         </div>
       )}
       {body !== undefined && (
@@ -513,7 +585,7 @@ function ToolCallCard({
         // KB chat. Clicking opens the source document (when the parent
         // wires `onOpenCitation`); no-op otherwise.
         <div className="kb-cites" style={{ marginTop: 6 }}>
-          <div className="kb-cites__label">Sources</div>
+          <div className="kb-cites__label">{t("entry.sources")}</div>
           {call.citations.map((c) => (
             <button
               key={c.marker}
@@ -535,13 +607,3 @@ function ToolCallCard({
   );
 }
 
-function summarizeArgs(args: Record<string, unknown>): string {
-  const entries = Object.entries(args);
-  if (entries.length === 0) return "";
-  return entries
-    .map(([k, v]) => {
-      const s = JSON.stringify(v);
-      return `${k}=${s.length > 40 ? `${s.slice(0, 40)}…` : s}`;
-    })
-    .join(", ");
-}

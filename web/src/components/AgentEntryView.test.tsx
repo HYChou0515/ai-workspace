@@ -104,7 +104,49 @@ describe("EntryView — ask_knowledge_base tool card citations", () => {
         }}
       />,
     );
-    expect(screen.queryByText(/Sources/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/來源|Sources/)).not.toBeInTheDocument();
+  });
+});
+
+describe("EntryView — de-jargoned tool cards (#160)", () => {
+  const toolEntry = (
+    name: string,
+    args: Record<string, unknown>,
+    over: Record<string, unknown> = {},
+  ) =>
+    ({
+      kind: "tool_call",
+      call: { call_id: "c", name, args, status: "done", output: "ok", ...over },
+    }) as const;
+
+  it("shows a plain-language label + humanized primary arg, not name(args)", () => {
+    render(<EntryView entry={toolEntry("exec", { cmd: ["pytest", "-q"] })} />);
+    expect(screen.getByText("執行指令")).toBeInTheDocument();
+    expect(screen.getByText(/pytest -q/)).toBeInTheDocument();
+    expect(screen.queryByText(/exec\(/)).not.toBeInTheDocument();
+  });
+
+  it("humanizes the query for a knowledge-base lookup", () => {
+    render(<EntryView entry={toolEntry("ask_knowledge_base", { question: "why drift?" })} />);
+    expect(screen.getByText("查詢知識庫")).toBeInTheDocument();
+    expect(screen.getByText(/why drift\?/)).toBeInTheDocument();
+  });
+
+  it("falls back to a generic label for an unmapped tool (no raw name leaks)", () => {
+    render(<EntryView entry={toolEntry("some_new_tool", { x: 1 })} />);
+    expect(screen.getByText("使用工具")).toBeInTheDocument();
+    expect(screen.queryByText(/some_new_tool/)).not.toBeInTheDocument();
+  });
+
+  it("labels the output as 結果 (done) / 執行中… (running)", () => {
+    const { rerender } = render(<EntryView entry={toolEntry("read_file", { path: "a.py" })} />);
+    expect(screen.getByText(/結果/)).toBeInTheDocument();
+    rerender(
+      <EntryView
+        entry={toolEntry("read_file", { path: "a.py" }, { status: "running", liveOutput: "…", output: undefined })}
+      />,
+    );
+    expect(screen.getByText(/執行中…/)).toBeInTheDocument();
   });
 });
 
@@ -120,7 +162,7 @@ describe("EntryView — replay entry points (#51 P6)", () => {
         onReplay={onReplay}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /replay/i }));
+    fireEvent.click(screen.getByRole("button", { name: /重跑/ }));
     expect(onReplay).toHaveBeenCalled();
   });
 
@@ -135,7 +177,7 @@ describe("EntryView — replay entry points (#51 P6)", () => {
         onReplay={onReplay}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /replay/i }));
+    fireEvent.click(screen.getByRole("button", { name: /重跑/ }));
     expect(onReplay).toHaveBeenCalled();
   });
 
@@ -146,14 +188,14 @@ describe("EntryView — replay entry points (#51 P6)", () => {
         onReplay={vi.fn()}
       />,
     );
-    expect(screen.queryByRole("button", { name: /replay/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重跑/ })).not.toBeInTheDocument();
     cleanup();
     render(
       <EntryView
         entry={{ kind: "message", message: { role: "assistant", content: "yo" } }}
       />,
     );
-    expect(screen.queryByRole("button", { name: /replay/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /重跑/ })).not.toBeInTheDocument();
   });
 });
 
@@ -166,7 +208,7 @@ describe("EntryView — undo affordance (#38)", () => {
         onUndo={onUndo}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /undo/i }));
+    fireEvent.click(screen.getByRole("button", { name: /復原/ }));
     expect(onUndo).toHaveBeenCalled();
   });
 
@@ -177,10 +219,10 @@ describe("EntryView — undo affordance (#38)", () => {
         onUndo={vi.fn()}
       />,
     );
-    expect(screen.queryByRole("button", { name: /undo/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /復原/ })).not.toBeInTheDocument();
     cleanup();
     render(<EntryView entry={{ kind: "message", message: { role: "user", content: "hi" } }} />);
-    expect(screen.queryByRole("button", { name: /undo/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /復原/ })).not.toBeInTheDocument();
   });
 });
 
