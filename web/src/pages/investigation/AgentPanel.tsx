@@ -543,7 +543,11 @@ export function AgentHeader({
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>{appTitle}</div>
         <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
-          {streaming ? "investigating · live" : "ready"}
+          {/* #159: action cue, not a vague status. Idle = "what do I do now?";
+              streaming = an app-neutral "Replying…" (RCA's "investigating" leaked
+              the domain into every App). The granular in-turn states live in the
+              composer's turn indicator, not here. */}
+          {streaming ? "Replying…" : "Your turn — type a message"}
         </div>
       </div>
       <button
@@ -580,26 +584,9 @@ export function AgentHeader({
         </span>
       )}
       <HealthDot />
-      <span
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          padding: "2px 8px",
-          borderRadius: "var(--radius-chip)",
-          background: streaming ? "var(--accent)" : "var(--paper-2)",
-          color: streaming ? "var(--white)" : "var(--text-paper-d)",
-          fontFamily: "var(--font-mono)",
-          fontSize: 11,
-        }}
-      >
-        <Icon
-          name="sparkle"
-          size={10}
-          color={streaming ? "var(--white)" : "var(--text-paper-d)"}
-        />
-        {streaming ? "running" : "idle"}
-      </span>
+      {/* #159: the running/idle mono badge was the most engineering-flavoured
+          chrome in the header and duplicated the status line above. Removed —
+          the action cue + the composer's turn indicator carry the state. */}
     </header>
   );
 }
