@@ -213,3 +213,58 @@ def test_import_into_existing_rejects_bad_mode_and_unknown_collection():
         files={"file": ("z.zip", zbytes, "application/zip")},
     )
     assert unknown.status_code == 404
+
+
+def test_import_skips_directory_entries_and_dot_members():
+    client = _client()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("sub/", b"")  # an explicit directory entry → not a document
+        zf.writestr(".", b"junk")  # canonicalises to empty → dropped
+        zf.writestr("real.md", b"hello")
+
+    new_cid = _import_new(client, buf.getvalue())
+
+    assert set(_docs_by_path(client, new_cid)) == {"real.md"}
+
+
+def test_overwrite_identical_bytes_is_a_noop():
+    client = _client()
+    cid = client.post("/kb/collections", json={"name": "C"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("x.md", b"same", "text/markdown")},
+    )
+    zbytes = _make_zip({"x.md": b"same"})  # byte-identical to the existing doc
+
+    r = client.post(
+        f"/kb/collections/{cid}/import?mode=overwrite",
+        files={"file": ("c.zip", zbytes, "application/zip")},
+    )
+    assert r.status_code == 200
+    # identical bytes → no new revision, so nothing is reported as (re)imported
+    assert r.json()["document_ids"] == []
+
+
+def test_import_restores_only_keyable_cards():
+    client = _client()
+    manifest = {
+        "version": 1,
+        "collection": {"name": "G"},
+        "documents": [],
+        "context_cards": [
+            {"keys": [], "title": "Reflow Zone", "body": "b1"},  # keyed by its title
+            {"keys": [], "title": "", "body": "b2"},  # nothing to key on → dropped
+            {"keys": ["M4"], "title": "M4", "body": "b3"},
+        ],
+    }
+    zbytes = _make_zip({}, manifest=manifest)
+
+    new_cid = _import_new(client, zbytes)
+
+    hits = client.post(
+        f"/kb/collections/{new_cid}/context-cards/lookup",
+        json={"terms": ["Reflow Zone", "M4"]},
+    ).json()
+    assert hits["results"]["Reflow Zone"][0]["body"] == "b1"  # title-fallback card kept
+    assert hits["results"]["M4"][0]["body"] == "b3"

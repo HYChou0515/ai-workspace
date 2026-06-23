@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import time
 import zipfile
 from collections.abc import AsyncIterator
 
@@ -20,6 +22,11 @@ from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.collection_export import (
+    collection_zip_filename,
+    downloads_dir,
+    sweep_stale_downloads,
+)
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
@@ -178,3 +185,35 @@ def test_empty_collection_exports_manifest_only():
     manifest = json.loads(zf.read(".kb-collection/manifest.json"))
     assert manifest["documents"] == []
     assert manifest["context_cards"] == []
+
+
+def test_stream_404_when_collection_deleted_after_prepare():
+    client = _client()
+    cid = client.post("/kb/collections", json={"name": "Gone"}).json()["resource_id"]
+    did = client.post(f"/kb/collections/{cid}/download/prepare").json()["download_id"]
+    # The collection vanishes between prepare and stream → the stream 404s even
+    # though the prepared file is still on disk.
+    client.delete(f"/collection/{cid}/permanently")
+    assert client.get(f"/kb/collections/{cid}/download/{did}").status_code == 404
+
+
+def test_sweep_removes_stale_but_keeps_fresh_downloads():
+    d = downloads_dir()
+    stale = d / "stale1234567890abcdef1234567890ab.zip"
+    fresh = d / "fresh1234567890abcdef1234567890ab.zip"
+    stale.write_bytes(b"x")
+    fresh.write_bytes(b"x")
+    old = time.time() - 10_000
+    os.utime(stale, (old, old))
+
+    sweep_stale_downloads(ttl_seconds=3600)
+
+    assert not stale.exists()  # older than the TTL → reaped
+    assert fresh.exists()  # within the TTL → kept
+    fresh.unlink()
+
+
+def test_collection_zip_filename_sanitizes_and_falls_back():
+    assert collection_zip_filename("My Report") == "My Report.zip"
+    assert collection_zip_filename("a/b:c") == "a_b_c.zip"  # path/illegal chars → _
+    assert collection_zip_filename("   ") == "collection.zip"  # blank → fallback name
