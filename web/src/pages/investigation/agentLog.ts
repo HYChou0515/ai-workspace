@@ -128,6 +128,32 @@ export function isToolRunning(log: AgentLog): boolean {
   return log.entries.some((e) => e.kind === "tool_call" && e.call.status === "running");
 }
 
+/** The waiting-state of an in-flight turn, derived purely from the folded log
+ * (no extra events). Splits the opaque "working…" wait into legible phases so a
+ * long hang shows WHERE it's stuck — and lets a viewer infer backend-slow
+ * (`prep`) vs LLM-slow (`waiting`/`thinking`) from which phase lingers:
+ *  - idle:      no turn in flight
+ *  - prep:      streaming, but the backend hasn't emitted its first metrics yet
+ *               (it's still building the turn / handing off to the model)
+ *  - waiting:   the prompt is with the model, but not one token has streamed
+ *               (cold-load / prefill / a busy LLM service — the long blank gap)
+ *  - thinking:  the model is streaming reasoning, no answer content yet
+ *  - answering: the model is streaming the visible answer */
+export type TurnPhase = "idle" | "prep" | "waiting" | "thinking" | "answering";
+
+export function turnPhase(log: AgentLog): TurnPhase {
+  if (!log.streaming) return "idle";
+  if (!log.metrics) return "prep";
+  // The trailing assistant message is this turn's live output (a user prompt or
+  // tool call ends the run, so a fresh turn has none yet — see lastAssistantIdx).
+  const idx = lastAssistantIdx(log.entries);
+  const entry = idx >= 0 ? log.entries[idx] : undefined;
+  const msg = entry && entry.kind === "message" ? entry.message : undefined;
+  if (msg && msg.content.trim().length > 0) return "answering";
+  if (msg && (msg.reasoning ?? "").length > 0) return "thinking";
+  return "waiting";
+}
+
 /** Claude-Code-style one-liner: ↑ prompt while sending, ↓ completion +
  * tok/s while/after receiving. While a tool runs (`toolRunning`), generation is
  * paused and no fresh metrics arrive, so keep the cumulative ↑/↓ tokens but drop

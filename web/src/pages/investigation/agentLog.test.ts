@@ -4,10 +4,12 @@ import type { AgentEvent } from "../../events";
 import {
   EMPTY_LOG,
   type AgentLog,
+  type AgentMetricsState,
   formatMetrics,
   isToolRunning,
   logFromMessages,
   turnsFromEntry,
+  turnPhase,
   reduceAgent,
   tokensPerSec,
 } from "./agentLog";
@@ -31,6 +33,50 @@ describe("metrics formatting", () => {
     expect(line).toContain("↓ 40 tok");
     expect(line).toContain("running");
     expect(line).not.toContain("tok/s"); // paused — no misleading rate during the tool gap
+  });
+});
+
+describe("turnPhase (wait-state selector)", () => {
+  const upMetrics: AgentMetricsState = { phase: "up", promptTokens: 256, completionTokens: 0, elapsedMs: 0 };
+  const streaming = (over: Partial<AgentLog> = {}): AgentLog => ({ ...EMPTY_LOG, streaming: true, ...over });
+
+  const downMetrics: AgentMetricsState = { phase: "down", promptTokens: 256, completionTokens: 3, elapsedMs: 500 };
+
+  it("is 'prep' while streaming before any metrics arrive (backend hand-off)", () => {
+    expect(turnPhase(streaming())).toBe("prep");
+  });
+
+  it("is 'thinking' once the model streams reasoning but no answer content yet", () => {
+    const base = fold([{ type: "message_delta", text: "Let me think", reasoning: true }]);
+    expect(turnPhase({ ...base, streaming: true, metrics: downMetrics })).toBe("thinking");
+  });
+
+  it("is 'idle' when no turn is in flight", () => {
+    expect(turnPhase(EMPTY_LOG)).toBe("idle");
+    expect(turnPhase({ ...EMPTY_LOG, metrics: downMetrics })).toBe("idle");
+  });
+
+  it("is 'waiting' when the prompt is with the model but no token has streamed", () => {
+    expect(turnPhase(streaming({ metrics: upMetrics }))).toBe("waiting");
+  });
+
+  it("is 'answering' once visible answer content streams", () => {
+    const base = fold([
+      { type: "message_delta", text: "Thinking", reasoning: true },
+      { type: "message_delta", text: "Here is the answer" },
+    ]);
+    expect(turnPhase({ ...base, streaming: true, metrics: downMetrics })).toBe("answering");
+  });
+
+  it("stays 'waiting' on a fresh turn even if a previous answer is in the log", () => {
+    const base = fold([{ type: "message_delta", text: "old answer" }]);
+    const fresh: AgentLog = {
+      ...base,
+      streaming: true,
+      metrics: upMetrics,
+      entries: [...base.entries, { kind: "message", message: { role: "user", content: "new q" } }],
+    };
+    expect(turnPhase(fresh)).toBe("waiting");
   });
 });
 

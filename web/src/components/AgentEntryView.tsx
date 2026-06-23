@@ -6,7 +6,7 @@
  * rendered as clickable source cards.
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -240,7 +240,9 @@ function MessageBlock({
           <span>{message.author ?? "Agent"}</span>
           {onReplay && <ReplayButton onReplay={onReplay} />}
         </div>
-        {message.reasoning && <ReasoningBlock text={message.reasoning} />}
+        {message.reasoning && (
+          <ReasoningBlock text={message.reasoning} answered={message.content.trim().length > 0} />
+        )}
         <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
           <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
             {message.content}
@@ -301,19 +303,39 @@ function RepetitionNotice({ answered }: { answered: boolean }) {
   );
 }
 
-function ReasoningBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(false);
+function ReasoningBlock({ text, answered = false }: { text: string; answered?: boolean }) {
+  // Auto-expand the live thinking so the page isn't blank while the model is
+  // mid-reasoning (the wait would otherwise look stuck), then auto-collapse the
+  // moment the visible answer starts. The user can still toggle freely after.
+  const [open, setOpen] = useState(!answered);
+  const wasAnswered = useRef(answered);
+  // How long the model thought — measured live (mount ≈ the first reasoning
+  // delta; frozen at the answer's first token). Absent on a reloaded thread,
+  // where the answer was already present, so the summary is just "已思考".
+  const startRef = useRef<number | null>(answered ? null : Date.now());
+  const [thinkSec, setThinkSec] = useState<number | null>(null);
+  useEffect(() => {
+    if (answered && !wasAnswered.current) {
+      setOpen(false);
+      if (startRef.current != null) {
+        setThinkSec(Math.max(0, Math.floor((Date.now() - startRef.current) / 1000)));
+      }
+    }
+    wasAnswered.current = answered;
+  }, [answered]);
   // Follow the reasoning as it streams (same rule as the chat) — bounded so a
   // long chain doesn't shove the answer off-screen.
   const preRef = useStickToBottom<HTMLPreElement>(text);
+  const summary = answered ? (thinkSec != null ? `已思考 ${thinkSec}s` : "已思考") : "思考中…";
   return (
     <details
+      open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
       style={{ marginLeft: 28, marginTop: 4, fontSize: 12, color: "var(--text-paper-d)" }}
     >
       <summary style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
         <Icon name={open ? "chev_d" : "chev_r"} size={11} />
-        Show thinking
+        {summary}
       </summary>
       <pre
         ref={preRef}

@@ -213,3 +213,42 @@ describe("EntryView — repetition stop notice (#113)", () => {
     expect(screen.queryByText(/重複/)).not.toBeInTheDocument();
   });
 });
+
+describe("EntryView — live thinking (reasoning block)", () => {
+  const assistant = (over: { reasoning?: string; content?: string }) => ({
+    kind: "message" as const,
+    message: { role: "assistant" as const, author: "Agent", content: over.content ?? "", reasoning: over.reasoning },
+  });
+
+  it("auto-expands the streaming thoughts while the answer hasn't started", () => {
+    const { container } = render(<EntryView entry={assistant({ reasoning: "work through it" })} />);
+    const details = container.querySelector("details");
+    expect(details).toHaveAttribute("open");
+    expect(screen.getByText(/思考中/)).toBeInTheDocument();
+    // the actual thoughts are on screen — not a blank page behind a toggle
+    expect(screen.getByText(/work through it/)).toBeInTheDocument();
+  });
+
+  it("collapses to a Chinese 已思考 summary once the answer streams (no English)", () => {
+    const { container } = render(
+      <EntryView entry={assistant({ reasoning: "thought", content: "Here is the answer." })} />,
+    );
+    expect(container.querySelector("details")).not.toHaveAttribute("open");
+    expect(screen.getByText(/已思考/)).toBeInTheDocument();
+    expect(screen.queryByText(/Show thinking/i)).not.toBeInTheDocument();
+  });
+
+  it("auto-collapses and stamps the elapsed think time when the answer begins", () => {
+    vi.useFakeTimers();
+    try {
+      const { container, rerender } = render(<EntryView entry={assistant({ reasoning: "ponder" })} />);
+      expect(container.querySelector("details")).toHaveAttribute("open");
+      vi.advanceTimersByTime(8_000);
+      rerender(<EntryView entry={assistant({ reasoning: "ponder", content: "Done." })} />);
+      expect(container.querySelector("details")).not.toHaveAttribute("open");
+      expect(screen.getByText(/已思考 8s/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -27,7 +27,8 @@ import { type AgentState, useOptionalAgent } from "../../hooks/useAgent";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
-import { formatMetrics, isToolRunning, turnsFromEntry } from "./agentLog";
+import { TurnStatus } from "../../components/TurnStatus";
+import { turnsFromEntry } from "./agentLog";
 
 const TEXT_EXTENSIONS = new Set([
   ".md",
@@ -277,18 +278,7 @@ export function AgentPanel({
             }
           />
         ))}
-        {log.streaming && log.metrics && (
-          <div
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: 11,
-              color: "var(--accent)",
-              padding: "2px 0 0 28px",
-            }}
-          >
-            {formatMetrics(log.metrics, isToolRunning(log))}
-          </div>
-        )}
+        <TurnStatus log={log} />
         {log.error && (
           <div
             style={{
