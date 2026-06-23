@@ -53,7 +53,9 @@ def _handle(make_plan=None, landed_ok=True):
 
     async def drive_turn(prompt, tools):
         calls.append(prompt)
-        out = _OUT_RE.search(prompt).group(1)
+        m = _OUT_RE.search(prompt)
+        assert m is not None, "the classify prompt always names its plan path"
+        out = m.group(1)
         plan = make_plan(prompt, len(calls)) if make_plan else _plan(_confident())
         await wf.write_json(out, plan)
         return "done"
