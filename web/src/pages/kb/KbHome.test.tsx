@@ -8,16 +8,18 @@ import { QueryWrap } from "../../test/queryWrapper";
 const render = (ui: Parameters<typeof rtlRender>[0]) =>
   rtlRender(ui, { wrapper: QueryWrap });
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { mockKbApi, _resetKbMock } from "../../api/kbMock";
-import { KbHome } from "./KbHome";
+import { _resetKbMock, mockKbApi } from "../../api/kbMock";
+import { kbRoutes } from "./kbRoutes";
 
-function renderShell() {
+/** Mount the whole KB route subtree (shell + child views) at `start`, wired
+ * with the in-memory mock — the same source of truth App.tsx mounts. */
+function renderShell(start = "/kb") {
   return render(
-    <MemoryRouter>
-      <KbHome client={mockKbApi} />
+    <MemoryRouter initialEntries={[start]}>
+      <Routes>{kbRoutes(mockKbApi)}</Routes>
     </MemoryRouter>,
   );
 }
@@ -28,27 +30,24 @@ describe("KbHome shell", () => {
 
   it("shows the collections surface by default and switches to chats", async () => {
     renderShell();
-    // collections surface (the "New collection" action) is visible first
-    expect(screen.getByRole("button", { name: /new collection/i })).toBeInTheDocument();
+    // /kb redirects to the collections surface (its New-collection action)…
+    expect(await screen.findByRole("button", { name: /new collection/i })).toBeInTheDocument();
 
+    // …clicking the Chats nav routes to the chats surface (its New-chat action)
     await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
-    // the chats surface is up — its New-chat action is unique to it
-    expect(screen.getByRole("button", { name: /new chat/i })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /new chat/i })).toBeInTheDocument();
   });
 
-  it("lands directly on the chats surface when ?tab=chats", async () => {
-    render(
-      <MemoryRouter initialEntries={["/kb?tab=chats"]}>
-        <KbHome client={mockKbApi} />
-      </MemoryRouter>,
-    );
+  it("lands on the chats surface at /kb/chats", async () => {
+    // (The legacy /kb?tab=chats deep-link is redirected here — see kbRoutes.test.)
+    renderShell("/kb/chats");
     expect(await screen.findByRole("button", { name: /new chat/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /new collection/i })).not.toBeInTheDocument();
   });
 
   it("opens the Ask-agent drawer from the top bar", async () => {
     renderShell();
-    await userEvent.click(screen.getByRole("button", { name: /ask agent/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /ask agent/i }));
     await waitFor(() =>
       expect(screen.getByPlaceholderText("Ask the knowledge base…")).toBeInTheDocument(),
     );
@@ -56,9 +55,8 @@ describe("KbHome shell", () => {
 
   it("opens a NEW chat as a full-page view, not a drawer", async () => {
     await mockKbApi.createCollection("kb");
-    renderShell();
-    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
-    expect(screen.getByText(/Select a conversation/i)).toBeInTheDocument();
+    renderShell("/kb/chats");
+    expect(await screen.findByText(/Select a conversation/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /new chat/i }));
     // the in-page conversation composer appears…
@@ -71,11 +69,10 @@ describe("KbHome shell", () => {
 
   it("shows a newly started chat in the conversations list right away", async () => {
     await mockKbApi.createCollection("kb");
-    renderShell();
-    await userEvent.click(screen.getByRole("button", { name: /^Chats$/ }));
+    renderShell("/kb/chats");
     expect(screen.queryByRole("button", { name: /msgs/ })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /new chat/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /new chat/i }));
     await userEvent.type(screen.getByPlaceholderText("Ask the knowledge base…"), "hello");
     await userEvent.click(screen.getByRole("button", { name: /^send$/i }));
 
@@ -87,7 +84,7 @@ describe("KbHome shell", () => {
     const col = await mockKbApi.createCollection("kb");
     renderShell();
     // open drawer, ask, follow the citation → doc viewer renders the document
-    await userEvent.click(screen.getByRole("button", { name: /ask agent/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /ask agent/i }));
     await userEvent.type(screen.getByPlaceholderText("Ask the knowledge base…"), "why?");
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
     const cite = await screen.findByRole("button", { name: /reflow\.md/i });

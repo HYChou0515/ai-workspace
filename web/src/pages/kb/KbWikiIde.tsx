@@ -10,7 +10,8 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { FileServiceProvider } from "../../api/fileService";
 import { kbApi, type KbApi } from "../../api/kb";
@@ -22,6 +23,7 @@ import { DialogProvider } from "../../components/Dialog";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import { FileBufferProvider, FileBufferStore, useFileBuffer, useIsDirty } from "../../hooks/fileBuffer";
 import { FileTree } from "../investigation/FileTree";
+import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { stem, WikiPageBody } from "./WikiPageBody";
 
 export function KbWikiIde({
@@ -87,34 +89,28 @@ export function KbWikiIde({
   const filePaths = useMemo(() => files.map((f) => f.path), [files]);
   const pageSet = useMemo(() => new Set(filePaths), [filePaths]);
 
-  const [activePath, setActivePath] = useState<string | null>(null);
-  // A just-created / moved page isn't in the list until the refetch lands;
-  // defer the open until it appears (same race the doc IDE hit).
-  const [pendingOpen, setPendingOpen] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const params = useParams();
+  // The open page is the URL (#93): /kb/collections/:cid/wiki/<path>. With no
+  // page in the URL we show index/first WITHOUT navigating, so the wiki landing
+  // stays at /wiki. A just-created / moved page lands in the URL before the
+  // refetch brings it in, so the editor only mounts once it's really in the
+  // list (`pageSet`) — otherwise we'd read a page that isn't there yet.
+  const fromUrl = params["*"] ? decodeLeafPath(params["*"]) : null;
+  const fallback = visiblePages.find((p) => p.endsWith("/index.md")) ?? visiblePages[0];
+  const target = fromUrl ?? (fallback ? normPath(fallback) : null);
+  const activePath = target && pageSet.has(target) ? target : null;
+  const wikiBase = `/kb/collections/${encodeURIComponent(collectionId)}/wiki`;
   const openPath = useCallback(
-    (p: string) => (pageSet.has(p) ? setActivePath(p) : setPendingOpen(p)),
-    [pageSet],
+    (p: string) => navigate(`${wikiBase}/${encodeLeafPath(p)}`),
+    [navigate, wikiBase],
   );
-  useEffect(() => {
-    if (pendingOpen && pageSet.has(pendingOpen)) {
-      setActivePath(pendingOpen);
-      setPendingOpen(null);
-    }
-  }, [pendingOpen, pageSet]);
-  // Keep a valid page selected: hold the current one if it still exists, else
-  // fall back to index/first (or nothing). Skipped while a deferred open waits.
-  useEffect(() => {
-    if (pendingOpen) return;
-    if (activePath && pageSet.has(activePath)) return;
-    const next = visiblePages.find((p) => p.endsWith("/index.md")) ?? visiblePages[0];
-    setActivePath(next ? normPath(next) : null);
-  }, [activePath, pendingOpen, pageSet, visiblePages]);
 
   // Follow a [[wikilink]] to the page whose stem matches.
-  const navigate = useCallback(
+  const followLink = useCallback(
     (name: string) => {
-      const target = visiblePages.find((p) => stem(p) === name);
-      if (target) openPath(normPath(target));
+      const t = visiblePages.find((p) => stem(p) === name);
+      if (t) openPath(normPath(t));
     },
     [visiblePages, openPath],
   );
@@ -149,7 +145,7 @@ export function KbWikiIde({
                       path={activePath}
                       pages={filePaths}
                       docIdByPath={docIdByPath}
-                      onNavigate={navigate}
+                      onNavigate={followLink}
                       onOpenDoc={onOpenDoc}
                     />
                   ) : (

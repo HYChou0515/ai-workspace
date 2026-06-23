@@ -2,13 +2,26 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetKbMock, _seedWikiMock, _setWikiStatusMock, mockKbApi } from "../../api/kbMock";
 import { QueryWrap } from "../../test/queryWrapper";
 import { WikiBrowser } from "./WikiBrowser";
 
-const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: QueryWrap });
+// WikiBrowser renders the URL-driven KbWikiIde (#93), so mount it under the
+// wiki splat route; the empty/building states don't read the URL but the
+// wrapper is harmless there.
+const render = (ui: ReactElement, start = "/kb/collections/c/wiki") =>
+  rtlRender(
+    <MemoryRouter initialEntries={[start]}>
+      <Routes>
+        <Route path="/kb/collections/:cid/wiki/*" element={ui} />
+      </Routes>
+    </MemoryRouter>,
+    { wrapper: QueryWrap },
+  );
 
 describe("WikiBrowser (#50 P7)", () => {
   beforeEach(() => _resetKbMock());

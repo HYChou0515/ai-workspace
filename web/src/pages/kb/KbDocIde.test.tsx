@@ -2,11 +2,34 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { KbApi, KbDocument } from "../../api/kb";
-import { renderWithQuery } from "../../test/queryWrapper";
+import { renderWithQuery as renderQ } from "../../test/queryWrapper";
 import { docHref } from "./kbLinks";
+
+/** Surfaces the URL so a test can assert navigation. */
+function LocationProbe() {
+  const loc = useLocation();
+  return <div data-testid="loc">{loc.pathname + loc.search}</div>;
+}
+
+// KbDocIde is now URL-driven (#93): the open doc is the `documents/*` splat.
+// Mount it under that route so opening a tree node navigates and the same route
+// re-renders with the doc open — existing test bodies keep calling
+// `renderWithQuery(<KbDocIde …/>)` unchanged.
+function renderWithQuery(ui: ReactElement, start = "/kb/collections/c1/documents") {
+  return renderQ(
+    <MemoryRouter initialEntries={[start]}>
+      <Routes>
+        <Route path="/kb/collections/:cid/documents/*" element={ui} />
+      </Routes>
+      <LocationProbe />
+    </MemoryRouter>,
+  );
+}
 
 // kbFileService reads doc bytes through specstar auto-CRUD (apiFetch), not the
 // KbApi — serve a content envelope + raw blob so opening a doc resolves.
@@ -260,5 +283,25 @@ describe("KbDocIde", () => {
     // … with the shared editor controls
     expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /save/i })).toBeInTheDocument();
+  });
+
+  it("opening a document routes to its URL (#93)", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(<KbDocIde collectionId="c1" client={stubClient([doc({ path: "/hello.md" })])} />);
+    await user.click(await screen.findByText("hello.md"));
+    expect(screen.getByTestId("loc")).toHaveTextContent("/kb/collections/c1/documents/hello.md");
+  });
+
+  it("deep-links to a nested, spaced doc path through the URL splat (#93)", async () => {
+    // Round-trip the trickiest id shape: a sub-folder + a space. The segment is
+    // percent-encoded (a%20dir) but the slash stays a real separator.
+    renderWithQuery(
+      <KbDocIde collectionId="c1" client={stubClient([doc({ path: "/a dir/b.md" })])} />,
+      "/kb/collections/c1/documents/a%20dir/b.md",
+    );
+    // the doc opens straight from the URL (its bytes render + the status bar
+    // shows the decoded canonical path)
+    expect(await screen.findByRole("heading", { name: "Hello KB" })).toBeInTheDocument();
+    expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("/a dir/b.md");
   });
 });
