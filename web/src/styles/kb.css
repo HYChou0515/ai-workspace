@@ -820,6 +820,30 @@
 .kb-tab.is-active .kb-tab__count {
   color: var(--accent-h);
 }
+/* One-line "what + when" explainer under the collection tabs (#162). Pulled up
+   snug against the tab strip's bottom margin. */
+.kb-tabs__blurb {
+  margin: -8px 0 14px;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  line-height: 1.5;
+}
+/* Index-status strip (#162) — keeps the upload → indexing → ready/error
+   transition visible on every collection tab, not just the doc tree. */
+.kb-index-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+.kb-index-status.is-error {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
 .kb-docsearch--inline {
   flex: 0 1 280px;
   margin: 0;
@@ -1407,6 +1431,14 @@
   font-family: var(--font-mono);
   font-size: var(--text-small);
   color: var(--text-paper-d);
+}
+/* What Chats are + when to use (#162) — purpose line above the count sub. */
+.kb-chats__lead {
+  margin: 6px 0 0;
+  max-width: 56ch;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+  line-height: 1.5;
 }
 .kb-tabs--compact {
   gap: 16px;

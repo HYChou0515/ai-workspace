@@ -422,6 +422,119 @@ describe("KbCollectionsPage", () => {
     );
   });
 
+  it("shows a one-line explainer under the tabs for the active Documents tab (#162)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    // Documents is the default tab — its "what + when" blurb is visible.
+    expect(
+      screen.getByText("The files you've uploaded. Search reads these to answer questions."),
+    ).toBeInTheDocument();
+  });
+
+  it("swaps the explainer when switching to the Context Cards tab (#162)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Context Cards" }));
+    expect(
+      screen.getByText(/A glossary you write by hand/),
+    ).toBeInTheDocument();
+    // the Documents blurb is gone once another tab is active
+    expect(
+      screen.queryByText("The files you've uploaded. Search reads these to answer questions."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the Wiki explainer on a wiki-enabled collection's Wiki tab (#162)", async () => {
+    const client = {
+      ...mockKbApi,
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", use_wiki: true })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Wiki" }));
+    expect(
+      screen.getByText(/An AI-built, cross-linked summary/),
+    ).toBeInTheDocument();
+  });
+
+  it("shows a collection-level index-status strip while a doc is indexing (#162)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "indexing" },
+        ]),
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const strip = await screen.findByTestId("kb-index-status");
+    expect(strip).toHaveTextContent(/Indexing 1/i);
+  });
+
+  it("reports a failed doc in the index-status strip (#162)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "error" },
+        ]),
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const strip = await screen.findByTestId("kb-index-status");
+    expect(strip).toHaveTextContent(/1 failed to index/i);
+  });
+
+  it("hides the index-status strip once every doc is ready (#162)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "ready" },
+        ]),
+    } as unknown as Client;
+    render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    // the doc tree renders the ready doc; the strip never appears
+    await screen.findByRole("button", { name: /a\.md/ });
+    expect(screen.queryByTestId("kb-index-status")).not.toBeInTheDocument();
+  });
+
+  it("shows an uploading state in the index-status strip while files upload (#162)", async () => {
+    const d = makeDeferred<string[]>();
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+      uploadDocument: () => d.promise,
+    } as unknown as Client;
+    const { container } = render(<KbCollectionsPage client={client} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const file = new File(["x"], "x.md", { type: "text/markdown" });
+    await userEvent.upload(
+      container.querySelector('input[type="file"]:not([webkitdirectory])') as HTMLInputElement,
+      file,
+    );
+    const strip = await screen.findByTestId("kb-index-status");
+    expect(strip).toHaveTextContent(/Uploading/i);
+    d.resolve(["c1/me/x.md"]); // settle the in-flight upload
+  });
+
   it("edits a collection's retrieval modes from the settings menu (#50)", async () => {
     const updateCollection = vi.fn(async () => {});
     const client = {
