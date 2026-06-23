@@ -3,8 +3,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { api } from "../api";
 import { itemChatApi, type ItemChat, type ItemChatSummary } from "../api/itemChats";
+import { kbApi } from "../api/kb";
 import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workflows";
+import type { FileContent } from "../api/types";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ItemChatShell } from "./ItemChatShell";
 
@@ -69,8 +72,23 @@ function stubChatApi(chats: ItemChatSummary[]) {
   );
 }
 
+/** Make the collection-set read resolve to a given collections.json body, or a
+ * 404 (missing file) when omitted. Keeps the shell's badge query from erroring. */
+function stubCollectionsFile(body?: string) {
+  vi.spyOn(api, "readFile").mockImplementation(async (_slug, _id, path): Promise<FileContent> => {
+    if (path === "/collections.json" && body !== undefined) {
+      return { kind: "text", path, size: body.length, text: body, encoding: "utf-8" };
+    }
+    const err = new Error("read failed: 404") as Error & { status: number };
+    err.status = 404;
+    throw err;
+  });
+  vi.spyOn(kbApi, "listCollections").mockResolvedValue([]);
+}
+
 beforeEach(() => {
   vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
+  stubCollectionsFile();
 });
 
 const render = () =>
@@ -140,6 +158,25 @@ describe("ItemChatShell", () => {
     fireEvent.click(screen.getByTestId("new-item-button"));
     fireEvent.click(await screen.findByTestId("new-item-workflow-collections"));
     await waitFor(() => expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections"));
+  });
+
+  it("nudges to pick collections when the hub has none, and opens the picker modal", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    stubCollectionsFile(); // 404 → empty selection
+    render();
+    const button = await screen.findByTestId("collections-button");
+    expect(button).toHaveTextContent("選擇知識庫");
+    fireEvent.click(button);
+    expect(await screen.findByTestId("collections-modal")).toBeInTheDocument();
+  });
+
+  it("badges the collection count from collections.json", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    stubCollectionsFile('[{"id":"a","name":"Alpha"},{"id":"b","name":"Beta"}]');
+    render();
+    await waitFor(() =>
+      expect(screen.getByTestId("collections-button")).toHaveTextContent("知識庫 (2)"),
+    );
   });
 
   it("opens the manage modal from the switcher and deletes a chat", async () => {

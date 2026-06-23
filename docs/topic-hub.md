@@ -174,8 +174,9 @@ workflow types (e.g. `→memory`, `→collections`, `→consolidate`).
 
 The Hub's set of collections is a **workspace file** (`collections.json`, a list of
 `[{id, name}, …]`), **not** a field on the item's resource. This keeps everything in a
-Hub file-shaped (like memory) and the `WorkItem` thin; it is mutable any time by
-editing the file (IDE) or by the agent (§5.1).
+Hub file-shaped (like memory) and the `WorkItem` thin; it is mutable any time by the
+**collection picker** (§5.2), the agent (§5.1), or — as an escape hatch — by editing
+the raw file in the Monaco IDE.
 
 - **Read at turn/run time, not from the resource.** Workflows read it with
   `wf.read_json("collections.json")`; the App turn-context-builder reads it to
@@ -207,6 +208,33 @@ give an **id or a name**; the agent needs the canonical `{id, name}` pair to rec
 - *Rejected: one tool that resolves **and** writes the file.* Keeping the write as an
   ordinary file edit matches "the agent itself maintains the file" and stays
   consistent with how memory is edited.
+
+### 5.2 The collection picker (#142)
+
+Editing `collections.json` by hand in Monaco is the power-user path, not the everyday
+one — so the Hub's chat top bar carries a **collection-set button** that opens a picker
+modal. FE-only; the backend (the file, `resolve_collection`, the turn-time read) is
+unchanged.
+
+- **Button states (discoverability).** Empty selection → an accent-styled
+  **「選擇知識庫」** nudge (a Hub with no collections has nothing for the agent to
+  retrieve); non-empty → a quiet **「知識庫 (N)」** badge. It is item-level (the set is
+  shared by every chat + the agent), so it sits on the shell bar, not inside a chat.
+- **Modal = a checklist over the live collection list** (`GET /kb/collections`) with a
+  search box; each row shows the collection's icon, name, and doc count, pre-checked
+  from `collections.json`.
+- **Display + write-back use LIVE names**, so a renamed collection self-heals and the
+  file stays fresh for the every-turn context injection (§6).
+- **Persistence = last-write-wins** (the locked "有爆炸就給它爆"): the modal reads the
+  file fresh on open and, on an explicit Save, overwrites the whole file (no merge,
+  2-space JSON) and invalidates both the picker's read and any open Monaco tab. It
+  **never writes on open**.
+- **Robustness.** A missing file → an empty selection (no warning); a whole-file parse
+  failure → a warning banner (the file may be mid-hand-edit) but Save may still
+  overwrite it; malformed entries are tolerated the way the backend's
+  `collection_ids_from_json` tolerates them (dropped + counted). An **orphan id** (its
+  collection was deleted) is surfaced in its own area with one-click removal and is
+  **preserved verbatim** on save until the user removes it — never auto-dropped.
 
 ---
 
