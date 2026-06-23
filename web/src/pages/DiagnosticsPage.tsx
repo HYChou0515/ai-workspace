@@ -16,6 +16,7 @@ import { type HealthApi, type HealthCheckRow, healthApi } from "../api/health";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
 import { type ChipTone } from "../components/StatusChip";
+import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { SanityMatrix } from "./SanityMatrix";
 import { TelemetryPanel } from "./TelemetryPanel";
 
@@ -81,6 +82,7 @@ function when(ms: number | null): string {
 export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  useBreadcrumbs([{ label: "Home", to: "/" }, { label: "Diagnostics" }]);
   const [tab, setTab] = useState<"checks" | "traces" | "matrix">("checks");
   const { data } = useQuery({
     queryKey: qk.health,
@@ -101,7 +103,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
   return (
     <div
       data-testid="page-diagnostics"
-      style={{ minHeight: "100vh", background: "var(--paper)", overflow: "auto" }}
+      style={{ minHeight: "100%", background: "var(--paper)", overflow: "auto" }}
     >
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "28px 20px 60px" }}>
         <button
