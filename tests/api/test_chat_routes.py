@@ -33,6 +33,21 @@ def _convs(spec, item_id):
     return rm
 
 
+def test_get_conversation_wire_field_is_item_id():
+    """#139: the FE hydrates the shared RCA chat by listing ``GET /conversation``
+    and matching the owning item on the ``item_id`` field (was ``investigation_id``
+    pre-#89). Lock the wire contract so a future struct rename can't silently
+    leave the FE matching nothing — which made the whole chat history (everyone's,
+    not just other users') fail to load on reload."""
+    client, _spec, iid = _client()
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "q"})
+    entries = client.get("/conversation").json()
+    assert entries, "the message should have created the item's default conversation"
+    data = entries[0]["data"]
+    assert data["item_id"] == iid
+    assert "investigation_id" not in data
+
+
 def test_chats_list_is_empty_then_shows_the_default_after_a_message():
     client, _spec, iid = _client()
     assert client.get(f"/a/rca/items/{iid}/chats").json() == []  # read-only: no chat yet
