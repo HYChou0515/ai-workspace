@@ -33,7 +33,8 @@
     "statusbar": ["severity", "status", "product"],
     "list": ["severity", "status", "product"],
     "form": ["severity", "status", "topics", "product"],
-    "default_tabs": ["/SOP.md", "/brief.md"]
+    "default_tabs": ["/SOP.md", "/brief.md"],
+    "primary_surface": "ide"
   },
   "lifecycle": { "status_field": "status", "closing_states": ["resolved", "abandoned"] },
   "labels": { "severity": "Severity", "status": "Status", "product": "Product" },

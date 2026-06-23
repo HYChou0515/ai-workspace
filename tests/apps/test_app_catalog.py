@@ -7,7 +7,13 @@ from workspace_app.apps.catalog import (
     validate_all_apps,
     validate_function_coherence,
 )
-from workspace_app.apps.manifest import AgentManifest, AppManifest, FunctionToggles, ItemNouns
+from workspace_app.apps.manifest import (
+    AgentManifest,
+    AppManifest,
+    FunctionToggles,
+    ItemNouns,
+    Layout,
+)
 from workspace_app.config.schema import Preset
 
 
@@ -95,13 +101,16 @@ def test_compose_prompt_joins_present_sections_and_skips_empty():
 
 
 # ─── function ↔ tools coherence (startup hard error) ────────────────
-def _manifest(*, tools, workspace=True, sandbox=True, terminal=True) -> AppManifest:
+def _manifest(
+    *, tools, workspace=True, sandbox=True, terminal=True, primary_surface="chat"
+) -> AppManifest:
     return AppManifest(
         slug="x",
         title="X",
         agent=AgentManifest(prompt_file="prompts/system.md", tools=tools),
         item=ItemNouns(noun="Item", noun_plural="Items"),
         function=FunctionToggles(workspace=workspace, sandbox=sandbox, terminal=terminal),
+        layout=Layout(primary_surface=primary_surface),
     )
 
 
@@ -122,6 +131,24 @@ def test_coherence_exec_requires_sandbox():
 def test_coherence_file_tools_require_workspace():
     with pytest.raises(ValueError, match="workspace"):
         validate_function_coherence(_manifest(tools=["read_file"], workspace=False))
+
+
+def test_coherence_ide_primary_surface_requires_workspace():
+    """#159: an `ide`-first layout has no IDE to show when `function.workspace`
+    is false — an incoherent combination, caught at startup."""
+    with pytest.raises(ValueError, match="primary_surface"):
+        validate_function_coherence(
+            _manifest(
+                tools=[], workspace=False, sandbox=False, terminal=False, primary_surface="ide"
+            )
+        )
+
+
+def test_coherence_chat_primary_surface_ok_without_workspace():
+    """A chat-first App with no IDE is the canonical pure-chat shape — coherent."""
+    validate_function_coherence(
+        _manifest(tools=[], workspace=False, sandbox=False, terminal=False, primary_surface="chat")
+    )  # no raise
 
 
 # ─── discovery + startup validation ─────────────────────────────────

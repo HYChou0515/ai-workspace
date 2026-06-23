@@ -69,6 +69,11 @@ def validate_function_coherence(manifest: AppManifest) -> None:
             f"app {manifest.slug!r}: file tools {sorted(tools & _FILE_TOOLS)} need "
             f"function.workspace but it is false"
         )
+    if manifest.layout.primary_surface == "ide" and not fn.workspace:
+        raise ValueError(
+            f"app {manifest.slug!r}: layout.primary_surface 'ide' requires "
+            f"function.workspace but it is false"
+        )
 
 
 def discover_app_slugs() -> list[str]:
