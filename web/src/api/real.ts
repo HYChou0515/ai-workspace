@@ -54,7 +54,10 @@ type SpecstarEntry<T> = {
 };
 
 type ConversationStruct = {
-  investigation_id: string;
+  // #139: the backend `Conversation` struct serializes its owning-item handle
+  // as `item_id` (was `investigation_id` pre-#89). Read it under the wire name
+  // or `getConversation` matches nothing → the shared chat never hydrates.
+  item_id: string;
   messages: Conversation["messages"];
 };
 
@@ -214,11 +217,11 @@ export const realApi: ApiClient = {
       const arr = await json<SpecstarEntry<ConversationStruct>[]>(
         await apiFetch("/conversation"),
       );
-      const hit = arr.find((e) => e.data.investigation_id === investigationId);
+      const hit = arr.find((e) => e.data.item_id === investigationId);
       if (!hit) return null;
       return {
         resource_id: hit.revision_info.resource_id,
-        investigation_id: hit.data.investigation_id,
+        investigation_id: hit.data.item_id,
         messages: hit.data.messages ?? [],
       };
     } catch (err) {
