@@ -12,7 +12,22 @@ import { MemoryRouter, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
+import { BreadcrumbProvider, useBreadcrumbTrail } from "../../hooks/breadcrumbs";
+import { KbHome } from "./KbHome";
 import { kbRoutes } from "./kbRoutes";
+
+function TrailProbe() {
+  const trail = useBreadcrumbTrail();
+  return (
+    <ul data-testid="trail">
+      {trail.map((c, i) => (
+        <li key={i} data-to={c.to ?? ""}>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /** Mount the whole KB route subtree (shell + child views) at `start`, wired
  * with the in-memory mock — the same source of truth App.tsx mounts. */
@@ -91,5 +106,24 @@ describe("KbHome shell", () => {
     await userEvent.click(cite);
     await waitFor(() => expect(screen.getByText("Cited passage")).toBeInTheDocument());
     expect(col.resource_id).toBeTruthy();
+  });
+
+  it("publishes a Home › Knowledge base breadcrumb", () => {
+    render(
+      <MemoryRouter>
+        <BreadcrumbProvider>
+          <KbHome client={mockKbApi} />
+          <TrailProbe />
+        </BreadcrumbProvider>
+      </MemoryRouter>,
+    );
+    const items = screen.getByTestId("trail").querySelectorAll("li");
+    expect([...items].map((li) => li.textContent)).toEqual(["Home", "Knowledge base"]);
+    expect(items[0].getAttribute("data-to")).toBe("/");
+  });
+
+  it("no longer carries its own 'Investigations' back link (the global bar navigates)", () => {
+    renderShell();
+    expect(screen.queryByRole("button", { name: /Investigations/i })).toBeNull();
   });
 });

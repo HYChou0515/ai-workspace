@@ -13,9 +13,9 @@ import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
+import { modCombo } from "../../lib/platform";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
-import { AppIcon } from "../../components/AppIcon";
 import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
@@ -32,10 +32,13 @@ import {
   useEditorGroups,
 } from "../../hooks/useEditorGroups";
 import { useThemeMode } from "../../hooks/theme";
+import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
+import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
+import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
@@ -59,6 +62,16 @@ export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
 /** Close a tab through the dirty-aware path (save-on-close prompt). Provided
  * by ShellBody so the deep tab strip can request closes without prop drilling. */
 const RequestCloseContext = createContext<(groupId: string, path: string) => void>(() => {});
+
+/** #159: whether the file IDE starts collapsed (chat as the main stage) when an
+ * item first opens. Chat-first Apps collapse it; ide-first Apps (RCA) open it.
+ * An App with no IDE at all (`function.workspace` false) reports collapsed —
+ * chat always fills the row there. This is only the first-time default; a
+ * per-App preference persisted in localStorage overrides it. */
+export function initialIdeCollapsed(manifest: AppManifest): boolean {
+  if (!manifest.function.workspace) return true;
+  return manifest.layout.primary_surface === "chat";
+}
 
 /** Provider shell: owns the shared file-buffer store + dialog/confirm
  * context, then renders the workspace body inside them. */
@@ -133,6 +146,11 @@ function ShellBody({
     manifest.resource_route,
     item as unknown as AppItem,
   );
+  useBreadcrumbs([
+    { label: "Home", to: "/" },
+    { label: manifest.title, to: `/a/${manifest.slug}` },
+    { label: item.title },
+  ]);
   // The initial open tabs come from the App's manifest (#89 P7b), filtered to
   // those that actually exist — not a hardcoded RCA design-view list.
   const defaultTabs = manifest.layout.default_tabs;
@@ -164,13 +182,20 @@ function ShellBody({
   const bottomStart = useRef(bottomH);
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [bottomOpen, setBottomOpen] = useState(true);
-  // Chat focus mode: fold the whole workspace (activity bar + tree + editor +
-  // bottom panel) away so the chat fills the row — toggled by the chevron on the
-  // editor/chat divider (and an expand handle on the collapsed edge). The
-  // editor keeps a min width while open, so dragging the divider can't squeeze
-  // it into a broken sliver; full-chat is this explicit fold, not a drag.
-  // Transient (not persisted) — resets to the normal split on reload.
-  const [chatMaximized, setChatMaximized] = useState(false);
+  // #159: chat is the main stage. When the IDE is collapsed, the whole
+  // workspace (activity bar + tree + editor + bottom panel) folds away so the
+  // chat fills the row — toggled by the TopBar `Workspace` button (and the
+  // chevron on the editor/chat divider). The editor keeps a min width while
+  // open, so dragging the divider can't squeeze it into a broken sliver;
+  // full-chat is this explicit fold, not a drag.
+  //
+  // The first-time default comes from the App's `layout.primary_surface`
+  // (chat-first Apps open collapsed; RCA's ide-first opens the workspace), then
+  // the user's choice persists per-App so it survives reloads.
+  const [ideCollapsed, setIdeCollapsed] = usePersistentBoolean(
+    `layout:ide-collapsed:${manifest.slug}`,
+    initialIdeCollapsed(manifest),
+  );
   // Cap the chat width so the editor always keeps a usable minimum. The chat is
   // fixed-width (flexShrink:0), so an over-wide agentW would otherwise squeeze
   // the editor into a broken sliver (the #108 regression). Dragging stops at
@@ -265,6 +290,9 @@ function ShellBody({
       const g = gRef.current;
       if (k === "p") {
         e.preventDefault();
+        // #159: the palette jumps to files, so a collapsed IDE auto-expands —
+        // the picked file lands in a visible editor, not behind the chat.
+        setIdeCollapsed(false);
         setPaletteOpen(true);
       } else if (k === "b") {
         e.preventDefault();
@@ -302,7 +330,9 @@ function ShellBody({
       <div
         data-testid="page-item"
         style={{
-          height: "100vh",
+          // Fill the global layout's content area (#158), not the whole viewport
+          // — the global bar takes the top 40px.
+          height: "100%",
           display: "flex",
           flexDirection: "column",
           background: "var(--paper)",
@@ -313,6 +343,8 @@ function ShellBody({
           item={item}
           manifest={manifest}
           onEditField={setField}
+          ideCollapsed={ideCollapsed}
+          onToggleIde={() => setIdeCollapsed((v) => !v)}
           onCommandPalette={() => setPaletteOpen(true)}
           onEdit={() => setEditOpen(true)}
         />
@@ -335,7 +367,7 @@ function ShellBody({
               terminal tab inside is further gated on `function.terminal` —
               sandbox's only human UI surface (exec/package are backend tools,
               gated by allowed_tools), so there is no separate sandbox pane. */}
-          {manifest.function.workspace && !chatMaximized && (
+          {manifest.function.workspace && !ideCollapsed && (
             <>
           <ActivityBar
             mode={activityMode}
@@ -396,47 +428,26 @@ function ShellBody({
             collapse={{
               label: "Collapse workspace",
               icon: "chev_l",
-              onToggle: () => setChatMaximized(true),
+              onToggle: () => setIdeCollapsed(true),
             }}
           />
             </>
           )}
-          {manifest.function.workspace && chatMaximized && (
-            // Collapsed edge: a thin handle to bring the workspace back.
-            <button
-              type="button"
-              aria-label="Show workspace"
-              title="Show workspace"
-              onClick={() => setChatMaximized(false)}
-              style={{
-                flexShrink: 0,
-                width: 16,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                padding: 0,
-                cursor: "pointer",
-                border: "none",
-                borderRight: "1px solid var(--paper-3)",
-                background: "var(--paper-1, var(--paper))",
-                color: "var(--text-paper-d)",
-              }}
-            >
-              <Icon name="chev_r" size={14} />
-            </button>
-          )}
+          {/* #159: the old 16px collapsed-edge handle is gone — the discoverable
+              TopBar `Workspace` button is now the canonical way to bring the IDE
+              back, so a near-invisible edge sliver is just noise. */}
           <div
             style={{
               display: "flex",
               flexDirection: "column",
               height: "100%",
               minHeight: 0,
-              // Maximized: grow to fill the whole row (workspace is unmounted).
-              ...(chatMaximized ? { flex: 1, minWidth: 0 } : {}),
+              // IDE collapsed: grow to fill the whole row (workspace is unmounted).
+              ...(ideCollapsed ? { flex: 1, minWidth: 0 } : {}),
               // The multi-chat shell takes no width prop (unlike AgentPanel), so the
               // wrapper owns the resizable width in that mode.
               width:
-                manifest.slug === "topic-hub" && !chatMaximized ? effectiveAgentW : undefined,
+                manifest.slug === "topic-hub" && !ideCollapsed ? effectiveAgentW : undefined,
             }}
           >
             {manifest.slug === "topic-hub" ? (
@@ -471,7 +482,7 @@ function ShellBody({
                 <AgentPanel
                   investigationId={item.resource_id}
                   width={effectiveAgentW}
-                  fill={!manifest.function.workspace || chatMaximized}
+                  fill={!manifest.function.workspace || ideCollapsed}
                   // #89 candidate 3: picker + suggestions come from the App manifest,
                   // not the global /agent-configs; attaching writes the item's preset.
                   picker={manifest.agent.picker}
@@ -710,24 +721,26 @@ function EditItemModal({
 
 /* ------------------------------ Top bar ------------------------------ */
 
-function TopBar({
+export function TopBar({
   item,
   manifest,
   onEditField,
+  ideCollapsed,
+  onToggleIde,
   onCommandPalette,
   onEdit,
 }: {
   item: AppItem;
   manifest: AppManifest;
   onEditField: (name: string, value: string) => void;
+  /** #159: whether the file IDE is currently folded away (chat is the main
+   * stage). Drives the `Workspace` toggle's pressed state + hides IDE-only
+   * chrome (the command palette) while collapsed. */
+  ideCollapsed: boolean;
+  onToggleIde: () => void;
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
-  const navigate = useNavigate();
-  // RCA breadcrumb chips not yet covered by DomainFields. AppItem's domain
-  // fields are typed `unknown`, so narrow the two this crumb still reads.
-  const topics = (item.topics as string[] | undefined) ?? [];
-  const product = String(item.product ?? "");
   return (
     <div
       style={{
@@ -741,22 +754,6 @@ function TopBar({
         gap: 12,
       }}
     >
-      <button
-        type="button"
-        onClick={() => navigate(`/a/${manifest.slug}`)}
-        style={{
-          padding: "4px 8px",
-          color: "var(--text-paper-d)",
-          fontSize: "var(--text-body-sm)",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-        }}
-      >
-        <Icon name="chev_l" size={14} /> All
-      </button>
-      <AppIcon icon={manifest.icon} color={manifest.color} size={22} />
-      <span style={{ width: 1, height: 22, background: "var(--paper-3)" }} />
       <div
         style={{
           display: "flex",
@@ -766,24 +763,9 @@ function TopBar({
           color: "var(--text-paper-d)",
         }}
       >
-        {topics.map((t) => (
-          <CrumbLink
-            key={t}
-            label={t}
-            onClick={() => navigate(`/?topic=${encodeURIComponent(t)}`)}
-            title={`Filter investigations by topic “${t}”`}
-          />
-        ))}
-        {product && (
-          <>
-            <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
-            <CrumbLink
-              label={product}
-              onClick={() => navigate(`/?product=${encodeURIComponent(product)}`)}
-              title={`Filter investigations by product “${product}”`}
-            />
-          </>
-        )}
+        {/* topic/product are item attributes, not hierarchy — they stay here in
+            the page-local header; the global bar owns Home › App › item (#158). */}
+        <ItemCrumbChips item={item} manifest={manifest} />
         <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
         <span style={{ color: "var(--text-paper)", fontWeight: 600 }}>
           {item.title}
@@ -809,29 +791,62 @@ function TopBar({
       </div>
       <span style={{ flex: 1 }} />
 
-      <button
-        type="button"
-        onClick={onCommandPalette}
-        title="Go to file (⌘P)"
-        style={{
-          width: 320,
-          height: 28,
-          border: "1px solid var(--paper-3)",
-          borderRadius: "var(--radius-btn)",
-          background: "var(--paper)",
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "0 10px",
-          color: "var(--text-paper-d)",
-          fontSize: 12,
-        }}
-      >
-        <Icon name="search" size={13} />
-        <span>Go to file, symbol, command…</span>
-        <span style={{ flex: 1 }} />
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>⌘P</span>
-      </button>
+      {/* #159: chat is the main stage; the file IDE (tree + editor + terminal)
+          folds behind this discoverable toggle. Only shown when the App has an
+          IDE at all (`function.workspace`); pressed = the workspace is open. */}
+      {manifest.function.workspace && (
+        <button
+          type="button"
+          onClick={onToggleIde}
+          aria-pressed={!ideCollapsed}
+          title={ideCollapsed ? "Show the file workspace" : "Hide the file workspace"}
+          style={{
+            height: 28,
+            border: "1px solid var(--paper-3)",
+            borderRadius: "var(--radius-btn)",
+            background: ideCollapsed ? "transparent" : "var(--paper-2)",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "0 10px",
+            color: ideCollapsed ? "var(--text-paper-d)" : "var(--text-paper)",
+            fontSize: 12,
+            cursor: "pointer",
+          }}
+        >
+          <Icon name="split" size={13} />
+          <span>Workspace</span>
+        </button>
+      )}
+
+      {/* #159: the command palette jumps to files/symbols — IDE-only chrome.
+          Hidden while the workspace is collapsed (and for chat-only Apps); ⌘P
+          still works and auto-expands the workspace. */}
+      {manifest.function.workspace && !ideCollapsed && (
+        <button
+          type="button"
+          onClick={onCommandPalette}
+          title={`Go to file (${modCombo("P")})`}
+          style={{
+            width: 320,
+            height: 28,
+            border: "1px solid var(--paper-3)",
+            borderRadius: "var(--radius-btn)",
+            background: "var(--paper)",
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "0 10px",
+            color: "var(--text-paper-d)",
+            fontSize: 12,
+          }}
+        >
+          <Icon name="search" size={13} />
+          <span>Go to file, symbol, command…</span>
+          <span style={{ flex: 1 }} />
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{modCombo("P")}</span>
+        </button>
+      )}
 
 
       <Popover
@@ -1031,40 +1046,6 @@ function CloseInvestigationButton({
         </div>
       )}
     </Popover>
-  );
-}
-
-function CrumbLink({
-  label,
-  onClick,
-  title,
-}: {
-  label: string;
-  onClick: () => void;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      style={{
-        color: "var(--text-paper-d)",
-        fontSize: "var(--text-body-sm)",
-        padding: "1px 4px",
-        borderRadius: 3,
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.color = "var(--accent-h)";
-        e.currentTarget.style.background = "var(--paper-2)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.color = "var(--text-paper-d)";
-        e.currentTarget.style.background = "transparent";
-      }}
-    >
-      {label}
-    </button>
   );
 }
 
@@ -2383,7 +2364,7 @@ function BottomPanel({
         <button
           type="button"
           onClick={onToggle}
-          title={open ? "Collapse panel (⌘J)" : "Expand panel (⌘J)"}
+          title={`${open ? "Collapse" : "Expand"} panel (${modCombo("J")})`}
           aria-label="toggle bottom panel"
           style={{ color: "var(--text-paper-d)", padding: 4 }}
         >

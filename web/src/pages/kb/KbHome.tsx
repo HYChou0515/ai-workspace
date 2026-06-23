@@ -14,8 +14,8 @@ import { Outlet, useLocation, useNavigate, useOutletContext, useSearchParams } f
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
-import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
+import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AskAgentLauncher } from "./AskAgentLauncher";
 import { KbDocViewer } from "./KbDocViewer";
 
@@ -33,6 +33,7 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const qc = useQueryClient();
+  useBreadcrumbs([{ label: "Home", to: "/" }, { label: "Knowledge base" }]);
   // The citation/doc overlay is the URL (#93): any /kb/... path may carry
   // ?doc=<sourceDocId>&hl=<snippet>. Driving it from a search param makes a
   // followed citation shareable and closeable with the Back button.
@@ -77,15 +78,11 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
         >
           <Icon name="chat" size={15} /> Chats
         </button>
-        <button type="button" className="kb-nav__back" onClick={() => navigate("/")}>
-          <Icon name="chev_l" size={13} /> Investigations
-        </button>
       </aside>
 
       <main className="kb-main">
         <header className="kb-topbar">
           <span className="kb-topbar__title">{onChats ? "Conversations" : "Collections"}</span>
-          <HealthDot />
           {/* Same component Home uses — routes our own surface on
               manage/history and reuses our viewer for citations. */}
           <AskAgentLauncher

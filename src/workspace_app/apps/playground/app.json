@@ -4,6 +4,16 @@
   "description": "A clean scratch App for poking at the workspace — files, terminal, and sandbox.",
   "icon": "sparkle",
   "color": "#0EA5A4",
+  "onboarding": {
+    "version": "1",
+    "title": "Welcome to the Playground",
+    "intro": "A clean scratch space to poke at files, the terminal, and the sandbox.",
+    "points": [
+      { "title": "Work with files", "body": "Create and edit files in the workspace on the left." },
+      { "title": "Run things", "body": "Open the terminal or ask the agent to run code in the sandbox." },
+      { "title": "Experiment freely", "body": "Nothing here is precious — try things out." }
+    ]
+  },
   "function": { "workspace": true, "sandbox": true, "terminal": true },
   "agent": {
     "prompt_file": "prompts/system.md",
@@ -14,7 +24,8 @@
     "picker": [{ "preset": "qwen3-local", "name": "Playground · Qwen3 (local)" }],
     "suggestions": [
       { "label": "List files", "prompt": "List the files in the workspace." },
-      { "label": "Working dir", "prompt": "Run `pwd` and show me the working directory." }
+      { "label": "Working dir", "prompt": "Run `pwd` and show me the working directory." },
+      { "label": "Hello, Python", "prompt": "Write and run a short Python script that prints a greeting." }
     ]
   },
   "item": { "noun": "Scratch", "noun_plural": "Scratches", "create_label": "New scratch" },

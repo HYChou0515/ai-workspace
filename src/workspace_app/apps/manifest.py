@@ -11,6 +11,7 @@ NOT restated here (decision 19).
 from __future__ import annotations
 
 from importlib import resources
+from typing import Literal
 
 import msgspec
 from msgspec import UNSET, Struct, UnsetType, field
@@ -67,6 +68,12 @@ class Layout(Struct):
     # Files the workspace opens on entry (filtered to those that exist). Replaces
     # the shell's old hardcoded `designViews`.
     default_tabs: list[str] = field(default_factory=list)
+    # #159: which surface leads when an item opens. "chat" (default) makes the
+    # agent chat the main stage and tucks the file IDE behind a `Workspace`
+    # toggle; "ide" opens the VS Code workspace up front (RCA's evidence/brief/
+    # notebook flow). Ignored when `function.workspace` is false (no IDE to
+    # show); "ide" requires workspace=true (validated at catalog build).
+    primary_surface: Literal["chat", "ide"] = "chat"
 
 
 class Lifecycle(Struct):
@@ -86,11 +93,32 @@ class ItemNouns(Struct):
     create_label: str | UnsetType = UNSET  # omitted → "New {noun}"
 
 
+class OnboardingPoint(Struct):
+    """One read-only step/highlight in an App's welcome teaching (#161)."""
+
+    title: str
+    body: str
+
+
+class Onboarding(Struct):
+    """Versioned, read-only welcome teaching shown when entering the App (#161).
+
+    The FE pops it until the user permanently dismisses *this* ``version``; bumping
+    ``version`` re-shows it for everyone. Content is per-App (this block); the
+    platform-level welcome lives as a FE constant, not here."""
+
+    version: str  # hand-bumped when the teaching changes (NOT a release version)
+    title: str
+    intro: str = ""
+    points: list[OnboardingPoint] = field(default_factory=list)
+
+
 class AppManifest(Struct):
     slug: str
     title: str
     agent: AgentManifest
     item: ItemNouns
+    onboarding: Onboarding | None = None
     description: str = ""
     icon: str = ""  # "icon.svg" (file) | emoji | named-icon key
     color: str = ""  # hex → --accent trio (full re-theme inside the App)
