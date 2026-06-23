@@ -350,18 +350,25 @@ A Hub chat answers from three sources, cheapest first:
 - **`→memory`** — digest uploaded material into memory files. Agent nodes (read +
   summarise) write `memory/*.md` + refresh `MEMORY.md`. Produce-then-write.
 - **`→collections`** — the canonical **produce → review → commit**, with the "review"
-  content living in **files** (the user's correction: the human gate stays a simple
-  yes/no; the *questions* go in a file):
+  content living in **files**. The agent does the writing (it **drafts** the glossary);
+  the human **reviews** a draft rather than filling in blanks (#133):
   1. **classify** (agent, per file): pick a collection from the Hub's set
-     (`collections.json`, §5) + write a digest + collect unknown terms →
-     `plan/<f>.json` (gate: `check.choice_in`).
-  2. **glossary** (agent): write the unknown terms into a fill-in file
-     (`glossary.todo.md`) for a human to complete.
-  3. **`human_gate`** (simple yes/no): *"Filled the glossary? Continue?"* The human
-     completes `glossary.todo.md` in the IDE — or **opens another chat** and has the
-     LLM help fill it (shared FileStore, §3.1) — then returns and approves.
+     (`collections.json`, §5) + write a digest + — while it still has the file open —
+     **draft a definition for each unknown term**, flagging each as confident or not →
+     `plan/r<round>/<f>.json` (gate: collection ∈ allowed set + `terms` shape).
+  2. **glossary** (deterministic): assemble the drafts into `glossary.todo.md` — a
+     confident draft becomes the definition; an uncertain one becomes a `⚠️` line the
+     human resolves. (No second agent pass: the drafting already happened in classify.)
+  3. **`human_gate`** (`approve` / `reject` / `revise`): the gate summary points to
+     `glossary.todo.md` with the term / `⚠️` counts + routing; the human **reads/edits
+     the draft in the IDE** (or opens another chat for LLM help — shared FileStore,
+     §3.1). **Approve** commits what's in the file (incl. their edits); **revise** +
+     a note re-runs the whole produce step to regenerate the drafts (overwriting),
+     re-gating; **reject** ends the run for interactive takeover.
   4. **commit** (deterministic, idempotent): `ingest_to_collection` the docs +
-     `create_context_card` (§8) for each filled glossary entry.
+     `upsert_context_card` (§8, #111) for each *filled* glossary entry — an entry that
+     is still only a `⚠️` line is skipped (unresolved), so re-classifying a term
+     updates its card instead of duplicating it.
 - **`→consolidate`** — read current memory + recent chats, **rewrite** memory files
   (dedupe / merge / summarise / drop stale). Self-referential; last-write-wins on
   `memory/`. **Triggered via Run** (a human or an external scheduler hits the Run

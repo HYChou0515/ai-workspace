@@ -337,13 +337,15 @@ run leaves a full transcript + files.
   hatch when an agent goes off the rails: stop, inspect, edit artifacts, re-run.
 - **While `running`, the item is workflow-driven** — a human does not free-chat into
   the same turn queue. Free chat opens once the run is terminal (or `awaiting_human`).
-- **Human gate (v1).** `await human_gate(wf, phase, title, summary, allow, allow_input)`
+- **Human gate (v1).** `await human_gate(wf, phase, title, summary, allow)`
   suspends the run and records a **pending decision** (its result is just another
   **artifact**, `step_<gate>/decision.json`). The run stops; a human responds via
-  `POST .../runs/{id}/decisions`; re-running finds the decision artifact, the gate
-  reads it, and execution continues. Outcomes the body sees: `approve` / `reject`
-  (→ end + interactive takeover) / `revise` (+ input). **"Retry/rewind" is not a gate
-  outcome** — it is the file-based mechanism in §9 (delete artifacts + re-run).
+  `POST .../runs/{id}/decisions` with `{choice, input?}`; re-running finds the decision
+  artifact, the gate reads it, and execution continues. `allow` lists the choices the
+  FE offers; a `revise` choice reveals a free-text `input` the body can act on. Outcomes
+  the body sees: `approve` / `reject` (→ end + interactive takeover) / `revise` (+ input,
+  e.g. `→collections` regenerates its drafts from the note). **"Retry/rewind" is not a
+  gate outcome** — it is the file-based mechanism in §9 (delete artifacts + re-run).
   - **Why v1:** both use cases end in an irreversible commit (publish a report;
     write into collections) that **must be confirmed first**. The canonical shape is
     **produce → review → commit**: the agent produces reviewable artifacts (safe),
