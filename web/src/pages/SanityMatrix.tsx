@@ -8,14 +8,24 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
-import { type SanityApi, type SanityCell, type SanityRunBody, sanityApi } from "../api/sanity";
+import {
+  type SanityApi,
+  type SanityCell,
+  type SanityLevel,
+  type SanityQuestion,
+  type SanityRunBody,
+  sanityApi,
+} from "../api/sanity";
 import { qk } from "../api/queryKeys";
 
 function cellKey(questionKey: string, level: string): string {
   return `${questionKey}|${level}`;
 }
+
+/** What a cell preview opens: the full result plus enough context to read it. */
+type OpenCell = { cell: SanityCell; level: SanityLevel; question: SanityQuestion };
 
 function Dot({ grade, error }: { grade: string; error: string }) {
   if (error) return <span title={error} style={{ color: "var(--warn)" }}>●</span>;
@@ -24,10 +34,156 @@ function Dot({ grade, error }: { grade: string; error: string }) {
   return null; // eyeball-only question → no dot
 }
 
+/** The in-cell preview: the grade dot + a truncated, clickable answer. The text
+ * is a real <button> (not a clickable <span>) so it stays keyboard-reachable,
+ * matching the existing ↻ rerun link-button. Clicking opens the full answer. */
+function CellPreview({
+  cell,
+  testId,
+  onOpen,
+}: {
+  cell: SanityCell;
+  testId: string;
+  onOpen: () => void;
+}) {
+  const [hover, setHover] = useState(false);
+  const preview = cell.error
+    ? cell.error
+    : cell.output.slice(0, 120) + (cell.output.length > 120 ? "…" : "");
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
+      <Dot grade={cell.grade} error={cell.error} />
+      <button
+        type="button"
+        data-testid={testId}
+        onClick={onOpen}
+        onMouseEnter={() => setHover(true)}
+        onMouseLeave={() => setHover(false)}
+        title="點擊看完整內容"
+        style={{
+          border: "none",
+          background: "none",
+          padding: 0,
+          margin: 0,
+          font: "inherit",
+          textAlign: "left",
+          cursor: "pointer",
+          color: hover ? "var(--accent-h)" : "inherit",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+        }}
+      >
+        {preview}
+      </button>
+    </div>
+  );
+}
+
+/** Read-only modal showing one cell's full answer (or error). Dedicated rather
+ * than the shared confirm Dialog because model answers run long (e.g. a 300-字
+ * essay) and need a wider, scrollable surface, not a 420px confirm body. */
+function OutputModal({ open, onClose }: { open: OpenCell; onClose: () => void }) {
+  const { cell, level, question } = open;
+  const prompt = question.messages[question.messages.length - 1]?.content ?? "";
+  const body = cell.error || cell.output;
+  const footer = [
+    cell.grade || null,
+    cell.reasoned ? "reasoned" : "no reasoning",
+    cell.aux || null,
+    `${cell.latency_ms}ms`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      role="presentation"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.4)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 200,
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${level.label} · ${prompt}`}
+        data-testid="sanity-output-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 720,
+          maxWidth: "90vw",
+          maxHeight: "80vh",
+          background: "var(--white)",
+          borderRadius: "var(--radius-card)",
+          border: "1px solid var(--paper-3)",
+          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
+          padding: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        <strong style={{ fontSize: 14 }}>
+          {level.label} · {prompt}
+        </strong>
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            overflowWrap: "anywhere",
+            fontSize: 13,
+            lineHeight: 1.5,
+            color: cell.error ? "var(--warn)" : "var(--text-paper)",
+          }}
+        >
+          {body}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>{footer}</div>
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            type="button"
+            data-testid="sanity-output-close"
+            onClick={onClose}
+            style={{
+              height: 30,
+              padding: "0 14px",
+              borderRadius: "var(--radius-btn)",
+              fontSize: 13,
+              cursor: "pointer",
+              border: "1px solid var(--paper-3)",
+              background: "var(--white)",
+              color: "var(--text-paper)",
+            }}
+          >
+            關閉
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function SanityMatrix({ client = sanityApi }: { client?: SanityApi }) {
   const queryClient = useQueryClient();
   const [model, setModel] = useState<string>("");
   const [pollUntil, setPollUntil] = useState(0);
+  const [openCell, setOpenCell] = useState<OpenCell | null>(null);
 
   const { data: meta } = useQuery({ queryKey: qk.sanity.meta, queryFn: () => client.getMeta() });
   const models = meta?.models ?? [];
@@ -139,14 +295,11 @@ export function SanityMatrix({ client = sanityApi }: { client?: SanityApi }) {
                     >
                       {cell ? (
                         <div>
-                          <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-                            <Dot grade={cell.grade} error={cell.error} />
-                            <span style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                              {cell.error
-                                ? cell.error
-                                : cell.output.slice(0, 120) + (cell.output.length > 120 ? "…" : "")}
-                            </span>
-                          </div>
+                          <CellPreview
+                            cell={cell}
+                            testId={`output-${q.key}-${lvl.level}`}
+                            onOpen={() => setOpenCell({ cell, level: lvl, question: q })}
+                          />
                           <div style={{ marginTop: 3, color: "var(--text-paper-d)", fontSize: 11 }}>
                             {cell.reasoned ? "reasoned" : "no reasoning"}
                             {cell.aux ? ` · ${cell.aux}` : ""}
@@ -208,6 +361,8 @@ export function SanityMatrix({ client = sanityApi }: { client?: SanityApi }) {
           </tbody>
         </table>
       </div>
+
+      {openCell && <OutputModal open={openCell} onClose={() => setOpenCell(null)} />}
     </div>
   );
 }
