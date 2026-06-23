@@ -30,6 +30,14 @@ describe("i18n translate", () => {
     expect(translate("zh-TW", "settings.language")).toBe("語言");
     expect(translate("en", "settings.language")).toBe("Language");
   });
+
+  it("interpolates {named} placeholders", () => {
+    expect(translate("en", "banner.maxTurns", { turns: 12 })).toBe(
+      "Reached the turn limit (12); the conversation stopped.",
+    );
+    expect(translate("zh-TW", "banner.maxTurns", { turns: 12 })).toContain("12");
+    expect(translate("zh-TW", "banner.maxTurns", { turns: 12 })).not.toContain("{turns}");
+  });
 });
 
 describe("i18n detectLocale", () => {

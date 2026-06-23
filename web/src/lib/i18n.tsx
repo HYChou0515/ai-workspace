@@ -151,12 +151,32 @@ export const messages = {
     "zh-TW": "選擇一個對話，或開始新的對話。",
     en: "Select a conversation, or start a new one.",
   },
+
+  // Agent run banners (agentLog reducer) — de-jargoned behavior descriptions
+  "banner.sandboxIdle": {
+    "zh-TW": "閒置太久，下次操作會重新啟動工作環境。",
+    en: "Idle too long — the workspace will restart on your next action.",
+  },
+  "banner.maxTurns": {
+    "zh-TW": "已達回合上限（{turns}），對話已停止。",
+    en: "Reached the turn limit ({turns}); the conversation stopped.",
+  },
+  "banner.cancelled": { "zh-TW": "已取消。", en: "Cancelled." },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;
 
-export function translate(locale: Locale, key: MsgKey): string {
-  return messages[key][locale];
+export type Vars = Record<string, string | number>;
+
+/** Look up a message in `locale`, substituting any `{name}` placeholders. */
+export function translate(locale: Locale, key: MsgKey, vars?: Vars): string {
+  let out = messages[key][locale];
+  if (vars) {
+    for (const [name, value] of Object.entries(vars)) {
+      out = out.split(`{${name}}`).join(String(value));
+    }
+  }
+  return out;
 }
 
 /** Pick a locale from a BCP-47 tag (e.g. `navigator.language`): any `zh*`
@@ -218,8 +238,8 @@ export function useLocale(): [Locale, (locale: Locale) => void] {
   return [locale, setLocale];
 }
 
-/** `t(key)` bound to the active locale. */
-export function useT(): (key: MsgKey) => string {
+/** `t(key, vars?)` bound to the active locale. */
+export function useT(): (key: MsgKey, vars?: Vars) => string {
   const { locale } = useContext(LocaleContext);
-  return useCallback((key: MsgKey) => translate(locale, key), [locale]);
+  return useCallback((key: MsgKey, vars?: Vars) => translate(locale, key, vars), [locale]);
 }
