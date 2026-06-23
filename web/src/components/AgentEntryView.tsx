@@ -13,7 +13,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 
 import type { Message, MessageCitation } from "../api/types";
-import type { AgentEntry, ToolCallView } from "../pages/investigation/agentLog";
+import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
@@ -55,6 +55,12 @@ export function EntryView({
   }
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
+  }
+  if (entry.kind === "phase") {
+    return <PhaseDivider phase={entry.phase} />;
+  }
+  if (entry.kind === "step") {
+    return <StepLine step={entry.step} />;
   }
   return (
     <MessageBlock
@@ -142,6 +148,76 @@ function MentionLine({ by, users, note }: { by: string; users: string[]; note: s
         </span>
       ))}
       {note && <span style={{ color: "var(--text-paper)" }}>— {note}</span>}
+    </div>
+  );
+}
+
+/** A new workflow phase began — a subtle divider so the feed shows the run
+ * moving from one phase to the next (#100 observability). */
+function PhaseDivider({ phase }: { phase: string }) {
+  return (
+    <div
+      data-testid="wf-phase"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 10px 2px",
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: "0.04em",
+        textTransform: "uppercase",
+        color: "var(--text-paper-d)",
+      }}
+    >
+      <span style={{ flex: 1, height: 1, background: "var(--paper-3)" }} />
+      <span>{phase}</span>
+      <span style={{ flex: 1, height: 1, background: "var(--paper-3)" }} />
+    </div>
+  );
+}
+
+const STEP_GLYPH: Record<StepView["status"], string> = {
+  running: "▸",
+  passed: "✓",
+  failed: "✗",
+  skipped: "⤳",
+  retrying: "↻",
+};
+
+const STEP_COLOR: Record<StepView["status"], string> = {
+  running: "var(--text-paper-d)",
+  passed: "var(--text-paper-d)",
+  failed: "var(--err)",
+  skipped: "var(--text-paper-d2)",
+  retrying: "var(--warn, var(--text-paper-d))",
+};
+
+/** One workflow step's live line — so a deterministic phase (commit: ingest each
+ * file) shows movement instead of looking frozen (#100 observability). The line
+ * transitions in place as `step.status` advances (running → passed/failed/…). */
+function StepLine({ step }: { step: StepView }) {
+  const color = STEP_COLOR[step.status];
+  return (
+    <div
+      data-testid="wf-step"
+      data-status={step.status}
+      style={{
+        display: "flex",
+        alignItems: "baseline",
+        gap: 6,
+        padding: "3px 10px",
+        fontSize: 12,
+        color: "var(--text-paper-d)",
+        fontFamily: "var(--font-mono, monospace)",
+      }}
+    >
+      <span aria-hidden style={{ color }}>
+        {STEP_GLYPH[step.status]}
+      </span>
+      <span style={{ color: "var(--text-paper)" }}>{step.name}</span>
+      {step.key && <span style={{ color: "var(--text-paper-d)" }}>· {step.key}</span>}
+      {step.reason && <span style={{ color }}>— {step.reason}</span>}
     </div>
   );
 }

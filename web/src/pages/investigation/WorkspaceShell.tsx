@@ -2614,6 +2614,32 @@ function PanelBody({
             />
           );
         }
+        if (e.kind === "phase") {
+          // #100: a workflow phase boundary in the log view.
+          return <LogLine key={i} ts={fmtTs(e.at)} kind="muted" text={`— ${e.phase} —`} />;
+        }
+        if (e.kind === "step") {
+          // #100: a workflow step's live line (deterministic-phase movement).
+          const glyph =
+            e.step.status === "passed"
+              ? "✓"
+              : e.step.status === "failed"
+                ? "✗"
+                : e.step.status === "skipped"
+                  ? "⤳"
+                  : e.step.status === "retrying"
+                    ? "↻"
+                    : "▸";
+          const detail = `${e.step.key ? ` · ${e.step.key}` : ""}${e.step.reason ? ` — ${e.step.reason}` : ""}`;
+          return (
+            <LogLine
+              key={i}
+              ts={fmtTs(e.at)}
+              kind={e.step.status === "failed" ? "warn" : "muted"}
+              text={`${glyph} ${e.step.name}${detail}`}
+            />
+          );
+        }
         const head = (
           <>
             <span style={logTs}>{fmtTs(e.at)}</span>

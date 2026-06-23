@@ -107,7 +107,9 @@ async def test_no_collections_file_short_circuits():
     run = _collections_run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     # No collections.json written at all → FileNotFound caught.
-    assert await run(wf, {}) == {"status": "no_collections"}
+    result = await run(wf, {})
+    assert result["status"] == "no_collections"
+    assert result["message"]  # #100: a human-readable reason, not a bare token
 
 
 async def test_non_list_collections_json_yields_no_collections():
@@ -116,17 +118,23 @@ async def test_non_list_collections_json_yields_no_collections():
     run = _collections_run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     await wf.write("collections.json", b'{"not": "a list"}')
-    assert await run(wf, {}) == {"status": "no_collections"}
+    result = await run(wf, {})
+    assert result["status"] == "no_collections"
+    assert result["message"]
 
 
 async def test_malformed_collection_entries_are_skipped():
     """Within a list, a non-dict entry (branch 54->53) and a dict entry with no
-    usable name/id (branch 56->53) are both skipped — leaving no collections."""
+    usable name/id (branch 56->53) are both skipped — leaving no usable
+    collections. Since the file is non-empty, the run reports it as malformed
+    (a fixable format error), not as an empty set (#100)."""
     run = _collections_run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     # "just-a-string" → not a dict (54->53); {} → no name/id (56->53).
     await wf.write("collections.json", b'["just-a-string", {}]')
-    assert await run(wf, {}) == {"status": "no_collections"}
+    result = await run(wf, {})
+    assert result["status"] == "malformed_collections"
+    assert result["message"]
 
 
 async def test_collections_set_but_no_input_files_returns_empty():
@@ -136,7 +144,10 @@ async def test_collections_set_but_no_input_files_returns_empty():
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
     await wf.write("inputs/input.json", b"{}")  # the only inputs/* file → excluded by default
-    assert await run(wf, {}) == {"status": "empty", "files": 0}
+    result = await run(wf, {})
+    assert result["status"] == "empty"
+    assert result["files"] == 0
+    assert result["message"]
 
 
 def test_parse_glossary_ignores_a_body_line_before_any_header():
