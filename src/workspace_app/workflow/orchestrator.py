@@ -257,7 +257,7 @@ class WorkflowOrchestrator:
         chat_id: str,
     ) -> None:
         key = chat_id or item_id
-        wf = self._build_handle(run_id, item_id, captured_user, manifest, key)
+        wf = self._build_handle(run_id, item_id, captured_user, manifest, key, workflow_id)
         profile_run = self.load_run(slug, profile, workflow_id)
         inputs = await self._read_inputs(wf, manifest)
         self._step_counts[run_id] = 0
@@ -301,6 +301,7 @@ class WorkflowOrchestrator:
         captured_user: str,
         manifest: WorkflowManifest | None,
         key: str,
+        workflow_id: str = "",
     ) -> WorkflowHandle:
         credential = ""
         if self.credentials is not None:
@@ -313,6 +314,7 @@ class WorkflowOrchestrator:
         wf = WorkflowHandle(
             store=self.store,
             workspace_id=item_id,
+            workflow_id=workflow_id,
             config=dict(manifest.config) if manifest is not None else {},
             user=captured_user,
             emit=lambda ev: self._on_event(run_id, key, ev),
@@ -392,7 +394,9 @@ class WorkflowOrchestrator:
         phase = data.pending_decision.phase
         key = data.chat_id or item_id
         manifest = self.load_manifest(slug, profile, data.workflow_id)
-        wf = self._build_handle(run_id, item_id, data.captured_user, manifest, key)
+        wf = self._build_handle(
+            run_id, item_id, data.captured_user, manifest, key, data.workflow_id
+        )
         await record_decision(wf, phase=phase, choice=choice, input=input, decided_by=decided_by)
         assert manifest is not None
         self._patch(run_id, status=RunStatus.RUNNING, pending_decision=None)
