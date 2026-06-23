@@ -1,5 +1,9 @@
 # workspace-app
 
+[![CI](https://github.com/HYChou0515/ai-workspace/actions/workflows/ci.yml/badge.svg)](https://github.com/HYChou0515/ai-workspace/actions/workflows/ci.yml)
+[![backend coverage](https://codecov.io/gh/HYChou0515/ai-workspace/branch/master/graph/badge.svg?flag=backend)](https://codecov.io/gh/HYChou0515/ai-workspace)
+[![frontend coverage](https://codecov.io/gh/HYChou0515/ai-workspace/branch/master/graph/badge.svg?flag=frontend)](https://codecov.io/gh/HYChou0515/ai-workspace)
+
 A team-internal web app for running OpenAI Agents inside per-workspace
 sandboxes. Each workspace owns a persistent file store; a sandbox is
 created on demand when the agent needs to run a shell command, and is

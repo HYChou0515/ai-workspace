@@ -48,16 +48,24 @@ dev = [
     "ty",
     "coverage>=7",
     "asgi-lifespan>=2.1.0",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: requires real docker / subprocess sandbox / jupyter kernel / uv / ollama; excluded from default CI via -m 'not integration'",
+]
 
 [tool.coverage.run]
 branch = true
 source = ["src/workspace_app"]
 omit = ["src/workspace_app/__main__.py"]
+# parallel + sitecustomize's process_startup() let each pytest-xdist worker
+# subprocess record its own .coverage.* file; `coverage combine` merges them.
+# Harmless for serial runs (one data file, still combined).
+parallel = true
 
 [tool.coverage.report]
 show_missing = true

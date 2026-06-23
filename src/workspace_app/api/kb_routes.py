@@ -550,7 +550,10 @@ def register_kb_routes(
                 indexed = ch.indexed_data
                 assert isinstance(indexed, dict)
                 sid = indexed.get("source_doc_id")
-                if isinstance(sid, str):
+                # `source_doc_id` is a required `str` field, so its indexed value
+                # is always a str when the IN query returns the row; the guard is
+                # belt-and-suspenders narrowing for ty and can't be False here.
+                if isinstance(sid, str):  # pragma: no branch
                     chunk_counts[sid] += 1
 
         for r in data_page:

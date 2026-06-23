@@ -334,6 +334,7 @@ def test_provision_uvrun_builds_present_sources_and_skips_missing(tmp_path, monk
 
 
 @pytest.mark.skipif(not _has_uv(), reason="uv not available")
+@pytest.mark.integration
 def test_build_package_uvrun_launch_runs_from_live_source_and_writes_in_callers_cwd(
     tmp_path: Path,
 ):
@@ -535,6 +536,7 @@ def test_build_package_removes_existing_dst_before_rebuilding(tmp_path: Path, mo
 
 
 @pytest.mark.skipif(not _has_uv(), reason="uv not available")
+@pytest.mark.integration
 def test_build_package_end_to_end_writes_full_prebuilt_tree(tmp_path: Path):
     """Real `uv venv + pip install` on a tiny self-contained source package
     that uses our dispatcher; verify `commands.json`, `schemas/*.json`,
@@ -612,6 +614,7 @@ def test_build_package_end_to_end_writes_full_prebuilt_tree(tmp_path: Path):
     assert (dst / "python").is_dir()
 
 
+@pytest.mark.integration
 def test_build_package_handles_venv_carrier_without_project_scripts(tmp_path: Path):
     """A package whose pyproject.toml has NO `[project.scripts]` table is
     a *venv carrier* — its sole job is to ship a uv-locked venv into the
@@ -680,6 +683,7 @@ def test_build_package_handles_venv_carrier_without_project_scripts(tmp_path: Pa
     assert "packaging" in result.stdout
 
 
+@pytest.mark.integration
 def test_build_package_venv_carrier_launcher_resolves_invocation_symlink(tmp_path: Path):
     """The jail bootstrap shims raw `python` via a symlink:
     `/tmp/.jailbin/python` → `/.tools/python-stack/launch`. The launcher
@@ -737,6 +741,7 @@ def test_build_package_venv_carrier_launcher_resolves_invocation_symlink(tmp_pat
     assert result.stdout.strip() == "3"
 
 
+@pytest.mark.integration
 def test_build_package_venv_carrier_launcher_does_not_dispatch_a_command(tmp_path: Path):
     """The venv-carrier launcher is *not* a 3-stage dispatcher: calling
     it bare (no args) does NOT print a commands list — it drops the user

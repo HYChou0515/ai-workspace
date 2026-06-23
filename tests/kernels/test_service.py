@@ -15,6 +15,8 @@ import pytest
 from workspace_app.api.events import CellDisplayData, CellDone, CellError, CellStream
 from workspace_app.kernels import KernelService
 
+pytestmark = pytest.mark.integration
+
 
 @pytest.fixture
 async def service():

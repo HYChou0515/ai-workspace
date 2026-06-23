@@ -850,6 +850,7 @@ def _ollama_default_model_available() -> bool:
     not _ollama_default_model_available(),
     reason="Ollama or the default AgentConfig.model not available",
 )
+@pytest.mark.integration
 async def test_live_run_against_ollama_emits_at_least_one_event():
 
     from workspace_app.agent import AgentToolContext
