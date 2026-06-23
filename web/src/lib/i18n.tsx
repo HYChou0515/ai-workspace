@@ -129,6 +129,28 @@ export const messages = {
   "mention.summoned": { "zh-TW": "召喚了", en: "summoned" },
   "entry.replay": { "zh-TW": "重跑這一步", en: "Replay this step with the current AI" },
   "entry.undo": { "zh-TW": "復原這一回合（含之後）", en: "Undo this turn and everything after it" },
+
+  // App launcher (Launcher)
+  "launcher.workspace": { "zh-TW": "工作區", en: "Workspace" },
+  "launcher.appsEyebrow": { "zh-TW": "應用程式", en: "APPS" },
+  "launcher.yourApps": { "zh-TW": "你的應用程式", en: "Your apps" },
+  "launcher.noApps": { "zh-TW": "尚無應用程式。", en: "No apps yet." },
+  "launcher.kb.title": { "zh-TW": "知識庫", en: "Knowledge Base" },
+  "launcher.kb.desc": {
+    "zh-TW": "共用文件、知識百科與知識庫對話。",
+    en: "Shared docs, wikis, and the KB chat.",
+  },
+
+  // KB shell (KbHome)
+  "kb.brand": { "zh-TW": "知識庫", en: "Knowledge base" },
+  "kb.collections": { "zh-TW": "知識集", en: "Collections" },
+  "kb.chats": { "zh-TW": "對話", en: "Chats" },
+  "kb.conversations": { "zh-TW": "對話", en: "Conversations" },
+  "kb.back": { "zh-TW": "首頁", en: "Home" },
+  "kb.empty": {
+    "zh-TW": "選擇一個對話，或開始新的對話。",
+    en: "Select a conversation, or start a new one.",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

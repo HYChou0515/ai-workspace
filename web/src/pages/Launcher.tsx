@@ -13,6 +13,7 @@ import { Link } from "react-router-dom";
 import { AppIcon } from "../components/AppIcon";
 import { Icon } from "../components/Icon";
 import { useApps } from "../hooks/useResources";
+import { useT } from "../lib/i18n";
 import type { AppSummary } from "../api/types";
 
 function softOf(hex: string): string {
@@ -57,9 +58,6 @@ function AppCard({ app }: { app: AppSummary }) {
           <span style={{ display: "block", fontSize: 13, color: "var(--text-paper-d)" }}>
             {app.description}
           </span>
-          <span style={{ display: "block", fontSize: 11, fontFamily: "monospace", color: "var(--text-paper-d2)" }}>
-            /a/{app.slug}
-          </span>
         </span>
         <Icon name="arrow_r" size={16} color="var(--text-paper-d2)" />
       </div>
@@ -68,6 +66,7 @@ function AppCard({ app }: { app: AppSummary }) {
 }
 
 function KbCard() {
+  const t = useT();
   return (
     <Link
       to="/kb"
@@ -98,9 +97,11 @@ function KbCard() {
         <Icon name="layers" size={24} color="var(--text-paper-d)" />
       </span>
       <span style={{ flex: 1 }}>
-        <span style={{ display: "block", fontWeight: 700, fontSize: 18 }}>Knowledge Base</span>
+        <span style={{ display: "block", fontWeight: 700, fontSize: 18 }}>
+          {t("launcher.kb.title")}
+        </span>
         <span style={{ display: "block", fontSize: 13, color: "var(--text-paper-d)" }}>
-          Shared docs, wikis, and the KB chat.
+          {t("launcher.kb.desc")}
         </span>
       </span>
       <Icon name="external" size={16} color="var(--text-paper-d2)" />
@@ -110,6 +111,7 @@ function KbCard() {
 
 export function Launcher() {
   const apps = useApps();
+  const t = useT();
   return (
     <div data-testid="page-launcher" style={{ minHeight: "100vh", background: "var(--paper)" }}>
       <header
@@ -122,13 +124,13 @@ export function Launcher() {
           fontWeight: 800,
         }}
       >
-        Workspace
+        {t("launcher.workspace")}
       </header>
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
         <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
-          APPS
+          {t("launcher.appsEyebrow")}
         </div>
-        <h1 style={{ fontSize: 40, margin: "4px 0 24px" }}>Your apps</h1>
+        <h1 style={{ fontSize: 40, margin: "4px 0 24px" }}>{t("launcher.yourApps")}</h1>
         <div
           style={{
             display: "grid",
@@ -137,7 +139,7 @@ export function Launcher() {
           }}
         >
           {apps.length === 0 && (
-            <div style={{ fontSize: 13, color: "var(--text-paper-d2)" }}>No apps yet.</div>
+            <div style={{ fontSize: 13, color: "var(--text-paper-d2)" }}>{t("launcher.noApps")}</div>
           )}
           {apps.map((a) => (
             <AppCard key={a.slug} app={a} />
