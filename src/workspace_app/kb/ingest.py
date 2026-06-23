@@ -253,6 +253,15 @@ class Ingestor:
                 touched.append(doc_id)
         return touched
 
+    def store_file(self, *, collection_id: str, user: str, path: str, data: bytes) -> str | None:
+        """Store ONE file at ``path`` VERBATIM — no archive expansion, no parser /
+        text-only filtering. The import path's per-member primitive (#101): an
+        exported member (even a ``.zip`` doc) round-trips byte-for-byte, whereas
+        ``store`` would re-expand an archive member. ``path`` is canonicalised
+        (zip-slip-safe — escaping paths raise). Returns the doc id, or ``None``
+        when the bytes already match (no-op re-upload)."""
+        return self._store_file(collection_id, user, path, data)
+
     def index(
         self, doc_id: str, *, source_doc_rm: IResourceManager[SourceDoc] | None = None
     ) -> None:

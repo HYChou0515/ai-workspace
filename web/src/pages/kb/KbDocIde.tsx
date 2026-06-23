@@ -35,8 +35,9 @@ import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 
 /** Page through the (paged) documents endpoint into one flat list — the tree
  * needs every path, not a slice. `collection_id` is indexed on the BE, so this
- * is cheap even for a large collection. */
-async function fetchAllDocs(
+ * is cheap even for a large collection. Exported so the collection page can
+ * share the SAME query (key + fetcher) for its index-status strip (#162). */
+export async function fetchAllDocs(
   client: Pick<KbApi, "listDocuments">,
   collectionId: string,
 ): Promise<KbDocument[]> {

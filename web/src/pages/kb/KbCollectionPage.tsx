@@ -14,23 +14,33 @@ import {
   NavLink,
   Navigate,
   Outlet,
+  useLocation,
   useNavigate,
   useOutletContext,
   useParams,
 } from "react-router-dom";
 
 import { mapWithConcurrency } from "../../api/concurrency";
-import { kbApi, type KbApi, type KbCitation, type KbCollection } from "../../api/kb";
+import { kbApi, type KbApi, type KbCitation, type KbCollection, type KbDocument } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
 import { ContextCardsTab } from "./ContextCardsTab";
-import { KbDocIde } from "./KbDocIde";
+import { fetchAllDocs, KbDocIde } from "./KbDocIde";
 import { useKbOutlet } from "./KbHome";
 import { RetrievalToggles } from "./RetrievalToggles";
 import { WikiBrowser } from "./WikiBrowser";
+
+// One-line "what + when" blurb under the collection tabs (#162) — orient the
+// reader on Documents / Context Cards / Wiki at the point of use. No system
+// nouns (chunk / embed / index internals) — describe the outcome.
+const TAB_BLURB: Record<"documents" | "cards" | "wiki", string> = {
+  documents: "The files you've uploaded. Search reads these to answer questions.",
+  cards: "A glossary you write by hand — exact terms the assistant uses verbatim when they come up.",
+  wiki: "An AI-built, cross-linked summary the assistant reads for the big picture. Updates as you upload.",
+};
 
 /** What the collection layout shares with its routed tab children: the open
  * collection, the API client, and the shell's doc-viewer openers (re-provided
@@ -51,6 +61,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const { openDoc, openCite } = useKbOutlet();
   // The open collection is the URL (#93): /kb/collections/:cid.
   const { cid } = useParams();
+  const { pathname } = useLocation();
   const [showRetrieval, setShowRetrieval] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -58,8 +69,12 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState("");
   const [confirmDel, setConfirmDel] = useState(false);
+  // #101: a zip staged for "import into this collection", held until the user
+  // picks how a path collision resolves (overwrite | skip). null ⇒ no dialog.
+  const [importFile, setImportFile] = useState<File | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
+  const importIntoRef = useRef<HTMLInputElement>(null);
   const pinned = usePersistentSet("kb:pinned-collections");
 
   const folderInputRef = (el: HTMLInputElement | null) => {
@@ -75,6 +90,23 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     queryFn: () => client.listCollections(),
   });
 
+  // Open collection's doc statuses, for the index-status strip (#162). Shares
+  // the exact query (key + fetcher) KbDocIde uses, so the two dedupe into one
+  // fetch + one poll; this observer keeps the strip live even on the Cards/Wiki
+  // tabs where KbDocIde isn't mounted.
+  const docStatusQuery = useQuery({
+    queryKey: qk.kb.documents(cid ?? "__none__"),
+    enabled: cid != null,
+    queryFn: () => fetchAllDocs(client, cid as string),
+    refetchInterval: (q) =>
+      (q.state.data as KbDocument[] | undefined)?.some((d) => d.status === "indexing")
+        ? 1500
+        : false,
+  });
+  const statusDocs = (docStatusQuery.data ?? []) as KbDocument[];
+  const indexingCount = statusDocs.filter((d) => d.status === "indexing").length;
+  const erroredCount = statusDocs.filter((d) => d.status === "error").length;
+
   // Reset the transient UI when switching to a different collection. (The doc
   // tree + editor own their own state inside KbDocIde.)
   useEffect(() => {
@@ -83,6 +115,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     setEditingDesc(false);
     setConfirmDel(false);
     setShowRetrieval(false);
+    setImportFile(null);
   }, [cid]);
 
   const updateMut = useMutation({
@@ -110,6 +143,47 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
       if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
     },
   });
+
+  // #101: two-step download — prepare (build the zip server-side) then stream it
+  // via a native anchor so even a large export writes straight to disk.
+  const downloadMut = useMutation({
+    mutationFn: async (collectionId: string) => {
+      const prep = await client.prepareCollectionDownload(collectionId);
+      return {
+        url: client.streamCollectionDownloadUrl(collectionId, prep.download_id),
+        filename: prep.filename,
+      };
+    },
+    onSuccess: ({ url, filename }) => {
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    },
+  });
+
+  // #101: merge a zip INTO the open collection. Picking a file stages it; the
+  // mode dialog then commits with overwrite|skip (overwrite is destructive, so
+  // the user confirms rather than it being silent).
+  const importIntoMut = useMutation({
+    mutationFn: (vars: { file: File; mode: "overwrite" | "skip" }) =>
+      client.importCollectionInto(cid as string, vars.file, vars.mode),
+    onSuccess: () => {
+      if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
+      void qc.invalidateQueries({ queryKey: qk.kb.collections });
+      setImportFile(null);
+    },
+  });
+  const pickImportInto = (files: FileList | null) => {
+    const file = files?.[0];
+    if (file) setImportFile(file);
+    if (importIntoRef.current) importIntoRef.current.value = "";
+  };
+  const runImportInto = (mode: "overwrite" | "skip") => {
+    if (importFile) importIntoMut.mutate({ file: importFile, mode });
+  };
 
   const uploadMut = useMutation({
     // Bounded concurrency: a folder pick can be hundreds of files — firing them
@@ -178,6 +252,10 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const tabIds = (
     selected.use_wiki ? ["documents", "cards", "wiki"] : ["documents", "cards"]
   ) as ("documents" | "cards" | "wiki")[];
+  // Which tab is open (for the blurb) — the path segment after the collection id.
+  const tabSeg = pathname.split("/")[4];
+  const activeTab: "documents" | "cards" | "wiki" =
+    tabSeg === "cards" || tabSeg === "wiki" ? tabSeg : "documents";
 
   return (
     <section className="kb-colpage" aria-label="Collection">
@@ -187,6 +265,14 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           ones (.jsonl/.tsv/.tgz/.tsx) and formats not in the list (.heic). */}
       <input ref={fileRef} type="file" multiple hidden onChange={(e) => upload(e.target.files)} />
       <input ref={folderInputRef} type="file" multiple hidden onChange={(e) => upload(e.target.files, true)} />
+      <input
+        ref={importIntoRef}
+        type="file"
+        accept=".zip,application/zip"
+        hidden
+        aria-label="Import into this collection"
+        onChange={(e) => pickImportInto(e.target.files)}
+      />
 
       <button type="button" className="kb-nav__back" onClick={() => navigate("/kb/collections")}>
         <Icon name="chev_l" size={13} /> Knowledge base
@@ -317,6 +403,12 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                 <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
                   <Icon name="refresh" size={14} color="var(--text-paper-d)" /> Re-index all
                 </button>
+                <button type="button" role="menuitem" className="kb-menu__item" disabled={downloadMut.isPending} onClick={() => { close(); downloadMut.mutate(selected.resource_id); }}>
+                  <Icon name="download" size={14} color="var(--text-paper-d)" /> Download collection
+                </button>
+                <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); importIntoRef.current?.click(); }}>
+                  <Icon name="upload" size={14} color="var(--text-paper-d)" /> Import into this collection
+                </button>
                 <div className="kb-menu__divider" />
                 <button type="button" role="menuitem" className="kb-menu__item kb-menu__item--danger" onClick={() => { close(); setConfirmDel(true); }}>
                   <Icon name="x" size={14} /> Delete collection
@@ -363,6 +455,21 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
               </button>
             </div>
           )}
+
+          {importFile && (
+            <div className="kb-colpage__confirm" role="dialog" aria-label="Import into collection">
+              <span>Import “{importFile.name}” — for documents that already exist?</span>
+              <button type="button" className="kb-btn kb-btn--danger" disabled={importIntoMut.isPending} onClick={() => runImportInto("overwrite")}>
+                Overwrite
+              </button>
+              <button type="button" className="kb-btn" disabled={importIntoMut.isPending} onClick={() => runImportInto("skip")}>
+                Skip existing
+              </button>
+              <button type="button" className="kb-btn" onClick={() => setImportFile(null)}>
+                Cancel
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -374,6 +481,32 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           </div>
         ))}
       </div>
+
+      {/* Index-status strip (#162): visible on every tab so the upload →
+          indexing → ready/error transition is never invisible. Hidden once
+          nothing is uploading / indexing / errored. */}
+      {(busy || indexingCount > 0 || erroredCount > 0) && (
+        <div
+          className={`kb-index-status${erroredCount > 0 && indexingCount === 0 && !busy ? " is-error" : ""}`}
+          data-testid="kb-index-status"
+          role="status"
+        >
+          <Icon
+            name={erroredCount > 0 && indexingCount === 0 && !busy ? "x" : "refresh"}
+            size={13}
+            color={erroredCount > 0 && indexingCount === 0 && !busy ? "var(--err)" : "var(--accent-h)"}
+          />
+          <span>
+            {[
+              busy ? "Uploading…" : null,
+              indexingCount > 0 ? `Indexing ${indexingCount}…` : null,
+              erroredCount > 0 ? `${erroredCount} failed to index` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        </div>
+      )}
 
       {showRetrieval && (
         <div
@@ -423,6 +556,8 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           </NavLink>
         ))}
       </div>
+
+      <p className="kb-tabs__blurb">{TAB_BLURB[activeTab]}</p>
 
       <div className="kb-colpage__docs">
         <Outlet

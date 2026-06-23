@@ -288,9 +288,15 @@ clamps X to the allowed set; the node guarantees exactly-once.
 
 This is the heart of the design. It replaces any separate journal/replay machinery.
 
-- **Each step checkpoints to the workspace** at `step_<name>/<key>` (key = loop
-  element / call identity, e.g. `step_classify/file_7.json`), alongside its
-  **input-hash** (`= hash(the step's arguments)`, per the §3 convention).
+- **Each step checkpoints to the workspace** under the run's **journal home**
+  `/.workflow/<workflow_id>/` (legacy singular workflows → `/.workflow/_default/`), at
+  `/.workflow/<workflow_id>/step_<name>/<key>` (key = loop element / call identity,
+  e.g. `/.workflow/collections/step_classify/file_7.json`), alongside its
+  **input-hash** (`= hash(the step's arguments)`, per the §3 convention). The journal
+  lives in its own folder so it stops scattering across the workspace root, and each
+  workflow's `step_*` artifacts stay grouped under that workflow's folder (#136). The
+  bare `step_<name>/<key>` shorthand used elsewhere in this doc always means that path
+  *inside* the run's journal home.
 - **On-demand inline skip.** A run re-executes `run()` from the top. **When control
   flow reaches a step**, the step first checks its own artifact: if it exists **and**
   the input-hash still matches → **skip** (return the cached artifact, do not redo
@@ -318,8 +324,9 @@ What this single mechanism gives us, for free:
   upstream artifact re-runs its downstream via input-hash. No rewind API, no
   `retry_to` list, no positional-prefix rule. *(All of these earlier mechanisms are
   removed — superseded by this.)*
-- **Reset "from scratch"** — delete `step_*` artifacts (keep the inputs). The #52
-  per-turn-snapshot dependency is no longer required for this.
+- **Reset "from scratch"** — delete the run's journal folder `/.workflow/<workflow_id>/`
+  (or the `step_*` artifacts within it); keep the inputs. The #52 per-turn-snapshot
+  dependency is no longer required for this.
 
 ---
 
@@ -339,7 +346,8 @@ run leaves a full transcript + files.
   the same turn queue. Free chat opens once the run is terminal (or `awaiting_human`).
 - **Human gate (v1).** `await human_gate(wf, phase, title, summary, allow)`
   suspends the run and records a **pending decision** (its result is just another
-  **artifact**, `step_<gate>/decision.json`). The run stops; a human responds via
+  **artifact**, `step_<gate>/decision.json` inside the run's journal home — i.e.
+  `/.workflow/<workflow_id>/step_<gate>/decision.json`). The run stops; a human responds via
   `POST .../runs/{id}/decisions` with `{choice, input?}`; re-running finds the decision
   artifact, the gate reads it, and execution continues. `allow` lists the choices the
   FE offers; a `revise` choice reveals a free-text `input` the body can act on. Outcomes

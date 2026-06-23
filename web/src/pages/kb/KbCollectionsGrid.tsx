@@ -7,7 +7,7 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi } from "../../api/kb";
@@ -48,6 +48,7 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
       { replace: key === "q" },
     );
   const pinned = usePersistentSet("kb:pinned-collections");
+  const importNewRef = useRef<HTMLInputElement>(null);
 
   const { data: collections = [], isPending: collectionsLoading } = useQuery({
     queryKey: qk.kb.collections,
@@ -59,6 +60,21 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
       client.createCollection(v.name, v.description, { useRag: v.useRag, useWiki: v.useWiki }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });
+
+  // #101: import a zip as a NEW collection. On success open it at its URL.
+  const importNewMut = useMutation({
+    mutationFn: (file: File) => client.importCollectionNew(file),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: qk.kb.collections });
+      navigate(`/kb/collections/${encodeURIComponent(res.collection_id)}`);
+    },
+  });
+  const pickImportNew = (files: FileList | null) => {
+    const file = files?.[0];
+    if (file) importNewMut.mutate(file);
+    // Clear so re-picking the same file fires onChange again.
+    if (importNewRef.current) importNewRef.current.value = "";
+  };
 
   const mostCited = collections.reduce<(typeof collections)[number] | null>(
     (best, c) => (c.cited > (best?.cited ?? 0) ? c : best),
@@ -173,6 +189,17 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
           )}
         </Popover>
         <span style={{ flex: 1 }} />
+        <input
+          ref={importNewRef}
+          type="file"
+          accept=".zip,application/zip"
+          hidden
+          aria-label="Import collection from file"
+          onChange={(e) => pickImportNew(e.target.files)}
+        />
+        <button type="button" className="kb-btn" disabled={importNewMut.isPending} onClick={() => importNewRef.current?.click()}>
+          <Icon name="upload" size={13} /> Import
+        </button>
         <button type="button" className="kb-btn kb-btn--primary" onClick={() => setNewOpen(true)}>
           <Icon name="plus" size={13} /> New collection
         </button>
