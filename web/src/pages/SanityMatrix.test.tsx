@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, screen, waitFor } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -98,6 +98,79 @@ describe("SanityMatrix", () => {
     await screen.findByText("台灣的首都是哪裡?");
     await userEvent.selectOptions(screen.getByTestId("sanity-model"), "ollama_chat/qwen3:8b");
     await waitFor(() => expect(getResults).toHaveBeenCalledWith("ollama_chat/qwen3:8b"));
+  });
+
+  it("clicking a filled cell's output opens a modal with the full, untruncated output", async () => {
+    const long = "甲".repeat(200);
+    const api = fakeApi({
+      getResults: async (model: string) =>
+        model === meta.models[0] ? [{ ...cells[0], output: long }] : [],
+    });
+    renderWithQuery(<SanityMatrix client={api} />);
+
+    // the in-cell preview is truncated (120 chars + …), so the full string is NOT in the grid
+    const preview = await screen.findByTestId("output-q1-none");
+    expect(preview).not.toHaveTextContent(long);
+
+    await userEvent.click(preview);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(long)).toBeInTheDocument();
+  });
+
+  it("the output modal shows the level label and question prompt as context", async () => {
+    renderWithQuery(<SanityMatrix client={fakeApi()} />);
+    await userEvent.click(await screen.findByTestId("output-q1-none"));
+    const dialog = await screen.findByRole("dialog");
+    // the column's level label + the question prompt, so you know which cell this is
+    expect(within(dialog).getByText(/Off/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/台灣的首都是哪裡/)).toBeInTheDocument();
+  });
+
+  it("the output modal footer surfaces grade, reasoning and latency", async () => {
+    renderWithQuery(<SanityMatrix client={fakeApi()} />);
+    await userEvent.click(await screen.findByTestId("output-q1-none"));
+    const dialog = await screen.findByRole("dialog");
+    // latency is shown nowhere else in the grid; the dot/aux are restated for context
+    expect(within(dialog).getByText(/5\s*ms/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/pass/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/no reasoning/)).toBeInTheDocument();
+  });
+
+  it("closes the output modal via the button, the backdrop, and Escape", async () => {
+    renderWithQuery(<SanityMatrix client={fakeApi()} />);
+
+    // 1) close button
+    await userEvent.click(await screen.findByTestId("output-q1-none"));
+    await screen.findByRole("dialog");
+    await userEvent.click(screen.getByTestId("sanity-output-close"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    // 2) Escape
+    await userEvent.click(screen.getByTestId("output-q1-none"));
+    await screen.findByRole("dialog");
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+    // 3) backdrop
+    await userEvent.click(screen.getByTestId("output-q1-none"));
+    const dialog = await screen.findByRole("dialog");
+    await userEvent.click(dialog.parentElement as HTMLElement);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("an errored cell opens the modal showing the full error text", async () => {
+    const longError = "RuntimeError: " + "x".repeat(200);
+    const api = fakeApi({
+      getResults: async (model: string) =>
+        model === meta.models[0]
+          ? [{ ...cells[0], output: "", grade: "", error: longError }]
+          : [],
+    });
+    renderWithQuery(<SanityMatrix client={api} />);
+    await userEvent.click(await screen.findByTestId("output-q1-none"));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(longError)).toBeInTheDocument();
   });
 
   it("shows an empty-state when no models are configured", async () => {

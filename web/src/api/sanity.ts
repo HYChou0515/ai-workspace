@@ -114,6 +114,22 @@ const mockCells: Record<string, SanityCell[]> = {
       error: "",
       latency_ms: 420,
     },
+    {
+      // A long answer so the in-cell truncation + "show full" modal are demoable offline.
+      question_key: "q-essay",
+      level: "medium",
+      output:
+        "海洋是地球上最廣闊的水體,覆蓋了約七成的表面,孕育著無數的生命。" +
+        "清晨時分,陽光灑在波光粼粼的海面上,海鷗在浪花間盤旋;" +
+        "潮水一次次拍打著沙灘,留下細碎的貝殼與泡沫。" +
+        "深處的洋流默默調節著全球的氣候,連結著遙遠的大陸。" +
+        "對人類而言,海洋既是糧食與資源的寶庫,也是需要共同守護的脆弱家園。",
+      reasoned: true,
+      grade: "",
+      aux: "143 字",
+      error: "",
+      latency_ms: 3120,
+    },
   ],
 };
 
