@@ -5,21 +5,34 @@ and the document render endpoint. Registered onto the app by `create_app`.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import posixpath
+import re
+import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import msgspec
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.aggregates import Count, ForeignAggregate, Max, Sum
 from specstar.types import Binary, ResourceIDNotFoundError
+from starlette.background import BackgroundTask
 
 from ..kb.cited import chunk_cited, collection_cited, doc_cited_count, doc_cited_for_ids
 from ..kb.code_repo import CodeRepoIngestor, CodeRepoSyncError
+from ..kb.collection_export import (
+    build_collection_zip,
+    collection_zip_filename,
+    downloads_dir,
+    sweep_stale_downloads,
+)
+from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
@@ -202,6 +215,27 @@ class DocumentRow(BaseModel):
     updated_at: int  # epoch ms
 
 
+class DownloadPrepared(BaseModel):
+    """Issue #101: result of POST .../download/prepare — the handle the FE
+    anchor-navigates to (GET .../download/{download_id}) to stream the zip.
+    `size` lets the FE show the export size before/while downloading."""
+
+    download_id: str
+    filename: str
+    size: int
+
+
+class CollectionImported(BaseModel):
+    """Issue #101: result of importing an exported zip. `collection_id` is the
+    target — a freshly created one (new-collection import) or the existing one
+    merged into. Documents land as `status="indexing"` and re-index off-request,
+    so the FE refetches the collection to watch them flip to `ready`."""
+
+    collection_id: str
+    document_ids: list[str]
+    status: str = "indexing"
+
+
 class DocumentsPage(BaseModel):
     """A page of documents inside a collection. `total` is the FULL collection
     size (not capped at `limit`), so the FE can render `n of N` + jump-to-page
@@ -218,6 +252,13 @@ class DocumentsPage(BaseModel):
 
 def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
+
+
+def _unlink_quietly(path: Path) -> None:
+    """Delete a streamed export zip after the response is sent. Best-effort —
+    a missing file (double-send race) is fine."""
+    with contextlib.suppress(OSError):
+        path.unlink()
 
 
 def register_kb_routes(
@@ -348,6 +389,110 @@ def register_kb_routes(
         for doc_id in ids:
             index_coordinator.enqueue(doc_id, collection_id)
         return {"document_ids": ids, "status": "indexing"}
+
+    # ── Issue #101: collection export (two-step prepare → stream) ──────────
+    @app.post("/kb/collections/{collection_id}/download/prepare")
+    async def prepare_collection_download(collection_id: str) -> DownloadPrepared:
+        """Build the export zip to a temp file and hand back a download id. The
+        zip build (restore every blob + compress) is blocking, so it runs off
+        the event loop. Stale temp files from abandoned prepares are reaped here.
+        404 when the collection is unknown."""
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as e:
+            raise HTTPException(status_code=404, detail="collection not found") from e
+        assert isinstance(coll, Collection)
+        sweep_stale_downloads()
+        download_id = uuid.uuid4().hex
+        out_path = downloads_dir() / f"{download_id}.zip"
+        await asyncio.to_thread(build_collection_zip, spec, collection_id, out_path)
+        return DownloadPrepared(
+            download_id=download_id,
+            filename=collection_zip_filename(coll.name),
+            size=out_path.stat().st_size,
+        )
+
+    @app.get("/kb/collections/{collection_id}/download/{download_id}")
+    async def stream_collection_download(collection_id: str, download_id: str) -> FileResponse:
+        """Stream a prepared export zip once, then delete it. `download_id` is a
+        uuid hex — validated so it can't escape `downloads_dir()`. 404 when the
+        id is malformed or the file was already streamed / reaped / never made."""
+        if not re.fullmatch(r"[0-9a-f]{32}", download_id):
+            raise HTTPException(status_code=404, detail="download not found")
+        path = downloads_dir() / f"{download_id}.zip"
+        if not path.exists():
+            raise HTTPException(status_code=404, detail="download not found")
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as e:
+            raise HTTPException(status_code=404, detail="collection not found") from e
+        assert isinstance(coll, Collection)
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=collection_zip_filename(coll.name),
+            background=BackgroundTask(_unlink_quietly, path),
+        )
+
+    @app.post("/kb/collections/import")
+    async def import_new_collection(
+        file: UploadFile = File(...),  # noqa: B008
+    ) -> CollectionImported:
+        """Import an exported zip as a NEW collection. The manifest restores the
+        collection settings + context cards; a manifest-less zip degrades to a
+        plain-files import named after the upload. Blocking work runs off-loop."""
+        data = await file.read()
+        fallback = Path(file.filename or "import").stem or "imported"
+        result = await asyncio.to_thread(
+            import_collection,
+            spec=spec,
+            ingestor=ingestor,
+            index_coordinator=index_coordinator,
+            zip_data=data,
+            user=get_user_id(),
+            fallback_name=fallback,
+        )
+        return CollectionImported(
+            collection_id=result.collection_id,
+            document_ids=result.document_ids,
+            status=result.status,
+        )
+
+    @app.post("/kb/collections/{collection_id}/import")
+    async def import_into_collection(
+        collection_id: str,
+        file: UploadFile = File(...),  # noqa: B008
+        mode: str = Query("overwrite"),
+    ) -> CollectionImported:
+        """Merge an exported zip INTO an existing collection. `mode` decides a
+        path collision: `overwrite` (last-write-wins) or `skip`. 404 unknown
+        collection, 400 bad mode."""
+        if mode not in ("overwrite", "skip"):
+            raise HTTPException(status_code=400, detail="mode must be 'overwrite' or 'skip'")
+        rm = spec.get_resource_manager(Collection)
+        try:
+            rm.get(collection_id)
+        except ResourceIDNotFoundError as e:
+            raise HTTPException(status_code=404, detail="collection not found") from e
+        data = await file.read()
+        result = await asyncio.to_thread(
+            import_collection,
+            spec=spec,
+            ingestor=ingestor,
+            index_coordinator=index_coordinator,
+            zip_data=data,
+            user=get_user_id(),
+            fallback_name="imported",
+            collection_id=collection_id,
+            mode=mode,
+        )
+        return CollectionImported(
+            collection_id=result.collection_id,
+            document_ids=result.document_ids,
+            status=result.status,
+        )
 
     @app.post("/kb/collections/{collection_id}/sync")
     async def sync_collection(collection_id: str) -> SyncOut:

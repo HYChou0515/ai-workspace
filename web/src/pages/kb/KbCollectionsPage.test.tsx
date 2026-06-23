@@ -554,4 +554,74 @@ describe("KbCollectionsPage", () => {
 
     expect(updateCollection).toHaveBeenCalledWith("c1", { use_rag: true, use_wiki: true });
   });
+
+  it("downloads a collection: prepares the export then triggers the stream", async () => {
+    await mockKbApi.createCollection("Reports");
+    const prepSpy = vi.spyOn(mockKbApi, "prepareCollectionDownload");
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(() => {});
+    render(<KbCollectionsPage client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open Reports" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Collection settings" }));
+    await userEvent.click(await screen.findByRole("menuitem", { name: /download collection/i }));
+
+    const colId = (await mockKbApi.listCollections())[0]!.resource_id;
+    await waitFor(() => expect(prepSpy).toHaveBeenCalledWith(colId));
+    // the prepared zip is fetched via a native anchor download (streamed to disk)
+    await waitFor(() => expect(clickSpy).toHaveBeenCalled());
+
+    clickSpy.mockRestore();
+    prepSpy.mockRestore();
+  });
+
+  it("imports a zip as a new collection from the landing page and opens it", async () => {
+    render(<KbCollectionsPage client={mockKbApi} />);
+
+    const input = screen.getByLabelText("Import collection from file") as HTMLInputElement;
+    const file = new File(["zipbytes"], "Archive.zip", { type: "application/zip" });
+    await userEvent.upload(input, file);
+
+    // the imported collection opens to its page (the settings button only exists there)
+    expect(await screen.findByRole("button", { name: "Collection settings" })).toBeInTheDocument();
+    // and it is named after the uploaded file (manifest-less fallback)
+    const names = (await mockKbApi.listCollections()).map((c) => c.name);
+    expect(names).toContain("Archive");
+  });
+
+  it("imports a zip into the open collection after choosing overwrite", async () => {
+    await mockKbApi.createCollection("kb");
+    const intoSpy = vi.spyOn(mockKbApi, "importCollectionInto");
+    render(<KbCollectionsPage client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const input = screen.getByLabelText("Import into this collection") as HTMLInputElement;
+    const file = new File(["zip"], "kb.zip", { type: "application/zip" });
+    await userEvent.upload(input, file);
+
+    // a confirm dialog appears so the user picks how path collisions resolve
+    await userEvent.click(await screen.findByRole("button", { name: /overwrite/i }));
+
+    const colId = (await mockKbApi.listCollections()).find((c) => c.name === "kb")!.resource_id;
+    await waitFor(() => expect(intoSpy).toHaveBeenCalledWith(colId, file, "overwrite"));
+    intoSpy.mockRestore();
+  });
+
+  it("imports into the open collection with skip mode when chosen", async () => {
+    await mockKbApi.createCollection("kb");
+    const intoSpy = vi.spyOn(mockKbApi, "importCollectionInto");
+    render(<KbCollectionsPage client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const input = screen.getByLabelText("Import into this collection") as HTMLInputElement;
+    const file = new File(["zip"], "kb.zip", { type: "application/zip" });
+    await userEvent.upload(input, file);
+
+    await userEvent.click(await screen.findByRole("button", { name: /skip existing/i }));
+
+    const colId = (await mockKbApi.listCollections()).find((c) => c.name === "kb")!.resource_id;
+    await waitFor(() => expect(intoSpy).toHaveBeenCalledWith(colId, file, "skip"));
+    intoSpy.mockRestore();
+  });
 });
