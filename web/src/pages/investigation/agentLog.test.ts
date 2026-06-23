@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+// happy-dom (not node) so the locale is deterministic: the reducer localizes
+// banners via initialLocale(), which reads navigator.language — present and
+// varying across Node versions/CI, absent locally. Pin it explicitly below so
+// these assertions don't depend on the ambient environment (#160).
+// @vitest-environment happy-dom
+import { beforeEach, describe, expect, it } from "vitest";
 
 import type { AgentEvent } from "../../events";
 import {
@@ -13,6 +18,10 @@ import {
   reduceAgent,
   tokensPerSec,
 } from "./agentLog";
+
+// Pin the locale so banner assertions are environment-independent (the reducer
+// reads it via initialLocale()).
+beforeEach(() => localStorage.setItem("ws.locale", "zh-TW"));
 
 describe("metrics formatting", () => {
   it("computes tok/s from completion tokens over elapsed", () => {
