@@ -8,7 +8,7 @@
  */
 
 import type { AgentEvent } from "../events";
-import { apiFetch } from "./http";
+import { API_BASE, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
 import type { ReasoningEffort } from "./types";
@@ -36,6 +36,23 @@ export type KbCollection = {
    * wiki answers. Blank ⇒ the bundled prompt is used as-is. */
   wiki_maintainer_guidance: string;
   wiki_reader_guidance: string;
+};
+
+/** Issue #101: result of preparing a collection export — the handle to stream
+ * the zip via `streamCollectionDownloadUrl`. `size` is the built zip's bytes. */
+export type DownloadPrepared = {
+  download_id: string;
+  filename: string;
+  size: number;
+};
+
+/** Issue #101: result of importing an exported zip. `collection_id` is the
+ * target (a new collection, or the existing one merged into); docs land as
+ * `status="indexing"` and re-index off-request. */
+export type CollectionImported = {
+  collection_id: string;
+  document_ids: string[];
+  status: string;
 };
 
 /** The LLM wiki's page paths for a collection (the read-only browser's tree). */
@@ -271,6 +288,24 @@ export interface KbApi {
    * member). `path` overrides the stored filename — used for folder uploads to
    * preserve each file's relative path. */
   uploadDocument(collectionId: string, file: File, path?: string): Promise<string[]>;
+  /** Issue #101: build the collection's export zip and return its handle. The
+   * zip is held server-side until streamed (or reaped); two-step so a large
+   * export's build latency hides behind a loading state, not a stalled click. */
+  prepareCollectionDownload(collectionId: string): Promise<DownloadPrepared>;
+  /** The URL to navigate to (native streaming download) for a prepared export.
+   * Not a fetch — an `<a href>` so the browser streams straight to disk. */
+  streamCollectionDownloadUrl(collectionId: string, downloadId: string): string;
+  /** Issue #101: import an exported zip as a NEW collection (settings + cards
+   * restored from its manifest; a manifest-less zip becomes a plain-files
+   * import named after the file). Returns the new collection id. */
+  importCollectionNew(file: File): Promise<CollectionImported>;
+  /** Issue #101: merge an exported zip INTO an existing collection. `mode`
+   * resolves a path collision: `overwrite` (last-write-wins) or `skip`. */
+  importCollectionInto(
+    collectionId: string,
+    file: File,
+    mode: "overwrite" | "skip",
+  ): Promise<CollectionImported>;
   /** Render a source document to markdown (kb:// links) for the citation viewer. */
   renderDocument(documentId: string): Promise<KbRenderedDoc>;
   /** A document's indexed chunks + their cited counts (the chunks debug view). */
@@ -403,6 +438,40 @@ export const realKbApi: KbApi = {
       "upload document",
     );
     return (await resp.json()).document_ids;
+  },
+  async prepareCollectionDownload(collectionId) {
+    const resp = await ok(
+      await apiFetch(
+        `/kb/collections/${encodeURIComponent(collectionId)}/download/prepare`,
+        { method: "POST" },
+      ),
+      "prepare collection download",
+    );
+    return resp.json();
+  },
+  streamCollectionDownloadUrl(collectionId, downloadId) {
+    return `${API_BASE}/kb/collections/${encodeURIComponent(collectionId)}/download/${encodeURIComponent(downloadId)}`;
+  },
+  async importCollectionNew(file) {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const resp = await ok(
+      await apiFetch("/kb/collections/import", { method: "POST", body: form }),
+      "import collection",
+    );
+    return resp.json();
+  },
+  async importCollectionInto(collectionId, file, mode) {
+    const form = new FormData();
+    form.append("file", file, file.name);
+    const resp = await ok(
+      await apiFetch(
+        `/kb/collections/${encodeURIComponent(collectionId)}/import?mode=${mode}`,
+        { method: "POST", body: form },
+      ),
+      "import into collection",
+    );
+    return resp.json();
   },
   async renderDocument(documentId) {
     // documentId is an opaque, slash-free token — pass it as a query param so
