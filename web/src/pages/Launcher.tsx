@@ -14,6 +14,7 @@ import { AppIcon } from "../components/AppIcon";
 import { HelpButton } from "../components/HelpButton";
 import { Icon } from "../components/Icon";
 import { OnboardingModal } from "../components/OnboardingModal";
+import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useOnboarding } from "../hooks/useOnboarding";
@@ -117,22 +118,11 @@ export function Launcher() {
   const apps = useApps();
   const me = useCurrentUser();
   const ob = useOnboarding(me, PLATFORM_SCOPE, PLATFORM_ONBOARDING);
+  // The launcher is "home" — its own title bar is now redundant with the global
+  // bar's brand (#158); publish a single Home crumb instead.
+  useBreadcrumbs([{ label: "Home" }]);
   return (
-    <div data-testid="page-launcher" style={{ minHeight: "100vh", background: "var(--paper)" }}>
-      <header
-        style={{
-          height: 60,
-          display: "flex",
-          alignItems: "center",
-          gap: 12,
-          padding: "0 24px",
-          borderBottom: "1px solid var(--paper-3)",
-          fontWeight: 800,
-        }}
-      >
-        <span style={{ flex: 1 }}>Workspace</span>
-        <HelpButton onClick={ob.reopen} label="About this workspace" />
-      </header>
+    <div data-testid="page-launcher" style={{ minHeight: "100%", background: "var(--paper)" }}>
       {ob.open && ob.content && (
         <OnboardingModal
           content={ob.content}
@@ -144,7 +134,10 @@ export function Launcher() {
         <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
           APPS
         </div>
-        <h1 style={{ fontSize: 40, margin: "4px 0 24px" }}>Your apps</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0 24px" }}>
+          <h1 style={{ fontSize: 40, margin: 0 }}>Your apps</h1>
+          <HelpButton onClick={ob.reopen} label="About this workspace" />
+        </div>
         <div
           style={{
             display: "grid",

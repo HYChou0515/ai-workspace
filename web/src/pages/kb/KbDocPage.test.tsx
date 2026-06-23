@@ -12,7 +12,21 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { KbApi, KbDocChunk, KbRenderedDoc } from "../../api/kb";
+import { BreadcrumbProvider, useBreadcrumbTrail } from "../../hooks/breadcrumbs";
 import { KbDocPage } from "./KbDocPage";
+
+function TrailProbe() {
+  const trail = useBreadcrumbTrail();
+  return (
+    <ul data-testid="trail">
+      {trail.map((c, i) => (
+        <li key={i} data-to={c.to ?? ""}>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function mkDoc(
   over: Partial<KbRenderedDoc> & Pick<KbRenderedDoc, "filename" | "markdown">,
@@ -85,5 +99,29 @@ describe("KbDocPage", () => {
     const chunk0 = (await screen.findByText("# Reflow")).closest(".kb-chunk")!;
     expect(chunk0).toHaveTextContent("3 cited");
     expect(chunk0).toHaveTextContent("#0");
+  });
+
+  it("publishes a Home › Knowledge base › {doc} breadcrumb once the doc loads", async () => {
+    const client = fakeClient(mkDoc({ filename: "reflow.md", markdown: "# Reflow\n\nbody" }));
+    render(
+      <MemoryRouter initialEntries={["/kb/doc/col-1/u/reflow.md"]}>
+        <BreadcrumbProvider>
+          <Routes>
+            <Route path="/kb/doc/*" element={<KbDocPage client={client} />} />
+          </Routes>
+          <TrailProbe />
+        </BreadcrumbProvider>
+      </MemoryRouter>,
+    );
+    await waitFor(() => {
+      const items = screen.getByTestId("trail").querySelectorAll("li");
+      expect([...items].map((li) => li.textContent)).toEqual([
+        "Home",
+        "Knowledge base",
+        "reflow.md",
+      ]);
+    });
+    const items = screen.getByTestId("trail").querySelectorAll("li");
+    expect(items[1].getAttribute("data-to")).toBe("/kb");
   });
 });

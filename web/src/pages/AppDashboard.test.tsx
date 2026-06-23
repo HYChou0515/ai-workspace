@@ -4,11 +4,25 @@ import { cleanup, fireEvent, render, screen, within } from "@testing-library/rea
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { QueryWrap } from "../test/queryWrapper";
 import { AppDashboard } from "./AppDashboard";
 
 afterEach(cleanup);
 beforeEach(() => localStorage.clear());
+
+function TrailProbe() {
+  const trail = useBreadcrumbTrail();
+  return (
+    <ul data-testid="trail">
+      {trail.map((c, i) => (
+        <li key={i} data-to={c.to ?? ""}>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 // Owner/current-user resolution is its own concern (useUsers tests); stub it so
 // the dashboard test stays hermetic and doesn't reach the network.
@@ -70,16 +84,28 @@ vi.mock("../hooks/useResources", () => ({
   ],
 }));
 
-function renderDash() {
+function renderDashAt(entry: string, extra?: React.ReactNode) {
   return render(
     <QueryWrap>
-      <MemoryRouter initialEntries={["/a/rca"]}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
-          <Route path="/a/:slug" element={<AppDashboard />} />
+          <Route
+            path="/a/:slug"
+            element={
+              <>
+                <AppDashboard />
+                {extra}
+              </>
+            }
+          />
         </Routes>
       </MemoryRouter>
     </QueryWrap>,
   );
+}
+
+function renderDash() {
+  return renderDashAt("/a/rca");
 }
 
 describe("AppDashboard", () => {
@@ -156,5 +182,44 @@ describe("AppDashboard", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Pinned/ }));
     const list = screen.getByTestId("dash-items");
     expect(within(list).getByRole("link", { name: /Oven drift/ })).toBeInTheDocument();
+  });
+
+  it("publishes a Home › {App title} breadcrumb", () => {
+    render(
+      <QueryWrap>
+        <MemoryRouter initialEntries={["/a/rca"]}>
+          <Routes>
+            <Route
+              path="/a/:slug"
+              element={
+                <BreadcrumbProvider>
+                  <AppDashboard />
+                  <TrailProbe />
+                </BreadcrumbProvider>
+              }
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryWrap>,
+    );
+    const items = screen.getByTestId("trail").querySelectorAll("li");
+    expect([...items].map((li) => li.textContent)).toEqual(["Home", "Root Cause Analysis"]);
+    expect(items[0].getAttribute("data-to")).toBe("/");
+    expect(items[1].getAttribute("data-to")).toBe("");
+  });
+
+  it("no longer carries its own 'All apps' home icon (the global bar navigates)", () => {
+    renderDash();
+    expect(screen.queryByRole("link", { name: /All apps/i })).toBeNull();
+  });
+
+  it("initializes the topic filter from ?topic= (breadcrumb chip deep-link)", () => {
+    // Oven drift carries topic "Reflow"; deep-linking ?topic=Panel must hide it.
+    renderDashAt("/a/rca?topic=Panel");
+    expect(screen.queryByRole("link", { name: /Oven drift/ })).not.toBeInTheDocument();
+
+    cleanup();
+    renderDashAt("/a/rca?topic=Reflow");
+    expect(screen.getByRole("link", { name: /Oven drift/ })).toBeInTheDocument();
   });
 });

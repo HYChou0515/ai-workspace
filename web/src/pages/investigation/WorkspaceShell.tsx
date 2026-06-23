@@ -16,7 +16,6 @@ import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
-import { AppIcon } from "../../components/AppIcon";
 import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
@@ -33,7 +32,9 @@ import {
   useEditorGroups,
 } from "../../hooks/useEditorGroups";
 import { useThemeMode } from "../../hooks/theme";
+import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
+import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
@@ -134,6 +135,11 @@ function ShellBody({
     manifest.resource_route,
     item as unknown as AppItem,
   );
+  useBreadcrumbs([
+    { label: "Home", to: "/" },
+    { label: manifest.title, to: `/a/${manifest.slug}` },
+    { label: item.title },
+  ]);
   // The initial open tabs come from the App's manifest (#89 P7b), filtered to
   // those that actually exist — not a hardcoded RCA design-view list.
   const defaultTabs = manifest.layout.default_tabs;
@@ -303,7 +309,9 @@ function ShellBody({
       <div
         data-testid="page-item"
         style={{
-          height: "100vh",
+          // Fill the global layout's content area (#158), not the whole viewport
+          // — the global bar takes the top 40px.
+          height: "100%",
           display: "flex",
           flexDirection: "column",
           background: "var(--paper)",
@@ -724,11 +732,6 @@ function TopBar({
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
-  const navigate = useNavigate();
-  // RCA breadcrumb chips not yet covered by DomainFields. AppItem's domain
-  // fields are typed `unknown`, so narrow the two this crumb still reads.
-  const topics = (item.topics as string[] | undefined) ?? [];
-  const product = String(item.product ?? "");
   return (
     <div
       style={{
@@ -742,22 +745,6 @@ function TopBar({
         gap: 12,
       }}
     >
-      <button
-        type="button"
-        onClick={() => navigate(`/a/${manifest.slug}`)}
-        style={{
-          padding: "4px 8px",
-          color: "var(--text-paper-d)",
-          fontSize: "var(--text-body-sm)",
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-        }}
-      >
-        <Icon name="chev_l" size={14} /> All
-      </button>
-      <AppIcon icon={manifest.icon} color={manifest.color} size={22} />
-      <span style={{ width: 1, height: 22, background: "var(--paper-3)" }} />
       <div
         style={{
           display: "flex",
@@ -767,24 +754,9 @@ function TopBar({
           color: "var(--text-paper-d)",
         }}
       >
-        {topics.map((t) => (
-          <CrumbLink
-            key={t}
-            label={t}
-            onClick={() => navigate(`/?topic=${encodeURIComponent(t)}`)}
-            title={`Filter investigations by topic “${t}”`}
-          />
-        ))}
-        {product && (
-          <>
-            <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
-            <CrumbLink
-              label={product}
-              onClick={() => navigate(`/?product=${encodeURIComponent(product)}`)}
-              title={`Filter investigations by product “${product}”`}
-            />
-          </>
-        )}
+        {/* topic/product are item attributes, not hierarchy — they stay here in
+            the page-local header; the global bar owns Home › App › item (#158). */}
+        <ItemCrumbChips item={item} manifest={manifest} />
         <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />
         <span style={{ color: "var(--text-paper)", fontWeight: 600 }}>
           {item.title}
@@ -1032,40 +1004,6 @@ function CloseInvestigationButton({
         </div>
       )}
     </Popover>
-  );
-}
-
-function CrumbLink({
-  label,
-  onClick,
-  title,
-}: {
-  label: string;
-  onClick: () => void;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      style={{
-        color: "var(--text-paper-d)",
-        fontSize: "var(--text-body-sm)",
-        padding: "1px 4px",
-        borderRadius: 3,
-      }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.color = "var(--accent-h)";
-        e.currentTarget.style.background = "var(--paper-2)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.color = "var(--text-paper-d)";
-        e.currentTarget.style.background = "transparent";
-      }}
-    >
-      {label}
-    </button>
   );
 }
 

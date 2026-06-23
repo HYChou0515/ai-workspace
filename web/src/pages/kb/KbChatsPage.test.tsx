@@ -44,6 +44,16 @@ describe("KbChatsPage", () => {
     expect(screen.queryByTestId("kb-chats-loading")).not.toBeInTheDocument();
   });
 
+  it("explains what Chats are with a one-line lead (#162)", async () => {
+    const client = { ...mockKbApi, listChats: async () => [] } as typeof mockKbApi;
+    render(<KbChatsPage client={client} />);
+    expect(
+      await screen.findByText(
+        "Ask questions across your collections. Every answer cites the documents it came from.",
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("lists chats and opens one", async () => {
     const onOpenChat = vi.fn();
     const chat = await mockKbApi.createChat("Void thresholds", ["col-1"]);
