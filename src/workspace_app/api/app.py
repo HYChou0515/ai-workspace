@@ -1411,8 +1411,16 @@ def create_app(
             await registry.flush(item_id)
         return result.exit_code, result.stdout.decode("utf-8", errors="replace")
 
-    async def _wf_ingest(item_id: str, captured_user: str, collection: str, path: str) -> str:
-        """The ingest capability (§8) bound to this run's workspace + captured user."""
+    async def _wf_ingest(
+        item_id: str,
+        captured_user: str,
+        collection: str,
+        path: str,
+        journal_dir: str = "/.workflow/_default",
+    ) -> str:
+        """The ingest capability (§8) bound to this run's workspace + captured user.
+        ``journal_dir`` is the run's journal folder (#136) so the receipt lands under
+        the run's workflow folder, not scattered at the workspace root."""
         return await ingest_to_collection(
             spec,
             ingestor,
@@ -1421,6 +1429,7 @@ def create_app(
             collection=collection,
             path=path,
             user=captured_user,
+            journal_dir=journal_dir,
         )
 
     async def _wf_upsert_card(
@@ -1459,7 +1468,9 @@ def create_app(
             item_id, chat_key, captured_user, prompt, tools
         )
         wf.run_sandbox = lambda run: _wf_run_sandbox(item_id, run, wf.credential)
-        wf._ingest = lambda collection, path: _wf_ingest(item_id, captured_user, collection, path)
+        wf._ingest = lambda collection, path: _wf_ingest(
+            item_id, captured_user, collection, path, wf.journal_dir
+        )
         wf._collection_has = _wf_collection_has
         wf._upsert_card = lambda collection, keys, title, body: _wf_upsert_card(
             captured_user, collection, keys, title, body
@@ -1704,6 +1715,9 @@ def create_app(
                 raise HTTPException(status_code=401, detail="invalid or expired workflow token")
             actor = claims.user
         try:
+            # The receipt for this direct/HTTP capability call lands in the _default
+            # journal folder (#136) — the handle-driven node path threads the run's own
+            # per-workflow journal_dir; this vestigial receipt has no run handle here.
             doc_id = await _wf_ingest(investigation_id, actor, body.collection, body.path)
         except CollectionNotFound as exc:
             raise HTTPException(

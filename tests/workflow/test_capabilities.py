@@ -50,9 +50,30 @@ async def test_ingest_lands_a_ready_doc_and_writes_a_receipt(spec_instance: Spec
     assert doc_id == encode_doc_id(cid, "digest/a.md")
     doc = spec_instance.get_resource_manager(SourceDoc).get(doc_id).data
     assert doc.status == "ready"
-    # the receipt makes the deterministic node checkpointable on re-run (§9)
-    receipt = json.loads(await store.read("ws", "/step_ingest/digest/a.md.done"))
+    # the receipt makes the deterministic node checkpointable on re-run (§9), and
+    # lives under the run's journal folder (#136) — _default with no workflow wired
+    receipt = json.loads(await store.read("ws", "/.workflow/_default/step_ingest/digest/a.md.done"))
     assert receipt["doc_id"] == doc_id
+
+
+async def test_ingest_receipt_lives_under_per_workflow_dir(spec_instance: SpecStar):
+    """#136: the ingest receipt is a journal artifact, so it lands under the run's
+    /.workflow/<workflow_id>/ folder — not scattered at the workspace root."""
+    cid = _collection(spec_instance)
+    store = MemoryFileStore()
+    await store.write("ws", "/a.md", b"hello world content")
+    await ingest_to_collection(
+        spec_instance,
+        _ingestor(spec_instance),
+        store,
+        workspace_id="ws",
+        collection=cid,
+        path="a.md",
+        user="alice",
+        journal_dir="/.workflow/memory",
+    )
+    assert await store.exists("ws", "/.workflow/memory/step_ingest/a.md.done")
+    assert not await store.exists("ws", "/step_ingest/a.md.done")
 
 
 async def test_ingest_is_idempotent(spec_instance: SpecStar):
