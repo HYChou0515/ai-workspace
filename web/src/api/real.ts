@@ -43,7 +43,7 @@ type SpecstarRevisionInfo = {
   revision_id: string;
   created_time: string;
   updated_time: string;
-  created_by?: string;
+  created_by: string;
   updated_by?: string;
 };
 
@@ -142,7 +142,9 @@ export const realApi: ApiClient = {
     return arr.map(
       (e): AppItem => ({
         resource_id: e.revision_info.resource_id,
+        created_time: e.revision_info.created_time,
         updated_time: e.revision_info.updated_time,
+        created_by: e.revision_info.created_by,
         ...(e.data as { title: string; owner: string }),
       }),
     );
@@ -158,7 +160,9 @@ export const realApi: ApiClient = {
     );
     return {
       resource_id: e.revision_info.resource_id,
+      created_time: e.revision_info.created_time,
       updated_time: e.revision_info.updated_time,
+      created_by: e.revision_info.created_by,
       ...(e.data as { title: string; owner: string }),
     } satisfies AppItem;
   },
