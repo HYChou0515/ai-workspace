@@ -19,7 +19,10 @@ from workspace_app.api.repetition_guard import guard_repetition
 
 
 async def _drain(src: AsyncIterator) -> list:
-    return [ev async for ev in guard_repetition(src)]
+    # The wiring tests exercise stop/forward/reset/channel behaviour with small
+    # streams, so they inject a small floor — production tuning (the generous
+    # #146 defaults) is verified separately, by the production-default tests.
+    return [ev async for ev in guard_repetition(src, repeats=3, min_loop_chars=12, window=4000)]
 
 
 async def test_guard_stops_a_degenerate_content_stream_and_does_not_drain_it():
@@ -33,6 +36,34 @@ async def test_guard_stops_a_degenerate_content_stream_and_does_not_drain_it():
 
     assert any(isinstance(e, RepetitionStopped) for e in out)
     assert not any(isinstance(e, MessageDelta) and "SHOULD_NOT_APPEAR" in e.text for e in out)
+
+
+async def test_production_defaults_leave_a_wide_table_stream_alone():
+    # #146: with the real (generous) defaults, a model streaming a wide markdown
+    # table must NOT be stopped — its rows are bounded structure, not a loop.
+    sep = "| " + "--- | " * 60
+    rows = "\n".join(f"| {i} " + "| x " * 60 + "|" for i in range(8))
+
+    async def src() -> AsyncIterator:
+        yield MessageDelta(text="Here is the data:\n")
+        for ch in sep + "\n" + rows + "\n":
+            yield MessageDelta(text=ch)
+        yield RunDone()
+
+    out = [ev async for ev in guard_repetition(src())]  # no overrides = production
+    assert not any(isinstance(e, RepetitionStopped) for e in out)
+
+
+async def test_production_defaults_still_stop_a_runaway_loop():
+    # The guard still earns its keep at production tuning: an unbounded loop
+    # (well past the generous floor) is stopped.
+    async def src() -> AsyncIterator:
+        yield MessageDelta(text="Here is the answer. ")
+        for _ in range(400):
+            yield MessageDelta(text="loopy ")
+
+    out = [ev async for ev in guard_repetition(src())]  # no overrides = production
+    assert any(isinstance(e, RepetitionStopped) for e in out)
 
 
 async def test_a_normal_stream_passes_through_untouched():

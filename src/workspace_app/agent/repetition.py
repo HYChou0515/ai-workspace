@@ -37,15 +37,26 @@ class RepetitionDetector:
     where repetition is legitimate.
     """
 
-    # A tiny period (`---`, `...`) repeated 3× is punctuation, not degeneration —
-    # only a long single/short-char run is a real loop. So a detected run must
-    # span at least this many chars before we believe it.
-    _MIN_LOOP_CHARS = 12
-
-    def __init__(self, *, repeats: int = 3, max_period: int = 800, window: int = 4000) -> None:
+    def __init__(
+        self,
+        *,
+        repeats: int = 10,
+        max_period: int = 800,
+        window: int = 10000,
+        min_loop_chars: int = 1200,
+    ) -> None:
         self._repeats = repeats
         self._max_period = max_period
         self._window = window
+        # The line between *degeneration* and *legitimate bounded repetition*
+        # (a wide table separator `| --- | --- | …`, a list, a numeric column)
+        # is not the *kind* of text but the *amount*: a real loop is unbounded
+        # and runs on past any structure, whereas even a 200-column table row
+        # ends at the newline. So we only believe a periodic tail once it spans
+        # ``min_loop_chars`` AND repeats ``repeats`` times — both floors are
+        # generous on purpose: this in-stream guard is a last-resort backstop,
+        # so a few wasted tokens beat truncating a legitimate answer (#146).
+        self._min_loop_chars = min_loop_chars
         self._buf = ""
         self._in_fence = False
         self._backtick_run = 0
@@ -95,6 +106,6 @@ class RepetitionDetector:
             r = 1
             while (start := n - p * (r + 1)) >= 0 and buf[start : start + p] == block:
                 r += 1
-            if r >= self._repeats and r * p >= self._MIN_LOOP_CHARS:
+            if r >= self._repeats and r * p >= self._min_loop_chars:
                 return RepetitionResult(loop_length=r * p)
         return None
