@@ -141,6 +141,10 @@ export type AppManifest = AppSummary & {
     form?: string[];
     /** Files the workspace opens on entry (filtered to those that exist). */
     default_tabs: string[];
+    /** #159: which surface leads when an item opens — "chat" (default) tucks the
+     * file IDE behind a `Workspace` toggle; "ide" opens the VS Code workspace up
+     * front. Ignored when `function.workspace` is false (no IDE to show). */
+    primary_surface: "chat" | "ide";
   };
   labels: Record<string, string>;
   fields: FieldSpec[];

@@ -41,3 +41,45 @@ describe("AgentHeader export", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/匯出失敗/);
   });
 });
+
+describe("AgentHeader status copy (#159)", () => {
+  afterEach(cleanup);
+
+  it("when idle, shows an action cue instead of the vague 'ready'", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/your turn/i)).toBeInTheDocument();
+    expect(screen.queryByText("ready")).not.toBeInTheDocument();
+  });
+
+  it("when streaming, shows an app-neutral 'Replying…' (not RCA's 'investigating')", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={true} investigationId="inv-1" slug="topic-hub" />
+      </MemoryRouter>,
+    );
+    expect(screen.getByText(/replying/i)).toBeInTheDocument();
+    expect(screen.queryByText(/investigating/i)).not.toBeInTheDocument();
+  });
+
+  it("drops the engineering-flavoured idle badge entirely", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText("idle")).not.toBeInTheDocument();
+  });
+
+  it("drops the engineering-flavoured running badge entirely", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={true} investigationId="inv-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByText("running")).not.toBeInTheDocument();
+  });
+});

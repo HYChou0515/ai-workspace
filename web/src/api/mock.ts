@@ -553,6 +553,7 @@ export const mockApi: ApiClient = {
         list: ["severity", "status", "product"],
         form: ["severity", "status", "product"],
         default_tabs: ["/SOP.md", "/brief.md"],
+        primary_surface: "ide",
       },
       lifecycle: { status_field: "status", closing_states: ["resolved", "abandoned"] },
       labels: { severity: "Severity", status: "Status", product: "Product" },

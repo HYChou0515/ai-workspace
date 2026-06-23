@@ -1,6 +1,6 @@
 import msgspec
 
-from workspace_app.apps.manifest import AppManifest, load_app_manifest
+from workspace_app.apps.manifest import AppManifest, Layout, load_app_manifest
 
 _MINIMAL = b"""{
   "slug": "x", "title": "X",
@@ -49,6 +49,19 @@ def test_shipped_apps_carry_onboarding_teaching():
         assert ob.intro
         assert len(ob.points) >= 2
         assert all(p.title and p.body for p in ob.points)
+
+
+def test_layout_primary_surface_defaults_to_chat():
+    """#159: an App declares which surface leads when an item opens. The default
+    is chat-first — the file IDE is tucked behind a `Workspace` toggle so the
+    IDE metaphor reaches only the Apps that opt into it."""
+    assert Layout().primary_surface == "chat"
+
+
+def test_rca_declares_ide_primary_surface():
+    """#159: RCA is an evidence/brief/notebook-heavy flow, so it opens the VS
+    Code workspace up front (the one bundled App that opts into `ide`)."""
+    assert load_app_manifest("rca").layout.primary_surface == "ide"
 
 
 def test_load_rca_app_manifest():
