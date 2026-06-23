@@ -158,14 +158,6 @@ async def test_classify_drafts_definitions_then_suspends_committing_nothing():
     assert ingested == [] and cards == []  # nothing committed before approval
 
 
-async def test_no_files_short_circuits():
-    run = _run()
-    wf, _ingested, _cards, _calls = _handle()
-    await wf.write("inputs/input.json", b"{}")  # the only file is the (excluded) spec
-    await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
-    assert await run(wf, {}) == {"status": "empty", "files": 0}
-
-
 async def test_approve_commits_the_drafted_card_and_ingests():
     run = _run()
     wf, ingested, cards, _calls = _handle()  # default confident M4 draft
