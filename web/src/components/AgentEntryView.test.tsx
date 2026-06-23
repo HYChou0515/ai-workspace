@@ -252,3 +252,33 @@ describe("EntryView — live thinking (reasoning block)", () => {
     }
   });
 });
+
+describe("EntryView — workflow step/phase lines (#100 observability)", () => {
+  it("renders a running step with its name and key so a deterministic phase shows movement", () => {
+    render(
+      <EntryView
+        entry={{ kind: "step", step: { phase: "commit", name: "ingest", key: "report.md", status: "running" } }}
+      />,
+    );
+    const line = screen.getByTestId("wf-step");
+    expect(line).toHaveAttribute("data-status", "running");
+    expect(line).toHaveTextContent("ingest");
+    expect(line).toHaveTextContent("report.md");
+  });
+
+  it("a failed step surfaces its reason", () => {
+    render(
+      <EntryView
+        entry={{ kind: "step", step: { phase: "classify", name: "classify_a", status: "failed", reason: "bad collection" } }}
+      />,
+    );
+    const line = screen.getByTestId("wf-step");
+    expect(line).toHaveAttribute("data-status", "failed");
+    expect(line).toHaveTextContent("bad collection");
+  });
+
+  it("renders a phase divider", () => {
+    render(<EntryView entry={{ kind: "phase", phase: "commit" }} />);
+    expect(screen.getByTestId("wf-phase")).toHaveTextContent("commit");
+  });
+});

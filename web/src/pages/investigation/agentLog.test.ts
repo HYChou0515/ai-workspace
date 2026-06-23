@@ -559,3 +559,75 @@ describe("repetition stop (#113)", () => {
     }
   });
 });
+
+describe("workflow step events in the feed (#100 observability)", () => {
+  it("renders step_started as a visible running step entry", () => {
+    // Deterministic phases (e.g. commit: ingest each file) used to look frozen:
+    // these events arrived on the SSE but the reducer dropped them. Now they
+    // show live movement.
+    const log = fold([{ type: "step_started", phase: "commit", name: "ingest", key: "report.md" }]);
+    const last = log.entries[log.entries.length - 1];
+    expect(last.kind).toBe("step");
+    if (last.kind === "step") {
+      expect(last.step.phase).toBe("commit");
+      expect(last.step.name).toBe("ingest");
+      expect(last.step.key).toBe("report.md");
+      expect(last.step.status).toBe("running");
+    }
+  });
+
+  it("step_passed transitions the matching running step in place (one entry)", () => {
+    const log = fold([
+      { type: "step_started", phase: "commit", name: "ingest", key: "a.md" },
+      { type: "step_passed", phase: "commit", name: "ingest", key: "a.md" },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1); // updated in place, not a second line
+    const s = steps[0];
+    if (s.kind === "step") expect(s.step.status).toBe("passed");
+  });
+
+  it("step_failed transitions in place and carries the reason", () => {
+    const log = fold([
+      { type: "step_started", phase: "classify", name: "classify_a", key: "a.md" },
+      { type: "step_failed", phase: "classify", name: "classify_a", key: "a.md", reason: "bad collection" },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1);
+    const s = steps[0];
+    if (s.kind === "step") {
+      expect(s.step.status).toBe("failed");
+      expect(s.step.reason).toBe("bad collection");
+    }
+  });
+
+  it("step_skipped (cached, no preceding started) renders its own line", () => {
+    // Cache hits emit StepSkipped directly without StepStarted (engine.py).
+    const log = fold([{ type: "step_skipped", phase: "commit", name: "ingest", key: "a.md" }]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1);
+    const s = steps[0];
+    if (s.kind === "step") expect(s.step.status).toBe("skipped");
+  });
+
+  it("step_retrying flags the running step with its reason (then a later pass updates it)", () => {
+    const log = fold([
+      { type: "step_started", phase: "glossary", name: "glossary", key: "" },
+      { type: "step_retrying", phase: "glossary", name: "glossary", key: "", reason: "empty file" },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1);
+    const s = steps[0];
+    if (s.kind === "step") {
+      expect(s.step.status).toBe("retrying");
+      expect(s.step.reason).toBe("empty file");
+    }
+  });
+
+  it("phase_entered renders a phase divider in the feed", () => {
+    const log = fold([{ type: "phase_entered", phase: "commit" }]);
+    const last = log.entries[log.entries.length - 1];
+    expect(last.kind).toBe("phase");
+    if (last.kind === "phase") expect(last.phase).toBe("commit");
+  });
+});

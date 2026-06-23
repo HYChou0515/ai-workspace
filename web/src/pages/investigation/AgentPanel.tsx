@@ -8,9 +8,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { api } from "../../api";
-import { API_BASE } from "../../api/http";
 import { kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { downloadChatExport } from "../../api/workflows";
 import { EntryView } from "../../components/AgentEntryView";
 import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
@@ -227,6 +227,7 @@ export function AgentPanel({
       <AgentHeader
         streaming={log.streaming}
         investigationId={investigationId}
+        slug={slug}
         appTitle={appTitle}
         appIcon={appIcon}
         appColor={appColor}
@@ -512,18 +513,22 @@ export function AgentPanel({
 export function AgentHeader({
   streaming,
   investigationId,
+  slug,
   appTitle = "Agent",
   appIcon,
   appColor,
 }: {
   streaming: boolean;
   investigationId: string;
+  /** The current App's slug (#95) — the export targets the app-scoped route. */
+  slug: string;
   /** App identity for the agent panel header (#89) — falls back to a generic
    * "Agent" mark when not provided (e.g. in isolated tests). */
   appTitle?: string;
   appIcon?: string;
   appColor?: string;
 }) {
+  const [exportError, setExportError] = useState<string | null>(null);
   return (
     <header
       style={{
@@ -541,20 +546,39 @@ export function AgentHeader({
           {streaming ? "investigating · live" : "ready"}
         </div>
       </div>
-      <a
-        // Downloads the `.chat.json` round-trip format (issue #39):
-        // re-uploadable to a KB collection, where the BE runs the same
-        // insight extraction the promote path does. The full debug dump
-        // (tool calls / reasoning / metrics) stays at `/export`,
-        // curl-only. Format details live in code, NOT in the copy.
-        href={`${API_BASE}/investigations/${encodeURIComponent(investigationId)}/export-chat`}
-        download
+      <button
+        type="button"
+        // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable
+        // to a KB collection, where the BE runs the same insight extraction the
+        // promote path does. Goes through the app-scoped route (#95) and validates
+        // the response, so a misroute surfaces an error instead of silently saving
+        // the SPA shell as `export-chat.html` (#100). Format details live in code.
+        onClick={() => {
+          setExportError(null);
+          downloadChatExport(slug, investigationId).catch((e) =>
+            setExportError(e instanceof Error ? e.message : "匯出失敗"),
+          );
+        }}
         title="Export this conversation"
         aria-label="Export conversation"
-        style={{ display: "inline-flex", alignItems: "center", gap: 4, color: "var(--text-paper-d)", fontSize: 11 }}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          color: "var(--text-paper-d)",
+          fontSize: 11,
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+        }}
       >
         <Icon name="download" size={13} /> Export
-      </a>
+      </button>
+      {exportError && (
+        <span role="alert" style={{ fontSize: 11, color: "var(--err)" }}>
+          {exportError}
+        </span>
+      )}
       <HealthDot />
       <span
         style={{
