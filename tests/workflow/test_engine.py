@@ -3,6 +3,7 @@ auto-invalidation, cache=False, and retry-with-feedback then abort."""
 
 import pytest
 
+from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.checks import choice_in, file_nonempty
 from workspace_app.workflow.engine import StepFailed, fail, run_step
 from workspace_app.workflow.handle import WorkflowHandle
@@ -44,7 +45,7 @@ async def test_deleted_artifact_reruns(wf: WorkflowHandle):
     of manual §9)."""
     calls, execute = _counter()
     await run_step(wf, name="s", args={"a": 1}, execute=execute)
-    await wf.delete("/step_s/main.json")
+    await wf.delete("/.workflow/_default/step_s/main.json")
     await run_step(wf, name="s", args={"a": 1}, execute=execute)
     assert len(calls) == 2
 
@@ -80,7 +81,7 @@ async def test_gate_failure_retries_with_feedback_then_aborts(wf: WorkflowHandle
             wf, name="s", args={}, execute=execute, check=file_nonempty("/out.txt"), retries=2
         )
     # no artifact is journaled for a failed step → a later run retries it
-    assert not await wf.exists("/step_s/main.json")
+    assert not await wf.exists("/.workflow/_default/step_s/main.json")
 
 
 async def test_gate_passes_after_retry_using_feedback(wf: WorkflowHandle):
@@ -98,7 +99,7 @@ async def test_gate_passes_after_retry_using_feedback(wf: WorkflowHandle):
     )
     assert attempts[0] is None
     assert attempts[1] is not None  # the gate's reason was fed back
-    assert await wf.exists("/step_s/main.json")
+    assert await wf.exists("/.workflow/_default/step_s/main.json")
 
 
 async def test_choice_in_gate_clamps_to_allowed_set(wf: WorkflowHandle):
@@ -133,3 +134,13 @@ async def test_fail_helper_raises_step_failed():
     """`fail(reason)` aborts the current step/element."""
     with pytest.raises(StepFailed, match="nope"):
         fail("nope")
+
+
+async def test_artifact_lives_under_per_workflow_dir():
+    """#136: a journaled step's artifact lives under /.workflow/<workflow_id>/ — its
+    own folder — instead of being scattered at the workspace root."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", workflow_id="memory")
+    _calls, execute = _counter()
+    await run_step(wf, name="s", args={"a": 1}, execute=execute)
+    assert await wf.exists("/.workflow/memory/step_s/main.json")
+    assert not await wf.exists("/step_s/main.json")
