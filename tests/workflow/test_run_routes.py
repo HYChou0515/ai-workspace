@@ -281,6 +281,21 @@ def test_run_with_sandbox_node_and_ingest_commits():
     assert data["result"]["landed"] is True  # collection_has verified the ingest landed
 
 
+def test_run_journals_under_the_workflow_dir_not_root():
+    """#136 end-to-end wiring: a run's journal artifacts — engine step records AND the
+    ingest receipt — live under /.workflow/<workflow_id>/ (here _default, echo being a
+    legacy singular workflow), with none left scattered at the workspace root."""
+    app, spec, item_id = _app()
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    with TestClient(app) as client:
+        _put_input(client, item_id, f'{{"ingest": "{cid}"}}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        paths = [f["path"] for f in client.get(f"{_base(item_id)}/files").json()]
+    assert any(p.startswith("/.workflow/_default/step_") for p in paths)  # journal moved
+    assert not any(p.startswith("/step_") for p in paths)  # nothing left at root
+
+
 def test_capability_ingest_lands_a_doc():
     app, spec, item_id = _app()
     cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id

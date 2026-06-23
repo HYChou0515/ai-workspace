@@ -14,8 +14,22 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { HealthApi, HealthCheckRow } from "../api/health";
+import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { renderWithQuery } from "../test/queryWrapper";
 import { DiagnosticsPage } from "./DiagnosticsPage";
+
+function TrailProbe() {
+  const trail = useBreadcrumbTrail();
+  return (
+    <ul data-testid="trail">
+      {trail.map((c, i) => (
+        <li key={i} data-to={c.to ?? ""}>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function row(over: Partial<HealthCheckRow>): HealthCheckRow {
   return {
@@ -111,5 +125,25 @@ describe("DiagnosticsPage", () => {
     await userEvent.click(btn);
 
     expect(runChecks).toHaveBeenCalledWith("embedder-default");
+  });
+
+  it("publishes a Home › Diagnostics breadcrumb", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <BreadcrumbProvider>
+          <DiagnosticsPage
+            client={{
+              getChecks: async () => ({ running: false, checks: [] }),
+              runChecks: async () => ({ started: true }),
+            }}
+          />
+          <TrailProbe />
+        </BreadcrumbProvider>
+      </MemoryRouter>,
+    );
+    const items = screen.getByTestId("trail").querySelectorAll("li");
+    expect([...items].map((li) => li.textContent)).toEqual(["Home", "Diagnostics"]);
+    expect(items[0].getAttribute("data-to")).toBe("/");
+    expect(items[1].getAttribute("data-to")).toBe("");
   });
 });

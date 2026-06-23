@@ -111,6 +111,26 @@ async def test_happy_path_records_done_progress_and_releases(spec_instance: Spec
     assert fakes.released == [("rca/i1", True)]  # sandbox freed on terminal (§16)
 
 
+async def test_run_journals_under_its_per_workflow_dir(spec_instance: SpecStar):
+    """#136: a run's journaled step artifacts land under /.workflow/<workflow_id>/ —
+    the orchestrator threads the run's workflow_id into the handle, so each workflow's
+    journal lives in its own folder instead of scattered at the workspace root."""
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={"a": 1}, execute=_ok)
+        return {"ok": True}
+
+    store = MemoryFileStore()
+    orch, _fakes = _orch(spec_instance, run, store=store)
+    run_id = await orch.start(
+        slug="rca", item_id="rca/i1", profile="echo", captured_user="alice", workflow_id="memory"
+    )
+    await asyncio.sleep(0)
+    assert spec_instance.get_resource_manager(WorkflowRun).get(run_id).data.status is RunStatus.DONE
+    assert await store.exists("rca/i1", "/.workflow/memory/step_think/main.json")
+    assert not await store.exists("rca/i1", "/step_think/main.json")
+
+
 async def test_failing_step_records_error_phase_and_notifies(spec_instance: SpecStar):
     async def run(wf, inputs):
         await run_step(

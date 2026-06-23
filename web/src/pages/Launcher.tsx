@@ -12,6 +12,7 @@ import { Link } from "react-router-dom";
 
 import { AppIcon } from "../components/AppIcon";
 import { Icon } from "../components/Icon";
+import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
 import type { AppSummary } from "../api/types";
 
@@ -110,20 +111,11 @@ function KbCard() {
 
 export function Launcher() {
   const apps = useApps();
+  // The launcher is "home" — its own title bar is now redundant with the global
+  // bar's brand (#158); publish a single Home crumb instead.
+  useBreadcrumbs([{ label: "Home" }]);
   return (
-    <div data-testid="page-launcher" style={{ minHeight: "100vh", background: "var(--paper)" }}>
-      <header
-        style={{
-          height: 60,
-          display: "flex",
-          alignItems: "center",
-          padding: "0 24px",
-          borderBottom: "1px solid var(--paper-3)",
-          fontWeight: 800,
-        }}
-      >
-        Workspace
-      </header>
+    <div data-testid="page-launcher" style={{ minHeight: "100%", background: "var(--paper)" }}>
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
         <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
           APPS

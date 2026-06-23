@@ -23,7 +23,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
-import { Link, Outlet, useParams } from "react-router-dom";
+import { Link, Outlet, useParams, useSearchParams } from "react-router-dom";
 
 import type { AppItem, FieldSpec } from "../api/types";
 import { summarize } from "../api/types";
@@ -32,6 +32,7 @@ import { DomainField } from "../components/DomainField";
 import { Icon, type IconName } from "../components/Icon";
 import { type ChipTone, chipStyle } from "../components/StatusChip";
 import { UserAvatar } from "../components/UserChip";
+import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
 import { useAppItems, useAppManifest } from "../hooks/useResources";
@@ -56,6 +57,7 @@ const topicsOf = (it: AppItem) => (Array.isArray(it.topics) ? it.topics.map(Stri
 
 export function AppDashboard() {
   const { slug = "" } = useParams();
+  const [params] = useSearchParams();
   const manifest = useAppManifest(slug);
   const items = useAppItems(slug, manifest?.resource_route);
   const { isPinned, toggle, pinned } = usePinned(slug);
@@ -66,8 +68,13 @@ export function AppDashboard() {
   const [view, setView] = useState("all");
   const [sev, setSev] = useState("any");
   const [owner, setOwner] = useState("any");
-  const [topic, setTopic] = useState("any");
+  // A breadcrumb topic chip deep-links here as `?topic=…`; seed the filter from
+  // it (one-shot, on mount) so the dashboard opens already narrowed (#158).
+  const [topic, setTopic] = useState(() => params.get("topic") ?? "any");
   const [age, setAge] = useState("any");
+  useBreadcrumbs(
+    manifest ? [{ label: "Home", to: "/" }, { label: manifest.title }] : [{ label: "Home", to: "/" }],
+  );
 
   if (!manifest) {
     return (
@@ -167,7 +174,7 @@ export function AppDashboard() {
   return (
     <div
       data-testid="page-app-dashboard"
-      style={{ ...themed, display: "flex", minHeight: "100vh", background: "var(--paper)", color: "var(--text-paper)" }}
+      style={{ ...themed, display: "flex", minHeight: "100%", background: "var(--paper)", color: "var(--text-paper)" }}
     >
       {/* SIDEBAR */}
       <aside
@@ -239,9 +246,6 @@ export function AppDashboard() {
               <div style={{ fontSize: 11, color: "var(--text-paper-d)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meUser.section}</div>
             )}
           </div>
-          <Link to="/" title="All apps" style={{ display: "inline-flex", color: "var(--text-paper-d2)" }}>
-            <Icon name="layers" size={15} />
-          </Link>
         </div>
       </aside>
 

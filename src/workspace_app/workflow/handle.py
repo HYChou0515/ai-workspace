@@ -3,8 +3,10 @@
 A thin, async wrapper over the item's ``FileStore``: the orchestration `run()` reads
 its inputs and step artifacts, and writes outputs, through this. The filesystem is
 the journal (manual §9), so the step engine also reads/writes its ``step_<name>/...``
-artifacts through here. Capability methods (ingest, …) and the run-scoped credential
-are layered on in later phases; this is the file/IO surface.
+artifacts through here — under the run's per-workflow journal folder ``journal_dir``
+(``/.workflow/<workflow_id>``, #136), so the journal stays out of the workspace root.
+Capability methods (ingest, …) and the run-scoped credential are layered on in later
+phases; this is the file/IO surface.
 """
 
 from __future__ import annotations
@@ -64,6 +66,7 @@ class WorkflowHandle:
         *,
         store: FileStore,
         workspace_id: str,
+        workflow_id: str = "",
         config: dict[str, Any] | None = None,
         user: str = "",
         drive_turn: DriveTurn | None = None,
@@ -77,6 +80,10 @@ class WorkflowHandle:
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
+        self._workflow_id = workflow_id
+        """Which of the profile's workflows this run executes (manual §4). Scopes the
+        journal directory (#136) so each workflow's ``step_*`` artifacts live under
+        their own folder instead of scattered at the workspace root."""
         self.config = config or {}
         """The profile's config (manual §20 reads ``wf.config["collections"]``)."""
         self.user = user
@@ -103,6 +110,14 @@ class WorkflowHandle:
         self.step_timeout_s = step_timeout_s
         """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
         Exceeding it aborts the step (and so the run) to ``error``."""
+
+    @property
+    def journal_dir(self) -> str:
+        """The run's journal home (#136): ``/.workflow/<workflow_id>`` — the folder
+        every ``step_<name>/<key>`` artifact lives under, so the journal stops
+        cluttering the workspace root. Legacy singular workflows (``workflow_id=""``)
+        fall back to ``/.workflow/_default``."""
+        return f"/.workflow/{self._workflow_id or '_default'}"
 
     async def read(self, path: str) -> bytes:
         return await self._store.read(self._workspace_id, _abs(path))

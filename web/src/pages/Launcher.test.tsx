@@ -7,6 +7,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 afterEach(cleanup);
 
 import { Launcher } from "./Launcher";
+import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
+
+function TrailProbe() {
+  const trail = useBreadcrumbTrail();
+  return (
+    <ul data-testid="trail">
+      {trail.map((c, i) => (
+        <li key={i} data-to={c.to ?? ""}>
+          {c.label}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 vi.mock("../hooks/useResources", () => ({
   useApps: () => [
@@ -50,5 +64,26 @@ describe("Launcher", () => {
   it("renders a fixed Knowledge Base link card → /kb (KB is not an App)", () => {
     renderLauncher();
     expect(screen.getByRole("link", { name: /Knowledge Base/ })).toHaveAttribute("href", "/kb");
+  });
+
+  it("publishes a Home breadcrumb (the launcher is the home leaf)", () => {
+    render(
+      <MemoryRouter>
+        <BreadcrumbProvider>
+          <Launcher />
+          <TrailProbe />
+        </BreadcrumbProvider>
+      </MemoryRouter>,
+    );
+    const items = screen.getByTestId("trail").querySelectorAll("li");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent("Home");
+    // leaf → no link target
+    expect(items[0].getAttribute("data-to")).toBe("");
+  });
+
+  it("drops its own redundant title header (the global bar already brands 'Workspace')", () => {
+    renderLauncher();
+    expect(screen.queryByText("Workspace")).toBeNull();
   });
 });
