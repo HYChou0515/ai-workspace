@@ -24,17 +24,25 @@ from .events import AgentEvent, MessageDelta, RepetitionStopped, RunDone, ToolSt
 async def guard_repetition(
     events: AsyncIterator[AgentEvent],
     *,
-    repeats: int = 3,
+    repeats: int = 10,
     max_period: int = 800,
-    window: int = 4000,
+    window: int = 10000,
+    min_loop_chars: int = 1200,
 ) -> AsyncIterator[AgentEvent]:
+    # Defaults mirror RepetitionDetector's: this is a deliberately loose,
+    # last-resort backstop (#146). A block must repeat `repeats` times AND span
+    # `min_loop_chars` before we believe it's runaway degeneration rather than
+    # bounded structure (a wide table row, a list) the model will move on from.
+    #
     # Content and reasoning loop independently — the reasoning channel is the
     # worst token-burner (a model can loop forever in <think> without ever
     # emitting an answer), so it gets its own detector.
-    detectors = {
-        "content": RepetitionDetector(repeats=repeats, max_period=max_period, window=window),
-        "reasoning": RepetitionDetector(repeats=repeats, max_period=max_period, window=window),
-    }
+    def _detector() -> RepetitionDetector:
+        return RepetitionDetector(
+            repeats=repeats, max_period=max_period, window=window, min_loop_chars=min_loop_chars
+        )
+
+    detectors = {"content": _detector(), "reasoning": _detector()}
     # Close the upstream generator on ANY exit (including stopping early), so
     # the in-flight LLM generation is actually cancelled (its `finally` cancels
     # the produce task) instead of looping on until GC. The runner Protocol
