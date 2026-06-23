@@ -7,10 +7,13 @@ Covers:
   (orchestrator.py 350->352),
 - the playground ``multi/beta`` fixture ``run()`` (beta/run.py 11),
 - defensive / edge branches in the topic-hub ``→collections`` workflow run.py
-  (49-50, 52->58, 54->53, 56->53, 76->72, 91, 155->154, 162->159).
+  (absent / non-list / malformed collections, no input files, glossary parsing,
+  and the commit term→collection / ingest-not-landed guards).
 """
 
 from __future__ import annotations
+
+import re
 
 import pytest
 from specstar import SpecStar
@@ -159,20 +162,18 @@ def test_parse_glossary_ignores_a_body_line_before_any_header():
 
 
 def _commit_handle(plan: dict, *, landed: bool = True):
-    """A handle whose agent turn writes the given classify `plan` (call 1) then a
-    glossary template (call 2); ingest/card/landed are fakes. `landed` controls
+    """A handle whose agent turn writes the given classify `plan` to the path named
+    in the prompt (#133: drafting is a single classify call; the glossary is then
+    assembled deterministically). ingest/card/landed are fakes; `landed` controls
     the post-ingest collection_has check."""
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     ingested: list = []
     cards: list = []
-    calls: list[str] = []
 
     async def drive_turn(prompt, tools):
-        calls.append(prompt)
-        if len(calls) == 1:
-            await wf.write_json("plan/inputs_a.txt.json", plan)
-        else:
-            await wf.write("glossary.todo.md", "## M4\n")
+        m = re.search(r"(plan/\S+?\.json)", prompt)
+        assert m is not None, "the classify prompt always names its plan path"
+        await wf.write_json(m.group(1), plan)
         return "done"
 
     async def ingest(coll, path):
@@ -201,8 +202,7 @@ async def _seed(wf: WorkflowHandle) -> None:
 
 async def test_commit_skips_non_string_and_blank_terms_in_term_collection():
     """A plan whose `terms` list carries a non-string and a blank entry: the
-    `isinstance(t, str) and t.strip()` guard in the commit term→collection map
-    skips them (branch 155->154). The valid term still authors a card."""
+    term→collection map skips them and the valid term still authors a card."""
     plan = {"collection": "Defects", "digest": "d", "terms": ["M4", 123, "   "]}
     run = _collections_run()
     wf, ingested, cards = _commit_handle(plan)
@@ -218,8 +218,8 @@ async def test_commit_skips_non_string_and_blank_terms_in_term_collection():
 
 
 async def test_commit_does_not_count_ingest_that_did_not_land():
-    """When the post-ingest `collection_has` check returns False (branch
-    162->159), the file is ingested but NOT counted toward `ingested`."""
+    """When the post-ingest `collection_has` check returns False, the file is
+    ingested but NOT counted toward `ingested`."""
     plan = {"collection": "Defects", "digest": "d", "terms": ["M4"]}
     run = _collections_run()
     wf, ingested, cards = _commit_handle(plan, landed=False)

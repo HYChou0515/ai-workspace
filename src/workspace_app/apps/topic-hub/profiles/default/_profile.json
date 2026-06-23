@@ -16,11 +16,11 @@
       "id": "collections",
       "title": "File uploads into collections",
       "tag": "batch",
-      "description": "Classify & digest each dropped file, then file it into a KB collection — you approve the routing first.",
+      "description": "Classify & digest each dropped file, draft glossary definitions for its unknown terms, then file it into a KB collection — you review the drafts first.",
       "hint": "Drop files into inputs/ · scope them in inputs/input.json.",
       "phases": [
-        { "id": "classify", "title": "Classify + digest" },
-        { "id": "glossary", "title": "Collect glossary terms" },
+        { "id": "classify", "title": "Classify + draft definitions" },
+        { "id": "glossary", "title": "Assemble glossary draft" },
         { "id": "review", "title": "Review" },
         { "id": "commit", "title": "Ingest + author cards" }
       ],
