@@ -26,7 +26,7 @@ export function AskAgentLauncher({
   client?: KbApi;
   /** Override "manage sources" — defaults to navigating to /kb. */
   onManage?: () => void;
-  /** Override "history" — defaults to navigating to /kb?tab=chats. */
+  /** Override "history" — defaults to navigating to /kb/chats. */
   onHistory?: () => void;
   /** Override the citation handler — if set, the launcher does NOT render its
    * own viewer (the caller handles it). Defaults to the internal viewer. */
@@ -44,7 +44,7 @@ export function AskAgentLauncher({
   const handleHistory = () => {
     setOpen(false);
     if (onHistory) onHistory();
-    else navigate("/kb?tab=chats");
+    else navigate("/kb/chats");
   };
   const handleCitation = (c: KbCitation) => {
     if (onOpenCitation) onOpenCitation(c);

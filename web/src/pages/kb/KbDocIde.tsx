@@ -12,7 +12,8 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { FileServiceProvider } from "../../api/fileService";
 import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
@@ -30,6 +31,7 @@ import { FileView } from "../../renderers/FileView";
 import { hasEditToggle, pickRenderer } from "../../renderers/registry";
 import { FileTree } from "../investigation/FileTree";
 import { docHref } from "./kbLinks";
+import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 
 /** Page through the (paged) documents endpoint into one flat list — the tree
  * needs every path, not a slice. `collection_id` is indexed on the BE, so this
@@ -89,16 +91,19 @@ export function KbDocIde({
     [],
   );
 
-  const [activePath, setActivePath] = useState<string | null>(null);
-  // A just-created / uploaded / moved doc isn't in `docs` until the refetch
-  // lands; opening it before then reads against the stale path→id map and
-  // throws "unknown KB document". So opens go through `pendingOpen` and only
-  // activate once the doc list actually has the path.
-  const [pendingOpen, setPendingOpen] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const params = useParams();
+  // The open document is the URL (#93): /kb/collections/:cid/documents/<path>.
+  const urlPath = params["*"] ? decodeLeafPath(params["*"]) : null;
   // Key everything by the canonical (leading-slash) path so a doc stored
   // relative ("mydir/x.md") and the tree's path ("/mydir/x.md") line up —
   // otherwise an inferred folder never matches its files (#87).
   const docByPath = useMemo(() => new Map(docs.map((d) => [normPath(d.path), d])), [docs]);
+  // Only treat the URL's doc as "open" once it's really in the list. A just-
+  // uploaded / freshly-moved doc lands in the URL before the refetch brings it
+  // in, and reading its bytes early throws "unknown KB document"; until then we
+  // show the empty pane and let the poll/refetch promote it.
+  const activePath = urlPath && docByPath.has(urlPath) ? urlPath : null;
   // `.gitkeep` is the hidden placeholder that keeps an otherwise-empty folder
   // alive — drop it from the file list, but surface its directory so the empty
   // folder still shows in the tree.
@@ -117,11 +122,13 @@ export function KbDocIde({
     return [...out];
   }, [docs]);
 
-  // Open a path: activate immediately if the doc list already has it, else
-  // defer until the refetch brings it in (covers create / upload / move).
+  // Opening a tree node routes to the doc's URL; the splat above is the single
+  // source of truth for which doc is open (covers create / upload / move — the
+  // editor just waits for the doc to land in the list, see `activePath`).
+  const docsBase = `/kb/collections/${encodeURIComponent(collectionId)}/documents`;
   const openPath = useCallback(
-    (p: string) => (docByPath.has(p) ? setActivePath(p) : setPendingOpen(p)),
-    [docByPath],
+    (p: string) => navigate(`${docsBase}/${encodeLeafPath(p)}`),
+    [navigate, docsBase],
   );
   // Re-chunk + re-embed a doc on demand (e.g. after an embedder fix) without
   // editing it — the per-doc action the old documents table had.
@@ -148,19 +155,6 @@ export function KbDocIde({
     },
     [docs, docByPath, client, refetch],
   );
-  // Promote a deferred open once its doc appears in the refreshed list.
-  useEffect(() => {
-    if (pendingOpen && docByPath.has(pendingOpen)) {
-      setActivePath(pendingOpen);
-      setPendingOpen(null);
-    }
-  }, [pendingOpen, docByPath]);
-
-  // Drop the open file if it's deleted out from under us.
-  useEffect(() => {
-    if (activePath && !docByPath.has(activePath)) setActivePath(null);
-  }, [activePath, docByPath]);
-
   if (docsQuery.isPending) {
     return (
       <p className="kb-cols__empty" role="status" aria-live="polite">

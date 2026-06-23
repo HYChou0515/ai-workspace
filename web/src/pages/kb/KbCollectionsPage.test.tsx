@@ -8,13 +8,41 @@ import { QueryWrap } from "../../test/queryWrapper";
 const render = (ui: Parameters<typeof rtlRender>[0]) =>
   rtlRender(ui, { wrapper: QueryWrap });
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Navigate, Outlet, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
 import type { KbDocumentsPage } from "../../api/kb";
-import { KbCollectionsPage, uploadDocPath } from "./KbCollectionsPage";
+import { uploadDocPath } from "./collectionFormat";
+import { CardsTab, DocumentsTab, KbCollectionPage, WikiTab } from "./KbCollectionPage";
+import { KbCollectionsGrid } from "./KbCollectionsGrid";
+import type { KbOutletCtx } from "./KbHome";
 
-type Client = Parameters<typeof KbCollectionsPage>[0]["client"];
+type Client = Parameters<typeof KbCollectionsGrid>[0]["client"];
+
+/** Mount the collections grid + open-collection page + its tab routes under a
+ * minimal shell that supplies the Outlet context the page reads (the real
+ * shell — KbHome — is exercised in KbHome/kbRoutes tests). Opening a card
+ * navigates to /kb/collections/:cid/documents (#93). */
+function renderKb(client: Client, start = "/kb/collections") {
+  return render(
+    <MemoryRouter initialEntries={[start]}>
+      <Routes>
+        <Route
+          element={<Outlet context={{ openDoc: () => {}, openCite: () => {} } satisfies KbOutletCtx} />}
+        >
+          <Route path="/kb/collections" element={<KbCollectionsGrid client={client} />} />
+          <Route path="/kb/collections/:cid" element={<KbCollectionPage client={client} />}>
+            <Route index element={<Navigate to="documents" replace />} />
+            <Route path="documents" element={<DocumentsTab />} />
+            <Route path="cards" element={<CardsTab />} />
+            <Route path="wiki" element={<WikiTab />} />
+          </Route>
+        </Route>
+      </Routes>
+    </MemoryRouter>,
+  );
+}
 
 /** Wrap a list of documents in the BE's `DocumentsPage` envelope so each
  * inline test client can keep returning a bare array literal. */
@@ -60,20 +88,20 @@ describe("KbCollectionsPage", () => {
 
   it("shows a loading placeholder while collections are still fetching — not the empty copy", () => {
     const client = { listCollections: () => new Promise(() => {}) } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
     expect(screen.getByTestId("kb-cols-loading")).toBeInTheDocument();
     expect(screen.queryByText(/No collections yet/)).not.toBeInTheDocument();
   });
 
   it("shows the empty copy only once loading resolves with no collections", async () => {
     const client = { listCollections: async () => [] } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
     expect(await screen.findByText(/No collections yet/)).toBeInTheDocument();
     expect(screen.queryByTestId("kb-cols-loading")).not.toBeInTheDocument();
   });
 
   it("creates a collection card; opening it shows the upload affordances", async () => {
-    render(<KbCollectionsPage client={mockKbApi} />);
+    renderKb(mockKbApi);
     // "New collection" opens a modal; name is entered there, then created
     await userEvent.click(screen.getByRole("button", { name: /new collection/i }));
     await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Process SOPs");
@@ -90,7 +118,7 @@ describe("KbCollectionsPage", () => {
 
   it("uploads a document and the doc tree lists it (#87)", async () => {
     await mockKbApi.createCollection("kb");
-    render(<KbCollectionsPage client={mockKbApi} />);
+    renderKb(mockKbApi);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
 
@@ -112,7 +140,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
     } as unknown as Client;
 
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     const card = await screen.findByRole("button", { name: "Open Reflow SOPs" });
     expect(card).toHaveTextContent("3 docs");
@@ -128,7 +156,7 @@ describe("KbCollectionsPage", () => {
       ],
       listDocuments: async () => page([]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await screen.findByRole("button", { name: "Open Alpha" });
     // alphabetical: Alpha before Zeta
@@ -150,7 +178,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
     } as unknown as Client;
 
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await screen.findByRole("button", { name: "Open Wirebond SOPs" });
     // header count line: "2 collections · 10 documents"
@@ -171,7 +199,7 @@ describe("KbCollectionsPage", () => {
       ],
       listDocuments: async () => page([]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await screen.findByRole("button", { name: "Open Mine SOPs" });
     expect(screen.getByRole("button", { name: "Open Theirs SOPs" })).toBeInTheDocument();
@@ -180,6 +208,37 @@ describe("KbCollectionsPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Mine/ }));
     expect(screen.getByRole("button", { name: "Open Mine SOPs" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Open Theirs SOPs" })).not.toBeInTheDocument();
+  });
+
+  it("reads the grid filter from the URL (?view=mine deep-link)", async () => {
+    // useCurrentUser() resolves to the mock's "default-user" → that's "Mine".
+    const client = {
+      listCollections: async () => [
+        col({ resource_id: "c1", name: "Mine SOPs", owner: "default-user" }),
+        col({ resource_id: "c2", name: "Theirs SOPs", owner: "alice" }),
+      ],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client, "/kb/collections?view=mine");
+
+    // the Mine filter is applied straight from the URL, no click needed
+    expect(await screen.findByRole("button", { name: "Open Mine SOPs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open Theirs SOPs" })).not.toBeInTheDocument();
+  });
+
+  it("reads the owner + name-query filters from the URL", async () => {
+    const client = {
+      listCollections: async () => [
+        col({ resource_id: "c1", name: "Reflow SOPs", owner: "alice" }),
+        col({ resource_id: "c2", name: "Wirebond SOPs", owner: "bob" }),
+      ],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client, "/kb/collections?owner=alice&q=reflow");
+
+    expect(await screen.findByRole("button", { name: "Open Reflow SOPs" })).toBeInTheDocument();
+    // owner=alice excludes bob's Wirebond; q=reflow would exclude it too
+    expect(screen.queryByRole("button", { name: "Open Wirebond SOPs" })).not.toBeInTheDocument();
   });
 
   it("open page shows a stats banner (docs/size/cited/owner/updated)", async () => {
@@ -197,7 +256,7 @@ describe("KbCollectionsPage", () => {
       ],
       listDocuments: async () => page([]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open Reflow SOPs" }));
     // "Documents" now appears as both a stats label and a view tab (#106); pick
@@ -217,7 +276,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       updateCollection,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("button", { name: "Change icon" }));
@@ -232,7 +291,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       updateCollection,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("heading", { name: "kb" }));
@@ -249,7 +308,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       deleteCollection,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     // delete lives inside the settings menu, not exposed as a bare button
@@ -269,7 +328,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       deleteCollection: () => d.promise,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
@@ -289,7 +348,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       createCollection,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: /new collection/i }));
     await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Reflow SOPs");
@@ -313,7 +372,7 @@ describe("KbCollectionsPage", () => {
         ]),
       reindexCollection,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
@@ -332,7 +391,7 @@ describe("KbCollectionsPage", () => {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
       listDocuments: () => pending,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     // Initial-load message replaces the empty-state copy and the table.
     expect(await screen.findByText("Loading documents…")).toBeInTheDocument();
@@ -357,7 +416,7 @@ describe("KbCollectionsPage", () => {
           { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "ready" },
         ]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await screen.findByText("a.md");
     // No pager — total < page size and we're on page 0.
@@ -378,7 +437,7 @@ describe("KbCollectionsPage", () => {
       },
     } as unknown as Client;
 
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     // KbDocIde badges the indexing doc in the tree, then the 1.5s poll clears it.
     expect(await screen.findByTitle("Indexing…")).toBeInTheDocument();
@@ -392,7 +451,7 @@ describe("KbCollectionsPage", () => {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
       listDocuments: async () => page([]),
     } as unknown as Client;
-    const { container } = render(<KbCollectionsPage client={client} />);
+    const { container } = renderKb(client);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const input = container.querySelector('input[type="file"]:not([webkitdirectory])')!;
     // No extension allow-list: macOS maps extensions to UTIs and disabled valid
@@ -410,7 +469,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       uploadDocument,
     } as unknown as Client;
-    const { container } = render(<KbCollectionsPage client={client} />);
+    const { container } = renderKb(client);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
 
     const folderInput = container.querySelector("input[webkitdirectory]") as HTMLInputElement;
@@ -427,7 +486,7 @@ describe("KbCollectionsPage", () => {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
       listDocuments: async () => page([]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     // Documents is the default tab — its "what + when" blurb is visible.
@@ -441,7 +500,7 @@ describe("KbCollectionsPage", () => {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
       listDocuments: async () => page([]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("tab", { name: "Context Cards" }));
@@ -460,7 +519,7 @@ describe("KbCollectionsPage", () => {
       listCollections: async () => [col({ resource_id: "c1", name: "kb", use_wiki: true })],
       listDocuments: async () => page([]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("tab", { name: "Wiki" }));
@@ -477,7 +536,7 @@ describe("KbCollectionsPage", () => {
           { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "indexing" },
         ]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const strip = await screen.findByTestId("kb-index-status");
@@ -492,7 +551,7 @@ describe("KbCollectionsPage", () => {
           { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "error" },
         ]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const strip = await screen.findByTestId("kb-index-status");
@@ -507,7 +566,7 @@ describe("KbCollectionsPage", () => {
           { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "ready" },
         ]),
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     // the doc tree renders the ready doc; the strip never appears
@@ -522,7 +581,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       uploadDocument: () => d.promise,
     } as unknown as Client;
-    const { container } = render(<KbCollectionsPage client={client} />);
+    const { container } = renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const file = new File(["x"], "x.md", { type: "text/markdown" });
@@ -545,7 +604,7 @@ describe("KbCollectionsPage", () => {
       listDocuments: async () => page([]),
       updateCollection,
     } as unknown as Client;
-    render(<KbCollectionsPage client={client} />);
+    renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open SOPs" }));
     await userEvent.click(await screen.findByRole("button", { name: "Collection settings" }));
@@ -561,7 +620,7 @@ describe("KbCollectionsPage", () => {
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, "click")
       .mockImplementation(() => {});
-    render(<KbCollectionsPage client={mockKbApi} />);
+    renderKb(mockKbApi);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open Reports" }));
     await userEvent.click(await screen.findByRole("button", { name: "Collection settings" }));
@@ -577,7 +636,7 @@ describe("KbCollectionsPage", () => {
   });
 
   it("imports a zip as a new collection from the landing page and opens it", async () => {
-    render(<KbCollectionsPage client={mockKbApi} />);
+    renderKb(mockKbApi);
 
     const input = screen.getByLabelText("Import collection from file") as HTMLInputElement;
     const file = new File(["zipbytes"], "Archive.zip", { type: "application/zip" });
@@ -593,7 +652,7 @@ describe("KbCollectionsPage", () => {
   it("imports a zip into the open collection after choosing overwrite", async () => {
     await mockKbApi.createCollection("kb");
     const intoSpy = vi.spyOn(mockKbApi, "importCollectionInto");
-    render(<KbCollectionsPage client={mockKbApi} />);
+    renderKb(mockKbApi);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const input = screen.getByLabelText("Import into this collection") as HTMLInputElement;
@@ -611,7 +670,7 @@ describe("KbCollectionsPage", () => {
   it("imports into the open collection with skip mode when chosen", async () => {
     await mockKbApi.createCollection("kb");
     const intoSpy = vi.spyOn(mockKbApi, "importCollectionInto");
-    render(<KbCollectionsPage client={mockKbApi} />);
+    renderKb(mockKbApi);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const input = screen.getByLabelText("Import into this collection") as HTMLInputElement;

@@ -1,14 +1,16 @@
 /**
- * KB shell (route /kb) — sidebar nav between collections-management and chat
- * history. The Chats tab is a list + a full-page conversation (KbChatView) for
- * the selected/new thread (NOT a drawer). The top-bar "Ask agent" opens the
- * fast-chat drawer for a quick throwaway question. Citations and document rows
- * open the doc viewer overlay.
+ * KB shell (route /kb) — the layout that frames every KB view: a sidebar that
+ * switches between collections-management and chat history, a top bar with the
+ * "Ask agent" launcher, and a surface that renders the matched child route
+ * (#93 — collections / a collection / chats all live at their own URLs).
+ *
+ * The citation/doc viewer overlay lives here (one per shell, over any child)
+ * and is exposed to children through the Outlet context (useKbOutlet); a later
+ * phase moves it onto a `?doc=` search param.
  */
 
 import { useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Outlet, useLocation, useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi, type KbCitation } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
@@ -16,39 +18,49 @@ import { Icon } from "../../components/Icon";
 import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { useT } from "../../lib/i18n";
 import { AskAgentLauncher } from "./AskAgentLauncher";
-import { KbChatsPage } from "./KbChatsPage";
-import { KbChatView } from "./KbChatView";
-import { KbCollectionsPage } from "./KbCollectionsPage";
 import { KbDocViewer } from "./KbDocViewer";
 
-type Tab = "collections" | "chats";
-type Viewer = { documentId: string; snippet?: string };
-// undefined = nothing selected yet; null = a new chat; string = an existing one.
-type Selected = string | null | undefined;
+/** What the shell shares with its routed children: the doc-viewer openers
+ * (the overlay itself is owned by the shell). */
+export type KbOutletCtx = {
+  openDoc: (documentId: string) => void;
+  openCite: (c: KbCitation) => void;
+};
+export function useKbOutlet(): KbOutletCtx {
+  return useOutletContext<KbOutletCtx>();
+}
 
 export function KbHome({ client = kbApi }: { client?: KbApi }) {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
   const t = useT();
   const qc = useQueryClient();
-  const [params] = useSearchParams();
   useBreadcrumbs([{ label: "Home", to: "/" }, { label: "Knowledge base" }]);
-  const [tab, setTab] = useState<Tab>(params.get("tab") === "chats" ? "chats" : "collections");
-  const [chatId, setChatId] = useState<Selected>(undefined);
-  const [viewKey, setViewKey] = useState(0);
-  const [chatListVersion, setChatListVersion] = useState(0);
-  const [viewer, setViewer] = useState<Viewer | null>(null);
+  // The citation/doc overlay is the URL (#93): any /kb/... path may carry
+  // ?doc=<sourceDocId>&hl=<snippet>. Driving it from a search param makes a
+  // followed citation shareable and closeable with the Back button.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const docId = searchParams.get("doc");
+  const snippet = searchParams.get("hl") ?? undefined;
 
-  const openCite = (c: KbCitation) => setViewer({ documentId: c.document_id, snippet: c.snippet });
-  // Explicitly open a thread (or a new one): remount the view.
-  const openThread = (id: string | null) => {
-    setChatId(id);
-    setViewKey((v) => v + 1);
-  };
-  // A new thread (first message) should appear in the list right away and its
-  // row should highlight — but DON'T bump viewKey (no remount mid-stream).
-  const onChatCreated = (id: string) => {
-    setChatId(id);
-    setChatListVersion((v) => v + 1);
-  };
+  const onChats = pathname.startsWith("/kb/chats");
+  // Set/clear the overlay params, preserving the rest of the URL (e.g. the
+  // grid's ?view=). URLSearchParams percent-encodes the opaque id for us.
+  const setDoc = (id: string | null, hl?: string) =>
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (id) {
+        next.set("doc", id);
+        if (hl) next.set("hl", hl);
+        else next.delete("hl");
+      } else {
+        next.delete("doc");
+        next.delete("hl");
+      }
+      return next;
+    });
+  const openCite = (c: KbCitation) => setDoc(c.document_id, c.snippet);
+  const openDoc = (documentId: string) => setDoc(documentId);
 
   return (
     <div className="kb-shell">
@@ -56,15 +68,15 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
         <div className="kb-nav__brand">{t("kb.brand")}</div>
         <button
           type="button"
-          className={`kb-nav__item${tab === "collections" ? " is-active" : ""}`}
-          onClick={() => setTab("collections")}
+          className={`kb-nav__item${onChats ? "" : " is-active"}`}
+          onClick={() => navigate("/kb/collections")}
         >
           <Icon name="layers" size={15} /> {t("kb.collections")}
         </button>
         <button
           type="button"
-          className={`kb-nav__item${tab === "chats" ? " is-active" : ""}`}
-          onClick={() => setTab("chats")}
+          className={`kb-nav__item${onChats ? " is-active" : ""}`}
+          onClick={() => navigate("/kb/chats")}
         >
           <Icon name="chat" size={15} /> {t("kb.chats")}
         </button>
@@ -72,56 +84,27 @@ export function KbHome({ client = kbApi }: { client?: KbApi }) {
 
       <main className="kb-main">
         <header className="kb-topbar">
-          <span className="kb-topbar__title">
-            {tab === "collections" ? t("kb.collections") : t("kb.conversations")}
-          </span>
-          {/* Same component Home uses — switches our own tab on
+          <span className="kb-topbar__title">{onChats ? t("kb.conversations") : t("kb.collections")}</span>
+          {/* Same component Home uses — routes our own surface on
               manage/history and reuses our viewer for citations. */}
           <AskAgentLauncher
             client={client}
-            onManage={() => setTab("collections")}
-            onHistory={() => setTab("chats")}
+            onManage={() => navigate("/kb/collections")}
+            onHistory={() => navigate("/kb/chats")}
             onOpenCitation={openCite}
           />
         </header>
 
         <div className="kb-surface">
-          {tab === "collections" ? (
-            <KbCollectionsPage client={client} onOpenDoc={(id) => setViewer({ documentId: id })} />
-          ) : (
-            <div className="kb-chats-split">
-              <KbChatsPage
-                client={client}
-                selectedId={chatId ?? undefined}
-                refreshSignal={chatListVersion}
-                onOpenChat={(id) => openThread(id)}
-                onNewChat={() => openThread(null)}
-              />
-              <div className="kb-chats-split__view">
-                {chatId === undefined ? (
-                  <div className="kb-chats-split__empty">{t("kb.empty")}</div>
-                ) : (
-                  // Keyed by viewKey (not chatId) so a fresh thread getting its
-                  // id mid-turn doesn't remount and kill the stream.
-                  <KbChatView
-                    key={viewKey}
-                    chatId={chatId}
-                    onOpenCitation={openCite}
-                    onChatCreated={onChatCreated}
-                    client={client}
-                  />
-                )}
-              </div>
-            </div>
-          )}
+          <Outlet context={{ openDoc, openCite } satisfies KbOutletCtx} />
         </div>
       </main>
 
-      {viewer && (
+      {docId && (
         <KbDocViewer
-          documentId={viewer.documentId}
-          snippet={viewer.snippet}
-          onClose={() => setViewer(null)}
+          documentId={docId}
+          snippet={snippet}
+          onClose={() => setDoc(null)}
           onChanged={() => void qc.invalidateQueries({ queryKey: qk.kb.all })}
           client={client}
         />

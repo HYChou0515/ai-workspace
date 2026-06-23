@@ -8,7 +8,7 @@ import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
-import { KbHome } from "./pages/kb/KbHome";
+import { kbRoutes } from "./pages/kb/kbRoutes";
 import { Launcher } from "./pages/Launcher";
 
 /**
@@ -35,7 +35,9 @@ export function AppRoutes() {
           <Route path="new" element={<AppNewItem />} />
         </Route>
         <Route path="/a/:slug/:itemId" element={<AppWorkspace />} />
-        <Route path="/kb" element={<KbHome />} />
+        {/* The KB shell + its child views (collections / a collection / chats);
+            the standalone full-page doc viewer stays outside the shell. */}
+        {kbRoutes()}
         <Route path="/kb/doc/*" element={<KbDocPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />

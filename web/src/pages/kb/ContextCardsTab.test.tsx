@@ -2,6 +2,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KbContextCard } from "../../api/kb";
@@ -21,7 +23,19 @@ vi.mock("../../components/MonacoEditor", () => ({
   ),
 }));
 
-const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: QueryWrap });
+// ContextCardsTab is URL-driven (#93): the open card is the :cardId param.
+// Mount it under both the bare-tab and the open-card routes so selecting a card
+// navigates and the same route re-renders with it open.
+const render = (ui: ReactElement, start = "/kb/collections/col-1/cards") =>
+  rtlRender(
+    <MemoryRouter initialEntries={[start]}>
+      <Routes>
+        <Route path="/kb/collections/:cid/cards" element={ui} />
+        <Route path="/kb/collections/:cid/cards/:cardId" element={ui} />
+      </Routes>
+    </MemoryRouter>,
+    { wrapper: QueryWrap },
+  );
 
 describe("ContextCardsTab (#106)", () => {
   beforeEach(() => _resetKbMock());
@@ -84,6 +98,19 @@ describe("ContextCardsTab (#106)", () => {
     await userEvent.click(screen.getByRole("tab", { name: "Edit" }));
     expect(await screen.findByLabelText("Explanation")).toHaveValue("The capping layer.");
     expect(screen.getByRole("button", { name: /delete/i })).toBeInTheDocument();
+  });
+
+  it("deep-links straight to a card's preview (#93)", async () => {
+    const id = await mockKbApi.createContextCard({
+      collection_id: "col-1",
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "The capping layer.",
+    });
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />, `/kb/collections/col-1/cards/${id}`);
+    // opens from the URL as a preview, no click
+    expect(await screen.findByText("The capping layer.")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Explanation")).not.toBeInTheDocument();
   });
 
   it("authors a new card and saves it through createContextCard", async () => {

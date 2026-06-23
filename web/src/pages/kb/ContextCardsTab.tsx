@@ -8,8 +8,9 @@
  */
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
+import { useNavigate, useParams } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 
 import { kbApi, type KbApi, type KbContextCard } from "../../api/kb";
@@ -22,6 +23,8 @@ type SearchMode = "name" | "text";
 
 type Draft = { id: string | null; keys: string[]; title: string; body: string };
 const BLANK: Draft = { id: null, keys: [], title: "", body: "" };
+// URL sentinel for the unsaved new-card form (card ids are `card-…`, never this).
+const NEW_CARD = "new";
 
 const cardLabel = (c: KbContextCard) => c.title || c.keys[0] || "Untitled";
 
@@ -33,6 +36,10 @@ export function ContextCardsTab({
   client?: KbApi;
 }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
+  // The open card is the URL (#93): /kb/collections/:cid/cards/:cardId.
+  const { cardId } = useParams();
+  const cardsBase = `/kb/collections/${encodeURIComponent(collectionId)}/cards`;
   const { data: cards = [], isPending } = useQuery({
     queryKey: qk.kb.contextCards(collectionId),
     queryFn: () => client.listContextCards(collectionId),
@@ -52,6 +59,33 @@ export function ContextCardsTab({
 
   const invalidate = () => qc.invalidateQueries({ queryKey: qk.kb.contextCards(collectionId) });
 
+  // Sync the editable draft to the URL's card. Re-run only when the id or the
+  // list changes (NOT on every keystroke — `draft` is the live edit buffer).
+  // The URL is the single source of "which card": `/cards/new` is a blank form,
+  // `/cards/:id` previews that card, bare `/cards` means nothing is open.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: draft is the edit buffer; depending on it would clobber edits
+  useEffect(() => {
+    if (cardId === NEW_CARD) {
+      // Entering the new-card form (from a saved card or from nothing). An
+      // in-progress blank draft (id null) is left alone so typing isn't lost.
+      if (draft?.id != null || draft == null) {
+        setDraft({ ...BLANK });
+        setEditing(true);
+      }
+      return;
+    }
+    if (!cardId) {
+      if (draft) setDraft(null);
+      return;
+    }
+    if (cardId === draft?.id) return;
+    const c = cards.find((x) => x.id === cardId);
+    // Only load the content here — `editing` is owned by the click handler (and
+    // stays true through a just-authored card's save), so a refetch landing
+    // mid-save can't bump us out of the editor.
+    if (c) setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body });
+  }, [cardId, cards]);
+
   const saveMut = useMutation({
     mutationFn: async (d: Draft): Promise<string> => {
       if (d.id) {
@@ -66,9 +100,11 @@ export function ContextCardsTab({
       });
     },
     // Promote a just-authored draft to "editing the saved card" so a second
-    // Save updates it instead of creating a duplicate.
+    // Save updates it instead of creating a duplicate, and put its id in the
+    // URL (a no-op for an update — same id).
     onSuccess: (id) => {
       setDraft((cur) => (cur && cur.id === null ? { ...cur, id } : cur));
+      navigate(`${cardsBase}/${encodeURIComponent(id)}`);
       void invalidate();
     },
   });
@@ -76,6 +112,7 @@ export function ContextCardsTab({
     mutationFn: (id: string) => client.deleteContextCard(id),
     onSuccess: () => {
       setDraft(null);
+      navigate(cardsBase);
       void invalidate();
     },
   });
@@ -123,10 +160,8 @@ export function ContextCardsTab({
         <button
           type="button"
           className="kb-cards__new"
-          onClick={() => {
-            setDraft({ ...BLANK });
-            setEditing(true); // a new card opens straight into the editor
-          }}
+          // The blank form is its own URL; the effect seeds the draft.
+          onClick={() => navigate(`${cardsBase}/${NEW_CARD}`)}
         >
           + New card
         </button>
@@ -144,10 +179,10 @@ export function ContextCardsTab({
               <li key={c.id}>
                 <button
                   type="button"
-                  className={`kb-cards__item${draft?.id === c.id ? " is-active" : ""}`}
+                  className={`kb-cards__item${(cardId ?? draft?.id) === c.id ? " is-active" : ""}`}
                   onClick={() => {
-                    setDraft({ id: c.id, keys: c.keys, title: c.title, body: c.body });
-                    setEditing(false); // existing card opens as a preview by default
+                    setEditing(false); // open as a preview by default
+                    navigate(`${cardsBase}/${encodeURIComponent(c.id)}`);
                   }}
                 >
                   {cardLabel(c)}
