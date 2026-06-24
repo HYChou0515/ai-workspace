@@ -223,8 +223,11 @@ describe("ItemChatShell", () => {
     const decide = vi.spyOn(workflowApi, "decide").mockResolvedValue();
     render();
     await waitFor(() => expect(screen.getByTestId("workflow-continue")).toBeInTheDocument());
+    // The gate is pinned to the top of the chat (#170) so scrolling past the
+    // feed can't bury the decision.
+    expect(screen.getByTestId("workflow-continue")).toHaveStyle({ position: "sticky" });
     expect(screen.getByText("Filled in the glossary? Continue to commit?")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("gate-approve"));
+    fireEvent.click(screen.getByText("Approve"));
     await waitFor(() => expect(decide).toHaveBeenCalledWith("topic-hub", "it", "r1", { choice: "approve" }));
   });
 });

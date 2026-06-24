@@ -564,6 +564,22 @@ function ToolCallCard({
           {call.parseError}
         </div>
       )}
+      {streamingLive && (
+        // A streaming stdout is a work-in-progress, not the answer (#170).
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            marginTop: 6,
+            fontSize: 11,
+            color: "var(--accent)",
+          }}
+        >
+          <Icon name="refresh" size={10} color="var(--accent)" />
+          {t("tool.streamingHint")}
+        </div>
+      )}
       {body !== undefined && (
         <pre
           ref={preRef}
