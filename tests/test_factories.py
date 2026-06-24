@@ -26,6 +26,7 @@ from workspace_app.config.schema import (
     ToolsSettings,
 )
 from workspace_app.factories import (
+    _backend_for,
     build_message_queue_factory,
     get_agent_config_catalog,
     get_check_registry,
@@ -192,6 +193,68 @@ def test_get_spec_with_a_disk_backend_round_trips(tmp_path):
     rm = spec.get_resource_manager(Collection)
     rid = rm.create(Collection(name="c")).resource_id
     assert rm.get(rid).data.name == "c"
+
+
+# ─── postgres connect_timeout (#208: dead DB must fail fast, not hang 10 min) ──
+
+
+def _backend_pg_dsn(settings) -> str:
+    """The pg connection_string `_backend_for` composed (these settings always
+    carry a pg_dsn, so a missing pg connection is a test-setup bug, not None)."""
+    cfg = _backend_for(settings)
+    assert cfg is not None and "pg" in cfg.connections
+    dsn = cfg.connections["pg"].options["connection_string"]
+    assert isinstance(dsn, str)
+    return dsn
+
+
+def _pg_settings(dsn: str, *, timeout: int = 10):
+    return replace(
+        Settings(),
+        filestore=replace(
+            FilestoreSettings(), kind="specstar", pg_dsn=dsn, pg_connect_timeout=timeout
+        ),
+    )
+
+
+def test_backend_injects_connect_timeout_into_url_dsn():
+    dsn = _backend_pg_dsn(_pg_settings("postgresql://u:p@host:5432/db"))
+    assert "connect_timeout=10" in dsn
+
+
+def test_backend_keeps_explicit_connect_timeout_in_dsn():
+    dsn = _backend_pg_dsn(_pg_settings("postgresql://u:p@h/db?connect_timeout=3"))
+    assert "connect_timeout=3" in dsn
+    assert "connect_timeout=10" not in dsn  # an explicit value wins
+
+
+def test_backend_preserves_other_dsn_params():
+    dsn = _backend_pg_dsn(_pg_settings("postgresql://u:p@h/db?sslmode=require"))
+    assert "sslmode=require" in dsn
+    assert "connect_timeout=10" in dsn
+
+
+def test_backend_timeout_zero_leaves_dsn_untouched():
+    dsn = _backend_pg_dsn(_pg_settings("postgresql://u:p@h/db", timeout=0))
+    assert "connect_timeout" not in dsn
+
+
+def test_backend_keeps_explicit_connect_timeout_in_keyvalue_dsn():
+    dsn = _backend_pg_dsn(_pg_settings("host=db port=5432 connect_timeout=4"))
+    assert "connect_timeout=4" in dsn
+    assert "connect_timeout=10" not in dsn
+
+
+def test_backend_injects_into_libpq_keyvalue_dsn():
+    dsn = _backend_pg_dsn(_pg_settings("host=db port=5432 dbname=app"))
+    assert "host=db" in dsn and "dbname=app" in dsn
+    assert "connect_timeout=10" in dsn
+
+
+def test_with_connect_timeout_noop_on_empty_dsn():
+    from workspace_app.factories import _with_connect_timeout
+
+    assert _with_connect_timeout("", 10) == ""
 
 
 # ─── embedder ───────────────────────────────────────────────────────────
