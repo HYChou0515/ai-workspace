@@ -17,6 +17,7 @@ import { kbApi, type KbApi, type KbContextCard } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { MonacoEditor } from "../../components/MonacoEditor";
 import { Skeleton } from "../../components/Skeleton";
+import { useT } from "../../lib/i18n";
 import { lookupByName, scanPassage } from "./cardSearch";
 
 type SearchMode = "name" | "text";
@@ -36,6 +37,7 @@ export function ContextCardsTab({
   client?: KbApi;
 }) {
   const qc = useQueryClient();
+  const t = useT();
   const navigate = useNavigate();
   // The open card is the URL (#93): /kb/collections/:cid/cards/:cardId.
   const { cardId } = useParams();
@@ -195,7 +197,13 @@ export function ContextCardsTab({
 
       <section className="kb-cards__editor">
         {draft === null ? (
-          <div className="kb-cards__empty">Select a card, or create a new one.</div>
+          // No card open: pitch the glossary's purpose + an example when the
+          // collection has none yet (#173); once cards exist just invite a pick.
+          <div className="kb-cards__empty">
+            {cards.length === 0 && !isPending
+              ? t("kb.cards.empty.none")
+              : t("kb.cards.empty.unselected")}
+          </div>
         ) : (
           <>
             <div className="kb-cards__viewtoggle" role="tablist" aria-label="View mode">
