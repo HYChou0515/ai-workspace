@@ -129,6 +129,8 @@ export const messages = {
   "mention.summoned": { "zh-TW": "召喚了", en: "summoned" },
   "entry.replay": { "zh-TW": "重跑這一步", en: "Replay this step with the current AI" },
   "entry.undo": { "zh-TW": "復原這一回合（含之後）", en: "Undo this turn and everything after it" },
+  // Compact label revealed on hover/focus of the undo control (#172).
+  "entry.undo.label": { "zh-TW": "復原此回合之後", en: "Undo this turn onward" },
 
   // App launcher (Launcher)
   "launcher.appsEyebrow": { "zh-TW": "應用程式", en: "APPS" },
@@ -160,6 +162,33 @@ export const messages = {
     en: "Reached the turn limit ({turns}); the conversation stopped.",
   },
   "banner.cancelled": { "zh-TW": "已取消。", en: "Cancelled." },
+
+  // App dashboard (AppDashboard) — filter strip (#172)
+  "dash.clearFilters": { "zh-TW": "清除篩選", en: "Clear filters" },
+
+  // Global nav (GlobalNav) — make the switcher + brand legible (#172)
+  "nav.switch": { "zh-TW": "切換", en: "Switch" },
+  "nav.switch.tip": {
+    "zh-TW": "切換 App、知識庫或診斷",
+    en: "Switch app, knowledge base, or diagnostics",
+  },
+  "nav.home": { "zh-TW": "回首頁", en: "Home" },
+
+  // Topic Hub collection-set picker entry (CollectionsButton) — frame it as the
+  // agent's search scope, not a generic count (#172).
+  "collections.set": { "zh-TW": "設定搜尋範圍", en: "Set search scope" },
+  "collections.scope": { "zh-TW": "搜尋範圍 · {n}", en: "Search scope · {n}" },
+  "collections.tip": {
+    "zh-TW": "AI 回答時會在這些知識集裡找資料",
+    en: "The AI searches these collections when answering",
+  },
+
+  // KB collection page (KbCollectionPage) (#172)
+  "kb.reindexAll": { "zh-TW": "重新索引全部", en: "Re-index all" },
+  "kb.uploadFiles": { "zh-TW": "上傳檔案", en: "Upload files" },
+  "kb.uploadFolder": { "zh-TW": "上傳資料夾", en: "Upload folder" },
+  "kb.dropToUpload": { "zh-TW": "放開以上傳", en: "Drop to upload" },
+  "kb.dropHint": { "zh-TW": "把檔案拖到這裡開始", en: "Drag files here to start" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

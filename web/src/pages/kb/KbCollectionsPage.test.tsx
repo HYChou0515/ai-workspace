@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 
 import { QueryWrap } from "../../test/queryWrapper";
 
@@ -100,7 +100,7 @@ describe("KbCollectionsPage", () => {
     expect(screen.queryByTestId("kb-cols-loading")).not.toBeInTheDocument();
   });
 
-  it("creates a collection card; opening it shows the upload affordances", async () => {
+  it("creates a collection card; opening it shows side-by-side upload buttons (#172)", async () => {
     renderKb(mockKbApi);
     // "New collection" opens a modal; name is entered there, then created
     await userEvent.click(screen.getByRole("button", { name: /new collection/i }));
@@ -109,11 +109,59 @@ describe("KbCollectionsPage", () => {
 
     // the new collection appears as a card in the grid
     const card = await screen.findByRole("button", { name: "Open Process SOPs" });
-    // opening it switches to the collection page; Upload is a dropdown menu
+    // opening it switches to the collection page; Upload is two one-click
+    // buttons now, not a dropdown (#172).
     await userEvent.click(card);
-    await userEvent.click(screen.getByRole("button", { name: "Upload" }));
-    expect(screen.getByRole("menuitem", { name: "Upload files" })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: "Upload folder" })).toBeInTheDocument();
+    // The header actions carry both upload buttons (an empty collection also
+    // shows an "上傳檔案" button in its drop-zone CTA, so scope to the header).
+    const actions = document.querySelector(".kb-colpage__actions")!;
+    expect(within(actions as HTMLElement).getByRole("button", { name: "上傳檔案" })).toBeInTheDocument();
+    expect(within(actions as HTMLElement).getByRole("button", { name: "上傳資料夾" })).toBeInTheDocument();
+  });
+
+  it("greets an empty collection with a drop-zone call-to-action, not passive text (#172)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const cta = await screen.findByTestId("kb-docs-empty-cta");
+    expect(cta).toHaveTextContent("把檔案拖到這裡開始");
+    expect(within(cta).getByRole("button", { name: "上傳檔案" })).toBeInTheDocument();
+  });
+
+  it("shows a drop overlay while dragging files over the Documents pane (#172)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const zone = await screen.findByTestId("kb-docs-dropzone");
+    expect(screen.queryByTestId("kb-drop-overlay")).toBeNull();
+    fireEvent.dragEnter(zone);
+    expect(screen.getByTestId("kb-drop-overlay")).toBeInTheDocument();
+    fireEvent.dragLeave(zone);
+    expect(screen.queryByTestId("kb-drop-overlay")).toBeNull();
+  });
+
+  it("uploads files dropped onto the Documents pane (#172)", async () => {
+    const uploadDocument = vi.fn(async () => ["c1/me/x.md"]);
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+      uploadDocument,
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const zone = await screen.findByTestId("kb-docs-dropzone");
+    const file = new File(["x"], "x.md", { type: "text/markdown" });
+    fireEvent.drop(zone, { dataTransfer: { files: [file], types: ["Files"] } });
+    await waitFor(() => expect(uploadDocument).toHaveBeenCalledWith("c1", file, "x.md"));
   });
 
   it("uploads a document and the doc tree lists it (#87)", async () => {
@@ -376,8 +424,38 @@ describe("KbCollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
-    await userEvent.click(screen.getByRole("menuitem", { name: "Re-index all" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "重新索引全部" }));
     expect(reindexCollection).toHaveBeenCalledWith("c1");
+  });
+
+  it("surfaces Re-index all as a Documents-tab action that re-indexes the collection (#172)", async () => {
+    const reindexCollection = vi.fn(async () => {});
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 1 })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "ready" },
+        ]),
+      reindexCollection,
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const btn = await screen.findByTestId("kb-reindex-all");
+    expect(btn).toBeEnabled();
+    await userEvent.click(btn);
+    expect(reindexCollection).toHaveBeenCalledWith("c1");
+  });
+
+  it("disables the Documents-tab Re-index action when the collection has no docs (#172)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 0 })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    expect(await screen.findByTestId("kb-reindex-all")).toBeDisabled();
   });
 
   it("shows a Loading… placeholder while the first page is in flight", async () => {

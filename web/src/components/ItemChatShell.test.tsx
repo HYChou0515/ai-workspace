@@ -165,7 +165,7 @@ describe("ItemChatShell", () => {
     stubCollectionsFile(); // 404 → empty selection
     render();
     const button = await screen.findByTestId("collections-button");
-    expect(button).toHaveTextContent("選擇知識庫");
+    expect(button).toHaveTextContent("設定搜尋範圍");
     fireEvent.click(button);
     expect(await screen.findByTestId("collections-modal")).toBeInTheDocument();
   });
@@ -175,7 +175,7 @@ describe("ItemChatShell", () => {
     stubCollectionsFile('[{"id":"a","name":"Alpha"},{"id":"b","name":"Beta"}]');
     render();
     await waitFor(() =>
-      expect(screen.getByTestId("collections-button")).toHaveTextContent("知識庫 (2)"),
+      expect(screen.getByTestId("collections-button")).toHaveTextContent("搜尋範圍 · 2"),
     );
   });
 

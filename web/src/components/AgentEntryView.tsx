@@ -158,23 +158,38 @@ function ReplayButton({ onReplay }: { onReplay: () => void }) {
 /** Per-turn "undo to here" trigger on a user message (#38). */
 function UndoButton({ onUndo }: { onUndo: () => void }) {
   const t = useT();
+  // A bare low-contrast icon reads as decoration (#172). Keep the icon always
+  // visible but as an obvious bordered button, and reveal a compact text label
+  // on hover/focus so its purpose ("undo this turn onward") is legible without
+  // relying on the title tooltip alone.
+  const [show, setShow] = useState(false);
   return (
     <button
       type="button"
       aria-label={t("entry.undo")}
       title={t("entry.undo")}
       onClick={onUndo}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+      onFocus={() => setShow(true)}
+      onBlur={() => setShow(false)}
       style={{
-        border: "none",
-        background: "none",
-        padding: 2,
+        border: "1px solid var(--paper-3)",
+        background: show ? "var(--paper-2)" : "var(--white)",
+        padding: "2px 6px",
         cursor: "pointer",
-        color: "var(--text-paper-d2)",
+        color: "var(--text-paper-d)",
         display: "inline-flex",
         alignItems: "center",
+        gap: 4,
+        fontSize: 11,
+        fontFamily: "inherit",
+        lineHeight: 1.4,
+        borderRadius: "var(--radius-btn)",
       }}
     >
       <Icon name="undo" size={12} />
+      {show && <span>{t("entry.undo.label")}</span>}
     </button>
   );
 }

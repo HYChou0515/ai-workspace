@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { EntryView } from "./AgentEntryView";
@@ -210,6 +210,21 @@ describe("EntryView — undo affordance (#38)", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /復原/ }));
     expect(onUndo).toHaveBeenCalled();
+  });
+
+  it("keeps the undo icon always visible but reveals a compact text label on hover (#172)", () => {
+    render(
+      <EntryView
+        entry={{ kind: "message", message: { role: "user", content: "why?" } }}
+        onUndo={vi.fn()}
+      />,
+    );
+    const btn = screen.getByRole("button", { name: /復原/ }); // aria-label stays descriptive
+    expect(within(btn).queryByText("復原此回合之後")).not.toBeInTheDocument();
+    fireEvent.mouseEnter(btn);
+    expect(within(btn).getByText("復原此回合之後")).toBeInTheDocument();
+    fireEvent.mouseLeave(btn);
+    expect(within(btn).queryByText("復原此回合之後")).not.toBeInTheDocument();
   });
 
   it("no undo control on assistant messages or when the surface opts out", () => {
