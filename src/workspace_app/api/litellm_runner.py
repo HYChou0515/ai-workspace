@@ -100,6 +100,13 @@ def _build_input(history: list[dict[str, str]], prompt: str) -> str | list[dict[
     agent has cross-turn memory (#17)."""
     if not history:
         return prompt
+    # #199 — the SDK prepends the system prompt itself, so the replayed history
+    # must never carry a `system` item; a mid-conversation one makes providers
+    # reject the call with "system message must be at the beginning". Fail loud
+    # at our boundary rather than as an opaque provider error.
+    assert not any(m.get("role") == "system" for m in history), (
+        "history must not contain a system message"
+    )
     return [*history, {"role": "user", "content": prompt}]
 
 
