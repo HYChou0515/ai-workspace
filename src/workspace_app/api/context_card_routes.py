@@ -12,7 +12,7 @@ route builder introspects the handler signature at apply() time and can't resolv
 stringised ForwardRef body types, so the annotations must be real classes.
 """
 
-from fastapi import Body, FastAPI
+from fastapi import APIRouter, Body, FastAPI
 from pydantic import BaseModel
 from specstar import SpecStar
 
@@ -95,7 +95,7 @@ class LookupOut(BaseModel):
     results: dict[str, list[CardOut]]
 
 
-def register_context_card_routes(app: FastAPI, spec: SpecStar) -> None:
+def register_context_card_routes(app: FastAPI | APIRouter, spec: SpecStar) -> None:
     """Plain read routes (added AFTER `spec.apply`). The exposed `get(term)`:
     deterministic, exact, batch, scoped to one collection."""
 

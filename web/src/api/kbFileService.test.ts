@@ -14,6 +14,7 @@ const backend = vi.hoisted(() => ({
 
 vi.mock("./http", () => ({
   API_BASE: "",
+  API_PREFIX: "/api",
   apiFetch: vi.fn(async (path: string, init?: RequestInit) => {
     const method = init?.method ?? "GET";
     const json = (obj: unknown) =>
@@ -255,13 +256,13 @@ describe("kbFileService", () => {
     it("resolves a doc-relative ref to the sibling doc's content blob", () => {
       // a ref in /guides/setup.md → ./diagram.png is the sibling /guides/diagram.png
       expect(svc.fileUrl("./diagram.png", "/guides/setup.md")).toBe(
-        "/source-doc/img-1/blobs/imgfid",
+        "/api/source-doc/img-1/blobs/imgfid",
       );
     });
 
     it("resolves a collection-root (absolute) ref", () => {
       expect(svc.fileUrl("/guides/diagram.png", "/notes.md")).toBe(
-        "/source-doc/img-1/blobs/imgfid",
+        "/api/source-doc/img-1/blobs/imgfid",
       );
     });
 

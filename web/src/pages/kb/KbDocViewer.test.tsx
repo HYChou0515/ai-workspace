@@ -147,7 +147,7 @@ describe("KbDocViewer binary documents (issue #39 bug)", () => {
     });
     render(<KbDocViewer documentId="col-1/u/shot.png" onClose={() => {}} client={client} />);
     const img = await screen.findByRole("img", { name: "shot.png" });
-    expect(img).toHaveAttribute("src", "/blobs/blob-png-1");
+    expect(img).toHaveAttribute("src", "/api/blobs/blob-png-1");
   });
 
   it("shows the VLM-parsed text below the image when the doc carries one (#114)", async () => {
@@ -162,7 +162,7 @@ describe("KbDocViewer binary documents (issue #39 bug)", () => {
     render(<KbDocViewer documentId="col-1/u/diagram.png" onClose={() => {}} client={client} />);
     // the image is still rendered from the blob
     const img = await screen.findByRole("img", { name: "diagram.png" });
-    expect(img).toHaveAttribute("src", "/blobs/blob-png-2");
+    expect(img).toHaveAttribute("src", "/api/blobs/blob-png-2");
     // AND the parsed text the chat actually saw is shown alongside it
     expect(await screen.findByText(/Reflow oven zone three drifted/)).toBeInTheDocument();
   });
@@ -200,7 +200,7 @@ describe("KbDocViewer browser-native documents (issue #39)", () => {
     render(<KbDocViewer documentId="col-1/u/deck2.pdf" onClose={() => {}} client={client} />);
     const frame = await screen.findByTitle("deck2.pdf");
     expect(frame.tagName).toBe("IFRAME");
-    expect(frame).toHaveAttribute("src", "/blobs/blob-pdf-2");
+    expect(frame).toHaveAttribute("src", "/api/blobs/blob-pdf-2");
   });
 
   it("renders an HTML doc in a sandboxed iframe (no scripts)", async () => {
@@ -215,7 +215,7 @@ describe("KbDocViewer browser-native documents (issue #39)", () => {
     render(<KbDocViewer documentId="col-1/u/page.html" onClose={() => {}} client={client} />);
     const frame = await screen.findByTitle("page.html");
     expect(frame.tagName).toBe("IFRAME");
-    expect(frame).toHaveAttribute("src", "/blobs/blob-html-1");
+    expect(frame).toHaveAttribute("src", "/api/blobs/blob-html-1");
     // sandbox with NO allow-scripts — uploaded HTML must not run JS.
     expect(frame).toHaveAttribute("sandbox", "");
   });
@@ -239,7 +239,7 @@ describe("KbDocViewer parser previews (pptx → converted PDF)", () => {
     const frame = await screen.findByTitle("deck.pptx");
     expect(frame.tagName).toBe("IFRAME");
     // The PREVIEW blob (converted PDF), not the original pptx bytes.
-    expect(frame).toHaveAttribute("src", "/blobs/blob-preview-pdf-1");
+    expect(frame).toHaveAttribute("src", "/api/blobs/blob-preview-pdf-1");
   });
 });
 

@@ -12,7 +12,7 @@ from typing import Any, Literal
 
 import msgspec
 from agents.tracing import set_trace_processors
-from fastapi import FastAPI, Header, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -204,6 +204,11 @@ class _SpaStaticFiles(StaticFiles):
             response = await super().get_response(path, scope)
         except StarletteHTTPException as exc:
             if exc.status_code != 404:
+                raise
+            # #177: every backend route lives under /api. An unmatched /api/*
+            # request is a real API miss — let it 404 as JSON, NOT the SPA
+            # history fallback (returning index.html would mask broken calls).
+            if path == "api" or path.startswith("api/"):
                 raise
             served_index = True  # history fallback → index.html
             response = await super().get_response("index.html", scope)
@@ -644,17 +649,32 @@ def create_app(
 
     # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and
     # any generated URLs respect a reverse-proxy sub-path mount.
-    app = FastAPI(title="RCA 3.0", lifespan=lifespan, root_path=root_path)
+    # #177: the docs / openapi / redoc live under /api too, so the SPA (mounted
+    # at "/") owns the entire root namespace and a hard-refreshed client route
+    # can never collide with a backend route.
+    app = FastAPI(
+        title="RCA 3.0",
+        lifespan=lifespan,
+        root_path=root_path,
+        docs_url="/api/docs",
+        redoc_url="/api/redoc",
+        openapi_url="/api/openapi.json",
+        swagger_ui_oauth2_redirect_url="/api/docs/oauth2-redirect",
+    )
+    # #177: EVERY backend route registers on this prefixed router — specstar's
+    # CRUD routes (via apply(router=…)) and all hand-written ones. It's included
+    # onto `app` exactly once, just before the SPA mount at the end of create_app.
+    api = APIRouter(prefix="/api")
 
-    register_notification_routes(app, spec, get_user_id)
-    register_health_routes(app, health_service)
+    register_notification_routes(api, spec, get_user_id)
+    register_health_routes(api, health_service)
 
-    @app.get("/me")
+    @api.get("/me")
     async def get_me() -> dict:
         """The signed-in user (resolved from the auth seam via the directory)."""
         return users.get(get_user_id()).to_dict()
 
-    @app.get("/users")
+    @api.get("/users")
     async def list_users() -> list[dict]:
         """The user directory — small enough to fetch whole and filter on the FE
         (mention / share pickers).
@@ -671,7 +691,7 @@ def create_app(
                 out.append(u.to_dict())
         return out
 
-    @app.get("/apps")
+    @api.get("/apps")
     async def list_apps() -> list[dict]:
         """#89 P4a — launcher card summaries, one per registered App."""
         from ..apps.catalog import discover_app_slugs
@@ -691,7 +711,7 @@ def create_app(
             )
         return out
 
-    @app.get("/apps/{slug}")
+    @api.get("/apps/{slug}")
     async def get_app_manifest(slug: str) -> dict:
         """#89 P4a — the full App manifest the dashboard + workspace drive off.
         A shipped ``icon.svg`` is inlined so the FE gets it in one fetch."""
@@ -726,7 +746,7 @@ def create_app(
                 )
         return data
 
-    @app.post("/a/{slug}/items")
+    @api.post("/a/{slug}/items")
     async def create_app_item(slug: str, body: dict) -> dict:
         """#89 P4b — create an App's WorkItem + seed its profile's files. The
         body carries the item's fields; `owner` comes from auth and `profile`
@@ -762,7 +782,7 @@ def create_app(
             "seeded": seeded,
         }
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/close",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -846,18 +866,18 @@ def create_app(
         turn_engine.forget(item_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.get("/activity")
+    @api.get("/activity")
     async def get_activity() -> list[dict]:
         """Recent activity feed (newest first) for the notifications popover."""
         return activity.entries()
 
-    @app.get("/monitor")
+    @api.get("/monitor")
     async def get_monitor(limit: int | None = None, group_id: str | None = None) -> list[dict]:
         """Recent LLM/agent telemetry events (from the SDK trace stream),
         optionally scoped to one investigation via `group_id`."""
         return monitor.recent(limit=limit, group_id=group_id)
 
-    @app.get("/monitor/stream")
+    @api.get("/monitor/stream")
     async def stream_monitor(group_id: str | None = None) -> StreamingResponse:
         """Live SSE feed of telemetry events as the SDK emits them."""
         return StreamingResponse(monitor.sse(group_id=group_id), media_type="text/event-stream")
@@ -866,7 +886,10 @@ def create_app(
     # BEFORE apply() so they materialise into routes (norm_keys derived in-write).
     register_context_card_actions(spec)
 
-    spec.apply(app)
+    # #177: generate specstar's CRUD routes onto the /api router (not the app),
+    # but DON'T include it yet — more hand-written routes are added to `api`
+    # below; we include it once, after all routes exist, before spec.openapi.
+    spec.apply(app, router=api, auto_include=False)
 
     # KB chatbot subsystem: ingestion + collection/document/render routes.
     # Embedder/Chunker are swappable; defaults are offline-friendly (production
@@ -955,10 +978,10 @@ def create_app(
             sanity_llm_factory,  # ty: ignore[invalid-argument-type]
             message_queue_factory=message_queue_factory,
         )
-        register_sanity_routes(app, sanity_models or [], sanity_coordinator)
+        register_sanity_routes(api, sanity_models or [], sanity_coordinator)
     app.state.sanity_coordinator = sanity_coordinator
     register_kb_routes(
-        app,
+        api,
         spec,
         ingestor,
         wiki_coordinator,
@@ -966,7 +989,7 @@ def create_app(
         get_user_id=get_user_id,
     )
     # #106: the exposed deterministic context-card lookup (read route, post-apply).
-    register_context_card_routes(app, spec)
+    register_context_card_routes(api, spec)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
     # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
@@ -999,7 +1022,7 @@ def create_app(
     )
     kb_turn_engine = ChatTurnEngine(kb_runner)
     register_kb_chat_routes(
-        app,
+        api,
         spec,
         kb_turn_engine,
         kb_retriever,
@@ -1325,7 +1348,7 @@ def create_app(
         mime = ct if isinstance(ct, str) else "application/octet-stream"
         return doc.path, mime, raw
 
-    register_replay_routes(app, service=replay_service, load_turn=_load_turn, load_doc=_load_doc)
+    register_replay_routes(api, service=replay_service, load_turn=_load_turn, load_doc=_load_doc)
 
     # ── Workflows (#100) ─────────────────────────────────────────────
     # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
@@ -1552,7 +1575,7 @@ def create_app(
             )
         return investigation_id, profile, manifest
 
-    @app.get("/a/{slug}/profiles")
+    @api.get("/a/{slug}/profiles")
     async def list_app_profiles(slug: str) -> list[dict]:
         """#100 (manual §4 & §14): the App's profiles, each with its list of workflow
         MANIFESTS so the FE's new-chat picker can offer every workflow type. Also keeps
@@ -1578,7 +1601,7 @@ def create_app(
             )
         return out
 
-    @app.post("/a/{slug}/items/{item_id}/run", status_code=status.HTTP_202_ACCEPTED)
+    @api.post("/a/{slug}/items/{item_id}/run", status_code=status.HTTP_202_ACCEPTED)
     async def run_workflow_item(slug: str, item_id: str, workflow_id: str = Query("")) -> dict:
         """#100 / topic-hub P8 (manual §3, §4, §14): launch a workflow. Opens a fresh
         WORKFLOW CHAT (a `Conversation` with `run_id`) the run streams into, and returns
@@ -1612,7 +1635,7 @@ def create_app(
         )
         return {"run_id": run_id, "item_id": investigation_id, "chat_id": chat_id}
 
-    @app.get("/a/{slug}/items/{item_id}/runs")
+    @api.get("/a/{slug}/items/{item_id}/runs")
     async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:
         """#100: the item's run history (newest first), for the run-list view."""
         investigation_id = _require_item(slug, item_id)
@@ -1631,7 +1654,7 @@ def create_app(
         out.sort(key=lambda d: d.get("started") or 0, reverse=True)
         return out
 
-    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}")
+    @api.get("/a/{slug}/items/{item_id}/runs/{run_id}")
     async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
         """#100 (manual §14): poll a run — status + result + per-phase progress."""
         _require_item(slug, item_id)
@@ -1643,7 +1666,7 @@ def create_app(
         assert isinstance(data, WorkflowRun)
         return {"run_id": run_id, **msgspec.to_builtins(data)}
 
-    @app.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
+    @api.get("/a/{slug}/items/{item_id}/runs/{run_id}/stream")
     async def stream_workflow_run(slug: str, item_id: str, run_id: str) -> StreamingResponse:
         """#100 / P8 (manual §3, §14): the run's live SSE — its WORKFLOW CHAT's stream
         (agent events + phase/step events overlaid). Falls back to the item's broadcast
@@ -1658,7 +1681,7 @@ def create_app(
             pass
         return StreamingResponse(turn_engine.subscribe_sse(key), media_type="text/event-stream")
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/runs/{run_id}/cancel",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -1669,7 +1692,7 @@ def create_app(
         await workflow_orchestrator.cancel(run_id, investigation_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/runs/{run_id}/decisions",
         status_code=status.HTTP_202_ACCEPTED,
     )
@@ -1693,7 +1716,7 @@ def create_app(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"run_id": run_id, "resumed": True}
 
-    @app.post("/a/{slug}/items/{item_id}/capabilities/ingest")
+    @api.post("/a/{slug}/items/{item_id}/capabilities/ingest")
     async def capability_ingest(
         slug: str,
         item_id: str,
@@ -1725,7 +1748,7 @@ def create_app(
             ) from exc
         return {"doc_id": doc_id}
 
-    @app.post("/a/{slug}/items/{item_id}/capabilities/context-card")
+    @api.post("/a/{slug}/items/{item_id}/capabilities/context-card")
     async def capability_context_card(
         slug: str,
         item_id: str,
@@ -1755,7 +1778,7 @@ def create_app(
             ) from exc
         return {"card_id": card_id}
 
-    @app.get("/a/{slug}/items/{item_id}/export")
+    @api.get("/a/{slug}/items/{item_id}/export")
     async def export_investigation(slug: str, item_id: str) -> Response:
         """Download the investigation's full conversation as JSON — every message
         with its reasoning, tool calls (name/args/output), citations, metrics and
@@ -1785,7 +1808,7 @@ def create_app(
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/messages",
         status_code=status.HTTP_202_ACCEPTED,
     )
@@ -1982,7 +2005,7 @@ def create_app(
         )
         await turn_engine.enqueue(engine_key, turn_content, ctx, on_complete=persist)
 
-    @app.get("/a/{slug}/items/{item_id}/stream")
+    @api.get("/a/{slug}/items/{item_id}/stream")
     async def stream_investigation(slug: str, item_id: str) -> StreamingResponse:
         """#43: the shared per-investigation event stream. Every viewer subscribes
         here and sees all turns live (whoever sent them) + human messages +
@@ -1995,7 +2018,7 @@ def create_app(
             turn_engine.subscribe_sse(investigation_id), media_type="text/event-stream"
         )
 
-    @app.delete(
+    @api.delete(
         "/a/{slug}/items/{item_id}/messages/current",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2006,7 +2029,7 @@ def create_app(
         await turn_engine.cancel_current(investigation_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.delete("/a/{slug}/items/{item_id}/messages")
+    @api.delete("/a/{slug}/items/{item_id}/messages")
     async def undo_turns(
         slug: str,
         item_id: str,
@@ -2083,7 +2106,7 @@ def create_app(
                 out[r.info.resource_id] = str(r.data.status)  # ty: ignore[unresolved-attribute]
         return out
 
-    @app.get("/a/{slug}/items/{item_id}/chats")
+    @api.get("/a/{slug}/items/{item_id}/chats")
     async def list_chats(slug: str, item_id: str) -> list[_ChatInfo]:
         """List the item's chats (free + workflow), **most-recent-activity first**
         (#132 — no "main chat" privilege). Each workflow chat carries its driving
@@ -2103,7 +2126,7 @@ def create_app(
         infos.sort(key=lambda c: (-(c.last_activity_ms or 0), c.chat_id))
         return infos
 
-    @app.post("/a/{slug}/items/{item_id}/chats", status_code=status.HTTP_201_CREATED)
+    @api.post("/a/{slug}/items/{item_id}/chats", status_code=status.HTTP_201_CREATED)
     async def create_chat(slug: str, item_id: str, body: _CreateChatBody) -> _ChatInfo:
         """Open a new FREE chat in the item (manual §3); returns its chat_id. A
         workflow chat is opened by the run endpoint (P8), not here."""
@@ -2118,7 +2141,7 @@ def create_app(
             conv_rm.get(rev.resource_id), default[0] if default else None, {}
         )
 
-    @app.patch("/a/{slug}/items/{item_id}/chats/{chat_id}")
+    @api.patch("/a/{slug}/items/{item_id}/chats/{chat_id}")
     async def rename_chat(
         slug: str, item_id: str, chat_id: str, body: _RenameChatBody
     ) -> _ChatInfo:
@@ -2134,7 +2157,7 @@ def create_app(
             conv_rm.get(rid), default[0] if default else None, _item_run_status(investigation_id)
         )
 
-    @app.delete("/a/{slug}/items/{item_id}/chats/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
+    @api.delete("/a/{slug}/items/{item_id}/chats/{chat_id}", status_code=status.HTTP_204_NO_CONTENT)
     async def delete_chat(slug: str, item_id: str, chat_id: str) -> Response:
         """Delete a chat (#132). A workflow chat's driving run is **cancelled first**
         (delete also cancels the run); then any in-flight turn / SSE is torn down and
@@ -2147,7 +2170,7 @@ def create_app(
         conv_rm.delete(rid)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/chats/{chat_id}/messages",
         status_code=status.HTTP_202_ACCEPTED,
     )
@@ -2159,7 +2182,7 @@ def create_app(
         await _send_into(investigation_id, rid, conv, _engine_key(investigation_id, rid), body)
         return Response(status_code=status.HTTP_202_ACCEPTED)
 
-    @app.get("/a/{slug}/items/{item_id}/chats/{chat_id}/stream")
+    @api.get("/a/{slug}/items/{item_id}/chats/{chat_id}/stream")
     async def stream_chat(slug: str, item_id: str, chat_id: str) -> StreamingResponse:
         """The chat's own live event stream (manual §3) — per-chat, unlike the
         item-level stream which carries the default chat + item-wide events."""
@@ -2170,7 +2193,7 @@ def create_app(
             media_type="text/event-stream",
         )
 
-    @app.delete(
+    @api.delete(
         "/a/{slug}/items/{item_id}/chats/{chat_id}/messages/current",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2180,7 +2203,7 @@ def create_app(
         await turn_engine.cancel_current(_engine_key(investigation_id, chat_id))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.delete("/a/{slug}/items/{item_id}/chats/{chat_id}/messages")
+    @api.delete("/a/{slug}/items/{item_id}/chats/{chat_id}/messages")
     async def undo_chat_turns(
         slug: str,
         item_id: str,
@@ -2199,7 +2222,7 @@ def create_app(
         conv_rm.update(rid, conv)
         return _UndoOut(message_count=len(conv.messages), removed=removed)
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/mentions",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2214,7 +2237,7 @@ def create_app(
         _record_mention(investigation_id, title, body.user_ids, body.note, actor=me, author=me)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.post("/a/{slug}/items/{item_id}/promote-to-kb")
+    @api.post("/a/{slug}/items/{item_id}/promote-to-kb")
     async def promote_chat_to_kb(slug: str, item_id: str) -> dict[str, list[str]]:
         """Manual trigger for chat → knowledge insight extraction. Runs
         synchronously (FE shows a spinner) and returns the SourceDoc ids
@@ -2237,7 +2260,7 @@ def create_app(
         )
         return {"insight_ids": ids}
 
-    @app.get("/a/{slug}/items/{item_id}/export-chat")
+    @api.get("/a/{slug}/items/{item_id}/export-chat")
     async def export_chat(slug: str, item_id: str) -> Response:
         """Download the conversation in the `.chat.json` round-trip
         format — the KB upload path runs the same insight extraction
@@ -2266,7 +2289,7 @@ def create_app(
 
     # ---- Files API (plan-backend §3.8) ----
 
-    @app.get("/a/{slug}/items/{item_id}/files")
+    @api.get("/a/{slug}/items/{item_id}/files")
     async def list_files(slug: str, item_id: str, prefix: str = "") -> list[dict]:
         investigation_id = _require_item(slug, item_id)
         paths = await files.ls(investigation_id, prefix)
@@ -2276,13 +2299,13 @@ def create_app(
             out.append({"path": p, "size": len(data)})
         return out
 
-    @app.get("/a/{slug}/items/{item_id}/dirs")
+    @api.get("/a/{slug}/items/{item_id}/dirs")
     async def list_dirs(slug: str, item_id: str) -> list[str]:
         """Directory paths (incl. empty ones) for the file tree."""
         investigation_id = _require_item(slug, item_id)
         return sorted(await files.listdir(investigation_id))
 
-    @app.post("/a/{slug}/items/{item_id}/files/refresh")
+    @api.post("/a/{slug}/items/{item_id}/files/refresh")
     async def refresh_files(slug: str, item_id: str) -> dict:
         """Force-mirror the live sandbox to the snapshot now (don't wait for the
         ≤window throttle sweep) — the explicit 'refresh' action. No-op cold."""
@@ -2290,7 +2313,7 @@ def create_app(
         await registry.flush(investigation_id)
         return {"ok": True}
 
-    @app.put(
+    @api.put(
         "/a/{slug}/items/{item_id}/files/{path:path}",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2314,7 +2337,7 @@ def create_app(
     # POST /files/mkdir and /move and /copy are registered before the
     # {path:path} routes so their literal segments can't be swallowed as a
     # path (distinct methods anyway, but keeping them first documents intent).
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/files/mkdir",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2366,7 +2389,7 @@ def create_app(
         if not copy:
             await files.delete(investigation_id, src)
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/files/move",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2383,7 +2406,7 @@ def create_app(
         turn_engine.publish(investigation_id, FileChanged(path=dst, by=get_user_id(), kind="moved"))
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/files/copy",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2429,7 +2452,7 @@ def create_app(
                 results.append((p, data, matches))
         return pattern, results
 
-    @app.post("/a/{slug}/items/{item_id}/search")
+    @api.post("/a/{slug}/items/{item_id}/search")
     async def search(slug: str, item_id: str, body: _SearchBody) -> list[dict]:
         investigation_id = _require_item(slug, item_id)
         if not body.query:
@@ -2443,7 +2466,7 @@ def create_app(
             for p, _data, matches in results
         ]
 
-    @app.post("/a/{slug}/items/{item_id}/replace")
+    @api.post("/a/{slug}/items/{item_id}/replace")
     async def replace(slug: str, item_id: str, body: _ReplaceBody) -> dict:
         investigation_id = _require_item(slug, item_id)
         if not body.query:
@@ -2465,7 +2488,7 @@ def create_app(
             )
         return {"replaced": replaced}
 
-    @app.delete(
+    @api.delete(
         "/a/{slug}/items/{item_id}/files/{path:path}",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2497,7 +2520,7 @@ def create_app(
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.get("/a/{slug}/items/{item_id}/files/{path:path}")
+    @api.get("/a/{slug}/items/{item_id}/files/{path:path}")
     async def read_file(slug: str, item_id: str, path: str) -> Response:
         investigation_id = _require_item(slug, item_id)
         import mimetypes
@@ -2525,7 +2548,7 @@ def create_app(
 
     # ---- Notebook cell execution (plan-backend §7.3) ----
 
-    @app.post("/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute")
+    @api.post("/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute")
     async def execute_cell(
         slug: str,
         item_id: str,
@@ -2543,7 +2566,7 @@ def create_app(
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
-    @app.delete(
+    @api.delete(
         "/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2554,7 +2577,7 @@ def create_app(
             await kernels.interrupt(handle)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    @app.post(
+    @api.post(
         "/a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/kernel/restart",
         status_code=status.HTTP_204_NO_CONTENT,
     )
@@ -2567,7 +2590,7 @@ def create_app(
 
     # ---- Direct sandbox shell — backs the FE Terminal pane ----
 
-    @app.post("/a/{slug}/items/{item_id}/exec")
+    @api.post("/a/{slug}/items/{item_id}/exec")
     async def exec_in_sandbox(slug: str, item_id: str, body: _ExecBody) -> dict[str, object]:
         investigation_id = _require_item(slug, item_id)
         if not body.cmd:
@@ -2599,6 +2622,12 @@ def create_app(
             "stdout": result.stdout.decode("utf-8", errors="replace"),
             "stderr": result.stderr.decode("utf-8", errors="replace"),
         }
+
+    # #177: now that EVERY route (specstar CRUD + all hand-written) is on the
+    # /api router, include it onto the app exactly once. Mounting the SPA at "/"
+    # afterwards means any non-/api path falls through to the SPA history
+    # fallback, so a refreshed client route can't be shadowed by an API route.
+    app.include_router(api)
 
     # Re-customize the OpenAPI schema now that *all* custom routes are
     # registered. specstar.apply(app) ran earlier and cached a schema that

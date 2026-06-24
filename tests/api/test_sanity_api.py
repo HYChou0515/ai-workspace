@@ -7,8 +7,6 @@ from __future__ import annotations
 import time
 from collections.abc import AsyncIterator, Iterator
 
-from fastapi.testclient import TestClient
-
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent
@@ -18,6 +16,8 @@ from workspace_app.kb.llm import ILlm
 from workspace_app.resources import SanityResult, make_spec, sanity_result_id
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 _MODEL = "ollama_chat/qwen3:14b"
 
