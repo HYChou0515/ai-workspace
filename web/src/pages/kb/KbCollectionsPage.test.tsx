@@ -440,8 +440,8 @@ describe("KbCollectionsPage", () => {
     renderKb(client);
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     // KbDocIde badges the indexing doc in the tree, then the 1.5s poll clears it.
-    expect(await screen.findByTitle("Indexing…")).toBeInTheDocument();
-    await waitFor(() => expect(screen.queryByTitle("Indexing…")).not.toBeInTheDocument(), {
+    expect(await screen.findByTitle("處理中…")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByTitle("處理中…")).not.toBeInTheDocument(), {
       timeout: 3000,
     });
   });
@@ -557,7 +557,9 @@ describe("KbCollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const strip = await screen.findByTestId("kb-index-status");
-    expect(strip).toHaveTextContent(/索引中 1/);
+    // #171: de-jargoned — "處理中" not "Indexing".
+    expect(strip).toHaveTextContent(/處理 1 份中/);
+    expect(strip).not.toHaveTextContent(/Indexing/i);
   });
 
   it("lists each failed doc in the index-status strip with its filename + reason (#170)", async () => {
@@ -579,7 +581,7 @@ describe("KbCollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const strip = await screen.findByTestId("kb-index-status");
-    expect(strip).toHaveTextContent(/1 份索引失敗/);
+    expect(strip).toHaveTextContent(/1 份處理失敗/);
     // the failed doc is named (by basename) + its reason is shown, not hidden
     expect(strip).toHaveTextContent("a.md");
     expect(strip).toHaveTextContent(/PdfParser: page 12/);
@@ -614,7 +616,10 @@ describe("KbCollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const strip = await screen.findByTestId("kb-index-status");
-    expect(strip).toHaveTextContent("索引失敗");
+    // #170 + #171: a failed doc with no detail falls back to the de-jargoned
+    // "處理失敗" reason (and the count header reads "1 份處理失敗").
+    expect(strip).toHaveTextContent(/1 份處理失敗/);
+    expect(strip).toHaveTextContent("處理失敗");
   });
 
   it("hides the index-status strip once every doc is ready (#162)", async () => {
@@ -648,8 +653,8 @@ describe("KbCollectionsPage", () => {
     renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
-    // first paint: still indexing
-    expect(await screen.findByTestId("kb-index-status")).toHaveTextContent(/索引中 1/);
+    // first paint: still processing (de-jargoned per #171)
+    expect(await screen.findByTestId("kb-index-status")).toHaveTextContent(/處理 1 份中/);
     // once the poll flips it to ready, a transient "all set" confirmation appears
     expect(await screen.findByText("✓ 全部就緒", {}, { timeout: 3000 })).toBeInTheDocument();
   });
@@ -686,7 +691,7 @@ describe("KbCollectionsPage", () => {
       file,
     );
     const strip = await screen.findByTestId("kb-index-status");
-    // Per-file progress, not a bare "Uploading…": one file in flight, none settled.
+    // #170: per-file progress, not a bare "上傳中…" — one file in flight, none settled.
     expect(strip).toHaveTextContent(/上傳 0\/1/);
     d.resolve(["c1/me/x.md"]); // settle the in-flight upload
   });
@@ -705,8 +710,10 @@ describe("KbCollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Open SOPs" }));
     await userEvent.click(await screen.findByRole("button", { name: "Collection settings" }));
-    await userEvent.click(await screen.findByRole("menuitem", { name: /Retrieval modes/i }));
-    await userEvent.click(await screen.findByRole("switch", { name: "Knowledge wiki" }));
+    // #171: "Retrieval modes" → de-jargoned "答案如何查詢" on the menu + panel header.
+    await userEvent.click(await screen.findByRole("menuitem", { name: /答案如何查詢/ }));
+    expect(screen.getByText("答案如何查詢")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("switch", { name: "知識百科" }));
 
     expect(updateCollection).toHaveBeenCalledWith("c1", { use_rag: true, use_wiki: true });
   });

@@ -184,7 +184,9 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
             [
               ["checks", "Health checks"],
               ["matrix", "Model sanity"],
-              ["traces", "Traces"],
+              // #171: "Activity" (not the OTel jargon "Traces") on the tab; the
+              // route/state key stays "traces".
+              ["traces", "Activity"],
             ] as const
           ).map(([id, label]) => (
             <button

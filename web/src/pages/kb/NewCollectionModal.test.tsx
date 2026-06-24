@@ -14,8 +14,8 @@ describe("NewCollectionModal — retrieval toggles (#50)", () => {
     render(<NewCollectionModal open onClose={() => {}} onCreate={onCreate} />);
 
     await userEvent.type(screen.getByPlaceholderText("New collection name…"), "Process SOPs");
-    // Opt into the wiki (document search stays on by default).
-    await userEvent.click(screen.getByRole("switch", { name: "Knowledge wiki" }));
+    // Opt into the wiki (document search stays on by default). #171: zh-TW labels.
+    await userEvent.click(screen.getByRole("switch", { name: "知識百科" }));
     await userEvent.click(screen.getByRole("button", { name: "Create" }));
 
     expect(onCreate).toHaveBeenCalledWith("Process SOPs", "", { useRag: true, useWiki: true });
@@ -25,7 +25,7 @@ describe("NewCollectionModal — retrieval toggles (#50)", () => {
     render(<NewCollectionModal open onClose={() => {}} onCreate={() => {}} />);
     await userEvent.type(screen.getByPlaceholderText("New collection name…"), "X");
     // Turn the default (document search) off; wiki is off too → nothing left.
-    await userEvent.click(screen.getByRole("switch", { name: "Document search" }));
+    await userEvent.click(screen.getByRole("switch", { name: "文件搜尋" }));
     expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
   });
 });

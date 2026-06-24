@@ -79,19 +79,19 @@ describe("ModelEffortPicker", () => {
     expect(chip).toHaveTextContent("深入");
   });
 
-  it("knowledge-search depth section only renders for the KB surface", async () => {
+  it("knowledge-search scope section only renders for the KB surface", async () => {
     const { unmount } = renderWithQuery(
       <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} />,
     );
     await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
-    expect(screen.queryByText("知識搜尋深度")).not.toBeInTheDocument();
+    expect(screen.queryByText("搜尋範圍")).not.toBeInTheDocument();
     unmount();
 
     renderWithQuery(
       <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} retrieval />,
     );
     await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
-    expect(screen.getByText("知識搜尋深度")).toBeInTheDocument();
+    expect(screen.getByText("搜尋範圍")).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "徹底" }));
     expect(getStored().mode).toBe("thorough");

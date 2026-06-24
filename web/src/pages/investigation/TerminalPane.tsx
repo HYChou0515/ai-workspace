@@ -9,9 +9,10 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../../api";
 import type { ExecResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
-import { modCombo } from "../../lib/platform";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { useT } from "../../lib/i18n";
+import { modCombo } from "../../lib/platform";
 
 type Entry = {
   prompt: string;
@@ -20,6 +21,7 @@ type Entry = {
 };
 
 export function TerminalPane({ investigationId }: { investigationId: string }) {
+  const t = useT();
   const slug = useWorkspaceSlug();
   const [draft, setDraft] = useState("");
   const [history, setHistory] = useState<Entry[]>([]);
@@ -69,7 +71,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
                 ...e,
                 result: {
                   kind: "error",
-                  message: aborted ? "^C  interrupted (still running in sandbox until it exits)" : err instanceof Error ? err.message : String(err),
+                  message: aborted ? t("terminal.aborted") : err instanceof Error ? err.message : String(err),
                 },
               }
             : e,
@@ -139,8 +141,8 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
       >
         {history.length === 0 && (
           <div style={{ color: "var(--text-paper-d)" }}>
-            Run shell commands in the sandbox. Try <kbd>ls</kbd>,{" "}
-            <kbd>echo hi</kbd>, <kbd>cat brief.md</kbd>. {modCombo("L")} clears.
+            {t("terminal.help.lead")} <kbd>ls</kbd>, <kbd>echo hi</kbd>,{" "}
+            <kbd>cat brief.md</kbd>. {modCombo("L")} {t("terminal.help.clears")}
           </div>
         )}
         {history.map((e, i) => (

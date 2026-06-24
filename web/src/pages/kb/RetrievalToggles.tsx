@@ -6,6 +6,7 @@
  */
 
 import { Icon } from "../../components/Icon";
+import { useT } from "../../lib/i18n";
 
 function Switch({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
   return (
@@ -60,6 +61,7 @@ function Row({
   recommended?: boolean;
   onToggle: () => void;
 }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -100,7 +102,7 @@ function Row({
                 borderRadius: 4,
               }}
             >
-              Recommended
+              {t("kb.retrieval.recommended")}
             </span>
           )}
         </div>
@@ -120,20 +122,21 @@ export function RetrievalToggles({
   wiki: boolean;
   onChange: (next: { docSearch: boolean; wiki: boolean }) => void;
 }) {
+  const t = useT();
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <Row
         icon="search"
-        title="Document search"
+        title={t("kb.retrieval.docSearch")}
         recommended
-        desc="Find passages from your documents to answer questions."
+        desc={t("kb.retrieval.docSearch.desc")}
         on={docSearch}
         onToggle={() => onChange({ docSearch: !docSearch, wiki })}
       />
       <Row
         icon="layers"
-        title="Knowledge wiki"
-        desc="An AI-built, cross-linked summary the assistant reads to answer. Updates as you upload."
+        title={t("kb.retrieval.wiki")}
+        desc={t("kb.retrieval.wiki.desc")}
         on={wiki}
         onToggle={() => onChange({ docSearch, wiki: !wiki })}
       />
@@ -149,9 +152,7 @@ export function RetrievalToggles({
           }}
         >
           <Icon name="sparkle" size={13} color="var(--accent-h)" />
-          <span style={{ fontSize: 12, color: "var(--ink)" }}>
-            Answers will draw on both — passages for detail, the wiki for the big picture.
-          </span>
+          <span style={{ fontSize: 12, color: "var(--ink)" }}>{t("kb.retrieval.both")}</span>
         </div>
       )}
     </div>

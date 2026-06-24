@@ -439,7 +439,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                   <Icon name="tag" size={14} color="var(--text-paper-d)" /> Rename
                 </button>
                 <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setShowRetrieval((v) => !v); }}>
-                  <Icon name="layers" size={14} color="var(--text-paper-d)" /> Retrieval modes
+                  <Icon name="layers" size={14} color="var(--text-paper-d)" /> {t("kb.retrieval.title")}
                 </button>
                 <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
                   <Icon name="refresh" size={14} color="var(--text-paper-d)" /> Re-index all
@@ -533,16 +533,17 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           data-testid="kb-index-status"
           role="status"
         >
-          {/* Live progress while work is in flight. */}
+          {/* Live progress while work is in flight (#170). De-jargoned wording
+              follows #171 (processing, not indexing). */}
           {pending && (
             <div className="kb-index-status__line">
               <Icon name="refresh" size={13} color="var(--accent-h)" />
               <span>
                 {[
                   busy
-                    ? t("kb.index.uploading", { done: upProg?.done ?? 0, total: upProg?.total ?? 0 })
+                    ? t("kb.status.uploadingProgress", { done: upProg?.done ?? 0, total: upProg?.total ?? 0 })
                     : null,
-                  indexingCount > 0 ? t("kb.index.indexing", { n: indexingCount }) : null,
+                  indexingCount > 0 ? t("kb.status.indexing", { n: indexingCount }) : null,
                 ]
                   .filter(Boolean)
                   .join(" · ")}
@@ -552,7 +553,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
 
           {/* Transient "all set" ✓ — only on a clean finish (#170). */}
           {justReady && !pending && erroredCount === 0 && (
-            <span className="kb-index-status__ready">{t("kb.index.allReady")}</span>
+            <span className="kb-index-status__ready">{t("kb.status.allReady")}</span>
           )}
 
           {/* Persistent failure list (#170): each failed doc by name + reason,
@@ -561,7 +562,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             <div className="kb-index-status__fails">
               <div className="kb-index-status__fails-head">
                 <Icon name="x" size={13} color="var(--err)" />
-                <span>{t("kb.index.failed", { n: erroredCount })}</span>
+                <span>{t("kb.status.failed", { n: erroredCount })}</span>
               </div>
               <ul className="kb-index-status__fail-list">
                 {erroredDocs.map((d) => {
@@ -571,12 +572,12 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                       <button
                         type="button"
                         className="kb-index-status__fail"
-                        aria-label={t("kb.index.openFailed", { name })}
+                        aria-label={t("kb.status.openFailed", { name })}
                         onClick={() => openDoc(d.resource_id)}
                       >
                         <span className="kb-index-status__fail-name">{name}</span>
                         <span className="kb-index-status__fail-reason">
-                          {d.status_detail || t("kb.index.failReason")}
+                          {d.status_detail || t("kb.doc.processingFailed")}
                         </span>
                       </button>
                     </li>
@@ -601,11 +602,11 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           <div
             style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}
           >
-            <span className="caps">Retrieval modes</span>
+            <span className="caps">{t("kb.retrieval.title")}</span>
             <button
               type="button"
               className="kb-btn"
-              aria-label="Close retrieval modes"
+              aria-label={t("kb.retrieval.close")}
               onClick={() => setShowRetrieval(false)}
             >
               <Icon name="x" size={12} />
