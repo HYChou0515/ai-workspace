@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 
 import { Icon } from "../../components/Icon";
+import { useT } from "../../lib/i18n";
 import { RetrievalToggles } from "./RetrievalToggles";
 
 export function NewCollectionModal({
@@ -24,6 +25,7 @@ export function NewCollectionModal({
   ) => void;
   busy?: boolean;
 }) {
+  const t = useT();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   // Retrieval modes (#50): chunk search on by default, the LLM wiki opt-in.
@@ -99,7 +101,7 @@ export function NewCollectionModal({
             />
           </label>
           <fieldset className="kb-field" style={{ border: 0, margin: 0, padding: 0 }}>
-            <span className="kb-field__label">How answers are found</span>
+            <span className="kb-field__label">{t("kb.retrieval.title")}</span>
             <RetrievalToggles
               docSearch={useRag}
               wiki={useWiki}
