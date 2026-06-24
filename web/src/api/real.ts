@@ -180,12 +180,17 @@ export const realApi: ApiClient = {
   },
 
   async updateAppItem(resourceRoute: string, id: string, data: Record<string, unknown>) {
-    // specstar PUT decodes into the model struct, ignoring non-model keys
-    // (resource_id / timestamps that ride along on the item we hold).
+    // #201: `getAppItem` flattens the server-owned revision metadata onto the
+    // item, so a read-modify-write (model picker, inline field edits) holds
+    // those keys. specstar rejects `resource_id` in a write body with a 422
+    // ("…is immutable"), which would silently drop the whole edit — so PUT only
+    // the model struct fields, never the ride-along metadata.
+    const body = { ...data };
+    for (const k of ["resource_id", "created_time", "updated_time", "created_by"]) delete body[k];
     const resp = await apiFetch(`${resourceRoute}/${encodeURIComponent(id)}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(data),
+      body: JSON.stringify(body),
     });
     return json<{ resource_id: string }>(resp);
   },

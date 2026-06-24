@@ -13,7 +13,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 
-from fastapi.testclient import TestClient
 from specstar import SpecStar
 
 from workspace_app.agent.context import AgentToolContext
@@ -27,6 +26,8 @@ from workspace_app.kb.llm import ILlm
 from workspace_app.resources import Conversation, Message, make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 class _Runner:

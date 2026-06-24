@@ -54,6 +54,12 @@
 #   kind: memory               # memory | specstar
 #   pg_dsn: ${SPECSTAR_PG_DSN} # secret → env
 #   disk_root: ./data/specstar
+#   # #208: connect timeout (seconds) injected into pg_dsn. specstar's engine
+#   # sets none, so an unreachable Postgres makes the boot hang silently for
+#   # minutes at the first connection (spec.apply). With this the boot fails
+#   # fast with a clear "connection ... timed out" instead. 0 = wait forever
+#   # (old behaviour). An explicit connect_timeout=… already in pg_dsn wins.
+#   pg_connect_timeout: 10
 
 # ─── runner (RCA agent loop) ────────────────────────────────────────
 # runner:

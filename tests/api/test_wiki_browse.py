@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from agents import RunContextWrapper
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.agent.tools import read_new_source_impl, write_file_impl
@@ -22,6 +22,8 @@ from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import AsyncClient
 
 
 class _WikiWritingRunner:

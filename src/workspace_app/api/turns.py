@@ -73,6 +73,29 @@ def _fit_token_budget(msgs: list[Any], max_tokens: int) -> list[Any]:
     return kept
 
 
+# #199 — a user cancellation is replayed by folding this marker into the
+# PRECEDING assistant turn (Cline-classic), never as a standalone `system`
+# message: the real system prompt is prepended separately by the SDK, so a
+# mid-conversation system item makes providers reject the next call with
+# "system message must be at the beginning".
+_INTERRUPTED_MARKER = "[Response interrupted by user]"
+
+
+def _fold_cancellation_marker(items: list[dict[str, Any]]) -> None:
+    """Record a user cancellation (issue #199) so the model knows its prior,
+    possibly partial answer was cut off — without ever emitting a `system`
+    item mid-conversation. Fold the marker onto the trailing assistant turn
+    if there is one; otherwise (cancelled before any text, right after a tool
+    output, or as the first item) emit a standalone assistant message.
+    Consecutive cancellations collapse to a single marker."""
+    last = items[-1] if items else None
+    if last is not None and last.get("role") == "assistant":
+        if not last["content"].endswith(_INTERRUPTED_MARKER):
+            last["content"] += f"\n\n{_INTERRUPTED_MARKER}"
+    else:
+        items.append({"role": "assistant", "content": _INTERRUPTED_MARKER})
+
+
 def history_items(
     messages: Iterable[Any], *, max_messages: int, max_tokens: int = 0
 ) -> list[dict[str, Any]]:
@@ -118,17 +141,12 @@ def history_items(
             # one exception is a user cancellation: the model otherwise
             # has no idea its prior (possibly partial) answer was cut off
             # on purpose, which is exactly what the user's next message
-            # leans on — so replay a compact system note. System/model
-            # errors and the step-limit are NOT replayed (re-feeding a
-            # connection error / "you ran out of turns" only derails a
-            # small model).
+            # leans on — so replay a compact marker folded into the prior
+            # assistant turn (#199). System/model errors and the step-limit
+            # are NOT replayed (re-feeding a connection error / "you ran out
+            # of turns" only derails a small model).
             if getattr(m, "error_kind", None) == "cancelled":
-                items.append(
-                    {
-                        "role": "system",
-                        "content": "[Your previous response was interrupted by the user.]",
-                    }
-                )
+                _fold_cancellation_marker(items)
             continue
         if m.role == "user" and m.content:
             items.append({"role": "user", "content": m.content})

@@ -10,8 +10,6 @@ sees it next turn.
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-
 from workspace_app.api import (
     MaxTurnsExceeded,
     MessageDelta,
@@ -25,6 +23,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
+from ._client import TestClient
 from .conftest import register_rca_item
 
 

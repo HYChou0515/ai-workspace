@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import msgspec
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from specstar import QB, SpecStar
@@ -262,7 +262,7 @@ def _unlink_quietly(path: Path) -> None:
 
 
 def register_kb_routes(
-    app: FastAPI,
+    app: FastAPI | APIRouter,
     spec: SpecStar,
     ingestor: Ingestor,
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
