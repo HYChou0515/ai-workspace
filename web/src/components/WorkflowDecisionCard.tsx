@@ -10,7 +10,9 @@
 
 import { useState } from "react";
 
+import { useT } from "../lib/i18n";
 import type { PendingDecision } from "../api/workflows";
+import { Icon } from "./Icon";
 
 const ACTION_LABEL: Record<string, string> = {
   approve: "Approve",
@@ -27,6 +29,7 @@ export function WorkflowDecisionCard({
   onDecide: (choice: string, input?: string) => void;
   busy?: boolean;
 }) {
+  const t = useT();
   const [revising, setRevising] = useState(false);
   const [note, setNote] = useState("");
   const allow = decision.allow.length ? decision.allow : ["approve", "reject"];
@@ -44,11 +47,28 @@ export function WorkflowDecisionCard({
         gap: 8,
       }}
     >
-      <header style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <span style={{ fontWeight: 600 }}>{decision.title || "Awaiting your decision"}</span>
-        <span style={{ fontSize: 11, color: "var(--warn)", fontFamily: "var(--font-mono)" }}>
-          awaiting you
+      <header style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {/* A loud, pill-shaped cue (#170): the old 11px grey "awaiting you" read
+            as a status note, not "it's your turn to act". */}
+        <span
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "2px 8px",
+            borderRadius: 999,
+            background: "var(--warn)",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 600,
+            textTransform: "uppercase",
+            letterSpacing: ".04em",
+          }}
+        >
+          <Icon name="bell" size={11} color="#fff" />
+          {t("wf.decision.cue")}
         </span>
+        <span style={{ fontWeight: 600 }}>{decision.title || t("wf.decision.titleFallback")}</span>
       </header>
       {decision.summary && (
         <pre

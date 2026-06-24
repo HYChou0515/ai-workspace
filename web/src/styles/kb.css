@@ -828,12 +828,14 @@
   color: var(--text-paper-d);
   line-height: 1.5;
 }
-/* Index-status strip (#162) — keeps the upload → indexing → ready/error
-   transition visible on every collection tab, not just the doc tree. */
+/* Index-status strip (#162, #170) — keeps the upload → indexing → ready/error
+   transition visible on every collection tab, not just the doc tree. Stacks a
+   live progress line, a transient "all set" ✓, and a persistent failure list. */
 .kb-index-status {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
   margin: 4px 0 10px;
   padding: 8px 12px;
   border-radius: 6px;
@@ -843,6 +845,77 @@
 }
 .kb-index-status.is-error {
   background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.kb-index-status__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* The "✓ all set" confirmation holds, then fades out just as the JS timer
+   (#170, ~4s) removes it — so it reads as a deliberate confirmation, not a flash. */
+.kb-index-status__ready {
+  color: var(--ok);
+  font-weight: 500;
+  animation: kbReadyFade 4s ease forwards;
+}
+@keyframes kbReadyFade {
+  0%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.kb-index-status__fails {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.kb-index-status__fails-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--err);
+  font-weight: 500;
+}
+.kb-index-status__fail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-index-status__fail {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.kb-index-status__fail:hover {
+  background: color-mix(in srgb, var(--err) 14%, transparent);
+}
+.kb-index-status__fail-name {
+  flex: 0 0 auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-body-sm);
+}
+.kb-index-status__fail-reason {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-paper-d);
 }
 .kb-docsearch--inline {
   flex: 0 1 280px;

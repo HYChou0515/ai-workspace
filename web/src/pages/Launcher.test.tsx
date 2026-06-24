@@ -11,6 +11,7 @@ beforeEach(() => localStorage.clear());
 
 import { Launcher } from "./Launcher";
 import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
+import { useApps } from "../hooks/useResources";
 
 function TrailProbe() {
   const trail = useBreadcrumbTrail();
@@ -28,7 +29,7 @@ function TrailProbe() {
 vi.mock("../hooks/useCurrentUser", () => ({ useCurrentUser: () => "alice" }));
 
 vi.mock("../hooks/useResources", () => ({
-  useApps: () => [
+  useApps: vi.fn(() => [
     {
       slug: "rca",
       title: "Root Cause Analysis",
@@ -43,7 +44,7 @@ vi.mock("../hooks/useResources", () => ({
       icon: "bug",
       color: "#2D6CC9",
     },
-  ],
+  ]),
 }));
 
 function renderLauncher() {
@@ -71,6 +72,22 @@ describe("Launcher", () => {
   it("renders a fixed Knowledge Base link card → /kb (KB is not an App)", () => {
     renderLauncher();
     expect(screen.getByRole("link", { name: /知識庫/ })).toHaveAttribute("href", "/kb");
+  });
+
+  it("guides an empty workspace: explains apps are team-set-up + keeps the KB reachable (#170)", () => {
+    const mock = vi.mocked(useApps);
+    const prev = mock.getMockImplementation();
+    mock.mockReturnValue([]); // persistent — survives the modal's re-render
+    try {
+      renderLauncher();
+      // a real empty-state with a next step, not a bare "尚無應用程式。" line
+      expect(screen.getByText(/由團隊設定/)).toBeInTheDocument();
+      // the knowledge base is still one click away
+      expect(screen.getByRole("link", { name: /知識庫/ })).toHaveAttribute("href", "/kb");
+    } finally {
+      mock.mockReset();
+      if (prev) mock.mockImplementation(prev);
+    }
   });
 
   it("#160: does not print the raw /a/:slug route on the card face", () => {

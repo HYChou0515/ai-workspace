@@ -113,6 +113,9 @@ export const messages = {
   "tool.argSep": { "zh-TW": "：", en: ": " },
   "tool.result": { "zh-TW": "結果", en: "Result" },
   "tool.running": { "zh-TW": "執行中…", en: "Running…" },
+  // Caption over still-streaming tool output (#170) — so a half-written stdout
+  // isn't mistaken for the final result.
+  "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
   "entry.retry": { "zh-TW": "重試：", en: "Retry: " },
   "entry.sources": { "zh-TW": "來源", en: "Sources" },
   "reasoning.thinking": { "zh-TW": "思考中…", en: "Thinking…" },
@@ -134,6 +137,13 @@ export const messages = {
   "launcher.appsEyebrow": { "zh-TW": "應用程式", en: "APPS" },
   "launcher.yourApps": { "zh-TW": "你的應用程式", en: "Your apps" },
   "launcher.noApps": { "zh-TW": "尚無應用程式。", en: "No apps yet." },
+  // Empty-state guidance (#170): apps are code/team-provisioned, so explain that
+  // and point at the knowledge base (always available below) as the next step.
+  "launcher.empty.title": { "zh-TW": "尚無應用程式", en: "No apps yet" },
+  "launcher.empty.body": {
+    "zh-TW": "應用程式由團隊設定。你仍可前往下方的知識庫瀏覽文件、與資料對話。",
+    en: "Apps are set up by your team. You can still open the knowledge base below to browse docs and chat with your data.",
+  },
   "launcher.kb.title": { "zh-TW": "知識庫", en: "Knowledge Base" },
   "launcher.kb.desc": {
     "zh-TW": "共用文件、知識百科與知識庫對話。",
@@ -149,6 +159,19 @@ export const messages = {
     "zh-TW": "選擇一個對話，或開始新的對話。",
     en: "Select a conversation, or start a new one.",
   },
+
+  // Collection index-status strip (#170) — upload progress → indexing → an
+  // explicit "all set" confirmation (fades) or a persistent failure list.
+  "kb.index.uploading": { "zh-TW": "上傳 {done}/{total}", en: "Uploading {done}/{total}" },
+  "kb.index.indexing": { "zh-TW": "索引中 {n}", en: "Indexing {n}" },
+  "kb.index.allReady": { "zh-TW": "✓ 全部就緒", en: "✓ All set" },
+  "kb.index.failed": { "zh-TW": "{n} 份索引失敗", en: "{n} failed to index" },
+  "kb.index.failReason": { "zh-TW": "索引失敗", en: "Indexing failed" },
+  "kb.index.openFailed": { "zh-TW": "查看 {name} 的失敗原因", en: "View why {name} failed" },
+
+  // Workflow review gate (WorkflowDecisionCard) — make "it's your turn" loud (#170)
+  "wf.decision.cue": { "zh-TW": "需要你的決定", en: "Your decision needed" },
+  "wf.decision.titleFallback": { "zh-TW": "需要你的決定", en: "Awaiting your decision" },
 
   // Agent run banners (agentLog reducer) — de-jargoned behavior descriptions
   "banner.sandboxIdle": {

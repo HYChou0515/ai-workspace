@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
+import { useAppManifest } from "../hooks/useResources";
 import { QueryWrap } from "../test/queryWrapper";
 import { AppDashboard } from "./AppDashboard";
 
@@ -33,7 +34,7 @@ vi.mock("../hooks/useUsers", () => ({
 }));
 
 vi.mock("../hooks/useResources", () => ({
-  useAppManifest: () => ({
+  useAppManifest: vi.fn(() => ({
     slug: "rca",
     title: "Root Cause Analysis",
     description: "Structured failure investigations.",
@@ -61,7 +62,7 @@ vi.mock("../hooks/useResources", () => ({
     function: { workspace: true, sandbox: true, terminal: true },
     agent: { picker: [] },
     default_profile: "default",
-  }),
+  })),
   useAppItems: () => [
     {
       resource_id: "rca-investigation/1",
@@ -109,6 +110,15 @@ function renderDash() {
 }
 
 describe("AppDashboard", () => {
+  it("shows a skeleton placeholder (not bare 'Loading…') while the manifest loads (#170)", () => {
+    vi.mocked(useAppManifest).mockReturnValueOnce(undefined);
+    renderDash();
+    const page = screen.getByTestId("page-app-dashboard");
+    expect(page).toHaveAttribute("aria-busy", "true");
+    expect(page.querySelector(".skeleton")).not.toBeNull();
+    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+  });
+
   it("shows the App brand + a create link → /a/:slug/new", () => {
     renderDash();
     expect(screen.getByText("Root Cause Analysis")).toBeInTheDocument(); // sidebar brand

@@ -148,6 +148,20 @@ describe("EntryView — de-jargoned tool cards (#160)", () => {
     );
     expect(screen.getByText(/執行中…/)).toBeInTheDocument();
   });
+
+  it("warns that streaming output may be incomplete while a tool is running (#170)", () => {
+    render(
+      <EntryView
+        entry={toolEntry("exec", { cmd: ["pytest"] }, { status: "running", liveOutput: "partial…", output: undefined })}
+      />,
+    );
+    expect(screen.getByText("即時輸出，可能未完成")).toBeInTheDocument();
+  });
+
+  it("drops the streaming warning once the tool finishes (#170)", () => {
+    render(<EntryView entry={toolEntry("exec", { cmd: ["pytest"] })} />); // done
+    expect(screen.queryByText("即時輸出，可能未完成")).not.toBeInTheDocument();
+  });
 });
 
 describe("EntryView — replay entry points (#51 P6)", () => {
