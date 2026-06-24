@@ -1,3 +1,5 @@
+import pytest
+
 from workspace_app.api.litellm_runner import _build_input
 from workspace_app.api.turns import history_items
 
@@ -141,18 +143,35 @@ def test_build_input_appends_the_user_prompt_after_history():
     assert _build_input(hist, "q2") == [*hist, {"role": "user", "content": "q2"}]
 
 
-def test_history_items_replays_a_cancellation_as_a_system_note():
-    """#37 — a user-cancellation marker carries forward so the model
-    knows its prior answer was cut off (the user's next message often
-    relies on that context); the partial answer itself stays too."""
+def test_build_input_rejects_a_system_message_in_history():
+    """#199 — defensive boundary: the SDK supplies the system prompt
+    separately, so the replayed history must never carry a `system`
+    item. Fail loud here instead of as an opaque provider 'system
+    message must be at the beginning' error on the next call."""
+    hist = [
+        {"role": "user", "content": "q1"},
+        {"role": "system", "content": "leaked mid-conversation"},
+    ]
+    with pytest.raises(AssertionError):
+        _build_input(hist, "q2")
 
-    class _E:
-        def __init__(self, role, content, *, error_kind=None):
-            self.role = role
-            self.content = content
-            self.error_kind = error_kind
-            self.tool_call_id = self.tool_name = self.tool_args = None
 
+class _E:
+    """A duck-typed message that can also carry an `error_kind`."""
+
+    def __init__(self, role, content, *, error_kind=None):
+        self.role = role
+        self.content = content
+        self.error_kind = error_kind
+        self.tool_call_id = self.tool_name = self.tool_args = None
+
+
+def test_history_items_folds_cancellation_marker_into_preceding_assistant():
+    """#199 — a user-cancellation must NOT inject a mid-conversation
+    `system` message (providers reject 'system message must be at the
+    beginning'). Fold a compact marker into the preceding assistant
+    turn (Cline-classic) so the model still knows its prior, partial
+    answer was cut off — the partial text itself stays."""
     msgs = [
         _E("user", "explain the SPC chart"),
         _E("assistant", "The chart shows"),  # partial, kept
@@ -162,10 +181,109 @@ def test_history_items_replays_a_cancellation_as_a_system_note():
     items = history_items(msgs, max_messages=100)
     assert items == [
         {"role": "user", "content": "explain the SPC chart"},
-        {"role": "assistant", "content": "The chart shows"},
-        {"role": "system", "content": "[Your previous response was interrupted by the user.]"},
+        {"role": "assistant", "content": "The chart shows\n\n[Response interrupted by user]"},
         {"role": "user", "content": "actually, just summarize"},
     ]
+
+
+def test_history_items_standalone_marker_when_no_preceding_assistant():
+    """#199 — when the cancel lands before any assistant text exists,
+    there is nothing to fold into, so the marker becomes a standalone
+    assistant message (assistant-first is always valid; only `system`
+    must be first)."""
+    msgs = [
+        _E("user", "do the thing"),
+        _E("error", "interrupted", error_kind="cancelled"),
+        _E("user", "never mind, do this instead"),
+    ]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "user", "content": "do the thing"},
+        {"role": "assistant", "content": "[Response interrupted by user]"},
+        {"role": "user", "content": "never mind, do this instead"},
+    ]
+
+
+def test_history_items_standalone_marker_when_cancel_follows_a_tool_output():
+    """#199 — a cancel right after a tool ran leaves a
+    `function_call_output` as the last item (no `role`), so the marker
+    is emitted as a fresh assistant message rather than folded onto a
+    tool item."""
+    msgs = [
+        _E("user", "open the csv"),
+        _M("assistant", ""),
+        _M(
+            "tool",
+            '{"rows": 10}',
+            tool_call_id="call-1",
+            tool_name="read_file",
+            tool_args={"path": "a.csv"},
+        ),
+        _E("error", "interrupted", error_kind="cancelled"),
+        _E("user", "actually summarize it"),
+    ]
+    items = history_items(msgs, max_messages=100)
+    assert items == [
+        {"role": "user", "content": "open the csv"},
+        {
+            "type": "function_call",
+            "call_id": "call-1",
+            "name": "read_file",
+            "arguments": '{"path": "a.csv"}',
+        },
+        {"type": "function_call_output", "call_id": "call-1", "output": '{"rows": 10}'},
+        {"role": "assistant", "content": "[Response interrupted by user]"},
+        {"role": "user", "content": "actually summarize it"},
+    ]
+
+
+def test_history_items_standalone_marker_when_cancellation_is_first():
+    """#199 — a cancel as the very first history item produces a
+    standalone assistant marker at position 0 (still not a `system`)."""
+    msgs = [
+        _E("error", "interrupted", error_kind="cancelled"),
+        _E("user", "ok let's start over"),
+    ]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "assistant", "content": "[Response interrupted by user]"},
+        {"role": "user", "content": "ok let's start over"},
+    ]
+
+
+def test_history_items_collapses_consecutive_cancellations_to_one_marker():
+    """#199 — back-to-back cancellations must not stack duplicate
+    markers; the second is a no-op because the last item already ends
+    with the marker."""
+    msgs = [
+        _E("user", "explain"),
+        _E("assistant", "The chart"),
+        _E("error", "interrupted", error_kind="cancelled"),
+        _E("error", "interrupted", error_kind="cancelled"),
+        _E("user", "summarize"),
+    ]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "user", "content": "explain"},
+        {"role": "assistant", "content": "The chart\n\n[Response interrupted by user]"},
+        {"role": "user", "content": "summarize"},
+    ]
+
+
+def test_history_items_never_emits_a_system_message():
+    """#199 regression — `history_items` must NEVER produce a `system`
+    item: the real system prompt is prepended by the SDK, so any
+    mid-conversation system breaks 'system message must be at the
+    beginning'. Holds across cancellations in any position."""
+    shapes = [
+        [_E("assistant", "partial"), _E("error", "x", error_kind="cancelled")],
+        [_E("error", "x", error_kind="cancelled"), _E("user", "q")],
+        [
+            _E("user", "q"),
+            _E("error", "x", error_kind="cancelled"),
+            _E("error", "x", error_kind="cancelled"),
+        ],
+    ]
+    for msgs in shapes:
+        items = history_items(msgs, max_messages=100)
+        assert all(it.get("role") != "system" for it in items)
 
 
 def test_history_items_drops_system_and_max_turns_errors_from_context():

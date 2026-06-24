@@ -25,6 +25,7 @@ import {
   reduceAgent,
 } from "../pages/investigation/agentLog";
 import { useCurrentUser } from "./useCurrentUser";
+import { STORE_POLL_MS, useStorePollFallback } from "./useStorePollFallback";
 import { useWorkspaceSlug } from "./useWorkspaceSlug";
 
 /**
@@ -52,11 +53,17 @@ export type AgentState = {
 
 const AgentContext = createContext<AgentState | null>(null);
 
-export function useAgentInternal(investigationId: string): AgentState {
+export function useAgentInternal(
+  investigationId: string,
+  pollMs: number = STORE_POLL_MS,
+): AgentState {
   const slug = useWorkspaceSlug();
   const currentUser = useCurrentUser();
   const qc = useQueryClient();
   const [log, setLog] = useState<AgentLog>(EMPTY_LOG);
+  // Epoch ms of the last live SSE event (or send) — drives the #202 store-poll
+  // gate so a healthy same-pod stream is never polled over.
+  const lastEventAtRef = useRef(0);
 
   // Hydrate the persisted conversation. staleTime 0 so each mount sees the
   // turns the backend persisted after the last stream; the guard below keeps a
@@ -89,6 +96,9 @@ export function useAgentInternal(investigationId: string): AgentState {
     (async () => {
       try {
         for await (const ev of api.subscribeInvestigation(slug, investigationId, controller.signal)) {
+          // A live event means this viewer IS on the turn's pod — record it so
+          // the #202 store-poll fallback stays dormant while the stream flows.
+          lastEventAtRef.current = Date.now();
           if (ev.type === "file_changed") {
             // A human edited a workspace file — refetch the file tree. Don't
             // fold it into the agent log (it's a side effect, not a turn event).
@@ -116,6 +126,34 @@ export function useAgentInternal(investigationId: string): AgentState {
     return () => controller.abort();
   }, [investigationId, qc]);
 
+  // #202 cross-pod safety net: when this viewer's broadcast is on a pod that
+  // isn't running the turn, the stream yields nothing and the composer stays
+  // stuck on "working…". While streaming AND the stream is silent, poll the
+  // persisted conversation (shared store): surface the user's own just-sent
+  // message, and clear "streaming" once the reply is persisted — never
+  // regressing a log the live stream may already have advanced.
+  useStorePollFallback({
+    active: log.streaming,
+    isLive: () => Date.now() - lastEventAtRef.current < pollMs,
+    fetchThread: () => api.getConversation(investigationId),
+    onSnapshot: (conv) => {
+      if (!conv) return;
+      const msgs = conv.messages;
+      const last = msgs[msgs.length - 1];
+      const done = last !== undefined && last.role !== "user";
+      if (done) {
+        qc.setQueryData(qk.conversation(investigationId), conv);
+        setLog(logFromMessages(msgs));
+        return;
+      }
+      const snap = logFromMessages(msgs);
+      setLog((prev) =>
+        snap.entries.length > prev.entries.length ? { ...snap, streaming: true } : prev,
+      );
+    },
+    pollMs,
+  });
+
   const send = useCallback(
     async (content: string) => {
       const trimmed = content.trim();
@@ -125,6 +163,9 @@ export function useAgentInternal(investigationId: string): AgentState {
       // push the user message — it now arrives via the `user_message`
       // broadcast (pushing here would duplicate it). The turn's events drive
       // the log through the persistent subscription.
+      // Stamp activity so the #202 poll gives the live stream one cycle to
+      // start before it starts polling the store.
+      lastEventAtRef.current = Date.now();
       setLog((prev) => ({ ...prev, streaming: true, error: null, metrics: null }));
 
       try {
