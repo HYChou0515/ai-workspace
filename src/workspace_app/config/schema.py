@@ -119,6 +119,14 @@ class EmbedderSettings:
     batch_size: int = 64
     base_url: str = ""
     api_key: str = ""
+    # #196 busy-aware failover for embeddings — a list of REPLICA endpoint URLs
+    # for the SAME model (the embedder can only fall over to another endpoint
+    # running the identical model; a different embedding model would produce
+    # vectors in an incompatible space and corrupt the index). When non-empty,
+    # the primary `base_url` plus these replicas form the priority chain; on a
+    # busy/failed endpoint the embedder switches to the next and cools the failed
+    # one. `api_key` is shared across replicas (same service).
+    fallbacks: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

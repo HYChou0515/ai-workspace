@@ -242,6 +242,11 @@ def get_embedder(settings: Settings) -> Embedder:
             batch_size=e.batch_size,
             base_url=e.base_url or None,
             api_key=e.api_key or None,
+            # #196 same-model replica failover (only when the operator lists
+            # replica endpoints — otherwise the single-endpoint path is unchanged).
+            fallback_base_urls=list(e.fallbacks),
+            cooldown_registry=get_cooldown_registry() if e.fallbacks else None,
+            cooldown_s=settings.failover.cooldown_s,
         )
     return HashEmbedder(dim=EMBED_DIM)
 

@@ -134,3 +134,38 @@ def failover_stream[T](
                 on_switch(provider, failure.cause)
             continue
     raise AllProvidersFailed("all providers failed or were cooling") from last
+
+
+@dataclass(frozen=True)
+class CallProvider[R]:
+    """A non-streaming failover entry (e.g. an embedding request) — ``call``
+    either returns the whole result or raises. There is no TTFT/idle here: the
+    inner call carries its own total ``timeout``, and any error switches."""
+
+    key: Hashable
+    label: str
+    call: Callable[[], R]
+    cooldown_s: float
+
+
+def failover_call[R](
+    providers: Sequence[CallProvider[R]],
+    cooldown: CooldownRegistry,
+    *,
+    on_switch: Callable[[CallProvider[R], BaseException], None] | None = None,
+) -> R:
+    """Try each non-cooling provider in priority order; the first that returns
+    wins. Any error parks that provider on cooldown and switches to the next.
+    All exhausted ⇒ :class:`AllProvidersFailed`."""
+    last: BaseException | None = None
+    for provider in providers:
+        if cooldown.is_cooling(provider.key):
+            continue
+        try:
+            return provider.call()
+        except Exception as exc:  # noqa: BLE001 — any failure switches to the next
+            cooldown.mark(provider.key, provider.cooldown_s)
+            last = exc
+            if on_switch is not None:
+                on_switch(provider, exc)
+    raise AllProvidersFailed("all providers failed or were cooling") from last

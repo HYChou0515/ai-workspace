@@ -19,8 +19,10 @@ import pytest
 from workspace_app.failover.cooldown import CooldownRegistry
 from workspace_app.failover.core import (
     AllProvidersFailed,
+    CallProvider,
     Provider,
     StreamStalled,
+    failover_call,
     failover_stream,
 )
 
@@ -215,3 +217,43 @@ def test_empty_stream_is_a_success_not_a_switch():
     )
     assert out == []  # empty completion is valid per the ILlm contract
     assert switched == []
+
+
+def _call(key: str, fn, *, cooldown_s: float = 30.0) -> CallProvider:
+    return CallProvider(key=key, label=key, call=fn, cooldown_s=cooldown_s)
+
+
+def test_failover_call_returns_first_success():
+    reg = _reg()
+    out = failover_call([_call("a", lambda: "first"), _call("b", lambda: "second")], reg)
+    assert out == "first"
+    assert reg.is_cooling("a") is False
+
+
+def test_failover_call_switches_and_cools_down_on_error():
+    clock = _Clock()
+    reg = _reg(clock)
+    switched: list[str] = []
+
+    def boom():
+        raise RuntimeError("busy")
+
+    out = failover_call(
+        [_call("a", boom), _call("b", lambda: "ok")],
+        reg,
+        on_switch=lambda p, exc: switched.append(p.key),
+    )
+    assert out == "ok"
+    assert switched == ["a"]
+    assert reg.is_cooling("a") is True
+
+
+def test_failover_call_skips_cooling_and_exhausts_to_error():
+    reg = _reg()
+    reg.mark("a", 30.0)
+
+    def boom():
+        raise RuntimeError("x")
+
+    with pytest.raises(AllProvidersFailed):
+        failover_call([_call("a", lambda: "never"), _call("b", boom)], reg)
