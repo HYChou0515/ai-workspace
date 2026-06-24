@@ -7,16 +7,31 @@ metadata:
     # prefix away so the backend sees "/" (see overlays/production).
     nginx.ingress.kubernetes.io/rewrite-target: /
     # Per-INVESTIGATION sticky routing (#16): the in-pod runtime (sandbox /
-    # kernel / in-flight turn) lives on one pod, and an investigation is shared
-    # across its users — so every request for the same investigation/chat must
-    # hit the same pod. Hash the upstream by the id extracted from the path
-    # (fallback $host for non-investigation routes). NOT cookie/per-user
-    # affinity, which would split a shared investigation across pods.
-    # Requires the controller's allow-snippet-annotations=true.
+    # kernel / in-flight broadcast turn) lives on one pod, and an item is shared
+    # across its users + chats — so every request for the same item must hit the
+    # same pod. Hash the upstream by the ITEM id extracted from the path; this is
+    # the right granularity because ALL of an item's chats run their turns on the
+    # pod that holds its sandbox. Fallback $host for non-item routes (e.g. the
+    # `/conversation/{id}` read, which any pod serves from the shared store).
+    # NOT cookie/per-user affinity, which would split a shared item across pods.
+    #
+    # #202: the regex is UN-ANCHORED so it matches regardless of the `/api`
+    # prefix (#177) or a sub-path deploy prefix (overlays' rewrite-target) — an
+    # anchored `^/investigations/…` silently stopped matching once routes moved
+    # to `/a/{slug}/items/{id}` (#94-97) and gained the `/api` prefix, dropping
+    # every chat to round-robin → the cross-pod blank-chat bug.
+    #
+    # Requires the controller's allow-snippet-annotations=true. If it is OFF
+    # (the modern ingress-nginx default), this snippet silently no-ops and the
+    # upstream falls back to round-robin; the FE store-poll fallback (#202) keeps
+    # chats usable in that case, just without live cross-pod streaming / LB.
     nginx.ingress.kubernetes.io/upstream-hash-by: "$rca_ws_key"
     nginx.ingress.kubernetes.io/configuration-snippet: |
       set $rca_ws_key $host;
-      if ($uri ~ ^/(?:investigations|kb/chats)/([^/]+)) {
+      if ($uri ~ "/a/[^/]+/items/([^/]+)") {
+        set $rca_ws_key $1;
+      }
+      if ($uri ~ "/kb/chats/([^/]+)") {
         set $rca_ws_key $1;
       }
 spec:
