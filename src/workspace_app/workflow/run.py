@@ -40,6 +40,25 @@ class PhaseState(Struct):
     failed: int = 0
 
 
+class StepState(Struct):
+    """Per-step status for the step board (#178) — so a long step doesn't look dead.
+    Bounded by collapse: loop elements (``key != ""``) live here only while running,
+    then fold into the phase ``done`` counter on terminal; distinct-named steps
+    (``key == ""``) persist with their final ``status`` + duration. ``started`` /
+    ``ended`` are server epoch ms (reload-safe elapsed); ``attempts`` counts retries.
+    Stdout stays ephemeral (streamed as ``StepOutput``), not stored here."""
+
+    phase: str
+    name: str
+    key: str = ""
+    status: str = "running"
+    """running | retrying | passed | skipped | failed."""
+    attempts: int = 1
+    reason: str = ""
+    started: int | None = None
+    ended: int | None = None
+
+
 class Failure(Struct):
     """A collected per-element failure (loop skip+collect policy, manual §11)."""
 
@@ -82,6 +101,10 @@ class WorkflowRun(Struct):
     status: RunStatus = RunStatus.PENDING
     current_phase: str = ""
     phases: list[PhaseState] = field(default_factory=list)
+    steps: list[StepState] = field(default_factory=list)
+    """Per-step board (#178) — bounded by collapse (loop elements drop on terminal;
+    distinct-named steps keep their final status + duration). Additive: runs written
+    before #178 just have an empty list, so no migration is needed."""
     failures: list[Failure] = field(default_factory=list)
     started: int | None = None
     """Epoch ms when the driver started the run; None while ``pending``."""

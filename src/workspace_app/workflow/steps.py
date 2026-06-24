@@ -13,7 +13,8 @@ import asyncio
 from typing import Any
 
 from .checks import file_nonempty
-from .engine import Check, StepFailed, run_step
+from .engine import Check, StepFailed, _emit, run_step
+from .events import StepOutput
 from .handle import WorkflowHandle
 
 
@@ -142,9 +143,20 @@ async def sandbox_node(
     if wf.run_sandbox is None:
         raise RuntimeError("sandbox_node needs a sandbox runner (wired by the run driver)")
     run_sandbox = wf.run_sandbox
+    step_name = name or phase
 
     async def execute(_feedback: str | None) -> dict[str, Any]:
-        exit_code, stdout = await run_sandbox(run)
+        # Stream stdout live as StepOutput so a long command shows movement instead
+        # of looking dead (#178); the complete stdout is still journaled below.
+        def on_output(chunk: bytes) -> None:
+            _emit(
+                wf,
+                StepOutput(
+                    phase=phase, name=step_name, key=key, text=chunk.decode("utf-8", "replace")
+                ),
+            )
+
+        exit_code, stdout = await run_sandbox(run, on_output)
         return {"exit_code": exit_code, "stdout": stdout}
 
     return await run_step(

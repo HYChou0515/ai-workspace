@@ -207,6 +207,7 @@ describe("ItemChatShell", () => {
       status: "awaiting_human",
       current_phase: "review",
       phases: [],
+      steps: [],
       failures: [],
       started: 1,
       ended: null,

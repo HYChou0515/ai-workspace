@@ -26,9 +26,14 @@ from .engine import StepFailed, run_step
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
 # orchestration driver wires the real implementation (P4); tests inject a fake.
 DriveTurn = Callable[[str, list[str] | None], Awaitable[Any]]
+# A live-stdout sink (#178): called with each stdout byte chunk as it arrives, so a
+# long deterministic step shows movement instead of looking dead. Matches the sandbox
+# protocol's OutputSink (defined here to keep the workflow package decoupled).
+OutputSink = Callable[[bytes], None]
 # How a deterministic node runs a command in the sandbox, returning (exit_code,
-# stdout). Wired by the driver; faked in tests.
-RunSandbox = Callable[[str], Awaitable[tuple[int, str]]]
+# stdout). ``on_output`` streams stdout chunks live (#178); None ⇒ no streaming.
+# Wired by the driver; faked in tests.
+RunSandbox = Callable[[str, "OutputSink | None"], Awaitable[tuple[int, str]]]
 # The ingest capability bound to this run's workspace + captured user (manual §8):
 # (collection, path) -> the SourceDoc id. Wired by the driver; faked in tests.
 IngestCapability = Callable[[str, str], Awaitable[str]]

@@ -40,14 +40,16 @@ from .events import (
     AwaitingHumanEvent,
     PhaseEntered,
     StepFailed,
+    StepOutput,
     StepPassed,
+    StepRetrying,
     StepSkipped,
     StepStarted,
 )
 from .gate import record_decision
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest
-from .run import PhaseState, RunStatus, WorkflowRun
+from .run import PhaseState, RunStatus, StepState, WorkflowRun
 
 # A run is "active" (blocks a second start, manual §14) while pending / running /
 # paused at a gate. The rest are terminal.
@@ -417,6 +419,11 @@ class WorkflowOrchestrator:
         stream (``key`` = its workflow chat, or the item's broadcast stream legacy).
         Enforces the max-steps budget (§17) by aborting an over-budget run before its
         step executes."""
+        if isinstance(ev, StepOutput):
+            # Live stdout (#178) is ephemeral: stream it only, never read/patch the
+            # resource (a patch per chunk would be a DB write per stdout line).
+            self.publish(key, ev)
+            return
         if isinstance(ev, StepStarted):
             self._step_counts[run_id] = self._step_counts.get(run_id, 0) + 1
             if self._step_counts[run_id] > self.max_steps:
@@ -447,7 +454,45 @@ class WorkflowOrchestrator:
             elif isinstance(ev, StepFailed):
                 p = msgspec.structs.replace(p, failed=p.failed + 1, status="failed")
             phases[idx] = p
-        changes: dict[str, Any] = {"phases": phases}
+        changes: dict[str, Any] = {"phases": phases, "steps": self._apply_step_record(data, ev)}
         if entering:
             changes["current_phase"] = phase
         self._patch(run_id, **changes)
+
+    def _apply_step_record(self, data: WorkflowRun, ev: object) -> list[StepState]:
+        """Maintain the bounded per-step board (#178). A step is keyed by
+        (phase, name, key). Loop elements (``key != ""``) live here only while running
+        and drop on terminal (folded into the phase counter / ``failures``); distinct
+        named steps (``key == ""``) persist with their final status + duration."""
+        if not isinstance(ev, (StepStarted, StepRetrying, StepPassed, StepSkipped, StepFailed)):
+            return data.steps
+        phase, name, key = ev.phase, ev.name, ev.key
+
+        def same(s: StepState) -> bool:
+            return s.phase == phase and s.name == name and s.key == key
+
+        steps = [s for s in data.steps if not same(s)]
+        prior = next((s for s in data.steps if same(s)), None)
+        if isinstance(ev, StepStarted):
+            steps.append(StepState(phase=phase, name=name, key=key, started=self.now()))
+        elif isinstance(ev, StepRetrying):
+            base = prior or StepState(phase=phase, name=name, key=key, started=self.now())
+            steps.append(
+                msgspec.structs.replace(
+                    base, status="retrying", attempts=base.attempts + 1, reason=ev.reason
+                )
+            )
+        elif key:
+            # A loop element reached a terminal state — collapse it into the counter
+            # (skip re-appending; failures already track failed elements, §11).
+            pass
+        elif isinstance(ev, StepFailed):
+            base = prior or StepState(phase=phase, name=name, key=key)
+            steps.append(
+                msgspec.structs.replace(base, status="failed", ended=self.now(), reason=ev.reason)
+            )
+        else:  # StepPassed / StepSkipped — terminal success, clear any retry reason
+            status = "skipped" if isinstance(ev, StepSkipped) else "passed"
+            base = prior or StepState(phase=phase, name=name, key=key)
+            steps.append(msgspec.structs.replace(base, status=status, ended=self.now(), reason=""))
+        return steps

@@ -8,9 +8,10 @@ from specstar import SpecStar
 
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.checks import file_nonempty
-from workspace_app.workflow.engine import run_step
+from workspace_app.workflow.engine import CheckResult, run_step
 from workspace_app.workflow.events import (
     AwaitingHumanEvent,
+    StepOutput,
     StepSkipped,
 )
 from workspace_app.workflow.gate import human_gate
@@ -129,6 +130,123 @@ async def test_run_journals_under_its_per_workflow_dir(spec_instance: SpecStar):
     assert spec_instance.get_resource_manager(WorkflowRun).get(run_id).data.status is RunStatus.DONE
     assert await store.exists("rca/i1", "/.workflow/memory/step_think/main.json")
     assert not await store.exists("rca/i1", "/step_think/main.json")
+
+
+async def test_step_output_is_streamed_but_not_persisted(spec_instance: SpecStar):
+    """#178: live stdout rides the stream as StepOutput but never patches the run —
+    a patch per chunk would be a DB write per line, and the journal holds the final
+    stdout. So it publishes without inflating phase progress."""
+
+    async def run(wf, inputs):
+        wf.emit(StepOutput(phase="think", name="think", text="tick\n"))
+        await run_step(wf, name="think", phase="think", args={"a": 1}, execute=_ok)
+        return {}
+
+    orch, fakes = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert got.status is RunStatus.DONE
+    assert "StepOutput" in fakes.types()  # streamed to the FE
+    think = next(p for p in got.phases if p.phase == "think")
+    assert think.done == 1  # the output chunk did not inflate persisted progress
+
+
+async def test_distinct_step_persists_a_passed_row_with_duration(spec_instance: SpecStar):
+    """#178: a distinct-named step is persisted on WorkflowRun.steps as a 'passed' row
+    with server-side started/ended, so the board survives a reload and can show how
+    long it took."""
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={"a": 1}, execute=_ok)
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    rows = [s for s in got.steps if s.name == "think"]
+    assert len(rows) == 1
+    s = rows[0]
+    assert s.status == "passed"
+    assert s.started is not None and s.ended is not None and s.ended >= s.started
+
+
+async def test_loop_elements_collapse_into_the_counter(spec_instance: SpecStar):
+    """#178: same-named loop elements fold into the phase done/total counter instead
+    of leaving N step rows — so a 100-file commit phase keeps the board bounded."""
+
+    async def run(wf, inputs):
+        for k in ("a", "b", "c"):
+            await run_step(wf, name="ingest", key=k, phase="commit", args={"k": k}, execute=_ok)
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert [s for s in got.steps if s.name == "ingest"] == []  # all collapsed
+    commit = next(p for p in got.phases if p.phase == "commit")
+    assert commit.done == 3
+
+
+async def test_a_crashed_step_stays_running_on_the_board(spec_instance: SpecStar):
+    """#178 core signal: a step that died mid-flight (its execute crashed) is left on
+    the board as 'running' with a start time and no end — that's how you see WHICH
+    step was in-flight when the run died, instead of a blank board."""
+
+    async def boom(_fb):
+        raise RuntimeError("kaboom")
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={}, execute=boom)
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert got.status is RunStatus.ERROR
+    row = next(s for s in got.steps if s.name == "think")
+    assert row.status == "running" and row.started is not None and row.ended is None
+
+
+async def test_retry_bumps_attempts_on_the_board(spec_instance: SpecStar):
+    """#178: a step's retry count is visible — attempts climbs each retry and the
+    final 'passed' row records how many tries it took."""
+    seen = {"n": 0}
+
+    async def gate(_wf, _result):
+        seen["n"] += 1
+        return CheckResult(seen["n"] >= 2, "not yet")
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={}, execute=_ok, check=gate, retries=1)
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    row = next(s for s in got.steps if s.name == "think")
+    assert row.status == "passed" and row.attempts == 2 and row.reason == ""
+
+
+async def test_failing_distinct_step_keeps_a_failed_row_with_reason(spec_instance: SpecStar):
+    """#178: a distinct-named step that aborts persists a 'failed' row carrying why."""
+
+    async def run(wf, inputs):
+        await run_step(
+            wf, name="think", phase="think", args={}, execute=_ok, check=file_nonempty("missing")
+        )
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    row = next(s for s in got.steps if s.name == "think")
+    assert row.status == "failed" and row.reason and row.ended is not None
 
 
 async def test_failing_step_records_error_phase_and_notifies(spec_instance: SpecStar):

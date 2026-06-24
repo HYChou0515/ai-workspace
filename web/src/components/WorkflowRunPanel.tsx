@@ -12,6 +12,7 @@ import { useCancelRun, useDecide, useRun } from "../hooks/useWorkflow";
 import { chipStyle } from "./StatusChip";
 import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
 import { WorkflowPhaseDiagram } from "./WorkflowPhaseDiagram";
+import { WorkflowStepBoard } from "./WorkflowStepBoard";
 
 function runTone(status: RunStatus): ChipTone {
   switch (status) {
@@ -48,13 +49,18 @@ export function WorkflowRunPanel({
   runId: string;
   declaredPhases: PhaseDef[];
 }) {
-  const { data: run } = useRun(slug, itemId, runId);
+  const runQuery = useRun(slug, itemId, runId);
+  const run = runQuery.data;
   const cancel = useCancelRun(slug, itemId);
   const decide = useDecide(slug, itemId, runId);
 
   if (!run) return <div data-testid="wf-run-loading">Loading run…</div>;
 
   const terminal = isRunTerminal(run.status);
+  // #178 silent-step liveness backstop: while a run is live, the panel polls; if
+  // that poll is failing the backend is unreachable, so a wedged/silent step might
+  // actually be dead. Surface it instead of letting the board look frozen-but-fine.
+  const disconnected = (runQuery.failureCount ?? 0) > 0 && !terminal;
   const nodes = phaseView(declaredPhases, run);
   // #100 observability: a run can finish `done` having executed nothing (e.g. a
   // precondition no-op). That used to look identical to a fresh/idle run. Flag it,
@@ -94,7 +100,27 @@ export function WorkflowRunPanel({
         )}
       </header>
 
+      {disconnected && (
+        <div
+          data-testid="wf-disconnected"
+          style={{
+            padding: "8px 10px",
+            background: "var(--paper-2)",
+            borderLeft: "2px solid var(--err)",
+            borderRadius: 6,
+            fontSize: 12,
+            color: "var(--err)",
+          }}
+        >
+          連線中斷，可能已停止。正在嘗試重新連線…
+        </div>
+      )}
+
       <WorkflowPhaseDiagram nodes={nodes} />
+
+      {/* #178: per-step board — which step is running and for how long, so a long
+          deterministic step doesn't look dead. Reload-safe (poll-driven). */}
+      <WorkflowStepBoard nodes={nodes} steps={run.steps} />
 
       {run.status === "awaiting_human" && run.pending_decision && (
         <WorkflowDecisionCard

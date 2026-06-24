@@ -33,6 +33,21 @@ class StepStarted:
 
 
 @dataclass(frozen=True)
+class StepOutput:
+    """A chunk of a still-running deterministic step's stdout, streamed live (#178)
+    so a long sandbox command shows movement instead of looking dead. ``key`` is the
+    loop element. Ephemeral: the FE folds it into the running step row, and it is NOT
+    persisted on ``WorkflowRun`` (the journal holds the final stdout, manual §9), so
+    the orchestrator publishes it on the stream without patching the resource."""
+
+    phase: str
+    name: str
+    text: str
+    key: str = ""
+    type: Literal["step_output"] = "step_output"
+
+
+@dataclass(frozen=True)
 class StepPassed:
     """A step's gate passed; its artifact is journaled (manual §9)."""
 
@@ -89,6 +104,7 @@ class AwaitingHumanEvent:
 WorkflowEvent = (
     PhaseEntered
     | StepStarted
+    | StepOutput
     | StepPassed
     | StepFailed
     | StepSkipped

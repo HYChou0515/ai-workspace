@@ -271,25 +271,45 @@ const STEP_COLOR: Record<StepView["status"], string> = {
 function StepLine({ step }: { step: StepView }) {
   const color = STEP_COLOR[step.status];
   return (
-    <div
-      data-testid="wf-step"
-      data-status={step.status}
-      style={{
-        display: "flex",
-        alignItems: "baseline",
-        gap: 6,
-        padding: "3px 10px",
-        fontSize: 12,
-        color: "var(--text-paper-d)",
-        fontFamily: "var(--font-mono, monospace)",
-      }}
-    >
-      <span aria-hidden style={{ color }}>
-        {STEP_GLYPH[step.status]}
-      </span>
-      <span style={{ color: "var(--text-paper)" }}>{step.name}</span>
-      {step.key && <span style={{ color: "var(--text-paper-d)" }}>· {step.key}</span>}
-      {step.reason && <span style={{ color }}>— {step.reason}</span>}
+    <div data-testid="wf-step" data-status={step.status}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 6,
+          padding: "3px 10px",
+          fontSize: 12,
+          color: "var(--text-paper-d)",
+          fontFamily: "var(--font-mono, monospace)",
+        }}
+      >
+        <span aria-hidden style={{ color }}>
+          {STEP_GLYPH[step.status]}
+        </span>
+        <span style={{ color: "var(--text-paper)" }}>{step.name}</span>
+        {step.key && <span style={{ color: "var(--text-paper-d)" }}>· {step.key}</span>}
+        {step.reason && <span style={{ color }}>— {step.reason}</span>}
+      </div>
+      {/* #178: live stdout from a running deterministic step, so a long command
+          shows movement instead of looking dead. */}
+      {step.liveOutput && (
+        <pre
+          data-testid="wf-step-output"
+          style={{
+            margin: "0 10px 4px 24px",
+            padding: "4px 8px",
+            background: "var(--paper-2)",
+            borderRadius: 6,
+            fontSize: 11,
+            maxHeight: 160,
+            overflow: "auto",
+            whiteSpace: "pre-wrap",
+            color: "var(--text-paper-d)",
+          }}
+        >
+          {step.liveOutput}
+        </pre>
+      )}
     </div>
   );
 }

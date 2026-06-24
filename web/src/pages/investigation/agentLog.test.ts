@@ -649,4 +649,21 @@ describe("workflow step events in the feed (#100 observability)", () => {
     expect(last.kind).toBe("phase");
     if (last.kind === "phase") expect(last.phase).toBe("commit");
   });
+
+  it("step_output streams live stdout onto the running step (#178)", () => {
+    // A long deterministic step (e.g. a sandbox command) streams its stdout chunk
+    // by chunk so it shows movement instead of looking dead.
+    const log = fold([
+      { type: "step_started", phase: "build", name: "compile", key: "" },
+      { type: "step_output", phase: "build", name: "compile", key: "", text: "line 1\n" },
+      { type: "step_output", phase: "build", name: "compile", key: "", text: "line 2\n" },
+    ]);
+    const steps = log.entries.filter((e) => e.kind === "step");
+    expect(steps).toHaveLength(1); // folded onto the one running step, not new lines
+    const s = steps[0];
+    if (s.kind === "step") {
+      expect(s.step.status).toBe("running");
+      expect(s.step.liveOutput).toBe("line 1\nline 2\n");
+    }
+  });
 });

@@ -1420,16 +1420,22 @@ def create_app(
         await turn_engine.enqueue(chat_key, prompt, ctx, on_complete=persist)
         return "\n".join(answer)
 
-    async def _wf_run_sandbox(item_id: str, run: str, credential: str) -> tuple[int, str]:
+    async def _wf_run_sandbox(
+        item_id: str,
+        run: str,
+        credential: str,
+        on_output: OutputSink | None = None,
+    ) -> tuple[int, str]:
         """Run a deterministic node's command in the item's sandbox (§5.2), with the
         run-scoped credential injected into its env so a node script can auth
-        capability HTTP calls (manual §15)."""
+        capability HTTP calls (manual §15). ``on_output`` streams stdout chunks live
+        (#178) so a long command shows movement instead of looking dead."""
         session = await registry.session(item_id)
         handle = await registry.ensure_handle(session)
         import shlex
 
         env = f"export WF_TOKEN={shlex.quote(credential)}; " if credential else ""
-        result = await sandbox.exec(handle, ["sh", "-lc", env + run])
+        result = await sandbox.exec(handle, ["sh", "-lc", env + run], on_output=on_output)
         with contextlib.suppress(Exception):
             await registry.flush(item_id)
         return result.exit_code, result.stdout.decode("utf-8", errors="replace")
@@ -1490,7 +1496,9 @@ def create_app(
         wf.drive_turn = lambda prompt, tools: _wf_drive_turn(
             item_id, chat_key, captured_user, prompt, tools
         )
-        wf.run_sandbox = lambda run: _wf_run_sandbox(item_id, run, wf.credential)
+        wf.run_sandbox = lambda run, on_output=None: _wf_run_sandbox(
+            item_id, run, wf.credential, on_output
+        )
         wf._ingest = lambda collection, path: _wf_ingest(
             item_id, captured_user, collection, path, wf.journal_dir
         )

@@ -65,6 +65,20 @@ export type PendingDecision = {
 
 export type Failure = { key: string; error: string; phase: string };
 
+/** One step's status on the board (#178). Bounded by collapse: loop elements
+ * (`key !== ""`) appear only while running; distinct-named steps persist with their
+ * final status + duration. `started`/`ended` are server epoch ms (reload-safe). */
+export type StepStateDTO = {
+  phase: string;
+  name: string;
+  key: string;
+  status: string; // running | retrying | passed | skipped | failed
+  attempts: number;
+  reason: string;
+  started: number | null;
+  ended: number | null;
+};
+
 export type WorkflowRunDTO = {
   run_id: string;
   item_id: string;
@@ -75,6 +89,8 @@ export type WorkflowRunDTO = {
   status: RunStatus;
   current_phase: string;
   phases: PhaseState[];
+  /** Per-step board (#178); empty for runs written before #178. */
+  steps: StepStateDTO[];
   failures: Failure[];
   started: number | null;
   ended: number | null;
@@ -131,6 +147,41 @@ export function phaseView(
   for (const d of declared) push(d.id, d.title ?? d.id);
   for (const p of run?.phases ?? []) if (!seen.has(p.phase)) push(p.phase, p.phase);
   return nodes;
+}
+
+/** A phase plus the steps the board shows under it (#178). */
+export type PhaseStepGroup = { node: PhaseNode; steps: StepStateDTO[] };
+
+/**
+ * Group the run's persisted steps under their phase node, preserving the diagram's
+ * phase order (#178). Loop elements are already collapsed server-side, so a phase's
+ * `steps` is just its distinct-named steps + the currently-running element(s); the
+ * `done / total · N failed` counter on the node carries the collapsed remainder.
+ * Pure — the board renders this, so it's unit-tested without the network.
+ */
+export function stepBoard(nodes: PhaseNode[], steps: StepStateDTO[]): PhaseStepGroup[] {
+  return nodes.map((node) => ({
+    node,
+    steps: steps.filter((s) => s.phase === node.id),
+  }));
+}
+
+/** How long a step has run, in ms: `ended - started` once done, else `now - started`
+ * (it keeps ticking). `null` when the step never recorded a start (e.g. a cache
+ * skip), so the board can omit the timer rather than show a bogus 0. */
+export function stepElapsedMs(step: StepStateDTO, now: number): number | null {
+  if (step.started == null) return null;
+  return Math.max(0, (step.ended ?? now) - step.started);
+}
+
+/** Format an elapsed duration as `m:ss` (or `h:mm:ss` past an hour) for the board. */
+export function fmtElapsed(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const s = total % 60;
+  const m = Math.floor(total / 60) % 60;
+  const h = Math.floor(total / 3600);
+  const ss = String(s).padStart(2, "0");
+  return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
 async function jsonOrThrow(r: Response, what: string): Promise<unknown> {

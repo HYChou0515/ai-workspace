@@ -11,6 +11,7 @@ from ..workflow.events import (
     AwaitingHumanEvent,
     PhaseEntered,
     StepFailed,
+    StepOutput,
     StepPassed,
     StepRetrying,
     StepSkipped,
@@ -168,6 +169,7 @@ AgentEvent = (
     | FileChanged  # #43: broadcast-only (a workspace file changed)
     | PhaseEntered  # #100: workflow phase/step observability (manual §12)
     | StepStarted
+    | StepOutput  # #178: live stdout from a running deterministic step
     | StepPassed
     | StepFailed
     | StepSkipped

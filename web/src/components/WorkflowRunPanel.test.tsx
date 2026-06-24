@@ -7,14 +7,18 @@ import type { WorkflowRunDTO } from "../api/workflows";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 
 const run = vi.hoisted(() => ({ current: null as WorkflowRunDTO | null }));
+const conn = vi.hoisted(() => ({ failureCount: 0 }));
 
 vi.mock("../hooks/useWorkflow", () => ({
-  useRun: () => ({ data: run.current }),
+  useRun: () => ({ data: run.current, failureCount: conn.failureCount }),
   useCancelRun: () => ({ mutate: vi.fn(), isPending: false }),
   useDecide: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  conn.failureCount = 0;
+});
 
 function mkRun(over: Partial<WorkflowRunDTO>): WorkflowRunDTO {
   return {
@@ -24,6 +28,7 @@ function mkRun(over: Partial<WorkflowRunDTO>): WorkflowRunDTO {
     status: "done",
     current_phase: "",
     phases: [],
+    steps: [],
     failures: [],
     started: 1,
     ended: 2,
@@ -78,5 +83,47 @@ describe("WorkflowRunPanel — no-op / terminal clarity (#100)", () => {
     });
     render(<WorkflowRunPanel slug="topic-hub" itemId="topic-hub:1" runId="r1" declaredPhases={PHASES} />);
     expect(screen.queryByTestId("wf-noop")).not.toBeInTheDocument();
+  });
+
+  it("warns the connection dropped while a run was live (#178)", () => {
+    conn.failureCount = 3; // poll failing → backend unreachable
+    run.current = mkRun({
+      status: "running",
+      ended: null,
+      phases: [{ phase: "classify", status: "running", done: 0, total: 0, failed: 0 }],
+    });
+    render(<WorkflowRunPanel slug="topic-hub" itemId="topic-hub:1" runId="r1" declaredPhases={PHASES} />);
+    expect(screen.getByTestId("wf-disconnected")).toBeInTheDocument();
+  });
+
+  it("does NOT warn about the connection once the run is terminal", () => {
+    conn.failureCount = 3;
+    run.current = mkRun({ status: "done" });
+    render(<WorkflowRunPanel slug="topic-hub" itemId="topic-hub:1" runId="r1" declaredPhases={PHASES} />);
+    expect(screen.queryByTestId("wf-disconnected")).not.toBeInTheDocument();
+  });
+
+  it("mounts the per-step board so each step's status is visible (#178)", () => {
+    run.current = mkRun({
+      status: "running",
+      ended: null,
+      current_phase: "classify",
+      phases: [{ phase: "classify", status: "running", done: 0, total: 0, failed: 0 }],
+      steps: [
+        {
+          phase: "classify",
+          name: "classify_a",
+          key: "",
+          status: "running",
+          attempts: 1,
+          reason: "",
+          started: 1,
+          ended: null,
+        },
+      ],
+    });
+    render(<WorkflowRunPanel slug="topic-hub" itemId="topic-hub:1" runId="r1" declaredPhases={PHASES} />);
+    expect(screen.getByTestId("wf-step-board")).toBeInTheDocument();
+    expect(screen.getByTestId("wf-step-row")).toHaveTextContent("classify_a");
   });
 });

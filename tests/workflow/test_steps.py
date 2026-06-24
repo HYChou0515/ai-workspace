@@ -83,7 +83,7 @@ async def test_agent_step_without_a_wired_driver_is_a_clear_error(wf: WorkflowHa
 async def test_sandbox_node_journals_exit_and_skips_on_rerun(wf: WorkflowHandle):
     runs: list[str] = []
 
-    async def run_sandbox(cmd: str) -> tuple[int, str]:
+    async def run_sandbox(cmd: str, on_output=None) -> tuple[int, str]:
         runs.append(cmd)
         return (0, "hello\n")
 
@@ -95,7 +95,7 @@ async def test_sandbox_node_journals_exit_and_skips_on_rerun(wf: WorkflowHandle)
 
 
 async def test_sandbox_node_gate_fails_on_nonzero_exit(wf: WorkflowHandle):
-    async def run_sandbox(cmd: str) -> tuple[int, str]:
+    async def run_sandbox(cmd: str, on_output=None) -> tuple[int, str]:
         return (1, "boom")
 
     async def exit_zero(_wf: WorkflowHandle, result: dict) -> CheckResult:
