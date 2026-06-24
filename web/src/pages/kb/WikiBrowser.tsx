@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { useT } from "../../lib/i18n";
 import { KbWikiIde } from "./KbWikiIde";
 
 // The maintainer's phases, in order — shown as the first-build step list and,
@@ -158,6 +159,10 @@ export function WikiBrowser({
   readerGuidance?: string;
 }) {
   const qc = useQueryClient();
+  const t = useT();
+  // #173: a rebuild can rewrite pages the user hand-edited, so the header
+  // Rebuild button asks first instead of firing immediately.
+  const [confirmRebuild, setConfirmRebuild] = useState(false);
   const { data: tree, isPending } = useQuery({
     queryKey: qk.kb.wikiPages(collectionId),
     queryFn: () => client.listWikiPages(collectionId),
@@ -228,7 +233,7 @@ export function WikiBrowser({
           color: "var(--text-paper-d)",
         }}
       >
-        <Icon name="sparkle" size={11} color="var(--accent-h)" /> AI-maintained
+        <Icon name="sparkle" size={11} color="var(--accent-h)" /> {t("kb.wiki.badge")}
       </span>
       <span style={{ flex: 1 }} />
       {building ? (
@@ -255,13 +260,39 @@ export function WikiBrowser({
             </span>
           ) : null}
         </span>
+      ) : confirmRebuild ? (
+        // #173: rebuild may rewrite hand-edited pages — confirm at the point of
+        // action (inline, matching the collection page's confirm rows).
+        <span
+          role="dialog"
+          aria-label="Confirm rebuild"
+          style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}
+        >
+          <span style={{ fontSize: 12, color: "var(--text-paper-d)", maxWidth: 320, lineHeight: 1.45 }}>
+            {t("kb.wiki.rebuild.confirm")}
+          </span>
+          <button
+            type="button"
+            className="kb-btn kb-btn--primary"
+            disabled={rebuildMut.isPending}
+            onClick={() => {
+              setConfirmRebuild(false);
+              rebuildMut.mutate();
+            }}
+          >
+            {t("kb.wiki.rebuild.confirm.go")}
+          </button>
+          <button type="button" className="kb-btn" onClick={() => setConfirmRebuild(false)}>
+            {t("kb.wiki.rebuild.confirm.cancel")}
+          </button>
+        </span>
       ) : (
         <button
           type="button"
           className="kb-btn"
           title="Refresh the wiki from the documents"
           disabled={rebuildMut.isPending}
-          onClick={() => rebuildMut.mutate()}
+          onClick={() => setConfirmRebuild(true)}
         >
           <Icon name="refresh" size={13} /> Rebuild
         </button>

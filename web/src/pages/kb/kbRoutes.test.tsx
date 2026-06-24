@@ -82,8 +82,8 @@ describe("KB routes", () => {
   it("routes the collection tab bar (Context Cards / Wiki)", async () => {
     const col = await mockKbApi.createCollection("Reflow SOPs", "", { useRag: true, useWiki: true });
     renderAt(`/kb/collections/${encodeURIComponent(col.resource_id)}`);
-    // Context Cards tab → /cards, with its search affordance
-    await userEvent.click(await screen.findByRole("tab", { name: "Context Cards" }));
+    // Glossary tab (#173 rename) → /cards, with its search affordance
+    await userEvent.click(await screen.findByRole("tab", { name: "詞彙表" }));
     expect(screen.getByTestId("loc")).toHaveTextContent("/cards");
     expect(await screen.findByLabelText("Search cards")).toBeInTheDocument();
     // Wiki tab → /wiki (the collection has a wiki)
@@ -105,7 +105,7 @@ describe("KB routes", () => {
     await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/documents"));
     // …and there's no Wiki tab in the bar
     expect(screen.queryByRole("tab", { name: "Wiki" })).not.toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Documents" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "文件" })).toBeInTheDocument();
   });
 
   it("keeps the Documents tab highlighted with a doc open under it (#93)", async () => {
@@ -115,7 +115,7 @@ describe("KB routes", () => {
     // a leaf URL under the documents tab…
     renderAt(`/kb/collections/${encodeURIComponent(col.resource_id)}/documents/guide.md`);
     // …still marks the Documents tab active (NavLink matches its descendants)
-    const tab = await screen.findByRole("tab", { name: "Documents" });
+    const tab = await screen.findByRole("tab", { name: "文件" });
     await waitFor(() => expect(tab).toHaveClass("is-active"));
   });
 
