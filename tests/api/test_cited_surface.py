@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from fastapi.testclient import TestClient
 from specstar import QB, SpecStar
 
 from workspace_app.agent.context import AgentToolContext
@@ -18,6 +17,8 @@ from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM, Citation, DocChunk
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 class _Runner:

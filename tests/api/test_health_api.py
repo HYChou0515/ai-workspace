@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from fastapi.testclient import TestClient
-
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent
@@ -22,6 +20,8 @@ from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 class _Runner:

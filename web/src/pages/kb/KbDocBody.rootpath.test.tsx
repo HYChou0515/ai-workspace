@@ -11,6 +11,7 @@ import { QueryWrap } from "../../test/queryWrapper";
 vi.mock("../../api/http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../api/http")>()),
   API_BASE: "/sub",
+  API_PREFIX: "/sub/api",
 }));
 
 import type { KbApi, KbRenderedDoc } from "../../api/kb";
@@ -50,14 +51,14 @@ describe("KbDocBody root-path (#73)", () => {
     const doc = mkDoc({ filename: "x.png", content_type: "image/png", file_id: "blob-png" });
     render(<KbDocBody documentId="col/u/x" onNavigate={() => {}} client={fakeClient(doc)} />);
     const img = await screen.findByRole("img");
-    expect(img).toHaveAttribute("src", "/sub/blobs/blob-png");
+    expect(img).toHaveAttribute("src", "/sub/api/blobs/blob-png");
   });
 
   it("prefixes the base path on the pdf iframe src", async () => {
     const doc = mkDoc({ filename: "x.pdf", content_type: "application/pdf", file_id: "blob-pdf" });
     render(<KbDocBody documentId="col/u/x" onNavigate={() => {}} client={fakeClient(doc)} />);
     const frame = await screen.findByTitle("x.pdf");
-    expect(frame).toHaveAttribute("src", "/sub/blobs/blob-pdf");
+    expect(frame).toHaveAttribute("src", "/sub/api/blobs/blob-pdf");
   });
 
   it("prefixes the base path on the preview iframe src", async () => {
@@ -68,7 +69,7 @@ describe("KbDocBody root-path (#73)", () => {
     });
     render(<KbDocBody documentId="col/u/x" onNavigate={() => {}} client={fakeClient(doc)} />);
     const frame = await screen.findByTitle("deck.pptx");
-    expect(frame).toHaveAttribute("src", "/sub/blobs/blob-preview");
+    expect(frame).toHaveAttribute("src", "/sub/api/blobs/blob-preview");
   });
 
   it("prefixes the base path on root-relative images inside the BE-rendered markdown", async () => {
@@ -76,6 +77,6 @@ describe("KbDocBody root-path (#73)", () => {
     const doc = mkDoc({ filename: "d.md", markdown: "![chart](/blobs/embedded-img)" });
     render(<KbDocBody documentId="col/u/d" onNavigate={() => {}} client={fakeClient(doc)} />);
     const img = await screen.findByRole("img", { name: "chart" });
-    expect(img).toHaveAttribute("src", "/sub/blobs/embedded-img");
+    expect(img).toHaveAttribute("src", "/sub/api/blobs/embedded-img");
   });
 });

@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 import msgspec
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from specstar import QB, SpecStar
@@ -225,7 +225,7 @@ def _now_ms() -> int:
 
 
 def register_kb_chat_routes(
-    app: FastAPI,
+    app: FastAPI | APIRouter,
     spec: SpecStar,
     engine: ChatTurnEngine,
     retriever: Retriever,

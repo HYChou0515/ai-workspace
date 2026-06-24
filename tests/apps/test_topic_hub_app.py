@@ -4,9 +4,9 @@ exposes the retriever-free glossary / collection / KB tool ceiling scoped to the
 Hub's collections.json."""
 
 from agents import RunContextWrapper
-from fastapi.testclient import TestClient
 from specstar import QB
 
+from tests.api._client import TestClient
 from workspace_app.agent import AgentToolContext, lookup_glossary_impl
 from workspace_app.api import RunDone, create_app
 from workspace_app.filestore.memory import MemoryFileStore

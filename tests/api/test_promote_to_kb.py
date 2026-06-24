@@ -11,7 +11,6 @@ import asyncio
 from collections.abc import Iterator
 
 import pytest
-from fastapi.testclient import TestClient
 from specstar import QB, SpecStar
 
 from workspace_app.api import (
@@ -29,6 +28,8 @@ from workspace_app.kb.llm import ILlm
 from workspace_app.resources import Conversation, Message, make_spec
 from workspace_app.resources.kb import EMBED_DIM, Collection, SourceDoc
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 class _FakeLlm(ILlm):

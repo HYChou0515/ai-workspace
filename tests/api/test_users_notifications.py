@@ -3,13 +3,13 @@ notifications (produced by an investigation status change)."""
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.users import MockUserDirectory, User
+
+from ._client import TestClient
 
 
 def _client(holder: dict[str, str]) -> TestClient:

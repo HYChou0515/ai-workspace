@@ -7,7 +7,7 @@ over HTTP."""
 from __future__ import annotations
 
 from fastapi.responses import StreamingResponse
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
@@ -15,9 +15,12 @@ from workspace_app.monitor import IMonitor, InMemoryMonitor
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
+from ._client import AsyncClient
+
 
 def _route(app, path: str):
-    return next(r.endpoint for r in app.routes if getattr(r, "path", None) == path)
+    # backend routes now live under /api (#177); accept the bare path callers pass
+    return next(r.endpoint for r in app.routes if getattr(r, "path", None) in (path, "/api" + path))
 
 
 def _app(monitor: IMonitor):

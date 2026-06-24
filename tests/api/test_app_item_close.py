@@ -11,8 +11,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from fastapi.testclient import TestClient
-
 from workspace_app.agent.config_catalog import AgentConfigCatalog
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import RunDone, create_app
@@ -22,6 +20,8 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.users import MockUserDirectory, User
+
+from ._client import TestClient
 
 
 class _Runner:
