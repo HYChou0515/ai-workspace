@@ -125,6 +125,14 @@ class EmbedderSettings:
     batch_size: int = 64
     base_url: str = ""
     api_key: str = ""
+    # #196 busy-aware failover for embeddings — a list of REPLICA endpoint URLs
+    # for the SAME model (the embedder can only fall over to another endpoint
+    # running the identical model; a different embedding model would produce
+    # vectors in an incompatible space and corrupt the index). When non-empty,
+    # the primary `base_url` plus these replicas form the priority chain; on a
+    # busy/failed endpoint the embedder switches to the next and cools the failed
+    # one. `api_key` is shared across replicas (same service).
+    fallbacks: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -392,6 +400,18 @@ class Preset:
     sandbox_image: str = "workspace-app/sandbox:py312-ds"
     idle_timeout_seconds: int = 28800
     llm: PresetLlmSettings = field(default_factory=PresetLlmSettings)
+    # #196 busy-aware failover: ordered names of OTHER presets to fall over to
+    # when this model is too busy (a fast error OR no first token in time). The
+    # chain is literally `[this preset, *fallbacks]` — a fallback's own
+    # `fallbacks` are NOT expanded (no recursion). Any role that references this
+    # preset inherits the chain unchanged; roles don't override it.
+    fallbacks: list[str] = field(default_factory=list)
+    # Per-preset overrides of the global `failover:` budgets (None = inherit the
+    # global default). TTFT is model-dependent — a slow hosted model legitimately
+    # needs longer before "no first token yet" should be read as "busy".
+    ttft_timeout_s: float | None = None
+    cooldown_s: float | None = None
+    idle_timeout_s: float | None = None
 
 
 # Bundled default presets — these populate `Settings().agents.presets`
@@ -549,6 +569,10 @@ def _preset_from_dict(d: dict[str, Any]) -> Preset:
             base_url=d.get("llm", {}).get("base_url", ""),
             api_key=d.get("llm", {}).get("api_key", ""),
         ),
+        fallbacks=list(d.get("fallbacks", [])),
+        ttft_timeout_s=d.get("ttft_timeout_s"),
+        cooldown_s=d.get("cooldown_s"),
+        idle_timeout_s=d.get("idle_timeout_s"),
     )
 
 
@@ -670,6 +694,22 @@ class ObservabilitySettings:
 
 
 @dataclass(frozen=True)
+class FailoverSettings:
+    """Global defaults for busy-aware LLM failover (#196 + #131).
+
+    A preset overrides any of these per-model (slow models relax ``ttft``); these
+    are the fallbacks when a preset leaves the field unset. ``ttft_timeout_s`` —
+    streaming: no first token within this ⇒ the model is busy, switch + cool it
+    down. ``cooldown_s`` — how long a busy ``(model, endpoint)`` is skipped.
+    ``idle_timeout_s`` — a mid-stream stall longer than this raises (a stream
+    already seen can't be transparently restarted, so it does NOT switch)."""
+
+    ttft_timeout_s: float = 8.0
+    cooldown_s: float = 30.0
+    idle_timeout_s: float = 120.0
+
+
+@dataclass(frozen=True)
 class ToolsSettings:
     """How RCA tool packages are provisioned into the sandbox (#63).
 
@@ -709,3 +749,4 @@ class Settings:
     health: HealthSettings = field(default_factory=HealthSettings)
     message_queue: MessageQueueSettings = field(default_factory=MessageQueueSettings)
     observability: ObservabilitySettings = field(default_factory=ObservabilitySettings)
+    failover: FailoverSettings = field(default_factory=FailoverSettings)

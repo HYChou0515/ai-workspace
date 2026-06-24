@@ -34,6 +34,7 @@ from .schema import (
     EnhancementInt,
     EnhancementSettings,
     ExecSettings,
+    FailoverSettings,
     FilestoreSettings,
     GitSettings,
     HealthSettings,
@@ -287,6 +288,7 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     problem; the message names the field path + the source file."""
     _check_unknown_keys(merged, _TOP_SCHEMA, prefix="", source=source)
     _check_preset_references(merged, source=source)
+    _check_preset_fallbacks(merged, source=source)
     _check_preset_required_fields(merged, source=source)
     _check_retrieval_llm_reference(merged, source=source)
     _check_max_searches(merged, source=source)
@@ -403,6 +405,8 @@ _TOP_SCHEMA: dict[str, Any] = {
     "observability": {
         "llm_log": _dataclass_keys(LlmLogSettings),
     },
+    # #196 busy-aware failover global defaults.
+    "failover": _dataclass_keys(FailoverSettings),
 }
 
 
@@ -516,6 +520,26 @@ def _check_preset_references(merged: dict[str, Any], *, source: str) -> None:
                     f"config {source}: agents.{purpose}[{i}].preset "
                     f"references unknown preset {ref!r}; "
                     f"known presets: {sorted(known)}"
+                )
+
+
+def _check_preset_fallbacks(merged: dict[str, Any], *, source: str) -> None:
+    """Every name in a preset's `fallbacks` chain (#196) must resolve to another
+    known preset, and a preset must not list itself (a degenerate cycle that
+    would retry the same busy model). No deeper recursion is checked because the
+    chain is not expanded — a fallback's own `fallbacks` are ignored."""
+    presets = merged.get("agents", {}).get("presets", {})
+    known = set(presets)
+    for name, d in presets.items():
+        if not isinstance(d, dict):
+            continue
+        for fb in d.get("fallbacks", []) or []:
+            if fb == name:
+                raise ValueError(f"config {source}: agents.presets.{name}.fallbacks lists itself")
+            if fb not in known:
+                raise ValueError(
+                    f"config {source}: agents.presets.{name}.fallbacks references "
+                    f"unknown preset {fb!r}; known presets: {sorted(known)}"
                 )
 
 
@@ -644,6 +668,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         observability=ObservabilitySettings(
             llm_log=_build(LlmLogSettings, d["observability"]["llm_log"]),
         ),
+        failover=_build(FailoverSettings, d["failover"]),
     )
 
 
@@ -738,4 +763,8 @@ def _build_preset(d: dict[str, Any]) -> Preset:
             presence_penalty=d.get("llm", {}).get("presence_penalty"),
             repetition_penalty=d.get("llm", {}).get("repetition_penalty"),
         ),
+        fallbacks=list(d.get("fallbacks", [])),
+        ttft_timeout_s=d.get("ttft_timeout_s"),
+        cooldown_s=d.get("cooldown_s"),
+        idle_timeout_s=d.get("idle_timeout_s"),
     )

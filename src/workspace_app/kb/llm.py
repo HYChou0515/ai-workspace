@@ -49,6 +49,9 @@ class LitellmLlm(ILlm):
         base_url: str | None = None,
         api_key: str | None = None,
         reasoning_effort: str | None = None,
+        *,
+        timeout: float | None = None,
+        num_retries: int = 0,
     ) -> None:
         self._model = model
         self._base_url = base_url
@@ -57,6 +60,12 @@ class LitellmLlm(ILlm):
         # param (model default). "none" ⇒ Ollama think=False (no <think> on query
         # expansion / HyDE / rerank); low|medium|high ⇒ thinking on.
         self.reasoning_effort = reasoning_effort
+        # Per-call timeout (so an abandoned producer thread eventually dies) and
+        # num_retries. Under FallbackLlm these are set from the endpoint budget
+        # with num_retries=0 — the failover loop owns retry-by-switching, not
+        # litellm's blind in-place retry (#196).
+        self._timeout = timeout
+        self._num_retries = num_retries
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         import litellm
@@ -80,6 +89,8 @@ class LitellmLlm(ILlm):
             stream=True,
             api_base=self._base_url,
             api_key=self._api_key,
+            timeout=self._timeout,
+            num_retries=self._num_retries,
             **extra,
         ):
             delta = chunk.choices[0].delta

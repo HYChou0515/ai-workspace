@@ -88,11 +88,16 @@ class DecideThenActModel(Model):
         base_url: str | None,
         api_key: str | None,
         reasoning_effort: str | None = None,
+        timeout: float | None = None,
     ) -> None:
         self._inner = inner
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
+        # Per-call total timeout (#196): bounds a busy/hung decision or args call
+        # so a non-streaming turn under FallbackModel can fail over instead of
+        # parking forever. None = no explicit timeout (litellm/provider default).
+        self._timeout = timeout
         # "none" is the OFF signal → splat the provider-correct disable param
         # (Ollama think=False / others vLLM enable_thinking=False) into each
         # sub-call. low|medium|high|None leave thinking at the model default.
@@ -117,6 +122,7 @@ class DecideThenActModel(Model):
             response_format=_json_schema_format(schema, "out"),
             stream=False,
             temperature=0,
+            timeout=self._timeout,
             **self._reasoning_off(),
         )
         return json.loads(resp.choices[0].message.content or "{}")
@@ -129,6 +135,7 @@ class DecideThenActModel(Model):
             base_url=self._base_url,
             api_key=self._api_key,
             stream=False,
+            timeout=self._timeout,
             **self._reasoning_off(),
         )
         return resp.choices[0].message.content or ""

@@ -33,7 +33,10 @@ from .api.runner import AgentRunner
 from .apps.catalog import AppCatalog, validate_all_apps
 from .config.catalog_build import build_catalog
 from .config.loader import load as load_settings
-from .config.schema import RetrievalLlmRef, Settings
+from .config.schema import Preset, RetrievalLlmRef, Settings
+from .failover.llm import FallbackLlm, FallbackVlm
+from .failover.observe import make_switch_logger
+from .failover.registry import get_cooldown_registry
 from .filestore.memory import MemoryFileStore
 from .filestore.protocol import FileStore
 from .filestore.specstar_impl import SpecstarFileStore
@@ -41,6 +44,7 @@ from .kb.chunker import Chunker, FixedTokenChunker
 from .kb.embedder import Embedder, HashEmbedder, LitellmEmbedder
 from .kb.llm import ILlm, LitellmLlm
 from .kb.retriever import Enhancements
+from .kb.vlm.protocol import IVlm
 from .resources.kb import CODE_EMBED_DIM, EMBED_DIM
 from .sandbox.local_process import LocalProcessSandbox
 from .sandbox.mock import MockSandbox
@@ -226,11 +230,22 @@ def get_runner(settings: Settings) -> AgentRunner:
     settings for the runner-wide defaults; per-preset endpoint overrides
     (set via `agents.presets.<name>.llm.*`) ride on each AgentConfig and
     win per turn (see `LitellmAgentRunner._build_agent`)."""
+    # #196 busy-aware failover for the agent / sub-agent chat path: build the
+    # per-config chains from every preset that declares `fallbacks`, keyed by the
+    # primary endpoint (model, base_url) so a turn's config finds its chain
+    # without touching the persisted AgentConfig.
+    chains: dict[tuple[str, str | None], list[LlmEndpoint]] = {}
+    for name in settings.agents.presets:
+        chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=name))
+        if len(chain) >= 2:
+            chains[(chain[0].model, chain[0].base_url)] = chain
     return LitellmAgentRunner(
         max_retries=settings.runner.max_retries,
         max_turns=settings.runner.max_turns,
         base_url=settings.llm.base_url or None,
         api_key=settings.llm.api_key or None,
+        fallback_chains=chains or None,
+        cooldown_registry=get_cooldown_registry() if chains else None,
     )
 
 
@@ -270,6 +285,11 @@ def get_embedder(settings: Settings) -> Embedder:
             batch_size=e.batch_size,
             base_url=e.base_url or None,
             api_key=e.api_key or None,
+            # #196 same-model replica failover (only when the operator lists
+            # replica endpoints — otherwise the single-endpoint path is unchanged).
+            fallback_base_urls=list(e.fallbacks),
+            cooldown_registry=get_cooldown_registry() if e.fallbacks else None,
+            cooldown_s=settings.failover.cooldown_s,
         )
     return HashEmbedder(dim=EMBED_DIM)
 
@@ -423,6 +443,39 @@ def get_parser_registry(settings: Settings):  # -> ParserRegistry
     return registry
 
 
+def _litellm_for(endpoint: LlmEndpoint) -> ILlm:
+    """Build the inner production ILlm for one failover endpoint — the per-call
+    `timeout` (so an abandoned producer dies) is the endpoint's idle ceiling, and
+    `num_retries=0` because the failover loop owns retry-by-switching (#196)."""
+    return LitellmLlm(
+        endpoint.model,
+        base_url=endpoint.base_url,
+        api_key=endpoint.api_key,
+        reasoning_effort=endpoint.reasoning_effort,
+        timeout=endpoint.idle_s,
+        num_retries=0,
+    )
+
+
+def _llm_from_chain(chain: list[LlmEndpoint]) -> ILlm | None:
+    """An ILlm for a resolved chain: `[]` → None (role off); a single endpoint →
+    a plain `LitellmLlm` (no failover machinery — there's nowhere to switch, so
+    behaviour is byte-for-byte today's); ≥2 → a busy-aware `FallbackLlm`."""
+    if not chain:
+        return None
+    if len(chain) == 1:
+        e = chain[0]
+        return LitellmLlm(
+            e.model, base_url=e.base_url, api_key=e.api_key, reasoning_effort=e.reasoning_effort
+        )
+    return FallbackLlm(
+        chain,
+        get_cooldown_registry(),
+        make_llm=_litellm_for,
+        on_switch=make_switch_logger("kb-llm"),
+    )
+
+
 def get_kb_llm(settings: Settings) -> ILlm | None:
     """KB retrieval LLM (multi-query / HyDE / rerank).
 
@@ -433,23 +486,12 @@ def get_kb_llm(settings: Settings) -> ILlm | None:
       ref.<field>  ◇  preset.<field>  ◇  settings.llm.<field>  ◇  None
 
     `None` retrieval_llm = enhancements disabled (factory returns
-    None). Operators put retrieval on a different provider from the
-    agent chat by editing the referenced preset (or by writing a new
-    preset and pointing the ref at it) — no parallel flat config
+    None). When the preset declares `fallbacks`, the chain becomes a
+    busy-aware `FallbackLlm` (#196). Operators put retrieval on a
+    different provider from the agent chat by editing the referenced
+    preset (or pointing the ref at a new one) — no parallel flat config
     block to keep in sync."""
-    ref = settings.kb.retrieval_llm
-    model, base_url, api_key = _resolve_llm_ref(settings, ref)
-    if model is None:
-        return None
-    assert ref is not None  # model resolved ⇒ the ref is present
-    return LitellmLlm(
-        model,
-        base_url=base_url,
-        api_key=api_key,
-        # "" (unset) ⇒ None so the param is omitted (model default); none|low|
-        # medium|high pass through (none → Ollama think=False).
-        reasoning_effort=ref.reasoning_effort or None,
-    )
+    return _llm_from_chain(resolve_llm_chain(settings, settings.kb.retrieval_llm))
 
 
 def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
@@ -459,18 +501,10 @@ def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
 
     Resolution: `kb.vlm_format_llm` if set, else reuse `kb.retrieval_llm` (a
     small reformat job — sharing the retrieval model is fine), else `None`
-    (stage 2 skipped; the raw VLM text is used as-is)."""
+    (stage 2 skipped; the raw VLM text is used as-is). Inherits the referenced
+    preset's failover chain like every other role."""
     ref = settings.kb.vlm_format_llm or settings.kb.retrieval_llm
-    model, base_url, api_key = _resolve_llm_ref(settings, ref)
-    if model is None:
-        return None
-    assert ref is not None  # model resolved ⇒ the ref is present
-    return LitellmLlm(
-        model,
-        base_url=base_url,
-        api_key=api_key,
-        reasoning_effort=ref.reasoning_effort or None,
-    )
+    return _llm_from_chain(resolve_llm_chain(settings, ref))
 
 
 def _resolve_llm_ref(
@@ -491,6 +525,89 @@ def _resolve_llm_ref(
     base_url = ref.llm.base_url or preset.llm.base_url or settings.llm.base_url or None
     api_key = ref.llm.api_key or preset.llm.api_key or settings.llm.api_key or None
     return model, base_url, api_key
+
+
+@dataclass(frozen=True)
+class LlmEndpoint:
+    """One resolved entry in a role's busy-aware failover chain (#196): a
+    concrete model + endpoint creds + the per-entry TTFT / idle / cooldown
+    budget (the preset's override, else the global `failover:` default)."""
+
+    model: str
+    base_url: str | None
+    api_key: str | None
+    reasoning_effort: str | None
+    ttft_s: float
+    idle_s: float
+    cooldown_s: float
+
+    @property
+    def cooldown_key(self) -> tuple[str, str]:
+        """Identity for the shared cooldown registry — the same model on the
+        same endpoint is one physical deployment whichever role reached it."""
+        return (self.model, self.base_url or "")
+
+
+def _endpoint(
+    settings: Settings,
+    preset: Preset,
+    *,
+    model: str,
+    base_url: str | None,
+    api_key: str | None,
+    reasoning_effort: str | None,
+) -> LlmEndpoint:
+    fo = settings.failover
+    return LlmEndpoint(
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
+        reasoning_effort=reasoning_effort,
+        ttft_s=preset.ttft_timeout_s if preset.ttft_timeout_s is not None else fo.ttft_timeout_s,
+        idle_s=preset.idle_timeout_s if preset.idle_timeout_s is not None else fo.idle_timeout_s,
+        cooldown_s=preset.cooldown_s if preset.cooldown_s is not None else fo.cooldown_s,
+    )
+
+
+def resolve_llm_chain(settings: Settings, ref: RetrievalLlmRef | None) -> list[LlmEndpoint]:
+    """The ordered failover chain for an LLM-only role: the primary (the ref's
+    preset cascade) followed by each name in `preset.fallbacks` resolved through
+    the same cascade. The chain is NOT expanded recursively — a fallback's own
+    `fallbacks` are ignored. The ref's `reasoning_effort` (a role-level
+    preference) applies to every entry. `ref is None` (off) → `[]`."""
+    if ref is None:
+        return []
+    preset = settings.agents.presets.get(ref.preset)
+    assert preset is not None, f"preset {ref.preset!r} unknown — loader should have caught this"
+    reasoning = ref.reasoning_effort or None
+    model, base_url, api_key = _resolve_llm_ref(settings, ref)
+    assert model is not None  # ref present ⇒ model resolves
+    chain = [
+        _endpoint(
+            settings,
+            preset,
+            model=model,
+            base_url=base_url,
+            api_key=api_key,
+            reasoning_effort=reasoning,
+        )
+    ]
+    for name in preset.fallbacks:
+        fb = settings.agents.presets.get(name)
+        assert fb is not None, f"fallback preset {name!r} unknown — loader should have caught this"
+        fb_base = fb.llm.base_url or settings.llm.base_url or None
+        fb_key = fb.llm.api_key or settings.llm.api_key or None
+        chain.append(
+            _endpoint(
+                settings,
+                fb,
+                model=fb.model,
+                base_url=fb_base,
+                api_key=fb_key,
+                reasoning_effort=reasoning,
+            )
+        )
+    return chain
 
 
 def _sanity_endpoints(settings: Settings) -> dict[str, tuple[str | None, str | None]]:
@@ -549,13 +666,24 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
 
     `kb.vlm_llm: null` = VLM parsing disabled (factory returns None;
     image-only uploads store with zero chunks until an operator wires
-    a VLM and reindexes)."""
+    a VLM and reindexes). When the vlm preset declares `fallbacks`, the chain
+    becomes a busy-aware `FallbackVlm` (#131 / #196)."""
     from .kb.vlm import LitellmVlm
 
-    model, base_url, api_key = _resolve_llm_ref(settings, settings.kb.vlm_llm)
-    if model is None:
+    def make_vlm(e: LlmEndpoint) -> IVlm:
+        return LitellmVlm(
+            e.model, base_url=e.base_url, api_key=e.api_key, timeout=e.idle_s, num_retries=0
+        )
+
+    chain = resolve_llm_chain(settings, settings.kb.vlm_llm)
+    if not chain:
         return None
-    return LitellmVlm(model, base_url=base_url, api_key=api_key)
+    if len(chain) == 1:
+        e = chain[0]
+        return LitellmVlm(e.model, base_url=e.base_url, api_key=e.api_key)
+    return FallbackVlm(
+        chain, get_cooldown_registry(), make_vlm=make_vlm, on_switch=make_switch_logger("vlm")
+    )
 
 
 def get_kb_describer(settings: Settings):  # -> VlmDescriber | None

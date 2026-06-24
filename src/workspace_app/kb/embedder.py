@@ -13,7 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+from ..failover.core import CallProvider, failover_call
+from ..failover.observe import make_switch_logger
+
+if TYPE_CHECKING:
+    from ..failover.cooldown import CooldownRegistry
 
 
 class Embedder(Protocol):
@@ -108,6 +114,9 @@ class LitellmEmbedder(_PrefixedEmbedder):
         batch_size: int = 64,
         base_url: str | None = None,
         api_key: str | None = None,
+        fallback_base_urls: list[str] | None = None,
+        cooldown_registry: CooldownRegistry | None = None,
+        cooldown_s: float = 30.0,
     ) -> None:
         super().__init__(query_prefix=query_prefix, doc_prefix=doc_prefix)
         self._model = model
@@ -118,6 +127,12 @@ class LitellmEmbedder(_PrefixedEmbedder):
         # Embedder endpoint (separate from the chat LLM). None → Ollama/env.
         self._base_url = base_url
         self._api_key = api_key
+        # #196 same-model replica failover: extra endpoint URLs for the SAME model.
+        # When set (with a shared cooldown registry), the primary + replicas form
+        # a priority chain — a busy/failed endpoint switches to the next.
+        self._fallback_base_urls = fallback_base_urls or []
+        self._registry = cooldown_registry
+        self._cooldown_s = cooldown_s
 
     @property
     def dim(self) -> int:
@@ -132,7 +147,27 @@ class LitellmEmbedder(_PrefixedEmbedder):
             out.extend(self._embed_batch(texts[i : i + self._batch_size]))
         return out
 
-    def _embed_batch(self, texts: list[str]) -> list[list[float]]:  # pragma: no cover — live model
+    def _embed_batch(self, texts: list[str]) -> list[list[float]]:
+        # No replicas (or no shared registry) → the single-endpoint path, exactly
+        # as before. With replicas, fail over across [primary, *replicas] (same
+        # model, different endpoint) on a busy/failed endpoint.
+        if not self._fallback_base_urls or self._registry is None:
+            return self._embed_at(texts, self._base_url)
+        providers = [
+            CallProvider(
+                key=(self._model, base_url or ""),
+                label=base_url or self._model,
+                call=lambda base_url=base_url: self._embed_at(texts, base_url),
+                cooldown_s=self._cooldown_s,
+            )
+            for base_url in [self._base_url, *self._fallback_base_urls]
+        ]
+        log = make_switch_logger("embedder")
+        return failover_call(providers, self._registry, on_switch=lambda p, exc: log(p.label, exc))
+
+    def _embed_at(
+        self, texts: list[str], base_url: str | None
+    ) -> list[list[float]]:  # pragma: no cover — live model
         import litellm
 
         resp = litellm.embedding(
@@ -140,7 +175,7 @@ class LitellmEmbedder(_PrefixedEmbedder):
             input=texts,
             timeout=self._timeout,
             num_retries=self._num_retries,
-            api_base=self._base_url,
+            api_base=base_url,
             api_key=self._api_key,
         )
         return [item["embedding"] for item in resp.data]

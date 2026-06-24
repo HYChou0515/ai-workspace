@@ -112,6 +112,28 @@
 #     dir: logs/llm             # log root (relative → run's cwd)
 #     keep_days: 0              # 0 = keep all (manual prune)
 
+# ─── busy-aware LLM failover (#196 / #131) ──────────────────────────
+# When you have SEVERAL models and any can get "too busy", give a preset a
+# `fallbacks:` chain (names of OTHER presets, in priority order). Every role
+# that references the preset inherits it. On a busy model — a fast error OR no
+# first token within `ttft_timeout_s` — the turn switches to the next model and
+# parks the busy one on a `cooldown_s` so later requests skip it. The chain is
+# NOT recursive (a fallback's own `fallbacks` are ignored); roles don't override
+# it (open a different preset instead). These are the GLOBAL defaults; a preset
+# overrides ttft/cooldown/idle per-model (a slow hosted model needs a longer
+# ttft before "no token yet" means "busy"):
+# failover:
+#   ttft_timeout_s: 8           # streaming: no first token within this ⇒ switch
+#   cooldown_s: 30              # how long a busy (model,endpoint) is skipped
+#   idle_timeout_s: 120         # mid-stream stall ceiling ⇒ raise (NOT switch)
+#
+# Example — local Qwen, fall over to a bigger local then to Claude when busy:
+# agents:
+#   presets:
+#     kb-default: { model: ollama_chat/qwen3:14b, fallbacks: [qwen3-32b-local, kb-claude] }
+#     qwen3-32b-local: { model: ollama_chat/qwen3:32b, llm: { base_url: http://gpu-2:11434 } }
+#     kb-claude: { model: claude-opus-4-7, ttft_timeout_s: 30 }   # hosted ⇒ relax ttft
+
 # ─── chat LLM endpoint (fallback for any preset that omits llm.*) ──
 # Per-preset `llm.base_url` / `llm.api_key` (under agents.presets.*)
 # win over this. Empty = LiteLLM's provider env defaults.
@@ -170,6 +192,12 @@
 #     batch_size: 64
 #     base_url: ""
 #     api_key: ${KB_EMBED_API_KEY}
+#     fallbacks: []                         # #196 same-model replica endpoints:
+#                                           # extra base_urls running the SAME
+#                                           # model (a different embedding model
+#                                           # would corrupt the vector space). A
+#                                           # busy/failed endpoint switches to the
+#                                           # next. e.g. [http://embed-2:11434]
 #   chunker:
 #     max_tokens: 256
 #     overlap: 32
