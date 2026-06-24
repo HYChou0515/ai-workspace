@@ -16,7 +16,7 @@ import os
 import time
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import litellm
 from agents import (
@@ -56,6 +56,15 @@ from .events import (
     ToolStart,
 )
 from .llm_trace import build_trace, format_trace_line, redact_endpoint, trace_enabled
+
+if TYPE_CHECKING:
+    from ..factories import LlmEndpoint
+    from ..failover.cooldown import CooldownRegistry
+
+    # #196: per-config busy-aware failover chains, keyed by the primary endpoint
+    # (model, base_url) so a config's chain is found without touching the
+    # persisted AgentConfig. Built once at startup from the presets.
+    FallbackChains = dict[tuple[str, str | None], list[LlmEndpoint]]
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -209,6 +218,8 @@ def _agent_for(
     reasoning_effort: str | None = None,
     app_slug: str | None = None,
     template_profile: str | None = None,
+    fallback_chains: FallbackChains | None = None,
+    cooldown_registry: CooldownRegistry | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
@@ -309,27 +320,51 @@ def _agent_for(
     # "inherit from runner" so a single-endpoint deploy still works.
     eff_base_url = config.llm_base_url or base_url
     eff_api_key = config.llm_api_key or api_key
-    model: Model = LitellmModel(model=config.model, base_url=eff_base_url, api_key=eff_api_key)
-    if _decide_then_act_enabled():
-        # Structured decide-then-act (WORKSPACE_AGENT_DECIDE_THEN_ACT): replace the
-        # native-tool-call path (+ guess-based repair) with grammar-constrained
-        # structured output — valid by construction, no fabrication. Provider-uniform.
-        from ..agent.decide_then_act import DecideThenActModel
 
-        model = DecideThenActModel(
-            model,
-            model=config.model,
-            base_url=eff_base_url,
-            api_key=eff_api_key,
-            reasoning_effort=reasoning_effort,
-        )
-    else:
+    def _build_model(
+        model_id: str, b_url: str | None, a_key: str | None, timeout: float | None = None
+    ) -> Model:
+        """Build one inner SDK model for one endpoint — the structured
+        decide-then-act path or the #76 repairing backstop. Shared by the
+        single-endpoint case and each entry of a busy-aware FallbackModel
+        (``timeout`` bounds a non-streaming decide/args call so it can fail over)."""
+        m: Model = LitellmModel(model=model_id, base_url=b_url, api_key=a_key)
+        if _decide_then_act_enabled():
+            # Structured decide-then-act (WORKSPACE_AGENT_DECIDE_THEN_ACT): replace the
+            # native-tool-call path (+ guess-based repair) with grammar-constrained
+            # structured output — valid by construction, no fabrication. Provider-uniform.
+            from ..agent.decide_then_act import DecideThenActModel
+
+            return DecideThenActModel(
+                m,
+                model=model_id,
+                base_url=b_url,
+                api_key=a_key,
+                reasoning_effort=reasoning_effort,
+                timeout=timeout,
+            )
         # #76 BACKSTOP (always on): sanitize malformed tool-call JSON at the output
         # boundary so a probabilistic small model can't crash/poison/abort the turn.
         # Leave this line on. To toggle the *self-repair* layer (recovering the
         # model's intent), comment the marked `repair_tool_args(...)` line inside
         # agent/repairing_model.py — the backstop still sanitizes either way.
-        model = RepairingModel(model)
+        return RepairingModel(m)
+
+    # #196 busy-aware failover: when this config's endpoint heads a fallback chain
+    # (preset.fallbacks), wrap the per-endpoint models in a FallbackModel that
+    # switches on a busy/slow/failed model. Single-endpoint configs take the plain
+    # path (chain absent / length 1) — byte-for-byte the prior behaviour.
+    chain = (fallback_chains or {}).get((config.model, eff_base_url))
+    if chain is not None and len(chain) >= 2 and cooldown_registry is not None:
+        from ..failover.model import FallbackModel
+
+        model: Model = FallbackModel(
+            chain,
+            cooldown_registry,
+            make_model=lambda e: _build_model(e.model, e.base_url, e.api_key, e.idle_s),
+        )
+    else:
+        model = _build_model(config.model, eff_base_url, eff_api_key)
     return Agent[AgentToolContext](
         name=config.name,
         instructions=base or None,
@@ -581,6 +616,8 @@ class LitellmAgentRunner:
         max_turns: int = 10,
         base_url: str | None = None,
         api_key: str | None = None,
+        fallback_chains: FallbackChains | None = None,
+        cooldown_registry: CooldownRegistry | None = None,
     ) -> None:
         # #94: no runner-level default config. Every turn's config arrives on
         # ctx.agent_config (resolved per-item via the AppCatalog / KB / wiki
@@ -591,6 +628,9 @@ class LitellmAgentRunner:
         # own provider env / Ollama defaults.
         self._base_url = base_url
         self._api_key = api_key
+        # #196 busy-aware failover (None when no preset declares fallbacks).
+        self._fallback_chains = fallback_chains
+        self._cooldown_registry = cooldown_registry
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         # #94: no silent fallback. Every turn must arrive with a resolved
@@ -676,6 +716,8 @@ class LitellmAgentRunner:
             reasoning_effort=ctx.reasoning_effort,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
+            fallback_chains=self._fallback_chains,
+            cooldown_registry=self._cooldown_registry,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
@@ -833,6 +875,8 @@ class LitellmAgentRunner:
             reasoning_effort=ctx.reasoning_effort,
             app_slug=ctx.app_slug,
             template_profile=ctx.template_profile,
+            fallback_chains=self._fallback_chains,
+            cooldown_registry=self._cooldown_registry,
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))

@@ -198,11 +198,22 @@ def get_runner(settings: Settings) -> AgentRunner:
     settings for the runner-wide defaults; per-preset endpoint overrides
     (set via `agents.presets.<name>.llm.*`) ride on each AgentConfig and
     win per turn (see `LitellmAgentRunner._build_agent`)."""
+    # #196 busy-aware failover for the agent / sub-agent chat path: build the
+    # per-config chains from every preset that declares `fallbacks`, keyed by the
+    # primary endpoint (model, base_url) so a turn's config finds its chain
+    # without touching the persisted AgentConfig.
+    chains: dict[tuple[str, str | None], list[LlmEndpoint]] = {}
+    for name in settings.agents.presets:
+        chain = resolve_llm_chain(settings, RetrievalLlmRef(preset=name))
+        if len(chain) >= 2:
+            chains[(chain[0].model, chain[0].base_url)] = chain
     return LitellmAgentRunner(
         max_retries=settings.runner.max_retries,
         max_turns=settings.runner.max_turns,
         base_url=settings.llm.base_url or None,
         api_key=settings.llm.api_key or None,
+        fallback_chains=chains or None,
+        cooldown_registry=get_cooldown_registry() if chains else None,
     )
 
 
