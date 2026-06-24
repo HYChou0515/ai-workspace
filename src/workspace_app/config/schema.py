@@ -60,6 +60,12 @@ class FilestoreSettings:
     kind: str = "memory"  # memory | specstar
     pg_dsn: str = ""
     disk_root: str = ""
+    # #208: libpq connect timeout (seconds) injected into pg_dsn so an
+    # unreachable Postgres fails fast with a clear error instead of hanging the
+    # boot silently for minutes at the first connection (specstar's engine sets
+    # no timeout). 0 ⇒ disabled (libpq waits indefinitely — the old behaviour).
+    # Override by putting connect_timeout=… straight in pg_dsn (that wins).
+    pg_connect_timeout: int = 10
 
 
 # ─── runner ─────────────────────────────────────────────────────────────
