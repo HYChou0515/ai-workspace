@@ -18,7 +18,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from ..health.replay import (
@@ -56,7 +56,7 @@ class RunStartedOut(BaseModel):
     started: bool  # False = a round was already in flight
 
 
-def register_health_routes(app: FastAPI, service: HealthService) -> None:
+def register_health_routes(app: FastAPI | APIRouter, service: HealthService) -> None:
     @app.get("/health/checks")
     async def get_checks() -> HealthOut:
         latest = {r.check_id: r for r in service.results()}
@@ -179,7 +179,7 @@ def _to_out(result: ReplayResult, original: ReplayOriginalOut | None = None) -> 
 
 
 def register_replay_routes(
-    app: FastAPI,
+    app: FastAPI | APIRouter,
     *,
     service: ReplayService | None,
     load_turn: LoadTurn,
@@ -282,7 +282,7 @@ class SanityRunStartedOut(BaseModel):
     queued: bool
 
 
-def register_sanity_routes(app: FastAPI, models: list[str], coordinator: Any) -> None:
+def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordinator: Any) -> None:
     """The model-sanity matrix API: GET the question/level/model metadata (the FE
     draws the empty grid), POST a run (cell or auto battery). Cell results
     themselves are a specstar resource — the FE lists ``/sanity-result`` directly

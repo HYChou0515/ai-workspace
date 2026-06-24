@@ -1,12 +1,12 @@
 """The FE edits an item's metadata via specstar's auto JSON-Patch route
 (PATCH /rca-investigation/{id}) — no custom endpoint. Guard that it works."""
 
-from fastapi.testclient import TestClient
-
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 def _client() -> TestClient:

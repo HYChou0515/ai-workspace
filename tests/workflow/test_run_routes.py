@@ -10,9 +10,9 @@ import time
 
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
-from fastapi.testclient import TestClient
 from specstar import SpecStar
 
+from tests.api._client import TestClient
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
@@ -36,7 +36,8 @@ def _app(profile: str = "echo") -> tuple[FastAPI, SpecStar, str]:
 
 
 def _route(app: FastAPI, path: str):
-    return next(r.endpoint for r in app.routes if getattr(r, "path", None) == path)  # ty: ignore
+    # backend routes now live under /api (#177); accept the bare path callers pass
+    return next(r.endpoint for r in app.routes if getattr(r, "path", None) in (path, "/api" + path))  # ty: ignore
 
 
 def _base(item_id: str) -> str:

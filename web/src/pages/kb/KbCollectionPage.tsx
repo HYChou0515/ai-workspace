@@ -14,6 +14,7 @@ import {
   NavLink,
   Navigate,
   Outlet,
+  useLocation,
   useNavigate,
   useOutletContext,
   useParams,
@@ -53,6 +54,10 @@ export type KbCollectionCtx = {
   client: KbApi;
   openDoc: (documentId: string) => void;
   openCite: (c: KbCitation) => void;
+  // #172: the Documents tab's empty state offers an upload CTA — opening the
+  // file picker is owned by the page (which holds the inputs + mutation).
+  onPickFiles?: () => void;
+  uploading?: boolean;
 };
 export function useCollectionOutlet(): KbCollectionCtx {
   return useOutletContext<KbCollectionCtx>();
@@ -65,6 +70,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const { openDoc, openCite } = useKbOutlet();
   // The open collection is the URL (#93): /kb/collections/:cid.
   const { cid } = useParams();
+  const { pathname } = useLocation();
   // The "what's in here" orientation strip (#173) defaults open and is
   // collapsed once the reader has the gist — persisted across collections.
   const [overviewCollapsed, setOverviewCollapsed] = usePersistentBoolean(
@@ -223,6 +229,12 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
 
   const busy = uploadMut.isPending;
 
+  // Drag-and-drop upload over the Documents pane (#172). A depth counter rides
+  // out dragenter/dragleave firing on child nodes so the overlay doesn't flicker
+  // as the cursor crosses the tree/editor.
+  const dragDepth = useRef(0);
+  const [dragging, setDragging] = useState(false);
+
   // "All set" confirmation (#170): without it, the strip just vanishes when the
   // last doc finishes and the user can't tell uploading→indexing→done ever
   // completed. Flash a ✓ only on a real >0→0 transition with no failures (an
@@ -297,6 +309,13 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const tabIds = (
     selected.use_wiki ? ["documents", "cards", "wiki"] : ["documents", "cards"]
   ) as ("documents" | "cards" | "wiki")[];
+  // Which tab is open (the URL is the source of truth, #93) — drives the
+  // Documents-only affordances (Re-index action + drag-drop upload, #172).
+  const activeTab: "documents" | "cards" | "wiki" = pathname.endsWith("/cards")
+    ? "cards"
+    : pathname.endsWith("/wiki")
+      ? "wiki"
+      : "documents";
 
   return (
     <section className="kb-colpage" aria-label="Collection">
@@ -442,7 +461,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                   <Icon name="layers" size={14} color="var(--text-paper-d)" /> {t("kb.retrieval.title")}
                 </button>
                 <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
-                  <Icon name="refresh" size={14} color="var(--text-paper-d)" /> Re-index all
+                  <Icon name="refresh" size={14} color="var(--text-paper-d)" /> {t("kb.reindexAll")}
                 </button>
                 <button type="button" role="menuitem" className="kb-menu__item" disabled={downloadMut.isPending} onClick={() => { close(); downloadMut.mutate(selected.resource_id); }}>
                   <Icon name="download" size={14} color="var(--text-paper-d)" /> Download collection
@@ -458,32 +477,24 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             )}
           </Popover>
 
-          <Popover
-            align="end"
-            trigger={({ onClick, open }) => (
-              <button
-                type="button"
-                className="kb-btn kb-btn--primary"
-                disabled={busy}
-                aria-haspopup="menu"
-                aria-expanded={open}
-                onClick={onClick}
-              >
-                <Icon name="upload" size={13} /> Upload <Icon name="chev_d" size={11} />
-              </button>
-            )}
+          {/* Upload is the collection's most-used action — two one-click
+              buttons instead of a dropdown that hides it behind a menu (#172). */}
+          <button
+            type="button"
+            className="kb-btn kb-btn--primary"
+            disabled={busy}
+            onClick={() => fileRef.current?.click()}
           >
-            {(close) => (
-              <div className="kb-menu" role="menu">
-                <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); fileRef.current?.click(); }}>
-                  <Icon name="file" size={14} color="var(--text-paper-d)" /> Upload files
-                </button>
-                <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); folderRef.current?.click(); }}>
-                  <Icon name="folder" size={14} color="var(--text-paper-d)" /> Upload folder
-                </button>
-              </div>
-            )}
-          </Popover>
+            <Icon name="file" size={13} /> {t("kb.uploadFiles")}
+          </button>
+          <button
+            type="button"
+            className="kb-btn"
+            disabled={busy}
+            onClick={() => folderRef.current?.click()}
+          >
+            <Icon name="folder" size={13} /> {t("kb.uploadFolder")}
+          </button>
 
           {confirmDel && (
             <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm delete collection">
@@ -663,10 +674,85 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
         )}
       </div>
 
-      <div className="kb-colpage__docs">
+      {/* Re-index all also lives in the ⚙ menu, but it's a documents action —
+          surface it on the Documents tab too so it's discoverable (#172). */}
+      {activeTab === "documents" && (
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "0 0 8px" }}>
+          <button
+            type="button"
+            className="kb-btn"
+            data-testid="kb-reindex-all"
+            disabled={selected.doc_count === 0 || reindexAllMut.isPending}
+            onClick={() => reindexAllMut.mutate()}
+          >
+            <Icon name="refresh" size={12} /> {t("kb.reindexAll")}
+          </button>
+        </div>
+      )}
+
+      <div
+        className="kb-colpage__docs"
+        data-testid="kb-docs-dropzone"
+        style={{ position: "relative" }}
+        {...(activeTab === "documents"
+          ? {
+              onDragEnter: (e: React.DragEvent) => {
+                e.preventDefault();
+                dragDepth.current += 1;
+                setDragging(true);
+              },
+              onDragOver: (e: React.DragEvent) => e.preventDefault(),
+              onDragLeave: (e: React.DragEvent) => {
+                e.preventDefault();
+                dragDepth.current -= 1;
+                if (dragDepth.current <= 0) {
+                  dragDepth.current = 0;
+                  setDragging(false);
+                }
+              },
+              onDrop: (e: React.DragEvent) => {
+                e.preventDefault();
+                dragDepth.current = 0;
+                setDragging(false);
+                upload(e.dataTransfer?.files ?? null);
+              },
+            }
+          : {})}
+      >
         <Outlet
-          context={{ collection: selected, client, openDoc, openCite } satisfies KbCollectionCtx}
+          context={
+            {
+              collection: selected,
+              client,
+              openDoc,
+              openCite,
+              onPickFiles: () => fileRef.current?.click(),
+              uploading: busy,
+            } satisfies KbCollectionCtx
+          }
         />
+        {dragging && (
+          <div
+            data-testid="kb-drop-overlay"
+            style={{
+              position: "absolute",
+              inset: 0,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+              border: "2px dashed var(--accent)",
+              borderRadius: 8,
+              background: "color-mix(in srgb, var(--accent) 10%, var(--white))",
+              color: "var(--accent-h)",
+              fontSize: 14,
+              fontWeight: 600,
+              pointerEvents: "none",
+            }}
+          >
+            <Icon name="upload" size={16} color="var(--accent-h)" /> {t("kb.dropToUpload")}
+          </div>
+        )}
       </div>
     </section>
   );
@@ -678,8 +764,15 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
 export function DocumentsTab() {
   // Documents as a VSCode-shaped tree + editor (#87) — the same shell the
   // investigation workspace uses, over this collection's docs.
-  const { collection, client } = useCollectionOutlet();
-  return <KbDocIde collectionId={collection.resource_id} client={client} />;
+  const { collection, client, onPickFiles, uploading } = useCollectionOutlet();
+  return (
+    <KbDocIde
+      collectionId={collection.resource_id}
+      client={client}
+      {...(onPickFiles ? { onPickFiles } : {})}
+      {...(uploading != null ? { uploading } : {})}
+    />
+  );
 }
 
 export function CardsTab() {

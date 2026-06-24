@@ -35,6 +35,7 @@ import { OnboardingModal } from "../components/OnboardingModal";
 import { Skeleton } from "../components/Skeleton";
 import { type ChipTone, chipStyle } from "../components/StatusChip";
 import { UserAvatar } from "../components/UserChip";
+import { useT } from "../lib/i18n";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useOnboarding } from "../hooks/useOnboarding";
@@ -67,6 +68,7 @@ export function AppDashboard() {
   const { isPinned, toggle, pinned } = usePinned(slug);
   const { recent, record } = useRecentlyViewed(slug);
   const users = useUsers();
+  const t = useT();
   const me = useCurrentUser();
   const meUser = useUser(me);
   const ob = useOnboarding(me, slug, manifest?.onboarding);
@@ -163,6 +165,9 @@ export function AppDashboard() {
     setTopic("any");
     setAge("any");
   };
+  // The filter strip's Clear button reflects the strip selects (not the nav
+  // view): enabled the moment any of them narrows the list (#172).
+  const hasActiveFilter = sev !== "any" || owner !== "any" || topic !== "any" || age !== "any";
 
   const nav: { key: string; icon: IconName; label: string; count?: number }[] = [
     { key: "all", icon: "bug", label: "All open", count: openItems.length },
@@ -368,6 +373,25 @@ export function AppDashboard() {
           <FilterSelect label="Filter by topic" prefix="Topic" value={topic} onChange={setTopic} options={allTopics} />
           <FilterSelect label="Filter by owner" prefix="Owner" value={owner} onChange={setOwner} options={owners} labelOf={nameOf} />
           <FilterSelect label="Filter by updated" prefix="Updated" value={age} onChange={setAge} options={["7", "30"]} labelOf={(d) => `last ${d}d`} />
+          <button
+            type="button"
+            data-testid="dash-clear-filters"
+            onClick={clearFilters}
+            disabled={!hasActiveFilter}
+            style={{
+              height: 28,
+              padding: "0 10px",
+              fontSize: 12,
+              borderRadius: "var(--radius-btn)",
+              border: "1px solid var(--paper-3)",
+              background: "var(--white)",
+              color: hasActiveFilter ? "var(--text-paper)" : "var(--text-paper-d2)",
+              cursor: hasActiveFilter ? "pointer" : "default",
+              opacity: hasActiveFilter ? 1 : 0.6,
+            }}
+          >
+            {t("dash.clearFilters")}
+          </button>
           <div style={{ flex: 1 }} />
           <span style={{ fontSize: 12, color: "var(--text-paper-d)" }}>
             showing {visible.length} of {items.length}
@@ -387,24 +411,10 @@ export function AppDashboard() {
             </div>
 
             {visible.length === 0 && (
-              <div style={{ padding: 24, color: "var(--text-paper-d2)", display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <span>No {noun.toLowerCase()} match these filters.</span>
-                <button
-                  type="button"
-                  onClick={clearFilters}
-                  style={{
-                    height: 28,
-                    padding: "0 12px",
-                    borderRadius: "var(--radius-btn)",
-                    border: "1px solid var(--paper-3)",
-                    background: "var(--white)",
-                    color: "var(--text-paper)",
-                    fontSize: 13,
-                    cursor: "pointer",
-                  }}
-                >
-                  Clear filters
-                </button>
+              <div style={{ padding: 24, color: "var(--text-paper-d2)" }}>
+                {/* The Clear-filters action lives in the always-visible strip
+                    above (#172) — no second button down here. */}
+                No {noun.toLowerCase()} match these filters.
               </div>
             )}
             {visible.map((it, i) => (
@@ -506,17 +516,23 @@ function FilterSelect({
   options: string[];
   labelOf?: (v: string) => string;
 }) {
+  // An active (non-"any") filter is hard to spot once the <select> collapses,
+  // so (a) every option carries the field prefix — a closed select reads
+  // "Severity · P2", not a context-free "P2" — and (b) an active select gets an
+  // accent border + text (#172).
+  const active = value !== "any";
   return (
     <select
       aria-label={label}
+      data-active={active ? "" : undefined}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      style={{ height: 28, padding: "0 8px", fontSize: 12, fontFamily: "inherit", color: "var(--text-paper)", background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-btn)", cursor: "pointer" }}
+      style={{ height: 28, padding: "0 8px", fontSize: 12, fontFamily: "inherit", color: active ? "var(--accent)" : "var(--text-paper)", background: "var(--white)", border: `1px solid ${active ? "var(--accent)" : "var(--paper-3)"}`, borderRadius: "var(--radius-btn)", cursor: "pointer" }}
     >
       <option value="any">{prefix} · any</option>
       {options.map((o) => (
         <option key={o} value={o}>
-          {labelOf ? labelOf(o) : o}
+          {prefix} · {labelOf ? labelOf(o) : o}
         </option>
       ))}
     </select>

@@ -18,7 +18,7 @@ import asyncio
 import contextlib
 from collections.abc import AsyncIterator
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 from specstar import QB
 
 from workspace_app.agent.context import AgentToolContext
@@ -28,6 +28,7 @@ from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
+from ._client import AsyncClient
 from .conftest import register_rca_item
 
 

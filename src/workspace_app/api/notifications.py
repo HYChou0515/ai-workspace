@@ -9,7 +9,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 import msgspec
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Response
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
@@ -60,7 +60,7 @@ def _to_dict(resource_id: str, n: Notification) -> dict:
 
 
 def register_notification_routes(
-    app: FastAPI, spec: SpecStar, get_user_id: Callable[[], str]
+    app: FastAPI | APIRouter, spec: SpecStar, get_user_id: Callable[[], str]
 ) -> None:
     rm = spec.get_resource_manager(Notification)
 

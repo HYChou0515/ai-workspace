@@ -174,14 +174,39 @@ describe("AppDashboard", () => {
     expect(screen.queryByRole("link", { name: /Oven drift/ })).not.toBeInTheDocument();
   });
 
-  it("when filters hide everything, offers Clear filters (not a dead 'none here')", () => {
+  it("labels each filter option with its field prefix, and marks an active (non-any) filter", () => {
+    renderDash();
+    const sev = screen.getByLabelText("Filter by severity");
+    // Every option — not just "any" — carries the field name, so a collapsed
+    // <select> still reads "Severity · P2" rather than a context-free "P2".
+    expect(within(sev).getByRole("option", { name: "Severity · P2" })).toBeInTheDocument();
+    expect(within(sev).getByRole("option", { name: "Severity · any" })).toBeInTheDocument();
+    // No active filter → no accent marker; selecting one marks it.
+    expect(sev).not.toHaveAttribute("data-active");
+    fireEvent.change(sev, { target: { value: "P2" } });
+    expect(sev).toHaveAttribute("data-active");
+  });
+
+  it("keeps a Clear filters button in the strip, disabled until a filter is active", () => {
+    renderDash();
+    const clear = screen.getByTestId("dash-clear-filters");
+    expect(clear).toBeDisabled(); // nothing narrowed yet
+    fireEvent.change(screen.getByLabelText("Filter by severity"), { target: { value: "P2" } });
+    expect(clear).toBeEnabled();
+    fireEvent.click(clear);
+    expect(screen.getByLabelText("Filter by severity")).toHaveValue("any");
+    expect(clear).toBeDisabled();
+  });
+
+  it("when filters hide everything, the message stays and the strip's Clear filters restores items", () => {
     renderDash();
     // No item is P3 → the filtered list is empty.
     fireEvent.change(screen.getByLabelText("Filter by severity"), { target: { value: "P3" } });
     expect(screen.getByText(/match these filters/i)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /Oven drift/ })).not.toBeInTheDocument();
-    // Clearing restores the open items.
-    fireEvent.click(screen.getByRole("button", { name: /clear filters/i }));
+    // The empty body no longer carries its own button — the persistent strip
+    // button (always visible) is the single Clear-filters entry point.
+    fireEvent.click(screen.getByTestId("dash-clear-filters"));
     expect(screen.getByRole("link", { name: /Oven drift/ })).toBeInTheDocument();
   });
 
