@@ -9,12 +9,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // #177: the whole backend lives under /api, so one proxy rule covers it and
+    // every other path falls through to Vite's index.html SPA fallback — a dev
+    // refresh of a client route (e.g. /kb/chats/{id}) boots the app, never JSON.
     proxy: {
-      "/investigation": "http://localhost:8000",
-      "/investigations": "http://localhost:8000",
-      "/conversation": "http://localhost:8000",
-      "/agent-config": "http://localhost:8000",
-      "/kb": "http://localhost:8000",
+      "/api": "http://localhost:8000",
     },
   },
   build: {

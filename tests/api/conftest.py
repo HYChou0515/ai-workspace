@@ -18,6 +18,8 @@ from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
+from ._client import TestClient as ApiTestClient
+
 
 def register_rca_item(spec: SpecStar, **fields: object) -> str:
     """Create a real rca App item directly via the resource manager (no file
@@ -35,7 +37,10 @@ def register_rca_item(spec: SpecStar, **fields: object) -> str:
 
 @dataclass
 class Harness:
-    client: TestClient
+    # `client` auto-prefixes /api (#177) so existing call sites use bare paths;
+    # `spa_client` is the raw client for SPA-fallback / openapi-shape assertions.
+    client: ApiTestClient
+    spa_client: TestClient
     spec: SpecStar
     filestore: SpecstarFileStore
     iid: str  # a real rca App item; workspace routes validate slug→item (#95)
@@ -72,4 +77,10 @@ def harness(scripted_events: list[AgentEvent]) -> Harness:
         .create(RcaInvestigation(title="t", owner="u"))
         .resource_id
     )
-    return Harness(client=TestClient(app), spec=spec, filestore=filestore, iid=iid)
+    return Harness(
+        client=ApiTestClient(app),
+        spa_client=TestClient(app),
+        spec=spec,
+        filestore=filestore,
+        iid=iid,
+    )

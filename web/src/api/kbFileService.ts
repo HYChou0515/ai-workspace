@@ -17,7 +17,7 @@
 
 import { decodeBytes } from "./encoding";
 import type { FileCaps, FileService } from "./fileService";
-import { API_BASE, apiFetch } from "./http";
+import { API_PREFIX, apiFetch } from "./http";
 import type { KbApi, KbDocument } from "./kb";
 import type { FileContent, FileInfo } from "./types";
 
@@ -226,7 +226,7 @@ export function kbFileService(
       const target = resolveRefPath(fromPath ?? "/", src);
       const sibling = byPath.get(target);
       if (!sibling || !sibling.file_id) return src;
-      return `${API_BASE}/source-doc/${encodeURIComponent(sibling.resource_id)}/blobs/${encodeURIComponent(sibling.file_id)}`;
+      return `${API_PREFIX}/source-doc/${encodeURIComponent(sibling.resource_id)}/blobs/${encodeURIComponent(sibling.file_id)}`;
     },
   };
 }

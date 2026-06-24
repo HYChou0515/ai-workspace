@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
@@ -11,6 +9,8 @@ from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 def _client(holder: dict[str, str]) -> TestClient:

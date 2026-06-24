@@ -4,14 +4,14 @@ the implicit default chat (byte-for-byte, covered in test_messages.py)."""
 
 import asyncio
 
-from fastapi.testclient import TestClient
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, Message, make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
+from ._client import AsyncClient, TestClient
 from .conftest import register_rca_item
 
 

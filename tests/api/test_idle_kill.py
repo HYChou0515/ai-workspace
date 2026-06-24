@@ -17,7 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import timedelta
 
 from asgi_lifespan import LifespanManager
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import RunDone, create_app
@@ -27,6 +27,7 @@ from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
+from ._client import AsyncClient
 from .conftest import register_rca_item
 
 
@@ -98,7 +99,11 @@ async def _running_app(app):
     LifespanManager so startup/shutdown actually fire."""
     async with (
         LifespanManager(app) as manager,
-        AsyncClient(transport=ASGITransport(app=manager.app), base_url="http://t") as client,
+        # routes_from=app: LifespanManager wraps the app as a bare callable, so
+        # route discovery for the /api auto-prefix reads the original app (#177).
+        AsyncClient(
+            transport=ASGITransport(app=manager.app), base_url="http://t", routes_from=app
+        ) as client,
     ):
         yield client
 

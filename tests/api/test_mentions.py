@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from fastapi.testclient import TestClient
 from specstar import QB, SpecStar
 
 from workspace_app.agent.context import AgentToolContext
@@ -14,6 +13,8 @@ from workspace_app.api.events import AgentEvent
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 def _conversation_messages(spec: SpecStar, investigation_id: str):

@@ -1,7 +1,5 @@
 from collections.abc import AsyncIterator
 
-from fastapi.testclient import TestClient
-
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import (
@@ -21,6 +19,8 @@ from workspace_app.kb.retriever import Retriever
 from workspace_app.resources import AgentConfig, make_spec
 from workspace_app.resources.kb import EMBED_DIM, RetrievedPassage
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 def _test_kb_cfg() -> AgentConfig:

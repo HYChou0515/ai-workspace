@@ -6,7 +6,7 @@
  * normal link.
  */
 
-import { API_BASE } from "../../api/http";
+import { API_BASE, API_PREFIX } from "../../api/http";
 
 const KB_DOC_PREFIX = "kb://doc/";
 
@@ -55,5 +55,5 @@ export function docHref(documentId: string, snippet?: string): string {
  * at `GET /blobs/{file_id}` (file_id = the content hash on the SourceDoc).
  */
 export function blobHref(fileId: string): string {
-  return `${API_BASE}/blobs/${encodeURIComponent(fileId)}`;
+  return `${API_PREFIX}/blobs/${encodeURIComponent(fileId)}`;
 }
