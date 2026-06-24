@@ -13,7 +13,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 
 import { api } from "./index";
-import { API_BASE } from "./http";
+import { API_PREFIX } from "./http";
 import { qk } from "./queryKeys";
 import type { FileContent, FileInfo } from "./types";
 
@@ -81,7 +81,7 @@ export function investigationFileService(slug: string, investigationId: string):
   };
 }
 
-/** Resolve a workspace-relative ref to `{API_BASE}/{base}/{path}`; pass through
+/** Resolve a workspace-relative ref to `{API_PREFIX}/{base}/{path}`; pass through
  * absolute URLs / fragments / protocol-relative refs untouched. Shared by every
  * service's `fileUrl` (the investigation file route, the KB blob route, …). */
 export function resolveServiceUrl(base: string, src: string | undefined): string {
@@ -89,7 +89,7 @@ export function resolveServiceUrl(base: string, src: string | undefined): string
   if (/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(src)) return src;
   const cleaned = src.replace(/^\.\//, "").replace(/^\/+/, "");
   const path = cleaned.split("/").map(encodeURIComponent).join("/");
-  return `${API_BASE}/${base}/${path}`;
+  return `${API_PREFIX}/${base}/${path}`;
 }
 
 // ── React context ──────────────────────────────────────────────────────────

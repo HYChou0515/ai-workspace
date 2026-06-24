@@ -21,8 +21,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, to_sse
@@ -34,6 +33,8 @@ from workspace_app.resources import make_spec
 from workspace_app.resources.conversation import Citation
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import AsyncClient, TestClient
 
 # ── app.py: _bubble_kb_citations ─────────────────────────────────────
 

@@ -11,7 +11,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
@@ -20,6 +19,8 @@ from workspace_app.kb.li_pipeline import build_doc_pipeline
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import CODE_EMBED_DIM, EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient
 
 
 def _git(cwd: Path, *args: str) -> None:

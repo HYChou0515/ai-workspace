@@ -73,9 +73,12 @@ def test_hashed_asset_is_not_no_cache(tmp_path: Path):
 
 
 def test_unknown_api_route_still_404s_json(tmp_path: Path):
-    """API misses keep their JSON 404 — only non-API paths fall back."""
-    resp = _client(tmp_path).get("/rca-investigation/does-not-exist")
+    """An /api/* path that matches NO route falls through to the SPA mount, but
+    the `api/` guard makes it 404 rather than serving index.html (#177) — an API
+    miss must stay an API miss, never a masked SPA page."""
+    resp = _client(tmp_path).get("/api/__no_such_route__")
     assert resp.status_code == 404
+    assert "text/html" not in resp.headers.get("content-type", "")
 
 
 def test_non_get_to_spa_path_is_not_rewritten(tmp_path: Path):

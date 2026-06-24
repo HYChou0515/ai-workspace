@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("./http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http")>()),
   API_BASE: "/sub",
+  API_PREFIX: "/sub/api",
 }));
 
 import { api } from "./index";
@@ -24,13 +25,13 @@ import {
 describe("resolveServiceUrl (#73)", () => {
   it("prefixes the deploy base path on a workspace-relative reference", () => {
     expect(resolveServiceUrl("investigations/inv1/files", "./plot.png")).toBe(
-      "/sub/investigations/inv1/files/plot.png",
+      "/sub/api/investigations/inv1/files/plot.png",
     );
   });
 
   it("strips a leading slash and keeps real slashes for nested paths (proxy-safe)", () => {
     expect(resolveServiceUrl("investigations/inv1/files", "/step2/abc.png")).toBe(
-      "/sub/investigations/inv1/files/step2/abc.png",
+      "/sub/api/investigations/inv1/files/step2/abc.png",
     );
   });
 
@@ -61,7 +62,7 @@ describe("investigationFileService", () => {
 
   it("builds file URLs on the investigation file route (with the deploy base)", () => {
     const svc = investigationFileService("rca", "inv1");
-    expect(svc.fileUrl("./plot.png")).toBe("/sub/a/rca/items/inv1/files/plot.png");
+    expect(svc.fileUrl("./plot.png")).toBe("/sub/api/a/rca/items/inv1/files/plot.png");
   });
 
   it("delegates each op to the investigation file API with the bound id", async () => {

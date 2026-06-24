@@ -20,6 +20,7 @@ import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
 import { kbFileService, normPath } from "../../api/kbFileService";
 import { qk } from "../../api/queryKeys";
 import { DialogProvider } from "../../components/Dialog";
+import { Icon } from "../../components/Icon";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import {
   FileBufferProvider,
@@ -52,12 +53,60 @@ export async function fetchAllDocs(
   return out;
 }
 
+/** The empty-collection greeting (#172): a drop-zone-styled call to action so
+ * uploading is obvious from the first screen. The actual drop is handled by the
+ * page-level overlay that wraps this pane; the button opens the file picker. */
+function EmptyUploadCta({
+  onPickFiles,
+  uploading,
+}: {
+  onPickFiles: () => void;
+  uploading: boolean;
+}) {
+  const t = useT();
+  return (
+    <div
+      data-testid="kb-docs-empty-cta"
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 12,
+        padding: 40,
+        margin: 12,
+        border: "2px dashed var(--paper-3)",
+        borderRadius: 10,
+        color: "var(--text-paper-d)",
+        textAlign: "center",
+      }}
+    >
+      <Icon name="upload" size={28} color="var(--text-paper-d2)" />
+      <div style={{ fontSize: 14 }}>{t("kb.dropHint")}</div>
+      <button
+        type="button"
+        className="kb-btn kb-btn--primary"
+        disabled={uploading}
+        onClick={onPickFiles}
+      >
+        <Icon name="file" size={13} /> {t("kb.uploadFiles")}
+      </button>
+    </div>
+  );
+}
+
 export function KbDocIde({
   collectionId,
   client = kbApi,
+  onPickFiles,
+  uploading = false,
 }: {
   collectionId: string;
   client?: KbApi;
+  // #172: when the page wires these in, an empty collection shows an upload
+  // call-to-action (drop hint + button) instead of passive text.
+  onPickFiles?: () => void;
+  uploading?: boolean;
 }) {
   const qc = useQueryClient();
   const docsQuery = useQuery({
@@ -164,7 +213,13 @@ export function KbDocIde({
     );
   }
   if (docs.length === 0) {
-    return <p className="kb-cols__empty">Upload markdown, text, or an archive to index it.</p>;
+    // With the page's picker wired in, greet the empty collection with a real
+    // drop-zone CTA (#172); otherwise fall back to the plain hint.
+    return onPickFiles ? (
+      <EmptyUploadCta onPickFiles={onPickFiles} uploading={uploading} />
+    ) : (
+      <p className="kb-cols__empty">Upload markdown, text, or an archive to index it.</p>
+    );
   }
 
   return (

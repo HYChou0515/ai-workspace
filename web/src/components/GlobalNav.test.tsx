@@ -61,6 +61,19 @@ describe("GlobalNav", () => {
     expect(screen.getByRole("link", { name: /Workspace/ })).toHaveAttribute("href", "/");
   });
 
+  it("brand cues it returns home — a tooltip — while still linking / (#172)", () => {
+    renderNav("/a/rca");
+    const brand = screen.getByRole("link", { name: /Workspace/ });
+    expect(brand).toHaveAttribute("href", "/");
+    expect(brand).toHaveAttribute("title", "回首頁");
+  });
+
+  it("the switcher carries a visible 切換 label, not just a bare chevron (#172)", () => {
+    renderNav("/a/rca");
+    const btn = screen.getByRole("button", { name: /切換/ });
+    expect(btn).toHaveTextContent("切換");
+  });
+
   it("renders the published trail: linked crumbs for `to`, plain text for the current page", () => {
     renderNav("/a/rca/123", [
       { label: "Home", to: "/" },
@@ -76,7 +89,7 @@ describe("GlobalNav", () => {
 
   it("switcher dropdown jumps straight to any App, the Knowledge base, or Diagnostics", () => {
     renderNav("/a/rca");
-    fireEvent.click(screen.getByRole("button", { name: /switch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /切換/ }));
     const menu = screen.getByRole("dialog");
     expect(within(menu).getByRole("link", { name: /Root Cause Analysis/ })).toHaveAttribute(
       "href",
@@ -98,7 +111,7 @@ describe("GlobalNav", () => {
 
   it("switcher marks the current location (the App you're inside)", () => {
     renderNav("/a/yield/42");
-    fireEvent.click(screen.getByRole("button", { name: /switch/i }));
+    fireEvent.click(screen.getByRole("button", { name: /切換/ }));
     const menu = screen.getByRole("dialog");
     expect(within(menu).getByRole("link", { name: /Yield Tracking/ })).toHaveAttribute(
       "aria-current",

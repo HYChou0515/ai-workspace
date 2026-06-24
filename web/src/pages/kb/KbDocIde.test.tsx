@@ -35,6 +35,7 @@ function renderWithQuery(ui: ReactElement, start = "/kb/collections/c1/documents
 // KbApi — serve a content envelope + raw blob so opening a doc resolves.
 vi.mock("../../api/http", () => ({
   API_BASE: "",
+  API_PREFIX: "/api",
   apiFetch: vi.fn(async (path: string) => {
     if (/\/blobs\//.test(path)) return new Response("# Hello KB\n\nbody", { status: 200 });
     if (/^\/source-doc\/[^/]+$/.test(path)) {

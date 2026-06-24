@@ -8,7 +8,6 @@ composer's effort pick was silently dropped.
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 
 from workspace_app.api import ScriptedAgentRunner, create_app  # noqa: F401 — re-export sanity
 from workspace_app.api.events import MessageDelta, RunDone
@@ -17,6 +16,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import AgentConfig, Collection, make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
+from ._client import TestClient
 from .conftest import register_rca_item
 
 

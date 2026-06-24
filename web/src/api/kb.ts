@@ -8,7 +8,7 @@
  */
 
 import type { AgentEvent } from "../events";
-import { API_BASE, apiFetch } from "./http";
+import { API_PREFIX, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
 import type { ReasoningEffort } from "./types";
@@ -450,7 +450,7 @@ export const realKbApi: KbApi = {
     return resp.json();
   },
   streamCollectionDownloadUrl(collectionId, downloadId) {
-    return `${API_BASE}/kb/collections/${encodeURIComponent(collectionId)}/download/${encodeURIComponent(downloadId)}`;
+    return `${API_PREFIX}/kb/collections/${encodeURIComponent(collectionId)}/download/${encodeURIComponent(downloadId)}`;
   },
   async importCollectionNew(file) {
     const form = new FormData();

@@ -8,7 +8,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator
 
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import RunDone, ToolStart, create_app
@@ -19,6 +19,8 @@ from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM
 from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import AsyncClient
 
 
 class _BlockingRunner:

@@ -6,10 +6,11 @@
  * and the current breadcrumb trail published by the active page.
  */
 
-import { Fragment } from "react";
+import { Fragment, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 
 import type { HealthApi } from "../api/health";
+import { useT } from "../lib/i18n";
 import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
 import { AppIcon } from "./AppIcon";
@@ -77,6 +78,7 @@ function FixedLink({ to, icon, label, pathname }: { to: string; icon: IconName; 
 function Switcher() {
   const apps = useApps();
   const { pathname } = useLocation();
+  const t = useT();
   return (
     <Popover
       align="start"
@@ -84,16 +86,24 @@ function Switcher() {
       trigger={({ onClick, open }) => (
         <button
           type="button"
-          aria-label="Switch workspace"
+          aria-label={t("nav.switch.tip")}
+          title={t("nav.switch.tip")}
           aria-expanded={open}
           onClick={onClick}
           style={{
             display: "inline-flex",
             alignItems: "center",
+            gap: 3,
             color: "var(--text-paper-d)",
-            padding: 2,
+            padding: "2px 8px",
+            fontSize: "var(--text-body-sm)",
+            border: "1px solid var(--paper-3)",
+            borderRadius: "var(--radius-btn)",
+            background: "var(--white)",
+            cursor: "pointer",
           }}
         >
+          <span>{t("nav.switch")}</span>
           <Icon name="chev_d" size={14} />
         </button>
       )}
@@ -166,6 +176,33 @@ function Breadcrumbs() {
   );
 }
 
+/** The product wordmark, doubling as a "return home" link. A bare bold word
+ * didn't read as clickable (#172) — pair it with a home icon, a tooltip, and a
+ * hover underline so the affordance is obvious. */
+function Brand() {
+  const t = useT();
+  const [hover, setHover] = useState(false);
+  return (
+    <Link
+      to="/"
+      title={t("nav.home")}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        fontWeight: 800,
+        color: "var(--text-paper)",
+        textDecoration: hover ? "underline" : "none",
+      }}
+    >
+      <Icon name="home" size={15} color="var(--text-paper-d)" />
+      Workspace
+    </Link>
+  );
+}
+
 export function GlobalNav({ healthClient }: { healthClient?: HealthApi }) {
   return (
     <header
@@ -180,19 +217,7 @@ export function GlobalNav({ healthClient }: { healthClient?: HealthApi }) {
         borderBottom: "1px solid var(--paper-3)",
       }}
     >
-      <Link
-        to="/"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 6,
-          fontWeight: 800,
-          color: "var(--text-paper)",
-          textDecoration: "none",
-        }}
-      >
-        Workspace
-      </Link>
+      <Brand />
       <Switcher />
       <span style={{ width: 1, height: 20, background: "var(--paper-3)" }} />
       <Breadcrumbs />

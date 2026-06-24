@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.mock("../api/http", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../api/http")>()),
   API_BASE: "/sub",
+  API_PREFIX: "/sub/api",
 }));
 
 import { baseAwareUrlTransform } from "./mdUrlTransform";
@@ -16,7 +17,7 @@ describe("baseAwareUrlTransform (#73)", () => {
   });
 
   it("prepends the deploy base path to a root-relative BE URL", () => {
-    expect(kb("/blobs/x")).toBe("/sub/blobs/x");
+    expect(kb("/blobs/x")).toBe("/sub/api/blobs/x");
   });
 
   it("leaves absolute http(s) URLs alone", () => {
@@ -26,6 +27,6 @@ describe("baseAwareUrlTransform (#73)", () => {
   it("works for any in-app scheme (wiki://)", () => {
     const wiki = baseAwareUrlTransform("wiki://");
     expect(wiki("wiki://page/x")).toBe("wiki://page/x");
-    expect(wiki("/blobs/y")).toBe("/sub/blobs/y");
+    expect(wiki("/blobs/y")).toBe("/sub/api/blobs/y");
   });
 });

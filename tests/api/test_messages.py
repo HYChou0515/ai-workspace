@@ -1,6 +1,5 @@
 import asyncio
 
-from fastapi.testclient import TestClient
 from specstar import QB
 
 from workspace_app.api import MessageDelta, RunDone, ScriptedAgentRunner, create_app
@@ -8,6 +7,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.resources import Conversation, make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
+from ._client import AsyncClient, TestClient
 from .conftest import Harness, register_rca_item
 
 
@@ -673,7 +673,7 @@ async def test_post_broadcasts_the_user_message_and_turn_events_on_the_stream():
     stream every viewer subscribes to. (The engine stream is read directly —
     the HTTP SSE transport just wraps it — because ASGITransport can't read an
     infinite response incrementally.)"""
-    from httpx import ASGITransport, AsyncClient
+    from httpx import ASGITransport
 
     spec = make_spec(default_user="u")
 
@@ -770,8 +770,6 @@ def test_spa_index_served_at_root_when_dist_exists():
 
         pytest.skip("web/dist not built")
 
-    from fastapi.testclient import TestClient
-
     from workspace_app.api import RunDone, ScriptedAgentRunner, create_app
     from workspace_app.filestore.specstar_impl import SpecstarFileStore
     from workspace_app.sandbox.mock import MockSandbox
@@ -790,8 +788,6 @@ def test_spa_index_served_at_root_when_dist_exists():
 
 def test_spa_mount_skipped_when_dist_missing(tmp_path):
     """create_app must not crash when the SPA build directory is absent."""
-
-    from fastapi.testclient import TestClient
 
     from workspace_app.api import RunDone, ScriptedAgentRunner, create_app
     from workspace_app.filestore.specstar_impl import SpecstarFileStore
@@ -924,7 +920,6 @@ async def test_put_file_into_nested_path(harness: Harness):
 
 
 def test_runner_exception_is_emitted_as_error_event():
-    from fastapi.testclient import TestClient
 
     from workspace_app.api import create_app
     from workspace_app.filestore.specstar_impl import SpecstarFileStore
