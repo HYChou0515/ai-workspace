@@ -14,7 +14,6 @@ import {
   NavLink,
   Navigate,
   Outlet,
-  useLocation,
   useNavigate,
   useOutletContext,
   useParams,
@@ -25,8 +24,9 @@ import { kbApi, type KbApi, type KbCitation, type KbCollection, type KbDocument 
 import { qk } from "../../api/queryKeys";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
+import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
-import { useT } from "../../lib/i18n";
+import { type MsgKey, useT } from "../../lib/i18n";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
 import { ContextCardsTab } from "./ContextCardsTab";
 import { fetchAllDocs, KbDocIde } from "./KbDocIde";
@@ -34,13 +34,15 @@ import { useKbOutlet } from "./KbHome";
 import { RetrievalToggles } from "./RetrievalToggles";
 import { WikiBrowser } from "./WikiBrowser";
 
-// One-line "what + when" blurb under the collection tabs (#162) — orient the
-// reader on Documents / Context Cards / Wiki at the point of use. No system
-// nouns (chunk / embed / index internals) — describe the outcome.
-const TAB_BLURB: Record<"documents" | "cards" | "wiki", string> = {
-  documents: "The files you've uploaded. Search reads these to answer questions.",
-  cards: "A glossary you write by hand — exact terms the assistant uses verbatim when they come up.",
-  wiki: "An AI-built, cross-linked summary the assistant reads for the big picture. Updates as you upload.",
+// Each tab's name + one-line "what + when" blurb, shown together in the
+// collapsible orientation strip under the tabs (#173). A first-timer sees all
+// three at once instead of only the active tab (#162's per-tab blurb hid the
+// rest). No system nouns (chunk / embed / index internals) — describe the
+// outcome. Keyed into the i18n catalog so the strip is bilingual.
+const TAB_HELP: Record<"documents" | "cards" | "wiki", { label: MsgKey; blurb: MsgKey }> = {
+  documents: { label: "kb.tab.documents", blurb: "kb.tab.documents.blurb" },
+  cards: { label: "kb.tab.cards", blurb: "kb.tab.cards.blurb" },
+  wiki: { label: "kb.tab.wiki", blurb: "kb.tab.wiki.blurb" },
 };
 
 /** What the collection layout shares with its routed tab children: the open
@@ -63,7 +65,12 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const { openDoc, openCite } = useKbOutlet();
   // The open collection is the URL (#93): /kb/collections/:cid.
   const { cid } = useParams();
-  const { pathname } = useLocation();
+  // The "what's in here" orientation strip (#173) defaults open and is
+  // collapsed once the reader has the gist — persisted across collections.
+  const [overviewCollapsed, setOverviewCollapsed] = usePersistentBoolean(
+    "kb:col-overview-collapsed",
+    false,
+  );
   const [showRetrieval, setShowRetrieval] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
@@ -290,10 +297,6 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const tabIds = (
     selected.use_wiki ? ["documents", "cards", "wiki"] : ["documents", "cards"]
   ) as ("documents" | "cards" | "wiki")[];
-  // Which tab is open (for the blurb) — the path segment after the collection id.
-  const tabSeg = pathname.split("/")[4];
-  const activeTab: "documents" | "cards" | "wiki" =
-    tabSeg === "cards" || tabSeg === "wiki" ? tabSeg : "documents";
 
   return (
     <section className="kb-colpage" aria-label="Collection">
@@ -629,12 +632,35 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             role="tab"
             className={({ isActive }) => `kb-tab${isActive ? " is-active" : ""}`}
           >
-            {id === "documents" ? "Documents" : id === "cards" ? "Context Cards" : "Wiki"}
+            {t(TAB_HELP[id].label)}
           </NavLink>
         ))}
       </div>
 
-      <p className="kb-tabs__blurb">{TAB_BLURB[activeTab]}</p>
+      {/* "What's in here" orientation strip (#173): all tab blurbs at once so a
+          first-timer never has to click each tab to learn what it is. Defaults
+          open, collapses to a single re-expand affordance once dismissed. */}
+      <div className="kb-tabs__orient">
+        <button
+          type="button"
+          className="kb-tabs__orient-toggle"
+          aria-expanded={!overviewCollapsed}
+          onClick={() => setOverviewCollapsed((v) => !v)}
+        >
+          <Icon name={overviewCollapsed ? "chev_r" : "chev_d"} size={11} />
+          {overviewCollapsed ? t("kb.col.overview.expand") : t("kb.col.overview.title")}
+        </button>
+        {!overviewCollapsed && (
+          <ul className="kb-tabs__orient-list">
+            {tabIds.map((id) => (
+              <li key={id} className="kb-tabs__orient-item">
+                <span className="kb-tabs__orient-label">{t(TAB_HELP[id].label)}</span>
+                <span className="kb-tabs__orient-blurb">{t(TAB_HELP[id].blurb)}</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
 
       <div className="kb-colpage__docs">
         <Outlet

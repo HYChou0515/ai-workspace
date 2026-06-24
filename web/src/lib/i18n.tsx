@@ -183,6 +183,48 @@ export const messages = {
     en: "Reached the turn limit ({turns}); the conversation stopped.",
   },
   "banner.cancelled": { "zh-TW": "已取消。", en: "Cancelled." },
+
+  // KB collection landing + in-place concept help (#173)
+  "kb.lead": {
+    "zh-TW": "每個集合是一組文件，AI 回答時可參考。挑選對話要用哪些當參考資料。",
+    en: "Each collection is a set of documents the assistant can draw on. Pick which to use as context when chatting.",
+  },
+  // The collection page's collapsible "what's in here" orientation strip.
+  "kb.col.overview.title": { "zh-TW": "這個集合裡有什麼", en: "What's in here" },
+  "kb.col.overview.expand": { "zh-TW": "這些分頁是什麼", en: "What are these tabs?" },
+  "kb.col.overview.collapse": { "zh-TW": "收合", en: "Collapse" },
+  "kb.tab.documents": { "zh-TW": "文件", en: "Documents" },
+  "kb.tab.cards": { "zh-TW": "詞彙表", en: "Glossary" },
+  "kb.tab.wiki": { "zh-TW": "Wiki", en: "Wiki" },
+  "kb.tab.documents.blurb": {
+    "zh-TW": "你上傳的檔案。AI 搜尋會讀這些來回答。",
+    en: "The files you upload. Search reads these to answer.",
+  },
+  "kb.tab.cards.blurb": {
+    "zh-TW": "你親手寫的詞彙表——AI 遇到這些詞會照你的定義使用。",
+    en: "A glossary you write — the assistant uses your wording when these terms come up.",
+  },
+  "kb.tab.wiki.blurb": {
+    "zh-TW": "AI 自動整理、互相連結的全集摘要；上傳新文件會跟著更新。",
+    en: "An AI-built, cross-linked summary; updates as you upload.",
+  },
+  // Glossary (Context Cards) tab empty states.
+  "kb.cards.empty.none": {
+    "zh-TW": "還沒有詞彙卡。詞彙表讓你定義 AI 該照字面使用的詞——例如「COGS 一律指 Cost of Goods Sold」。用左側「＋ 新增」開始。",
+    en: 'No glossary cards yet. A glossary defines terms the assistant should use verbatim — e.g. "COGS always means Cost of Goods Sold." Use "+ New" on the left to start.',
+  },
+  "kb.cards.empty.unselected": {
+    "zh-TW": "選一張詞彙卡，或新增一張。",
+    en: "Select a glossary card, or create a new one.",
+  },
+  // Wiki: AI-written + editable badge, and the rebuild confirmation.
+  "kb.wiki.badge": { "zh-TW": "AI 撰寫，可編輯", en: "AI-written, editable" },
+  "kb.wiki.rebuild.confirm": {
+    "zh-TW": "重建會依文件重新整理頁面，AI 可能改寫你手動編輯過的頁面（不會刪除任何頁面）。要繼續嗎？",
+    en: "Rebuild refreshes pages from the documents and may rewrite pages you've edited (no pages are deleted). Continue?",
+  },
+  "kb.wiki.rebuild.confirm.go": { "zh-TW": "重建", en: "Rebuild" },
+  "kb.wiki.rebuild.confirm.cancel": { "zh-TW": "取消", en: "Cancel" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;
