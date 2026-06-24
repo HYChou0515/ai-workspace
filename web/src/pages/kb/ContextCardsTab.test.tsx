@@ -60,6 +60,29 @@ describe("ContextCardsTab (#106)", () => {
     expect(screen.queryByTestId("kb-cards-loading")).not.toBeInTheDocument();
   });
 
+  it("pitches the glossary's purpose with an example when there are no cards (#173)", async () => {
+    render(<ContextCardsTab collectionId="empty-col" client={mockKbApi} />);
+    // The editor pane explains WHY to build one, with a concrete example —
+    // not just "select a card".
+    expect(await screen.findByText(/還沒有詞彙卡/)).toBeInTheDocument();
+    expect(screen.getByText(/COGS/)).toBeInTheDocument();
+  });
+
+  it("shows a neutral hint when cards exist but none is selected (#173)", async () => {
+    await mockKbApi.createContextCard({
+      collection_id: "col-1",
+      keys: ["M4"],
+      title: "Metal 4",
+      body: "b",
+    });
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+
+    // A card is listed, so the pane just invites picking one — no purpose pitch.
+    expect(await screen.findByText("Metal 4")).toBeInTheDocument();
+    expect(screen.getByText(/選一張詞彙卡，或新增一張/)).toBeInTheDocument();
+    expect(screen.queryByText(/還沒有詞彙卡/)).not.toBeInTheDocument();
+  });
+
   it("lists a collection's cards by their label", async () => {
     await mockKbApi.createContextCard({
       collection_id: "col-1",

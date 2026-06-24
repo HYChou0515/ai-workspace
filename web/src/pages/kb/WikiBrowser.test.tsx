@@ -159,4 +159,33 @@ describe("WikiBrowser (#50 P7)", () => {
     expect(pill).toHaveTextContent("3 / 24");
     expect(screen.queryByText(/Updating the wiki/i)).not.toBeInTheDocument();
   });
+
+  it("labels the wiki as AI-written and editable (#173)", async () => {
+    _seedWikiMock("col-badge", { "/index.md": "# Wiki\n" });
+    render(<WikiBrowser collectionId="col-badge" client={mockKbApi} />);
+
+    expect(await screen.findByText("AI 撰寫，可編輯")).toBeInTheDocument();
+    // the old jargon that didn't convey "you can edit this" is gone
+    expect(screen.queryByText("AI-maintained")).not.toBeInTheDocument();
+  });
+
+  it("asks for confirmation before a rebuild, warning about manual edits (#173)", async () => {
+    _seedWikiMock("col-rbc", { "/index.md": "# Wiki\n" });
+    const rebuild = vi.spyOn(mockKbApi, "rebuildWiki");
+    render(<WikiBrowser collectionId="col-rbc" client={mockKbApi} />);
+
+    // Clicking Rebuild asks first — it does NOT immediately refresh.
+    await userEvent.click(await screen.findByRole("button", { name: /Rebuild/i }));
+    expect(rebuild).not.toHaveBeenCalled();
+    expect(screen.getByText(/可能改寫你手動編輯過的頁面/)).toBeInTheDocument();
+
+    // Cancel backs out without rebuilding.
+    await userEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(rebuild).not.toHaveBeenCalled();
+
+    // Confirming actually rebuilds.
+    await userEvent.click(await screen.findByRole("button", { name: /Rebuild/i }));
+    await userEvent.click(screen.getByRole("button", { name: "重建" }));
+    expect(rebuild).toHaveBeenCalledWith("col-rbc");
+  });
 });

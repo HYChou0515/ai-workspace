@@ -820,13 +820,50 @@
 .kb-tab.is-active .kb-tab__count {
   color: var(--accent-h);
 }
-/* One-line "what + when" explainer under the collection tabs (#162). Pulled up
-   snug against the tab strip's bottom margin. */
-.kb-tabs__blurb {
+/* "What's in here" orientation strip under the collection tabs (#173) — lists
+   every tab's one-line "what + when" at once so a first-timer never has to
+   click each tab to learn it. Collapsible (persisted); pulled up snug against
+   the tab strip's bottom margin. */
+.kb-tabs__orient {
   margin: -8px 0 14px;
+}
+.kb-tabs__orient-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  background: none;
+  border: none;
   font-size: var(--text-body-sm);
+  font-weight: 600;
   color: var(--text-paper-d);
+  cursor: pointer;
+}
+.kb-tabs__orient-toggle:hover {
+  color: var(--text-paper);
+}
+.kb-tabs__orient-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-tabs__orient-item {
+  display: flex;
+  gap: 8px;
+  font-size: var(--text-body-sm);
   line-height: 1.5;
+}
+.kb-tabs__orient-label {
+  flex-shrink: 0;
+  min-width: 84px;
+  font-weight: 600;
+  color: var(--text-paper);
+}
+.kb-tabs__orient-blurb {
+  color: var(--text-paper-d);
 }
 /* Index-status strip (#162) — keeps the upload → indexing → ready/error
    transition visible on every collection tab, not just the doc tree. */
