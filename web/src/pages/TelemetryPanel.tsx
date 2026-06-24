@@ -120,7 +120,7 @@ function TraceRow({ trace }: { trace: Trace }) {
         )}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
-          {trace.spans.length} span{trace.spans.length === 1 ? "" : "s"}
+          {trace.spans.length} step{trace.spans.length === 1 ? "" : "s"}
         </span>
         {totalTokens > 0 && (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-paper-d)" }}>
@@ -135,7 +135,7 @@ function TraceRow({ trace }: { trace: Trace }) {
         <div style={{ paddingBottom: 8 }}>
           {trace.spans.length === 0 ? (
             <div style={{ padding: "4px 10px 4px 30px", fontSize: 12, color: "var(--text-paper-d2)" }}>
-              No spans recorded.
+              No steps recorded.
             </div>
           ) : (
             trace.spans.map((s) => <SpanRow key={s.id} span={s} />)
@@ -176,7 +176,7 @@ export function TelemetryPanel({ client = monitorApi }: { client?: MonitorApi })
         role="status"
         style={{ marginTop: 24, color: "var(--text-paper-d)", fontSize: "var(--text-body-sm)" }}
       >
-        No traces yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls
+        No activity yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls
         appear here live.
       </p>
     );

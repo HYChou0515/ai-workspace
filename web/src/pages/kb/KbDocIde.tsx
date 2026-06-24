@@ -27,6 +27,7 @@ import {
   useFileBuffer,
   useIsDirty,
 } from "../../hooks/fileBuffer";
+import { useT } from "../../lib/i18n";
 import { FileView } from "../../renderers/FileView";
 import { hasEditToggle, pickRenderer } from "../../renderers/registry";
 import { FileTree } from "../investigation/FileTree";
@@ -216,11 +217,16 @@ function fmtBytes(n: number): string {
 /** VSCode-style bottom status bar: the open doc's path + index status, plus the
  * per-doc chunks / cited / size that used to live in the table column. */
 function KbStatusBar({ doc }: { doc?: KbDocument }) {
+  const t = useT();
   if (!doc) {
     return <div className="kb-ide__status kb-ide__status--empty" data-testid="kb-ide-status" />;
   }
   const status =
-    doc.status === "ready" ? "ready" : doc.status === "indexing" ? "indexing…" : "error";
+    doc.status === "ready"
+      ? t("kb.doc.ready")
+      : doc.status === "indexing"
+        ? t("kb.doc.processing")
+        : t("kb.doc.failed");
   // The chunk count doubles as the entry point to the full chunks view — the
   // doc IDE has no inline chunks panel, so clicking it opens the dedicated
   // page (File ⇄ Chunks) in a new tab, keeping the editor where it is.
@@ -263,6 +269,7 @@ function KbStatusBar({ doc }: { doc?: KbDocument }) {
 
 /** Trailing tree-row badge: an unsaved dot wins, else the doc's index status. */
 function KbRowBadge({ path, status }: { path: string; status?: string }) {
+  const t = useT();
   const dirty = useIsDirty(path);
   if (dirty) {
     return (
@@ -273,14 +280,14 @@ function KbRowBadge({ path, status }: { path: string; status?: string }) {
   }
   if (status === "indexing") {
     return (
-      <span className="kb-ide__badge" title="Indexing…">
+      <span className="kb-ide__badge" title={t("kb.doc.processing")}>
         ⟳
       </span>
     );
   }
   if (status === "error") {
     return (
-      <span className="kb-ide__badge kb-ide__badge--err" title="Indexing failed">
+      <span className="kb-ide__badge kb-ide__badge--err" title={t("kb.doc.processingFailed")}>
         !
       </span>
     );
@@ -297,6 +304,7 @@ function KbEditorPane({
   doc?: KbDocument;
   onReindex?: (docId: string) => void;
 }) {
+  const t = useT();
   const { save } = useFileBuffer(path);
   const dirty = useIsDirty(path);
   const { isEditing, toggle } = useEditMode();
@@ -322,7 +330,7 @@ function KbEditorPane({
         <span className="kb-ide__crumb mono">{path}</span>
         {doc && doc.status !== "ready" && (
           <span className={`kb-status kb-status--${doc.status}`}>
-            {doc.status === "indexing" ? "indexing…" : "error"}
+            {doc.status === "indexing" ? t("kb.doc.processing") : t("kb.doc.failed")}
           </span>
         )}
         <span className="kb-ide__spacer" />

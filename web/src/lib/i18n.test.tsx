@@ -40,6 +40,33 @@ describe("i18n translate", () => {
   });
 });
 
+describe("i18n #171 term sweep", () => {
+  it("unifies the reasoning knob on 'thinking' (en); zh stays 思考", () => {
+    expect(translate("en", "picker.effort")).toBe("Thinking depth");
+    expect(translate("en", "picker.aria")).toBe("Model and thinking depth");
+    expect(translate("zh-TW", "picker.effort")).toBe("思考深度");
+  });
+
+  it("renames the knowledge-search knob to 'Search scope' so it no longer collides with thinking depth", () => {
+    expect(translate("en", "picker.depth")).toBe("Search scope");
+    expect(translate("zh-TW", "picker.depth")).toBe("搜尋範圍");
+  });
+
+  it("de-jargons the sandbox idle banner to 'execution environment' / 執行環境", () => {
+    expect(translate("en", "banner.sandboxIdle")).toContain("execution environment");
+    expect(translate("en", "banner.sandboxIdle")).not.toContain("workspace");
+    expect(translate("zh-TW", "banner.sandboxIdle")).toContain("執行環境");
+  });
+
+  it("reframes the advanced-retrieval tooltips as outcomes, not mechanisms", () => {
+    expect(translate("zh-TW", "depth.expand.title")).toContain("相關文件");
+    expect(translate("en", "depth.expand.title")).toMatch(/rephras/i);
+    expect(translate("zh-TW", "depth.hyde.title")).toContain("貼近");
+    expect(translate("en", "depth.rerank.title")).toMatch(/most relevant/i);
+    expect(translate("zh-TW", "depth.rerank.title")).toContain("排到前面");
+  });
+});
+
 describe("i18n detectLocale", () => {
   it("maps any zh* tag to zh-TW", () => {
     expect(detectLocale("zh-TW")).toBe("zh-TW");

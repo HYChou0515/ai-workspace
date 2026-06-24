@@ -20,6 +20,7 @@ import {
   type ReplayToolCallOut,
   replayApi,
 } from "../api/health";
+import { useT } from "../lib/i18n";
 import { Icon } from "./Icon";
 
 export type ReplayRequest =
@@ -105,6 +106,7 @@ export function ReplayDialog({
   onClose: () => void;
   client?: ReplayApi;
 }) {
+  const t = useT();
   const [showThinking, setShowThinking] = useState(false);
 
   const { data, error, isPending } = useQuery<ReplayOut, Error>({
@@ -271,7 +273,7 @@ export function ReplayDialog({
                   }}
                 >
                   <Icon name={showThinking ? "chev_d" : "chev_r"} size={11} />
-                  {showThinking ? "Hide thinking" : "Show thinking"}
+                  {showThinking ? t("replay.hideThinking") : t("replay.showThinking")}
                 </button>
               )}
               {showThinking && data.reasoning && (
