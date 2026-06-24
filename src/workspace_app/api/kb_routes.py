@@ -667,15 +667,22 @@ def register_kb_routes(
         chrm = spec.get_resource_manager(DocChunk)
         q = QB["collection_id"] == collection_id
         total = rm.count_resources(q.build())
-        # Sort by the resource's revision timestamp (newest first) BEFORE
-        # paging — without an explicit sort the page would be unstable
-        # across mutations (re-ingest, re-index) and the FE's "page 2"
-        # could silently overlap or skip rows from "page 1". `updated_time`
-        # is an info-level field specstar indexes implicitly, so no
-        # `add_model(indexed_fields=...)` change is needed.
+        # Sort by IMMUTABLE keys BEFORE paging — `created_time` (the resource's
+        # birth stamp, never moves across revisions) newest-first, with
+        # `resource_id` as a total-order tiebreak for docs born in the same ms
+        # (a bulk folder upload). NOT `updated_time`: re-ingest / re-index bumps
+        # it, so a doc indexing *between* the FE's offset fetches would jump to
+        # the front and slide the window, double-counting one row and dropping
+        # another in the fetch-all loop (#184). Both are meta-level fields
+        # specstar indexes implicitly — no `add_model(indexed_fields=...)`.
         items: list[DocumentRow] = []
         data_page = list(
-            rm.list_resources(q.sort(QB.updated_time().desc()).offset(offset).limit(limit).build())
+            rm.list_resources(
+                q.sort(QB.created_time().desc(), QB.resource_id().asc())
+                .offset(offset)
+                .limit(limit)
+                .build()
+            )
         )
         # Batched chunk-per-doc count: one query against DocChunk filtered
         # by `source_doc_id IN (this page's resource_ids)`, then bucket
