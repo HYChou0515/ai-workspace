@@ -17,6 +17,7 @@ import { Popover } from "../../components/Popover";
 import { Skeleton } from "../../components/Skeleton";
 import { UserAvatar } from "../../components/UserChip";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useT } from "../../lib/i18n";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { fmtBytes, fmtCount, fmtDate } from "./collectionFormat";
 import { NewCollectionModal } from "./NewCollectionModal";
@@ -26,6 +27,7 @@ type Tab = "all" | "mine" | "pinned";
 
 export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
   const qc = useQueryClient();
+  const t = useT();
   const me = useCurrentUser();
   const navigate = useNavigate();
   const [newOpen, setNewOpen] = useState(false);
@@ -116,9 +118,7 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
             {collections.length} collections <span className="kb-libhead__dot">·</span> {totalDocs}{" "}
             documents
           </h1>
-          <p className="kb-libhead__lead">
-            Collections are the unit of search. Pick which to use as context when chatting.
-          </p>
+          <p className="kb-libhead__lead">{t("kb.lead")}</p>
         </div>
         <div className="kb-libhead__metrics">
           <div className="kb-metric">

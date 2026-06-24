@@ -481,7 +481,22 @@ describe("KbCollectionsPage", () => {
     );
   });
 
-  it("shows a one-line explainer under the tabs for the active Documents tab (#162)", async () => {
+  it("describes a collection in plain language on the landing header (#173)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    expect(
+      await screen.findByText(/每個集合是一組文件，AI 回答時可參考/),
+    ).toBeInTheDocument();
+    // the old "unit of search" jargon is gone
+    expect(screen.queryByText(/unit of search/i)).not.toBeInTheDocument();
+  });
+
+  it("shows an in-place orientation strip with every tab's blurb expanded by default (#173)", async () => {
+    localStorage.removeItem("kb:col-overview-collapsed");
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
       listDocuments: async () => page([]),
@@ -489,31 +504,18 @@ describe("KbCollectionsPage", () => {
     renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
-    // Documents is the default tab — its "what + when" blurb is visible.
+    // All tab blurbs are visible at once — a first-timer never has to click
+    // each tab to learn what it is.
+    expect(screen.getByText(/你上傳的檔案。AI 搜尋會讀這些來回答/)).toBeInTheDocument();
     expect(
-      screen.getByText("The files you've uploaded. Search reads these to answer questions."),
+      screen.getByText(/你親手寫的詞彙表——AI 遇到這些詞會照你的定義使用/),
     ).toBeInTheDocument();
+    // No wiki on this collection → no wiki blurb.
+    expect(screen.queryByText(/AI 自動整理、互相連結的全集摘要/)).not.toBeInTheDocument();
   });
 
-  it("swaps the explainer when switching to the Context Cards tab (#162)", async () => {
-    const client = {
-      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
-      listDocuments: async () => page([]),
-    } as unknown as Client;
-    renderKb(client);
-
-    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
-    await userEvent.click(screen.getByRole("tab", { name: "Context Cards" }));
-    expect(
-      screen.getByText(/A glossary you write by hand/),
-    ).toBeInTheDocument();
-    // the Documents blurb is gone once another tab is active
-    expect(
-      screen.queryByText("The files you've uploaded. Search reads these to answer questions."),
-    ).not.toBeInTheDocument();
-  });
-
-  it("shows the Wiki explainer on a wiki-enabled collection's Wiki tab (#162)", async () => {
+  it("lists the Wiki blurb in the orientation strip only when the collection has a wiki (#173)", async () => {
+    localStorage.removeItem("kb:col-overview-collapsed");
     const client = {
       ...mockKbApi,
       listCollections: async () => [col({ resource_id: "c1", name: "kb", use_wiki: true })],
@@ -522,10 +524,25 @@ describe("KbCollectionsPage", () => {
     renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
-    await userEvent.click(screen.getByRole("tab", { name: "Wiki" }));
-    expect(
-      screen.getByText(/An AI-built, cross-linked summary/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/AI 自動整理、互相連結的全集摘要/)).toBeInTheDocument();
+  });
+
+  it("collapses the orientation strip and remembers it (#173)", async () => {
+    localStorage.removeItem("kb:col-overview-collapsed");
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    // Collapse via the strip's header toggle.
+    await userEvent.click(screen.getByRole("button", { name: /這個集合裡有什麼/ }));
+    // Blurbs hidden; only the re-expand affordance remains.
+    expect(screen.queryByText(/你上傳的檔案。AI 搜尋會讀這些來回答/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /這些分頁是什麼/ })).toBeInTheDocument();
+    // …and the choice is persisted so it stays collapsed next visit.
+    expect(localStorage.getItem("kb:col-overview-collapsed")).toBe("true");
   });
 
   it("shows a collection-level index-status strip while a doc is indexing (#162)", async () => {
