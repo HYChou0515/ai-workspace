@@ -26,9 +26,10 @@ function fakeClient(over: Partial<ItemChatApi> = {}): ItemChatApi {
   } as ItemChatApi;
 }
 
-const render = (client: ItemChatApi) =>
+const render = (client: ItemChatApi, extra: { pollMs?: number } = {}) =>
   renderHook(
-    () => useItemChat({ slug: "topic-hub", itemId: "it", chatId: "conversation:c1", client }),
+    () =>
+      useItemChat({ slug: "topic-hub", itemId: "it", chatId: "conversation:c1", client, ...extra }),
     { wrapper: QueryWrap },
   );
 
@@ -142,6 +143,50 @@ describe("useItemChat", () => {
     });
     act(() => result.current.cancel());
     expect(client.cancelMessage).toHaveBeenCalledWith("topic-hub", "it", "conversation:c1");
+    expect(result.current.log.streaming).toBe(false);
+  });
+
+  it("recovers a stuck chat when the broadcast stream is cross-pod silent (#202)", async () => {
+    // The viewer's /stream landed on a pod that isn't running the turn, so it
+    // yields nothing (the default fake `subscribe` hangs forever). The persisted
+    // thread on the SHARED store still grows: the user message is saved on send,
+    // the reply once the turn completes on the other pod. The store-poll fallback
+    // must surface both and clear "streaming" even though no SSE event arrived.
+    const prior: ItemChat = { ...CHAT, messages: [{ role: "assistant", content: "earlier" }] };
+    const running: ItemChat = {
+      ...CHAT,
+      messages: [
+        { role: "assistant", content: "earlier" },
+        { role: "user", content: "q" },
+      ],
+    };
+    const completed: ItemChat = {
+      ...CHAT,
+      messages: [
+        { role: "assistant", content: "earlier" },
+        { role: "user", content: "q" },
+        { role: "assistant", content: "answer from the other pod" },
+      ],
+    };
+    const getChat = vi
+      .fn()
+      .mockResolvedValueOnce(prior) // mount hydrate
+      .mockResolvedValueOnce(running) // first silent poll: turn still running
+      .mockResolvedValue(completed); // later silent poll: turn done
+    const client = fakeClient({ getChat });
+    const { result } = render(client, { pollMs: 5 });
+    // Hydration settles BEFORE the user sends (mirrors the real app order).
+    await waitFor(() => expect(result.current.log.entries.length).toBe(1));
+    await act(async () => {
+      await result.current.send("q");
+    });
+    await waitFor(() =>
+      expect(
+        result.current.log.entries.some(
+          (e) => e.kind === "message" && e.message.content.includes("other pod"),
+        ),
+      ).toBe(true),
+    );
     expect(result.current.log.streaming).toBe(false);
   });
 
