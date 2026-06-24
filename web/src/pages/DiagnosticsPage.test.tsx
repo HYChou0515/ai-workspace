@@ -55,6 +55,15 @@ function renderPage(api: HealthApi) {
 describe("DiagnosticsPage", () => {
   afterEach(cleanup);
 
+  it("labels the telemetry tab 'Activity', not the OTel term 'Traces' (#171)", async () => {
+    renderPage({
+      getChecks: async () => ({ running: false, checks: [] }),
+      runChecks: async () => ({ started: true }),
+    });
+    expect(await screen.findByRole("tab", { name: "Activity" })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Traces" })).not.toBeInTheDocument();
+  });
+
   it("lists every check with a readable outcome", async () => {
     const checks = [
       row({}),

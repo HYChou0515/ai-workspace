@@ -33,10 +33,10 @@ export const messages = {
   "about.docs.link": { "zh-TW": "API 文件", en: "API reference" },
 
   // Model + reasoning-depth picker (ModelEffortPicker)
-  "picker.aria": { "zh-TW": "模型與思考深度", en: "Model and reasoning depth" },
+  "picker.aria": { "zh-TW": "模型與思考深度", en: "Model and thinking depth" },
   "picker.model": { "zh-TW": "模型", en: "Model" },
   "picker.default": { "zh-TW": "預設", en: "Default" },
-  "picker.effort": { "zh-TW": "思考深度", en: "Reasoning depth" },
+  "picker.effort": { "zh-TW": "思考深度", en: "Thinking depth" },
   "effort.low": { "zh-TW": "快速", en: "Quick" },
   "effort.medium": { "zh-TW": "一般", en: "Standard" },
   "effort.high": { "zh-TW": "深入", en: "Deep" },
@@ -48,8 +48,9 @@ export const messages = {
   "picker.footer.high": { "zh-TW": "較慢但更完整", en: "Slower, more thorough" },
   "picker.done": { "zh-TW": "完成", en: "Done" },
 
-  // Knowledge-search depth (KB surface)
-  "picker.depth": { "zh-TW": "知識搜尋深度", en: "Knowledge search depth" },
+  // Knowledge-search scope (KB surface) — renamed from "depth" so it no longer
+  // collides with the model's thinking depth (#171). Key stays picker.depth.
+  "picker.depth": { "zh-TW": "搜尋範圍", en: "Search scope" },
   "picker.advanced": { "zh-TW": "進階", en: "Advanced" },
   "depth.quick": { "zh-TW": "快速", en: "Quick" },
   "depth.standard": { "zh-TW": "標準", en: "Standard" },
@@ -72,18 +73,18 @@ export const messages = {
   },
   "depth.expand": { "zh-TW": "換句話多問幾種", en: "Alternative phrasings" },
   "depth.expand.title": {
-    "zh-TW": "額外產生幾種替代問法（0＝關閉）",
-    en: "Alternative query phrasings to generate (0 = off)",
+    "zh-TW": "用不同說法多找一些相關文件（0＝關閉）",
+    en: "Find more by rephrasing your question (0 = off)",
   },
   "depth.hyde": { "zh-TW": "先擬假設答案再搜", en: "Hypothetical-answer probes" },
   "depth.hyde.title": {
-    "zh-TW": "先擬幾份假設文件再嵌入比對（0＝關閉）",
-    en: "Hypothetical-document probes to embed (0 = off)",
+    "zh-TW": "先猜可能的答案，用它找更貼近的文件（0＝關閉）",
+    en: "Draft a likely answer first to find closer matches (0 = off)",
   },
   "depth.rerank": { "zh-TW": "讓 AI 重新排序結果", en: "Let AI re-rank results" },
   "depth.rerank.title": {
-    "zh-TW": "用 AI 對合併後的候選重新排序",
-    en: "LLM-rerank the merged candidate set",
+    "zh-TW": "讓 AI 把最相關的結果排到前面",
+    en: "Let AI move the most relevant results to the top",
   },
   "picker.wiki": { "zh-TW": "一併查知識百科", en: "Also search the wiki" },
   "picker.wiki.title": {
@@ -150,16 +151,61 @@ export const messages = {
     en: "Select a conversation, or start a new one.",
   },
 
+  // Collection page — index-status strip + "how answers are found" panel (#171,
+  // de-jargoned from "Indexing" / "Retrieval modes").
+  "kb.status.uploading": { "zh-TW": "上傳中…", en: "Uploading…" },
+  "kb.status.indexing": { "zh-TW": "處理 {n} 份中…", en: "Processing {n}…" },
+  "kb.status.failed": { "zh-TW": "{n} 份處理失敗", en: "{n} couldn’t be processed" },
+  "kb.retrieval.title": { "zh-TW": "答案如何查詢", en: "How answers are found" },
+  "kb.retrieval.close": { "zh-TW": "收合答案如何查詢", en: "Close how answers are found" },
+
+  // Per-doc index state (KbDocIde status bar / tree badge / editor header) — #171.
+  "kb.doc.ready": { "zh-TW": "就緒", en: "Ready" },
+  "kb.doc.processing": { "zh-TW": "處理中…", en: "Processing…" },
+  "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
+  "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
+
+  // Retrieval toggles (RetrievalToggles, used by the new-collection modal +
+  // collection settings) — #171.
+  "kb.retrieval.docSearch": { "zh-TW": "文件搜尋", en: "Document search" },
+  "kb.retrieval.docSearch.desc": {
+    "zh-TW": "從你上傳的文件中找出段落來回答問題。",
+    en: "Find passages from your documents to answer questions.",
+  },
+  "kb.retrieval.wiki": { "zh-TW": "知識百科", en: "Knowledge wiki" },
+  "kb.retrieval.wiki.desc": {
+    "zh-TW": "AI 建立、彼此連結的摘要，助理會讀它來回答；上傳後會更新。",
+    en: "An AI-built, cross-linked summary the assistant reads to answer. Updates as you upload.",
+  },
+  "kb.retrieval.recommended": { "zh-TW": "建議", en: "Recommended" },
+  "kb.retrieval.both": {
+    "zh-TW": "兩者都會用——段落看細節、百科看全貌。",
+    en: "Answers will draw on both — passages for detail, the wiki for the big picture.",
+  },
+
   // Agent run banners (agentLog reducer) — de-jargoned behavior descriptions
   "banner.sandboxIdle": {
-    "zh-TW": "閒置太久，下次操作會重新啟動工作環境。",
-    en: "Idle too long — the workspace will restart on your next action.",
+    "zh-TW": "閒置太久，下次操作會重新啟動執行環境。",
+    en: "Idle too long — the execution environment will restart on your next action.",
   },
   "banner.maxTurns": {
     "zh-TW": "已達回合上限（{turns}），對話已停止。",
     en: "Reached the turn limit ({turns}); the conversation stopped.",
   },
   "banner.cancelled": { "zh-TW": "已取消。", en: "Cancelled." },
+
+  // Investigation terminal (TerminalPane) — sandbox → 執行環境 (#171).
+  "terminal.help.lead": {
+    "zh-TW": "在執行環境裡執行指令，試試",
+    en: "Run shell commands in the execution environment. Try",
+  },
+  "terminal.help.clears": { "zh-TW": "可清除畫面。", en: "clears." },
+  "replay.showThinking": { "zh-TW": "顯示思考", en: "Show thinking" },
+  "replay.hideThinking": { "zh-TW": "隱藏思考", en: "Hide thinking" },
+  "terminal.aborted": {
+    "zh-TW": "^C 已中斷（指令仍在執行環境裡跑到結束）",
+    en: "^C  interrupted (still running in the execution environment until it exits)",
+  },
 
   // KB collection landing + in-place concept help (#173)
   "kb.lead": {

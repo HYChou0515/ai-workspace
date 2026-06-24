@@ -64,9 +64,9 @@ describe("ReplayDialog", () => {
       thread_id: "inv-1",
       message_index: 2,
     });
-    // Thinking stays collapsed until asked for.
+    // Thinking stays collapsed until asked for. #171: zh-TW label 顯示思考.
     expect(screen.queryByText("let me think")).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: /thinking/i }));
+    await userEvent.click(screen.getByRole("button", { name: /思考/ }));
     expect(screen.getByText("let me think")).toBeInTheDocument();
   });
 

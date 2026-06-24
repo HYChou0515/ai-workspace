@@ -29,9 +29,11 @@ const withTrace: MonitorApi = {
 describe("TelemetryPanel", () => {
   afterEach(cleanup);
 
-  it("lists a trace and expands to reveal its spans (LLM + tool calls)", async () => {
+  it("lists a run and expands to reveal its steps (LLM + tool calls)", async () => {
     render(<TelemetryPanel client={withTrace} />);
     const row = await screen.findByRole("button", { name: /Wiki maintainer/ });
+    // #171: spans relabeled to "steps" for the diagnostic surface.
+    expect(screen.getByText(/2 steps/)).toBeInTheDocument();
     await userEvent.click(row);
     // The maintainer's actual activity: an LLM generation + a write_file tool call.
     expect(await screen.findByText("write_file")).toBeInTheDocument();
@@ -45,6 +47,6 @@ describe("TelemetryPanel", () => {
       async *streamMonitor() {},
     };
     render(<TelemetryPanel client={empty} />);
-    expect(await screen.findByText(/No traces yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No activity yet/i)).toBeInTheDocument();
   });
 });
