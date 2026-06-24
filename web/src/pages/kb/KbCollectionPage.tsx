@@ -120,7 +120,8 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   });
   const statusDocs = (docStatusQuery.data ?? []) as KbDocument[];
   const indexingCount = statusDocs.filter((d) => d.status === "indexing").length;
-  const erroredCount = statusDocs.filter((d) => d.status === "error").length;
+  const erroredDocs = statusDocs.filter((d) => d.status === "error");
+  const erroredCount = erroredDocs.length;
 
   // Reset the transient UI when switching to a different collection. (The doc
   // tree + editor own their own state inside KbDocIde.)
@@ -200,18 +201,30 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     if (importFile) importIntoMut.mutate({ file: importFile, mode });
   };
 
+  // Live "uploaded N of M" progress (#170) — a folder pick can be hundreds of
+  // files, so a bare "Uploading…" hides how far along we are. Each file that
+  // settles bumps `done`; cleared once the whole batch finishes.
+  const [upProg, setUpProg] = useState<{ done: number; total: number } | null>(null);
+
   const uploadMut = useMutation({
     // Bounded concurrency: a folder pick can be hundreds of files — firing them
     // all at once froze the tab and flushed nothing. A small pool keeps the UI
     // alive while still uploading everything.
-    mutationFn: (vars: { files: File[]; asFolder: boolean }) =>
-      mapWithConcurrency(vars.files, 4, (file) =>
-        client.uploadDocument(cid as string, file, uploadDocPath(file, vars.asFolder)),
-      ),
+    mutationFn: async (vars: { files: File[]; asFolder: boolean }) => {
+      setUpProg({ done: 0, total: vars.files.length });
+      let done = 0;
+      return mapWithConcurrency(vars.files, 4, async (file) => {
+        const r = await client.uploadDocument(cid as string, file, uploadDocPath(file, vars.asFolder));
+        done += 1;
+        setUpProg({ done, total: vars.files.length });
+        return r;
+      });
+    },
     onSuccess: () => {
       if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
       void qc.invalidateQueries({ queryKey: qk.kb.collections });
     },
+    onSettled: () => setUpProg(null),
   });
 
   const busy = uploadMut.isPending;
@@ -221,6 +234,29 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   // as the cursor crosses the tree/editor.
   const dragDepth = useRef(0);
   const [dragging, setDragging] = useState(false);
+
+  // "All set" confirmation (#170): without it, the strip just vanishes when the
+  // last doc finishes and the user can't tell uploading→indexing→done ever
+  // completed. Flash a ✓ only on a real >0→0 transition with no failures (an
+  // already-indexed collection that opens clean must NOT flash), then fade.
+  const pending = busy || indexingCount > 0;
+  const [justReady, setJustReady] = useState(false);
+  const hadPending = useRef(false);
+  useEffect(() => {
+    if (pending) {
+      hadPending.current = true;
+      setJustReady(false);
+      return;
+    }
+    if (hadPending.current) {
+      hadPending.current = false;
+      if (erroredCount === 0) {
+        setJustReady(true);
+        const tmr = setTimeout(() => setJustReady(false), 4000);
+        return () => clearTimeout(tmr);
+      }
+    }
+  }, [pending, erroredCount]);
 
   const upload = (files: FileList | null, asFolder = false) => {
     if (!files || !cid || busy) return;
@@ -498,29 +534,69 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
         ))}
       </div>
 
-      {/* Index-status strip (#162): visible on every tab so the upload →
-          indexing → ready/error transition is never invisible. Hidden once
-          nothing is uploading / indexing / errored. */}
-      {(busy || indexingCount > 0 || erroredCount > 0) && (
+      {/* Index-status strip (#162, #170): visible on every tab so the upload →
+          indexing → ready/error transition is never invisible. Shows live
+          progress, then either a transient "all set" ✓ or a persistent failure
+          list. Hidden only when idle with nothing to report. */}
+      {(pending || erroredCount > 0 || justReady) && (
         <div
-          className={`kb-index-status${erroredCount > 0 && indexingCount === 0 && !busy ? " is-error" : ""}`}
+          className={`kb-index-status${erroredCount > 0 && !pending ? " is-error" : ""}`}
           data-testid="kb-index-status"
           role="status"
         >
-          <Icon
-            name={erroredCount > 0 && indexingCount === 0 && !busy ? "x" : "refresh"}
-            size={13}
-            color={erroredCount > 0 && indexingCount === 0 && !busy ? "var(--err)" : "var(--accent-h)"}
-          />
-          <span>
-            {[
-              busy ? t("kb.status.uploading") : null,
-              indexingCount > 0 ? t("kb.status.indexing", { n: indexingCount }) : null,
-              erroredCount > 0 ? t("kb.status.failed", { n: erroredCount }) : null,
-            ]
-              .filter(Boolean)
-              .join(" · ")}
-          </span>
+          {/* Live progress while work is in flight (#170). De-jargoned wording
+              follows #171 (processing, not indexing). */}
+          {pending && (
+            <div className="kb-index-status__line">
+              <Icon name="refresh" size={13} color="var(--accent-h)" />
+              <span>
+                {[
+                  busy
+                    ? t("kb.status.uploadingProgress", { done: upProg?.done ?? 0, total: upProg?.total ?? 0 })
+                    : null,
+                  indexingCount > 0 ? t("kb.status.indexing", { n: indexingCount }) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </span>
+            </div>
+          )}
+
+          {/* Transient "all set" ✓ — only on a clean finish (#170). */}
+          {justReady && !pending && erroredCount === 0 && (
+            <span className="kb-index-status__ready">{t("kb.status.allReady")}</span>
+          )}
+
+          {/* Persistent failure list (#170): each failed doc by name + reason,
+              click to open it (the viewer shows the full status_detail). */}
+          {erroredCount > 0 && (
+            <div className="kb-index-status__fails">
+              <div className="kb-index-status__fails-head">
+                <Icon name="x" size={13} color="var(--err)" />
+                <span>{t("kb.status.failed", { n: erroredCount })}</span>
+              </div>
+              <ul className="kb-index-status__fail-list">
+                {erroredDocs.map((d) => {
+                  const name = d.path.split("/").pop() ?? d.path;
+                  return (
+                    <li key={d.resource_id}>
+                      <button
+                        type="button"
+                        className="kb-index-status__fail"
+                        aria-label={t("kb.status.openFailed", { name })}
+                        onClick={() => openDoc(d.resource_id)}
+                      >
+                        <span className="kb-index-status__fail-name">{name}</span>
+                        <span className="kb-index-status__fail-reason">
+                          {d.status_detail || t("kb.doc.processingFailed")}
+                        </span>
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
         </div>
       )}
 

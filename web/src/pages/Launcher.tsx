@@ -148,7 +148,24 @@ export function Launcher() {
           }}
         >
           {apps.length === 0 && (
-            <div style={{ fontSize: 13, color: "var(--text-paper-d2)" }}>{t("launcher.noApps")}</div>
+            // A real empty-state with a next step (#170): apps are team/code
+            // provisioned, so say so and point at the KB card just below.
+            <div
+              style={{
+                gridColumn: "1 / -1",
+                padding: "18px 20px",
+                borderRadius: 12,
+                border: "1px dashed var(--line)",
+                background: "var(--paper-2)",
+              }}
+            >
+              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
+                {t("launcher.empty.title")}
+              </div>
+              <div style={{ fontSize: 13, color: "var(--text-paper-d)" }}>
+                {t("launcher.empty.body")}
+              </div>
+            </div>
           )}
           {apps.map((a) => (
             <AppCard key={a.slug} app={a} />

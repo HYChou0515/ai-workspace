@@ -32,6 +32,7 @@ import { DomainField } from "../components/DomainField";
 import { HelpButton } from "../components/HelpButton";
 import { Icon, type IconName } from "../components/Icon";
 import { OnboardingModal } from "../components/OnboardingModal";
+import { Skeleton } from "../components/Skeleton";
 import { type ChipTone, chipStyle } from "../components/StatusChip";
 import { UserAvatar } from "../components/UserChip";
 import { useT } from "../lib/i18n";
@@ -84,8 +85,13 @@ export function AppDashboard() {
 
   if (!manifest) {
     return (
-      <div data-testid="page-app-dashboard" style={{ padding: 28 }}>
-        Loading…
+      <div data-testid="page-app-dashboard" style={{ padding: 28 }} aria-busy="true">
+        {/* Skeleton, not bare "Loading…" (#170): a title bar + a few list rows so
+            the wait reads as content arriving, not a stalled screen. */}
+        <Skeleton style={{ height: 28, width: 220, marginBottom: 18 }} />
+        {[0, 1, 2, 3].map((i) => (
+          <Skeleton key={i} style={{ height: 44, marginBottom: 8, borderRadius: 8 }} />
+        ))}
         {/* Keep the nested create route (`/a/:slug/new`) mounted while the
             dashboard's manifest is still loading. */}
         <Outlet />

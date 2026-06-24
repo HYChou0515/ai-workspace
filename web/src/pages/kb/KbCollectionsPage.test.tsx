@@ -24,12 +24,12 @@ type Client = Parameters<typeof KbCollectionsGrid>[0]["client"];
  * minimal shell that supplies the Outlet context the page reads (the real
  * shell — KbHome — is exercised in KbHome/kbRoutes tests). Opening a card
  * navigates to /kb/collections/:cid/documents (#93). */
-function renderKb(client: Client, start = "/kb/collections") {
+function renderKb(client: Client, start = "/kb/collections", openDoc: (id: string) => void = () => {}) {
   return render(
     <MemoryRouter initialEntries={[start]}>
       <Routes>
         <Route
-          element={<Outlet context={{ openDoc: () => {}, openCite: () => {} } satisfies KbOutletCtx} />}
+          element={<Outlet context={{ openDoc, openCite: () => {} } satisfies KbOutletCtx} />}
         >
           <Route path="/kb/collections" element={<KbCollectionsGrid client={client} />} />
           <Route path="/kb/collections/:cid" element={<KbCollectionPage client={client} />}>
@@ -640,7 +640,49 @@ describe("KbCollectionsPage", () => {
     expect(strip).not.toHaveTextContent(/Indexing/i);
   });
 
-  it("reports a failed doc in the index-status strip (#162)", async () => {
+  it("lists each failed doc in the index-status strip with its filename + reason (#170)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          {
+            resource_id: "c1/me/specs/a.md",
+            path: "specs/a.md",
+            content_type: "text/markdown",
+            created_by: "me",
+            status: "error",
+            status_detail: "PdfParser: page 12 → boom",
+          },
+        ]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const strip = await screen.findByTestId("kb-index-status");
+    expect(strip).toHaveTextContent(/1 份處理失敗/);
+    // the failed doc is named (by basename) + its reason is shown, not hidden
+    expect(strip).toHaveTextContent("a.md");
+    expect(strip).toHaveTextContent(/PdfParser: page 12/);
+  });
+
+  it("opens the failed doc's read-only viewer when its row is clicked (#170)", async () => {
+    const openDoc = vi.fn();
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "error", status_detail: "boom" },
+        ]),
+    } as unknown as Client;
+    renderKb(client, "/kb/collections", openDoc);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(await screen.findByRole("button", { name: /查看 a\.md 的失敗原因/ }));
+    // clicking the failure row routes to the doc viewer by its opaque id
+    expect(openDoc).toHaveBeenCalledWith("c1/me/a.md");
+  });
+
+  it("falls back to a generic reason when a failed doc has no status_detail (#170)", async () => {
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
       listDocuments: async () =>
@@ -652,7 +694,10 @@ describe("KbCollectionsPage", () => {
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const strip = await screen.findByTestId("kb-index-status");
+    // #170 + #171: a failed doc with no detail falls back to the de-jargoned
+    // "處理失敗" reason (and the count header reads "1 份處理失敗").
     expect(strip).toHaveTextContent(/1 份處理失敗/);
+    expect(strip).toHaveTextContent("處理失敗");
   });
 
   it("hides the index-status strip once every doc is ready (#162)", async () => {
@@ -671,6 +716,43 @@ describe("KbCollectionsPage", () => {
     expect(screen.queryByTestId("kb-index-status")).not.toBeInTheDocument();
   });
 
+  it("flashes an all-set confirmation when the last indexing doc finishes with no errors (#170)", async () => {
+    let status = "indexing";
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () => {
+        const s = status;
+        status = "ready"; // the next 1.5s poll returns ready
+        return page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: s },
+        ]);
+      },
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    // first paint: still processing (de-jargoned per #171)
+    expect(await screen.findByTestId("kb-index-status")).toHaveTextContent(/處理 1 份中/);
+    // once the poll flips it to ready, a transient "all set" confirmation appears
+    expect(await screen.findByText("✓ 全部就緒", {}, { timeout: 3000 })).toBeInTheDocument();
+  });
+
+  it("shows no all-set confirmation when a collection opens already fully indexed (#170)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "ready" },
+        ]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await screen.findByRole("button", { name: /a\.md/ });
+    // nothing was ever pending this visit → no false "all set" flash
+    expect(screen.queryByText("✓ 全部就緒")).not.toBeInTheDocument();
+  });
+
   it("shows an uploading state in the index-status strip while files upload (#162)", async () => {
     const d = makeDeferred<string[]>();
     const client = {
@@ -687,7 +769,8 @@ describe("KbCollectionsPage", () => {
       file,
     );
     const strip = await screen.findByTestId("kb-index-status");
-    expect(strip).toHaveTextContent(/上傳中/);
+    // #170: per-file progress, not a bare "上傳中…" — one file in flight, none settled.
+    expect(strip).toHaveTextContent(/上傳 0\/1/);
     d.resolve(["c1/me/x.md"]); // settle the in-flight upload
   });
 
