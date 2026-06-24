@@ -2059,7 +2059,11 @@
 .kb-ide__status-meta { font-family: var(--font-mono); }
 
 /* #106 Context Cards tab — left list + center editor (mirrors the docs IDE). */
-.kb-cards { display: flex; gap: 12px; height: 100%; min-height: 0; }
+/* #180 Cap the box to the viewport (like the docs IDE's bounded height) so the
+ * left list's overflow-y:auto actually engages instead of the whole page
+ * growing. max-height — not a fixed height — keeps the box compact when only a
+ * few cards exist and only scrolls once the list outgrows the cap. */
+.kb-cards { display: flex; gap: 12px; max-height: min(70vh, 720px); min-height: 0; overflow: hidden; }
 /* compact, dense left column */
 .kb-cards__list {
   width: 196px; flex: 0 0 196px; display: flex; flex-direction: column; gap: 4px;
@@ -2070,7 +2074,8 @@
   list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px;
   flex: 1 1 auto; min-height: 0; overflow-y: auto;
 }
-.kb-cards__search { display: flex; flex-direction: column; gap: 4px; }
+/* search + New stay pinned (flex-shrink:0) so only the list scrolls (#180). */
+.kb-cards__search { display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }
 .kb-cards__modes { display: flex; gap: 3px; }
 .kb-cards__mode {
   flex: 1 1 0; padding: 2px 4px; font-size: 11px; cursor: pointer;
@@ -2086,7 +2091,7 @@
 .kb-cards__new {
   text-align: left; padding: 3px 6px; font-size: 12px; border: 1px dashed var(--paper-3);
   border-radius: var(--radius-btn); background: transparent; color: var(--text-paper-d);
-  cursor: pointer;
+  cursor: pointer; flex-shrink: 0;
 }
 .kb-cards__item {
   display: block; width: 100%; text-align: left; padding: 3px 6px; font-size: 12px; line-height: 1.4;
