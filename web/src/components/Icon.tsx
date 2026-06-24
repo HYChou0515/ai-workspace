@@ -45,7 +45,8 @@ export type IconName =
   | "undo"
   | "quote"
   | "external"
-  | "paperclip";
+  | "paperclip"
+  | "home";
 
 export function Icon({
   name,
@@ -229,6 +230,12 @@ export function Icon({
         d="M16 7 L9 14 A3 3 0 0 0 13 18 L20 11 A5 5 0 0 0 13 4 L5 12 A7 7 0 0 0 15 22 L18 19"
         {...sp}
       />
+    ),
+    home: (
+      <>
+        <path d="M3 11 L12 3 L21 11" {...sp} />
+        <path d="M5 9.5 V20 H19 V9.5" {...sp} />
+      </>
     ),
     quote: (
       <path
