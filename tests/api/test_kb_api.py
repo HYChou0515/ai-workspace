@@ -354,9 +354,12 @@ def test_reindex_collection_rebuilds_all_docs():
 
 def test_list_documents_is_paged_via_specstar_qb_offset_limit():
     """Documents inside a collection are paged through specstar's
-    `QB[...].offset(offset).limit(limit)` query, sorted by `updated_time`
-    descending so paging is stable across mutations. `total` is the FULL
-    filtered count; `has_more` is the convenience offset+len<total flag.
+    `QB[...].offset(offset).limit(limit)` query, sorted by the IMMUTABLE
+    `created_time` descending (with `resource_id` as tiebreak) so paging stays
+    stable even while rows re-index — see
+    `test_paging_stays_consistent_when_a_doc_is_reindexed_mid_paging` (#184).
+    `total` is the FULL filtered count; `has_more` is the convenience
+    offset+len<total flag.
 
     Locks the API shape so we don't accidentally fall back to a fetch-all
     response.
@@ -365,8 +368,9 @@ def test_list_documents_is_paged_via_specstar_qb_offset_limit():
 
     client = _client()
     cid = _new_collection(client)
-    # Upload 5 docs in a fixed order. specstar stamps `updated_time` per
-    # write, so the latest upload is the page's first item (sort desc).
+    # Upload 5 docs in a fixed order. specstar stamps `created_time` at birth,
+    # so the latest upload is the page's first item (sort desc); for docs never
+    # re-indexed this equals upload order.
     paths = ["a.md", "b.md", "c.md", "d.md", "e.md"]
     for p in paths:
         client.post(
@@ -408,6 +412,41 @@ def test_list_documents_is_paged_via_specstar_qb_offset_limit():
         "b.md",
         "a.md",
     ]
+
+
+def test_paging_stays_consistent_when_a_doc_is_reindexed_mid_paging():
+    """During indexing a re-ingest/re-index bumps a doc's `updated_time`. If the
+    page were sorted by `updated_time`, a doc bumped *between* the FE's offset
+    fetches would jump to the front and slide the window, so the fetch-all loop
+    would double-count one row and drop another. Sorting by the IMMUTABLE
+    `created_time` (+ `resource_id` tiebreak) pins the window, so paging the
+    collection in slices yields every doc exactly once even while rows churn. (#184)
+    """
+    import time
+
+    client = _client()
+    cid = _new_collection(client)
+    paths = ["a.md", "b.md", "c.md", "d.md", "e.md"]
+    for p in paths:
+        client.post(
+            f"/kb/collections/{cid}/documents",
+            files={"file": (p, b"# tiny", "text/markdown")},
+        )
+        time.sleep(0.005)  # strictly monotonic created_time for a deterministic order
+
+    # Fetch the first slice, THEN re-ingest an OLDER doc (its `updated_time` jumps
+    # to newest, mimicking indexing finishing on "a.md" between offset fetches).
+    page1 = client.get(f"/kb/collections/{cid}/documents?offset=0&limit=2").json()
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", b"# tiny v2", "text/markdown")},
+    )
+    page2 = client.get(f"/kb/collections/{cid}/documents?offset=2&limit=2").json()
+    page3 = client.get(f"/kb/collections/{cid}/documents?offset=4&limit=2").json()
+
+    seen = [d["path"] for pg in (page1, page2, page3) for d in pg["items"]]
+    assert len(seen) == len(set(seen)), f"duplicate rows across pages: {seen}"
+    assert sorted(seen) == sorted(paths), f"a doc was dropped/duplicated: {seen}"
 
 
 def test_folder_upload_preserves_relative_path():
