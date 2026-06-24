@@ -16,6 +16,7 @@ import { CollectionsButton } from "./CollectionsButton";
 import { CollectionsPickerModal } from "./CollectionsPickerModal";
 import { ManageChatsModal } from "./ManageChatsModal";
 import { NewItemPicker } from "./NewItemPicker";
+import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
@@ -211,19 +212,18 @@ function ItemChatPanel({
         <div
           className="item-chat-panel__gate"
           data-testid="workflow-continue"
-          style={{ flex: "0 0 auto", display: "flex", gap: 8, alignItems: "center", padding: "6px 8px" }}
+          // Pin the decision to the top of the chat (#170): the old gate scrolled
+          // away with the feed, so a paused run was easy to miss. The richer
+          // WorkflowDecisionCard (summary + revise) replaces the bare buttons.
+          style={{ flex: "0 0 auto", position: "sticky", top: 0, zIndex: 2, padding: "6px 8px" }}
         >
-          <span>{gate.title}</span>
-          {gate.allow.map((choice) => (
-            <button
-              key={choice}
-              type="button"
-              onClick={() => decide.mutate({ choice })}
-              data-testid={`gate-${choice}`}
-            >
-              {choice === "approve" ? "Continue" : choice}
-            </button>
-          ))}
+          <WorkflowDecisionCard
+            decision={gate}
+            busy={decide.isPending}
+            onDecide={(choice, input) =>
+              decide.mutate(input === undefined ? { choice } : { choice, input })
+            }
+          />
         </div>
       )}
 

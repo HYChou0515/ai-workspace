@@ -24,6 +24,11 @@ describe("WorkflowDecisionCard", () => {
     expect(screen.getByTestId("wf-decision-summary")).toHaveTextContent("file-a → kb-docs");
   });
 
+  it("shows a prominent 'your decision needed' cue so it doesn't read as info (#170)", () => {
+    render(<WorkflowDecisionCard decision={decision()} onDecide={() => {}} />);
+    expect(screen.getByText("需要你的決定")).toBeInTheDocument();
+  });
+
   it("approve / reject post the bare choice", () => {
     const onDecide = vi.fn();
     render(<WorkflowDecisionCard decision={decision()} onDecide={onDecide} />);
