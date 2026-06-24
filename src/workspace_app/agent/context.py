@@ -126,6 +126,16 @@ class AgentToolContext:
     retriever: Retriever | None = None
     collection_ids: list[str] = field(default_factory=list)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
+    # #195: per-turn cap on how many times `kb_search` may actually run. `None`
+    # = unlimited (Topic Hub and other flavours leave it unset). When set, the
+    # KB-chat turn + the ask_knowledge_base bridge populate it from
+    # `kb.max_searches_per_turn`. Each completed search increments
+    # `kb_search_calls`; once it reaches the cap, `kb_search` stops running the
+    # retriever and returns a sentinel telling the model to answer from the
+    # passages it already has. Every capped result also reports the remaining
+    # budget so a small model spends its searches frugally.
+    kb_search_max_calls: int | None = None
+    kb_search_calls: int = 0
     # Topic Hub tools (`resolve_collection`, `lookup_glossary`) query specstar
     # resources (Collection / ContextCard) directly. Set by the Topic Hub turn
     # builder; None for RCA/KB-flavour contexts.

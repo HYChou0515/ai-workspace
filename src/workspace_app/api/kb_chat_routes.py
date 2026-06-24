@@ -68,6 +68,7 @@ async def answer_question(
     wiki: bool = False,
     on_event: Callable[[AgentEvent], None] | None = None,
     on_citations: Callable[[list[Citation]], None] | None = None,
+    max_searches: int | None = None,
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
@@ -104,6 +105,8 @@ async def answer_question(
         # Route through the wiki/both path when the caller (a wiki-aware runner)
         # opted in. Harmless when the runner isn't wiki-aware.
         wiki_query=wiki,
+        # #195: cap the bridge's kb_search calls too (same KB agent).
+        kb_search_max_calls=max_searches,
     )
     parts: list[str] = []
     # (tool_name, error_text) pairs captured from ToolEnd events whose
@@ -234,6 +237,8 @@ def register_kb_chat_routes(
     kb_agent_configs: list[AgentConfig],
     history_max_messages: int = 40,
     history_max_context_tokens: int = 24_000,
+    # #195: per-turn cap on kb_search calls (None ⇒ unlimited).
+    max_searches_per_turn: int | None = None,
 ) -> None:
     """Register the KB chat surface.
 
@@ -422,6 +427,8 @@ def register_kb_chat_routes(
             # Per-query opt-in to the wiki path (depth picker). The
             # WikiAwareRunner gates it on the collections' use_wiki/use_rag.
             wiki_query=bool(body.enhancements and body.enhancements.wiki),
+            # #195: cap how many times this reply may run kb_search.
+            kb_search_max_calls=max_searches_per_turn,
         )
 
         def persist(produced: list[TurnMessage]) -> None:
