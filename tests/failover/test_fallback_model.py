@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
+from agents.models.interface import Model
 
 from workspace_app.factories import LlmEndpoint
 from workspace_app.failover.cooldown import CooldownRegistry
@@ -37,7 +39,7 @@ def _ep(model: str, *, ttft_s: float = 5.0, idle_s: float = 5.0) -> LlmEndpoint:
     )
 
 
-class _FakeModel:
+class _FakeModel(Model):
     """A stand-in SDK model: get_response returns/raises; stream_response yields
     the given events, optionally erroring or stalling at a chosen position."""
 
@@ -55,13 +57,25 @@ class _FakeModel:
             raise self._error
         return self._response
 
-    async def stream_response(self, *args, **kwargs) -> AsyncIterator[str]:
+    async def stream_response(self, *args, **kwargs) -> AsyncIterator[Any]:
         if self._error is not None:
             raise self._error
         for i, ev in enumerate(self._events):
             if self._stall_after is not None and i == self._stall_after:
+                assert self._stall_event is not None
                 await self._stall_event.wait()
             yield ev
+
+
+class _MidFailModel(Model):
+    """Yields one event then raises — a mid-stream (post-first) failure."""
+
+    async def get_response(self, *args, **kwargs):  # pragma: no cover — unused
+        raise NotImplementedError
+
+    async def stream_response(self, *args, **kwargs) -> AsyncIterator[Any]:
+        yield "partial"
+        raise RuntimeError("mid")
 
 
 def _model(reg, impls: dict[str, _FakeModel], **kw) -> FallbackModel:
@@ -112,14 +126,7 @@ def test_stream_ttft_timeout_switches():
 def test_stream_failure_after_first_event_propagates():
     async def run():
         reg = CooldownRegistry(clock=_Clock())
-
-        async def boom_after_first(*args, **kwargs):
-            yield "partial"
-            raise RuntimeError("mid")
-
-        fake = _FakeModel(["partial"])
-        fake.stream_response = boom_after_first  # type: ignore[method-assign]
-        m = FallbackModel([_ep("a"), _ep("b")], reg, make_model=lambda e: fake)
+        m = FallbackModel([_ep("a"), _ep("b")], reg, make_model=lambda e: _MidFailModel())
         with pytest.raises(RuntimeError, match="mid"):
             await _collect(m.stream_response())
         assert reg.is_cooling(("a", "")) is False  # produced output ⇒ not busy

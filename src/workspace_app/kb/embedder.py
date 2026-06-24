@@ -16,6 +16,7 @@ import struct
 from typing import TYPE_CHECKING, Protocol
 
 from ..failover.core import CallProvider, failover_call
+from ..failover.observe import make_switch_logger
 
 if TYPE_CHECKING:
     from ..failover.cooldown import CooldownRegistry
@@ -155,13 +156,14 @@ class LitellmEmbedder(_PrefixedEmbedder):
         providers = [
             CallProvider(
                 key=(self._model, base_url or ""),
-                label=self._model,
+                label=base_url or self._model,
                 call=lambda base_url=base_url: self._embed_at(texts, base_url),
                 cooldown_s=self._cooldown_s,
             )
             for base_url in [self._base_url, *self._fallback_base_urls]
         ]
-        return failover_call(providers, self._registry)
+        log = make_switch_logger("embedder")
+        return failover_call(providers, self._registry, on_switch=lambda p, exc: log(p.label, exc))
 
     def _embed_at(
         self, texts: list[str], base_url: str | None

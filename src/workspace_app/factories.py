@@ -34,6 +34,7 @@ from .config.catalog_build import build_catalog
 from .config.loader import load as load_settings
 from .config.schema import Preset, RetrievalLlmRef, Settings
 from .failover.llm import FallbackLlm, FallbackVlm
+from .failover.observe import make_switch_logger
 from .failover.registry import get_cooldown_registry
 from .filestore.memory import MemoryFileStore
 from .filestore.protocol import FileStore
@@ -436,7 +437,12 @@ def _llm_from_chain(chain: list[LlmEndpoint]) -> ILlm | None:
         return LitellmLlm(
             e.model, base_url=e.base_url, api_key=e.api_key, reasoning_effort=e.reasoning_effort
         )
-    return FallbackLlm(chain, get_cooldown_registry(), make_llm=_litellm_for)
+    return FallbackLlm(
+        chain,
+        get_cooldown_registry(),
+        make_llm=_litellm_for,
+        on_switch=make_switch_logger("kb-llm"),
+    )
 
 
 def get_kb_llm(settings: Settings) -> ILlm | None:
@@ -644,7 +650,9 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
     if len(chain) == 1:
         e = chain[0]
         return LitellmVlm(e.model, base_url=e.base_url, api_key=e.api_key)
-    return FallbackVlm(chain, get_cooldown_registry(), make_vlm=make_vlm)
+    return FallbackVlm(
+        chain, get_cooldown_registry(), make_vlm=make_vlm, on_switch=make_switch_logger("vlm")
+    )
 
 
 def get_kb_describer(settings: Settings):  # -> VlmDescriber | None

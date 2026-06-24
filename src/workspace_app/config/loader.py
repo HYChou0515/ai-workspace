@@ -516,9 +516,7 @@ def _check_preset_fallbacks(merged: dict[str, Any], *, source: str) -> None:
             continue
         for fb in d.get("fallbacks", []) or []:
             if fb == name:
-                raise ValueError(
-                    f"config {source}: agents.presets.{name}.fallbacks lists itself"
-                )
+                raise ValueError(f"config {source}: agents.presets.{name}.fallbacks lists itself")
             if fb not in known:
                 raise ValueError(
                     f"config {source}: agents.presets.{name}.fallbacks references "

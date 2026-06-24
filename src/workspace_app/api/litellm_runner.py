@@ -357,11 +357,13 @@ def _agent_for(
     chain = (fallback_chains or {}).get((config.model, eff_base_url))
     if chain is not None and len(chain) >= 2 and cooldown_registry is not None:
         from ..failover.model import FallbackModel
+        from ..failover.observe import make_switch_logger
 
         model: Model = FallbackModel(
             chain,
             cooldown_registry,
             make_model=lambda e: _build_model(e.model, e.base_url, e.api_key, e.idle_s),
+            on_switch=make_switch_logger("agent"),
         )
     else:
         model = _build_model(config.model, eff_base_url, eff_api_key)

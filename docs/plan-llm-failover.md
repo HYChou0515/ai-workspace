@@ -1,7 +1,16 @@
 # Plan — LLM Failover & Busy-Aware Switching (#196 + #131)
 
-> Status: grilled & locked (see `/grill-me` session). Implement with `/tdd`.
+> Status: **BUILT** (P1–P8) via `/tdd`. Grilled & locked first (see `/grill-me`).
 > Flat integer phases (P1, P2, …) per CLAUDE.md.
+>
+> Built: P1 core (`failover/`) · P2 config (`Preset.fallbacks` + `FailoverSettings`)
+> · P3 `FallbackLlm`/`FallbackVlm` (KB retrieval / VLM / formatter — delivers #131)
+> · P4 `DecideThenActModel` acompletion timeout · P5 embedder replica failover
+> · P6 agent `FallbackModel` (RCA + KB chat + wiki) · P7 operator switch logging
+> (`failover/observe.py`; the user-facing in-chat degradation note is deferred —
+> it needs runner→SSE threading on the critical path, and degradation is already
+> in the operator log + the faithful LLM call log) · P8 config.example docs +
+> live integration smoke test. failover package at 100% unit coverage.
 
 ## Problem
 
