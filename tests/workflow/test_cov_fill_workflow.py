@@ -78,6 +78,26 @@ async def test_post_run_on_a_still_running_run_releases_nothing(spec_instance: S
     assert released == []  # RUNNING is neither terminal nor awaiting_human → no release
 
 
+def test_apply_step_record_ignores_a_non_step_event(spec_instance: SpecStar):
+    """#178 robustness (orchestrator.py 468): the step board only tracks step events;
+    a non-step event (e.g. PhaseEntered, which has no name/key) must leave the board
+    untouched rather than corrupt it or raise."""
+    from workspace_app.workflow.events import PhaseEntered
+
+    async def _never_run(wf, inputs):
+        return {}
+
+    orch = WorkflowOrchestrator(
+        spec=spec_instance,
+        store=MemoryFileStore(),
+        load_run=lambda _s, _p, _w="": _never_run,
+        load_manifest=lambda _s, _p, _w="": None,
+        wire_handle=lambda *_a: None,
+    )
+    run = WorkflowRun(item_id="it", captured_user="u")
+    assert orch._apply_step_record(run, PhaseEntered(phase="x")) is run.steps
+
+
 # ─── playground multi/beta fixture run() (beta/run.py 11) ──────────────────
 
 

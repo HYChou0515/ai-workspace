@@ -2,11 +2,29 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   fetchChatExport,
+  fmtElapsed,
   isRunTerminal,
   phaseView,
+  stepBoard,
+  stepElapsedMs,
   type PhaseDef,
+  type StepStateDTO,
   type WorkflowRunDTO,
 } from "./workflows";
+
+function step(over: Partial<StepStateDTO> = {}): StepStateDTO {
+  return {
+    phase: "commit",
+    name: "ingest",
+    key: "",
+    status: "running",
+    attempts: 1,
+    reason: "",
+    started: 1000,
+    ended: null,
+    ...over,
+  };
+}
 
 const DECLARED: PhaseDef[] = [
   { id: "classify", title: "Classify" },
@@ -22,6 +40,7 @@ function run(over: Partial<WorkflowRunDTO> = {}): WorkflowRunDTO {
     status: "running",
     current_phase: "",
     phases: [],
+    steps: [],
     failures: [],
     started: 1,
     ended: null,
@@ -121,5 +140,41 @@ describe("fetchChatExport (#100 — export fail-loud)", () => {
       ),
     );
     await expect(fetchChatExport("topic-hub", "topic-hub:1")).rejects.toThrow(/匯出/);
+  });
+});
+
+describe("stepBoard (#178)", () => {
+  it("groups steps under their phase node, preserving diagram order", () => {
+    const nodes = phaseView(DECLARED, run());
+    const steps = [
+      step({ phase: "classify", name: "classify_a" }),
+      step({ phase: "ingest", name: "ingest", key: "a.md" }),
+      step({ phase: "ingest", name: "ingest", key: "b.md" }),
+    ];
+    const board = stepBoard(nodes, steps);
+    expect(board.map((g) => g.node.id)).toEqual(["classify", "review", "ingest"]);
+    expect(board.find((g) => g.node.id === "classify")!.steps).toHaveLength(1);
+    expect(board.find((g) => g.node.id === "review")!.steps).toHaveLength(0);
+    expect(board.find((g) => g.node.id === "ingest")!.steps).toHaveLength(2);
+  });
+});
+
+describe("stepElapsedMs / fmtElapsed (#178)", () => {
+  it("a running step keeps ticking (now - started)", () => {
+    expect(stepElapsedMs(step({ started: 1000, ended: null }), 4500)).toBe(3500);
+  });
+
+  it("a finished step freezes at ended - started", () => {
+    expect(stepElapsedMs(step({ started: 1000, ended: 9000 }), 999999)).toBe(8000);
+  });
+
+  it("a step with no start (cache skip) has no timer", () => {
+    expect(stepElapsedMs(step({ started: null }), 5000)).toBeNull();
+  });
+
+  it("formats as m:ss and h:mm:ss", () => {
+    expect(fmtElapsed(42_000)).toBe("0:42");
+    expect(fmtElapsed(272_000)).toBe("4:32");
+    expect(fmtElapsed(3_661_000)).toBe("1:01:01");
   });
 });

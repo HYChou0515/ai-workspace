@@ -39,6 +39,7 @@ const run = (over: Partial<WorkflowRunDTO> = {}): WorkflowRunDTO => ({
   status: "running",
   current_phase: "think",
   phases: [{ phase: "think", status: "running", done: 0, total: 0, failed: 0 }],
+  steps: [],
   failures: [],
   started: 1,
   ended: null,

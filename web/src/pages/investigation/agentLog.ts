@@ -50,6 +50,9 @@ export type StepView = {
   status: "running" | "passed" | "failed" | "skipped" | "retrying";
   /** Why a step failed / is retrying — surfaced on the line. */
   reason?: string;
+  /** Live stdout streamed while a deterministic step runs (#178, step_output) —
+   * accumulated chunk by chunk so a long command shows movement. */
+  liveOutput?: string;
 };
 
 export type AgentEntry =
@@ -429,6 +432,21 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           at: now,
           step: { phase: ev.phase, name: ev.name, key: ev.key, status, reason },
         });
+      }
+      return { ...log, entries };
+    }
+
+    case "step_output": {
+      // #178: stream a deterministic step's stdout onto its running line so a long
+      // command shows movement instead of looking dead. Ephemeral (not persisted) —
+      // if no running step is found yet, drop it (the board still shows status).
+      const idx = findStep(entries, ev.phase, ev.name, ev.key);
+      const e = idx >= 0 ? entries[idx] : undefined;
+      if (e && e.kind === "step") {
+        entries[idx] = {
+          ...e,
+          step: { ...e.step, liveOutput: (e.step.liveOutput ?? "") + ev.text },
+        };
       }
       return { ...log, entries };
     }

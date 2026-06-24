@@ -106,6 +106,16 @@ export type PhaseEntered = { type: "phase_entered"; phase: string };
 /** A step began executing (not a cache skip). `key` is the loop element. */
 export type StepStarted = { type: "step_started"; phase: string; name: string; key?: string };
 
+/** Live stdout from a still-running deterministic step (#178) — folded into the
+ * running step row so a long command shows movement. Ephemeral (not persisted). */
+export type StepOutput = {
+  type: "step_output";
+  phase: string;
+  name: string;
+  text: string;
+  key?: string;
+};
+
 /** A step's gate passed; its artifact is journaled. */
 export type StepPassed = { type: "step_passed"; phase: string; name: string; key?: string };
 
@@ -137,6 +147,7 @@ export type AwaitingHuman = { type: "awaiting_human"; phase: string; title: stri
 export type WorkflowEvent =
   | PhaseEntered
   | StepStarted
+  | StepOutput
   | StepPassed
   | StepFailed
   | StepSkipped

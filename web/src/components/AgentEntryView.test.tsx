@@ -352,4 +352,16 @@ describe("EntryView — workflow step/phase lines (#100 observability)", () => {
     render(<EntryView entry={{ kind: "phase", phase: "commit" }} />);
     expect(screen.getByTestId("wf-phase")).toHaveTextContent("commit");
   });
+
+  it("streams a deterministic step's live stdout below the line (#178)", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "step",
+          step: { phase: "build", name: "compile", status: "running", liveOutput: "compiling…\nok\n" },
+        }}
+      />,
+    );
+    expect(screen.getByTestId("wf-step-output")).toHaveTextContent("compiling…");
+  });
 });
