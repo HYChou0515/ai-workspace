@@ -333,8 +333,9 @@ describe("reduceAgent", () => {
     const log = fold([{ type: "sandbox_killed_idle" }]);
     const b = log.entries.find((e) => e.kind === "banner");
     if (b?.kind !== "banner") throw new Error("expected a banner entry");
-    expect(b.text).not.toMatch(/sandbox|exec/i);
-    expect(b.text).toMatch(/工作環境|workspace/);
+    expect(b.text).not.toMatch(/sandbox/i);
+    // #171: sandbox → 執行環境 / execution environment (was 工作環境 / workspace).
+    expect(b.text).toMatch(/執行環境|execution environment/);
   });
 
   it("starts a new assistant message after a tool call returns", () => {

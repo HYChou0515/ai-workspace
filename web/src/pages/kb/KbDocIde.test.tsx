@@ -116,7 +116,8 @@ describe("KbDocIde", () => {
       />,
     );
     expect(await screen.findByText("fresh.md")).toBeInTheDocument();
-    expect(screen.getByTitle("Indexing…")).toBeInTheDocument();
+    // #171: de-jargoned — "處理中…" not "Indexing…".
+    expect(screen.getByTitle("處理中…")).toBeInTheDocument();
   });
 
   it("shows the active doc's path + status + chunks/cited in the bottom status bar", async () => {
@@ -132,7 +133,7 @@ describe("KbDocIde", () => {
     await user.click(await screen.findByText("hello.md"));
     const bar = await screen.findByTestId("kb-ide-status");
     expect(bar).toHaveTextContent("/hello.md");
-    expect(bar).toHaveTextContent("ready");
+    expect(bar).toHaveTextContent("就緒"); // #171: "ready" → 就緒
     expect(bar).toHaveTextContent("4 chunks");
     expect(bar).toHaveTextContent("cited 2×");
   });

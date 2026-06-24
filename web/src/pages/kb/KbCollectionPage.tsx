@@ -59,8 +59,8 @@ export function useCollectionOutlet(): KbCollectionCtx {
 }
 
 export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
-  const qc = useQueryClient();
   const t = useT();
+  const qc = useQueryClient();
   const navigate = useNavigate();
   const { openDoc, openCite } = useKbOutlet();
   // The open collection is the URL (#93): /kb/collections/:cid.
@@ -403,7 +403,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                   <Icon name="tag" size={14} color="var(--text-paper-d)" /> Rename
                 </button>
                 <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setShowRetrieval((v) => !v); }}>
-                  <Icon name="layers" size={14} color="var(--text-paper-d)" /> Retrieval modes
+                  <Icon name="layers" size={14} color="var(--text-paper-d)" /> {t("kb.retrieval.title")}
                 </button>
                 <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
                   <Icon name="refresh" size={14} color="var(--text-paper-d)" /> Re-index all
@@ -503,9 +503,9 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           />
           <span>
             {[
-              busy ? "Uploading…" : null,
-              indexingCount > 0 ? `Indexing ${indexingCount}…` : null,
-              erroredCount > 0 ? `${erroredCount} failed to index` : null,
+              busy ? t("kb.status.uploading") : null,
+              indexingCount > 0 ? t("kb.status.indexing", { n: indexingCount }) : null,
+              erroredCount > 0 ? t("kb.status.failed", { n: erroredCount }) : null,
             ]
               .filter(Boolean)
               .join(" · ")}
@@ -526,11 +526,11 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           <div
             style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}
           >
-            <span className="caps">Retrieval modes</span>
+            <span className="caps">{t("kb.retrieval.title")}</span>
             <button
               type="button"
               className="kb-btn"
-              aria-label="Close retrieval modes"
+              aria-label={t("kb.retrieval.close")}
               onClick={() => setShowRetrieval(false)}
             >
               <Icon name="x" size={12} />
