@@ -57,6 +57,35 @@ def test_operator_yaml_overrides_a_single_scalar_keeps_other_defaults(tmp_path: 
     assert s.kb.embedder.model == "ollama/bge-m3"
 
 
+def test_kb_max_searches_per_turn_defaults_to_three():
+    """#195: a fresh deploy caps kb_search at 3 calls per reply."""
+    s = load(config_path=None, env={})
+    assert s.kb.max_searches_per_turn == 3
+
+
+def test_kb_max_searches_per_turn_operator_override(tmp_path: Path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("kb:\n  max_searches_per_turn: 5\n", encoding="utf-8")
+    s = load(config_path=cfg, env={})
+    assert s.kb.max_searches_per_turn == 5
+
+
+def test_kb_max_searches_per_turn_null_lifts_the_cap(tmp_path: Path):
+    """#195: `null` is the documented off switch — no cap at all."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("kb:\n  max_searches_per_turn: null\n", encoding="utf-8")
+    s = load(config_path=cfg, env={})
+    assert s.kb.max_searches_per_turn is None
+
+
+def test_kb_max_searches_per_turn_zero_raises(tmp_path: Path):
+    """#195: 0/negative would silently mute the KB — reject it; use null to lift."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("kb:\n  max_searches_per_turn: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="kb.max_searches_per_turn"):
+        load(config_path=cfg, env={})
+
+
 def test_tools_mode_defaults_to_prebuilt_and_parses_uv_run(tmp_path: Path):
     """#63: `tools.mode` selects how packages are provisioned. Default is
     `prebuilt`; an operator opts into the uv-run debug mode by writing it."""

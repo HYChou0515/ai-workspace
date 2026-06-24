@@ -376,6 +376,9 @@ def kb_search_impl(
     is numbered globally across the turn; cite a claim with the matching [n].
     Numbers persist across calls, so [1] always means the same passage.
 
+    Your kb_search calls are limited per reply; each result reports how many
+    remain — spend them only on genuinely distinct information.
+
     The optional `expand` / `hyde` / `rerank` knobs override the operator's
     retrieval enhancement defaults for THIS call only — set them when the
     query needs more recall (raise `expand` / `hyde`) or when a quick lookup
@@ -386,6 +389,21 @@ def kb_search_impl(
 
     retriever = ctx.context.retriever
     assert retriever is not None  # kb_search implies a KB context
+
+    # #195: enforce the per-turn search budget. Once the model has used its
+    # allotment, stop running the (expensive multi-query / HyDE / rerank)
+    # retriever and tell it to answer from what it already retrieved — far
+    # cheaper than letting a small model re-search the same thing up to
+    # max_turns, and it keeps the reply focused. `None` ⇒ unlimited.
+    cap = ctx.context.kb_search_max_calls
+    if cap is not None and ctx.context.kb_search_calls >= cap:
+        _LOGGER.info("kb_search budget exhausted (%d/%d) for query=%r", cap, cap, query)
+        return (
+            f"Search budget exhausted for this reply ({cap} of {cap} used). "
+            "Answer the user now using the passages already retrieved above; "
+            "do not call kb_search again."
+        )
+
     registry = ctx.context.kb_passages
     seen = {(p.document_id, p.start, p.end): i for i, p in enumerate(registry)}
 
@@ -407,6 +425,11 @@ def kb_search_impl(
     # as this tool's live output, so its thinking shows in the chat (issue #10).
     sink = ctx.context.on_exec_output
     on_progress = (lambda text, _reasoning: sink(text.encode())) if sink is not None else None
+
+    # Consume one unit of the budget for this run. We count BEFORE searching so
+    # an empty-handed or erroring search still costs a unit — otherwise a model
+    # that keeps matching nothing could loop forever re-searching.
+    ctx.context.kb_search_calls += 1
 
     lines: list[str] = []
     try:
@@ -434,9 +457,14 @@ def kb_search_impl(
         _LOGGER.exception("kb_search failed for query=%r", query)
         raise
 
-    if not lines:
-        return "No matching passages in the knowledge base."
-    return "\n\n".join(lines)
+    body = "\n\n".join(lines) if lines else "No matching passages in the knowledge base."
+    if cap is not None:
+        used = ctx.context.kb_search_calls
+        body += (
+            f"\n\n(Search budget: {used} of {cap} used, {cap - used} left. "
+            "Only search again for genuinely different information.)"
+        )
+    return body
 
 
 async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:

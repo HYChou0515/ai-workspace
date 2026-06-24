@@ -480,6 +480,12 @@ def create_app(
     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
     kb_retrieval_enhancements: EnhancementSettings | None = None,
+    # #195: per-turn cap on `kb_search` calls for the KB chat turn + the
+    # ask_knowledge_base bridge. `None` ⇒ unlimited (also what other surfaces
+    # like Topic Hub use). __main__ threads `settings.kb.max_searches_per_turn`
+    # (default 3); the default here stays None so tests that don't pass it keep
+    # the unlimited pre-#195 behaviour.
+    kb_max_searches_per_turn: int | None = None,
     packages: list[PackageInfo] | None = None,
     prebuilt_dir: Path | None = None,
     # #100: workflow run limits (manual §16/§17). Global concurrency cap (runs
@@ -1030,6 +1036,7 @@ def create_app(
         kb_agent_configs=kb_agent_configs,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        max_searches_per_turn=kb_max_searches_per_turn,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
@@ -1143,6 +1150,9 @@ def create_app(
             wiki=wiki_query,
             on_event=relay,
             on_citations=log_cites,
+            # #195: the RCA → KB bridge is the same KB agent — cap its searches
+            # too (None ⇒ unlimited when the operator lifts the cap).
+            max_searches=kb_max_searches_per_turn,
         )
         return answer, captured
 

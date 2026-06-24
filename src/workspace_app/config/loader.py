@@ -289,6 +289,22 @@ def _validate(merged: dict[str, Any], *, source: str) -> None:
     _check_preset_references(merged, source=source)
     _check_preset_required_fields(merged, source=source)
     _check_retrieval_llm_reference(merged, source=source)
+    _check_max_searches(merged, source=source)
+
+
+def _check_max_searches(merged: dict[str, Any], *, source: str) -> None:
+    """Issue #195: `kb.max_searches_per_turn` is `null` (no cap) or a positive
+    integer. A zero/negative cap would disable kb_search entirely, which is
+    what `null`… is NOT for — use `null` to lift the cap. Reject it loudly so
+    an operator typo doesn't silently mute the knowledge base."""
+    value = merged.get("kb", {}).get("max_searches_per_turn")
+    if value is None:
+        return
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise ValueError(
+            f"config {source}: kb.max_searches_per_turn must be null or a positive "
+            f"integer, got {value!r}"
+        )
 
 
 # The shape of the legal key tree. A `dict` value here means "this key
@@ -359,6 +375,9 @@ _TOP_SCHEMA: dict[str, Any] = {
                 "rerank": _dataclass_keys(EnhancementBool),
             },
         },
+        # Issue #195: scalar leaf (int or null). The shape walk skips its
+        # non-dict value; the value range is checked by `_check_max_searches`.
+        "max_searches_per_turn": set(),
         "code_embedder": _dataclass_keys(CodeEmbedderSettings),
         "git": _dataclass_keys(GitSettings),
         # Issue #39: `kb.parsers` / `kb.parsers_disabled` are
@@ -601,6 +620,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             chunker=_build(ChunkerSettings, d["kb"]["chunker"]),
             retrieval_llm=_build_retrieval_llm(d["kb"]["retrieval_llm"]),
             retrieval=_build_retrieval(d["kb"]["retrieval"]),
+            max_searches_per_turn=d["kb"]["max_searches_per_turn"],
             code_embedder=_build(CodeEmbedderSettings, d["kb"]["code_embedder"]),
             git=_build(GitSettings, d["kb"]["git"]),
             vlm_llm=_build_retrieval_llm(d["kb"]["vlm_llm"]),

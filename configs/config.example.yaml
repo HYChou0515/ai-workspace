@@ -188,6 +188,15 @@
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
 # # when recall trumps latency. Setting max below default is fine — `min(...)`
 # # clamps the default down too.
+#   max_searches_per_turn: 3                # issue #195: cap kb_search calls per KB-chat
+#                                           #   reply (+ the ask_knowledge_base bridge). Each
+#                                           #   search runs the expand/HyDE/rerank cascade and
+#                                           #   small models tend to re-search instead of
+#                                           #   answering; this bounds that. The tool reports
+#                                           #   the remaining budget on every result and, once
+#                                           #   used up, tells the model to answer from what it
+#                                           #   already has. null = no cap. (Topic Hub etc.
+#                                           #   are never capped.)
 #   code_embedder:
 #     model: ""                             # "" disables P3.0 code-specialised embed
 #     query_prefix: ""

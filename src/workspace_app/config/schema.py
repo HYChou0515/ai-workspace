@@ -254,6 +254,15 @@ class KbSettings:
     # ceilings). Independent from `retrieval_llm` — that names which LLM
     # to call; this controls how many calls and how aggressively.
     retrieval: RetrievalSettings = field(default_factory=RetrievalSettings)
+    # Issue #195: per-turn cap on how many times the KB agent may call
+    # `kb_search` in one reply (the KB chat turn + the ask_knowledge_base
+    # bridge). Each kb_search runs the expensive multi-query / HyDE / rerank
+    # cascade, and small models often re-search the same thing instead of
+    # answering — this bounds that, keeping replies fast and focused. The tool
+    # reports the remaining budget on every result and, once exhausted, tells
+    # the model to answer from what it already retrieved. `null` ⇒ no cap (also
+    # the behaviour for other surfaces like Topic Hub, which never set it).
+    max_searches_per_turn: int | None = 3
     code_embedder: CodeEmbedderSettings = field(default_factory=CodeEmbedderSettings)
     git: GitSettings = field(default_factory=GitSettings)
     # Issue #39: the VLM the vision-backed parsers (image / PDF visual

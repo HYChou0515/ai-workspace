@@ -197,6 +197,9 @@ def main() -> None:
         # the VLM-backed ingestion parsers); None when kb.vlm_llm is unset.
         vlm_describer=get_kb_describer(settings),
         kb_retrieval_enhancements=settings.kb.retrieval.enhancements,
+        # #195: per-turn kb_search cap for the KB chat turn + ask_knowledge_base
+        # bridge (null in config ⇒ unlimited).
+        kb_max_searches_per_turn=settings.kb.max_searches_per_turn,
         monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
         root_path=settings.server.root_path,
         read_file_max_lines=settings.read_file.max_lines,

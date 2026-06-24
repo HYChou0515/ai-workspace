@@ -50,3 +50,38 @@ def test_ask_knowledge_base_depth_reaches_kb_search():
     )
 
     assert recorded["enh"] == Enhancements(expand=3, hyde=1, rerank=True)
+
+
+def test_ask_knowledge_base_caps_kb_search_calls():
+    """#195: answer_question threads `max_searches` into the bridge's ctx, so the
+    KB sub-agent can't run kb_search past the cap — a 2nd call when the cap is 1
+    returns the sentinel without ever touching the retriever."""
+    calls = {"n": 0}
+    captured: dict[str, str] = {}
+
+    class _CountingRetriever:
+        def search(self, query, collection_ids, on_progress, *, enhancements=None):
+            calls["n"] += 1
+            return []
+
+    class _TwoSearchRunner:
+        async def run(self, question, ctx):
+            wrapped = RunContextWrapper(ctx)
+            kb_search_impl(wrapped, "first")  # uses the single unit of budget
+            captured["second"] = kb_search_impl(wrapped, "second")  # exhausted
+            yield MessageDelta(text="done")
+            yield RunDone()
+
+    asyncio.run(
+        answer_question(
+            _TwoSearchRunner(),  # ty: ignore[invalid-argument-type]
+            _CountingRetriever(),  # ty: ignore[invalid-argument-type]
+            ["c1"],
+            "q",
+            agent_config=AgentConfig(name="kb"),
+            max_searches=1,
+        )
+    )
+
+    assert calls["n"] == 1  # the cap blocked the second real search
+    assert "budget exhausted" in captured["second"].lower()

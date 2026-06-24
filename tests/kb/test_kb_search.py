@@ -85,6 +85,88 @@ async def test_kb_search_streams_enhancement_thinking_to_the_run_sink(
     assert "gamma" in text  # the model's streamed chunk
 
 
+def _capped_ctx(spec: SpecStar, embedder: HashEmbedder, collection_ids: list[str], cap: int | None):
+    return RunContextWrapper(
+        AgentToolContext(
+            retriever=Retriever(spec, embedder=embedder),
+            collection_ids=collection_ids,
+            kb_search_max_calls=cap,
+        )
+    )
+
+
+async def test_kb_search_appends_budget_footer_when_capped(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #195: when a per-turn cap is set, every result tells the model how much
+    # of its search budget remains, so it spends searches frugally.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="reflow.md",
+        data=b"reflow oven temperature drifted in zone three causing solder voids",
+    )
+    ctx = _capped_ctx(spec, embedder, [cid], cap=3)
+
+    out = kb_search_impl(ctx, "reflow temperature")
+
+    assert "1 of 3 used" in out  # this is the first search of the budget
+    assert "2 left" in out
+    assert "[1]" in out  # the passages are still returned alongside the footer
+
+
+async def test_kb_search_no_footer_when_uncapped(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #195: Topic Hub etc. leave the cap None — no budget bookkeeping, no footer.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid, user="u", filename="reflow.md", data=b"reflow oven temperature"
+    )
+    ctx = _capped_ctx(spec, embedder, [cid], cap=None)
+
+    out = kb_search_impl(ctx, "reflow temperature")
+
+    assert "budget" not in out.lower()
+
+
+async def test_kb_search_sentinel_when_budget_exhausted(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #195: the N+1th call doesn't run the retriever — it returns a sentinel
+    # telling the model to answer from what it already has.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="reflow.md",
+        data=b"reflow oven temperature drifted in zone three causing solder voids",
+    )
+    ctx = _capped_ctx(spec, embedder, [cid], cap=2)
+
+    kb_search_impl(ctx, "reflow temperature")  # 1 of 2
+    kb_search_impl(ctx, "solder voids")  # 2 of 2
+    registry_len_at_cap = len(ctx.context.kb_passages)
+    out = kb_search_impl(ctx, "zone three")  # exhausted — sentinel
+
+    assert "budget" in out.lower() and "answer" in out.lower()
+    assert "[" not in out  # no passages returned
+    assert len(ctx.context.kb_passages) == registry_len_at_cap  # nothing new registered
+
+
+async def test_kb_search_empty_result_still_consumes_budget(spec: SpecStar, embedder: HashEmbedder):
+    # #195: a search that matches nothing still costs one unit of the budget,
+    # so an empty-handed model can't loop forever re-searching.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="empty")).resource_id
+    ctx = _capped_ctx(spec, embedder, [cid], cap=3)
+
+    out = kb_search_impl(ctx, "anything")
+
+    assert "no" in out.lower()  # still the no-results message
+    assert "1 of 3 used" in out  # but the budget was consumed and reported
+
+
 async def test_kb_search_keeps_numbers_stable_across_calls(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
