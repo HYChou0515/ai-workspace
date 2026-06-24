@@ -36,6 +36,7 @@ from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import VlmDescriber
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
+from ..observability.boot import boot_step
 from ..resources import (
     AgentConfig,
     CheckRun,
@@ -618,17 +619,23 @@ def create_app(
         # Issue #51 / Q2: the fast (connectivity-grade) probes block
         # boot — an operator sees a dead embedder before the first
         # request; the full capability round runs in the background.
-        await asyncio.to_thread(health_service.run_fast_sync)
+        # #208: each step narrates (→/✓) so a stall in the lifespan names itself
+        # instead of looking like a silent hang.
+        with boot_step("health: connectivity checks"):
+            await asyncio.to_thread(health_service.run_fast_sync)
         # #59: every pod runs a wiki-maintenance consumer so the shared,
         # partitioned job queue drains regardless of which pod enqueued (and
         # even on pods that received no uploads). Idempotent + non-blocking.
-        app.state.wiki_coordinator.start_consuming()
+        with boot_step("start wiki-maintenance consumer"):
+            app.state.wiki_coordinator.start_consuming()
         # #82: same — every pod runs an indexing consumer draining the shared,
         # partitioned IndexJob queue (so a slow embed never starves the request path).
-        app.state.index_coordinator.start_consuming()
+        with boot_step("start indexing consumer"):
+            app.state.index_coordinator.start_consuming()
         # Model-sanity battery consumer (when wired) — drains SanityRun jobs.
         if app.state.sanity_coordinator is not None:
-            app.state.sanity_coordinator.start_consuming()
+            with boot_step("start model-sanity consumer"):
+                app.state.sanity_coordinator.start_consuming()
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
         bg.append(asyncio.create_task(health_service.run_round()))
         if code_sync_check_interval is not None:
@@ -892,10 +899,15 @@ def create_app(
     # BEFORE apply() so they materialise into routes (norm_keys derived in-write).
     register_context_card_actions(spec)
 
+    # #208: the first real backend hit — specstar materialises every model's
+    # schema here (create_all), so a down/unreachable Postgres hangs the whole
+    # boot at this line with no message. Narrate it (and let pg_connect_timeout
+    # turn the hang into a fast, clear error). Prime suspect for the silent stall.
     # #177: generate specstar's CRUD routes onto the /api router (not the app),
     # but DON'T include it yet — more hand-written routes are added to `api`
     # below; we include it once, after all routes exist, before spec.openapi.
-    spec.apply(app, router=api, auto_include=False)
+    with boot_step("apply spec to backend (DB schema)"):
+        spec.apply(app, router=api, auto_include=False)
 
     # KB chatbot subsystem: ingestion + collection/document/render routes.
     # Embedder/Chunker are swappable; defaults are offline-friendly (production

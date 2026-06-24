@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from specstar import BackendBinding, BackendConfig, ConnectionProfile, SpecStar
 
@@ -135,7 +136,8 @@ def _backend_for(settings: Settings) -> BackendConfig | None:
         connections["local"] = ConnectionProfile(type="disk", options={"rootdir": fs.disk_root})
     if fs.pg_dsn:
         connections["pg"] = ConnectionProfile(
-            type="postgres", options={"connection_string": fs.pg_dsn}
+            type="postgres",
+            options={"connection_string": _with_connect_timeout(fs.pg_dsn, fs.pg_connect_timeout)},
         )
     bind = "local" if "local" in connections else "pg"
     return BackendConfig(
@@ -144,6 +146,35 @@ def _backend_for(settings: Settings) -> BackendConfig | None:
         resource=BackendBinding(use=bind),
         blob=BackendBinding(use=bind),
     )
+
+
+def _with_connect_timeout(dsn: str, seconds: int) -> str:
+    """Inject a libpq ``connect_timeout`` into a Postgres DSN so an unreachable
+    server fails fast instead of hanging the boot silently (#208).
+
+    Specstar's SQLAlchemy engine is built with no timeout, so the first real
+    connection (``create_all`` at ``spec.apply``) blocks for minutes when the DB
+    is down. We set the timeout at the only seam we own — the DSN string — which
+    flows to every store (meta / resource / blob) built from this connection.
+
+    No-ops when ``seconds <= 0`` (opt-out), when the DSN is empty, or when it
+    already carries a ``connect_timeout`` (an explicit value wins). Handles both
+    the URL form (``postgresql://…?k=v``) and the libpq key=value form
+    (``host=… port=…``)."""
+    if seconds <= 0 or not dsn:
+        return dsn
+    if "://" in dsn:
+        parts = urlsplit(dsn)
+        pairs = parse_qsl(parts.query, keep_blank_values=True)
+        if any(k.lower() == "connect_timeout" for k, _ in pairs):
+            return dsn
+        pairs.append(("connect_timeout", str(seconds)))
+        return urlunsplit(parts._replace(query=urlencode(pairs)))
+    # libpq key=value form: "host=… port=… dbname=…"
+    keys = {tok.split("=", 1)[0].lower() for tok in dsn.split() if "=" in tok}
+    if "connect_timeout" in keys:
+        return dsn
+    return f"{dsn} connect_timeout={seconds}".strip()
 
 
 def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
