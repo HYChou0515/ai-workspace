@@ -14,10 +14,22 @@ from .protocol import IVlm
 
 
 class LitellmVlm(IVlm):
-    def __init__(self, model: str, base_url: str | None = None, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        *,
+        timeout: float | None = None,
+        num_retries: int = 0,
+    ) -> None:
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
+        # See LitellmLlm: per-call timeout + num_retries=0 under FallbackVlm so
+        # the failover loop owns retry-by-switching (#196 / #131).
+        self._timeout = timeout
+        self._num_retries = num_retries
 
     def stream(
         self, prompt: str, *, images: Sequence[tuple[bytes, str]]
@@ -34,6 +46,8 @@ class LitellmVlm(IVlm):
             stream=True,
             api_base=self._base_url,
             api_key=self._api_key,
+            timeout=self._timeout,
+            num_retries=self._num_retries,
         ):
             delta = chunk.choices[0].delta
             reasoning = getattr(delta, "reasoning_content", None)
