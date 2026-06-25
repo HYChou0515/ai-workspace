@@ -73,7 +73,9 @@ export type Conversation = {
   messages: Message[];
 };
 
-export type FileInfo = { path: string; size: number };
+// `read_only` (#205): files under the reserved `.readonly/` directory the IDE
+// renders non-editable (the diff "before" snapshot). Optional for older backends.
+export type FileInfo = { path: string; size: number; read_only?: boolean };
 
 /** An agent profile the picker offers — model + prompt live BE-side; the
  * FE only needs enough to label the radio and PATCH the attachment.

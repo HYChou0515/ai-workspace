@@ -17,7 +17,7 @@ from specstar import SpecStar
 from ..filestore.protocol import FileStore
 from ..kb.doc_id import encode_doc_id
 from ..kb.ingest import Ingestor
-from ..resources.kb import Collection
+from ..resources.kb import Collection, ContextCard
 
 
 class CollectionNotFound(LookupError):
@@ -187,6 +187,32 @@ def update_context_card(
             ),
         )
     return card_id
+
+
+def find_overwrite_target(
+    spec: SpecStar, *, collection: str, keys: list[str], title: str
+) -> tuple[ContextCard | None, int]:
+    """The existing card a deterministic ``upsert_context_card(collection, keys, title)``
+    would OVERWRITE, plus how many cards share the matched key (#205 — the diff "before").
+
+    Mirrors ``upsert``'s resolution EXACTLY so the snapshot the human reviews is what the
+    commit actually overwrites: same collection resolve, same ``eff_keys`` (title fallback),
+    the FIRST key with a hit wins and its first card is the target. Returns ``(None, 0)``
+    when no key matches — a brand-new card (no "before"). The second element is the count of
+    cards carrying the matched key: ``>1`` means the term is ambiguous (names several cards)
+    and only the first is overwritten — surfaced in the review summary so it isn't silent.
+    """
+    from ..kb.context_cards import derive_norm_keys, find_cards_by_key
+
+    collection_id = resolve_collection_id(spec, collection)
+    eff_keys = list(keys)
+    if not derive_norm_keys(eff_keys) and title.strip():
+        eff_keys = [title]
+    for key in eff_keys:
+        existing = find_cards_by_key(spec, collection_id, key)
+        if existing:
+            return existing[0][1], len(existing)
+    return None, 0
 
 
 def upsert_context_card(

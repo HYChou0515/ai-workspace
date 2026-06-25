@@ -282,6 +282,27 @@ def test_run_with_sandbox_node_and_ingest_commits():
     assert data["result"]["landed"] is True  # collection_has verified the ingest landed
 
 
+def test_run_finds_the_card_an_upsert_would_overwrite():
+    """#205: the read-only find-overwrite-target capability resolves, through the real
+    wiring, the existing card a commit-time upsert would overwrite (a hit returns its real
+    keys/title/body + ambiguity; a non-matching key returns None)."""
+    from workspace_app.workflow.capabilities import create_context_card
+
+    app, spec, item_id = _app()
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    create_context_card(
+        spec, collection=cid, keys=["M4", "Metal 4"], title="Metal 4 layer", body="old", user="u"
+    )
+    with TestClient(app) as client:
+        _put_input(client, item_id, f'{{"find_card": "{cid}", "keys": ["M4"], "title": "M4"}}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        data = _poll(client, item_id, run_id, "done")
+    found = data["result"]["found"]
+    assert found["title"] == "Metal 4 layer" and found["body"] == "old"
+    assert sorted(found["keys"]) == ["M4", "Metal 4"] and found["ambiguity"] == 1
+    assert data["result"]["miss"] is None  # a key that names no card → None
+
+
 def test_run_journals_under_the_workflow_dir_not_root():
     """#136 end-to-end wiring: a run's journal artifacts — engine step records AND the
     ingest receipt — live under /.workflow/<workflow_id>/ (here _default, echo being a

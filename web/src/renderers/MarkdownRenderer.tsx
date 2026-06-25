@@ -18,7 +18,7 @@ export function MarkdownRenderer({ path }: { path: string }) {
   // Content + edits live in the shared per-path buffer, so this file
   // opened in two split panes edits live on both sides. The Edit/Preview
   // toggle lives in the group tab strip (VSCode-style) via useEditMode.
-  const { entry, setText } = useFileBuffer(path);
+  const { entry, setText, readOnly } = useFileBuffer(path);
   const { isEditing } = useEditMode();
   const svc = useFileService();
 
@@ -37,7 +37,7 @@ export function MarkdownRenderer({ path }: { path: string }) {
   // the pane scrolls. The path lives in the breadcrumb, not here.
   return editing ? (
     <div style={{ height: "100%", minHeight: 0 }}>
-      <MonacoEditor value={text} onChange={setText} language="markdown" minHeight={0} />
+      <MonacoEditor value={text} onChange={setText} language="markdown" readOnly={readOnly} minHeight={0} />
     </div>
   ) : (
     <article className="md-body">

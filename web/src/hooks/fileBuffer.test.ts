@@ -139,6 +139,19 @@ describe("FileBufferStore", () => {
     expect(s.snapshot("/missing").error).toContain("not found");
   });
 
+  it("a .readonly/ snapshot ignores edits and never writes (#205)", async () => {
+    const io = makeIO({ "/.readonly/context-card.current.md": "before" });
+    const s = new FileBufferStore(io);
+    s.ensureLoaded("/.readonly/context-card.current.md");
+    await tick();
+    s.setText("/.readonly/context-card.current.md", "tampered");
+    // edit is dropped — the snapshot stays as loaded and never goes dirty
+    expect(s.snapshot("/.readonly/context-card.current.md").text).toBe("before");
+    expect(s.isDirty("/.readonly/context-card.current.md")).toBe(false);
+    await s.save("/.readonly/context-card.current.md");
+    expect(io.writeFile).not.toHaveBeenCalled();
+  });
+
   it("reload re-fetches latest backend content", async () => {
     const io = makeIO({ "/a.md": "v1" });
     const s = new FileBufferStore(io);

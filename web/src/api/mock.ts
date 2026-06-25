@@ -8,6 +8,7 @@
  */
 
 import type { AgentEvent, CellEvent } from "../events";
+import { isReadOnlyPath } from "../lib/readonly";
 import type {
   ApiClient,
   AppItem,
@@ -679,7 +680,7 @@ export const mockApi: ApiClient = {
     if (!tree) return [];
     return Array.from(tree.entries())
       .filter(([path]) => !prefix || path.startsWith(prefix))
-      .map(([path, f]) => ({ path, size: f.bytes }))
+      .map(([path, f]) => ({ path, size: f.bytes, read_only: isReadOnlyPath(path) }))
       .sort((a, b) => a.path.localeCompare(b.path));
   },
 

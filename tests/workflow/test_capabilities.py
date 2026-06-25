@@ -314,6 +314,63 @@ async def test_wf_upsert_context_card_without_capability_raises():
         await wf.upsert_context_card("kb", ["x"], title="t", body="b")
 
 
+# ── find_overwrite_target capability (#205 — the review "before" snapshot) ──
+
+
+def test_find_overwrite_target_returns_the_card_an_upsert_would_replace(spec_instance: SpecStar):
+    """#205: it resolves the SAME card ``upsert`` would overwrite (first key with a hit),
+    with the count of cards sharing that key (1 = unambiguous)."""
+    from workspace_app.workflow.capabilities import find_overwrite_target, upsert_context_card
+
+    cid = _collection(spec_instance)
+    card_id = upsert_context_card(
+        spec_instance,
+        collection=cid,
+        keys=["M4", "Metal 4"],
+        title="Metal 4 layer",
+        body="b",
+        user="u",
+    )
+    card, ambiguity = find_overwrite_target(spec_instance, collection=cid, keys=["M4"], title="M4")
+    assert card is not None and card.title == "Metal 4 layer" and card.body == "b"
+    assert sorted(card.keys) == ["M4", "Metal 4"]  # the real (un-narrowed) keys
+    assert ambiguity == 1
+    # sanity: it's the very card upsert targets
+    from workspace_app.kb.context_cards import find_cards_by_key
+
+    assert find_cards_by_key(spec_instance, cid, "m4")[0][0] == card_id
+
+
+def test_find_overwrite_target_is_none_for_a_new_card(spec_instance: SpecStar):
+    from workspace_app.workflow.capabilities import find_overwrite_target
+
+    cid = _collection(spec_instance)
+    card, ambiguity = find_overwrite_target(
+        spec_instance, collection=cid, keys=["never"], title="never"
+    )
+    assert card is None and ambiguity == 0
+
+
+def test_find_overwrite_target_counts_ambiguous_keys(spec_instance: SpecStar):
+    """Two cards sharing a key (keys are many-to-many, no uniqueness) → ambiguity 2; only
+    the first is the upsert target, surfaced so the overwrite isn't silently to one of N."""
+    from workspace_app.workflow.capabilities import create_context_card, find_overwrite_target
+
+    cid = _collection(spec_instance)
+    create_context_card(spec_instance, collection=cid, keys=["dup"], title="A", body="a", user="u")
+    create_context_card(spec_instance, collection=cid, keys=["dup"], title="B", body="b", user="u")
+    card, ambiguity = find_overwrite_target(
+        spec_instance, collection=cid, keys=["dup"], title="dup"
+    )
+    assert card is not None and ambiguity == 2
+
+
+async def test_wf_find_overwrite_card_without_capability_returns_none():
+    """An unwired handle (no driver) finds nothing — a fresh workspace diffs as all-new."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws")
+    assert await wf.find_overwrite_card("kb", ["x"], title="t") is None
+
+
 # ── update_context_card capability (#111, manual §8) ─────────────────────
 
 

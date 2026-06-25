@@ -44,6 +44,11 @@ CollectionChecker = Callable[[str, str], Awaitable[bool]]
 # -> the card's id. Create-or-update by key (‘有就更新、沒才新增’). Wired by the driver;
 # faked in tests.
 UpsertCardCapability = Callable[[str, list[str], str, str], Awaitable[str]]
+# The find-overwrite-target capability (#205): (collection, keys, title) -> the EXISTING
+# card a commit-time upsert would overwrite, as {keys, title, body, ambiguity}, or None for
+# a new card. Read-only — backs the review "before" snapshot. Wired by the driver; faked
+# in tests.
+FindCardCapability = Callable[[str, list[str], str], Awaitable[dict[str, Any] | None]]
 
 
 def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
@@ -80,6 +85,7 @@ class WorkflowHandle:
         ingest: IngestCapability | None = None,
         collection_checker: CollectionChecker | None = None,
         upsert_card: UpsertCardCapability | None = None,
+        find_card: FindCardCapability | None = None,
         credential: str = "",
         step_timeout_s: float | None = None,
     ) -> None:
@@ -108,6 +114,10 @@ class WorkflowHandle:
         self._upsert_card = upsert_card
         """Wired by the orchestration driver — the ``upsert_context_card`` capability
         (create-or-update by key, #111) bound to this run's captured user (manual §8)."""
+        self._find_card = find_card
+        """Wired by the orchestration driver — the read-only ``find_overwrite_target``
+        capability (#205) backing the review "before" snapshot. None ⇒ no existing card
+        is ever found (a fresh workspace), so the snapshot is empty."""
         self.credential = credential
         """The run-scoped credential (manual §15) — injected into a deterministic
         node's sandbox env so its script can auth capability HTTP calls. "" until
@@ -221,6 +231,19 @@ class WorkflowHandle:
             cache=cache,
         )
         return result["card_id"]
+
+    async def find_overwrite_card(
+        self, collection: str, keys: list[str], *, title: str = ""
+    ) -> dict[str, Any] | None:
+        """#205: the EXISTING card a commit-time ``upsert_context_card(collection, keys,
+        title)`` would overwrite — as ``{keys, title, body, ambiguity}`` — or ``None`` when
+        it would create a new card. Read-only; the ``→collections`` review uses it to write
+        the diff "before" snapshot (``.readonly/context-card.current.md``). No journaling
+        (a pure read inside the deterministic assemble step). ``None`` capability (an
+        unwired handle) ⇒ ``None`` (no card found), so a fresh workspace diffs as all-new."""
+        if self._find_card is None:
+            return None
+        return await self._find_card(collection, keys, title)
 
     async def map(
         self,

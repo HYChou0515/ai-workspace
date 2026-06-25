@@ -116,11 +116,11 @@ def _collections_run():
     return load_run_callable("topic-hub", "default", "collections")
 
 
-def _parse_glossary():
-    """Reach the module's private `_parse_glossary` via the loaded run.py module
-    globals (it's loaded by file path, not importable as a package)."""
+def _parse_cards():
+    """Reach the module's private `_parse_cards` via the loaded run.py module globals
+    (it's loaded by file path, not importable as a package)."""
     run = _collections_run()
-    return run.__globals__["_parse_glossary"]
+    return run.__globals__["_parse_cards"]
 
 
 async def test_no_collections_file_short_circuits():
@@ -173,12 +173,14 @@ async def test_collections_set_but_no_input_files_returns_empty():
     assert result["message"]
 
 
-def test_parse_glossary_ignores_a_body_line_before_any_header():
-    """`_parse_glossary` only appends body lines once a `## ` header opened a
-    term; a leading non-header line is ignored (branch 76->72)."""
-    parse = _parse_glossary()
+def test_parse_cards_ignores_a_body_line_before_any_header():
+    """`_parse_cards` only appends body lines once a `## ` header opened a card; a
+    leading non-header line is ignored."""
+    parse = _parse_cards()
     text = "preamble line before any header\n## M4\nThe fourth metal layer.\n"
-    assert parse(text) == [("M4", "The fourth metal layer.")]
+    assert parse(text) == [
+        {"collection": "", "keys": ["M4"], "title": "M4", "body": "The fourth metal layer."}
+    ]
 
 
 def _commit_handle(plan: dict, *, landed: bool = True):
@@ -220,16 +222,16 @@ async def _seed(wf: WorkflowHandle) -> None:
     await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
 
 
-async def test_commit_skips_non_string_and_blank_terms_in_term_collection():
-    """A plan whose `terms` list carries a non-string and a blank entry: the
-    term→collection map skips them and the valid term still authors a card."""
+async def test_commit_skips_non_string_and_blank_terms_and_authors_card():
+    """A plan whose `terms` list carries a non-string and a blank entry: `_plan_terms`
+    skips them and the valid term still authors a card from its block."""
     plan = {"collection": "Defects", "digest": "d", "terms": ["M4", 123, "   "]}
     run = _collections_run()
     wf, ingested, cards = _commit_handle(plan)
     await _seed(wf)
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    await wf.write("glossary.todo.md", "## M4\nThe fourth metal layer.")
+    await wf.write("context-card.todo.md", "## M4\nThe fourth metal layer.")
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     assert result["status"] == "approved"
@@ -246,7 +248,7 @@ async def test_commit_does_not_count_ingest_that_did_not_land():
     await _seed(wf)
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    await wf.write("glossary.todo.md", "## M4\nThe fourth metal layer.")
+    await wf.write("context-card.todo.md", "## M4\nThe fourth metal layer.")
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     assert result["status"] == "approved"

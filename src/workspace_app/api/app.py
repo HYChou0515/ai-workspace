@@ -238,6 +238,27 @@ class _UndoOut(BaseModel):
     removed: int
 
 
+class _FileEntry(BaseModel):
+    """One workspace file in the listing (#205). ``read_only`` flags files the IDE
+    must render non-editable — files under the reserved ``.readonly/`` directory,
+    server-enforced (PUT is refused). A computed convention, so no per-file metadata."""
+
+    path: str
+    size: int
+    read_only: bool
+
+
+_READONLY_DIR = ".readonly"
+
+
+def _is_readonly_path(path: str) -> bool:
+    """#205: files under the reserved ``.readonly/`` directory are server-enforced
+    read-only — the IDE renders them non-editable and a PUT is refused. A computed
+    convention (like the ``/.workflow/`` journal folder, #136), so no per-file
+    metadata or migration is needed; any segment named ``.readonly`` qualifies."""
+    return _READONLY_DIR in path.strip("/").split("/")
+
+
 class _CreateChatBody(BaseModel):
     # #topic-hub P7 (manual §3): open a new FREE chat in an item. Title is optional;
     # a workflow chat is opened by the run endpoint (P8), not here.
@@ -1493,6 +1514,23 @@ def create_app(
             spec, collection=collection, keys=keys, title=title, body=body, user=captured_user
         )
 
+    async def _wf_find_card(collection: str, keys: list[str], title: str) -> dict[str, Any] | None:
+        """The read-only find-overwrite-target capability (#205) — the existing card a
+        commit-time upsert would overwrite, as a plain dict the workflow lib renders into
+        the diff "before" snapshot (it stays decoupled from ``ContextCard``)."""
+        from ..resources.kb import ContextCard
+        from ..workflow.capabilities import find_overwrite_target
+
+        card, ambiguity = find_overwrite_target(spec, collection=collection, keys=keys, title=title)
+        if not isinstance(card, ContextCard):
+            return None
+        return {
+            "keys": list(card.keys),
+            "title": card.title,
+            "body": card.body,
+            "ambiguity": ambiguity,
+        }
+
     async def _wf_collection_has(collection: str, path: str) -> bool:
         """Backs ``check.collection_has`` (§8): did ``path`` land in ``collection``
         (a name or id) as a ``ready`` doc? Read back from the KB at its natural-key id."""
@@ -1528,6 +1566,7 @@ def create_app(
         wf._upsert_card = lambda collection, keys, title, body: _wf_upsert_card(
             captured_user, collection, keys, title, body
         )
+        wf._find_card = _wf_find_card
 
     def _wf_any_running(item_id: str) -> bool:
         """Is any run on this item still RUNNING? Used to decide whether the shared
@@ -2320,13 +2359,13 @@ def create_app(
     # ---- Files API (plan-backend §3.8) ----
 
     @api.get("/a/{slug}/items/{item_id}/files")
-    async def list_files(slug: str, item_id: str, prefix: str = "") -> list[dict]:
+    async def list_files(slug: str, item_id: str, prefix: str = "") -> list[_FileEntry]:
         investigation_id = _require_item(slug, item_id)
         paths = await files.ls(investigation_id, prefix)
-        out: list[dict] = []
+        out: list[_FileEntry] = []
         for p in sorted(paths):
             data = await files.read(investigation_id, p)
-            out.append({"path": p, "size": len(data)})
+            out.append(_FileEntry(path=p, size=len(data), read_only=_is_readonly_path(p)))
         return out
 
     @api.get("/a/{slug}/items/{item_id}/dirs")
@@ -2351,6 +2390,9 @@ def create_app(
         investigation_id = _require_item(slug, item_id)
         body = await request.body()
         norm = "/" + path.lstrip("/")
+        if _is_readonly_path(norm):
+            # #205: the `.readonly/` snapshot the human diffs against is not hand-editable.
+            raise HTTPException(status_code=403, detail="this file is read-only")
         await files.write(investigation_id, norm, body)
         activity.record(
             "file_written",
