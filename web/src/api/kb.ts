@@ -277,9 +277,11 @@ export interface KbApi {
   ): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
   deleteCollection(id: string): Promise<void>;
-  /** Re-chunk + re-embed every document in the collection (recovers `error`
-   * docs after an embedder fix). Each doc flips back to `indexing`. */
-  reindexCollection(id: string): Promise<void>;
+  /** Re-chunk + re-embed documents in the collection (recovers `error` docs
+   * after an embedder fix). Each re-queued doc flips back to `indexing`.
+   * `{ only: "failed" }` re-queues ONLY docs stuck in `error` (issue #223);
+   * omitted re-indexes the whole collection. */
+  reindexCollection(id: string, opts?: { only?: "failed" }): Promise<void>;
   listDocuments(
     collectionId: string,
     page?: { offset?: number; limit?: number },
@@ -412,9 +414,10 @@ export const realKbApi: KbApi = {
       "delete collection",
     );
   },
-  async reindexCollection(id) {
+  async reindexCollection(id, opts) {
+    const qs = opts?.only ? `?only=${encodeURIComponent(opts.only)}` : "";
     await ok(
-      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/reindex`, { method: "POST" }),
+      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/reindex${qs}`, { method: "POST" }),
       "reindex collection",
     );
   },

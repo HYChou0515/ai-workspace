@@ -160,6 +160,15 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     },
   });
 
+  // #223: recover only the failed docs (the failure strip's one-click retry),
+  // leaving healthy `ready` docs untouched so an outage costs no re-embedding.
+  const reindexFailedMut = useMutation({
+    mutationFn: () => client.reindexCollection(cid as string, { only: "failed" }),
+    onSuccess: () => {
+      if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
+    },
+  });
+
   // #101: two-step download — prepare (build the zip server-side) then stream it
   // via a native anchor so even a large export writes straight to disk.
   const downloadMut = useMutation({
@@ -574,6 +583,17 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
               <div className="kb-index-status__fails-head">
                 <Icon name="x" size={13} color="var(--err)" />
                 <span>{t("kb.status.failed", { n: erroredCount })}</span>
+                {/* #223: re-queue ONLY the failed docs in one click — recover
+                    after a transient outage without re-embedding the rest. */}
+                <button
+                  type="button"
+                  className="kb-btn kb-index-status__retry"
+                  data-testid="kb-reindex-failed"
+                  disabled={reindexFailedMut.isPending}
+                  onClick={() => reindexFailedMut.mutate()}
+                >
+                  <Icon name="refresh" size={12} /> {t("kb.status.retryFailed")}
+                </button>
               </div>
               <ul className="kb-index-status__fail-list">
                 {erroredDocs.map((d) => {
