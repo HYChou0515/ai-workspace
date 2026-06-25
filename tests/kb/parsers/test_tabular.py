@@ -80,6 +80,44 @@ def test_tsv_rides_the_same_parser_via_tab_delimiter():
     assert docs[0].text == "name: Bob\nemail: bob@x.com"
 
 
+# ── CsvParser fan-out unit seam (#227) ───────────────────────────────
+
+
+def test_csv_count_units_is_the_data_row_count():
+    """#227: count_units = data rows (header excluded) so a 100k-row CSV
+    fans out into many small embed jobs instead of one 30-min job."""
+    data = b"name\nBob\nAmy\nCy\n"  # 3 data rows
+    assert CsvParser().count_units(_input(data), filename="u.csv", mime="text/csv") == 3
+
+
+def test_csv_parse_unit_range_slices_rows():
+    """A process job's unit_range=[a,b) yields ONLY those rows, in order."""
+    data = b"name\nBob\nAmy\nCy\nDi\n"
+    docs = list(
+        CsvParser().parse(_input(data), filename="u.csv", mime="text/csv", unit_range=(1, 3))
+    )
+    assert [d.text for d in docs] == ["name: Amy", "name: Cy"]
+
+
+# ── ExcelParser fan-out unit seam (#227) ─────────────────────────────
+
+
+def test_excel_count_units_totals_rows_across_sheets():
+    data = _xlsx({"A": [{"x": "a1"}, {"x": "a2"}], "B": [{"y": "b1"}]})
+    assert ExcelParser().count_units(_input(data, "w.xlsx"), filename="w.xlsx", mime="") == 3
+
+
+def test_excel_parse_unit_range_slices_global_rows_across_sheets():
+    """Rows are numbered globally across sheets in sheet order, so a
+    unit_range can straddle a sheet boundary and still slice cleanly."""
+    data = _xlsx({"A": [{"x": "a1"}, {"x": "a2"}], "B": [{"y": "b1"}, {"y": "b2"}]})
+    docs = list(
+        ExcelParser().parse(_input(data, "w.xlsx"), filename="w.xlsx", mime="", unit_range=(1, 3))
+    )
+    # global rows 1,2 = A's second row and B's first row.
+    assert [d.text for d in docs] == ["sheet: A\nx: a2", "sheet: B\ny: b1"]
+
+
 # ── ExcelParser.matches ──────────────────────────────────────────────
 
 

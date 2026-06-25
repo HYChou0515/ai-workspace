@@ -43,6 +43,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def chunk_id(doc_id: str, seq: int) -> str:
+    """Deterministic ``DocChunk`` id for the fan-out path (#227): keyed on
+    ``(doc_id, seq)`` so a redelivered process job overwrites its slice in place
+    instead of minting duplicate chunk rows. ``seq`` is globally unique per doc
+    (each fan-out batch numbers from ``batch_index * stride``)."""
+    return f"{doc_id}.c{seq}"
+
+
 class _IndexOutput(NamedTuple):
     """What one index pass hands back to ``index()``.
 
@@ -440,8 +448,6 @@ class Ingestor:
         mime = magic.from_buffer(data, mime=True)
         is_code = any(path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
 
-        chrm = self._spec.get_resource_manager(DocChunk)
-
         def on_progress(message: str) -> None:
             self._set_status_detail(doc_id, message)
 
@@ -495,30 +501,56 @@ class Ingestor:
         use_alt = self._should_use_alt_embedder(collection_id)
         seq_offset = 0
         for parser_id, docs in packets:
-            nodes = self._pipeline.run(documents=docs, show_progress=False)
-            if use_alt:
-                assert self._code_embedder is not None, (
-                    "Collection has embedder_id != 0 but no code_embedder was wired"
-                )
-                alt_vecs = self._code_embedder.embed_documents([n.get_content() for n in nodes])
-            for i, n in enumerate(nodes):
-                start = n.start_char_idx if n.start_char_idx is not None else 0
-                end = n.end_char_idx if n.end_char_idx is not None else len(n.get_content())
-                chrm.create(
-                    DocChunk(
-                        collection_id=collection_id,
-                        source_doc_id=doc_id,
-                        seq=seq_offset + i,
-                        start=start,
-                        end=end,
-                        text=n.get_content(),
-                        embedding=None if use_alt else (n.embedding or None),
-                        embedding_alt=alt_vecs[i] if use_alt else None,
-                        parser_id=parser_id,
-                    )
-                )
-            seq_offset += len(nodes)
+            seq_offset += self._emit_packet(
+                collection_id, doc_id, parser_id, docs, seq_base=seq_offset, use_alt=use_alt
+            )
         return _IndexOutput(full_text or None, preview)
+
+    def _emit_packet(
+        self,
+        collection_id: str,
+        doc_id: str,
+        parser_id: str,
+        docs: list[Document],
+        *,
+        seq_base: int,
+        use_alt: bool,
+        deterministic: bool = False,
+    ) -> int:
+        """Split + embed one parser packet's Documents into ``DocChunk`` rows,
+        numbering ``seq`` from ``seq_base``. Returns the node count so the caller
+        can advance the offset. ``deterministic`` (#227) mints chunk ids from
+        ``(doc_id, seq)`` so a redelivered fan-out process job OVERWRITES its
+        slice instead of duplicating it; the single-job path keeps auto ids."""
+        assert self._pipeline is not None  # only the pipeline path emits packets
+        chrm = self._spec.get_resource_manager(DocChunk)
+        nodes = self._pipeline.run(documents=docs, show_progress=False)
+        alt_vecs: list[list[float]] | None = None
+        if use_alt:
+            assert self._code_embedder is not None, (
+                "Collection has embedder_id != 0 but no code_embedder was wired"
+            )
+            alt_vecs = self._code_embedder.embed_documents([n.get_content() for n in nodes])
+        for i, n in enumerate(nodes):
+            start = n.start_char_idx if n.start_char_idx is not None else 0
+            end = n.end_char_idx if n.end_char_idx is not None else len(n.get_content())
+            seq = seq_base + i
+            chunk = DocChunk(
+                collection_id=collection_id,
+                source_doc_id=doc_id,
+                seq=seq,
+                start=start,
+                end=end,
+                text=n.get_content(),
+                embedding=None if use_alt else (n.embedding or None),
+                embedding_alt=alt_vecs[i] if (use_alt and alt_vecs is not None) else None,
+                parser_id=parser_id,
+            )
+            if deterministic:
+                chrm.create_or_update(chunk_id(doc_id, seq), chunk)
+            else:
+                chrm.create(chunk)
+        return len(nodes)
 
     def _should_use_alt_embedder(self, collection_id: str) -> bool:
         """Return True iff the Collection's `embedder_id` selects the alt
@@ -527,3 +559,86 @@ class Ingestor:
         coll = self._spec.get_resource_manager(Collection).get(collection_id).data
         assert isinstance(coll, Collection)
         return coll.embedder_id != 0
+
+    # ── fan-out (#227): split a large index into per-unit-range process jobs ──
+    def fanout_units(self, doc_id: str) -> tuple[int, str]:
+        """Plan the fan-out for ``doc_id``: ``(unit_count, parser_id)``. Fan-out
+        applies only when EXACTLY one parser claims the doc (pipeline mode) and
+        it reports more than one unit — then the index splits into per-unit-range
+        process jobs. Otherwise returns ``(1, "")`` ⇒ index as a single job (the
+        unchanged whole-doc path: multi-parser, no-parser, legacy chunker, or a
+        genuinely small file)."""
+        if self._pipeline is None:
+            return (1, "")
+        drm = self._spec.get_resource_manager(SourceDoc)
+        doc = drm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        raw = drm.restore_binary(doc).content.data
+        assert isinstance(raw, bytes)
+        mime = magic.from_buffer(raw, mime=True)
+        with MaterialisedParserInput(raw, filename=doc.path) as source:
+            parsers = self._parser_registry.all_matching(
+                filename=doc.path, mime=mime, source=source
+            )
+            if len(parsers) != 1:
+                return (1, "")
+            units = parsers[0].count_units(source, filename=doc.path, mime=mime)
+        return (max(1, units), type(parsers[0]).__name__)
+
+    def prepare_fanout(self, doc_id: str) -> None:
+        """Clear the doc's chunks ONCE before the fan-out's process jobs each
+        (re)create their own deterministic slice."""
+        self._delete_chunks(doc_id)
+
+    def index_units(
+        self,
+        doc_id: str,
+        unit_range: tuple[int, int],
+        *,
+        seq_base: int,
+        source_doc_rm: IResourceManager[SourceDoc] | None = None,
+    ) -> str:
+        """Parse + chunk + embed ONLY units ``[start, end)`` of the doc's single
+        parser, writing deterministic-id ``DocChunk`` rows (idempotent under
+        redelivery). Returns the clean text of those units, which the finalize
+        step rejoins in order into ``SourceDoc.text``."""
+        assert self._pipeline is not None
+        drm = (
+            source_doc_rm
+            if source_doc_rm is not None
+            else self._spec.get_resource_manager(SourceDoc)
+        )
+        doc = drm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        raw = drm.restore_binary(doc).content.data
+        assert isinstance(raw, bytes)
+        mime = magic.from_buffer(raw, mime=True)
+        use_alt = self._should_use_alt_embedder(doc.collection_id)
+        with MaterialisedParserInput(raw, filename=doc.path) as source:
+            parsers = self._parser_registry.all_matching(
+                filename=doc.path, mime=mime, source=source
+            )
+            assert len(parsers) == 1, "fanout_units guarantees a single parser"
+            parser = parsers[0]
+            docs = list(
+                parser.parse(
+                    source,
+                    filename=doc.path,
+                    mime=mime,
+                    on_progress=lambda m: self._set_status_detail(doc_id, m),
+                    unit_range=unit_range,
+                )
+            )
+            for d in docs:
+                d.metadata.setdefault("filename", doc.path)
+                d.metadata.setdefault("mime", mime)
+        self._emit_packet(
+            doc.collection_id,
+            doc_id,
+            type(parser).__name__,
+            docs,
+            seq_base=seq_base,
+            use_alt=use_alt,
+            deterministic=True,
+        )
+        return "\n\n".join(d.text for d in docs).strip()

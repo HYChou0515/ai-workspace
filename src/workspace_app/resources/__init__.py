@@ -24,7 +24,17 @@ from .agent_config import AgentConfig
 from .check_run import CheckRun
 from .citation_event import CitationEvent
 from .conversation import Conversation, Message
-from .kb import Collection, ContextCard, DocChunk, KbChat, SourceDoc, WikiBuildState, WikiPage
+from .kb import (
+    Collection,
+    ContextCard,
+    DocChunk,
+    IndexRun,
+    IndexUnitText,
+    KbChat,
+    SourceDoc,
+    WikiBuildState,
+    WikiPage,
+)
 from .notification import Notification
 from .sanity import SanityResult, sanity_result_id
 
@@ -35,6 +45,8 @@ __all__ = [
     "ContextCard",
     "Conversation",
     "DocChunk",
+    "IndexRun",
+    "IndexUnitText",
     "KbChat",
     "Message",
     "Notification",
@@ -143,6 +155,13 @@ def _register_all(spec: SpecStar) -> None:
     # retriever's per-collection lookup) is a query — a non-indexed filter would
     # load + deserialize every chunk's embedding Vector, which is the hang.
     spec.add_model(DocChunk, indexed_fields=["source_doc_id", "collection_id"])
+    # #227: fan-out join state, one row per doc (id = doc id). `status` indexed
+    # so the safety sweep can find runs still "running" with no live jobs; the
+    # per-doc active-run guard is a point get by id.
+    spec.add_model(IndexRun, indexed_fields=["status"])
+    # #227: per-batch staged text (doc_id indexed so finalize lists a doc's
+    # batches to rejoin into SourceDoc.text). Transient; deleted at finalize.
+    spec.add_model(IndexUnitText, indexed_fields=["doc_id"])
     # Issue #50: collection_id indexed so a wiki's pages list (WikiFileStore.ls)
     # is a query, not a full scan.
     spec.add_model(WikiPage, indexed_fields=["collection_id"])

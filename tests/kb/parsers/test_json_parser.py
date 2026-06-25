@@ -90,3 +90,55 @@ def test_jsonl_with_invalid_line_raises():
             filename="r.jsonl",
             mime="text/plain",
         )
+
+
+# ── fan-out unit seam (#227) ─────────────────────────────────────────
+
+
+def test_json_array_count_units_is_element_count():
+    """A top-level JSON array is a record list → one element = one unit,
+    so a giant array fans out instead of embedding in a single job."""
+    p = JsonParser()
+    data = b'[{"a": 1}, {"a": 2}, {"a": 3}]'
+    assert p.count_units(_input(data), filename="x.json", mime="application/json") == 3
+
+
+def test_json_object_root_is_a_single_unit():
+    """A non-array root stays one indivisible unit (whole-file Document,
+    splitter owns granularity) — never fanned out."""
+    import json
+
+    p = JsonParser()
+    data = b'{"a": 1, "b": 2}'
+    assert p.count_units(_input(data), filename="x.json", mime="application/json") == 1
+    # Malformed too → 1 unit, so the error surfaces via parse() as before.
+    assert p.count_units(_input(b"{nope"), filename="x.json", mime="application/json") == 1
+    docs = list(p.parse(_input(data), filename="x.json", mime="application/json"))
+    assert len(docs) == 1 and json.loads(docs[0].text) == {"a": 1, "b": 2}
+
+
+def test_json_array_parse_unit_range_slices_elements():
+    """A process job's unit_range yields a Document holding ONLY its array
+    slice (still valid JSON → the splitter's JSON branch flattens it)."""
+    import json
+
+    p = JsonParser()
+    data = b'[{"a": 1}, {"a": 2}, {"a": 3}, {"a": 4}]'
+    docs = list(
+        p.parse(_input(data), filename="x.json", mime="application/json", unit_range=(1, 3))
+    )
+    assert len(docs) == 1
+    assert json.loads(docs[0].text) == [{"a": 2}, {"a": 3}]
+
+
+def test_jsonl_count_units_and_unit_range():
+    """JSONL: non-empty lines are the units (blank lines don't count);
+    unit_range slices the record list while metadata keeps real line nos."""
+    import json
+
+    p = JsonParser()
+    data = b'{"a": 1}\n{"a": 2}\n\n{"a": 3}\n'
+    assert p.count_units(_input(data, "r.jsonl"), filename="r.jsonl", mime="") == 3
+    docs = list(p.parse(_input(data, "r.jsonl"), filename="r.jsonl", mime="", unit_range=(1, 3)))
+    assert [json.loads(d.text) for d in docs] == [{"a": 2}, {"a": 3}]
+    assert [d.metadata["jsonl_line"] for d in docs] == [2, 4]

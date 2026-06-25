@@ -85,6 +85,20 @@ class IParser(ABC):
         adapter so subsequent ``matches`` calls and the eventual
         ``parse`` call don't reread the same bytes."""
 
+    def count_units(self, source: IParserInput, *, filename: str, mime: str) -> int:
+        """How many independently-parseable **units** this source holds —
+        pages (PDF), rows (CSV / Excel), top-level array elements (JSON),
+        etc. (#227). The fan-out splitter uses this to break a large index
+        into many small jobs that each ``parse`` a ``unit_range`` slice, so
+        no single job exceeds the broker's consumer-ack timeout.
+
+        MUST be **cheap** — a page/row/element count, never the expensive
+        per-unit work (no VLM describe, no embed). The default ``1`` means
+        "one indivisible unit" (the whole file): such a parser is never
+        fanned out and indexes as a single job, exactly as before the seam.
+        Override only for parsers whose per-unit work can be large."""
+        return 1
+
     @abstractmethod
     def parse(
         self,
@@ -94,12 +108,20 @@ class IParser(ABC):
         mime: str,
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
     ) -> Iterator[Document] | list[Document]:
         """Convert the source into LlamaIndex ``Document``s. Return an
         iterator OR a list — the Ingestor materialises whichever shape
         the parser produces. Multiple Documents per source are normal
         (one per slide / CSV row group / JSON entity); per-Document
         metadata carries the position so retrieval can name it back.
+
+        ``unit_range`` (#227), when given, restricts parsing to the
+        half-open unit interval ``[start, end)`` (units as counted by
+        ``count_units``) — the fan-out process job's slice. ``None`` (the
+        default) parses the whole source. Parsers that leave
+        ``count_units`` at the default ``1`` only ever receive ``None`` or
+        the full range, so they may ignore the argument.
 
         ``on_progress(message)``, when supplied, lets a long-running
         parser (VLM image / VLM slide) surface a short status string

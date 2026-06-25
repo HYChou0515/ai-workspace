@@ -61,6 +61,7 @@ class PptxParser(IParser):
         mime: str,
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
     ) -> list[Document]:
         soffice = _find_soffice()
         if soffice is None:

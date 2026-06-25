@@ -253,7 +253,9 @@ def test_parser_text_is_persisted_on_sourcedoc_pre_chunk(spec: SpecStar, embedde
         def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
             return filename.endswith(".img")
 
-        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+        def parse(
+            self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None
+        ):  # type: ignore[no-untyped-def]
             return [
                 Document(text="VLM description of the diagram", metadata={}),
                 Document(text="second region text", metadata={}),
@@ -525,7 +527,9 @@ def test_ingest_large_table_writes_row_chunks_spanning_the_table(
         def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
             return filename.endswith(".png")
 
-        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+        def parse(
+            self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None
+        ):  # type: ignore[no-untyped-def]
             return [
                 Document(
                     text=md,
@@ -584,7 +588,9 @@ def test_vlm_markdown_image_chunks_split_on_structure_not_truncated(
         def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
             return filename.endswith(".png")
 
-        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+        def parse(
+            self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None
+        ):  # type: ignore[no-untyped-def]
             return [
                 Document(
                     text=md,
@@ -762,7 +768,9 @@ def test_parser_on_progress_lands_on_status_detail_during_index(
         def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
             return filename.endswith(".bin")
 
-        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+        def parse(
+            self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None
+        ):  # type: ignore[no-untyped-def]
             assert on_progress is not None
             on_progress("SlowParser: step 1/2")
             # Peek at the row mid-parse — the detail must already be live.
@@ -849,7 +857,9 @@ def test_parser_preview_persists_on_sourcedoc(spec: SpecStar, embedder: HashEmbe
         def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
             return filename.endswith(".deck")
 
-        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+        def parse(
+            self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None
+        ):  # type: ignore[no-untyped-def]
             assert on_preview is not None
             on_preview(b"%PDF-converted", "application/pdf")
             from llama_index.core.schema import Document

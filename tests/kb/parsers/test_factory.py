@@ -61,7 +61,14 @@ class HelloParser(IParser):
         return filename.endswith(".hello")
 
     def parse(
-        self, source: IParserInput, *, filename: str, mime: str, on_progress=None, on_preview=None
+        self,
+        source: IParserInput,
+        *,
+        filename: str,
+        mime: str,
+        on_progress=None,
+        on_preview=None,
+        unit_range=None,
     ):  # type: ignore[no-untyped-def]
         return []
 

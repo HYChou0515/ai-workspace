@@ -39,6 +39,22 @@ class CsvParser(IParser):
         # Extension matters: libmagic usually sniffs csv/tsv as text/plain.
         return mime in _CSV_MIMES or filename.lower().endswith((".csv", ".tsv"))
 
+    def _rows(self, source: IParserInput, *, filename: str, mime: str) -> list[Document]:
+        from llama_index.readers.file import PagedCSVReader
+
+        delimiter = "\t" if filename.lower().endswith(".tsv") else ","
+        docs = PagedCSVReader().load_data(file=source.as_path(), delimiter=delimiter)
+        for d in docs:
+            d.metadata.setdefault("filename", filename)
+            d.metadata.setdefault("mime", mime)
+        return docs
+
+    def count_units(self, source: IParserInput, *, filename: str, mime: str) -> int:
+        """Data-row count (#227) — one row = one unit, so a huge CSV fans
+        out into many small embed jobs (the parse is cheap; the embed of
+        thousands of row-Documents is the long pole that must be split)."""
+        return len(self._rows(source, filename=filename, mime=mime))
+
     def parse(
         self,
         source: IParserInput,
@@ -47,14 +63,11 @@ class CsvParser(IParser):
         mime: str,
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
     ) -> list[Document]:
-        from llama_index.readers.file import PagedCSVReader
-
-        delimiter = "\t" if filename.lower().endswith(".tsv") else ","
-        docs = PagedCSVReader().load_data(file=source.as_path(), delimiter=delimiter)
-        for d in docs:
-            d.metadata.setdefault("filename", filename)
-            d.metadata.setdefault("mime", mime)
+        docs = self._rows(source, filename=filename, mime=mime)
+        if unit_range is not None:
+            docs = docs[unit_range[0] : unit_range[1]]
         return docs
 
 
@@ -68,15 +81,9 @@ class ExcelParser(IParser):
         # is the reliable signal.
         return mime == _XLSX_MIME or filename.lower().endswith(".xlsx")
 
-    def parse(
-        self,
-        source: IParserInput,
-        *,
-        filename: str,
-        mime: str,
-        on_progress: Callable[[str], None] | None = None,
-        on_preview: Callable[[bytes, str], None] | None = None,
-    ) -> list[Document]:
+    def _rows(self, source: IParserInput, *, filename: str, mime: str) -> list[Document]:
+        """Every row across ALL sheets, in sheet order — one Document each,
+        numbered globally so a fan-out unit_range can straddle sheets."""
         import pandas as pd
         from llama_index.core.schema import Document
 
@@ -95,4 +102,23 @@ class ExcelParser(IParser):
                         metadata={"filename": filename, "mime": mime, "sheet": sheet_name},
                     )
                 )
+        return docs
+
+    def count_units(self, source: IParserInput, *, filename: str, mime: str) -> int:
+        """Total data rows across every sheet (#227) — one row = one unit."""
+        return len(self._rows(source, filename=filename, mime=mime))
+
+    def parse(
+        self,
+        source: IParserInput,
+        *,
+        filename: str,
+        mime: str,
+        on_progress: Callable[[str], None] | None = None,
+        on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
+    ) -> list[Document]:
+        docs = self._rows(source, filename=filename, mime=mime)
+        if unit_range is not None:
+            docs = docs[unit_range[0] : unit_range[1]]
         return docs
