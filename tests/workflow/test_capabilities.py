@@ -2,6 +2,7 @@
 step: a workspace file lands in an existing KB collection, idempotently."""
 
 import json
+from collections.abc import Callable
 
 import pytest
 from specstar import QB, SpecStar
@@ -32,10 +33,28 @@ def _collection(spec: SpecStar) -> str:
     return spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
 
 
-async def test_ingest_lands_a_ready_doc_and_writes_a_receipt(spec_instance: SpecStar):
+def _enqueue_recorder() -> tuple[Callable[[str, str], bool], list[tuple[str, str]]]:
+    """A stand-in for ``IndexCoordinator.enqueue`` that records the (doc_id,
+    collection_id) pairs the capability hands it — so a test asserts the index job
+    was queued without registering a real message-queue model (#234)."""
+    calls: list[tuple[str, str]] = []
+
+    def enqueue(doc_id: str, collection_id: str) -> bool:
+        calls.append((doc_id, collection_id))
+        return True
+
+    return enqueue, calls
+
+
+def _noop_enqueue(doc_id: str, collection_id: str) -> bool:
+    return True
+
+
+async def test_ingest_stores_an_indexing_doc_enqueues_and_writes_a_receipt(spec_instance: SpecStar):
     cid = _collection(spec_instance)
     store = MemoryFileStore()
     await store.write("ws", "/digest/a.md", b"# A\nhello world content")
+    enqueue, enqueued = _enqueue_recorder()
 
     doc_id = await ingest_to_collection(
         spec_instance,
@@ -45,15 +64,46 @@ async def test_ingest_lands_a_ready_doc_and_writes_a_receipt(spec_instance: Spec
         collection=cid,
         path="digest/a.md",
         user="alice",
+        enqueue=enqueue,
     )
 
     assert doc_id == encode_doc_id(cid, "digest/a.md")
     doc = spec_instance.get_resource_manager(SourceDoc).get(doc_id).data
-    assert doc.status == "ready"
+    # #234: the upload lands as ``indexing`` and the index job is ENQUEUED — the
+    # capability never blocks on chunk+embed; a background consumer indexes it.
+    assert doc.status == "indexing"
+    assert enqueued == [(doc_id, cid)]
     # the receipt makes the deterministic node checkpointable on re-run (§9), and
     # lives under the run's journal folder (#136) — _default with no workflow wired
     receipt = json.loads(await store.read("ws", "/.workflow/_default/step_ingest/digest/a.md.done"))
     assert receipt["doc_id"] == doc_id
+
+
+async def test_collection_has_doc_counts_an_indexing_upload_as_landed(spec_instance: SpecStar):
+    """#234: ingest is async now (store + enqueue), so a freshly-uploaded doc is still
+    ``indexing`` when the workflow verifies it landed — ``landed`` means the SourceDoc
+    EXISTS in the collection (the deterministic upload succeeded), not that the background
+    chunk+embed has finished."""
+    from workspace_app.workflow.capabilities import collection_has_doc
+
+    cid = _collection(spec_instance)
+    store = MemoryFileStore()
+    await store.write("ws", "/a.md", b"hello world content")
+    doc_id = await ingest_to_collection(
+        spec_instance,
+        _ingestor(spec_instance),
+        store,
+        workspace_id="ws",
+        collection=cid,
+        path="a.md",
+        user="u",
+        enqueue=_noop_enqueue,
+    )
+    # no consumer ran, so the doc is still indexing — yet it has landed in the collection.
+    assert spec_instance.get_resource_manager(SourceDoc).get(doc_id).data.status == "indexing"
+    assert collection_has_doc(spec_instance, collection=cid, path="a.md") is True
+    assert collection_has_doc(spec_instance, collection=cid, path="missing.md") is False
+    assert collection_has_doc(spec_instance, collection="no-such", path="a.md") is False
 
 
 async def test_ingest_receipt_lives_under_per_workflow_dir(spec_instance: SpecStar):
@@ -71,6 +121,7 @@ async def test_ingest_receipt_lives_under_per_workflow_dir(spec_instance: SpecSt
         path="a.md",
         user="alice",
         journal_dir="/.workflow/memory",
+        enqueue=_noop_enqueue,
     )
     assert await store.exists("ws", "/.workflow/memory/step_ingest/a.md.done")
     assert not await store.exists("ws", "/step_ingest/a.md.done")
@@ -84,7 +135,14 @@ async def test_ingest_is_idempotent(spec_instance: SpecStar):
     ing = _ingestor(spec_instance)
     for _ in range(2):
         await ingest_to_collection(
-            spec_instance, ing, store, workspace_id="ws", collection=cid, path="a.md", user="u"
+            spec_instance,
+            ing,
+            store,
+            workspace_id="ws",
+            collection=cid,
+            path="a.md",
+            user="u",
+            enqueue=_noop_enqueue,
         )
     docs = list(
         spec_instance.get_resource_manager(SourceDoc).list_resources(
@@ -112,6 +170,7 @@ async def test_ingest_accepts_a_collection_name(spec_instance: SpecStar):
         collection="kb-logs",  # a NAME, not the id
         path="a.md",
         user="u",
+        enqueue=_noop_enqueue,
     )
     assert doc_id == encode_doc_id(cid, "a.md")  # resolved to the collection's id
 
@@ -128,6 +187,7 @@ async def test_unknown_collection_is_rejected(spec_instance: SpecStar):
             collection="no-such",
             path="a.md",
             user="u",
+            enqueue=_noop_enqueue,
         )
 
 

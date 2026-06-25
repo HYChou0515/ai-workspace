@@ -166,7 +166,7 @@ async def test_collections_set_but_no_input_files_returns_empty():
     run = _collections_run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
-    await wf.write("inputs/input.json", b"{}")  # the only inputs/* file → excluded by default
+    await wf.write("uploads/input.json", b"{}")  # the only uploads/* file → excluded by default
     result = await run(wf, {})
     assert result["status"] == "empty"
     assert result["files"] == 0
@@ -217,8 +217,8 @@ def _commit_handle(plan: dict, *, landed: bool = True):
 
 
 async def _seed(wf: WorkflowHandle) -> None:
-    await wf.write("inputs/a.txt", b"the M4 layer delaminated")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/a.txt", b"the M4 layer delaminated")
+    await wf.write("uploads/input.json", b"{}")
     await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
 
 
@@ -253,7 +253,7 @@ async def test_commit_does_not_count_ingest_that_did_not_land():
     result = await run(wf, {})
     assert result["status"] == "approved"
     assert result["ingested"] == 0  # landed=False → not counted (162->159)
-    assert ingested == [("Defects", "/inputs/a.txt")]  # but the ingest DID run
+    assert ingested == [("Defects", "a.txt")]  # but the ingest DID run (uploads/ stripped, #234)
 
 
 def test_topic_hub_collections_run_py_exists_on_disk():

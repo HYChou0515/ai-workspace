@@ -26,8 +26,8 @@ def _slug(path: str) -> str:
 
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     files = await wf.glob(
-        inputs.get("files", ["inputs/*"]),
-        exclude=inputs.get("except", ["inputs/input.json"]),
+        inputs.get("files", ["uploads/*"]),
+        exclude=inputs.get("except", ["uploads/input.json"]),
     )
     if not files:
         return {"status": "empty", "notes": 0}
