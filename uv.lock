@@ -3197,7 +3197,7 @@ wheels = [
 
 [[package]]
 name = "specstar"
-version = "0.11.8"
+version = "0.11.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fastapi" },
@@ -3211,9 +3211,9 @@ dependencies = [
     { name = "qqabc" },
     { name = "xxhash" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0d/fb/9fd4f39bbadf1c32979a7625652a777785b69d8c0bec869f60d507f45fd9/specstar-0.11.8.tar.gz", hash = "sha256:88eac3dd2c7f88fa4eca14af479f3a97af672a695724c845d52b820cfc911d3e", size = 1107527, upload-time = "2026-06-10T15:23:11.499Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ff/12/6f8bdad7c35191a29570d2e882cc1f8877e7122480470a96cb82f17c8e45/specstar-0.11.9.tar.gz", hash = "sha256:f5f0b0900d29033801e6f3e6f3d56a07be83092f91abcecb75ee83337eac4354", size = 1118087, upload-time = "2026-06-25T00:05:42.984Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/52/4fd33c6a6f53e8802305d13785e208c70a2dcfe8dcfacf53504636cd8036/specstar-0.11.8-py3-none-any.whl", hash = "sha256:49002c08924037aa62469e856fbe2e8c643bac2d24fb71a7a1178e1eaf415ddd", size = 427689, upload-time = "2026-06-10T15:23:08.681Z" },
+    { url = "https://files.pythonhosted.org/packages/ff/b4/2c7477cd113b18a37b4d473fbfe5976b699cccdd9bfa0b59655ba65e1524/specstar-0.11.9-py3-none-any.whl", hash = "sha256:69cd6dbc13c6ac1886ecb8cf0e1c619d6923090b759c1676d765f58b05139f25", size = 438652, upload-time = "2026-06-25T00:05:40.565Z" },
 ]
 
 [package.optional-dependencies]
@@ -3752,7 +3752,7 @@ requires-dist = [
     { name = "scikit-learn", marker = "extra == 'process-sandbox'", specifier = ">=1.8.0" },
     { name = "scipy", marker = "extra == 'process-sandbox'", specifier = ">=1.17.1" },
     { name = "seaborn", marker = "extra == 'process-sandbox'", specifier = ">=0.13.2" },
-    { name = "specstar", extras = ["magic"], specifier = ">=0.11.8" },
+    { name = "specstar", extras = ["magic"], specifier = ">=0.11.9" },
     { name = "tree-sitter", specifier = "<0.22" },
     { name = "tree-sitter-languages", specifier = ">=1.10.2" },
 ]
