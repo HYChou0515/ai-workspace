@@ -105,6 +105,15 @@ def _png_size(data: bytes) -> tuple[int, int]:
     return w, h
 
 
+def _first_png(vlm: FakeVlm) -> bytes:
+    """The PNG bytes the VLM received on its first (only) call."""
+    images = vlm.calls[0]["images"]
+    assert isinstance(images, list)
+    data, _mime = images[0]  # ty: ignore[not-iterable]
+    assert isinstance(data, bytes)
+    return data
+
+
 def test_svg_parser_rasterizes_at_a_legible_resolution_for_ocr():
     # #185: cairosvg with no scale renders an SVG at its nominal px size, which
     # is too soft for the VLM to OCR. The long side is pulled up to the target.
@@ -115,9 +124,7 @@ def test_svg_parser_rasterizes_at_a_legible_resolution_for_ocr():
         b'<text x="20" y="60" font-size="40">Flow start</text></svg>'
     )
     list(p.parse(_input(svg, "big.svg"), filename="big.svg", mime="image/svg+xml"))
-    (call,) = vlm.calls
-    img_bytes, _ = call["images"][0]  # ty: ignore[not-iterable]
-    w, _h = _png_size(img_bytes)
+    w, _h = _png_size(_first_png(vlm))
     assert 2000 <= w <= 2100  # nominal 1000px scaled ~2× toward the OCR target
 
 
@@ -131,8 +138,7 @@ def test_svg_parser_caps_the_upscale_for_a_tiny_svg():
         b'<rect width="20" height="20"/></svg>'
     )
     list(p.parse(_input(svg, "tiny.svg"), filename="tiny.svg", mime="image/svg+xml"))
-    img_bytes, _ = vlm.calls[0]["images"][0]  # ty: ignore[not-iterable]
-    w, _h = _png_size(img_bytes)
+    w, _h = _png_size(_first_png(vlm))
     assert 20 < w <= 320  # upscaled past nominal, but capped well below the target
 
 
