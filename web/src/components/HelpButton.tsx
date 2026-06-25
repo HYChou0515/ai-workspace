@@ -1,3 +1,4 @@
+import { pxToRem } from "../lib/pxToRem";
 /**
  * The persistent "?" help entry (#161). Reopens the current surface's welcome
  * teaching — so "Don't show again" only stops the auto-popup, never hides the
@@ -24,7 +25,7 @@ export function HelpButton({
         border: "1px solid var(--paper-3)",
         background: "var(--white)",
         color: "var(--text-paper-d)",
-        fontSize: 14,
+        fontSize: pxToRem(14),
         fontWeight: 700,
         lineHeight: 1,
         cursor: "pointer",

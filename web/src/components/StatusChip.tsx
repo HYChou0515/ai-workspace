@@ -8,6 +8,7 @@
  */
 
 import type { ChipTone, Severity, Status } from "../api/types";
+import { pxToRem } from "../lib/pxToRem";
 
 // ChipTone now lives in api/types (shared with App `field_styles`); re-exported
 // here so existing importers (DiagnosticsPage, DomainField) keep working.
@@ -65,7 +66,7 @@ export function chipStyle(tone: ChipTone): React.CSSProperties {
     background: TONE_BG[tone],
     color: TONE_FG[tone],
     fontFamily: "var(--font-mono)",
-    fontSize: 11,
+    fontSize: pxToRem(11),
     fontWeight: 500,
     letterSpacing: "0.02em",
     whiteSpace: "nowrap",

@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useUsers } from "../hooks/useUsers";
 import { Icon } from "./Icon";
 import { UserAvatar } from "./UserChip";
+import { pxToRem } from "../lib/pxToRem";
 
 /**
  * A filterable list of the company directory for picking people (share /
@@ -69,7 +70,7 @@ export function UserPicker({
               <UserAvatar userId={u.id} size={22} />
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ fontWeight: 500 }}>{u.name}</span>{" "}
-                <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>
+                <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
                   {u.id}
                   {u.section ? ` · ${u.section}` : ""}
                 </span>
@@ -79,7 +80,7 @@ export function UserPicker({
           </li>
         ))}
         {shown.length === 0 && (
-          <li style={{ padding: "6px 8px", color: "var(--text-paper-d)", fontSize: 12 }}>
+          <li style={{ padding: "6px 8px", color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
             No matches.
           </li>
         )}

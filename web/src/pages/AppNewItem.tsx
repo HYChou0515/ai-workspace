@@ -23,6 +23,7 @@ import { Icon } from "../components/Icon";
 import { ItemForm, pruneEmpty } from "../components/ItemForm";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useAppManifest } from "../hooks/useResources";
+import { pxToRem } from "../lib/pxToRem";
 
 const FORM_ID = "new-item-form";
 
@@ -33,7 +34,7 @@ const primaryBtn: CSSProperties = {
   justifyContent: "center",
   height: 36,
   padding: "0 14px",
-  fontSize: 13,
+  fontSize: pxToRem(13),
   fontWeight: 500,
   fontFamily: "inherit",
   color: "var(--white)",
@@ -46,7 +47,7 @@ const primaryBtn: CSSProperties = {
 const ghostBtn: CSSProperties = {
   height: 36,
   padding: "0 14px",
-  fontSize: 13,
+  fontSize: pxToRem(13),
   fontWeight: 500,
   fontFamily: "inherit",
   color: "var(--text-paper-d)",
@@ -58,7 +59,7 @@ const ghostBtn: CSSProperties = {
 
 function CapsLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-paper-d)", marginBottom: 6 }}>
+    <div style={{ fontSize: pxToRem(10), fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-paper-d)", marginBottom: 6 }}>
       {children}
     </div>
   );
@@ -112,7 +113,7 @@ export function AppNewItem() {
           <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid var(--paper-3)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
               <CapsLabel>New {noun}</CapsLabel>
-              <h2 style={{ fontSize: 22, fontWeight: 800, margin: "6px 0 0", letterSpacing: "-0.02em" }}>
+              <h2 style={{ fontSize: pxToRem(22), fontWeight: 800, margin: "6px 0 0", letterSpacing: "-0.02em" }}>
                 Start {article} {noun.toLowerCase()}
               </h2>
             </div>

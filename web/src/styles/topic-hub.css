@@ -87,7 +87,7 @@
 .chat-switcher__time {
   flex: 0 0 auto;
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   color: var(--text-paper-d);
 }
 .chat-switcher__manage {
@@ -117,7 +117,7 @@
   padding: 0 6px;
   border-radius: var(--radius-chip);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   white-space: nowrap;
 }
 .chat-switcher__badge--active,
@@ -215,7 +215,7 @@
   font-weight: 600;
 }
 .new-item-picker__wf-desc {
-  font-size: 12px;
+  font-size: 0.75rem;
   line-height: 1.35;
   color: var(--text-paper-d);
 }
@@ -284,7 +284,7 @@
   padding: 6px 8px;
   border-bottom: 1px solid var(--paper-3);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 0.625rem;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-paper-d);
@@ -341,7 +341,7 @@
   color: var(--accent);
 }
 .manage-chats__confirm-note {
-  font-size: 12px;
+  font-size: 0.75rem;
   color: var(--text-paper-d);
 }
 .manage-chats__empty {

@@ -12,6 +12,7 @@ import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 
+import { useMonacoFontSize } from "../hooks/fontScale";
 import type { MonacoDiffEditorProps } from "./MonacoDiffEditor";
 
 self.MonacoEnvironment = {
@@ -29,6 +30,7 @@ export default function MonacoDiffEditorImpl({
   language = "markdown",
   onChangeModified,
 }: MonacoDiffEditorProps) {
+  const fontSize = useMonacoFontSize(13);
   const dark =
     typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
   return (
@@ -58,7 +60,7 @@ export default function MonacoDiffEditorImpl({
           readOnly: false,
           renderSideBySide: true,
           minimap: { enabled: false },
-          fontSize: 13,
+          fontSize,
           fontFamily: "var(--font-mono)",
           lineNumbers: "on",
           scrollBeyondLastLine: false,

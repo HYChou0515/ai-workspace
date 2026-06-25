@@ -10,6 +10,7 @@ import { useEditMode } from "../hooks/editMode";
 import { useFileBuffer } from "../hooks/fileBuffer";
 import { parseCsv } from "./csv";
 import { TextRenderer } from "./TextRenderer";
+import { pxToRem } from "../lib/pxToRem";
 
 const MAX_ROWS = 500; // preview cap — the byte editor (Edit) shows the whole file
 
@@ -36,7 +37,7 @@ export function CsvRenderer({ path }: { path: string }) {
 
   return (
     <div style={{ height: "100%", minHeight: 0, overflow: "auto" }}>
-      <table className="csv-table" style={{ borderCollapse: "collapse", fontSize: 12, width: "100%" }}>
+      <table className="csv-table" style={{ borderCollapse: "collapse", fontSize: pxToRem(12), width: "100%" }}>
         <thead>
           <tr>
             {header.map((h, i) => (
@@ -58,7 +59,7 @@ export function CsvRenderer({ path }: { path: string }) {
           ))}
         </tbody>
       </table>
-      <div style={{ color: "var(--text-paper-d)", fontSize: 12, padding: "6px 2px" }}>
+      <div style={{ color: "var(--text-paper-d)", fontSize: pxToRem(12), padding: "6px 2px" }}>
         {body.length} rows × {header.length} columns
         {capped > 0 ? ` — showing first ${MAX_ROWS} (Edit to see all)` : ""}
       </div>

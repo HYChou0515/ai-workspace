@@ -9,6 +9,8 @@ import { Stack, Text, Group, ActionIcon, Tooltip } from '@mantine/core';
 import { IconArrowsMaximize, IconArrowsMinimize } from '@tabler/icons-react';
 import Editor from '@monaco-editor/react';
 
+import { useMonacoFontSize } from '../../../../../hooks/fontScale';
+
 export interface JsonEditorProps {
   /** Field label */
   label: string;
@@ -56,6 +58,7 @@ export function JsonEditor({
 }: JsonEditorProps) {
   const [expanded, setExpanded] = useState(false);
   const displayHeight = expanded ? Math.max(height, 400) : height;
+  const fontSize = useMonacoFontSize(13);
 
   const handleChange = useCallback(
     (val: string | undefined) => {
@@ -97,7 +100,7 @@ export function JsonEditor({
             lineNumbers: 'on',
             wordWrap: 'on',
             scrollBeyondLastLine: false,
-            fontSize: 13,
+            fontSize,
             tabSize: 2,
             formatOnPaste: true,
             automaticLayout: true,

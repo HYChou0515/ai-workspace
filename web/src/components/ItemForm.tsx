@@ -22,13 +22,14 @@ import type { AppManifest, FieldSpec } from "../api/types";
 import { useUser } from "../hooks/useUsers";
 import { Icon } from "./Icon";
 import { UserAvatar } from "./UserChip";
+import { pxToRem } from "../lib/pxToRem";
 
 const inputStyle: CSSProperties = {
   width: "100%",
   boxSizing: "border-box",
   height: 38,
   padding: "0 12px",
-  fontSize: 14,
+  fontSize: pxToRem(14),
   fontFamily: "inherit",
   color: "var(--text-paper)",
   background: "var(--white)",
@@ -40,7 +41,7 @@ const inputStyle: CSSProperties = {
 const primaryBtn: CSSProperties = {
   height: 36,
   padding: "0 16px",
-  fontSize: 13,
+  fontSize: pxToRem(13),
   fontWeight: 500,
   fontFamily: "inherit",
   color: "var(--white)",
@@ -53,7 +54,7 @@ const primaryBtn: CSSProperties = {
 const ghostBtn: CSSProperties = {
   height: 36,
   padding: "0 14px",
-  fontSize: 13,
+  fontSize: pxToRem(13),
   fontWeight: 500,
   fontFamily: "inherit",
   color: "var(--text-paper-d)",
@@ -80,7 +81,7 @@ export function pruneEmpty(values: Record<string, unknown>): Record<string, unkn
 function Field({ label, required, children }: { label: string; required?: boolean; children: ReactNode }) {
   return (
     <div>
-      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-paper-d)", marginBottom: 6 }}>
+      <div style={{ fontSize: pxToRem(10), fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-paper-d)", marginBottom: 6 }}>
         {label}
         {required && <span style={{ color: "var(--accent)", marginLeft: 4 }}>*</span>}
       </div>
@@ -100,7 +101,7 @@ function Picker({ label, options, value, onChange }: { label: string; options: s
             type="button"
             aria-pressed={active}
             onClick={() => onChange(active ? "" : o)}
-            style={{ padding: "4px 10px", border: "none", borderRadius: 4, fontSize: 12, fontFamily: "var(--font-mono)", cursor: "pointer", background: active ? "var(--ink)" : "transparent", color: active ? "var(--white)" : "var(--text-paper)" }}
+            style={{ padding: "4px 10px", border: "none", borderRadius: 4, fontSize: pxToRem(12), fontFamily: "var(--font-mono)", cursor: "pointer", background: active ? "var(--ink)" : "transparent", color: active ? "var(--white)" : "var(--text-paper)" }}
           >
             {o}
           </button>
@@ -120,7 +121,7 @@ function TagInput({ label, value, onChange }: { label: string; value: string[]; 
   return (
     <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, minHeight: 38, padding: "6px 10px", background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-btn)" }}>
       {value.map((t) => (
-        <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 4px 2px 8px", borderRadius: "var(--radius-chip)", background: "var(--paper-2)", fontSize: 12 }}>
+        <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 4px 2px 8px", borderRadius: "var(--radius-chip)", background: "var(--paper-2)", fontSize: pxToRem(12) }}>
           {t}
           <button type="button" aria-label={`Remove ${t}`} onClick={() => onChange(value.filter((x) => x !== t))} style={{ display: "inline-flex", border: "none", background: "transparent", cursor: "pointer", color: "var(--text-paper-d)" }}>
             <Icon name="x" size={10} />
@@ -139,7 +140,7 @@ function TagInput({ label, value, onChange }: { label: string; value: string[]; 
         }}
         onBlur={add}
         placeholder="+ add"
-        style={{ flex: 1, minWidth: 80, border: "none", outline: "none", background: "transparent", fontSize: 13, fontFamily: "inherit", color: "var(--text-paper)" }}
+        style={{ flex: 1, minWidth: 80, border: "none", outline: "none", background: "transparent", fontSize: pxToRem(13), fontFamily: "inherit", color: "var(--text-paper)" }}
       />
     </div>
   );
@@ -223,7 +224,7 @@ export function ItemForm({
           style={{ ...inputStyle, border: `1.5px solid ${titleError ? "var(--err)" : "var(--accent)"}` }}
         />
         {titleError && (
-          <div style={{ fontSize: 11, color: "var(--err)", marginTop: 4 }}>Title is required</div>
+          <div style={{ fontSize: pxToRem(11), color: "var(--err)", marginTop: 4 }}>Title is required</div>
         )}
       </Field>
 
@@ -249,7 +250,7 @@ export function ItemForm({
             <Field label="Owner">
               <div style={{ display: "flex", alignItems: "center", gap: 8, height: 38, padding: "0 10px", background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-btn)" }}>
                 <UserAvatar userId={ownerId} size={22} />
-                <span style={{ fontSize: 13 }}>{ownerUser.name}</span>
+                <span style={{ fontSize: pxToRem(13) }}>{ownerUser.name}</span>
               </div>
             </Field>
           )}
@@ -269,8 +270,8 @@ export function ItemForm({
                   onClick={() => setProfile(p.name)}
                   style={{ textAlign: "left", padding: 12, background: active ? "var(--accent-soft)" : "var(--white)", border: `1.5px solid ${active ? "var(--accent)" : "var(--paper-3)"}`, borderRadius: "var(--radius-btn)", cursor: "pointer" }}
                 >
-                  <div style={{ fontSize: 13, fontWeight: 600, color: active ? "var(--accent-h)" : "var(--text-paper)", marginBottom: 2 }}>{p.title}</div>
-                  {p.description && <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>{p.description}</div>}
+                  <div style={{ fontSize: pxToRem(13), fontWeight: 600, color: active ? "var(--accent-h)" : "var(--text-paper)", marginBottom: 2 }}>{p.title}</div>
+                  {p.description && <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{p.description}</div>}
                 </button>
               );
             })}

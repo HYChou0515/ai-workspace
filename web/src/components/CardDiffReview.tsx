@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { type FileService, investigationFileService } from "../api/fileService";
 import { useT } from "../lib/i18n";
 import { MonacoDiffEditor } from "./MonacoDiffEditor";
+import { pxToRem } from "../lib/pxToRem";
 
 export const TODO_PATH = "/context-card.todo.md";
 export const CURRENT_PATH = "/.readonly/context-card.current.md";
@@ -180,12 +181,12 @@ function CardDiffModal({
         }}
       >
         <header style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-          <strong style={{ fontSize: 14 }}>{t("cardDiff.title")}</strong>
-          <span style={{ fontSize: 12, color: "var(--text-paper-d)" }}>
+          <strong style={{ fontSize: pxToRem(14) }}>{t("cardDiff.title")}</strong>
+          <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
             ◧ {t("cardDiff.current")} · {t("cardDiff.proposed")} ◨
           </span>
         </header>
-        <p style={{ margin: 0, fontSize: 12, color: "var(--text-paper-d)" }}>
+        <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
           {allNew ? t("cardDiff.allNew") : t("cardDiff.hint")}
         </p>
 
@@ -198,7 +199,7 @@ function CardDiffModal({
                 alignItems: "center",
                 justifyContent: "center",
                 color: "var(--text-paper-d2)",
-                fontSize: 12,
+                fontSize: pxToRem(12),
               }}
             >
               {t("cardDiff.loading")}
@@ -220,7 +221,7 @@ function CardDiffModal({
             onChange={(e) => setNote(e.target.value)}
             placeholder="What should change?"
             rows={2}
-            style={{ width: "100%", fontFamily: "inherit", fontSize: 12 }}
+            style={{ width: "100%", fontFamily: "inherit", fontSize: pxToRem(12) }}
           />
         )}
 

@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { FileInfo } from "../../api/types";
 import { Icon } from "../../components/Icon";
 import { basename } from "./renderer";
+import { pxToRem } from "../../lib/pxToRem";
 
 export function CommandPalette({
   open,
@@ -116,7 +117,7 @@ export function CommandPalette({
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
+              fontSize: pxToRem(11),
               color: "var(--text-paper-d2)",
               border: "1px solid var(--paper-3)",
               borderRadius: 4,
@@ -128,7 +129,7 @@ export function CommandPalette({
         </div>
         <div className="scrollable" style={{ overflowY: "auto" }}>
           {filtered.length === 0 && (
-            <div style={{ padding: 16, fontSize: 13, color: "var(--text-paper-d)" }}>
+            <div style={{ padding: 16, fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
               No files match.
             </div>
           )}
@@ -152,7 +153,7 @@ export function CommandPalette({
                   gap: 8,
                   background: isActive ? "var(--accent-soft)" : "transparent",
                   color: isActive ? "var(--accent-h)" : "var(--text-paper)",
-                  fontSize: 13,
+                  fontSize: pxToRem(13),
                 }}
               >
                 <Icon name="file" size={13} color={isActive ? "var(--accent-h)" : "var(--text-paper-d)"} />
@@ -161,7 +162,7 @@ export function CommandPalette({
                 <span
                   style={{
                     fontFamily: "var(--font-mono)",
-                    fontSize: 11,
+                    fontSize: pxToRem(11),
                     color: isActive ? "var(--accent-h)" : "var(--text-paper-d2)",
                   }}
                 >

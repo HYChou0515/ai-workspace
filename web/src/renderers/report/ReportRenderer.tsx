@@ -29,6 +29,7 @@ import {
   reportVersions,
   versionFromPath,
 } from "./versions";
+import { pxToRem } from "../../lib/pxToRem";
 
 export function ReportRenderer({ path }: { path: string }) {
   const files = useFileList();
@@ -200,7 +201,7 @@ function VersionRibbon({
       }}
     >
       <Icon name="file" size={14} color="var(--accent)" />
-      <strong style={{ fontSize: 13 }}>Final report</strong>
+      <strong style={{ fontSize: pxToRem(13) }}>Final report</strong>
       <div style={{ display: "flex", gap: 4 }}>
         {versions.map((v) => {
           const active = v.v === selected.v;
@@ -213,7 +214,7 @@ function VersionRibbon({
                 padding: "2px 10px",
                 borderRadius: "var(--radius-chip)",
                 fontFamily: "var(--font-mono)",
-                fontSize: 11,
+                fontSize: pxToRem(11),
                 background: active ? "var(--accent)" : "transparent",
                 color: active ? "var(--white)" : "var(--text-dark-d)",
                 border: active ? "1px solid var(--accent)" : "1px solid var(--ink-4)",
@@ -239,7 +240,7 @@ function VersionRibbon({
             borderRadius: "var(--radius-btn)",
             background: dirty ? "var(--accent)" : "transparent",
             color: dirty ? "var(--white)" : "var(--text-dark-d)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             cursor: dirty ? "pointer" : "default",
           }}
         >
@@ -257,7 +258,7 @@ function VersionRibbon({
           borderRadius: "var(--radius-btn)",
           background: editing ? "var(--accent)" : "transparent",
           color: editing ? "var(--white)" : "var(--text-dark)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
           display: "inline-flex",
           alignItems: "center",
           gap: 4,
@@ -274,7 +275,7 @@ function VersionRibbon({
           border: "1px solid var(--ink-4)",
           borderRadius: "var(--radius-btn)",
           color: "var(--text-dark)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
         }}
       >
         Export PDF
@@ -289,7 +290,7 @@ function VersionRibbon({
           background: generating ? "var(--ink-4)" : "var(--accent)",
           color: "var(--white)",
           borderRadius: "var(--radius-btn)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
           cursor: generating ? "wait" : "pointer",
         }}
       >
@@ -318,7 +319,7 @@ function SupersededNotice({
       }}
     >
       <Icon name="clock" size={14} color="var(--text-paper-d)" />
-      <span style={{ fontSize: 12, color: "var(--text-paper-d)" }}>
+      <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
         Viewing an older version — superseded by v{current.v}. Read-only.
       </span>
       <span style={{ flex: 1 }} />
@@ -329,7 +330,7 @@ function SupersededNotice({
           padding: "2px 10px",
           border: "1px solid var(--paper-3)",
           borderRadius: "var(--radius-btn)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
         }}
       >
         Go to current
@@ -415,7 +416,7 @@ function ReportBody({
             padding: "4px 14px",
             color: "var(--text-paper-d2)",
             fontFamily: "var(--font-mono)",
-            fontSize: 13,
+            fontSize: pxToRem(13),
             fontWeight: 700,
             letterSpacing: "0.18em",
             textTransform: "uppercase",
@@ -525,7 +526,7 @@ function ReportBody({
           paddingTop: 10,
           borderTop: "1px solid var(--paper-3)",
           fontFamily: "var(--font-mono)",
-          fontSize: 11,
+          fontSize: pxToRem(11),
           color: "var(--text-paper-d2)",
           display: "flex",
           justifyContent: "space-between",
@@ -673,12 +674,12 @@ function VersionHistory({
                   color: v.isCurrent ? "var(--accent-h)" : "var(--text-paper-d)",
                   borderRadius: "var(--radius-chip)",
                   fontFamily: "var(--font-mono)",
-                  fontSize: 11,
+                  fontSize: pxToRem(11),
                 }}
               >
                 {v.isCurrent ? "current" : "superseded"}
               </span>
-              <span style={{ flex: 1, fontSize: 12, color: "var(--text-paper-d)" }}>
+              <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
                 {v.path}
               </span>
               <Icon name="chev_r" size={12} color="var(--text-paper-d2)" />

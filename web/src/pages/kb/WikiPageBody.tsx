@@ -12,6 +12,7 @@ import remarkGfm from "remark-gfm";
 
 import { Icon } from "../../components/Icon";
 import { baseAwareUrlTransform } from "../../renderers/mdUrlTransform";
+import { pxToRem } from "../../lib/pxToRem";
 
 // Keep wiki:// links intact for [[wikilink]] navigation; root-relative URLs the
 // BE embeds (e.g. `/blobs/...`) get the deploy sub-path prepended (#73).
@@ -115,7 +116,7 @@ export function WikiPageBody({
 
       {sources.length > 0 && (
         <div style={{ marginTop: 26, paddingTop: 16, borderTop: "1px solid var(--paper-3)" }}>
-          <div className="caps" style={{ marginBottom: 10, fontSize: 11, color: "var(--text-paper-d2)" }}>
+          <div className="caps" style={{ marginBottom: 10, fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
             Sources
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
@@ -139,7 +140,7 @@ export function WikiPageBody({
                     borderRadius: 6,
                     cursor: openable ? "pointer" : "default",
                     font: "inherit",
-                    fontSize: 12,
+                    fontSize: pxToRem(12),
                     fontFamily: "var(--font-mono)",
                     color: "var(--text-paper)",
                   }}

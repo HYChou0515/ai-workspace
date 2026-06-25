@@ -31,6 +31,7 @@ import {
   emptyNotebook,
   parseNotebook,
 } from "./types";
+import { pxToRem } from "../../lib/pxToRem";
 
 export function NotebookRenderer({ path }: { path: string }) {
   const { entry, setText, save } = useFileBuffer(path);
@@ -235,7 +236,7 @@ function NotebookBody({
             padding: "6px 12px",
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             display: "inline-flex",
             alignItems: "center",
             gap: 6,
@@ -268,7 +269,7 @@ function NotebookBody({
           padding: "6px 12px",
           border: "1px dashed var(--paper-3)",
           borderRadius: "var(--radius-btn)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
           color: "var(--text-paper-d)",
           display: "inline-flex",
           alignItems: "center",
@@ -317,7 +318,7 @@ function Cell({
         <Gutter index={index} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <CardHeader kind="raw" />
-          <pre style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: 12 }}>
+          <pre style={{ margin: 0, fontFamily: "var(--font-mono)", fontSize: pxToRem(12) }}>
             {cellSource(cell)}
           </pre>
         </div>
@@ -406,7 +407,7 @@ function Gutter({
         <div
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: pxToRem(11),
             color: "var(--text-paper-d2)",
           }}
         >
@@ -441,7 +442,7 @@ function CardHeader({
         alignItems: "center",
         gap: 8,
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
+        fontSize: pxToRem(11),
         color: "var(--text-paper-d)",
         marginBottom: 4,
       }}

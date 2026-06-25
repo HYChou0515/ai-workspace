@@ -65,26 +65,27 @@ describe("tokens.css drift guard", () => {
     expect(css).toMatch(/--font-mono:[^;]*JetBrains Mono/);
   });
 
-  it("declares the type scale (display-xl through xs and mono-caps)", () => {
+  it("declares the type scale in rem so it scales with the system font size (#226)", () => {
     const css = readTokens();
-    // README: display-xl 56/1.05, display-lg 40/1.10, display-md 28/1.15,
-    // display-sm 22/1.20, body-lg 18/1.55, body 14/1.55, body-sm 13/1.5,
-    // small 12/1.5, xs 11/1.5, mono-caps 11 (uppercase, ls 0.12em)
-    expect(css).toMatch(/--text-display-xl:\s*56px/);
+    // Sizes are rem (n/16) so the font-size setting (:root font-size %) scales
+    // them; px-equivalent at the default 100%: display-xl 56, display-lg 40,
+    // display-md 28, display-sm 22, body-lg 18, body 14, body-sm 13, small 12,
+    // xs 11, mono-caps 11. Leadings stay unit-less, tracking stays em.
+    expect(css).toMatch(/--text-display-xl:\s*3\.5rem/);
     expect(css).toMatch(/--leading-display-xl:\s*1\.05/);
-    expect(css).toMatch(/--text-display-lg:\s*40px/);
+    expect(css).toMatch(/--text-display-lg:\s*2\.5rem/);
     expect(css).toMatch(/--leading-display-lg:\s*1\.10?/);
-    expect(css).toMatch(/--text-display-md:\s*28px/);
+    expect(css).toMatch(/--text-display-md:\s*1\.75rem/);
     expect(css).toMatch(/--leading-display-md:\s*1\.15/);
-    expect(css).toMatch(/--text-display-sm:\s*22px/);
+    expect(css).toMatch(/--text-display-sm:\s*1\.375rem/);
     expect(css).toMatch(/--leading-display-sm:\s*1\.20?/);
-    expect(css).toMatch(/--text-body-lg:\s*18px/);
-    expect(css).toMatch(/--text-body:\s*14px/);
+    expect(css).toMatch(/--text-body-lg:\s*1\.125rem/);
+    expect(css).toMatch(/--text-body:\s*0\.875rem/);
     expect(css).toMatch(/--leading-body:\s*1\.55/);
-    expect(css).toMatch(/--text-body-sm:\s*13px/);
-    expect(css).toMatch(/--text-small:\s*12px/);
-    expect(css).toMatch(/--text-xs:\s*11px/);
-    expect(css).toMatch(/--text-mono-caps:\s*11px/);
+    expect(css).toMatch(/--text-body-sm:\s*0\.8125rem/);
+    expect(css).toMatch(/--text-small:\s*0\.75rem/);
+    expect(css).toMatch(/--text-xs:\s*0\.6875rem/);
+    expect(css).toMatch(/--text-mono-caps:\s*0\.6875rem/);
     expect(css).toMatch(/--tracking-mono-caps:\s*0\.12em/);
   });
 

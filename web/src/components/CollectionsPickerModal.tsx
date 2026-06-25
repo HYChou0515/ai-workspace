@@ -7,6 +7,7 @@ import { qk } from "../api/queryKeys";
 import { useItemCollections, COLLECTIONS_PATH } from "../hooks/useItemCollections";
 import { serializeCollectionsFile, type CollectionEntry } from "./collectionsFile";
 import { Icon, type IconName } from "./Icon";
+import { pxToRem } from "../lib/pxToRem";
 
 /**
  * The collection-set picker (topic-hub §5, #142): a modal over an item's
@@ -134,8 +135,8 @@ export function CollectionsPickerModal({
           minHeight: 0,
         }}
       >
-        <strong style={{ fontSize: 14 }}>選擇知識庫</strong>
-        <p style={{ margin: 0, fontSize: 12, color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+        <strong style={{ fontSize: pxToRem(14) }}>選擇知識庫</strong>
+        <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
           勾選這個主題要查詢的知識庫；選好才有內容可供 AI 檢索與引用。
         </p>
 
@@ -143,7 +144,7 @@ export function CollectionsPickerModal({
           <div
             data-testid="collections-invalid-banner"
             style={{
-              fontSize: 12,
+              fontSize: pxToRem(12),
               lineHeight: 1.5,
               padding: "8px 10px",
               borderRadius: "var(--radius-btn)",
@@ -159,7 +160,7 @@ export function CollectionsPickerModal({
         {ready && checked!.size === 0 && fileQ.data?.status !== "invalid" && (
           <div
             data-testid="collections-empty-hint"
-            style={{ fontSize: 12, color: "var(--text-paper-d)" }}
+            style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
           >
             尚未選擇任何知識庫。
           </div>
@@ -176,7 +177,7 @@ export function CollectionsPickerModal({
               height: 30,
               boxSizing: "border-box",
               padding: "0 10px",
-              fontSize: 13,
+              fontSize: pxToRem(13),
               borderRadius: "var(--radius-btn)",
               border: "1px solid var(--paper-3)",
               background: "var(--paper-1, var(--white))",
@@ -186,10 +187,10 @@ export function CollectionsPickerModal({
         </div>
 
         <div style={{ overflowY: "auto", minHeight: 0, flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          {!ready && <p style={{ fontSize: 12, color: "var(--text-paper-d)" }}>載入中…</p>}
+          {!ready && <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>載入中…</p>}
 
           {fileQ.isError && (
-            <p style={{ fontSize: 12, color: "var(--danger, #b4413c)" }}>無法讀取 collections.json。</p>
+            <p style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>無法讀取 collections.json。</p>
           )}
 
           {ready &&
@@ -204,7 +205,7 @@ export function CollectionsPickerModal({
                   padding: "6px 6px",
                   borderRadius: "var(--radius-btn)",
                   cursor: "pointer",
-                  fontSize: 13,
+                  fontSize: pxToRem(13),
                 }}
               >
                 <input
@@ -217,21 +218,21 @@ export function CollectionsPickerModal({
                 <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {c.name}
                 </span>
-                <span style={{ fontSize: 11, color: "var(--text-paper-d)" }}>{c.doc_count} 份</span>
+                <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{c.doc_count} 份</span>
               </label>
             ))}
 
           {ready && visible.length === 0 && available.length > 0 && (
-            <p style={{ fontSize: 12, color: "var(--text-paper-d)" }}>沒有符合「{search}」的知識庫。</p>
+            <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>沒有符合「{search}」的知識庫。</p>
           )}
 
           {ready && available.length === 0 && (
-            <p style={{ fontSize: 12, color: "var(--text-paper-d)" }}>目前沒有任何知識庫可選。</p>
+            <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>目前沒有任何知識庫可選。</p>
           )}
         </div>
 
         {ready && (fileQ.data?.ignored ?? 0) > 0 && (
-          <div data-testid="collections-ignored-note" style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
+          <div data-testid="collections-ignored-note" style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
             已忽略 {fileQ.data!.ignored} 筆無效項。
           </div>
         )}
@@ -246,15 +247,15 @@ export function CollectionsPickerModal({
               gap: 4,
             }}
           >
-            <span style={{ fontSize: 11, color: "var(--danger, #b4413c)" }}>已不存在的知識庫（建議移除）</span>
+            <span style={{ fontSize: pxToRem(11), color: "var(--danger, #b4413c)" }}>已不存在的知識庫（建議移除）</span>
             {orphans.map((e) => (
               <div
                 key={e.id}
                 data-testid={`orphan-${e.id}`}
-                style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}
+                style={{ display: "flex", alignItems: "center", gap: 8, fontSize: pxToRem(12) }}
               >
                 <span style={{ flex: 1, minWidth: 0, color: "var(--text-paper-d)" }}>
-                  {e.name || "(未命名)"} · <code style={{ fontSize: 11 }}>{e.id}</code>
+                  {e.name || "(未命名)"} · <code style={{ fontSize: pxToRem(11) }}>{e.id}</code>
                 </span>
                 <button
                   type="button"
@@ -263,7 +264,7 @@ export function CollectionsPickerModal({
                   style={{
                     height: 24,
                     padding: "0 8px",
-                    fontSize: 12,
+                    fontSize: pxToRem(12),
                     borderRadius: "var(--radius-btn)",
                     border: "1px solid var(--paper-3)",
                     background: "var(--white)",
@@ -278,14 +279,14 @@ export function CollectionsPickerModal({
           </div>
         )}
 
-        {saveError && <div style={{ fontSize: 12, color: "var(--danger, #b4413c)" }}>{saveError}</div>}
+        {saveError && <div style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>{saveError}</div>}
 
         {confirming ? (
           <div
             data-testid="collections-discard-confirm"
             style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
           >
-            <span style={{ flex: 1, fontSize: 12, color: "var(--text-paper-d)" }}>放棄未儲存的變更？</span>
+            <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>放棄未儲存的變更？</span>
             <button type="button" data-testid="discard-no" onClick={() => setConfirming(false)} style={btn()}>
               繼續編輯
             </button>
@@ -319,7 +320,7 @@ function btn(variant?: "primary" | "danger"): React.CSSProperties {
     height: 30,
     padding: "0 14px",
     borderRadius: "var(--radius-btn)",
-    fontSize: 13,
+    fontSize: pxToRem(13),
     cursor: "pointer",
     border: "1px solid var(--paper-3)",
     background: "var(--white)",

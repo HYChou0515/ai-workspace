@@ -42,6 +42,7 @@ import { useOnboarding } from "../hooks/useOnboarding";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
 import { useAppItems, useAppManifest } from "../hooks/useResources";
 import { useUser, useUsers } from "../hooks/useUsers";
+import { pxToRem } from "../lib/pxToRem";
 
 const DAY = 86_400_000;
 
@@ -212,17 +213,17 @@ export function AppDashboard() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <AppIcon icon={manifest.icon} color={manifest.color} size={40} />
             <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 800, fontSize: 16, letterSpacing: "-0.02em", lineHeight: 1.1 }}>
+              <div style={{ fontWeight: 800, fontSize: pxToRem(16), letterSpacing: "-0.02em", lineHeight: 1.1 }}>
                 {manifest.title}
               </div>
-              <div style={{ fontSize: 11, color: "var(--text-paper-d2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                 {summarize(manifest.description)}
               </div>
             </div>
           </div>
           <Link
             to={`/a/${slug}/new`}
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, height: 36, marginTop: 16, borderRadius: "var(--radius-btn)", background: "var(--accent)", color: "var(--white)", fontSize: 13, fontWeight: 500, textDecoration: "none" }}
+            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, height: 36, marginTop: 16, borderRadius: "var(--radius-btn)", background: "var(--accent)", color: "var(--white)", fontSize: pxToRem(13), fontWeight: 500, textDecoration: "none" }}
           >
             <Icon name="plus" size={14} />
             {createLabel}
@@ -239,7 +240,7 @@ export function AppDashboard() {
           <div style={{ padding: "16px 16px 8px" }}>
             <CapsLabel>Topics</CapsLabel>
             {allTopics.length === 0 && (
-              <div style={{ fontSize: 12, color: "var(--text-paper-d2)", padding: "6px 10px" }}>
+              <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d2)", padding: "6px 10px" }}>
                 No topics yet
               </div>
             )}
@@ -251,13 +252,13 @@ export function AppDashboard() {
                     key={name}
                     type="button"
                     onClick={() => setTopic(topic === name ? "any" : name)}
-                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", border: "none", borderRadius: 4, background: topic === name ? "var(--accent-soft)" : "transparent", color: "var(--text-paper)", font: "inherit", fontSize: 13, cursor: "pointer" }}
+                    style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "5px 10px", border: "none", borderRadius: 4, background: topic === name ? "var(--accent-soft)" : "transparent", color: "var(--text-paper)", font: "inherit", fontSize: pxToRem(13), cursor: "pointer" }}
                   >
                     <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <Dot on={count > 0} />
                       {name}
                     </span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: count > 0 ? "var(--accent)" : "var(--text-paper-d2)" }}>{count}</span>
+                    <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: count > 0 ? "var(--accent)" : "var(--text-paper-d2)" }}>{count}</span>
                   </button>
                 );
               })}
@@ -268,9 +269,9 @@ export function AppDashboard() {
         <div style={{ marginTop: "auto", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px 0", borderTop: "1px solid var(--paper-3)" }}>
           <UserAvatar userId={me} size={28} />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meUser.name}</div>
+            <div style={{ fontSize: pxToRem(13), fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meUser.name}</div>
             {meUser.section && (
-              <div style={{ fontSize: 11, color: "var(--text-paper-d)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meUser.section}</div>
+              <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{meUser.section}</div>
             )}
           </div>
         </div>
@@ -298,10 +299,10 @@ export function AppDashboard() {
               }}
             >
               <AppIcon icon={manifest.icon} color={manifest.color} />
-              <h1 style={{ fontSize: 28, fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
+              <h1 style={{ fontSize: pxToRem(28), fontWeight: 800, margin: 0, letterSpacing: "-0.02em" }}>
                 No {noun.toLowerCase()} yet
               </h1>
-              <p style={{ color: "var(--text-paper-d)", fontSize: 14, margin: 0, maxWidth: 420 }}>
+              <p style={{ color: "var(--text-paper-d)", fontSize: pxToRem(14), margin: 0, maxWidth: 420 }}>
                 {manifest.description || `Create your first ${manifest.item.noun.toLowerCase()} to get started.`}
               </p>
               <Link
@@ -315,7 +316,7 @@ export function AppDashboard() {
                   borderRadius: "var(--radius-btn)",
                   background: "var(--accent)",
                   color: "var(--white)",
-                  fontSize: 14,
+                  fontSize: pxToRem(14),
                   fontWeight: 600,
                   textDecoration: "none",
                 }}
@@ -331,10 +332,10 @@ export function AppDashboard() {
         <div style={{ padding: "28px 28px 18px", display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 24, borderBottom: "1px solid var(--paper-3)" }}>
           <div>
             <CapsLabel>{noun}</CapsLabel>
-            <h1 style={{ fontSize: 40, fontWeight: 800, margin: "10px 0 0", letterSpacing: "-0.02em" }}>
+            <h1 style={{ fontSize: pxToRem(40), fontWeight: 800, margin: "10px 0 0", letterSpacing: "-0.02em" }}>
               {openCount} open <span style={{ color: "var(--accent)" }}>·</span> {criticalCount} critical
             </h1>
-            <p style={{ color: "var(--text-paper-d)", fontSize: 14, margin: "8px 0 0" }}>
+            <p style={{ color: "var(--text-paper-d)", fontSize: pxToRem(14), margin: "8px 0 0" }}>
               All {noun.toLowerCase()} are visible to your org. Pin the ones you own.
             </p>
           </div>
@@ -359,8 +360,8 @@ export function AppDashboard() {
                 onClick={() => setView(t.key)}
                 style={{ padding: "12px 0", border: "none", borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`, background: "transparent", display: "flex", alignItems: "center", gap: 6, cursor: "pointer", font: "inherit" }}
               >
-                <span style={{ fontSize: 14, fontWeight: active ? 600 : 400, color: active ? "var(--text-paper)" : "var(--text-paper-d)" }}>{t.label}</span>
-                <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: active ? "var(--accent)" : "var(--text-paper-d2)" }}>{t.count}</span>
+                <span style={{ fontSize: pxToRem(14), fontWeight: active ? 600 : 400, color: active ? "var(--text-paper)" : "var(--text-paper-d)" }}>{t.label}</span>
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: active ? "var(--accent)" : "var(--text-paper-d2)" }}>{t.count}</span>
               </button>
             );
           })}
@@ -381,7 +382,7 @@ export function AppDashboard() {
             style={{
               height: 28,
               padding: "0 10px",
-              fontSize: 12,
+              fontSize: pxToRem(12),
               borderRadius: "var(--radius-btn)",
               border: "1px solid var(--paper-3)",
               background: "var(--white)",
@@ -393,7 +394,7 @@ export function AppDashboard() {
             {t("dash.clearFilters")}
           </button>
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 12, color: "var(--text-paper-d)" }}>
+          <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
             showing {visible.length} of {items.length}
           </span>
         </div>
@@ -404,7 +405,7 @@ export function AppDashboard() {
             <div role="row" style={{ display: "grid", gridTemplateColumns: GRID, padding: "10px 16px", borderBottom: "1px solid var(--paper-3)", alignItems: "center", gap: 10 }}>
               <div />
               {[manifest.item.noun, manifest.labels[sevField] ?? "Severity", "Topic · product", "Owner", "Updated"].map((h) => (
-                <div key={h} role="columnheader" style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-paper-d)" }}>
+                <div key={h} role="columnheader" style={{ fontSize: pxToRem(10), fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--text-paper-d)" }}>
                   {h}
                 </div>
               ))}
@@ -435,7 +436,7 @@ export function AppDashboard() {
               />
             ))}
 
-            <div style={{ padding: "10px 16px", background: "var(--paper-2)", borderTop: "1px solid var(--paper-3)", fontSize: 12, color: "var(--text-paper-d)" }}>
+            <div style={{ padding: "10px 16px", background: "var(--paper-2)", borderTop: "1px solid var(--paper-3)", fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
               {visible.length === 0 ? "0" : `1–${visible.length}`} of {items.length}
             </div>
           </div>
@@ -462,7 +463,7 @@ const GRID = "32px 2.4fr 0.8fr 1.4fr 1.2fr 0.9fr";
 
 function CapsLabel({ children }: { children: ReactNode }) {
   return (
-    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-paper-d2)" }}>
+    <div style={{ fontSize: pxToRem(10), fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-paper-d2)" }}>
       {children}
     </div>
   );
@@ -478,8 +479,8 @@ function Metric({ label, value, sub }: { label: string; value: string; sub: stri
   return (
     <div style={{ minWidth: 120 }}>
       <CapsLabel>{label}</CapsLabel>
-      <div style={{ fontSize: 30, fontWeight: 800, marginTop: 6, letterSpacing: "-0.02em" }}>{value}</div>
-      <div style={{ fontSize: 11, color: "var(--text-paper-d2)", marginTop: 2 }}>{sub}</div>
+      <div style={{ fontSize: pxToRem(30), fontWeight: 800, marginTop: 6, letterSpacing: "-0.02em" }}>{value}</div>
+      <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)", marginTop: 2 }}>{sub}</div>
     </div>
   );
 }
@@ -490,12 +491,12 @@ function NavRow({ icon, label, count, active, onClick }: { icon: IconName; label
       type="button"
       onClick={onClick}
       data-active={active ? "" : undefined}
-      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", height: 32, padding: "0 10px", border: "none", borderRadius: 4, background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent)" : "var(--text-paper-d)", font: "inherit", fontSize: 13, cursor: "pointer", textAlign: "left" }}
+      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", height: 32, padding: "0 10px", border: "none", borderRadius: 4, background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent)" : "var(--text-paper-d)", font: "inherit", fontSize: pxToRem(13), cursor: "pointer", textAlign: "left" }}
     >
       <Icon name={icon} size={15} />
       <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: active ? 600 : 400 }}>{label}</span>
       {count != null && (
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: active ? "var(--accent)" : "var(--text-paper-d2)" }}>{count}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: active ? "var(--accent)" : "var(--text-paper-d2)" }}>{count}</span>
       )}
     </button>
   );
@@ -527,7 +528,7 @@ function FilterSelect({
       data-active={active ? "" : undefined}
       value={value}
       onChange={(e) => onChange(e.target.value)}
-      style={{ height: 28, padding: "0 8px", fontSize: 12, fontFamily: "inherit", color: active ? "var(--accent)" : "var(--text-paper)", background: "var(--white)", border: `1px solid ${active ? "var(--accent)" : "var(--paper-3)"}`, borderRadius: "var(--radius-btn)", cursor: "pointer" }}
+      style={{ height: 28, padding: "0 8px", fontSize: pxToRem(12), fontFamily: "inherit", color: active ? "var(--accent)" : "var(--text-paper)", background: "var(--white)", border: `1px solid ${active ? "var(--accent)" : "var(--paper-3)"}`, borderRadius: "var(--radius-btn)", cursor: "pointer" }}
     >
       <option value="any">{prefix} · any</option>
       {options.map((o) => (
@@ -584,11 +585,11 @@ function ItemRow({
       </button>
 
       <div style={{ minWidth: 0 }}>
-        <Link to={`/a/${slug}/${encodeURIComponent(item.resource_id)}`} onClick={onOpen} style={{ color: "var(--text-paper)", textDecoration: "none", fontWeight: 600, fontSize: 14 }}>
+        <Link to={`/a/${slug}/${encodeURIComponent(item.resource_id)}`} onClick={onOpen} style={{ color: "var(--text-paper)", textDecoration: "none", fontWeight: 600, fontSize: pxToRem(14) }}>
           {item.title}
         </Link>
         {summary && (
-          <div style={{ fontSize: 12, color: "var(--text-paper-d)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{summary}</div>
+          <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)", marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{summary}</div>
         )}
         {statusVal && (
           <div style={{ marginTop: 6 }}>
@@ -610,26 +611,26 @@ function ItemRow({
           ))}
       </div>
 
-      <div style={{ minWidth: 0, fontSize: 13 }}>
+      <div style={{ minWidth: 0, fontSize: pxToRem(13) }}>
         <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", overflow: "hidden" }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{topics[0] ?? ""}</span>
           {topics.length > 1 && (
-            <span title={topics.slice(1).join(", ")} style={{ flexShrink: 0, padding: "1px 5px", border: "1px solid var(--paper-3)", borderRadius: 3, fontSize: 10, color: "var(--text-paper-d)", fontFamily: "var(--font-mono)" }}>
+            <span title={topics.slice(1).join(", ")} style={{ flexShrink: 0, padding: "1px 5px", border: "1px solid var(--paper-3)", borderRadius: 3, fontSize: pxToRem(10), color: "var(--text-paper-d)", fontFamily: "var(--font-mono)" }}>
               +{topics.length - 1}
             </span>
           )}
         </div>
         {product && (
-          <div style={{ fontSize: 11, color: "var(--text-paper-d)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product}</div>
+          <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", fontFamily: "var(--font-mono)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{product}</div>
         )}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <UserAvatar userId={item.owner} size={26} />
-        <span style={{ fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner.name}</span>
+        <span style={{ fontSize: pxToRem(13), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{owner.name}</span>
       </div>
 
-      <div style={{ fontSize: 13, color: "var(--text-paper-d)" }}>{ago(item.updated_time)}</div>
+      <div style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>{ago(item.updated_time)}</div>
     </div>
   );
 }

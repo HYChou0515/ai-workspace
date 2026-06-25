@@ -20,6 +20,7 @@ import {
 } from "../api/monitor";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
+import { pxToRem } from "../lib/pxToRem";
 
 const SPAN_LABEL: Record<string, string> = {
   generation: "LLM",
@@ -47,7 +48,7 @@ function SpanRow({ span }: { span: TraceSpan }) {
       <span
         style={{
           fontFamily: "var(--font-mono)",
-          fontSize: 10,
+          fontSize: pxToRem(10),
           color: "var(--text-paper-d2)",
           minWidth: 52,
         }}
@@ -58,7 +59,7 @@ function SpanRow({ span }: { span: TraceSpan }) {
         {span.label}
       </span>
       {tokens && (
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-paper-d)" }}>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
           {tokens}
         </span>
       )}
@@ -93,7 +94,7 @@ function TraceRow({ trace }: { trace: Trace }) {
           style={{
             padding: "2px 8px",
             borderRadius: 999,
-            fontSize: 11,
+            fontSize: pxToRem(11),
             fontWeight: 600,
             background: "var(--accent-soft)",
             color: "var(--accent-h)",
@@ -107,7 +108,7 @@ function TraceRow({ trace }: { trace: Trace }) {
             title={trace.groupId}
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
+              fontSize: pxToRem(11),
               color: "var(--text-paper-d2)",
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -119,22 +120,22 @@ function TraceRow({ trace }: { trace: Trace }) {
           </span>
         )}
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
+        <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
           {trace.spans.length} step{trace.spans.length === 1 ? "" : "s"}
         </span>
         {totalTokens > 0 && (
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, color: "var(--text-paper-d)" }}>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
             ↑{trace.inputTokens} ↓{trace.outputTokens}
           </span>
         )}
         {!trace.done && (
-          <span style={{ fontSize: 10, color: "var(--accent-h)" }}>live</span>
+          <span style={{ fontSize: pxToRem(10), color: "var(--accent-h)" }}>live</span>
         )}
       </button>
       {open && (
         <div style={{ paddingBottom: 8 }}>
           {trace.spans.length === 0 ? (
-            <div style={{ padding: "4px 10px 4px 30px", fontSize: 12, color: "var(--text-paper-d2)" }}>
+            <div style={{ padding: "4px 10px 4px 30px", fontSize: pxToRem(12), color: "var(--text-paper-d2)" }}>
               No steps recorded.
             </div>
           ) : (

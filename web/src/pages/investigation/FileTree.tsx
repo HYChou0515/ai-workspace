@@ -15,6 +15,7 @@ import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
+import { pxToRem } from "../../lib/pxToRem";
 
 type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
@@ -25,7 +26,7 @@ const uploadMenuItem: React.CSSProperties = {
   width: "100%",
   textAlign: "left",
   padding: "5px 14px",
-  fontSize: 12,
+  fontSize: pxToRem(12),
   color: "var(--text-paper)",
   background: "transparent",
 };
@@ -424,7 +425,7 @@ export function FileTree({
         }}
       >
         {tree.length === 0 && !creating && (
-          <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
+          <div style={{ padding: "4px 14px", color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
             No files yet.
           </div>
         )}
@@ -542,7 +543,7 @@ function InlineEdit({
           border: "1px solid var(--accent)",
           borderRadius: 3,
           padding: "1px 4px",
-          fontSize: 12,
+          fontSize: pxToRem(12),
           outline: "none",
           background: "var(--white)",
           color: "var(--text-paper)",
@@ -662,7 +663,7 @@ function TreeRow({
             padding: `4px 14px 4px ${indent}px`,
             textAlign: "left",
             color: "var(--text-paper-d)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             background: dropOver
               ? "var(--accent-soft)"
               : selectedSet.has(node.path)
@@ -757,7 +758,7 @@ function TreeRow({
         borderLeft:
           active || selected ? "2px solid var(--accent)" : "2px solid transparent",
         color: active ? "var(--accent-h)" : "var(--text-paper)",
-        fontSize: 12,
+        fontSize: pxToRem(12),
         opacity: dragging ? 0.4 : 1,
       }}
     >
@@ -826,7 +827,7 @@ function TreeContextMenu({
         width: "100%",
         textAlign: "left",
         padding: "5px 14px",
-        fontSize: 12,
+        fontSize: pxToRem(12),
         color: "var(--text-paper)",
         background: "transparent",
       }}

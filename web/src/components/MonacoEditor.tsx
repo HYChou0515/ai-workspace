@@ -12,6 +12,8 @@
 
 import { lazy, Suspense } from "react";
 
+import { pxToRem } from "../lib/pxToRem";
+
 const LazyMonaco = lazy(() => import("./MonacoEditorImpl"));
 
 export type MonacoEditorProps = {
@@ -46,7 +48,7 @@ function EditorSkeleton({ minHeight = 120 }: { minHeight?: number }) {
         justifyContent: "center",
         color: "var(--text-paper-d2)",
         fontFamily: "var(--font-mono)",
-        fontSize: 12,
+        fontSize: pxToRem(12),
       }}
     >
       loading editor…
