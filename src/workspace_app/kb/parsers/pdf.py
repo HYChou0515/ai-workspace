@@ -62,13 +62,19 @@ def pdf_pages_to_documents(
     sparse_text_threshold: int = SPARSE_TEXT_THRESHOLD,
     parser_label: str = "PdfParser",
     page_word: str = "page",
+    page_range: tuple[int, int] | None = None,
 ) -> list[Document]:
     """One Document per page: text layer + (selectively) VLM markdown.
 
     A page is "visual" when its text layer is sparse OR it embeds
     images; visual pages render → VLM describe, and the description is
     appended after the verbatim text layer. Pages that end up with no
-    content at all (sparse + no VLM) produce no Document."""
+    content at all (sparse + no VLM) produce no Document.
+
+    ``page_range`` (#227), when given, limits work to pages in the
+    half-open ``[start, end)`` interval — the fan-out process job's slice
+    — while ``page`` metadata and the progress ``N/total`` stay global so
+    downstream chunk ``seq`` and the FE progress remain doc-wide."""
     import pypdf
     from llama_index.core.schema import Document
 
@@ -76,6 +82,8 @@ def pdf_pages_to_documents(
     total = len(reader.pages)
     docs: list[Document] = []
     for i, page in enumerate(reader.pages):
+        if page_range is not None and not (page_range[0] <= i < page_range[1]):
+            continue  # outside this process job's slice — skipped cheaply
         text = (page.extract_text() or "").strip()
         try:
             has_images = bool(page.images)
@@ -122,6 +130,14 @@ class PdfParser(IParser):
     def matches(self, *, filename: str, mime: str, source: IParserInput) -> bool:
         return mime == "application/pdf" or filename.lower().endswith(".pdf")
 
+    def count_units(self, source: IParserInput, *, filename: str, mime: str) -> int:
+        """Page count (#227) — cheap: pypdf reads the page tree without
+        rendering or extracting text, so the splitter can size the fan-out
+        without spending a single VLM call."""
+        import pypdf
+
+        return len(pypdf.PdfReader(io.BytesIO(source.as_bytes())).pages)
+
     def parse(
         self,
         source: IParserInput,
@@ -130,6 +146,7 @@ class PdfParser(IParser):
         mime: str,
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
     ) -> list[Document]:
         return pdf_pages_to_documents(
             source.as_bytes(),
@@ -138,4 +155,5 @@ class PdfParser(IParser):
             describer=self._describer,
             on_progress=on_progress,
             sparse_text_threshold=self._sparse_text_threshold,
+            page_range=unit_range,
         )

@@ -36,7 +36,9 @@ def test_iparser_requires_parse_and_matches():
     instantiated — caught at construction time, not at first use."""
 
     class MissingMatches(IParser):
-        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+        def parse(
+            self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None
+        ):  # type: ignore[no-untyped-def]
             return []
 
     class MissingParse(IParser):
@@ -69,8 +71,36 @@ def test_a_complete_iparser_instance_can_be_constructed():
         def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
             return filename.endswith(".hello")
 
-        def parse(self, source, *, filename, mime, on_progress=None, on_preview=None):  # type: ignore[no-untyped-def]
+        def parse(
+            self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None
+        ):  # type: ignore[no-untyped-def]
             return []
 
     p = HelloParser()
     assert isinstance(p, IParser)
+
+
+class _NoOverrideParser(IParser):
+    """Overrides only the two abstract methods — inherits the seam defaults."""
+
+    def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
+        return True
+
+    def parse(self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None):  # type: ignore[no-untyped-def]
+        return []
+
+
+def test_count_units_defaults_to_one():
+    """A parser that doesn't override ``count_units`` reports a single
+    unit — so the fan-out splitter (#227) never shreds it; it indexes as
+    one job, exactly as before the seam existed."""
+    p = _NoOverrideParser()
+    # source is unused by the default count_units, so None is fine at runtime.
+    assert p.count_units(source=None, filename="a.bin", mime="x") == 1  # ty: ignore[invalid-argument-type]
+
+
+def test_parse_accepts_unit_range_kwarg():
+    """Every parser's ``parse`` accepts ``unit_range`` so the fan-out
+    process job can ask for a sub-range uniformly; ``None`` means whole."""
+    p = _NoOverrideParser()
+    assert p.parse(None, filename="a.bin", mime="x", unit_range=(0, 1)) == []

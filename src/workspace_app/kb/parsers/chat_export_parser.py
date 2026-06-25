@@ -48,6 +48,7 @@ class ChatExportParser(IParser):
         mime: str,
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
     ) -> list[Document]:
         from llama_index.core.schema import Document
 

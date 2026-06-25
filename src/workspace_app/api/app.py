@@ -249,6 +249,12 @@ class _FileEntry(BaseModel):
 
 
 _READONLY_DIR = ".readonly"
+# #227: how often the background index-sweeper recovers stuck fan-out runs, and
+# how long a run may go without progress before its missing batches are declared
+# failed. The grace must exceed one batch's worst case (≈ the broker's 30-min
+# consumer-ack timeout) so a slow-but-live run is never falsely failed.
+_INDEX_SWEEP_INTERVAL_S = 300.0
+_INDEX_STUCK_AFTER_S = 3600.0
 
 
 def _is_readonly_path(path: str) -> bool:
@@ -617,6 +623,22 @@ def create_app(
         except asyncio.CancelledError:
             return
 
+    async def _index_sweeper() -> None:
+        """#227: periodically recover stuck index fan-outs — a lost finalize
+        trigger (winner crashed) or a dead-lettered batch — so a doc never wedges
+        in 'indexing'. Queue-agnostic (CAS), idempotent, and cheap (one indexed
+        query), run off the loop since it does blocking specstar I/O."""
+        try:
+            while True:
+                await asyncio.sleep(_INDEX_SWEEP_INTERVAL_S)
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        app.state.index_coordinator.sweep_stuck_runs,
+                        stuck_after_seconds=_INDEX_STUCK_AFTER_S,
+                    )
+        except asyncio.CancelledError:
+            return
+
     # Issue #51: the sanity-check service — latest results in memory,
     # every executed probe persisted as a CheckRun row (audit trail).
     def _persist_check_run(result: CheckResult) -> None:
@@ -658,6 +680,7 @@ def create_app(
             with boot_step("start model-sanity consumer"):
                 app.state.sanity_coordinator.start_consuming()
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
+        bg.append(asyncio.create_task(_index_sweeper()))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(health_service.run_round()))
         if code_sync_check_interval is not None:
             bg.append(asyncio.create_task(_code_sync_sweeper()))

@@ -293,6 +293,63 @@ def test_pptx_converts_via_soffice_then_reuses_pdf_page_logic(monkeypatch, tmp_p
     assert vlm.calls == []  # healthy text layer → no VLM spend
 
 
+def _sparse_pdf_n(n: int) -> bytes:
+    """N blank pages — the multi-page "slide export" shape, for fan-out
+    (#227) range tests. Every page is sparse, so each goes to the VLM."""
+    import io
+
+    import pypdf
+
+    w = pypdf.PdfWriter()
+    for _ in range(n):
+        w.add_blank_page(width=612, height=792)
+    buf = io.BytesIO()
+    w.write(buf)
+    return buf.getvalue()
+
+
+def test_pdf_count_units_is_the_page_count():
+    """#227: count_units = page count (cheap, no VLM) so the fan-out
+    splitter knows how many process jobs to spawn — even with no VLM."""
+    p = PdfParser(None)
+    assert p.count_units(_input(_sparse_pdf_n(5), "deck.pdf"), filename="deck.pdf", mime="") == 5
+    assert p.count_units(_input(_TEXT_PDF, "paper.pdf"), filename="paper.pdf", mime="") == 1
+
+
+def test_pdf_parse_unit_range_processes_only_those_pages():
+    """#227: a process job's unit_range=[a,b) describes ONLY pages a..b-1,
+    keeping global ``page`` metadata so chunk seq stays globally ordered.
+    The VLM is spent only on the in-range pages — the whole point of fan-out."""
+    vlm, d = _describer()
+    p = PdfParser(d)
+    docs = list(
+        p.parse(
+            _input(_sparse_pdf_n(5), "deck.pdf"),
+            filename="deck.pdf",
+            mime="application/pdf",
+            unit_range=(1, 3),
+        )
+    )
+    assert [doc.metadata["page"] for doc in docs] == [2, 3]
+    # Only pages 2 and 3 reached the VLM — pages 1, 4, 5 were never rendered.
+    prompts = [str(c["prompt"]) for c in vlm.calls]
+    assert len(prompts) == 2
+    assert "page 2 of deck.pdf" in prompts[0]
+    assert "page 3 of deck.pdf" in prompts[1]
+
+
+def test_pdf_parse_unit_range_none_is_the_whole_file():
+    """unit_range=None (the default) parses every page — backwards-compatible
+    with the pre-fan-out single-job path."""
+    p = PdfParser(None)
+    whole = list(
+        p.parse(_input(_sparse_pdf_n(3), "d.pdf"), filename="d.pdf", mime="", unit_range=None)
+    )
+    # No VLM → sparse pages yield nothing, but count_units still sees all 3.
+    assert whole == []
+    assert p.count_units(_input(_sparse_pdf_n(3), "d.pdf"), filename="d.pdf", mime="") == 3
+
+
 def test_pdf_progress_reported_per_vlm_page():
     """Q11: each VLM-bound page reports `PdfParser: page N/M → VLM`
     through on_progress (→ SourceDoc.status_detail)."""
