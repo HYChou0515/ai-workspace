@@ -1501,6 +1501,9 @@ def create_app(
             collection=collection,
             path=path,
             user=captured_user,
+            # #234: store-then-enqueue — the upload auto-indexes off the request path via
+            # the IndexCoordinator, exactly like the KB upload endpoint.
+            enqueue=index_coordinator.enqueue,
             journal_dir=journal_dir,
         )
 
@@ -1533,20 +1536,11 @@ def create_app(
 
     async def _wf_collection_has(collection: str, path: str) -> bool:
         """Backs ``check.collection_has`` (§8): did ``path`` land in ``collection``
-        (a name or id) as a ``ready`` doc? Read back from the KB at its natural-key id."""
-        from ..kb.doc_id import encode_doc_id
-        from ..workflow.capabilities import resolve_collection_id
+        (a name or id)? #234: ingest is async, so ``landed`` means the SourceDoc EXISTS
+        — the upload succeeded — not that the background index has flipped it to ``ready``."""
+        from ..workflow.capabilities import collection_has_doc
 
-        try:
-            collection_id = resolve_collection_id(spec, collection)
-        except CollectionNotFound:
-            return False
-        doc_rm = spec.get_resource_manager(SourceDoc)
-        try:
-            doc = doc_rm.get(encode_doc_id(collection_id, path.lstrip("/"))).data
-        except ResourceIDNotFoundError:
-            return False
-        return isinstance(doc, SourceDoc) and doc.status == "ready"
+        return collection_has_doc(spec, collection=collection, path=path)
 
     def _wf_wire_handle(
         wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str

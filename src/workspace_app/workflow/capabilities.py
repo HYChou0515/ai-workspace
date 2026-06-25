@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 
 from specstar import SpecStar
 
@@ -60,6 +61,28 @@ def resolve_collection_id(spec: SpecStar, ref: str) -> str:
     raise CollectionNotFound(ref)
 
 
+def collection_has_doc(spec: SpecStar, *, collection: str, path: str) -> bool:
+    """Has ``path`` landed in ``collection`` (a name or id)? Backs ``check.collection_has``
+    (§8). #234: ingest is async (store + enqueue), so ``landed`` means the SourceDoc EXISTS
+    at its natural-key id — the deterministic upload succeeded — NOT that the background
+    chunk+embed has flipped it to ``ready`` (it usually hasn't yet when the run checks).
+    A missing collection or doc is simply ``False`` (fail-closed)."""
+    from specstar.types import ResourceIDNotFoundError
+
+    from ..resources.kb import SourceDoc
+
+    try:
+        collection_id = resolve_collection_id(spec, collection)
+    except CollectionNotFound:
+        return False
+    doc_id = encode_doc_id(collection_id, path.lstrip("/"))
+    try:
+        doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    except ResourceIDNotFoundError:
+        return False
+    return isinstance(doc, SourceDoc)
+
+
 async def ingest_to_collection(
     spec: SpecStar,
     ingestor: Ingestor,
@@ -69,16 +92,24 @@ async def ingest_to_collection(
     collection: str,
     path: str,
     user: str,
+    enqueue: Callable[[str, str], object],
     journal_dir: str = "/.workflow/_default",
 ) -> str:
-    """Ingest a workspace file into an existing KB collection as ``user`` (manual §8).
+    """Upload a workspace file into an existing KB collection as ``user`` (manual §8).
+
+    #234: STORE only (fast — the SourceDoc lands as ``status="indexing"``), then hand
+    each stored doc to ``enqueue(doc_id, collection_id)`` — the IndexCoordinator's
+    ``enqueue``, which queues a durable index job a background consumer drains off the
+    request path (chunk + embed). This is the same upload → auto-index path the KB
+    upload endpoint takes, so the deterministic node never blocks on a slow embedder.
 
     Idempotent: the SourceDoc id is ``encode_doc_id(collection, path)``, so a re-run
-    upserts rather than duplicating. Writes a ``<journal_dir>/step_ingest/<path>.done``
+    upserts rather than duplicating; identical bytes are a no-op (``store`` returns
+    ``[]`` → nothing to enqueue). Writes a ``<journal_dir>/step_ingest/<path>.done``
     receipt so the deterministic node is checkpointable on re-run (manual §9); the
     receipt lives under the run's journal folder (#136) — ``journal_dir`` is the run
     handle's ``journal_dir`` (legacy/no-run callers fall back to ``_default``).
-    Blocking ingest is offloaded so it never sits on the event loop. Returns the
+    Blocking ``store`` is offloaded so it never sits on the event loop. Returns the
     SourceDoc id.
     """
     collection_id = resolve_collection_id(spec, collection)
@@ -86,10 +117,12 @@ async def ingest_to_collection(
     filename = path.lstrip("/")
     data = await store.read(workspace_id, _abs(path))
     ids = await asyncio.to_thread(
-        ingestor.ingest, collection_id=collection_id, user=user, filename=filename, data=data
+        ingestor.store, collection_id=collection_id, user=user, filename=filename, data=data
     )
-    # Re-ingesting identical bytes is a no-op (returns []); the doc already exists
-    # at its natural-key id (manual §8 idempotency).
+    # Queue the slow chunk+embed off the request path; a no-op re-upload returns [] so
+    # nothing is enqueued (the doc already exists at its natural-key id, manual §8).
+    for stored_id in ids:
+        enqueue(stored_id, collection_id)
     doc_id = ids[0] if ids else encode_doc_id(collection_id, filename)
     receipt = json.dumps({"doc_id": doc_id, "collection": collection_id, "path": filename})
     await store.write(workspace_id, f"{journal_dir}/step_ingest/{filename}.done", receipt.encode())

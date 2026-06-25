@@ -48,6 +48,12 @@ _TODO = "context-card.todo.md"
 _CURRENT = ".readonly/context-card.current.md"
 _WARN = "⚠️"
 
+# The Hub's upload staging folder (#234). Uploaded files live under ``uploads/`` in the
+# workspace; this prefix is stripped before a file is ingested so it lands in the
+# collection at its bare path (``a.txt``, not ``uploads/a.txt``). Hardcoded for now —
+# making the folder profile-configurable is #198.
+_UPLOADS = "uploads/"
+
 # Human-readable reasons for the "did nothing" outcomes (#100 observability). A
 # no-op used to return a bare status token the UI showed as raw JSON; these are
 # surfaced as the run's message so the user sees WHY nothing happened, and how to
@@ -61,7 +67,7 @@ _MSG_MALFORMED_COLLECTIONS = (
     "知識庫清單（collections.json）有內容，但格式不正確、讀不到任何知識庫。"
     '每一項應為物件，例如 [{"id": "…", "name": "…"}]。請修正後再重新執行。'
 )
-_MSG_NO_FILES = "沒有找到要歸檔的檔案，已跳過。請把要歸檔的檔案放進 inputs/ 後再執行。"
+_MSG_NO_FILES = "沒有找到要歸檔的檔案，已跳過。請把要歸檔的檔案放進 uploads/ 後再執行。"
 
 
 async def _no_collections_result(wf: WorkflowHandle) -> dict[str, Any]:
@@ -319,8 +325,8 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     if not collections:
         return await _no_collections_result(wf)
     files = await wf.glob(
-        inputs.get("files", ["inputs/*"]),
-        exclude=inputs.get("except", ["inputs/input.json"]),
+        inputs.get("files", [f"{_UPLOADS}*"]),
+        exclude=inputs.get("except", [f"{_UPLOADS}input.json"]),
     )
     if not files:
         return {"status": "empty", "files": 0, "message": _MSG_NO_FILES}
@@ -366,8 +372,13 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     ingested = 0
     for f in files:
         coll = plan_by_file[f]["collection"]
-        await wf.ingest_to_collection(coll, f, phase="commit")
-        if (await collection_has(coll, f)(wf, None)).ok:
+        # #234: the ``uploads/`` staging prefix is NOT part of the doc's path in the
+        # collection — strip it so the doc lands at its bare path (``a.txt``, not
+        # ``uploads/a.txt``). The same stripped path feeds the landing check so both
+        # resolve to the same natural-key id.
+        dest = f.removeprefix("/").removeprefix(_UPLOADS)
+        await wf.ingest_to_collection(coll, dest, phase="commit")
+        if (await collection_has(coll, dest)(wf, None)).ok:
             ingested += 1
 
     cards = 0

@@ -85,8 +85,8 @@ def _handle(make_plan=None, landed_ok=True, find_existing=None):
 
 
 async def _seed(wf: WorkflowHandle) -> None:
-    await wf.write("inputs/a.txt", b"the M4 layer delaminated")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/a.txt", b"the M4 layer delaminated")
+    await wf.write("uploads/input.json", b"{}")
     await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
 
 
@@ -99,8 +99,8 @@ async def test_collections_workflow_is_discovered_and_coherent():
 async def test_no_collection_set_short_circuits_with_a_human_reason():
     run = _run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
-    await wf.write("inputs/a.txt", b"x")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/a.txt", b"x")
+    await wf.write("uploads/input.json", b"{}")
     await wf.write("collections.json", b"[]")  # empty set → nothing to classify into
     result = await run(wf, {})
     assert result["status"] == "no_collections"
@@ -114,8 +114,8 @@ async def test_malformed_collections_is_distinguished_from_empty():
     must say the file is malformed (a fixable format error), not 'no collections'."""
     run = _run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
-    await wf.write("inputs/a.txt", b"x")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/a.txt", b"x")
+    await wf.write("uploads/input.json", b"{}")
     await wf.write("collections.json", b'["collection-id-123"]')  # strings, wrong shape
     result = await run(wf, {})
     assert result["status"] == "malformed_collections"
@@ -144,7 +144,7 @@ async def test_no_files_to_archive_is_a_visible_skip():
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
     # Only the spec file is present → nothing to classify.
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/input.json", b"{}")
     result = await run(wf, {})
     assert result["status"] == "empty"
     assert result["message"]
@@ -176,7 +176,7 @@ async def test_approve_commits_the_drafted_card_and_ingests():
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     assert result == {"status": "approved", "ingested": 1, "cards": 1}
-    assert ingested == [("Defects", "/inputs/a.txt")]
+    assert ingested == [("Defects", "a.txt")]
     assert cards == [("Defects", ["M4"], "M4", "The fourth metal layer.")]
 
 
@@ -288,7 +288,7 @@ async def test_rerun_with_an_edited_definition_upserts_the_card_again():
     )
     await run(wf, {})
     assert cards[-1] == ("Defects", ["M4"], "M4", "The fourth metal interconnect layer.")
-    assert ingested == [("Defects", "/inputs/a.txt")]  # ingest stayed idempotent
+    assert ingested == [("Defects", "a.txt")]  # ingest stayed idempotent
 
 
 async def test_ingest_that_does_not_land_is_not_counted_but_cards_still_author():
@@ -300,7 +300,7 @@ async def test_ingest_that_does_not_land_is_not_counted_but_cards_still_author()
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     assert result == {"status": "approved", "ingested": 0, "cards": 1}
-    assert ingested == [("Defects", "/inputs/a.txt")]  # attempted, just not counted as landed
+    assert ingested == [("Defects", "a.txt")]  # attempted, just not counted as landed
 
 
 # --- deterministic helpers (unit-tested directly via the loaded module's globals) ---
@@ -445,8 +445,8 @@ async def test_commit_routes_by_the_block_collection_not_the_title():
     the diff can't misroute the card — the human can also re-route it to another collection."""
     run = _run()
     wf, _ingested, cards, _calls = _handle()
-    await wf.write("inputs/a.txt", b"x")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/a.txt", b"x")
+    await wf.write("uploads/input.json", b"{}")
     await wf.write("collections.json", b'[{"name": "Defects"}, {"name": "Notes"}]')
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
