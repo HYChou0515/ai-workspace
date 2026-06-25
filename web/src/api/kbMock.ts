@@ -140,11 +140,13 @@ export const mockKbApi: KbApi = {
     collections.delete(id);
     documents.delete(id);
   },
-  async reindexCollection(id) {
+  async reindexCollection(id, opts) {
     const list = documents.get(id) ?? [];
     documents.set(
       id,
-      list.map((d) => ({ ...d, status: "ready" })),
+      // `{ only: "failed" }` (issue #223) recovers just the `error` docs; the
+      // whole-collection call (no opts) re-indexes everything.
+      list.map((d) => (opts?.only === "failed" && d.status !== "error" ? d : { ...d, status: "ready" })),
     );
   },
   async listDocuments(collectionId, page) {
