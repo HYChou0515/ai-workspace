@@ -11,6 +11,7 @@ from workspace_app.workflow.checks import file_nonempty
 from workspace_app.workflow.engine import CheckResult, run_step
 from workspace_app.workflow.events import (
     AwaitingHumanEvent,
+    PhaseEntered,
     StepOutput,
     StepSkipped,
 )
@@ -340,6 +341,55 @@ async def test_human_gate_suspends_then_decision_resumes(spec_instance: SpecStar
     got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
     assert got.status is RunStatus.DONE
     assert got.result == {"status": "approved", "note": "lgtm"}
+
+
+async def test_reviewed_gate_greens_and_prior_phases_green_at_the_pause(spec_instance: SpecStar):
+    """#176: the human-reviewed gate phase must light up. While paused, the phases that
+    already finished show 'passed' (not stuck 'running'); after approval the gate phase
+    itself ends 'passed' (green) instead of reverting to grey."""
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={}, execute=_ok)
+        await human_gate(wf, phase="review", title="ok?", allow=["approve", "reject"])
+        return {"status": "approved"}
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="iR", profile="echo", captured_user="u")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert got.current_phase == "review"  # the gate is the current phase (slice 1)
+    assert next(p for p in got.phases if p.phase == "think").status == "passed"  # 瑕疵2
+    assert next(p for p in got.phases if p.phase == "review").status != "passed"  # still awaiting
+    # approve → resume → done
+    await orch.decide(slug="rca", item_id="iR", profile="echo", run_id=run_id, choice="approve")
+    await asyncio.sleep(0)
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert got.status is RunStatus.DONE
+    assert next(p for p in got.phases if p.phase == "review").status == "passed"  # #176: green
+    assert next(p for p in got.phases if p.phase == "think").status == "passed"
+
+
+async def test_resuming_does_not_replay_a_completed_phase_as_current(spec_instance: SpecStar):
+    """#176: on resume the finished phases are skipped — replaying them must NOT
+    re-enter them (no PhaseEntered, no backwards current_phase), so the highlight does
+    not flicker back to an already-done phase."""
+
+    async def run(wf, inputs):
+        await run_step(wf, name="think", phase="think", args={}, execute=_ok)
+        await human_gate(wf, phase="review", title="ok?", allow=["approve", "reject"])
+        return {"status": "approved"}
+
+    orch, fakes = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="iS", profile="echo", captured_user="u")
+    await asyncio.sleep(0)
+    fakes.events.clear()  # focus on what the resume publishes
+    await orch.decide(slug="rca", item_id="iS", profile="echo", run_id=run_id, choice="approve")
+    await asyncio.sleep(0)
+    entered = [e.phase for _k, e in fakes.events if isinstance(e, PhaseEntered)]
+    assert "think" not in entered  # the skipped, already-finished phase is not re-entered
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert got.status is RunStatus.DONE
+    assert got.current_phase != "think"  # current_phase never regressed to the skipped phase
 
 
 async def test_reject_decision_ends_run(spec_instance: SpecStar):

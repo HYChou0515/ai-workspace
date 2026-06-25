@@ -6,6 +6,7 @@ from specstar import SpecStar
 
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.driver import run_workflow
+from workspace_app.workflow.events import StepPassed, StepStarted
 from workspace_app.workflow.gate import AwaitingHuman, human_gate, record_decision
 from workspace_app.workflow.handle import WorkflowHandle
 from workspace_app.workflow.run import RunStatus, WorkflowRun
@@ -25,6 +26,31 @@ async def test_gate_returns_the_recorded_decision(wf: WorkflowHandle):
     decision = await human_gate(wf, phase="review", title="Export?")
     assert decision.choice == "approve"
     assert decision.input == "ship it"
+
+
+async def test_gate_emits_step_started_while_awaiting():
+    """#176: the gate is a step too — reaching it (no decision yet) emits StepStarted
+    so the phase enters the run's progress (a yellow, *current* node), instead of
+    being invisible until the FE overlays the pending-decision. No StepPassed yet."""
+    events: list[object] = []
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", emit=events.append)
+    with pytest.raises(AwaitingHuman):
+        await human_gate(wf, phase="review", title="ok?")
+    assert any(isinstance(e, StepStarted) and e.phase == "review" for e in events)
+    assert not any(isinstance(e, StepPassed) for e in events)
+
+
+async def test_gate_emits_step_passed_once_a_decision_exists():
+    """#176: the reviewed gate must light up green — reaching it with a recorded
+    decision emits StepPassed for its phase, so the phase ends 'passed' instead of
+    reverting to grey once the pending-decision overlay disappears."""
+    events: list[object] = []
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", emit=events.append)
+    await record_decision(wf, phase="review", choice="approve")
+    events.clear()
+    decision = await human_gate(wf, phase="review", title="ok?")
+    assert decision.choice == "approve"
+    assert any(isinstance(e, StepPassed) and e.phase == "review" for e in events)
 
 
 async def test_decision_artifact_lives_under_per_workflow_dir():
