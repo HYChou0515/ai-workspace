@@ -206,6 +206,26 @@ export const messages = {
   "wf.decision.cue": { "zh-TW": "需要你的決定", en: "Your decision needed" },
   "wf.decision.titleFallback": { "zh-TW": "需要你的決定", en: "Awaiting your decision" },
 
+  // #205 — context-card diff review (before approving an overwrite)
+  "cardDiff.view": { "zh-TW": "查看變更", en: "View changes" },
+  "cardDiff.title": { "zh-TW": "檢查卡片變更", en: "Review card changes" },
+  "cardDiff.current": { "zh-TW": "目前（唯讀）", en: "Current (read-only)" },
+  "cardDiff.proposed": { "zh-TW": "提案（可編輯）", en: "Proposed (editable)" },
+  "cardDiff.hint": {
+    "zh-TW": "左為現有卡片、右為將寫入的版本，可直接修改右側再核准。",
+    en: "Left is the existing card, right is what will be saved — edit the right side, then approve.",
+  },
+  "cardDiff.empty": {
+    "zh-TW": "沒有要檢查的卡片變更。",
+    en: "No card changes to review.",
+  },
+  "cardDiff.loading": { "zh-TW": "載入變更中…", en: "Loading changes…" },
+  "cardDiff.close": { "zh-TW": "關閉", en: "Close" },
+  "cardDiff.allNew": {
+    "zh-TW": "全部都是新增卡片（沒有會被覆寫的既有卡片）。",
+    en: "All cards are new — nothing existing will be overwritten.",
+  },
+
   // Agent run banners (agentLog reducer) — de-jargoned behavior descriptions
   "banner.sandboxIdle": {
     "zh-TW": "閒置太久，下次操作會重新啟動執行環境。",

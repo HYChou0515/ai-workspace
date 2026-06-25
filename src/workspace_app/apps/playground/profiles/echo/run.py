@@ -49,6 +49,16 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
         await wf.ingest_to_collection(cid, "out/doc.md", phase="think")
         verdict = await collection_has(cid, "out/doc.md")(wf, None)
         return {"status": "done", "n": n, "landed": verdict.ok}
+    if inputs.get("find_card"):
+        # #205: exercise the read-only find-overwrite-target capability through the real
+        # wiring — the existing card a commit-time upsert(keys) would overwrite (a hit),
+        # and a key that matches nothing (a miss → None).
+        cid = inputs["find_card"]
+        hit = await wf.find_overwrite_card(
+            cid, inputs.get("keys", []), title=inputs.get("title", "")
+        )
+        miss = await wf.find_overwrite_card(cid, ["definitely-absent-key"], title="")
+        return {"status": "done", "found": hit, "miss": miss}
     if inputs.get("gate"):
         decision = await human_gate(
             wf,

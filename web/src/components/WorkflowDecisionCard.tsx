@@ -24,10 +24,14 @@ export function WorkflowDecisionCard({
   decision,
   onDecide,
   busy,
+  aux,
 }: {
   decision: PendingDecision;
   onDecide: (choice: string, input?: string) => void;
   busy?: boolean;
+  // Extra action rendered alongside the decision buttons (#205: the "View changes"
+  // button that opens the context-card diff). Generic so RCA gates pass nothing.
+  aux?: React.ReactNode;
 }) {
   const t = useT();
   const [revising, setRevising] = useState(false);
@@ -98,7 +102,8 @@ export function WorkflowDecisionCard({
           style={{ width: "100%", fontFamily: "inherit", fontSize: 12 }}
         />
       )}
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        {aux}
         {allow.map((choice) => {
           const isRevise = choice === "revise";
           const onClick = () => {

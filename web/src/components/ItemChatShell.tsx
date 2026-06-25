@@ -11,6 +11,7 @@ import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
 import { useDecide, useRun, useWorkflowProfiles } from "../hooks/useWorkflow";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
+import { CardDiffReview } from "./CardDiffReview";
 import { ChatSwitcher } from "./ChatSwitcher";
 import { CollectionsButton } from "./CollectionsButton";
 import { CollectionsPickerModal } from "./CollectionsPickerModal";
@@ -222,6 +223,17 @@ function ItemChatPanel({
             busy={decide.isPending}
             onDecide={(choice, input) =>
               decide.mutate(input === undefined ? { choice } : { choice, input })
+            }
+            aux={
+              <CardDiffReview
+                slug={slug}
+                itemId={itemId}
+                allow={gate.allow}
+                busy={decide.isPending}
+                onDecide={(choice, input) =>
+                  decide.mutate(input === undefined ? { choice } : { choice, input })
+                }
+              />
             }
           />
         </div>

@@ -42,10 +42,12 @@ def _g():
     return _run().__globals__
 
 
-def _handle(make_plan=None, landed_ok=True):
+def _handle(make_plan=None, landed_ok=True, find_existing=None):
     """A handle whose agent turn drafts a classify plan for the file named in the
     prompt (the plan path is parsed back out of the prompt). ``make_plan(prompt, n)``
-    overrides the default single-term confident plan per call."""
+    overrides the default single-term confident plan per call. ``find_existing(coll,
+    keys, title)`` fakes the #205 find-overwrite-target capability (None ⇒ no existing
+    card, so the snapshot is empty)."""
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     ingested: list = []
     cards: list = []
@@ -68,12 +70,16 @@ def _handle(make_plan=None, landed_ok=True):
         cards.append((coll, list(keys), title, body))
         return f"card:{title}"
 
+    async def find_card(coll, keys, title):
+        return find_existing(coll, keys, title) if find_existing else None
+
     async def landed(_coll, _path):
         return landed_ok
 
     wf.drive_turn = drive_turn
     wf._ingest = ingest
     wf._upsert_card = upsert_card
+    wf._find_card = find_card
     wf._collection_has = landed
     return wf, ingested, cards, calls
 
@@ -146,15 +152,18 @@ async def test_no_files_to_archive_is_a_visible_skip():
 
 async def test_classify_drafts_definitions_then_suspends_committing_nothing():
     """The agent drafts a definition while classifying; the workflow assembles it into
-    ``glossary.todo.md`` and suspends at the review gate — committing nothing."""
+    ``context-card.todo.md`` (with a read-only ``.readonly/`` snapshot beside it) and
+    suspends at the review gate — committing nothing."""
     run = _run()
     wf, ingested, cards, _calls = _handle()
     await _seed(wf)
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    glossary = await wf.read_text("glossary.todo.md")
-    assert "## M4" in glossary
-    assert "The fourth metal layer." in glossary  # AI-drafted definition, not a blank
+    todo = await wf.read_text("context-card.todo.md")
+    assert "## M4" in todo
+    assert "The fourth metal layer." in todo  # AI-drafted definition, not a blank
+    # the read-only "before" snapshot is written too (empty — nothing exists yet)
+    assert await wf.exists(".readonly/context-card.current.md")
     assert ingested == [] and cards == []  # nothing committed before approval
 
 
@@ -179,8 +188,8 @@ async def test_uncertain_draft_is_flagged_and_skipped_until_resolved():
     await _seed(wf)
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    glossary = await wf.read_text("glossary.todo.md")
-    assert "## reflow" in glossary and "⚠️" in glossary  # flagged, not silently dropped
+    todo = await wf.read_text("context-card.todo.md")
+    assert "## reflow" in todo and "⚠️" in todo  # flagged, not silently dropped
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     # confident M4 → a card; uncertain reflow stays a ⚠️ line → no card.
@@ -196,8 +205,11 @@ async def test_human_resolves_warning_in_ide_then_approve_authors_card():
     await _seed(wf)
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    # The human edits the draft in the IDE, replacing the ⚠️ line with a real definition.
-    await wf.write("glossary.todo.md", "## reflow\nOven step that melts solder paste.\n")
+    # The human edits the proposed card in the diff, replacing the ⚠️ line with a real def.
+    await wf.write(
+        "context-card.todo.md",
+        "## reflow\ncollection: Defects\nkeys: reflow\n\nOven step that melts solder paste.\n",
+    )
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     assert result["cards"] == 1
@@ -236,15 +248,15 @@ async def test_revise_redrafts_with_feedback_then_approve_commits():
     with pytest.raises(AwaitingHuman):
         await run(wf, {})  # revise → round 1 redraft → gate "review_1"
     assert seen_feedback  # feedback reached the re-draft prompt
-    glossary = await wf.read_text("glossary.todo.md")
-    assert "4th metal layer." in glossary and "verbose" not in glossary  # redraft overwrote
+    todo = await wf.read_text("context-card.todo.md")
+    assert "4th metal layer." in todo and "verbose" not in todo  # redraft overwrote
     await record_decision(wf, phase="review_1", choice="approve")
     result = await run(wf, {})
     assert result == {"status": "approved", "ingested": 1, "cards": 1}
     assert cards == [("Defects", ["M4"], "M4", "4th metal layer.")]
 
 
-async def test_gate_summary_points_to_the_ide_with_counts_and_routing():
+async def test_gate_summary_points_to_the_diff_with_counts_and_routing():
     run = _run()
     wf, _ingested, _cards, _calls = _handle(
         lambda _p, _n: _plan(_confident("M4"), _uncertain("reflow", "maybe oven"))
@@ -253,8 +265,8 @@ async def test_gate_summary_points_to_the_ide_with_counts_and_routing():
     with pytest.raises(AwaitingHuman) as ei:
         await run(wf, {})
     summary = ei.value.summary
-    assert "glossary.todo.md" in summary  # tells the human where to look
-    assert "2 term(s)" in summary and "1 still need" in summary  # counts incl. ⚠️
+    assert "查看變更" in summary  # tells the human to open the diff
+    assert "2 card(s)" in summary and "1 still need" in summary  # counts incl. ⚠️
     assert "→ Defects" in summary  # routing
 
 
@@ -269,8 +281,11 @@ async def test_rerun_with_an_edited_definition_upserts_the_card_again():
     await record_decision(wf, phase="review", choice="approve")
     await run(wf, {})
     assert cards == [("Defects", ["M4"], "M4", "The fourth metal layer.")]
-    # The human refines the definition in the IDE and re-runs the approved workflow.
-    await wf.write("glossary.todo.md", "## M4\nThe fourth metal interconnect layer.\n")
+    # The human refines the definition in the diff and re-runs the approved workflow.
+    await wf.write(
+        "context-card.todo.md",
+        "## M4\ncollection: Defects\nkeys: M4\n\nThe fourth metal interconnect layer.\n",
+    )
     await run(wf, {})
     assert cards[-1] == ("Defects", ["M4"], "M4", "The fourth metal interconnect layer.")
     assert ingested == [("Defects", "/inputs/a.txt")]  # ingest stayed idempotent
@@ -332,8 +347,8 @@ async def test_classify_check_rejects_bad_plan_shapes():
     assert (await check(wf, None)).ok  # valid
 
 
-def test_assemble_glossary_marks_uncertain_and_dedups():
-    asm = _g()["_assemble_glossary"]
+def test_proposed_cards_dedups_marks_uncertain_and_routes():
+    pc = _g()["_proposed_cards"]
     plans = {
         "/f1": _plan(
             _confident("M4", "metal 4"),
@@ -342,23 +357,113 @@ def test_assemble_glossary_marks_uncertain_and_dedups():
         ),
         "/f2": _plan(_confident("M4", "duplicate ignored")),
     }
-    out = asm(plans)
-    assert "## M4\nmetal 4\n" in out and out.count("## M4") == 1  # first appearance wins
-    assert "## reflow\n⚠️ oven\n" in out  # uncertain → ⚠️ + the guess
-    assert "## bare\n⚠️ draft a definition for this term\n" in out  # no draft → ⚠️ prompt
+    cards = pc(plans)
+    assert [c["title"] for c in cards] == ["M4", "reflow", "bare"]  # order, deduped
+    by_title = {c["title"]: c for c in cards}
+    assert by_title["M4"]["body"] == "metal 4"  # first appearance wins
+    assert by_title["M4"]["keys"] == ["M4"] and by_title["M4"]["collection"] == "Defects"
+    assert by_title["reflow"]["body"] == "⚠️ oven"  # uncertain → ⚠️ + the guess
+    assert by_title["bare"]["body"] == "⚠️ draft a definition for this term"  # no draft
 
 
-def test_term_collection_first_file_wins_and_skips_missing_collection():
-    tc = _g()["_term_collection"]
-    plans = {
-        "/a": _plan(_confident("t"), collection="A"),
-        "/b": _plan(_confident("t"), collection="B"),
-    }
-    assert tc(plans) == {"t": "A"}
-    assert tc({"/a": {"terms": [{"term": "t"}]}}) == {}  # no collection → skipped
+def test_render_cards_emits_diffable_blocks_with_keys_and_collection():
+    render = _g()["_render_cards"]
+    out = render(
+        [{"title": "M4", "collection": "Defects", "keys": ["M4", "Metal 4"], "body": "the 4th"}]
+    )
+    assert "## M4" in out
+    assert "collection: Defects" in out
+    assert "keys: M4, Metal 4" in out  # keys in-file so a narrowing shows in the diff
+    assert "the 4th" in out
+    assert render([]) == ""  # empty snapshot = every proposed card is new
 
 
-def test_parse_glossary_ignores_leading_text_and_warning_lines():
-    parse = _g()["_parse_glossary"]
-    assert parse("intro before any heading\n## b\nreal\n") == [("b", "real")]
-    assert parse("## a\n⚠️ guess\n\n## c\n⚠️ hint\nreal\n") == [("c", "real")]
+def test_parse_cards_reads_metadata_routes_and_skips_warning_only():
+    parse = _g()["_parse_cards"]
+    text = "## M4\ncollection: Defects\nkeys: M4, Metal 4\n\nthe 4th metal\n"
+    assert parse(text) == [
+        {"collection": "Defects", "keys": ["M4", "Metal 4"], "title": "M4", "body": "the 4th metal"}
+    ]
+    # leading text before any heading ignored; a ⚠️-only block authors no card
+    assert parse("intro\n## a\n⚠️ guess\n") == []
+    # a minimal hand-typed block: keys fall back to the title, collection stays blank
+    assert parse("## reflow\noven step\n") == [
+        {"collection": "", "keys": ["reflow"], "title": "reflow", "body": "oven step"}
+    ]
+
+
+# --- #205: the read-only "before" snapshot + collection-from-block routing ---
+
+
+def _existing(keys, title, body, ambiguity=1):
+    return lambda _coll, _ks, _t: (
+        {"keys": keys, "title": title, "body": body, "ambiguity": ambiguity}
+    )
+
+
+async def test_review_snapshot_shows_the_card_an_overwrite_would_replace():
+    """#205: when a term already names a card, the read-only snapshot carries that card's
+    CURRENT keys/title/body — so the diff shows before vs after and a silent key-narrowing
+    (multi-key existing → single-key proposal) is visible, not hidden in a body-only view."""
+    run = _run()
+    wf, _ingested, _cards, _calls = _handle(
+        find_existing=_existing(["M4", "Metal 4"], "Metal 4 layer", "the existing def")
+    )
+    await _seed(wf)
+    with pytest.raises(AwaitingHuman):
+        await run(wf, {})
+    todo = await wf.read_text("context-card.todo.md")
+    current = await wf.read_text(".readonly/context-card.current.md")
+    # proposed (todo) narrows to a single key + retitles to the term...
+    assert "## M4" in todo and "keys: M4\n" in todo
+    # ...while the read-only snapshot keeps the real card the upsert would overwrite.
+    assert "## Metal 4 layer" in current
+    assert "keys: M4, Metal 4" in current
+    assert "the existing def" in current
+
+
+async def test_review_snapshot_is_empty_when_every_card_is_new():
+    run = _run()
+    wf, _ingested, _cards, _calls = _handle()  # default find → None
+    await _seed(wf)
+    with pytest.raises(AwaitingHuman):
+        await run(wf, {})
+    assert await wf.read_text(".readonly/context-card.current.md") == ""
+
+
+async def test_ambiguous_overwrite_is_noted_in_the_summary():
+    run = _run()
+    wf, _ingested, _cards, _calls = _handle(find_existing=_existing(["M4"], "M4", "x", ambiguity=3))
+    await _seed(wf)
+    with pytest.raises(AwaitingHuman) as ei:
+        await run(wf, {})
+    assert "match more than one existing card" in ei.value.summary
+
+
+async def test_commit_routes_by_the_block_collection_not_the_title():
+    """#205: commit reads each card's collection from its block, so editing the title in
+    the diff can't misroute the card — the human can also re-route it to another collection."""
+    run = _run()
+    wf, _ingested, cards, _calls = _handle()
+    await wf.write("inputs/a.txt", b"x")
+    await wf.write("inputs/input.json", b"{}")
+    await wf.write("collections.json", b'[{"name": "Defects"}, {"name": "Notes"}]')
+    with pytest.raises(AwaitingHuman):
+        await run(wf, {})
+    # The human renames the title and routes the card to Notes in the diff.
+    await wf.write("context-card.todo.md", "## renamed\ncollection: Notes\nkeys: M4\n\nbody\n")
+    await record_decision(wf, phase="review", choice="approve")
+    await run(wf, {})
+    assert cards == [("Notes", ["M4"], "renamed", "body")]
+
+
+async def test_commit_rejects_a_block_routed_to_an_unknown_collection():
+    run = _run()
+    wf, _ingested, _cards, _calls = _handle()
+    await _seed(wf)  # only "Defects"
+    with pytest.raises(AwaitingHuman):
+        await run(wf, {})
+    await wf.write("context-card.todo.md", "## M4\ncollection: Nope\nkeys: M4\n\nbody\n")
+    await record_decision(wf, phase="review", choice="approve")
+    with pytest.raises(ValueError, match="not one of the Hub"):
+        await run(wf, {})

@@ -23,6 +23,7 @@ import {
 import { type FileEncoding, encodeText } from "../api/encoding";
 import type { FileService } from "../api/fileService";
 import type { FileContent } from "../api/types";
+import { isReadOnlyPath } from "../lib/readonly";
 
 export type SaveStatus = "clean" | "dirty" | "saving" | "saved" | "error";
 
@@ -136,8 +137,10 @@ export class FileBufferStore {
   }
 
   /** Update the in-memory text (live across all panes). Marks dirty unless
-   * the text matches the last-saved baseline. Never autosaves. */
+   * the text matches the last-saved baseline. Never autosaves. A read-only path
+   * (#205, the `.readonly/` snapshot) ignores edits — it can't be persisted. */
   setText(path: string, text: string): void {
+    if (isReadOnlyPath(path)) return;
     const prev = this.entries.get(path) ?? LOADING;
     this.set(path, {
       status: "ready",
@@ -166,6 +169,9 @@ export class FileBufferStore {
   /** Persist the buffer to the backend now (⌘S, notebook run, close→Save).
    * No-op when clean. Updates the baseline so dirty clears. */
   async save(path: string): Promise<void> {
+    // #205: a `.readonly/` snapshot is never persisted (the server refuses the
+    // PUT too) — guard here so a stray save() can't surface a 403.
+    if (isReadOnlyPath(path)) return;
     const entry = this.entries.get(path);
     if (!entry || entry.save === "saving" || !this.isDirty(path)) return;
     const text = entry.text;
@@ -239,6 +245,7 @@ export function useFileBuffer(path: string) {
   }, [store, path]);
   return {
     entry,
+    readOnly: isReadOnlyPath(path), // #205: renderers bind Monaco `readOnly` + hide save
     setText: useCallback((t: string) => store.setText(path, t), [store, path]),
     save: useCallback(() => store.save(path), [store, path]),
     flush: useCallback(() => store.flush(path), [store, path]),

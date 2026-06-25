@@ -847,6 +847,29 @@ async def test_list_files_prefix_filter(harness: Harness):
     assert sorted(paths) == ["/src/a.py", "/src/b.py"]
 
 
+async def test_list_files_marks_readonly_dir_entries(harness: Harness):
+    """Files under the reserved ``.readonly/`` directory (#205) are flagged
+    ``read_only`` so the IDE renders them non-editable; everything else is editable."""
+    await harness.filestore.write(harness.iid, "/a.txt", b"hi")
+    await harness.filestore.write(harness.iid, "/.readonly/context-card.current.md", b"snap")
+    resp = harness.client.get(harness.wpath("/files"))
+    assert resp.status_code == 200
+    ro = {it["path"]: it["read_only"] for it in resp.json()}
+    assert ro == {"/a.txt": False, "/.readonly/context-card.current.md": True}
+
+
+async def test_put_to_readonly_path_is_forbidden(harness: Harness):
+    """A write under ``.readonly/`` is server-enforced read-only (#205) — the snapshot
+    the human diffs against can't be hand-edited via the IDE. Normal paths still write."""
+    ok = harness.client.put(harness.wpath("/files/notes.md"), content=b"hi")
+    assert ok.status_code == 204
+    blocked = harness.client.put(
+        harness.wpath("/files/.readonly/context-card.current.md"), content=b"nope"
+    )
+    assert blocked.status_code == 403
+    assert not await harness.filestore.exists(harness.iid, "/.readonly/context-card.current.md")
+
+
 async def test_read_file_returns_text_for_utf8(harness: Harness):
     await harness.filestore.write(harness.iid, "/a.txt", b"hello")
     resp = harness.client.get(harness.wpath("/files/a.txt"))

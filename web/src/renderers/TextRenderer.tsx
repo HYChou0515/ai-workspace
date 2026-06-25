@@ -8,7 +8,7 @@ import { MonacoEditor, monacoLanguage } from "../components/MonacoEditor";
 import { useFileBuffer } from "../hooks/fileBuffer";
 
 export function TextRenderer({ path }: { path: string }) {
-  const { entry, setText } = useFileBuffer(path);
+  const { entry, setText, readOnly } = useFileBuffer(path);
 
   if (entry.status === "loading") return <Status>Loading {path}…</Status>;
   if (entry.status === "error") {
@@ -25,6 +25,7 @@ export function TextRenderer({ path }: { path: string }) {
         value={entry.text}
         onChange={setText}
         language={monacoLanguage(path)}
+        readOnly={readOnly}
         minimap
         minHeight={0}
       />

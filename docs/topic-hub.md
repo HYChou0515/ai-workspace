@@ -385,19 +385,25 @@ A Hub chat answers from three sources, cheapest first:
      (`collections.json`, §5) + write a digest + — while it still has the file open —
      **draft a definition for each unknown term**, flagging each as confident or not →
      `plan/r<round>/<f>.json` (gate: collection ∈ allowed set + `terms` shape).
-  2. **glossary** (deterministic): assemble the drafts into `glossary.todo.md` — a
-     confident draft becomes the definition; an uncertain one becomes a `⚠️` line the
-     human resolves. (No second agent pass: the drafting already happened in classify.)
+  2. **cards** (deterministic): assemble the drafts into proposed cards in
+     `context-card.todo.md` — one `## <title>` block per term carrying `collection` /
+     `keys` / body (a confident draft becomes the body; an uncertain one a `⚠️` line).
+     Beside it, write a **read-only "before" snapshot** `.readonly/context-card.current.md`:
+     for each proposed card, the existing card a commit-time upsert would **overwrite**
+     (its real keys/title/body), or an empty block when the card is new (#205). So the
+     two files diff block-by-block and a silent key-narrowing is visible, not hidden.
   3. **`human_gate`** (`approve` / `reject` / `revise`): the gate summary points to
-     `glossary.todo.md` with the term / `⚠️` counts + routing; the human **reads/edits
-     the draft in the IDE** (or opens another chat for LLM help — shared FileStore,
-     §3.1). **Approve** commits what's in the file (incl. their edits); **revise** +
-     a note re-runs the whole produce step to regenerate the drafts (overwriting),
-     re-gating; **reject** ends the run for interactive takeover.
+     **查看變更**, which opens a VSCode-style diff — left = `.readonly/context-card.current.md`
+     (read-only), right = `context-card.todo.md` (editable) — so an overwrite is never
+     blind-signed. The human reviews/edits the proposed cards **in the diff** (or another
+     chat for LLM help — shared FileStore, §3.1). **Approve** commits what's in the file
+     (incl. their edits); **revise** + a note re-runs the whole produce step to regenerate
+     the drafts (overwriting), re-gating; **reject** ends the run for interactive takeover.
   4. **commit** (deterministic, idempotent): `ingest_to_collection` the docs +
-     `upsert_context_card` (§8, #111) for each *filled* glossary entry — an entry that
-     is still only a `⚠️` line is skipped (unresolved), so re-classifying a term
-     updates its card instead of duplicating it.
+     `upsert_context_card` (§8, #111) for each *filled* block — the `collection` is read
+     straight from the block (so a human title edit can't misroute it), and an
+     unknown collection is rejected loudly. A block that is still only a `⚠️` line is
+     skipped (unresolved), so re-classifying a term updates its card, not duplicates it.
 - **`→consolidate`** — read current memory + recent chats, **rewrite** memory files
   (dedupe / merge / summarise / drop stale). Self-referential; last-write-wins on
   `memory/`. **Triggered via Run** (a human or an external scheduler hits the Run

@@ -6,20 +6,25 @@ PRODUCE: an agent node classifies each upload into one of the Hub's collections
 **drafts a short definition for each unknown domain term**, judging whether it is
 confident the draft is right (``plan/r<n>/<f>.json``, gated by ``classify_plan`` so the
 agent never holds a side-effecting tool). A deterministic node then assembles those
-drafts into ``glossary.todo.md``: confident drafts become the definition; uncertain ones
-become a ``⚠️`` line for the human to resolve.
+drafts into the proposed cards file ``context-card.todo.md`` (one ``## <title>`` block per
+term carrying ``collection`` / ``keys`` / body): confident drafts become the body, uncertain
+ones a ``⚠️`` line for the human to resolve. Alongside it, the node writes a READ-ONLY
+"before" snapshot ``.readonly/context-card.current.md`` — for each proposed card, the
+EXISTING card a commit-time upsert would overwrite (#205), so the human can diff the two
+and never blind-signs an overwrite.
 
-REVIEW: a ``human_gate`` (approve / reject / **revise**). The *content* to review is the
-drafted ``glossary.todo.md`` — the human reads/edits it in the IDE (shared FileStore,
-§3.1), then **approves** (commit what's there, incl. their edits). **Revise** + feedback
-re-runs the whole produce step to regenerate the drafts (overwriting). **Reject** ends
-the run for interactive takeover.
+REVIEW: a ``human_gate`` (approve / reject / **revise**). The human opens "查看變更" to
+diff ``context-card.todo.md`` (right, editable) against ``.readonly/context-card.current.md``
+(left, read-only) — VSCode-style — and edits the proposed cards in place before
+**approving** (commit what's there, incl. their edits). **Revise** + feedback re-runs the
+whole produce step to regenerate the drafts (overwriting). **Reject** ends the run.
 
 COMMIT (deterministic, idempotent): ``ingest_to_collection`` files each upload and
-``upsert_context_card`` (§8, #111) authors a context card for each *filled* glossary
-entry — create-or-update by key, so re-classifying a term updates its card. Entries that
-are still only a ``⚠️`` line are skipped (unresolved). Re-run replays completed steps
-(§9); nothing reaches a collection before approval.
+``upsert_context_card`` (§8, #111) authors a context card for each *filled* block — the
+``collection`` is read straight from the block (so a human title edit can't misroute it),
+keys/title/body full-overwrite by key. Blocks that are still only a ``⚠️`` line are skipped
+(unresolved). Re-run replays completed steps (§9); nothing reaches a collection before
+approval.
 
 Loaded by file path (hyphenated slug) → absolute imports only.
 """
@@ -37,7 +42,10 @@ from workspace_app.workflow import (
 from workspace_app.workflow.engine import CheckResult, run_step
 from workspace_app.workflow.handle import WorkflowHandle
 
-_GLOSSARY = "glossary.todo.md"
+# The proposed cards (editable, committed) + the read-only "before" snapshot the human
+# diffs it against (#205). ``.readonly/`` is server-enforced read-only (api/app.py).
+_TODO = "context-card.todo.md"
+_CURRENT = ".readonly/context-card.current.md"
 _WARN = "⚠️"
 
 # Human-readable reasons for the "did nothing" outcomes (#100 observability). A
@@ -159,100 +167,149 @@ def _classify_prompt(f: str, out: str, collections: list[str], feedback: str) ->
     return base
 
 
-def _assemble_glossary(plan_by_file: dict[str, dict[str, Any]]) -> str:
-    """Deterministic: one ``## <term>`` section per unique term (first appearance wins).
-    A confident draft becomes the definition; an uncertain one becomes a ``⚠️`` line the
-    human resolves in the IDE."""
-    seen: dict[str, tuple[str, bool]] = {}
+def _proposed_cards(plan_by_file: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Deterministic: one proposed card per unique term (first appearance wins). Each is
+    ``{title, collection, keys, body}`` — title/keys are the term (drafting stays per-key,
+    #205), collection is the file's routing. A confident draft becomes the body; an
+    uncertain one a ``⚠️`` line the human resolves in the diff."""
+    seen: dict[str, dict[str, Any]] = {}
     order: list[str] = []
     for plan in plan_by_file.values():
+        coll = plan.get("collection")
+        coll = coll if isinstance(coll, str) else ""
         for term, definition, confident in _plan_terms(plan):
             if term not in seen:
-                seen[term] = (definition, confident)
+                if confident and definition:
+                    body = definition
+                elif definition:
+                    body = f"{_WARN} {definition}"
+                else:
+                    body = f"{_WARN} draft a definition for this term"
+                seen[term] = {"title": term, "collection": coll, "keys": [term], "body": body}
                 order.append(term)
-    blocks: list[str] = []
-    for term in order:
-        definition, confident = seen[term]
-        if confident and definition:
-            body = definition
-        elif definition:
-            body = f"{_WARN} {definition}"
-        else:
-            body = f"{_WARN} draft a definition for this term"
-        blocks.append(f"## {term}\n{body}\n")
-    return "\n".join(blocks)
+    return [seen[t] for t in order]
 
 
-def _term_collection(plan_by_file: dict[str, dict[str, Any]]) -> dict[str, str]:
-    """``term → collection`` (first file wins) so each card lands in the right place."""
-    out: dict[str, str] = {}
-    for plan in plan_by_file.values():
-        coll = plan.get("collection")
-        for term, _definition, _confident in _plan_terms(plan):
-            if isinstance(coll, str):
-                out.setdefault(term, coll)
-    return out
+def _render_cards(cards: list[dict[str, Any]]) -> str:
+    """Render cards as ``## <title>`` blocks carrying ``collection`` / ``keys`` / body
+    (#205) — the SAME format for both files, so a whole-file diff lines up block-by-block
+    and shows keys/title/body changes (incl. a silent key-narrowing). Empty list → ``""``
+    (an empty snapshot = every proposed card is brand-new)."""
+
+    def _block(c: dict[str, Any]) -> str:
+        keys = ", ".join(c["keys"])
+        return f"## {c['title']}\ncollection: {c['collection']}\nkeys: {keys}\n\n{c['body']}\n"
+
+    return "\n".join(_block(c) for c in cards)
 
 
-def _parse_glossary(text: str) -> list[tuple[str, str]]:
-    """Parse the (drafted, possibly human-edited) ``glossary.todo.md`` into
-    ``(term, definition)`` pairs. A section counts as *filled* only once its ``⚠️`` lines
-    are dropped and something remains — so an unresolved draft authors no card."""
-    entries: list[tuple[str, str]] = []
-    term: str | None = None
+def _parse_cards(text: str) -> list[dict[str, Any]]:
+    """Parse the (proposed, possibly human-edited) ``context-card.todo.md`` into
+    ``{collection, keys, title, body}`` dicts (#205). ``collection`` / ``keys`` are read
+    from their metadata lines (first wins) so a human title edit can't misroute the card;
+    everything else is body. A block counts as *filled* only once its ``⚠️`` lines are
+    dropped and something remains — an unresolved draft authors no card."""
+    cards: list[dict[str, Any]] = []
+    title: str | None = None
+    collection = ""
+    keys: list[str] = []
     body: list[str] = []
 
     def _flush() -> None:
-        if term is not None:
+        if title is not None:
             kept = [ln for ln in body if not ln.strip().startswith(_WARN)]
             if filled := "\n".join(kept).strip():
-                entries.append((term, filled))
+                cards.append(
+                    {
+                        "collection": collection,
+                        "keys": keys or [title],
+                        "title": title,
+                        "body": filled,
+                    }
+                )
 
     for line in text.splitlines():
         if line.startswith("## "):
             _flush()
-            term, body = line[3:].strip(), []
-        elif term is not None:
-            body.append(line)
+            title, collection, keys, body = line[3:].strip(), "", [], []
+        elif title is not None:
+            s = line.strip()
+            if s.startswith("collection:") and not collection:
+                collection = s[len("collection:") :].strip()
+            elif s.startswith("keys:") and not keys:
+                keys = [k.strip() for k in s[len("keys:") :].split(",") if k.strip()]
+            else:
+                body.append(line)
     _flush()
-    return entries
+    return cards
 
 
-def _gate_summary(files: list[str], plan_by_file: dict[str, dict[str, Any]]) -> str:
-    """What the human reviews at the gate (#133): where the drafts live, how many still
-    need their input, and the routing — the *content* itself is read/edited in the IDE."""
+def _gate_summary(
+    files: list[str], plan_by_file: dict[str, dict[str, Any]], ambiguous: int = 0
+) -> str:
+    """What the human reviews at the gate (#133, #205): open "查看變更" to diff the proposed
+    cards against the current ones, how many still need their input, any ambiguous overwrite,
+    and the routing — the card *content* is reviewed/edited in the diff itself."""
     drafted: dict[str, bool] = {}  # term → confident (first appearance wins)
     for f in files:
         for term, _definition, confident in _plan_terms(plan_by_file[f]):
             drafted.setdefault(term, confident)
     n_warn = sum(1 for confident in drafted.values() if not confident)
     routing = "; ".join(f"{f} → {plan_by_file[f].get('collection')}" for f in files)
-    return "\n".join(
-        [
-            f"Open {_GLOSSARY} in the file tree, review/edit the definitions, then Approve.",
-            f"{len(drafted)} term(s) drafted, {n_warn} still need your input ({_WARN}).",
-            f"Routing: {routing}",
-        ]
-    )
+    lines = [
+        "Open 查看變更 to compare each proposed card against the current one before it's "
+        "overwritten, edit if needed, then Approve.",
+        f"{len(drafted)} card(s) proposed, {n_warn} still need your input ({_WARN}).",
+    ]
+    if ambiguous:
+        lines.append(
+            f"{ambiguous} term(s) match more than one existing card — only the first is "
+            "overwritten."
+        )
+    lines.append(f"Routing: {routing}")
+    return "\n".join(lines)
 
 
 async def _assemble_step(
     wf: WorkflowHandle, round: int, plan_by_file: dict[str, dict[str, Any]]
-) -> None:
-    """Write the assembled glossary as a deterministic, journaled node so a replay
-    (e.g. after the human edits the file and approves) is a cache hit and does NOT
-    clobber their edits."""
-    content = _assemble_glossary(plan_by_file)
+) -> dict[str, Any]:
+    """Write the proposed cards + the read-only "before" snapshot as one deterministic,
+    journaled node (#205) so a replay (after the human edits the file and approves) is a
+    cache hit and does NOT clobber their edits — nor re-snapshot away from what they
+    reviewed. For each proposed card, look up the EXISTING card a commit-time upsert would
+    overwrite and render it into ``.readonly/context-card.current.md`` (empty block-set when
+    none exists → diff shows pure additions). Returns the step result, incl. how many terms
+    were ambiguous (matched >1 card) for the gate summary."""
+    proposed = _proposed_cards(plan_by_file)
+    todo_content = _render_cards(proposed)
 
-    async def execute(_feedback: str | None) -> dict[str, str]:
-        await wf.write(_GLOSSARY, content)
-        return {"path": _GLOSSARY}
+    async def execute(_feedback: str | None) -> dict[str, Any]:
+        current: list[dict[str, Any]] = []
+        ambiguous = 0
+        for card in proposed:
+            existing = await wf.find_overwrite_card(
+                card["collection"], card["keys"], title=card["title"]
+            )
+            if existing is not None:
+                current.append(
+                    {
+                        "title": existing["title"],
+                        "collection": card["collection"],  # same collection (scoped lookup)
+                        "keys": existing["keys"],
+                        "body": existing["body"],
+                    }
+                )
+                if existing.get("ambiguity", 0) > 1:
+                    ambiguous += 1
+        await wf.write(_TODO, todo_content)
+        await wf.write(_CURRENT, _render_cards(current))
+        return {"todo": _TODO, "current": _CURRENT, "ambiguous": ambiguous}
 
-    await run_step(
+    return await run_step(
         wf,
-        name=f"glossary_r{round}",
+        name=f"cards_r{round}",
         phase="glossary",
-        args={"round": round, "content": content},
+        args={"round": round, "content": todo_content},
         execute=execute,
     )
 
@@ -286,13 +343,13 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
                 retries=2,
             )
             plan_by_file[f] = await wf.read_json(out)
-        await _assemble_step(wf, round, plan_by_file)
+        assembled = await _assemble_step(wf, round, plan_by_file)
 
         decision = await human_gate(
             wf,
             phase=_review_phase(round),
-            title="Review the drafted glossary, then approve",
-            summary=_gate_summary(files, plan_by_file),
+            title="Review the proposed context cards, then approve",
+            summary=_gate_summary(files, plan_by_file, assembled.get("ambiguous", 0)),
             allow=["approve", "reject", "revise"],
         )
         if decision.choice == "reject":
@@ -302,9 +359,10 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
         feedback = decision.input
         round += 1
 
-    # COMMIT: ingest each upload + author a card per filled (non-⚠️) glossary entry.
-    term_collection = _term_collection(plan_by_file)
-
+    # COMMIT: ingest each upload + author a card per filled (non-⚠️) block. The collection
+    # is read from the block itself (#205) so a human title edit can't misroute it; a block
+    # with no/blank collection falls back to the first Hub collection, and a collection that
+    # isn't one of the Hub's is rejected loudly rather than silently mis-filing the card.
     ingested = 0
     for f in files:
         coll = plan_by_file[f]["collection"]
@@ -313,13 +371,15 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
             ingested += 1
 
     cards = 0
-    for term, body in _parse_glossary(await wf.read_text(_GLOSSARY)):
+    for card in _parse_cards(await wf.read_text(_TODO)):
+        coll = card["collection"] or collections[0]
+        if coll not in collections:
+            raise ValueError(
+                f"card {card['title']!r} names collection {coll!r}, which is not one of the "
+                f"Hub's collections {collections} — fix it in the diff and re-approve"
+            )
         await wf.upsert_context_card(
-            term_collection.get(term, collections[0]),
-            [term],
-            title=term,
-            body=body,
-            phase="commit",
+            coll, card["keys"], title=card["title"], body=card["body"], phase="commit"
         )
         cards += 1
 
