@@ -458,6 +458,27 @@ describe("KbCollectionsPage", () => {
     expect(await screen.findByTestId("kb-reindex-all")).toBeDisabled();
   });
 
+  it("re-indexes only the failed docs from the failure strip (#223)", async () => {
+    const reindexCollection = vi.fn(async () => {});
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 2 })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "error", status_detail: "boom", chunks: 0 },
+          { resource_id: "c1/me/b.md", path: "b.md", content_type: "text/markdown", created_by: "me", status: "ready" },
+        ]),
+      reindexCollection,
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    // The failure strip surfaces a one-click retry that re-queues ONLY the
+    // failed docs (not the healthy `ready` one) — issue #223.
+    const btn = await screen.findByTestId("kb-reindex-failed");
+    await userEvent.click(btn);
+    expect(reindexCollection).toHaveBeenCalledWith("c1", { only: "failed" });
+  });
+
   it("shows a Loading… placeholder while the first page is in flight", async () => {
     // Withhold the listDocuments resolution so the query stays in the
     // initial-loading state long enough to assert the placeholder.

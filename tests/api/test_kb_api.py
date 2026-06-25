@@ -353,6 +353,49 @@ def test_reindex_collection_rebuilds_all_docs():
     assert all(d["chunks"] > 0 for d in docs)
 
 
+def test_reindex_collection_only_failed_requeues_only_error_docs():
+    """`?only=failed` re-indexes ONLY docs stuck in `error`, leaving healthy
+    `ready` docs untouched — issue #223: recover a collection after a transient
+    embedder outage without paying to re-embed every doc that already indexed."""
+    import msgspec
+
+    from workspace_app.resources.kb import SourceDoc
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    for name in ("good.md", "bad.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents",
+            files={"file": (name, b"# one two three four", "text/markdown")},
+        )
+    _drain(client)  # both land ready
+
+    # Force one doc into the failed state, exactly as a real embedding error would.
+    rm = spec.get_resource_manager(SourceDoc)
+    bad_id = encode_doc_id(cid, "bad.md")
+    bad = rm.get(bad_id).data
+    assert isinstance(bad, SourceDoc)
+    rm.update(bad_id, msgspec.structs.replace(bad, status="error", status_detail="boom"))
+
+    r = client.post(f"/kb/collections/{cid}/reindex", params={"only": "failed"})
+    assert r.status_code == 200
+    assert r.json()["reindexed"] == 1  # only the failed doc was queued, not both
+
+    _drain(client)
+    docs = {d["path"]: d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"]}
+    assert docs["bad.md"]["status"] == "ready"  # recovered out of error
+    assert docs["good.md"]["status"] == "ready"  # never re-queued, still healthy
+
+
+def test_reindex_collection_rejects_unknown_only_value():
+    """`only` is a closed vocabulary: anything but `failed` (or absent) is a 400,
+    so a typo can't silently fall back to re-indexing the whole collection."""
+    client = _client()
+    cid = _new_collection(client)
+    r = client.post(f"/kb/collections/{cid}/reindex", params={"only": "ready"})
+    assert r.status_code == 400
+
+
 def test_list_documents_is_paged_via_specstar_qb_offset_limit():
     """Documents inside a collection are paged through specstar's
     `QB[...].offset(offset).limit(limit)` query, sorted by the IMMUTABLE

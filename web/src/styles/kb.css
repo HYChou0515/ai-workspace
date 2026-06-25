@@ -916,6 +916,16 @@
   color: var(--err);
   font-weight: 500;
 }
+/* #223: one-click "retry the failed docs", pushed to the right of the head. */
+.kb-index-status__retry {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
 .kb-index-status__fail-list {
   list-style: none;
   margin: 0;

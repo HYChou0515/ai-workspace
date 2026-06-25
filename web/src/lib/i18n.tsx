@@ -201,6 +201,7 @@ export const messages = {
   "kb.status.uploadingProgress": { "zh-TW": "上傳 {done}/{total}", en: "Uploading {done}/{total}" },
   "kb.status.allReady": { "zh-TW": "✓ 全部就緒", en: "✓ All set" },
   "kb.status.openFailed": { "zh-TW": "查看 {name} 的失敗原因", en: "View why {name} failed" },
+  "kb.status.retryFailed": { "zh-TW": "重試", en: "Retry" },
 
   // Workflow review gate (WorkflowDecisionCard) — make "it's your turn" loud (#170)
   "wf.decision.cue": { "zh-TW": "需要你的決定", en: "Your decision needed" },

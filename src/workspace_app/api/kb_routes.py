@@ -522,16 +522,27 @@ def register_kb_routes(
         return SyncOut(status="ok", git_last_sha=refreshed.git_last_sha)
 
     @app.post("/kb/collections/{collection_id}/reindex")
-    async def reindex_collection(collection_id: str) -> ReindexOut:
-        # Re-chunk + re-embed every doc in the collection — the recovery path
-        # after fixing the embedder (e.g. a missing model). Flip each doc back to
-        # `indexing` synchronously (so the UI shows progress + polls), then run
-        # the blocking rebuild off the loop, same as upload.
+    async def reindex_collection(
+        collection_id: str, only: str | None = Query(default=None)
+    ) -> ReindexOut:
+        # Re-chunk + re-embed the collection — the recovery path after fixing the
+        # embedder (e.g. a missing model). Flip each doc back to `indexing`
+        # synchronously (so the UI shows progress + polls), then run the blocking
+        # rebuild off the loop, same as upload.
+        #
+        # `?only=failed` (issue #223) re-queues ONLY docs stuck in `error`, so a
+        # transient outage can be recovered without re-embedding every doc that
+        # already indexed. `only` is a closed vocabulary: anything else is a 400
+        # rather than a silent fall-through to "re-index everything".
+        if only is not None and only != "failed":
+            raise HTTPException(status_code=400, detail=f"unknown only={only!r}")
         rm = spec.get_resource_manager(SourceDoc)
         count = 0
         for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
             doc = r.data
             assert isinstance(doc, SourceDoc)
+            if only == "failed" and doc.status != "error":
+                continue
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
             rm.update(rid, msgspec.structs.replace(doc, status="indexing"))
             index_coordinator.enqueue(rid, collection_id)
