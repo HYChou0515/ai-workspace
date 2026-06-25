@@ -1,0 +1,106 @@
+# Example deployment of the HTTP sandbox host (#60).
+#
+# The host runs `python -m workspace_app.sandbox_host` from the SAME image as the
+# app, in its own Deployment + HPA, and the app talks to it over the in-cluster
+# ClusterIP Service (set `sandbox.kind: http` + `sandbox.http.base_url:
+# http://sandbox-host:8000` in the app's config). Each sandbox runs as a pooled
+# numeric uid under a per-handle cgroup v2 — so the pod needs root + a delegated
+# cgroup subtree (see the securityContext notes). Adjust names/namespace/limits.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-host
+  labels: { app: sandbox-host }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: sandbox-host }
+  template:
+    metadata:
+      labels: { app: sandbox-host }
+    spec:
+      # SIGTERM → drain grace: the PreStop hook flips the host to draining
+      # (POST /drain → new `create`s get 503) before termination, so a
+      # scale-down doesn't strand fresh sandboxes. Keep this ≥ drain window.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: sandbox-host
+          image: workspace-app:latest # same image as the app
+          command: ["python", "-m", "workspace_app.sandbox_host"]
+          ports:
+            - containerPort: 8000
+          env:
+            # The pod's routable IP — the host advertises this in `create` so
+            # clients route every later call straight back to THIS pod.
+            - name: POD_IP
+              valueFrom:
+                fieldRef: { fieldPath: status.podIP }
+          securityContext:
+            # The host must setuid/chown to foreign uids and write the cgroup
+            # subtree, so it runs as root. Per-sandbox isolation is uid + cgroup
+            # (NOT a privileged container) — but cgroup v2 delegation to the pod
+            # is runtime-specific; on some clusters it needs a delegated subtree
+            # (systemd `Delegate=yes`) or, as a coarser fallback, privileged.
+            runAsUser: 0
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "curl -fsS -XPOST localhost:8000/drain; sleep 10"]
+          readinessProbe: # gates `create` traffic on cgroup v2 + delegation
+            httpGet: { path: /readyz, port: 8000 }
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 15
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "2Gi" }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-host
+spec:
+  selector: { app: sandbox-host }
+  ports:
+    - port: 8000
+      targetPort: 8000
+  # ClusterIP: `create` load-balances here; subsequent calls go pod-direct via
+  # the POD_IP the handle encodes (pod IPs are routable in-cluster).
+  type: ClusterIP
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sandbox-host
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sandbox-host
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
+---
+# No app-level auth (v1): the host trusts in-namespace callers, so restrict who
+# can reach it to the app pods only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-host-allow-app
+spec:
+  podSelector:
+    matchLabels: { app: sandbox-host }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: workspace-app } # the app pods
+      ports:
+        - protocol: TCP
+          port: 8000
