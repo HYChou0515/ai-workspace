@@ -45,3 +45,21 @@ def test_build_host_app_is_fastapi(tmp_path):
     )
     app = build_host_app(settings, pod_ip="10.0.0.5")
     assert isinstance(app, FastAPI)
+
+
+async def test_build_host_app_readyz_runs_cgroup_check(tmp_path, monkeypatch):
+    import httpx
+    from httpx import ASGITransport
+
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(
+        "workspace_app.sandbox_host.service.check_cgroup_ready",
+        lambda root: seen.setdefault("root", root),
+    )
+    settings = replace(
+        Settings(), sandbox_host=SandboxHostSettings(cgroup_root=str(tmp_path / "cg"))
+    )
+    app = build_host_app(settings, pod_ip=None)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://h") as c:
+        assert (await c.get("/readyz")).status_code == 200
+    assert str(seen["root"]).endswith("cg")  # the configured cgroup_root threaded in

@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import FastAPI
 
 from ..config.schema import SandboxHostSettings, Settings
-from ..sandbox.host.app import make_host_app
+from ..sandbox.host.app import check_cgroup_ready, make_host_app
 from ..sandbox.isolated_process import IsolatedProcessSandbox
 
 # Where a pod's own delegated cgroup v2 subtree is mounted when the operator
@@ -55,4 +55,10 @@ def build_host_app(
 ) -> FastAPI:
     host = settings.sandbox_host
     sandbox = build_sandbox(host, tools_dir=tools_dir)
-    return make_host_app(sandbox, advertise_url=advertise_url(host.bind, pod_ip))
+    cgroup_root = resolve_cgroup_root(host)
+    return make_host_app(
+        sandbox,
+        advertise_url=advertise_url(host.bind, pod_ip),
+        idle_ttl=host.idle_ttl,
+        readiness=lambda: check_cgroup_ready(cgroup_root),
+    )
