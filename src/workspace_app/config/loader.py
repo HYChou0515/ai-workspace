@@ -691,9 +691,7 @@ def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:
     `_build`. `http` is None unless `kind: http` declares the client block."""
     http = d.get("http")
     flat = {k: v for k, v in d.items() if k != "http"}
-    return SandboxSettings(
-        **flat, http=HttpSandboxSettings(**http) if http is not None else None
-    )
+    return SandboxSettings(**flat, http=HttpSandboxSettings(**http) if http is not None else None)
 
 
 def _normalize_usage_list(raw: Any) -> list[dict[str, Any]]:

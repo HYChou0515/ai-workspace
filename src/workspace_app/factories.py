@@ -219,9 +219,7 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
                 )
             from .sandbox.http_client import HttpSandbox
 
-            return HttpSandbox(
-                base_url=sb.http.base_url, read_timeout=sb.http.read_timeout
-            )
+            return HttpSandbox(base_url=sb.http.base_url, read_timeout=sb.http.read_timeout)
         case other:
             raise ValueError(f"unknown sandbox.kind: {other!r}")
 

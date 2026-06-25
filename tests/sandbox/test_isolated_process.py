@@ -45,7 +45,7 @@ def isolated(tmp_path):
         pids_max=64,
         acl_runner=calls.append,
     )
-    sb.acl_calls = calls  # type: ignore[attr-defined]
+    sb.acl_calls = calls  # ty: ignore[unresolved-attribute]
     return sb
 
 
