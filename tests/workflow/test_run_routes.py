@@ -106,6 +106,66 @@ def test_run_to_done_with_result():
     assert think["status"] == "passed"
 
 
+def test_run_accepts_uploaded_input_file_then_runs():
+    """#197: an external trigger uploads the workflow's input FILES in the same
+    multipart POST (we talk to workflows through the workspace). Each part lands at
+    its filename'd path, then the run starts and reads them — here the uploaded
+    ``inputs/input.json`` steers ``n`` so the result proves the file was read."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(
+            f"{_base(item_id)}/run",
+            files={"file": ("inputs/input.json", b'{"n": 9}', "application/json")},
+        )
+        assert r.status_code == 202
+        run_id = r.json()["run_id"]
+        data = _poll(client, item_id, run_id, "done")
+        assert client.get(f"{_base(item_id)}/files/inputs/input.json").content == b'{"n": 9}'
+    assert data["result"] == {"status": "done", "n": 9}
+
+
+def test_run_rejects_an_upload_that_escapes_the_workspace():
+    """#197: an uploaded path that escapes the workspace root is rejected (400) and NO
+    run starts — the whole trigger aborts before anything is written."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(f"{_base(item_id)}/run", files={"file": ("../escape.txt", b"x")})
+        assert r.status_code == 400
+        assert client.get(f"{_base(item_id)}/runs").json() == []  # nothing started
+
+
+def test_run_reads_workflow_id_from_a_form_field():
+    """#197: a multipart trigger may name the workflow as a `workflow_id` FORM field (not
+    only the query param), so an external upload+trigger is one self-contained body."""
+    app, _spec, item_id = _app(profile="multi")
+    with TestClient(app) as client:
+        r = client.post(
+            f"{_base(item_id)}/run",
+            data={"workflow_id": "alpha"},
+            files={"file": ("note.txt", b"hi")},
+        )
+        run_id = r.json()["run_id"]
+        data = _poll(client, item_id, run_id, "done")
+        assert client.get(f"{_base(item_id)}/files/note.txt").content == b"hi"
+    assert data["workflow_id"] == "alpha"
+
+
+def test_run_query_workflow_id_wins_and_a_stray_file_field_is_ignored():
+    """#197: the query `workflow_id` overrides a form one, and a non-file value sent
+    under the `file` field is skipped — only real uploads are written."""
+    app, _spec, item_id = _app(profile="multi")
+    with TestClient(app) as client:
+        r = client.post(
+            f"{_base(item_id)}/run?workflow_id=alpha",
+            data={"workflow_id": "beta", "file": "stray"},
+            files={"file": ("real.txt", b"hi")},
+        )
+        run_id = r.json()["run_id"]
+        data = _poll(client, item_id, run_id, "done")
+        assert client.get(f"{_base(item_id)}/files/real.txt").content == b"hi"
+    assert data["workflow_id"] == "alpha"  # query beat the form's "beta"
+
+
 def test_failing_step_reports_error_phase_and_reason():
     app, _spec, item_id = _app()
     with TestClient(app) as client:
