@@ -64,6 +64,21 @@ def test_rca_declares_ide_primary_surface():
     assert load_app_manifest("rca").layout.primary_surface == "ide"
 
 
+def test_layout_chat_switcher_defaults_to_auto():
+    """#200: an App declares how prominent its multi-chat switcher is. The default
+    is `auto` — the switcher stays hidden until a second chat exists, so a normal
+    App feels single-chat while staying multichat-capable (the escape hatch when a
+    chat wedges)."""
+    assert Layout().chat_switcher == "auto"
+
+
+def test_topic_hub_declares_always_chat_switcher():
+    """#200: Topic Hub is multi-chat-first (cross-collection threads accumulate),
+    so it opts into an always-visible switcher rather than the single-chat-leaning
+    default."""
+    assert load_app_manifest("topic-hub").layout.chat_switcher == "always"
+
+
 def test_load_rca_app_manifest():
     """The RCA App's `app.json` decodes into a typed `AppManifest` carrying its
     identity, function toggles, agent ceiling (picker + tools + base prompt),

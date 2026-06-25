@@ -47,6 +47,8 @@ export function ItemChatShell({
   slug,
   itemId,
   profile,
+  chatSwitcher,
+  showCollections,
   picker,
   suggestions,
   appTitle,
@@ -58,6 +60,13 @@ export function ItemChatShell({
   slug: string;
   itemId: string;
   profile: string;
+  /** #200: how prominent the switcher is. "auto" hides it until a 2nd chat
+   * exists (single-chat-leaning); "always" surfaces it up front (Topic Hub). */
+  chatSwitcher: "auto" | "always";
+  /** #200: whether this App manages a collection set (the topic-hub §5 picker).
+   * Derived upstream from the manifest's `context_files` containing
+   * `collections.json`; off for most Apps (RCA / Playground). */
+  showCollections: boolean;
 } & AgentChrome) {
   const qc = useQueryClient();
   const { chats, isLoading, createFreeChat, renameChat, deleteChat } = useItemChats(slug, itemId);
@@ -108,33 +117,50 @@ export function ItemChatShell({
 
   const active = chats.find((c) => c.chat_id === activeChatId) ?? null;
 
+  // #200: the switcher leans single-chat — hidden until a second chat exists,
+  // unless the App opts into an always-visible switcher (Topic Hub). The bar as a
+  // whole renders only when it would carry something: the switcher, the workflow
+  // picker, or the collection set. When it carries nothing (a single-chat-leaning
+  // App with one chat, e.g. RCA), the lone "+ New chat" escape moves into the chat
+  // header instead so the App reads as a single chat — `onNewChat` below.
+  const showSwitcher = chatSwitcher === "always" || chats.length > 1;
+  const hasWorkflows = workflows.length > 0;
+  const showBar = showSwitcher || hasWorkflows || showCollections;
+
   return (
     <div
       className="item-chat-shell"
       data-testid="item-chat-shell"
       style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}
     >
-      <div
-        className="item-chat-shell__bar"
-        style={{
-          display: "flex",
-          gap: 8,
-          alignItems: "center",
-          flex: "0 0 auto",
-          padding: "4px 8px",
-          borderBottom: "1px solid var(--border, #2a2a2a)",
-        }}
-      >
-        <ChatSwitcher
-          chats={chats}
-          activeChatId={activeChatId}
-          onSelect={setActiveChatId}
-          onManage={() => setManaging(true)}
-        />
-        <NewItemPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
-        <div style={{ flex: 1 }} />
-        <CollectionsButton count={collectionCount} onClick={() => setPickerOpen(true)} />
-      </div>
+      {showBar && (
+        <div
+          className="item-chat-shell__bar"
+          data-testid="item-chat-shell__bar"
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+            flex: "0 0 auto",
+            padding: "4px 8px",
+            borderBottom: "1px solid var(--border, #2a2a2a)",
+          }}
+        >
+          {showSwitcher && (
+            <ChatSwitcher
+              chats={chats}
+              activeChatId={activeChatId}
+              onSelect={setActiveChatId}
+              onManage={() => setManaging(true)}
+            />
+          )}
+          <NewItemPicker workflows={workflows} onFreeChat={onFreeChat} onWorkflow={onWorkflow} />
+          <div style={{ flex: 1 }} />
+          {showCollections && (
+            <CollectionsButton count={collectionCount} onClick={() => setPickerOpen(true)} />
+          )}
+        </div>
+      )}
       {managing && (
         <ManageChatsModal
           chats={chats}
@@ -155,6 +181,10 @@ export function ItemChatShell({
           itemId={itemId}
           chat={active}
           workflows={workflows}
+          // #200: when the bar is hidden the chat header carries the lone escape
+          // hatch; when the bar is shown its "+ New" picker already does, so the
+          // header omits it (exactly one create-entry is ever visible).
+          onNewChat={showBar ? undefined : onFreeChat}
           picker={picker}
           suggestions={suggestions}
           appTitle={appTitle}
@@ -177,6 +207,7 @@ function ItemChatPanel({
   itemId,
   chat,
   workflows,
+  onNewChat,
   picker,
   suggestions,
   appTitle,
@@ -189,6 +220,9 @@ function ItemChatPanel({
   itemId: string;
   chat: ItemChatSummary;
   workflows: WorkflowManifestDTO[];
+  /** #200: the single-chat-leaning escape hatch — present only when the shell
+   * bar is hidden, so the header is the sole place to start a fresh chat. */
+  onNewChat?: () => void;
 } & AgentChrome) {
   // The active chat drives the full RCA AgentPanel (AgentState shape) — the
   // model picker, suggestions, @mention, attach, undo and Cmd-Enter all work
@@ -244,6 +278,7 @@ function ItemChatPanel({
         agent={agent}
         fill
         phases={phases}
+        onNewChat={onNewChat}
         picker={picker}
         suggestions={suggestions}
         attachedPreset={attachedPreset}

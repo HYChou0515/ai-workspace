@@ -21,7 +21,6 @@ import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
-import { WorkflowRunSection } from "../../components/WorkflowRunSection";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
@@ -48,7 +47,6 @@ import { useOnTurnEnd } from "../../hooks/useOnTurnEnd";
 import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { emitRunAll } from "../../lib/editorEvents";
 import { FileView } from "../../renderers/FileView";
-import { AgentPanel } from "./AgentPanel";
 import { CommandPalette } from "./CommandPalette";
 import { FileTree } from "./FileTree";
 import { type Edge, type PaneNode, edgeForPoint } from "./paneTree";
@@ -208,6 +206,10 @@ function ShellBody({
   const chromeW = ACTIVITY_BAR_W + (sidebarOpen ? sidebarW : 0);
   const maxChatW = Math.max(280, viewportW - chromeW - EDITOR_MIN_W);
   const effectiveAgentW = Math.min(agentW, maxChatW);
+  // #200: the chat fills the whole row when there's no IDE beside it — a
+  // workspace=false App has none, and collapsing the IDE unmounts it. Otherwise
+  // the chat sits at its resizable width next to the editor.
+  const chatFills = !manifest.function.workspace || ideCollapsed;
 
   const recentFiles = usePersistentDeque(
     `rca:recent-files:${item.resource_id}`,
@@ -444,59 +446,37 @@ function ShellBody({
               flexDirection: "column",
               height: "100%",
               minHeight: 0,
-              // IDE collapsed: grow to fill the whole row (workspace is unmounted).
-              ...(ideCollapsed ? { flex: 1, minWidth: 0 } : {}),
-              // The multi-chat shell takes no width prop (unlike AgentPanel), so the
-              // wrapper owns the resizable width in that mode.
-              width:
-                manifest.slug === "topic-hub" && !ideCollapsed ? effectiveAgentW : undefined,
+              // The chat fills the row when there's no IDE beside it (a workspace=false
+              // App, or the IDE collapsed); otherwise it sits at its resizable width.
+              // The multi-chat shell takes no width prop, so the wrapper owns it.
+              ...(chatFills ? { flex: 1, minWidth: 0 } : {}),
+              width: chatFills ? undefined : effectiveAgentW,
             }}
           >
-            {manifest.slug === "topic-hub" ? (
-              // topic-hub §3: the per-item multi-chat shell replaces the single
-              // AgentPanel. Gated to this App so RCA's full chat UI is untouched;
-              // multi-chat goes platform-wide once the shell reaches feature parity.
-              <ItemChatShell
-                slug={manifest.slug}
-                itemId={item.resource_id}
-                profile={String(item.profile ?? manifest.default_profile)}
-                // Same manifest-derived chat chrome the RCA <AgentPanel> gets —
-                // the shell threads it through to each chat tab's panel.
-                picker={manifest.agent.picker}
-                suggestions={manifest.agent.suggestions}
-                appTitle={manifest.title}
-                appIcon={manifest.icon}
-                appColor={manifest.color}
-                attachedPreset={String(item.attached_preset ?? "")}
-                onAttachPreset={(preset) => setField("attached_preset", preset)}
-              />
-            ) : (
-              <>
-                {/* #100: the run progress view sits above the chat (a run is a turn
-                    on the item, so the agent's stream stays in the chat below).
-                    Renders nothing for a non-workflow profile, so it's inert on
-                    ordinary items. */}
-                <WorkflowRunSection
-                  slug={manifest.slug}
-                  itemId={item.resource_id}
-                  profile={String(item.profile ?? manifest.default_profile)}
-                />
-                <AgentPanel
-                  investigationId={item.resource_id}
-                  width={effectiveAgentW}
-                  fill={!manifest.function.workspace || ideCollapsed}
-                  // #89 candidate 3: picker + suggestions come from the App manifest,
-                  // not the global /agent-configs; attaching writes the item's preset.
-                  picker={manifest.agent.picker}
-                  attachedPreset={String(item.attached_preset ?? "")}
-                  onAttachPreset={(preset) => setField("attached_preset", preset)}
-                  suggestions={manifest.agent.suggestions}
-                  appTitle={manifest.title}
-                  appIcon={manifest.icon}
-                  appColor={manifest.color}
-                />
-              </>
-            )}
+            {/* #200: every App workspace is the per-item multi-chat shell — no slug
+                fork. It leans single-chat by manifest (`layout.chat_switcher`): the
+                switcher stays hidden until a second chat exists, and the lone
+                "+ New chat" escape lives in the chat header, so a wedged chat is
+                never a dead end. The shell carries workflow launches as chats too,
+                so the old single-chat WorkflowRunSection is retired. */}
+            <ItemChatShell
+              slug={manifest.slug}
+              itemId={item.resource_id}
+              profile={String(item.profile ?? manifest.default_profile)}
+              chatSwitcher={manifest.layout.chat_switcher}
+              // Derived, not a flag: an App manages a collection set iff its agent
+              // injects collections.json each turn (Topic Hub §5).
+              showCollections={!!manifest.agent.context_files?.includes("collections.json")}
+              // Same manifest-derived chat chrome the RCA <AgentPanel> got — the
+              // shell threads it through to each chat tab's panel.
+              picker={manifest.agent.picker}
+              suggestions={manifest.agent.suggestions}
+              appTitle={manifest.title}
+              appIcon={manifest.icon}
+              appColor={manifest.color}
+              attachedPreset={String(item.attached_preset ?? "")}
+              onAttachPreset={(preset) => setField("attached_preset", preset)}
+            />
           </div>
         </div>
 

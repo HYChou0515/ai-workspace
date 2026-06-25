@@ -42,6 +42,30 @@ describe("AgentHeader export", () => {
   });
 });
 
+describe("AgentHeader new-chat escape hatch (#200)", () => {
+  afterEach(cleanup);
+
+  it("renders a New chat button and calls onNewChat when clicked", () => {
+    const onNewChat = vi.fn();
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" onNewChat={onNewChat} />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /new chat/i }));
+    expect(onNewChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the New chat button when onNewChat is not provided", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole("button", { name: /new chat/i })).not.toBeInTheDocument();
+  });
+});
+
 describe("AgentHeader status copy (#159)", () => {
   afterEach(cleanup);
 
