@@ -555,6 +555,7 @@ export const mockApi: ApiClient = {
         form: ["severity", "status", "product"],
         default_tabs: ["/SOP.md", "/brief.md"],
         primary_surface: "ide",
+        chat_switcher: "auto",
       },
       lifecycle: { status_field: "status", closing_states: ["resolved", "abandoned"] },
       labels: { severity: "Severity", status: "Status", product: "Product" },

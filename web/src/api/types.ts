@@ -134,7 +134,15 @@ export type Onboarding = {
  * the model); `layout` + `labels` are the display overlay. */
 export type AppManifest = AppSummary & {
   function: { workspace: boolean; sandbox: boolean; terminal: boolean };
-  agent: { picker: { preset: string; name: string }[]; suggestions?: Suggestion[] };
+  agent: {
+    picker: { preset: string; name: string }[];
+    suggestions?: Suggestion[];
+    /** Topic Hub §6 — workspace files whose live content is injected each turn
+     * (e.g. `MEMORY.md`, `collections.json`). The workspace derives whether to
+     * show the collection-set picker from this containing `collections.json`
+     * (#200), so there's no separate flag. Empty/absent for most Apps. */
+    context_files?: string[];
+  };
   item: { noun: string; noun_plural: string; create_label?: string };
   layout: {
     breadcrumb: string[];
@@ -147,6 +155,10 @@ export type AppManifest = AppSummary & {
      * file IDE behind a `Workspace` toggle; "ide" opens the VS Code workspace up
      * front. Ignored when `function.workspace` is false (no IDE to show). */
     primary_surface: "chat" | "ide";
+    /** #200: how prominent the per-item multi-chat switcher is — "auto" (default)
+     * hides it until a second chat exists (single-chat-leaning); "always" surfaces
+     * it up front (Topic Hub). Every App is multichat-capable regardless. */
+    chat_switcher: "auto" | "always";
   };
   labels: Record<string, string>;
   fields: FieldSpec[];

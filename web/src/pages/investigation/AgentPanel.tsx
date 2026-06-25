@@ -66,6 +66,7 @@ export function AgentPanel({
   appTitle,
   appIcon,
   appColor,
+  onNewChat,
 }: {
   investigationId: string;
   /** The agent conversation state. Defaults to the surrounding
@@ -93,6 +94,11 @@ export function AgentPanel({
   appTitle?: string;
   appIcon?: string;
   appColor?: string;
+  /** #200: the single-chat-leaning escape hatch. When the multi-chat shell bar
+   * is hidden, it threads its "start a fresh chat" action here so the chat header
+   * is the lone, low-key place to escape a wedged chat. Absent → no header button
+   * (the shell bar already carries a creator, or this is a bare RCA chat). */
+  onNewChat?: () => void;
 }) {
   // Quick-prompt chips come ONLY from the attached AgentConfig (BE) — the FE
   // never invents its own. No config suggestions → no chip row.
@@ -233,6 +239,7 @@ export function AgentPanel({
         appTitle={appTitle}
         appIcon={appIcon}
         appColor={appColor}
+        onNewChat={onNewChat}
       />
       <ProgressBar phases={phases} />
 
@@ -518,6 +525,7 @@ export function AgentHeader({
   appTitle = "Agent",
   appIcon,
   appColor,
+  onNewChat,
 }: {
   streaming: boolean;
   investigationId: string;
@@ -528,6 +536,10 @@ export function AgentHeader({
   appTitle?: string;
   appIcon?: string;
   appColor?: string;
+  /** #200: the single-chat-leaning escape hatch. Present only when the shell bar
+   * is hidden, so this header is the lone, low-key way to start a fresh chat and
+   * leave a wedged one behind. Absent → no button. */
+  onNewChat?: () => void;
 }) {
   const [exportError, setExportError] = useState<string | null>(null);
   return (
@@ -551,6 +563,29 @@ export function AgentHeader({
           {streaming ? "Replying…" : "Your turn — type a message"}
         </div>
       </div>
+      {onNewChat && (
+        // #200: the low-key escape hatch. A wedged chat (interrupt crash, repetition,
+        // step limit, model error) is never a dead end — start a fresh one and the
+        // old chat stays reachable via the switcher that appears once a second exists.
+        <button
+          type="button"
+          onClick={onNewChat}
+          title="Start a fresh chat"
+          aria-label="New chat"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            color: "var(--text-paper-d)",
+            fontSize: 11,
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          <Icon name="plus" size={13} /> New chat
+        </button>
+      )}
       <button
         type="button"
         // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable

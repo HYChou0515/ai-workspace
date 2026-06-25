@@ -74,6 +74,13 @@ class Layout(Struct):
     # notebook flow). Ignored when `function.workspace` is false (no IDE to
     # show); "ide" requires workspace=true (validated at catalog build).
     primary_surface: Literal["chat", "ide"] = "chat"
+    # #200: how prominent the per-item multi-chat switcher is. "auto" (default)
+    # keeps the switcher hidden until a second chat exists, so a normal App feels
+    # single-chat while staying multichat-capable — a wedged chat is never a dead
+    # end (the "+ New chat" escape lives in the chat header). "always" surfaces the
+    # switcher up front for multi-chat-first Apps (Topic Hub). Drives FE chrome
+    # only; every App is multichat-capable regardless of this value.
+    chat_switcher: Literal["auto", "always"] = "auto"
 
 
 class Lifecycle(Struct):
