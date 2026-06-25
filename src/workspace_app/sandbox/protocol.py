@@ -3,7 +3,9 @@
 A Sandbox is an isolated place to run the agent's / user's shell commands and
 hold a working copy of the workspace files. Implementations: `MockSandbox`
 (in-memory, tests), `LocalProcessSandbox` (subprocess + temp dir, optionally
-user-namespace-jailed), `DockerSandbox` (one container per handle).
+user-namespace-jailed), `DockerSandbox` (one container per handle), `HttpSandbox`
+(client to a separate sandbox host pod — see `docs/sandbox-host.md`; the host
+wraps an `IsolatedProcessSandbox` that isolates each handle by uid + cgroup).
 
 Conventions shared by all methods:
 

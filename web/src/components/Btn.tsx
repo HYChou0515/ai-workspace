@@ -5,13 +5,14 @@
  * one-offs historically; new design-aligned surfaces use this.
  */
 import type { CSSProperties, ReactNode } from "react";
+import { pxToRem } from "../lib/pxToRem";
 
 type Variant = "primary" | "secondary" | "ghost";
 type Size = "sm" | "md";
 
-const SIZES: Record<Size, { height: number; padding: string; fontSize: number; gap: number }> = {
-  sm: { height: 28, padding: "0 10px", fontSize: 12, gap: 6 },
-  md: { height: 36, padding: "0 14px", fontSize: 13, gap: 8 },
+const SIZES: Record<Size, { height: number; padding: string; fontSize: string; gap: number }> = {
+  sm: { height: 28, padding: "0 10px", fontSize: pxToRem(12), gap: 6 },
+  md: { height: 36, padding: "0 14px", fontSize: pxToRem(13), gap: 8 },
 };
 
 const VARIANTS: Record<Variant, CSSProperties> = {

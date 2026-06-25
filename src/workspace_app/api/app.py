@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
+from starlette.datastructures import UploadFile
 
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
@@ -367,6 +368,44 @@ class _CardBody(BaseModel):
     keys: list[str] = Field(default_factory=list)
     title: str = ""
     body: str = ""
+
+
+async def _staged_run_uploads(
+    request: Request, workflow_id: str
+) -> tuple[str, list[tuple[str, bytes]]]:
+    """#197: parse a workflow-run trigger's optional ``multipart/form-data`` body into
+    a (resolved ``workflow_id``, staged ``[(workspace_path, bytes)]``) pair so the caller
+    can write the files THEN start the run.
+
+    Each ``file`` part's filename IS its workspace path (sub-dirs allowed); ``canonical_path``
+    resolves ``.``/``..`` and a path escaping the root raises 400. ALL parts are validated
+    before the caller writes any, so one bad upload aborts the whole trigger (nothing is
+    half-written, no run starts). The query ``workflow_id`` wins; absent it a ``workflow_id``
+    form field is honoured. With no multipart body this is a no-op — the plain trigger the
+    FE makes (query param only, empty body) is left completely untouched."""
+    if not request.headers.get("content-type", "").startswith("multipart/form-data"):
+        return workflow_id, []
+    from ..kb.doc_id import canonical_path
+
+    form = await request.form()
+    if not workflow_id:
+        field = form.get("workflow_id")
+        if isinstance(field, str):
+            workflow_id = field
+    staged: list[tuple[str, bytes]] = []
+    for part in form.getlist("file"):
+        # A `file` field carrying a plain string (no filename) is not an upload — skip it.
+        if not isinstance(part, UploadFile) or not part.filename:
+            continue
+        try:
+            rel = canonical_path(part.filename)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"upload path escapes the workspace: {part.filename!r}",
+            ) from exc
+        staged.append(("/" + rel, await part.read()))
+    return workflow_id, staged
 
 
 async def _promote_chat_to_kb(
@@ -1524,6 +1563,9 @@ def create_app(
             collection=collection,
             path=path,
             user=captured_user,
+            # #234: store-then-enqueue — the upload auto-indexes off the request path via
+            # the IndexCoordinator, exactly like the KB upload endpoint.
+            enqueue=index_coordinator.enqueue,
             journal_dir=journal_dir,
         )
 
@@ -1556,20 +1598,11 @@ def create_app(
 
     async def _wf_collection_has(collection: str, path: str) -> bool:
         """Backs ``check.collection_has`` (§8): did ``path`` land in ``collection``
-        (a name or id) as a ``ready`` doc? Read back from the KB at its natural-key id."""
-        from ..kb.doc_id import encode_doc_id
-        from ..workflow.capabilities import resolve_collection_id
+        (a name or id)? #234: ingest is async, so ``landed`` means the SourceDoc EXISTS
+        — the upload succeeded — not that the background index has flipped it to ``ready``."""
+        from ..workflow.capabilities import collection_has_doc
 
-        try:
-            collection_id = resolve_collection_id(spec, collection)
-        except CollectionNotFound:
-            return False
-        doc_rm = spec.get_resource_manager(SourceDoc)
-        try:
-            doc = doc_rm.get(encode_doc_id(collection_id, path.lstrip("/"))).data
-        except ResourceIDNotFoundError:
-            return False
-        return isinstance(doc, SourceDoc) and doc.status == "ready"
+        return collection_has_doc(spec, collection=collection, path=path)
 
     def _wf_wire_handle(
         wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
@@ -1694,13 +1727,35 @@ def create_app(
         return out
 
     @api.post("/a/{slug}/items/{item_id}/run", status_code=status.HTTP_202_ACCEPTED)
-    async def run_workflow_item(slug: str, item_id: str, workflow_id: str = Query("")) -> dict:
+    async def run_workflow_item(
+        slug: str, item_id: str, request: Request, workflow_id: str = Query("")
+    ) -> dict:
         """#100 / topic-hub P8 (manual §3, §4, §14): launch a workflow. Opens a fresh
         WORKFLOW CHAT (a `Conversation` with `run_id`) the run streams into, and returns
         its `chat_id`. ``workflow_id`` selects which of the profile's workflows (§4);
         runs are per-chat, so several may run in parallel on one item (§3). Inputs come
-        from the workspace (``MANIFEST.input_json``)."""
+        from the workspace (``MANIFEST.input_json``).
+
+        #197: an external system triggers headlessly by uploading the workflow's input
+        FILES in the SAME call — we communicate with workflows through the workspace, not
+        a JSON body. A ``multipart/form-data`` body carries ``file`` parts (each part's
+        filename IS its workspace path, sub-dirs allowed) and may also carry
+        ``workflow_id`` as a form field; the files are written (overwrite) BEFORE the run
+        starts. A path that escapes the workspace root aborts the whole call (400) so
+        nothing is half-written and no run begins. With no body the call is the plain
+        trigger the FE makes — the upload path is skipped entirely."""
+        workflow_id, staged = await _staged_run_uploads(request, workflow_id)
         investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
+        for norm, data in staged:
+            await files.write(investigation_id, norm, data)
+            activity.record(
+                "file_written",
+                f"Wrote {norm}",
+                {"investigation_id": investigation_id, "path": norm},
+            )
+            turn_engine.publish(
+                investigation_id, FileChanged(path=norm, by=get_user_id(), kind="written")
+            )
         # The chat overlay (manual §3): create it, start the run on it, then link the
         # run_id back. This runs synchronously before the run task drives any turn, so
         # the chat carries its run_id before it streams.

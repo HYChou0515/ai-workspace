@@ -127,4 +127,9 @@ describe("GlobalNav", () => {
     const dot = await screen.findByRole("link", { name: /AI features are working/i });
     expect(dot).toHaveAttribute("href", "/diagnostics");
   });
+
+  it("exposes the platform-wide settings gear (#226)", () => {
+    renderNav("/a/rca");
+    expect(screen.getByRole("button", { name: "設定" })).toBeInTheDocument();
+  });
 });

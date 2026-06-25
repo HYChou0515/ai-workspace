@@ -1,5 +1,6 @@
 import { useT } from "../lib/i18n";
 import { Icon } from "./Icon";
+import { pxToRem } from "../lib/pxToRem";
 
 /**
  * The Topic Hub top-bar entry to the collection-set picker (#142). Two states:
@@ -27,7 +28,7 @@ export function CollectionsButton({ count, onClick }: { count: number; onClick: 
         gap: 5,
         height: 26,
         padding: "0 10px",
-        fontSize: 12,
+        fontSize: pxToRem(12),
         borderRadius: "var(--radius-btn)",
         cursor: "pointer",
         border: `1px solid ${empty ? "var(--accent)" : "var(--paper-3)"}`,

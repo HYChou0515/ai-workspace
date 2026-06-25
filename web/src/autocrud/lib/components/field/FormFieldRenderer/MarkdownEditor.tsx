@@ -9,6 +9,8 @@ import Editor from '@monaco-editor/react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import { useMonacoFontSize } from '../../../../../hooks/fontScale';
+
 export interface MarkdownEditorProps {
   /** Field label */
   label: string;
@@ -33,6 +35,7 @@ export function MarkdownEditor({
   error,
 }: MarkdownEditorProps) {
   const [mode, setMode] = useState<'edit' | 'preview'>('edit');
+  const fontSize = useMonacoFontSize(14);
 
   return (
     <Stack gap={4}>
@@ -72,7 +75,7 @@ export function MarkdownEditor({
               lineNumbers: 'off',
               wordWrap: 'on',
               scrollBeyondLastLine: false,
-              fontSize: 14,
+              fontSize,
               padding: { top: 8, bottom: 8 },
             }}
           />

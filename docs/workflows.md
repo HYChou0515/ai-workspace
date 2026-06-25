@@ -432,17 +432,28 @@ business, using the existing free workspace.
    like a non-workflow item.**
 2. **Run** — `POST /a/{slug}/items/{item_id}/run` (async; API-triggerable). Starts
    the orchestrator on the item; the run reads `inputs` + the workspace as the
-   profile dictates.
+   profile dictates. The body is optional:
+   - **empty body** (`?workflow_id=…` query only) — the plain trigger the UI makes;
+     it runs against whatever already sits in the workspace.
+   - **`multipart/form-data`** (#197) — an external trigger uploads the workflow's
+     input **files in the same call**, because we talk to workflows through the
+     workspace, not a JSON body. Each `file` part's **filename IS its workspace path**
+     (sub-dirs allowed, e.g. `inputs/data.csv`); `workflow_id` may ride as a query
+     param **or** a form field (query wins). The files are written (overwrite,
+     last-write-wins) **before** the run starts; a path escaping the workspace root
+     aborts the whole call with **400** (nothing half-written, no run). There is **no
+     `input.json` in the request** — if a workflow wants one, it is simply one of the
+     uploaded files.
 
 **There is no separate "manual vs auto" mode** — both reduce to *prepare the item's
 inputs, then Run*:
 
 - **Human:** open a workflow-profile item, drop files / edit `input.json` via the
   file UI, press **Run workflow**.
-- **External / periodic:** use the **existing** endpoints to create an item, upload
-  files, write `input.json`, then call **Run**. (An optional one-shot
-  `POST /a/{slug}/profiles/{profile}/runs` that bundles create + upload + run is mere
-  convenience, not a distinct mode.)
+- **External / periodic:** create an item, then **Run with the input files attached**
+  to the same multipart call (above) — one self-contained trigger. (Uploading files
+  via the existing file routes first and then calling Run with an empty body is
+  equivalent; the multipart form is the convenience.)
 
 After Run, the platform does exactly two things: **the orchestrator updates the
 `WorkflowRun` status**, and **agent nodes stream into the item's chat as if talking

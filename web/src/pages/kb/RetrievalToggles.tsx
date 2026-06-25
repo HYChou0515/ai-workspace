@@ -7,6 +7,7 @@
 
 import { Icon } from "../../components/Icon";
 import { useT } from "../../lib/i18n";
+import { pxToRem } from "../../lib/pxToRem";
 
 function Switch({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) {
   return (
@@ -90,11 +91,11 @@ function Row({
       </div>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3 }}>
-          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>{title}</span>
+          <span style={{ fontSize: pxToRem(14), fontWeight: 600, color: "var(--ink)" }}>{title}</span>
           {recommended && (
             <span
               style={{
-                fontSize: 10,
+                fontSize: pxToRem(10),
                 fontWeight: 600,
                 color: "var(--ok)",
                 background: "color-mix(in srgb, var(--ok) 14%, transparent)",
@@ -106,7 +107,7 @@ function Row({
             </span>
           )}
         </div>
-        <div style={{ fontSize: 12.5, color: "var(--text-paper-d)", lineHeight: 1.5 }}>{desc}</div>
+        <div style={{ fontSize: pxToRem(12.5), color: "var(--text-paper-d)", lineHeight: 1.5 }}>{desc}</div>
       </div>
       <Switch on={on} onClick={onToggle} label={title} />
     </div>
@@ -152,7 +153,7 @@ export function RetrievalToggles({
           }}
         >
           <Icon name="sparkle" size={13} color="var(--accent-h)" />
-          <span style={{ fontSize: 12, color: "var(--ink)" }}>{t("kb.retrieval.both")}</span>
+          <span style={{ fontSize: pxToRem(12), color: "var(--ink)" }}>{t("kb.retrieval.both")}</span>
         </div>
       )}
     </div>
@@ -172,7 +173,7 @@ export function WikiBadge() {
         background: "var(--ink)",
         color: "var(--paper)",
         fontFamily: "var(--font-mono)",
-        fontSize: 10,
+        fontSize: pxToRem(10),
         fontWeight: 500,
       }}
     >

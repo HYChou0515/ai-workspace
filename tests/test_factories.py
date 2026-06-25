@@ -81,6 +81,27 @@ def test_get_sandbox_dispatch(monkeypatch):
         get_sandbox(_with_sandbox("bogus"))
 
 
+def test_get_sandbox_http_returns_client():
+    from workspace_app.config.schema import HttpSandboxSettings
+    from workspace_app.sandbox.http_client import HttpSandbox
+
+    s = replace(
+        Settings(),
+        sandbox=replace(
+            SandboxSettings(),
+            kind="http",
+            http=HttpSandboxSettings(base_url="http://sandbox-host:8000"),
+        ),
+    )
+    assert isinstance(get_sandbox(s), HttpSandbox)
+
+
+def test_get_sandbox_http_without_base_url_raises():
+    # kind=http but no http block (or empty base_url) ⇒ misconfigured, fail loud.
+    with pytest.raises(ValueError, match="base_url"):
+        get_sandbox(_with_sandbox("http"))
+
+
 def test_sandbox_isolate_threads_through_to_local_process():
     """sandbox.isolate=None lets the LocalProcessSandbox auto-detect
     userns; True/False forces the choice."""

@@ -9,6 +9,7 @@
 import { useEffect } from "react";
 
 import type { Onboarding } from "../api/types";
+import { pxToRem } from "../lib/pxToRem";
 
 export function OnboardingModal({
   content,
@@ -62,11 +63,11 @@ export function OnboardingModal({
         }}
       >
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <h2 style={{ fontSize: 20, fontWeight: 800, margin: 0, letterSpacing: "-0.01em" }}>
+          <h2 style={{ fontSize: pxToRem(20), fontWeight: 800, margin: 0, letterSpacing: "-0.01em" }}>
             {content.title}
           </h2>
           {content.intro && (
-            <p style={{ fontSize: 14, color: "var(--text-paper-d)", margin: 0, lineHeight: 1.5 }}>
+            <p style={{ fontSize: pxToRem(14), color: "var(--text-paper-d)", margin: 0, lineHeight: 1.5 }}>
               {content.intro}
             </p>
           )}
@@ -85,7 +86,7 @@ export function OnboardingModal({
                     borderRadius: 999,
                     background: "var(--accent)",
                     color: "var(--white)",
-                    fontSize: 12,
+                    fontSize: pxToRem(12),
                     fontWeight: 700,
                     display: "inline-flex",
                     alignItems: "center",
@@ -95,8 +96,8 @@ export function OnboardingModal({
                   {i + 1}
                 </span>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600 }}>{p.title}</div>
-                  <div style={{ fontSize: 13, color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+                  <div style={{ fontSize: pxToRem(14), fontWeight: 600 }}>{p.title}</div>
+                  <div style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
                     {p.body}
                   </div>
                 </div>
@@ -113,7 +114,7 @@ export function OnboardingModal({
               height: 32,
               padding: "0 12px",
               borderRadius: "var(--radius-btn)",
-              fontSize: 13,
+              fontSize: pxToRem(13),
               cursor: "pointer",
               border: "none",
               background: "transparent",
@@ -130,7 +131,7 @@ export function OnboardingModal({
               height: 32,
               padding: "0 16px",
               borderRadius: "var(--radius-btn)",
-              fontSize: 13,
+              fontSize: pxToRem(13),
               cursor: "pointer",
               border: "1px solid var(--accent)",
               background: "var(--accent)",

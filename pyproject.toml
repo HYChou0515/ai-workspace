@@ -61,7 +61,10 @@ markers = [
 [tool.coverage.run]
 branch = true
 source = ["src/workspace_app"]
-omit = ["src/workspace_app/__main__.py"]
+omit = [
+    "src/workspace_app/__main__.py",
+    "src/workspace_app/sandbox_host/__main__.py",  # serve glue (uvicorn), like the app entrypoint
+]
 # parallel + sitecustomize's process_startup() let each pytest-xdist worker
 # subprocess record its own .coverage.* file; `coverage combine` merges them.
 # Harmless for serial runs (one data file, still combined).

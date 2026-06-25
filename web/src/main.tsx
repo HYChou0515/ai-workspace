@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { queryClient } from "./api/queryClient";
+import { FontScaleProvider, initFontScale } from "./hooks/fontScale";
 import { initTheme } from "./hooks/theme";
 import { LocaleProvider } from "./lib/i18n";
 // Self-hosted fonts (Fontsource) — bundled into dist, no runtime CDN. The
@@ -24,6 +25,7 @@ import "./styles/brand.css";
 import "./styles/topic-hub.css";
 
 initTheme();
+initFontScale();
 
 const root = document.getElementById("root");
 if (!root) throw new Error("root element missing");
@@ -31,7 +33,9 @@ createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <LocaleProvider>
-        <App />
+        <FontScaleProvider>
+          <App />
+        </FontScaleProvider>
       </LocaleProvider>
     </QueryClientProvider>
   </StrictMode>,

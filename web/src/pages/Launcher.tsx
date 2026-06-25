@@ -21,6 +21,7 @@ import { useOnboarding } from "../hooks/useOnboarding";
 import { PLATFORM_ONBOARDING, PLATFORM_SCOPE } from "../lib/platformOnboarding";
 import { useT } from "../lib/i18n";
 import type { AppSummary } from "../api/types";
+import { pxToRem } from "../lib/pxToRem";
 
 function softOf(hex: string): string {
   return `color-mix(in srgb, ${hex} 8%, var(--white))`;
@@ -60,8 +61,8 @@ function AppCard({ app }: { app: AppSummary }) {
           <AppIcon icon={app.icon} color={app.color} />
         </span>
         <span style={{ flex: 1 }}>
-          <span style={{ display: "block", fontWeight: 700, fontSize: 18 }}>{app.title}</span>
-          <span style={{ display: "block", fontSize: 13, color: "var(--text-paper-d)" }}>
+          <span style={{ display: "block", fontWeight: 700, fontSize: pxToRem(18) }}>{app.title}</span>
+          <span style={{ display: "block", fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
             {app.description}
           </span>
         </span>
@@ -103,10 +104,10 @@ function KbCard() {
         <Icon name="layers" size={24} color="var(--text-paper-d)" />
       </span>
       <span style={{ flex: 1 }}>
-        <span style={{ display: "block", fontWeight: 700, fontSize: 18 }}>
+        <span style={{ display: "block", fontWeight: 700, fontSize: pxToRem(18) }}>
           {t("launcher.kb.title")}
         </span>
-        <span style={{ display: "block", fontSize: 13, color: "var(--text-paper-d)" }}>
+        <span style={{ display: "block", fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
           {t("launcher.kb.desc")}
         </span>
       </span>
@@ -133,11 +134,11 @@ export function Launcher() {
         />
       )}
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
-        <div style={{ fontFamily: "monospace", fontSize: 11, letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
+        <div style={{ fontFamily: "monospace", fontSize: pxToRem(11), letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
           {t("launcher.appsEyebrow")}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0 24px" }}>
-          <h1 style={{ fontSize: 40, margin: 0 }}>{t("launcher.yourApps")}</h1>
+          <h1 style={{ fontSize: pxToRem(40), margin: 0 }}>{t("launcher.yourApps")}</h1>
           <HelpButton onClick={ob.reopen} label="About this workspace" />
         </div>
         <div
@@ -159,10 +160,10 @@ export function Launcher() {
                 background: "var(--paper-2)",
               }}
             >
-              <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>
+              <div style={{ fontSize: pxToRem(15), fontWeight: 600, marginBottom: 4 }}>
                 {t("launcher.empty.title")}
               </div>
-              <div style={{ fontSize: 13, color: "var(--text-paper-d)" }}>
+              <div style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
                 {t("launcher.empty.body")}
               </div>
             </div>

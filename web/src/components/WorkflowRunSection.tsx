@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import { isRunTerminal, type WorkflowRunDTO } from "../api/workflows";
 import { useItemRuns, useStartRun, useWorkflowManifest } from "../hooks/useWorkflow";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
+import { pxToRem } from "../lib/pxToRem";
 
 function when(ms: number | null): string {
   if (!ms) return "";
@@ -52,7 +53,7 @@ export function WorkflowRunSection({
       style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12 }}
     >
       <header style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <strong style={{ fontSize: 13 }}>{manifest.title || "Workflow"}</strong>
+        <strong style={{ fontSize: pxToRem(13) }}>{manifest.title || "Workflow"}</strong>
         <button
           type="button"
           data-testid="wf-run-button"
@@ -86,10 +87,10 @@ export function WorkflowRunSection({
 
       {runs.data && runs.data.length > 0 && (
         <details data-testid="wf-run-history">
-          <summary style={{ cursor: "pointer", fontSize: 12 }}>
+          <summary style={{ cursor: "pointer", fontSize: pxToRem(12) }}>
             Run history ({runs.data.length})
           </summary>
-          <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0, fontSize: 12 }}>
+          <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0, fontSize: pxToRem(12) }}>
             {runs.data.map((r: WorkflowRunDTO) => (
               <li key={r.run_id}>
                 <button

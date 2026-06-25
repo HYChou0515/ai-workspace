@@ -57,6 +57,44 @@ def test_operator_yaml_overrides_a_single_scalar_keeps_other_defaults(tmp_path: 
     assert s.kb.embedder.model == "ollama/bge-m3"
 
 
+def test_http_sandbox_and_host_sections_load(tmp_path: Path):
+    """#60: the client `sandbox.http` block + the standalone `sandbox_host`
+    section parse into typed settings (nested http built, not left a dict)."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            sandbox:
+              kind: http
+              http:
+                base_url: http://sandbox-host:8000
+                read_timeout: 0
+            sandbox_host:
+              uid_min: 200000
+              uid_max: 209999
+              memory_max: 1G
+              cpu_cores: 2.0
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.sandbox.kind == "http"
+    assert s.sandbox.http is not None
+    assert s.sandbox.http.base_url == "http://sandbox-host:8000"
+    assert s.sandbox_host.uid_min == 200000
+    assert s.sandbox_host.memory_max == "1G"
+    assert s.sandbox_host.cpu_cores == 2.0
+    # Untouched host knobs keep their defaults.
+    assert s.sandbox_host.pids_max == 512
+
+
+def test_default_config_leaves_http_sandbox_unset():
+    """A default deploy keeps the local backend; `sandbox.http` is None and the
+    host section carries its bundled defaults."""
+    s = load(config_path=None, env={})
+    assert s.sandbox.http is None
+    assert s.sandbox_host.bind == "0.0.0.0:8000"
+
+
 def test_kb_max_searches_per_turn_defaults_to_three():
     """#195: a fresh deploy caps kb_search at 3 calls per reply."""
     s = load(config_path=None, env={})

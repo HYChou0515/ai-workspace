@@ -5,6 +5,7 @@
  */
 
 import { useEffect, useId, useRef, useState } from "react";
+import { pxToRem } from "../lib/pxToRem";
 
 export function Popover({
   trigger,
@@ -97,7 +98,7 @@ export function PopoverItem({
         textAlign: "left",
         background: "transparent",
         borderRadius: 4,
-        fontSize: 13,
+        fontSize: pxToRem(13),
         color: disabled ? "var(--text-paper-d2)" : "var(--text-paper)",
         cursor: disabled ? "not-allowed" : "pointer",
       }}
@@ -121,7 +122,7 @@ export function PopoverItem({
           alignItems: "center",
           justifyContent: "center",
           color: "var(--white)",
-          fontSize: 10,
+          fontSize: pxToRem(10),
         }}
       >
         {selected ? "✓" : ""}

@@ -224,12 +224,13 @@ class LocalProcessSandbox:
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
         del self._dirs[handle.id]
 
-    async def exec(
-        self,
-        handle: SandboxHandle,
-        cmd: list[str],
-        on_output: OutputSink | None = None,
-    ) -> ExecResult:
+    def _exec_argv(
+        self, handle: SandboxHandle, cmd: list[str]
+    ) -> tuple[list[str], Path, dict[str, str]]:
+        """Build the `(argv, cwd, env)` for one command. The seam subclasses
+        override to wrap `cmd` (e.g. `IsolatedProcessSandbox` prepends a
+        `setpriv` + cgroup-join wrapper); the exec pump/timeout machinery below
+        stays shared. Validates the handle (raises `SandboxNotFound`)."""
         root = self._require(handle)
         ws = root / _WORKSPACE
         env = {**os.environ, "PYTHONUNBUFFERED": "1"}
@@ -247,6 +248,15 @@ class LocalProcessSandbox:
             argv = cmd
             sub_cwd = ws
             env["HOME"] = str(ws)
+        return argv, sub_cwd, env
+
+    async def exec(
+        self,
+        handle: SandboxHandle,
+        cmd: list[str],
+        on_output: OutputSink | None = None,
+    ) -> ExecResult:
+        argv, sub_cwd, env = self._exec_argv(handle, cmd)
         try:
             proc = await asyncio.create_subprocess_exec(
                 *argv,
@@ -366,9 +376,10 @@ class LocalProcessSandbox:
                 await watchdog
             # The jail leaves /dev device-node files behind (bind targets) at
             # the sandbox root; drop them. (They're outside the workspace now,
-            # so they wouldn't reverse-sync anyway — belt and suspenders.)
+            # so they wouldn't reverse-sync anyway — belt and suspenders.) In the
+            # isolate path `sub_cwd` IS the sandbox root.
             if self._isolate:
-                await asyncio.to_thread(shutil.rmtree, root / "dev", ignore_errors=True)
+                await asyncio.to_thread(shutil.rmtree, sub_cwd / "dev", ignore_errors=True)
 
         stdout = b"".join(out_buf)
         if timed_out is not None:

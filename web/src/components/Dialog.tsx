@@ -5,6 +5,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { pxToRem } from "../lib/pxToRem";
 
 export type DialogAction = {
   id: string;
@@ -85,9 +86,9 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
               gap: 12,
             }}
           >
-            <strong style={{ fontSize: 14 }}>{opts.title}</strong>
+            <strong style={{ fontSize: pxToRem(14) }}>{opts.title}</strong>
             {opts.body != null && (
-              <div style={{ fontSize: 13, color: "var(--text-paper-d)", lineHeight: 1.5 }}>
+              <div style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
                 {opts.body}
               </div>
             )}
@@ -116,7 +117,7 @@ function actionStyle(variant: DialogAction["variant"]): React.CSSProperties {
     height: 30,
     padding: "0 14px",
     borderRadius: "var(--radius-btn)",
-    fontSize: 13,
+    fontSize: pxToRem(13),
     cursor: "pointer",
     border: "1px solid var(--paper-3)",
     background: "var(--white)",

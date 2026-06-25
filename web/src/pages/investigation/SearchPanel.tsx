@@ -12,6 +12,7 @@ import type { SearchOptions, SearchResult } from "../../api/types";
 import { Icon } from "../../components/Icon";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { basename, dirname } from "./renderer";
+import { pxToRem } from "../../lib/pxToRem";
 
 type SearchClient = {
   searchFiles: (
@@ -117,7 +118,7 @@ export function SearchPanel({
     <aside style={frame}>
       <div style={header}>
         <span className="caps">Search</span>
-        {busy && <span style={{ fontSize: 11, color: "var(--text-paper-d2)" }}>searching…</span>}
+        {busy && <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>searching…</span>}
       </div>
 
       <div style={{ padding: 10, display: "flex", alignItems: "flex-start", gap: 4 }}>
@@ -192,7 +193,7 @@ export function SearchPanel({
         </div>
       </div>
 
-      <div style={{ padding: "0 12px 6px", fontSize: 11, color: "var(--text-paper-d)" }}>
+      <div style={{ padding: "0 12px 6px", fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
         {error ? (
           <span style={{ color: "var(--danger, #b4413c)" }}>{error}</span>
         ) : query && results.length > 0 ? (
@@ -217,7 +218,7 @@ export function SearchPanel({
               >
                 <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={12} />
                 <span style={{ fontWeight: 600 }}>{basename(r.path)}</span>
-                <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>
+                <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
                   {dirname(r.path)}
                 </span>
                 <span style={{ flex: 1 }} />
@@ -265,7 +266,7 @@ function Toggle({
       style={{
         ...iconToggle,
         width: 22,
-        fontSize: 11,
+        fontSize: pxToRem(11),
         fontWeight: 600,
         background: on ? "var(--accent-soft)" : "transparent",
         color: on ? "var(--accent-h)" : "var(--text-paper-d)",
@@ -344,7 +345,7 @@ const input: React.CSSProperties = {
   border: "none",
   outline: "none",
   background: "transparent",
-  fontSize: 12,
+  fontSize: pxToRem(12),
   color: "var(--text-paper)",
   minWidth: 0,
 };
@@ -366,13 +367,13 @@ const fileHeader: React.CSSProperties = {
   width: "100%",
   padding: "4px 10px",
   background: "transparent",
-  fontSize: 12,
+  fontSize: pxToRem(12),
   textAlign: "left",
   color: "var(--text-paper)",
 };
 
 const countBadge: React.CSSProperties = {
-  fontSize: 10,
+  fontSize: pxToRem(10),
   minWidth: 16,
   textAlign: "center",
   padding: "0 5px",
@@ -388,7 +389,7 @@ const matchRow: React.CSSProperties = {
   width: "100%",
   padding: "2px 10px 2px 28px",
   background: "transparent",
-  fontSize: 12,
+  fontSize: pxToRem(12),
   textAlign: "left",
   color: "var(--text-paper-d)",
   fontFamily: "var(--font-mono)",
@@ -396,7 +397,7 @@ const matchRow: React.CSSProperties = {
 
 const lineNo: React.CSSProperties = {
   color: "var(--text-paper-d2)",
-  fontSize: 10,
+  fontSize: pxToRem(10),
   minWidth: 22,
   textAlign: "right",
   flexShrink: 0,

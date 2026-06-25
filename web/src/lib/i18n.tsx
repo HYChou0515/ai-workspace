@@ -14,8 +14,15 @@ export type Locale = "zh-TW" | "en";
 type Entry = Record<Locale, string>;
 
 export const messages = {
-  // Settings panel (WorkspaceShell)
+  // Settings panel (global, GlobalNav gear)
   "settings.title": { "zh-TW": "設定", en: "Settings" },
+  "settings.close": { "zh-TW": "關閉", en: "Close" },
+  "settings.fontsize": { "zh-TW": "字體大小", en: "Text size" },
+  "settings.fontsize.note": {
+    "zh-TW": "調整介面文字大小；其餘版面維持不變。",
+    en: "Scales the interface text; the rest of the layout stays put.",
+  },
+  "settings.fontsize.reset": { "zh-TW": "重置為預設大小", en: "Reset to default size" },
   "settings.theme": { "zh-TW": "外觀", en: "Appearance" },
   "settings.theme.note": {
     "zh-TW": "「系統」會跟隨你的作業系統外觀。",

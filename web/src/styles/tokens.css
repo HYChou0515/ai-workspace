@@ -60,25 +60,25 @@
    * matching the role: hero numbers / page H1 / section H2 / card title
    * / body / small / mono caps.
    */
-  --text-display-xl:    56px;
+  --text-display-xl:    3.5rem;
   --leading-display-xl: 1.05;
-  --text-display-lg:    40px;
+  --text-display-lg:    2.5rem;
   --leading-display-lg: 1.10;
-  --text-display-md:    28px;
+  --text-display-md:    1.75rem;
   --leading-display-md: 1.15;
-  --text-display-sm:    22px;
+  --text-display-sm:    1.375rem;
   --leading-display-sm: 1.20;
-  --text-body-lg:       18px;
+  --text-body-lg:       1.125rem;
   --leading-body-lg:    1.55;
-  --text-body:          14px;
+  --text-body:          0.875rem;
   --leading-body:       1.55;
-  --text-body-sm:       13px;
+  --text-body-sm:       0.8125rem;
   --leading-body-sm:    1.5;
-  --text-small:         12px;
+  --text-small:         0.75rem;
   --leading-small:      1.5;
-  --text-xs:            11px;
+  --text-xs:            0.6875rem;
   --leading-xs:         1.5;
-  --text-mono-caps:     11px;
+  --text-mono-caps:     0.6875rem;
   --tracking-mono-caps: 0.12em;
 
   /* Spacing — 4px base. Use these in padding / gap / margin. */

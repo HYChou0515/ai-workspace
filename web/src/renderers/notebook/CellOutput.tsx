@@ -8,6 +8,7 @@
 import DOMPurify from "dompurify";
 
 import { type NbOutput, pickMime } from "./types";
+import { pxToRem } from "../../lib/pxToRem";
 
 export function CellOutput({ outputs }: { outputs: NbOutput[] }) {
   if (outputs.length === 0) return null;
@@ -31,7 +32,7 @@ function OutputItem({ output }: { output: NbOutput }) {
             background: "var(--paper-2)",
             borderRadius: 4,
             fontFamily: "var(--font-mono)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: output.name === "stderr" ? "var(--err)" : "var(--text-paper)",
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
@@ -60,7 +61,7 @@ function OutputItem({ output }: { output: NbOutput }) {
             // eslint-disable-next-line react/no-danger
             dangerouslySetInnerHTML={{ __html: sanitized }}
             style={{
-              fontSize: 13,
+              fontSize: pxToRem(13),
               maxWidth: "100%",
               overflowX: "auto",
             }}
@@ -75,7 +76,7 @@ function OutputItem({ output }: { output: NbOutput }) {
             background: "var(--paper-2)",
             borderRadius: 4,
             fontFamily: "var(--font-mono)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: "var(--text-paper)",
             whiteSpace: "pre-wrap",
           }}
@@ -94,7 +95,7 @@ function OutputItem({ output }: { output: NbOutput }) {
             border: "1px solid var(--err)",
             borderRadius: 4,
             fontFamily: "var(--font-mono)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: "var(--err)",
             whiteSpace: "pre-wrap",
           }}

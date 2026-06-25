@@ -19,6 +19,7 @@ import { useT, type MsgKey } from "../lib/i18n";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
 import { UserChip } from "./UserChip";
+import { pxToRem } from "../lib/pxToRem";
 
 // #160: present each tool as a behavior, never its raw name(args). A friendly
 // label (localized) + the single most meaningful argument in plain text.
@@ -96,7 +97,7 @@ export function EntryView({
           padding: "6px 10px",
           background: "var(--accent-soft)",
           borderLeft: "2px solid var(--accent)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
           color: "var(--accent-h)",
         }}
       >
@@ -182,7 +183,7 @@ function UndoButton({ onUndo }: { onUndo: () => void }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 4,
-        fontSize: 11,
+        fontSize: pxToRem(11),
         fontFamily: "inherit",
         lineHeight: 1.4,
         borderRadius: "var(--radius-btn)",
@@ -206,7 +207,7 @@ function MentionLine({ by, users, note }: { by: string; users: string[]; note: s
         padding: "6px 10px",
         background: "var(--paper-2)",
         borderLeft: "2px solid var(--text-paper-d2)",
-        fontSize: 12,
+        fontSize: pxToRem(12),
         color: "var(--text-paper-d)",
       }}
     >
@@ -235,7 +236,7 @@ function PhaseDivider({ phase }: { phase: string }) {
         alignItems: "center",
         gap: 8,
         padding: "8px 10px 2px",
-        fontSize: 11,
+        fontSize: pxToRem(11),
         fontWeight: 600,
         letterSpacing: "0.04em",
         textTransform: "uppercase",
@@ -278,7 +279,7 @@ function StepLine({ step }: { step: StepView }) {
           alignItems: "baseline",
           gap: 6,
           padding: "3px 10px",
-          fontSize: 12,
+          fontSize: pxToRem(12),
           color: "var(--text-paper-d)",
           fontFamily: "var(--font-mono, monospace)",
         }}
@@ -300,7 +301,7 @@ function StepLine({ step }: { step: StepView }) {
             padding: "4px 8px",
             background: "var(--paper-2)",
             borderRadius: 6,
-            fontSize: 11,
+            fontSize: pxToRem(11),
             maxHeight: 160,
             overflow: "auto",
             whiteSpace: "pre-wrap",
@@ -335,7 +336,7 @@ function MessageBlock({
             alignItems: "center",
             gap: 6,
             color: "var(--text-paper-d)",
-            fontSize: 11,
+            fontSize: pxToRem(11),
             fontFamily: "var(--font-mono)",
           }}
         >
@@ -349,7 +350,7 @@ function MessageBlock({
               display: "inline-flex",
               alignItems: "center",
               justifyContent: "center",
-              fontSize: 10,
+              fontSize: pxToRem(10),
               fontWeight: 600,
             }}
           >
@@ -367,7 +368,7 @@ function MessageBlock({
           style={{
             marginLeft: 28,
             marginTop: 4,
-            fontSize: 13,
+            fontSize: pxToRem(13),
             color: "var(--text-paper)",
             // Preserve the user's newlines/spacing (issue #18) — their message is
             // plain text, not markdown, so render it verbatim.
@@ -389,7 +390,7 @@ function MessageBlock({
             alignItems: "center",
             gap: 6,
             color: "var(--text-paper-d)",
-            fontSize: 11,
+            fontSize: pxToRem(11),
             fontFamily: "var(--font-mono)",
           }}
         >
@@ -446,7 +447,7 @@ function MessageBlock({
   // tool messages fold into ToolCallView during reduce; render unattributed
   // ones (e.g. system messages) plainly.
   return (
-    <div style={{ fontSize: 12, color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)" }}>
+    <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)" }}>
       {message.content}
     </div>
   );
@@ -463,7 +464,7 @@ function RepetitionNotice({ answered }: { answered: boolean }) {
       style={{
         marginLeft: 28,
         marginTop: 4,
-        fontSize: 12,
+        fontSize: pxToRem(12),
         color: "var(--text-paper-d2)",
         fontStyle: "italic",
       }}
@@ -506,7 +507,7 @@ function ReasoningBlock({ text, answered = false }: { text: string; answered?: b
     <details
       open={open}
       onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
-      style={{ marginLeft: 28, marginTop: 4, fontSize: 12, color: "var(--text-paper-d)" }}
+      style={{ marginLeft: 28, marginTop: 4, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
     >
       <summary style={{ cursor: "pointer", display: "inline-flex", alignItems: "center", gap: 4 }}>
         <Icon name={open ? "chev_d" : "chev_r"} size={11} />
@@ -521,7 +522,7 @@ function ReasoningBlock({ text, answered = false }: { text: string; answered?: b
           borderRadius: 4,
           whiteSpace: "pre-wrap",
           fontFamily: "var(--font-mono)",
-          fontSize: 11,
+          fontSize: pxToRem(11),
           color: "var(--text-paper-d)",
           maxHeight: 220,
           overflow: "auto",
@@ -563,7 +564,7 @@ function ToolCallCard({
         borderRadius: "var(--radius-card)",
         padding: "8px 10px",
         fontFamily: "var(--font-mono)",
-        fontSize: 12,
+        fontSize: pxToRem(12),
       }}
     >
       <summary
@@ -589,14 +590,14 @@ function ToolCallCard({
           </span>
         )}
         {body !== undefined && (
-          <span style={{ color: "var(--text-paper-d2)", fontSize: 11 }}>
+          <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11) }}>
             · {streamingLive ? t("tool.running") : t("tool.result")}
           </span>
         )}
         {onReplay && <ReplayButton onReplay={onReplay} />}
       </summary>
       {call.parseError && (
-        <div style={{ color: "var(--warn)", fontSize: 11, marginTop: 4 }}>
+        <div style={{ color: "var(--warn)", fontSize: pxToRem(11), marginTop: 4 }}>
           {t("entry.retry")}
           {call.parseError}
         </div>
@@ -609,7 +610,7 @@ function ToolCallCard({
             alignItems: "center",
             gap: 4,
             marginTop: 6,
-            fontSize: 11,
+            fontSize: pxToRem(11),
             color: "var(--accent)",
           }}
         >

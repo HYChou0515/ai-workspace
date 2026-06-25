@@ -6,6 +6,8 @@
 
 import { lazy, Suspense } from "react";
 
+import { pxToRem } from "../lib/pxToRem";
+
 const LazyMonacoDiff = lazy(() => import("./MonacoDiffEditorImpl"));
 
 export type MonacoDiffEditorProps = {
@@ -37,7 +39,7 @@ function DiffSkeleton() {
         justifyContent: "center",
         color: "var(--text-paper-d2)",
         fontFamily: "var(--font-mono)",
-        fontSize: 12,
+        fontSize: pxToRem(12),
       }}
     >
       loading diff…

@@ -13,6 +13,7 @@ import { chipStyle } from "./StatusChip";
 import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
 import { WorkflowPhaseDiagram } from "./WorkflowPhaseDiagram";
 import { WorkflowStepBoard } from "./WorkflowStepBoard";
+import { pxToRem } from "../lib/pxToRem";
 
 function runTone(status: RunStatus): ChipTone {
   switch (status) {
@@ -108,7 +109,7 @@ export function WorkflowRunPanel({
             background: "var(--paper-2)",
             borderLeft: "2px solid var(--err)",
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: "var(--err)",
           }}
         >
@@ -138,7 +139,7 @@ export function WorkflowRunPanel({
             background: "var(--paper-2)",
             borderLeft: "2px solid var(--text-paper-d2)",
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: "var(--text-paper)",
           }}
         >
@@ -153,7 +154,7 @@ export function WorkflowRunPanel({
             padding: "8px 10px",
             background: "var(--paper-2)",
             borderRadius: 6,
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: "var(--text-paper)",
           }}
         >
@@ -169,7 +170,7 @@ export function WorkflowRunPanel({
             background: "var(--paper-2)",
             borderRadius: 6,
             padding: 8,
-            fontSize: 12,
+            fontSize: pxToRem(12),
             whiteSpace: "pre-wrap",
           }}
         >
@@ -178,7 +179,7 @@ export function WorkflowRunPanel({
       )}
 
       {run.failures.length > 0 && (
-        <ul data-testid="wf-failures" style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+        <ul data-testid="wf-failures" style={{ margin: 0, paddingLeft: 18, fontSize: pxToRem(12) }}>
           {run.failures.map((f) => (
             <li key={f.key} style={{ color: "var(--err)" }}>
               <code>{f.key}</code>: {f.error}

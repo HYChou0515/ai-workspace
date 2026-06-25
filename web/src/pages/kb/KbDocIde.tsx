@@ -34,6 +34,7 @@ import { hasEditToggle, pickRenderer } from "../../renderers/registry";
 import { FileTree } from "../investigation/FileTree";
 import { docHref } from "./kbLinks";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
+import { pxToRem } from "../../lib/pxToRem";
 
 /** Page through the (paged) documents endpoint into one flat list — the tree
  * needs every path, not a slice. `collection_id` is indexed on the BE, so this
@@ -82,7 +83,7 @@ function EmptyUploadCta({
       }}
     >
       <Icon name="upload" size={28} color="var(--text-paper-d2)" />
-      <div style={{ fontSize: 14 }}>{t("kb.dropHint")}</div>
+      <div style={{ fontSize: pxToRem(14) }}>{t("kb.dropHint")}</div>
       <button
         type="button"
         className="kb-btn kb-btn--primary"

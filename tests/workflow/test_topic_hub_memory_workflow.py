@@ -28,15 +28,15 @@ async def test_memory_workflow_digests_uploads_then_refreshes_the_index():
         calls.append(prompt)
         if len(calls) == 1:  # the digest node's note content
             return "Key fact: the oven runs at 250C."
-        return "# Memory\n- [oven](memory/inputs_doc.md)"  # the index content
+        return "# Memory\n- [oven](memory/uploads_doc.md)"  # the index content
 
     wf.drive_turn = drive_turn
-    await wf.write("inputs/doc.txt", b"the oven runs at 250C during reflow")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/doc.txt", b"the oven runs at 250C during reflow")
+    await wf.write("uploads/input.json", b"{}")
 
     result = await run(wf, {})
     assert result == {"status": "done", "notes": 1}
-    assert "oven" in await wf.read_text("memory/inputs_doc.md")
+    assert "oven" in await wf.read_text("memory/uploads_doc.md")
     assert "Memory" in await wf.read_text("MEMORY.md")
     assert len(calls) == 2  # one digest + one index turn
 
@@ -56,8 +56,8 @@ async def test_memory_workflow_overwrites_seeded_files_from_agent_reply():
 
     wf.drive_turn = drive_turn
     await wf.write("MEMORY.md", "# Memory — STALE SEED")  # pre-existing → must be replaced
-    await wf.write("inputs/doc.txt", b"content")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/doc.txt", b"content")
+    await wf.write("uploads/input.json", b"{}")
     await run(wf, {})
     assert await wf.read_text("MEMORY.md") == "# Memory index\n- fresh"  # overwritten
     # the content-producing nodes never carry write tools — they reply with the content.
@@ -75,8 +75,8 @@ async def test_memory_workflow_rerun_skips_completed_steps():
         return "note" if len(calls) == 1 else "# Memory"
 
     wf.drive_turn = drive_turn
-    await wf.write("inputs/doc.txt", b"content")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/doc.txt", b"content")
+    await wf.write("uploads/input.json", b"{}")
     await run(wf, {})
     before = len(calls)
     await run(wf, {})  # re-run — every step is already journaled
@@ -86,5 +86,5 @@ async def test_memory_workflow_rerun_skips_completed_steps():
 async def test_memory_workflow_is_empty_with_no_uploads():
     run = _run()
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
-    await wf.write("inputs/input.json", b"{}")
+    await wf.write("uploads/input.json", b"{}")
     assert await run(wf, {}) == {"status": "empty", "notes": 0}
