@@ -34,6 +34,7 @@ from __future__ import annotations
 from typing import Any
 
 from workspace_app.filestore.protocol import FileNotFound
+from workspace_app.kb.context_cards import norm
 from workspace_app.workflow import (
     agent_step,
     collection_has,
@@ -47,6 +48,10 @@ from workspace_app.workflow.handle import WorkflowHandle
 _TODO = "context-card.todo.md"
 _CURRENT = ".readonly/context-card.current.md"
 _WARN = "⚠️"
+# Card separator (#183). A card ``body`` is free markdown — it may itself contain ``##``
+# headings — so the per-card boundary can't be a ``##`` line. This HTML comment never
+# appears in a natural body, renders invisibly, and stays visible/editable in the diff.
+_SENTINEL = "<!-- card -->"
 
 # Human-readable reasons for the "did nothing" outcomes (#100 observability). A
 # no-op used to return a bare status token the UI showed as raw JSON; these are
@@ -114,17 +119,32 @@ async def _read_collections(wf: WorkflowHandle) -> list[str]:
     return out
 
 
-def _plan_terms(plan: dict[str, Any]) -> list[tuple[str, str, bool]]:
-    """``(term, definition, confident)`` triples from a classify plan, tolerant of a
-    bare-string ``terms`` entry (→ uncertain, no draft) for robustness."""
-    out: list[tuple[str, str, bool]] = []
+def _plan_terms(plan: dict[str, Any]) -> list[tuple[str, list[str], str, bool]]:
+    """``(title, keys, definition, confident)`` quadruples from a classify plan (#182).
+    ``keys`` are the surface forms a reader might actually type — each alias becomes its own
+    exact-lookup key. Tolerant of older / sloppier shapes: a pre-#182 ``{term, ...}`` entry →
+    title=term, keys=[term]; a bare-string entry → title=string, keys=[string], uncertain;
+    a ``{title, ...}`` with no usable ``keys`` falls back to keys=[title]."""
+    out: list[tuple[str, list[str], str, bool]] = []
     for t in plan.get("terms") or []:
         if isinstance(t, dict):
-            term = str(t.get("term", "")).strip()
-            if term:
-                out.append((term, str(t.get("definition", "")).strip(), bool(t.get("confident"))))
+            title = str(t.get("title") or t.get("term") or "").strip()
+            if not title:
+                continue
+            raw_keys = t.get("keys")
+            keys = (
+                [s for k in raw_keys if (s := str(k).strip())] if isinstance(raw_keys, list) else []
+            )
+            out.append(
+                (
+                    title,
+                    keys or [title],
+                    str(t.get("definition", "")).strip(),
+                    bool(t.get("confident")),
+                )
+            )
         elif isinstance(t, str) and t.strip():
-            out.append((t.strip(), "", False))
+            out.append((t.strip(), [t.strip()], "", False))
     return out
 
 
@@ -145,7 +165,9 @@ def _classify_check(path: str, allowed: list[str]):
                 False, f"collection={obj.get('collection')!r} is not one of {allowed}"
             )
         if not isinstance(obj.get("terms"), list):
-            return CheckResult(False, "terms must be a list of {term, definition, confident}")
+            return CheckResult(
+                False, "terms must be a list of {title, keys, definition, confident}"
+            )
         return CheckResult(True)
 
     return _check
@@ -155,11 +177,22 @@ def _classify_prompt(f: str, out: str, collections: list[str], feedback: str) ->
     base = (
         f"Read the file {f}. Choose the single best collection for it from {collections}. "
         f"Write a one-line digest. Identify the domain terms or abbreviations a newcomer "
-        f"would not know. For EACH such term, draft a short plain-language definition based "
-        f"on the file, and set confident=true only if you are sure the draft is correct "
-        f"(false if you are guessing). Then write a JSON object "
+        f"would not know. For EACH such term:\n"
+        f"- Give it a short display `title` and a `keys` list of the surface forms a reader "
+        f"might actually type for it — its abbreviation, full name, and any English/Chinese "
+        f"variant (e.g. 'M4', 'Metal 4', '第四層金屬'). Each key is later matched by EXACT "
+        f"membership after normalisation (case-folded, full/half-width unified, whitespace "
+        f"collapsed): a query must equal a WHOLE key to find the card. So list every distinct "
+        f"form a reader might search as its OWN key, keep each key a short term or phrase "
+        f"(never a sentence), and don't add mere case/width variants (those already normalise "
+        f"together).\n"
+        f"- Draft a short `definition` in MARKDOWN (you may use **bold**, lists or `code`; keep "
+        f"it concise — the card already shows the title, so no top-level heading is needed). "
+        f"Set confident=true only if you are sure the draft is correct (false if guessing).\n"
+        f"Then write a JSON object "
         f'{{"collection": <one of {collections}>, "digest": <text>, "terms": '
-        f'[{{"term": <term>, "definition": <your draft>, "confident": <true|false>}}, ...]}} '
+        f'[{{"title": <term>, "keys": [<surface forms>], "definition": <markdown>, '
+        f'"confident": <true|false>}}, ...]}} '
         f"to {out} with write_file (use edit_file if {out} already exists). Output nothing else."
     )
     if feedback:
@@ -168,55 +201,76 @@ def _classify_prompt(f: str, out: str, collections: list[str], feedback: str) ->
 
 
 def _proposed_cards(plan_by_file: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
-    """Deterministic: one proposed card per unique term (first appearance wins). Each is
-    ``{title, collection, keys, body}`` — title/keys are the term (drafting stays per-key,
-    #205), collection is the file's routing. A confident draft becomes the body; an
-    uncertain one a ``⚠️`` line the human resolves in the diff."""
-    seen: dict[str, dict[str, Any]] = {}
-    order: list[str] = []
+    """Deterministic: one proposed card per unique concept. Each is ``{title, collection,
+    keys, body}`` (#182, #205) — ``keys`` are the AI's surface forms (every alias a separate
+    exact-lookup key), ``collection`` is the file's routing. Concepts are deduped by
+    NORMALISED key: a later mention sharing any ``norm`` key folds into the first card and
+    contributes its new aliases (so the same term spelled differently across files merges
+    into one card instead of spawning a near-duplicate). First appearance wins for title /
+    collection / body; a confident draft becomes the body, an uncertain one a ``⚠️`` line."""
+    by_normkey: dict[str, dict[str, Any]] = {}
+    order: list[dict[str, Any]] = []
     for plan in plan_by_file.values():
         coll = plan.get("collection")
         coll = coll if isinstance(coll, str) else ""
-        for term, definition, confident in _plan_terms(plan):
-            if term not in seen:
+        for title, keys, definition, confident in _plan_terms(plan):
+            # _plan_terms guarantees keys is non-empty with each element stripped, so each
+            # norm(k) is non-empty (strip and split share one whitespace definition).
+            nk_pairs = [(k, norm(k)) for k in keys]
+            existing = next((by_normkey[n] for _, n in nk_pairs if n in by_normkey), None)
+            if existing is None:
                 if confident and definition:
                     body = definition
                 elif definition:
                     body = f"{_WARN} {definition}"
                 else:
                     body = f"{_WARN} draft a definition for this term"
-                seen[term] = {"title": term, "collection": coll, "keys": [term], "body": body}
-                order.append(term)
-    return [seen[t] for t in order]
+                card = {"title": title, "collection": coll, "keys": list(keys), "body": body}
+                order.append(card)
+                for _, n in nk_pairs:
+                    by_normkey.setdefault(n, card)
+            else:
+                for k, n in nk_pairs:
+                    if n not in by_normkey:
+                        existing["keys"].append(k)
+                        by_normkey[n] = existing
+    return order
 
 
 def _render_cards(cards: list[dict[str, Any]]) -> str:
-    """Render cards as ``## <title>`` blocks carrying ``collection`` / ``keys`` / body
-    (#205) — the SAME format for both files, so a whole-file diff lines up block-by-block
-    and shows keys/title/body changes (incl. a silent key-narrowing). Empty list → ``""``
-    (an empty snapshot = every proposed card is brand-new)."""
+    """Render cards as ``<!-- card -->``-delimited blocks carrying ``title`` / ``collection``
+    / ``keys`` metadata lines then a free-markdown body (#183, #205) — the SAME format for
+    both files, so a whole-file diff lines up block-by-block and shows keys/title/body
+    changes (incl. a silent key-narrowing). The sentinel (not a ``##`` heading) is the card
+    boundary so a body may use its own ``##`` headings. Empty list → ``""`` (an empty
+    snapshot = every proposed card is brand-new)."""
 
     def _block(c: dict[str, Any]) -> str:
         keys = ", ".join(c["keys"])
-        return f"## {c['title']}\ncollection: {c['collection']}\nkeys: {keys}\n\n{c['body']}\n"
+        return (
+            f"{_SENTINEL}\ntitle: {c['title']}\ncollection: {c['collection']}\n"
+            f"keys: {keys}\n\n{c['body']}\n"
+        )
 
     return "\n".join(_block(c) for c in cards)
 
 
 def _parse_cards(text: str) -> list[dict[str, Any]]:
     """Parse the (proposed, possibly human-edited) ``context-card.todo.md`` into
-    ``{collection, keys, title, body}`` dicts (#205). ``collection`` / ``keys`` are read
-    from their metadata lines (first wins) so a human title edit can't misroute the card;
-    everything else is body. A block counts as *filled* only once its ``⚠️`` lines are
+    ``{collection, keys, title, body}`` dicts (#183, #205). A ``<!-- card -->`` line starts
+    a card; ``title`` / ``collection`` / ``keys`` are read from their metadata lines (first
+    wins) so a human title edit can't misroute the card; everything else — including any
+    ``##`` headings — is body. A block counts as *filled* only once its ``⚠️`` lines are
     dropped and something remains — an unresolved draft authors no card."""
     cards: list[dict[str, Any]] = []
-    title: str | None = None
+    open_card = False
+    title = ""
     collection = ""
     keys: list[str] = []
     body: list[str] = []
 
     def _flush() -> None:
-        if title is not None:
+        if open_card:
             kept = [ln for ln in body if not ln.strip().startswith(_WARN)]
             if filled := "\n".join(kept).strip():
                 cards.append(
@@ -229,12 +283,14 @@ def _parse_cards(text: str) -> list[dict[str, Any]]:
                 )
 
     for line in text.splitlines():
-        if line.startswith("## "):
+        if line.strip() == _SENTINEL:
             _flush()
-            title, collection, keys, body = line[3:].strip(), "", [], []
-        elif title is not None:
+            open_card, title, collection, keys, body = True, "", "", [], []
+        elif open_card:
             s = line.strip()
-            if s.startswith("collection:") and not collection:
+            if s.startswith("title:") and not title:
+                title = s[len("title:") :].strip()
+            elif s.startswith("collection:") and not collection:
                 collection = s[len("collection:") :].strip()
             elif s.startswith("keys:") and not keys:
                 keys = [k.strip() for k in s[len("keys:") :].split(",") if k.strip()]
@@ -250,10 +306,10 @@ def _gate_summary(
     """What the human reviews at the gate (#133, #205): open "查看變更" to diff the proposed
     cards against the current ones, how many still need their input, any ambiguous overwrite,
     and the routing — the card *content* is reviewed/edited in the diff itself."""
-    drafted: dict[str, bool] = {}  # term → confident (first appearance wins)
+    drafted: dict[str, bool] = {}  # title → confident (first appearance wins)
     for f in files:
-        for term, _definition, confident in _plan_terms(plan_by_file[f]):
-            drafted.setdefault(term, confident)
+        for title, _keys, _definition, confident in _plan_terms(plan_by_file[f]):
+            drafted.setdefault(title, confident)
     n_warn = sum(1 for confident in drafted.values() if not confident)
     routing = "; ".join(f"{f} → {plan_by_file[f].get('collection')}" for f in files)
     lines = [

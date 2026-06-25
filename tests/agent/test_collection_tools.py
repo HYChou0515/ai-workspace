@@ -214,3 +214,15 @@ def test_create_context_card_tool_without_a_spec_errors():
 
 def test_create_context_card_is_a_buildable_tool():
     assert "create_context_card" in {t.name for t in build_tools(["create_context_card"])}
+
+
+def test_card_tool_docstrings_explain_key_search_and_markdown_body():
+    """#182/#183: the create/update tool descriptions tell the model HOW keys are matched
+    (exact membership, so give every alias as its own key) and that the body is markdown —
+    so it authors findable, readable cards. (Behaviour is verified live; this locks the
+    guidance into the tool descriptions the model actually reads.)"""
+    for fn in (create_context_card_impl, update_context_card_impl):
+        doc = (fn.__doc__ or "").lower()
+        assert "exact" in doc  # exact-membership lookup semantics
+        assert "alias" in doc or "surface form" in doc  # ask for multiple keys
+        assert "markdown" in doc  # body is markdown (#183)

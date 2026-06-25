@@ -383,11 +383,17 @@ A Hub chat answers from three sources, cheapest first:
   the human **reviews** a draft rather than filling in blanks (#133):
   1. **classify** (agent, per file): pick a collection from the Hub's set
      (`collections.json`, §5) + write a digest + — while it still has the file open —
-     **draft a definition for each unknown term**, flagging each as confident or not →
-     `plan/r<round>/<f>.json` (gate: collection ∈ allowed set + `terms` shape).
-  2. **cards** (deterministic): assemble the drafts into proposed cards in
-     `context-card.todo.md` — one `## <title>` block per term carrying `collection` /
-     `keys` / body (a confident draft becomes the body; an uncertain one a `⚠️` line).
+     **draft a markdown definition for each unknown term**, giving each a display `title`,
+     the surface forms a reader might search (abbreviation / full name / English-Chinese
+     aliases) as its `keys`, and a confident/uncertain flag → `plan/r<round>/<f>.json`
+     (gate: collection ∈ allowed set + `terms` shape). The prompt explains that keys are
+     matched by EXACT normalised membership (#182), so the agent lists every alias as its
+     own key rather than collapsing the term to one form or writing a whole sentence.
+  2. **cards** (deterministic): assemble the drafts (deduped by normalised key, aliases
+     unioned) into proposed cards in `context-card.todo.md` — one `<!-- card -->` block per
+     term carrying `title` / `collection` / `keys` metadata lines then a **free-markdown
+     body** (#183), so a body may use its own `##` headings without splitting the block (a
+     confident draft becomes the body; an uncertain one a `⚠️` line).
      Beside it, write a **read-only "before" snapshot** `.readonly/context-card.current.md`:
      for each proposed card, the existing card a commit-time upsert would **overwrite**
      (its real keys/title/body), or an empty block when the card is new (#205). So the

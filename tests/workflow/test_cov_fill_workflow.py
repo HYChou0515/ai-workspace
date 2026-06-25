@@ -173,11 +173,11 @@ async def test_collections_set_but_no_input_files_returns_empty():
     assert result["message"]
 
 
-def test_parse_cards_ignores_a_body_line_before_any_header():
-    """`_parse_cards` only appends body lines once a `## ` header opened a card; a
-    leading non-header line is ignored."""
+def test_parse_cards_ignores_a_body_line_before_any_card():
+    """`_parse_cards` only appends body lines once a `<!-- card -->` sentinel opened a
+    card (#183); a leading line before any sentinel is ignored."""
     parse = _parse_cards()
-    text = "preamble line before any header\n## M4\nThe fourth metal layer.\n"
+    text = "preamble line before any card\n<!-- card -->\ntitle: M4\nThe fourth metal layer.\n"
     assert parse(text) == [
         {"collection": "", "keys": ["M4"], "title": "M4", "body": "The fourth metal layer."}
     ]
@@ -231,7 +231,7 @@ async def test_commit_skips_non_string_and_blank_terms_and_authors_card():
     await _seed(wf)
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    await wf.write("context-card.todo.md", "## M4\nThe fourth metal layer.")
+    await wf.write("context-card.todo.md", "<!-- card -->\ntitle: M4\nThe fourth metal layer.")
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     assert result["status"] == "approved"
@@ -248,7 +248,7 @@ async def test_commit_does_not_count_ingest_that_did_not_land():
     await _seed(wf)
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    await wf.write("context-card.todo.md", "## M4\nThe fourth metal layer.")
+    await wf.write("context-card.todo.md", "<!-- card -->\ntitle: M4\nThe fourth metal layer.")
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     assert result["status"] == "approved"

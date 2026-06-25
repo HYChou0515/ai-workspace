@@ -765,7 +765,13 @@ def update_context_card_impl(
     `keys`/`title`/`body` fully REPLACE the card's current values (merge any content you
     want to keep into `body` yourself). Use this when a term already has a card and you
     mean the SAME thing; for a same-term-different-meaning entry, use create_context_card
-    instead. Returns a confirmation, or an `error:` note (re-read and retry on a clash)."""
+    instead.
+
+    `keys` are how the card is found: each is matched by EXACT membership after normalisation,
+    so a query must equal a WHOLE key. Keep EVERY surface form a reader might type (its
+    abbreviation, full name, an English/Chinese alias) as its OWN short key — since this
+    overwrites, dropping an existing alias means the card stops matching it. Write `body` in
+    markdown. Returns a confirmation, or an `error:` note (re-read and retry on a clash)."""
     from ..workflow.capabilities import CardConflict, CardNotFound, update_context_card
 
     spec = ctx.context.spec
@@ -803,7 +809,15 @@ def create_context_card_impl(
     Use this only for a term that has NO card yet, or a same-term-DIFFERENT-meaning
     entry. If an exact key already exists in the collection, this REFUSES and returns
     the existing card id — update that card with update_context_card instead (read it
-    first). `collection` is an id or name. Returns a confirmation or an `error:` note."""
+    first). `collection` is an id or name.
+
+    `keys` are how the card is later found: each key is matched by EXACT membership after
+    normalisation (case-folded, full/half-width unified, whitespace collapsed), so a query
+    must equal a WHOLE key — 'M4' never finds an 'M40' card. List every surface form a reader
+    might type (abbreviation, full name, an English/Chinese alias) as its OWN key, each a
+    short term or phrase not a sentence; case/width variants already normalise together so
+    don't repeat them. Write `body` in markdown (bold / lists / `code`; the title already
+    shows). Returns a confirmation or an `error:` note."""
     from ..kb.context_cards import find_cards_by_key
     from ..workflow.capabilities import (
         CollectionNotFound,

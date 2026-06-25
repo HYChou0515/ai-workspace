@@ -1,9 +1,10 @@
 """The Topic Hub ``→collections`` workflow (#133, §12) — produce → review → commit:
-classify uploads into the Hub's collections while **drafting** a definition for each
-unknown term, assemble those drafts into ``glossary.todo.md`` deterministically, gate on
-a human (approve / reject / revise), then ingest the docs + author a context card per
-filled glossary entry. Uncertain drafts are flagged with ``⚠️`` and skipped at commit
-until a human resolves them.
+classify uploads into the Hub's collections while **drafting** a markdown definition for
+each unknown term (with the surface forms a reader might search as the card's ``keys``,
+#182), assemble those drafts into ``context-card.todo.md`` deterministically, gate on a
+human (approve / reject / revise), then ingest the docs + author a context card per filled
+block. Uncertain drafts are flagged with ``⚠️`` and skipped at commit until a human
+resolves them.
 
 Driven through the file-path-loaded ``run()`` with a fake agent turn + fake ingest /
 card-author / collection-check capabilities (no LLM, no KB)."""
@@ -160,7 +161,7 @@ async def test_classify_drafts_definitions_then_suspends_committing_nothing():
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
     todo = await wf.read_text("context-card.todo.md")
-    assert "## M4" in todo
+    assert "title: M4" in todo
     assert "The fourth metal layer." in todo  # AI-drafted definition, not a blank
     # the read-only "before" snapshot is written too (empty — nothing exists yet)
     assert await wf.exists(".readonly/context-card.current.md")
@@ -189,7 +190,7 @@ async def test_uncertain_draft_is_flagged_and_skipped_until_resolved():
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
     todo = await wf.read_text("context-card.todo.md")
-    assert "## reflow" in todo and "⚠️" in todo  # flagged, not silently dropped
+    assert "title: reflow" in todo and "⚠️" in todo  # flagged, not silently dropped
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
     # confident M4 → a card; uncertain reflow stays a ⚠️ line → no card.
@@ -208,7 +209,8 @@ async def test_human_resolves_warning_in_ide_then_approve_authors_card():
     # The human edits the proposed card in the diff, replacing the ⚠️ line with a real def.
     await wf.write(
         "context-card.todo.md",
-        "## reflow\ncollection: Defects\nkeys: reflow\n\nOven step that melts solder paste.\n",
+        "<!-- card -->\ntitle: reflow\ncollection: Defects\nkeys: reflow\n\n"
+        "Oven step that melts solder paste.\n",
     )
     await record_decision(wf, phase="review", choice="approve")
     result = await run(wf, {})
@@ -284,7 +286,8 @@ async def test_rerun_with_an_edited_definition_upserts_the_card_again():
     # The human refines the definition in the diff and re-runs the approved workflow.
     await wf.write(
         "context-card.todo.md",
-        "## M4\ncollection: Defects\nkeys: M4\n\nThe fourth metal interconnect layer.\n",
+        "<!-- card -->\ntitle: M4\ncollection: Defects\nkeys: M4\n\n"
+        "The fourth metal interconnect layer.\n",
     )
     await run(wf, {})
     assert cards[-1] == ("Defects", ["M4"], "M4", "The fourth metal interconnect layer.")
@@ -319,18 +322,28 @@ async def test_read_collections_tolerates_absent_malformed_and_odd_entries():
     assert await rc(wf) == ["A", "B"]
 
 
-def test_plan_terms_tolerates_bare_strings_and_empty_terms():
+def test_plan_terms_normalises_old_and_new_shapes():
+    """#182: ``terms`` carry ``keys`` now. ``_plan_terms`` yields (title, keys, definition,
+    confident) and stays tolerant of the pre-#182 ``{term}`` shape, bare strings, and a
+    ``{title}`` with no keys (keys fall back to the title)."""
     pt = _g()["_plan_terms"]
     plan = {
         "terms": [
-            "bare",
+            "bare",  # bare string → title + sole key = the string, uncertain
             "   ",  # blank string → skipped
             123,  # non-str / non-dict → skipped
             {"term": ""},  # empty term → skipped
-            {"term": "x", "definition": "d", "confident": True},
+            {"term": "x", "definition": "d", "confident": True},  # pre-#182 shape
+            {"title": "Metal 4", "keys": ["M4", "Metal 4"], "definition": "4th", "confident": True},
+            {"title": "CMP"},  # title with no keys → keys fall back to [title]
         ]
     }
-    assert pt(plan) == [("bare", "", False), ("x", "d", True)]
+    assert pt(plan) == [
+        ("bare", ["bare"], "", False),
+        ("x", ["x"], "d", True),
+        ("Metal 4", ["M4", "Metal 4"], "4th", True),
+        ("CMP", ["CMP"], "", False),
+    ]
 
 
 async def test_classify_check_rejects_bad_plan_shapes():
@@ -366,28 +379,113 @@ def test_proposed_cards_dedups_marks_uncertain_and_routes():
     assert by_title["bare"]["body"] == "⚠️ draft a definition for this term"  # no draft
 
 
+def test_classify_prompt_explains_key_search_and_asks_for_markdown_body():
+    """#182/#183: the prompt must tell the AI HOW keys get searched (exact normalised
+    membership) so it provides real aliases as separate keys rather than a sentence, and
+    ask for a markdown body. (Behaviour is verified live; this locks the guidance in place.)"""
+    prompt = _g()["_classify_prompt"]("f.txt", "plan/out.json", ["Defects"], "")
+    low = prompt.lower()
+    assert "exact" in low  # exact-membership lookup semantics are communicated
+    assert "alias" in low or "surface form" in low  # ask for aliases, not one form
+    assert "markdown" in low  # body is markdown (#183)
+    assert '"keys"' in prompt  # the requested JSON schema carries a keys list
+
+
+def test_proposed_cards_uses_ai_aliases_as_keys():
+    """#182: when the classify plan gives a term several surface forms, the proposed card
+    carries ALL of them as keys (so each alias can be found by exact lookup) under the AI's
+    chosen display title — not just the term collapsed to a single key."""
+    pc = _g()["_proposed_cards"]
+    plans = {
+        "/f1": _plan(
+            {
+                "title": "Metal 4",
+                "keys": ["M4", "Metal 4", "第四層金屬"],
+                "definition": "the fourth metal layer",
+                "confident": True,
+            },
+        )
+    }
+    cards = pc(plans)
+    assert len(cards) == 1
+    assert cards[0]["title"] == "Metal 4"
+    assert cards[0]["keys"] == ["M4", "Metal 4", "第四層金屬"]
+    assert cards[0]["body"] == "the fourth metal layer"
+
+
+def test_proposed_cards_merges_cross_file_aliases_by_normalised_key():
+    """#182: the same concept seen in two files under overlapping-but-different surface forms
+    folds into ONE card (deduped by NORMALISED key), unioning the new aliases — not two
+    near-duplicates. Case/width differences normalise onto the same key (so ``m4`` ≡ ``M4``);
+    first appearance wins for title + body; an already-present alias isn't re-added."""
+    pc = _g()["_proposed_cards"]
+    plans = {
+        "/f1": _plan(
+            {
+                "title": "Metal 4",
+                "keys": ["M4", "Metal 4"],
+                "definition": "4th layer",
+                "confident": True,
+            }
+        ),
+        "/f2": _plan(
+            {
+                "title": "dup",
+                "keys": ["m4", "第四層金屬"],
+                "definition": "ignored",
+                "confident": True,
+            }
+        ),
+    }
+    cards = pc(plans)
+    assert len(cards) == 1  # "m4" normalises onto "M4" → same card, not a duplicate
+    assert cards[0]["title"] == "Metal 4" and cards[0]["body"] == "4th layer"  # first wins
+    assert cards[0]["keys"] == [
+        "M4",
+        "Metal 4",
+        "第四層金屬",
+    ]  # new alias unioned, dup not re-added
+
+
 def test_render_cards_emits_diffable_blocks_with_keys_and_collection():
     render = _g()["_render_cards"]
     out = render(
         [{"title": "M4", "collection": "Defects", "keys": ["M4", "Metal 4"], "body": "the 4th"}]
     )
-    assert "## M4" in out
+    assert "<!-- card -->" in out  # sentinel boundary, not a ## heading (#183)
+    assert "title: M4" in out
     assert "collection: Defects" in out
     assert "keys: M4, Metal 4" in out  # keys in-file so a narrowing shows in the diff
     assert "the 4th" in out
     assert render([]) == ""  # empty snapshot = every proposed card is new
 
 
+def test_card_body_keeps_markdown_headings_through_render_and_parse():
+    """#183: a card body is free markdown — including ``##`` sub-headings. The render →
+    parse round-trip must NOT mistake a heading inside the body for a new card."""
+    g = _g()
+    render, parse = g["_render_cards"], g["_parse_cards"]
+    body = "Intro paragraph.\n\n## Usage\n- signal routing\n- power\n\n## Notes\nsee M40."
+    text = render(
+        [{"title": "M4", "collection": "Defects", "keys": ["M4", "Metal 4"], "body": body}]
+    )
+    cards = parse(text)
+    assert len(cards) == 1  # the ## headings in the body did not start new cards
+    assert cards[0]["title"] == "M4"
+    assert cards[0]["keys"] == ["M4", "Metal 4"]
+    assert cards[0]["body"] == body  # full markdown body preserved verbatim
+
+
 def test_parse_cards_reads_metadata_routes_and_skips_warning_only():
     parse = _g()["_parse_cards"]
-    text = "## M4\ncollection: Defects\nkeys: M4, Metal 4\n\nthe 4th metal\n"
+    text = "<!-- card -->\ntitle: M4\ncollection: Defects\nkeys: M4, Metal 4\n\nthe 4th metal\n"
     assert parse(text) == [
         {"collection": "Defects", "keys": ["M4", "Metal 4"], "title": "M4", "body": "the 4th metal"}
     ]
-    # leading text before any heading ignored; a ⚠️-only block authors no card
-    assert parse("intro\n## a\n⚠️ guess\n") == []
+    # leading text before any card sentinel ignored; a ⚠️-only block authors no card
+    assert parse("intro\n<!-- card -->\ntitle: a\n⚠️ guess\n") == []
     # a minimal hand-typed block: keys fall back to the title, collection stays blank
-    assert parse("## reflow\noven step\n") == [
+    assert parse("<!-- card -->\ntitle: reflow\n\noven step\n") == [
         {"collection": "", "keys": ["reflow"], "title": "reflow", "body": "oven step"}
     ]
 
@@ -415,9 +513,9 @@ async def test_review_snapshot_shows_the_card_an_overwrite_would_replace():
     todo = await wf.read_text("context-card.todo.md")
     current = await wf.read_text(".readonly/context-card.current.md")
     # proposed (todo) narrows to a single key + retitles to the term...
-    assert "## M4" in todo and "keys: M4\n" in todo
+    assert "title: M4" in todo and "keys: M4\n" in todo
     # ...while the read-only snapshot keeps the real card the upsert would overwrite.
-    assert "## Metal 4 layer" in current
+    assert "title: Metal 4 layer" in current
     assert "keys: M4, Metal 4" in current
     assert "the existing def" in current
 
@@ -451,7 +549,10 @@ async def test_commit_routes_by_the_block_collection_not_the_title():
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
     # The human renames the title and routes the card to Notes in the diff.
-    await wf.write("context-card.todo.md", "## renamed\ncollection: Notes\nkeys: M4\n\nbody\n")
+    await wf.write(
+        "context-card.todo.md",
+        "<!-- card -->\ntitle: renamed\ncollection: Notes\nkeys: M4\n\nbody\n",
+    )
     await record_decision(wf, phase="review", choice="approve")
     await run(wf, {})
     assert cards == [("Notes", ["M4"], "renamed", "body")]
@@ -463,7 +564,10 @@ async def test_commit_rejects_a_block_routed_to_an_unknown_collection():
     await _seed(wf)  # only "Defects"
     with pytest.raises(AwaitingHuman):
         await run(wf, {})
-    await wf.write("context-card.todo.md", "## M4\ncollection: Nope\nkeys: M4\n\nbody\n")
+    await wf.write(
+        "context-card.todo.md",
+        "<!-- card -->\ntitle: M4\ncollection: Nope\nkeys: M4\n\nbody\n",
+    )
     await record_decision(wf, phase="review", choice="approve")
     with pytest.raises(ValueError, match="not one of the Hub"):
         await run(wf, {})
