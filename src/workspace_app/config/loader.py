@@ -39,6 +39,7 @@ from .schema import (
     GitSettings,
     HealthSettings,
     HistorySettings,
+    HttpSandboxSettings,
     KbSettings,
     LlmLogSettings,
     LlmSettings,
@@ -51,6 +52,7 @@ from .schema import (
     RetrievalLlmRef,
     RetrievalSettings,
     RunnerSettings,
+    SandboxHostSettings,
     SandboxSettings,
     ServerSettings,
     Settings,
@@ -345,7 +347,11 @@ def _dataclass_keys(cls) -> set[str]:
 
 _TOP_SCHEMA: dict[str, Any] = {
     "server": _dataclass_keys(ServerSettings),
-    "sandbox": _dataclass_keys(SandboxSettings),
+    "sandbox": {
+        **{k: None for k in _dataclass_keys(SandboxSettings) if k != "http"},
+        "http": _dataclass_keys(HttpSandboxSettings),
+    },
+    "sandbox_host": _dataclass_keys(SandboxHostSettings),
     "tools": _dataclass_keys(ToolsSettings),
     "filestore": _dataclass_keys(FilestoreSettings),
     "runner": _dataclass_keys(RunnerSettings),
@@ -631,7 +637,8 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
     sub-section is built by `_build(SectionCls, sub_dict)`."""
     return Settings(
         server=_build(ServerSettings, d["server"]),
-        sandbox=_build(SandboxSettings, d["sandbox"]),
+        sandbox=_build_sandbox(d["sandbox"]),
+        sandbox_host=_build(SandboxHostSettings, d["sandbox_host"]),
         tools=_build(ToolsSettings, d["tools"]),
         filestore=_build(FilestoreSettings, d["filestore"]),
         runner=_build(RunnerSettings, d["runner"]),
@@ -677,6 +684,16 @@ def _build(cls, sub: dict[str, Any]):
     names (validated upstream). Extra fields → schema validator caught;
     missing fields → dataclass default applies."""
     return cls(**sub)
+
+
+def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:
+    """`sandbox` has one nested dataclass (`http`), so it can't use the flat
+    `_build`. `http` is None unless `kind: http` declares the client block."""
+    http = d.get("http")
+    flat = {k: v for k, v in d.items() if k != "http"}
+    return SandboxSettings(
+        **flat, http=HttpSandboxSettings(**http) if http is not None else None
+    )
 
 
 def _normalize_usage_list(raw: Any) -> list[dict[str, Any]]:

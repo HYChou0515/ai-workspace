@@ -42,8 +42,19 @@ class ServerSettings:
 
 # ─── sandbox ────────────────────────────────────────────────────────────
 @dataclass(frozen=True)
+class HttpSandboxSettings:
+    """`sandbox.kind: http` — the client half. `base_url` is the host's
+    ClusterIP Service (only `create` hits it; later calls go straight to the
+    pod the handle encodes). `read_timeout` 0 ⇒ no HTTP read deadline, so a
+    long command is bounded by the host's exec/idle timeout, not the wire."""
+
+    base_url: str = ""
+    read_timeout: float = 0.0
+
+
+@dataclass(frozen=True)
 class SandboxSettings:
-    kind: str = "local"  # local | docker | mock
+    kind: str = "local"  # local | docker | mock | http
     root: str | None = None  # null → tmpdir per sandbox
     # Two peer command timeouts (#70); 0 disables that one. `exec_timeout` is
     # the TOTAL wall-clock cap; `log_timeout` is the IDLE cap (no stdout/stderr
@@ -52,6 +63,31 @@ class SandboxSettings:
     exec_timeout: float = 60.0
     log_timeout: float = 60.0
     isolate: bool | None = None  # None = auto-detect userns
+    http: HttpSandboxSettings | None = None  # only when kind == "http"
+
+
+@dataclass(frozen=True)
+class SandboxHostSettings:
+    """`python -m workspace_app.sandbox_host` — the host half (its own pod).
+
+    Wraps an `IsolatedProcessSandbox`: each handle runs as a pooled numeric
+    uid (`uid_min..uid_max`) under a cgroup capped by `memory_max` (e.g. "512M")
+    / `cpu_cores` / `pids_max`. `cgroup_root` is the delegated cgroup v2 subtree
+    (null = auto-detect this pod's own). `idle_ttl` reaps sandboxes orphaned by
+    an app-pod crash (0 = off). The command timeouts mirror SandboxSettings."""
+
+    bind: str = "0.0.0.0:8000"
+    uid_min: int = 100000
+    uid_max: int = 199999
+    memory_max: str = "512M"
+    cpu_cores: float = 1.0
+    pids_max: int = 512
+    cgroup_root: str | None = None
+    root: str | None = None
+    exec_timeout: float = 60.0
+    log_timeout: float = 60.0
+    tools_dir: str | None = None
+    idle_ttl: float = 1800.0
 
 
 # ─── filestore ──────────────────────────────────────────────────────────
@@ -737,6 +773,7 @@ class Settings:
 
     server: ServerSettings = field(default_factory=ServerSettings)
     sandbox: SandboxSettings = field(default_factory=SandboxSettings)
+    sandbox_host: SandboxHostSettings = field(default_factory=SandboxHostSettings)
     tools: ToolsSettings = field(default_factory=ToolsSettings)
     filestore: FilestoreSettings = field(default_factory=FilestoreSettings)
     runner: RunnerSettings = field(default_factory=RunnerSettings)

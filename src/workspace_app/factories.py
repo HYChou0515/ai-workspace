@@ -211,6 +211,17 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
             from .sandbox.docker import DockerSandbox
 
             return DockerSandbox()
+        case "http":
+            if sb.http is None or not sb.http.base_url:
+                raise ValueError(
+                    "sandbox.kind=http requires sandbox.http.base_url (the "
+                    "sandbox host's Service URL)"
+                )
+            from .sandbox.http_client import HttpSandbox
+
+            return HttpSandbox(
+                base_url=sb.http.base_url, read_timeout=sb.http.read_timeout
+            )
         case other:
             raise ValueError(f"unknown sandbox.kind: {other!r}")
 
