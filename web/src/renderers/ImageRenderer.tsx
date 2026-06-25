@@ -23,6 +23,7 @@ import {
   panBy,
   zoomAt,
 } from "./panZoom";
+import { svgNaturalSize } from "./svgSize";
 import { TextRenderer } from "./TextRenderer";
 
 // Wheel-delta → zoom-factor sensitivity. `exp(-dy * k)`: a standard ~100px
@@ -42,10 +43,25 @@ export function ImageRenderer({ path }: { path: string }) {
 
   useEffect(() => () => void (url && URL.revokeObjectURL(url)), [url]);
 
-  // Viewport (measured) + natural image size (from onLoad) → the fitted base.
+  // SVG is vector: it re-rasterizes crisply at any size, so it may upscale to
+  // fill the pane — and its size comes from the parsed viewBox, since the
+  // browser reports a tiny placeholder intrinsic for viewBox-only SVGs (#185).
+  const isSvg = imageMime(path) === "image/svg+xml";
+  const svgNat = useMemo(
+    () =>
+      isSvg && entry.status === "ready" && entry.kind === "text"
+        ? svgNaturalSize(entry.text)
+        : null,
+    [isSvg, entry.status, entry.kind, entry.text],
+  );
+
+  // Viewport (measured) + natural image size (SVG: viewBox; else onLoad) → base.
   const [viewport, setViewport] = useState<Size>({ w: 0, h: 0 });
   const [natural, setNatural] = useState<Size>({ w: 0, h: 0 });
-  const base = useMemo(() => fitSize(natural, viewport), [natural, viewport]);
+  const base = useMemo(
+    () => fitSize(svgNat ?? natural, viewport, isSvg),
+    [svgNat, natural, viewport, isSvg],
+  );
   const [pz, setPz] = useState<PanZoom>({ scale: 1, tx: 0, ty: 0 });
 
   // Reset to a centered fit whenever the fit changes (image load, pane resize)
