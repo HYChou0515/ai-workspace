@@ -132,10 +132,16 @@ describe("EntryView — de-jargoned tool cards (#160)", () => {
     expect(screen.getByText(/why drift\?/)).toBeInTheDocument();
   });
 
-  it("falls back to a generic label for an unmapped tool (no raw name leaks)", () => {
+  it("shows the generic label plus the raw name for an unmapped tool (#206)", () => {
     render(<EntryView entry={toolEntry("some_new_tool", { x: 1 })} />);
     expect(screen.getByText("使用工具")).toBeInTheDocument();
-    expect(screen.queryByText(/some_new_tool/)).not.toBeInTheDocument();
+    expect(screen.getByText(/some_new_tool/)).toBeInTheDocument();
+  });
+
+  it("shows only the generic label when an unmapped tool has no name (#206)", () => {
+    render(<EntryView entry={toolEntry("", { x: 1 })} />);
+    expect(screen.getByText("使用工具")).toBeInTheDocument();
+    expect(screen.queryByText(/：/)).not.toBeInTheDocument();
   });
 
   it("labels the output as 結果 (done) / 執行中… (running)", () => {
