@@ -16,6 +16,9 @@ from typing import TYPE_CHECKING, Any
 
 from msgspec import Struct
 
+from .engine import _emit
+from .events import StepPassed, StepStarted
+
 if TYPE_CHECKING:
     from .handle import WorkflowHandle
 
@@ -63,7 +66,15 @@ async def human_gate(
     path = _decision_path(wf, phase)
     if await wf.exists(path):
         rec = await wf.read_json(path)
+        # The reviewed gate is a step too (#176): emit StepPassed so its phase ends
+        # 'passed' (green) rather than reverting to grey once the resolved
+        # pending-decision overlay disappears.
+        _emit(wf, StepPassed(phase=phase, name=phase))
         return Decision(choice=rec["choice"], input=rec.get("input", ""))
+    # First reach (no decision yet): enter the gate's phase as a *running*, current
+    # step (#176) so it shows up while awaiting — instead of being invisible in the
+    # run's progress until the FE overlays the pending decision.
+    _emit(wf, StepStarted(phase=phase, name=phase))
     raise AwaitingHuman(phase=phase, title=title, summary=_as_text(summary), allow=list(allow))
 
 

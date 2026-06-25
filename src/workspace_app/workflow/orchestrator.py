@@ -331,6 +331,20 @@ class WorkflowOrchestrator:
         data = self._get(run_id)
         status = data.status
         if status is RunStatus.AWAITING_HUMAN and data.pending_decision is not None:
+            # Green the phases that finished before the gate (#176): without this they
+            # stay 'running' (blue) until the run reaches DONE, so a pause looks like
+            # work is still in flight. The gate's own phase is left untouched — it is
+            # not done yet, and the FE overlays it as the awaiting node anyway.
+            gate = data.pending_decision.phase
+            self._patch(
+                run_id,
+                phases=[
+                    msgspec.structs.replace(p, status="passed")
+                    if p.status == "running" and p.phase != gate
+                    else p
+                    for p in data.phases
+                ],
+            )
             self.publish(
                 key,
                 AwaitingHumanEvent(
@@ -430,7 +444,15 @@ class WorkflowOrchestrator:
                 raise StepBudgetExceeded(f"exceeded max steps ({self.max_steps})")
         data = self._get(run_id)
         phase = getattr(ev, "phase", "")
-        entering = bool(phase) and not isinstance(ev, PhaseEntered) and data.current_phase != phase
+        # A skip means the phase already ran in an earlier pass (a resume replays the
+        # completed prefix, §9) — it must NOT count as *entering* the phase, or the
+        # highlight regresses to an already-finished phase and re-marks it 'running'
+        # (#176). Only genuine work (StepStarted/Passed/…) advances the current phase.
+        entering = (
+            bool(phase)
+            and not isinstance(ev, (PhaseEntered, StepSkipped))
+            and data.current_phase != phase
+        )
         if entering:
             self.publish(key, PhaseEntered(phase=phase))
         self.publish(key, ev)
