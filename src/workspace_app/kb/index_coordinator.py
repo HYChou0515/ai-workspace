@@ -21,16 +21,20 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import datetime as dt
 import logging
+import math
 import time
 from typing import TYPE_CHECKING
 
+import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.events import OnSuccessPatch, do
 from specstar.types import ResourceAction, ResourceIDNotFoundError, TaskStatus
 
-from ..resources import SourceDoc
+from ..resources import IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
+from .index_run import IndexRunStore
 
 if TYPE_CHECKING:
     from specstar.events import EventContext
@@ -42,6 +46,10 @@ _LOGGER = logging.getLogger(__name__)
 
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
 _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to drain
+# #227: each fan-out batch numbers its chunks from batch_index * this stride, so
+# independent process jobs never collide on `seq` (which is cosmetic ordering —
+# merge adjacency uses char offsets). Far above any realistic chunks-per-batch.
+_SEQ_STRIDE = 1_000_000
 
 
 class IndexCoordinator:
@@ -56,10 +64,25 @@ class IndexCoordinator:
         *,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         message_queue_factory: object | None = None,
+        unit_batch_sizes: dict[str, int] | None = None,
+        default_unit_batch: int = 8,
     ) -> None:
         self._spec = spec
         self._ingestor = ingestor
         self._wiki = wiki_coordinator
+        # #227 fan-out: units-per-process-job, per parser class. PDF/PPTX go to
+        # the VLM (~slow seconds/page) so they batch small; row-based parsers
+        # (CSV/Excel/JSON) batch large (cheap parse, the embed is the cost). Each
+        # batch must stay well under the broker's consumer-ack timeout (~30 min).
+        self._unit_batch_sizes = unit_batch_sizes or {
+            "PdfParser": 8,
+            "PptxParser": 8,
+            "CsvParser": 500,
+            "ExcelParser": 500,
+            "JsonParser": 200,
+        }
+        self._default_unit_batch = default_unit_batch
+        self._runs = IndexRunStore(spec)
         # The queue backend MUST be set PER-MODEL (a global configure() doesn't
         # propagate to a real pg/disk backend) — pass the config-selected factory
         # straight to add_model. Default = the specstar Simple queue (multipod
@@ -105,7 +128,11 @@ class IndexCoordinator:
         PROCESSING does NOT block a new enqueue: it may have read stale content
         before an edit landed, so that edit still needs its own rerun (coalescing
         collapses only the *pending* tail, never the in-flight run)."""
-        if self._has_pending_job(doc_id):
+        # Coalesce a pending split, AND don't start a fresh fan-out while one is
+        # already in flight for this doc (#227): the active IndexRun is the
+        # queue-agnostic guard that replaces partition_key serialization (which
+        # the RabbitMQ backend ignores) against two runs racing _delete_chunks.
+        if self._has_pending_job(doc_id) or self._runs.is_active(doc_id):
             return False
         self._job_rm.create(
             IndexJob(
@@ -204,34 +231,221 @@ class IndexCoordinator:
 
     # ── consume (handler — runs in the queue's consumer thread) ──────
     def _handle(self, job) -> None:  # job: Resource[IndexJob]
-        """Index one doc, then fold it into the wiki. Runs OFF the request path
-        (the consumer's own thread). Exceptions are logged + swallowed: the
-        Ingestor already marks the SourceDoc status=error, and a deterministic
-        failure must not wedge the partition (returning normally → COMPLETED)."""
-        doc_id = job.data.payload.doc_id
-        # #83: a job pod has no request user, so an unguarded index() would stamp
-        # the SourceDoc's updated_by with the bare default — erasing the real
-        # uploader. Read the doc's last updater and run the index AS that user so
-        # updated_by survives the mechanical reindex. (`using` binds this exact
-        # rm instance, so we hand it to index() to use for its writes.)
+        """Dispatch one index step by ``kind`` (#227). Runs OFF the request path
+        (the consumer's own thread)."""
+        payload = job.data.payload
+        if payload.kind == "process":
+            self._handle_process(payload)
+        elif payload.kind == "finalize":
+            self._handle_finalize(payload)
+        else:
+            self._handle_split(payload)
+
+    def _last_updater(self, doc_id: str) -> str | None:
+        """The doc's last updater (#83): a job pod has no request user, so the
+        index must run AS the real uploader or it erases ``updated_by``. ``None``
+        means the doc was deleted between enqueue and run."""
+        try:
+            return self._spec.get_resource_manager(SourceDoc).get(doc_id).info.updated_by
+        except ResourceIDNotFoundError:
+            return None
+
+    def _handle_split(self, payload) -> None:
+        """Plan the index: run it whole (small / multi-parser / no-parser), or
+        fan it out into per-unit-range ``process`` jobs when one parser reports
+        many units. Seeds the ``IndexRun`` join state BEFORE enqueuing any
+        process job, so no early finisher can finalize prematurely."""
+        doc_id, cid = payload.doc_id, payload.collection_id
+        updater = self._last_updater(doc_id)
+        if updater is None:
+            return
+        try:
+            units, parser_id = self._ingestor.fanout_units(doc_id)
+        except Exception:  # noqa: BLE001 — can't plan → fall back to a single whole-doc job
+            _LOGGER.exception("IndexCoordinator: fan-out planning failed for %s", doc_id)
+            units, parser_id = 1, ""
+        if units <= 1:
+            self._index_whole(doc_id, updater)
+            return
+        batch = self._unit_batch_sizes.get(parser_id, self._default_unit_batch)
+        nbatches = math.ceil(units / batch)
+        self._ingestor.prepare_fanout(doc_id)  # clear chunks ONCE before fan-out
+        self._runs.start(doc_id, cid, total=nbatches)
+        for b in range(nbatches):
+            start = b * batch
+            self._job_rm.create(
+                IndexJob(
+                    payload=IndexJobPayload(
+                        doc_id=doc_id,
+                        collection_id=cid,
+                        kind="process",
+                        unit_start=start,
+                        unit_end=min(units, start + batch),
+                        batch_index=b,
+                    ),
+                    # No partition_key (#227): process jobs are meant to parallelize
+                    # across pods; the CAS join, not the queue, guards correctness.
+                    partition_key=None,
+                )
+            )
+
+    def _index_whole(self, doc_id: str, updater: str) -> None:
+        """The unchanged single-job path: chunk + embed the whole doc, flip its
+        status, run the wiki hook. Errors are logged + swallowed (the Ingestor
+        marks the doc status=error; a bad doc must not wedge the queue)."""
         doc_rm = self._spec.get_resource_manager(SourceDoc)
         try:
-            last_updater = doc_rm.get(doc_id).info.updated_by
-        except ResourceIDNotFoundError:
-            return  # doc deleted between enqueue and run — nothing to index
-        try:
-            with doc_rm.using(user=last_updater):
+            with doc_rm.using(user=updater):
                 self._ingestor.index(doc_id, source_doc_rm=doc_rm)
-        except Exception:  # noqa: BLE001 — doc is marked error by the Ingestor; don't wedge the queue
+        except Exception:  # noqa: BLE001 — doc is marked error by the Ingestor
             _LOGGER.exception("IndexCoordinator: indexing failed for %s", doc_id)
             return
-        if self._wiki is not None:
-            try:
-                # on_doc_indexed is async (it enqueues a wiki job); drive it with
-                # a fresh loop since we're on the consumer's worker thread.
-                asyncio.run(self._wiki.on_doc_indexed(doc_id))
-            except Exception:  # noqa: BLE001 — a wiki-hook failure must not fail the index job
-                _LOGGER.exception("IndexCoordinator: wiki hook failed for %s", doc_id)
+        self._wiki_hook(doc_id)
+
+    def _handle_process(self, payload) -> None:
+        """Index ONE unit batch end-to-end, stage its text, record it done, and —
+        if it's the one that completes the set — win the finalize gate and enqueue
+        the finalize job. A failure RE-RAISES so the broker retries it; a
+        permanent failure dead-letters and the safety sweep records it failed."""
+        doc_id = payload.doc_id
+        updater = self._last_updater(doc_id)
+        if updater is None:
+            return  # doc deleted between split and run
+        doc_rm = self._spec.get_resource_manager(SourceDoc)
+        # #227 SEQ_STRIDE: each batch numbers its chunks from batch_index*stride so
+        # independent process jobs never collide on seq (cosmetic ordering only).
+        seq_base = payload.batch_index * _SEQ_STRIDE
+        with doc_rm.using(user=updater):
+            text = self._ingestor.index_units(
+                doc_id,
+                (payload.unit_start, payload.unit_end),
+                seq_base=seq_base,
+                source_doc_rm=doc_rm,
+            )
+        self._stage_text(doc_id, payload.batch_index, text)
+        self._runs.mark_done(doc_id, payload.batch_index)
+        if self._runs.claim_finalize(doc_id):
+            self._enqueue_finalize(doc_id, payload.collection_id)
+
+    def _enqueue_finalize(self, doc_id: str, collection_id: str) -> None:
+        self._job_rm.create(
+            IndexJob(
+                payload=IndexJobPayload(
+                    doc_id=doc_id, collection_id=collection_id, kind="finalize"
+                ),
+                partition_key=None,
+            )
+        )
+
+    def _handle_finalize(self, payload) -> None:
+        """Exactly-once close-out of a fan-out: rejoin the staged batch text into
+        ``SourceDoc.text``, flip status (``error`` if any batch failed, else
+        ``ready``), clear staging, close the run, and run the wiki hook."""
+        doc_id = payload.doc_id
+        run = self._runs.get(doc_id)
+        if run is None:  # pragma: no cover — finalize implies a run exists
+            return
+        # Idempotent: a duplicate finalize (sweep re-enqueue, redelivery) must NOT
+        # re-run — staging is already cleared, so it would wipe SourceDoc.text.
+        if run.status != "running":
+            return
+        updater = self._last_updater(doc_id)
+        if updater is None:
+            self._clear_staged_text(doc_id)
+            return
+        doc_rm = self._spec.get_resource_manager(SourceDoc)
+        doc = doc_rm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        status = "error" if run.failed else "ready"
+        detail = "" if status == "ready" else f"{len(run.failed)} batch(es) failed to index"
+        text = self._joined_staged_text(doc_id)
+        with doc_rm.using(user=updater):
+            doc_rm.update(
+                doc_id,
+                msgspec.structs.replace(
+                    doc, status=status, status_detail=detail, text=text or None
+                ),
+            )
+        self._clear_staged_text(doc_id)
+        # The RUN is done either way (its job is complete); the doc carries the
+        # ready/error verdict. `error` keeps the failed batches visible for ops.
+        self._runs.finish(doc_id, status="error" if run.failed else "done")
+        if status == "ready":
+            self._wiki_hook(doc_id)
+
+    # ── safety sweep (#227): recover the fan-out failure branch ──────
+    def sweep_stuck_runs(self, *, stuck_after_seconds: float = 3600.0) -> list[str]:
+        """Backstop the fan-out's two failure modes and return the doc ids it
+        re-drove. Runs periodically (and is queue-agnostic):
+
+        - **finalize-recovery** — a run whose batches are all accounted for
+          (``done ∪ failed == total``) but whose finalize never ran (the trigger
+          winner crashed): claim the gate if open and (re)enqueue finalize. No
+          grace, because the gate condition is already met.
+        - **stuck-recovery** — a run with missing batches and no progress for
+          ``stuck_after_seconds``. Each live batch advances the run as it
+          finishes, so a stalled run stops updating; the missing batches
+          dead-lettered, so record them ``failed`` and then finalize.
+
+        Finalize is idempotent (it no-ops once the run leaves ``running``), so a
+        re-enqueue that races a normal finalize is harmless."""
+        acted: list[str] = []
+        now = dt.datetime.now(dt.UTC)
+        rm = self._spec.get_resource_manager(IndexRun)
+        for res in rm.list_resources((QB["status"] == "running").build()):
+            run = res.data
+            assert isinstance(run, IndexRun)
+            doc_id = res.info.resource_id  # ty: ignore[unresolved-attribute]
+            age = (now - res.info.updated_time).total_seconds()  # ty: ignore[unresolved-attribute]
+            accounted = set(run.done) | set(run.failed)
+            if len(accounted) < run.total:
+                if age < stuck_after_seconds:
+                    continue  # still progressing (recent update) — leave it alone
+                for i in range(run.total):
+                    if i not in accounted:
+                        self._runs.mark_failed(doc_id, i)
+            # Gate is now met (already, or after marking the missing failed).
+            if self._runs.claim_finalize(doc_id):
+                self._enqueue_finalize(doc_id, run.collection_id)  # we won → drive finalize
+                acted.append(doc_id)
+            elif run.finalized and age >= stuck_after_seconds:
+                # Claimed earlier but the run never closed out — the finalize job
+                # was lost (winner crashed after claiming). Re-drive it; finalize
+                # is idempotent, and the grace avoids spamming a healthy in-flight
+                # finalize.
+                self._enqueue_finalize(doc_id, run.collection_id)
+                acted.append(doc_id)
+        return acted
+
+    def _wiki_hook(self, doc_id: str) -> None:
+        if self._wiki is None:
+            return
+        try:
+            # on_doc_indexed is async (it enqueues a wiki job); drive it with a
+            # fresh loop since we're on the consumer's worker thread.
+            asyncio.run(self._wiki.on_doc_indexed(doc_id))
+        except Exception:  # noqa: BLE001 — a wiki-hook failure must not fail the index job
+            _LOGGER.exception("IndexCoordinator: wiki hook failed for %s", doc_id)
+
+    # ── fan-out text staging (#227) ──────────────────────────────────
+    def _stage_text(self, doc_id: str, batch_index: int, text: str) -> None:
+        rm = self._spec.get_resource_manager(IndexUnitText)
+        rm.create_or_update(
+            f"{doc_id}.t{batch_index}",
+            IndexUnitText(doc_id=doc_id, batch_index=batch_index, text=text),
+        )
+
+    def _joined_staged_text(self, doc_id: str) -> str:
+        rm = self._spec.get_resource_manager(IndexUnitText)
+        rows = [r.data for r in rm.list_resources((QB["doc_id"] == doc_id).build())]
+        rows = [r for r in rows if isinstance(r, IndexUnitText)]
+        rows.sort(key=lambda r: r.batch_index)
+        return "\n\n".join(r.text for r in rows if r.text).strip()
+
+    def _clear_staged_text(self, doc_id: str) -> None:
+        rm = self._spec.get_resource_manager(IndexUnitText)
+        for r in rm.list_resources((QB["doc_id"] == doc_id).build()):
+            rm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
     # ── lifecycle ────────────────────────────────────────────────────
     async def aclose(self) -> None:

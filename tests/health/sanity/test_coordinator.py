@@ -140,6 +140,28 @@ async def test_run_battery_fills_every_auto_cell():
     assert len(rows) == len(auto_run_cells())  # no dupes
 
 
+async def test_battery_fans_out_one_cell_job_per_cell():
+    """#227: a battery no longer runs every cell inline in one long handler (which
+    could trip the broker's consumer-ack timeout) — it enqueues one short cell
+    job per cell. Observable as a SanityRun per cell (plus the battery itself)."""
+    from workspace_app.health.sanity.jobs import SanityRun
+
+    spec = make_spec(default_user="u")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="x"))
+    coord.run_battery(_MODEL)
+    await coord.aclose()
+
+    n_cells = len(auto_run_cells())
+    job_rm = spec.get_resource_manager(SanityRun)
+    runs = [
+        r.data for r in job_rm.list_resources(QB.all().build()) if isinstance(r.data, SanityRun)
+    ]
+    cell_jobs = [r for r in runs if r.payload.scope == "cell"]
+    battery_jobs = [r for r in runs if r.payload.scope == "battery"]
+    assert len(battery_jobs) == 1
+    assert len(cell_jobs) == n_cells  # one job per cell, fanned out
+
+
 async def test_cell_for_an_edited_away_question_is_a_noop():
     spec = make_spec(default_user="u")
     coord = SanityBatteryCoordinator(spec, _FakeLlmFactory())

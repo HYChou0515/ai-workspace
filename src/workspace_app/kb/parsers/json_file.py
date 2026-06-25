@@ -45,6 +45,30 @@ class JsonParser(IParser):
         # text/plain, so mime alone would miss most uploads.
         return mime in _JSON_MIMES or filename.lower().endswith(_JSON_EXTENSIONS)
 
+    @staticmethod
+    def _jsonl_records(text: str) -> list[tuple[int, str]]:
+        """Non-empty lines as ``(1-based line no, line)`` — the JSONL units
+        (#227). Blank lines are skipped but don't shift line numbers, so
+        citation labels stay accurate."""
+        return [
+            (lineno, line) for lineno, line in enumerate(text.splitlines(), start=1) if line.strip()
+        ]
+
+    def count_units(self, source: IParserInput, *, filename: str, mime: str) -> int:
+        """Fan-out unit count (#227). JSONL → non-empty line count. A
+        top-level JSON **array** → its element count (each element is a
+        record, like a CSV row). Any other root — or unparseable bytes —
+        stays a single unit so the whole-file path (and its error
+        surfacing) is unchanged."""
+        text = source.as_bytes().decode("utf-8", errors="replace")
+        if filename.lower().endswith(".jsonl"):
+            return len(self._jsonl_records(text))
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            return 1  # malformed → not fanned out; parse() raises the real error
+        return len(obj) if isinstance(obj, list) else 1
+
     def parse(
         self,
         source: IParserInput,
@@ -53,16 +77,18 @@ class JsonParser(IParser):
         mime: str,
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
     ) -> list[Document]:
         from llama_index.core.schema import Document
 
         text = source.as_bytes().decode("utf-8", errors="replace")
         meta = {"filename": filename, "mime": mime}
         if filename.lower().endswith(".jsonl"):
+            records = self._jsonl_records(text)
+            if unit_range is not None:
+                records = records[unit_range[0] : unit_range[1]]
             docs: list[Document] = []
-            for lineno, line in enumerate(text.splitlines(), start=1):
-                if not line.strip():
-                    continue
+            for lineno, line in records:
                 try:
                     json.loads(line)
                 except json.JSONDecodeError as exc:
@@ -70,7 +96,12 @@ class JsonParser(IParser):
                 docs.append(Document(text=line, metadata={**meta, "jsonl_line": lineno}))
             return docs
         try:
-            json.loads(text)
+            obj = json.loads(text)
         except json.JSONDecodeError as exc:
             raise ValueError(f"invalid JSON: {exc}") from exc
+        # A fanned-out array process job emits only its element slice (still
+        # valid JSON → DispatchSplitter's JSON branch flattens it). The
+        # whole-file path keeps the verbatim text (granularity = splitter).
+        if unit_range is not None and isinstance(obj, list):
+            return [Document(text=json.dumps(obj[unit_range[0] : unit_range[1]]), metadata=meta)]
         return [Document(text=text, metadata=meta)]

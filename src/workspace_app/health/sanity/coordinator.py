@@ -95,13 +95,18 @@ class SanityBatteryCoordinator:
     def _handle(self, job) -> None:  # job: Resource[SanityRun]
         payload = job.data.payload
         if payload.scope == "battery":
+            # #227: fan out one short cell job per cell instead of running the
+            # whole battery inline. A full battery (every auto question × level,
+            # each a live LLM call) can run for many minutes and trip RabbitMQ's
+            # consumer-ack timeout; one cell per job keeps every job short, and
+            # each cell upserts its own SanityResult so no join is needed.
             for q, level in auto_run_cells():
-                self._run_one(payload.model, q, level)
-        else:
-            q = find_question(payload.question_key)
-            if q is None:
-                return  # the prompt was edited away between enqueue and run
-            self._run_one(payload.model, q, payload.level)
+                self.run_cell(payload.model, question_key(q), level)
+            return
+        q = find_question(payload.question_key)
+        if q is None:
+            return  # the prompt was edited away between enqueue and run
+        self._run_one(payload.model, q, payload.level)
 
     def _run_one(self, model: str, q: SanityQuestion, level: str) -> None:
         """Run one cell through the real ``ILlm`` seam, grade it, and upsert the

@@ -70,6 +70,7 @@ class _BaseReaderParser(IParser):
         mime: str,
         on_progress: _OnProgress = None,
         on_preview: Callable[[bytes, str], None] | None = None,
+        unit_range: tuple[int, int] | None = None,
     ) -> list[Document]:
         # HTML / DOCX readers are fast enough that per-file status
         # updates would be noise; ignore on_progress entirely.

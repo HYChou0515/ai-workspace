@@ -259,6 +259,45 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     )
 
 
+class IndexRun(Struct):  # → resource "index-run"
+    """Issue #227: the fan-out **join state** for one indexing of a SourceDoc.
+
+    A large index (a 100-page VLM PDF, a 100k-row CSV) is split into many small
+    ``IndexJob(kind="process")`` jobs so none exceeds the broker's consumer-ack
+    timeout. This row is how the independent process jobs agree on "the whole
+    doc is done": the split job seeds ``total`` (number of unit batches); each
+    process job idempotently records its batch index in ``done`` (or ``failed``);
+    the finalize step runs exactly once, gated by the CAS-claimed ``finalized``
+    flag (set only when ``done ∪ failed`` covers every batch).
+
+    The resource id IS the doc id — one run row per doc, so a fresh fan-out
+    overwrites the prior terminal run, and ``status == "running"`` is the
+    queue-agnostic "an index is already in flight for this doc" guard (the
+    coalescing that ``partition_key`` was meant to give but the RabbitMQ backend
+    does not honor). Correctness rests on compare-and-swap, never on the queue.
+    """
+
+    doc_id: Annotated[str, Ref("source-doc", on_delete=OnDelete.cascade)]
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    total: int
+    done: list[int] = field(default_factory=list)  # batch indices that finished OK
+    failed: list[int] = field(default_factory=list)  # batch indices that gave up
+    finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
+    status: str = "running"  # running | done | error
+
+
+class IndexUnitText(Struct):  # → resource "index-unit-text"
+    """Issue #227 fan-out **staging**: one process job's clean pre-chunk text for
+    its unit batch, id ``{doc_id}.t{batch_index}``. The finalize step rejoins
+    these in batch order into ``SourceDoc.text`` (the wiki maintainer / citation
+    canonical text) and then deletes them — transient, alive only between a
+    fan-out's process jobs and its finalize."""
+
+    doc_id: Annotated[str, Ref("source-doc", on_delete=OnDelete.cascade)]
+    batch_index: int
+    text: str
+
+
 class ContextCard(Struct):  # → resource "context-card"
     """Issue #106: a lightweight glossary card — several ``keys`` (a term and
     its surface forms) → a short ``body`` explanation, looked up deterministically
