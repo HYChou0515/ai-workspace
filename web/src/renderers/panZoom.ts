@@ -18,11 +18,14 @@ export type PanZoom = { scale: number; tx: number; ty: number };
 export const MIN_SCALE = 0.1;
 export const MAX_SCALE = 20;
 
-/** The image's size at scale 1: contained within the viewport (aspect kept),
- * but never upscaled beyond its natural size (a small image stays crisp). */
-export function fitSize(natural: Size, viewport: Size): Size {
+/** The image's size at scale 1: contained within the viewport (aspect kept).
+ * By default a small image is never upscaled (a raster bitmap shown beyond its
+ * natural size only blurs). `allowUpscale` lifts that cap for vector sources
+ * (SVG), which re-rasterize crisply at any size, so they fill the pane (#185). */
+export function fitSize(natural: Size, viewport: Size, allowUpscale = false): Size {
   if (natural.w <= 0 || natural.h <= 0) return { w: 0, h: 0 };
-  const k = Math.min(1, viewport.w / natural.w, viewport.h / natural.h);
+  const contain = Math.min(viewport.w / natural.w, viewport.h / natural.h);
+  const k = allowUpscale ? contain : Math.min(1, contain);
   return { w: natural.w * k, h: natural.h * k };
 }
 

@@ -43,6 +43,17 @@ _SVG_NS = "http://www.w3.org/2000/svg"
 # no CJK font on the box at all, which no rasterizer could fix anyway).
 _DEFAULT_CJK_FONT = "Noto Sans CJK TC"
 
+# cairosvg with no scale renders an SVG at its nominal px size, which is too soft
+# for the VLM to OCR (#185 — the same low-res-raster root cause as the FE
+# preview). Lift the long side toward this target, never below 1.0 (so the
+# raster is never softer than the nominal render), capped so a tiny icon can't
+# balloon into an enormous one. Cf. the PDF parser's ~200 DPI sweet spot.
+_VLM_TARGET_PX = 2048
+_VLM_MAX_SCALE = 8.0
+# Used when neither width/height (px) nor a viewBox tells us the intrinsic size:
+# still bump resolution rather than render at the soft default.
+_VLM_DEFAULT_SCALE = 2.0
+
 # Serialize the SVG namespace with no prefix so the injected ``text { … }`` CSS
 # type selector matches (cssselect2 matches bare type selectors in the default
 # namespace). Module-level + idempotent.
@@ -84,6 +95,53 @@ def _force_cjk_font(svg_bytes: bytes, family: str) -> bytes:
     return ET.tostring(root, encoding="utf-8")
 
 
+def _abs_px(value: str | None) -> float | None:
+    """A length attribute as pixels — a bare number or a ``px`` suffix. Other
+    units (``%``, ``cm``, ``em``) have no intrinsic px size here, so they return
+    None and the viewBox governs instead."""
+    if value is None:
+        return None
+    v = value.strip().removesuffix("px").strip()
+    try:
+        n = float(v)
+    except ValueError:
+        return None
+    return n if n > 0 else None
+
+
+def _intrinsic_longer_px(svg_bytes: bytes) -> float | None:
+    """The SVG's longer intrinsic side in px — absolute ``width``/``height`` if
+    present (what cairosvg renders to), else the ``viewBox`` extent. None when
+    neither is usable. Unparseable XML degrades to None."""
+    try:
+        root = ET.fromstring(svg_bytes)
+    except ET.ParseError:
+        return None
+    w = _abs_px(root.get("width"))
+    h = _abs_px(root.get("height"))
+    if w is not None and h is not None:
+        return max(w, h)
+    view_box = root.get("viewBox")
+    if view_box:
+        parts = view_box.replace(",", " ").split()
+        if len(parts) == 4:
+            try:
+                return max(abs(float(parts[2])), abs(float(parts[3])))
+            except ValueError:
+                return None
+    return None
+
+
+def _render_scale(svg_bytes: bytes) -> float:
+    """The cairosvg ``scale`` lifting the SVG's long side toward
+    ``_VLM_TARGET_PX`` for legible OCR — floored at 1.0 (never softer than the
+    nominal render) and capped at ``_VLM_MAX_SCALE``."""
+    longer = _intrinsic_longer_px(svg_bytes)
+    if longer is None:
+        return _VLM_DEFAULT_SCALE
+    return min(_VLM_MAX_SCALE, max(1.0, _VLM_TARGET_PX / longer))
+
+
 class SvgParser(IParser):
     def __init__(self, describer: VlmDescriber | None) -> None:
         self._describer = describer
@@ -109,7 +167,7 @@ class SvgParser(IParser):
             import cairosvg  # lazy: a deploy without libcairo still builds the registry
 
             svg = _force_cjk_font(source.as_bytes(), _cjk_font_family())
-            png = cairosvg.svg2png(bytestring=svg)
+            png = cairosvg.svg2png(bytestring=svg, scale=_render_scale(svg))
         except Exception as exc:  # noqa: BLE001 — bad SVG / missing libcairo → 0 chunks, not error
             _LOGGER.warning("SvgParser: could not rasterize %s: %s", filename, exc)
             return []

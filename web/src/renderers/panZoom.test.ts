@@ -24,6 +24,15 @@ describe("fitSize", () => {
   it("never upscales an image smaller than the viewport (shown at natural size)", () => {
     expect(fitSize({ w: 100, h: 100 }, VP)).toEqual({ w: 100, h: 100 });
   });
+  it("upscales a small image to fill the viewport when allowUpscale is set (vector)", () => {
+    // A vector (SVG) source can be re-rasterized at any size, so a small one
+    // should fill the pane crisply instead of sitting tiny in the middle (#185).
+    expect(fitSize({ w: 100, h: 100 }, VP, true)).toEqual({ w: 400, h: 400 });
+    expect(fitSize({ w: 1000, h: 700 }, { w: 360, h: 260 }, true)).toEqual({
+      w: 360,
+      h: 252,
+    });
+  });
 });
 
 describe("initialState", () => {
