@@ -550,7 +550,9 @@ function ToolCallCard({
   // Follow streaming stdout to the bottom unless the user scrolls up.
   const preRef = useStickToBottom<HTMLPreElement>(body);
   const labelKey = TOOL_LABEL[call.name];
-  const hint = toolArgHint(call.name, call.args);
+  // An unmapped tool has no known primary arg, so surface its raw name in the
+  // hint slot — the generic "使用工具" label alone hides which tool ran (#206).
+  const hint = labelKey ? toolArgHint(call.name, call.args) : call.name;
   return (
     <details
       open={streamingLive}
