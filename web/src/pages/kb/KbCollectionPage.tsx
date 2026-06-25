@@ -34,6 +34,7 @@ import { fetchAllDocs, KbDocIde } from "./KbDocIde";
 import { useKbOutlet } from "./KbHome";
 import { RetrievalToggles } from "./RetrievalToggles";
 import { WikiBrowser } from "./WikiBrowser";
+import { pxToRem } from "../../lib/pxToRem";
 
 // Each tab's name + one-line "what + when" blurb, shown together in the
 // collapsible orientation strip under the tabs (#173). A first-timer sees all
@@ -765,7 +766,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
               borderRadius: 8,
               background: "color-mix(in srgb, var(--accent) 10%, var(--white))",
               color: "var(--accent-h)",
-              fontSize: 14,
+              fontSize: pxToRem(14),
               fontWeight: 600,
               pointerEvents: "none",
             }}

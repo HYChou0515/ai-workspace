@@ -11,6 +11,7 @@ import jsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import tsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import { useState } from "react";
 
+import { useMonacoFontSize } from "../hooks/fontScale";
 import type { MonacoEditorProps } from "./MonacoEditor";
 
 // Route Monaco's worker requests to the Vite-bundled worker chunks.
@@ -35,6 +36,7 @@ export default function MonacoEditorImpl({
   minHeight = 120,
 }: MonacoEditorProps) {
   const [height, setHeight] = useState(minHeight);
+  const fontSize = useMonacoFontSize(13);
   const dark =
     typeof document !== "undefined" && document.documentElement.dataset.theme === "dark";
 
@@ -63,7 +65,7 @@ export default function MonacoEditorImpl({
         options={{
           readOnly,
           minimap: { enabled: minimap },
-          fontSize: 13,
+          fontSize,
           fontFamily: "var(--font-mono)",
           lineNumbers: "on",
           scrollBeyondLastLine: false,

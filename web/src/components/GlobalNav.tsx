@@ -14,6 +14,7 @@ import { useT } from "../lib/i18n";
 import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
 import { useApps } from "../hooks/useResources";
 import { AppIcon } from "./AppIcon";
+import { GlobalSettings } from "./GlobalSettings";
 import { HealthDot } from "./HealthDot";
 import { Icon } from "./Icon";
 import type { IconName } from "./Icon";
@@ -223,6 +224,7 @@ export function GlobalNav({ healthClient }: { healthClient?: HealthApi }) {
       <Breadcrumbs />
       <span style={{ flex: 1 }} />
       <HealthDot {...(healthClient ? { client: healthClient } : {})} />
+      <GlobalSettings />
     </header>
   );
 }

@@ -31,6 +31,7 @@ import { nameForPreset, pickerModels, presetForName } from "./agentPicker";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
+import { pxToRem } from "../../lib/pxToRem";
 
 const TEXT_EXTENSIONS = new Set([
   ".md",
@@ -257,7 +258,7 @@ export function AgentPanel({
         }}
       >
         {log.entries.length === 0 && !log.streaming && (
-          <div style={{ color: "var(--text-paper-d)", fontSize: 13 }}>
+          <div style={{ color: "var(--text-paper-d)", fontSize: pxToRem(13) }}>
             {chatEmptyHint(chips.length > 0)}
           </div>
         )}
@@ -296,7 +297,7 @@ export function AgentPanel({
               borderRadius: "var(--radius-card)",
               color: "var(--err)",
               fontFamily: "var(--font-mono)",
-              fontSize: 12,
+              fontSize: pxToRem(12),
             }}
           >
             {log.error}
@@ -328,7 +329,7 @@ export function AgentPanel({
               borderRadius: 999,
               border: "1px solid var(--paper-3)",
               background: "var(--white)",
-              fontSize: 12,
+              fontSize: pxToRem(12),
               color: "var(--text-paper)",
               cursor: log.streaming ? "not-allowed" : "pointer",
               opacity: log.streaming ? 0.5 : 1,
@@ -357,7 +358,7 @@ export function AgentPanel({
       >
         {mentions.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-            <span style={{ fontSize: 11, color: "var(--text-paper-d)" }}>Summon:</span>
+            <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>Summon:</span>
             {mentions.map((id) => (
               <button
                 key={id}
@@ -371,7 +372,7 @@ export function AgentPanel({
                   padding: "2px 6px",
                   border: "1px solid var(--paper-3)",
                   borderRadius: "var(--radius-chip)",
-                  fontSize: 12,
+                  fontSize: pxToRem(12),
                 }}
               >
                 <UserChip userId={id} size={16} />
@@ -391,7 +392,7 @@ export function AgentPanel({
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
             padding: 8,
-            fontSize: 13,
+            fontSize: pxToRem(13),
             resize: "vertical",
             outline: "none",
             fontFamily: "var(--font-body)",
@@ -428,7 +429,7 @@ export function AgentPanel({
                 type="button"
                 onClick={onClick}
                 title="@ mention someone to come look (notifies them — no agent run)"
-                style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}
+                style={{ color: "var(--text-paper-d)", display: "inline-flex", alignItems: "center", gap: 4, fontSize: pxToRem(12) }}
               >
                 <Icon name="user" size={14} /> @
               </button>
@@ -459,7 +460,7 @@ export function AgentPanel({
               display: "inline-flex",
               alignItems: "center",
               gap: 4,
-              fontSize: 12,
+              fontSize: pxToRem(12),
             }}
           >
             <Icon name="plus" size={14} />
@@ -469,7 +470,7 @@ export function AgentPanel({
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 10,
+              fontSize: pxToRem(10),
               color: "var(--text-paper-d2)",
             }}
           >
@@ -484,7 +485,7 @@ export function AgentPanel({
                 borderRadius: "var(--radius-btn)",
                 border: "1px solid var(--err)",
                 color: "var(--err)",
-                fontSize: 12,
+                fontSize: pxToRem(12),
               }}
             >
               Stop
@@ -502,7 +503,7 @@ export function AgentPanel({
                     borderRadius: "var(--radius-btn)",
                     background: enabled ? "var(--accent)" : "var(--paper-3)",
                     color: enabled ? "var(--white)" : "var(--text-paper-d)",
-                    fontSize: 12,
+                    fontSize: pxToRem(12),
                     fontWeight: 500,
                   }}
                 >
@@ -555,7 +556,7 @@ export function AgentHeader({
       {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>{appTitle}</div>
-        <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
+        <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
           {/* #159: action cue, not a vague status. Idle = "what do I do now?";
               streaming = an app-neutral "Replying…" (RCA's "investigating" leaked
               the domain into every App). The granular in-turn states live in the
@@ -577,7 +578,7 @@ export function AgentHeader({
             alignItems: "center",
             gap: 4,
             color: "var(--text-paper-d)",
-            fontSize: 11,
+            fontSize: pxToRem(11),
             background: "transparent",
             border: "none",
             cursor: "pointer",
@@ -606,7 +607,7 @@ export function AgentHeader({
           alignItems: "center",
           gap: 4,
           color: "var(--text-paper-d)",
-          fontSize: 11,
+          fontSize: pxToRem(11),
           background: "transparent",
           border: "none",
           cursor: "pointer",
@@ -615,7 +616,7 @@ export function AgentHeader({
         <Icon name="download" size={13} /> Export
       </button>
       {exportError && (
-        <span role="alert" style={{ fontSize: 11, color: "var(--err)" }}>
+        <span role="alert" style={{ fontSize: pxToRem(11), color: "var(--err)" }}>
           {exportError}
         </span>
       )}
@@ -676,7 +677,7 @@ function ProgressBar({ phases }: { phases?: import("../../api/workflows").PhaseN
           />
         ))}
       </div>
-      <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
+      <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
         step {currentIdx + 1} · {current.title}
       </div>
     </div>

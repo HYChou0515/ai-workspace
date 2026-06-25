@@ -14,6 +14,7 @@ import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { useT } from "../../lib/i18n";
 import { KbWikiIde } from "./KbWikiIde";
+import { pxToRem } from "../../lib/pxToRem";
 
 // The maintainer's phases, in order — shown as the first-build step list and,
 // shrunk, as the header pill's live label during a rebuild.
@@ -68,11 +69,11 @@ function WikiGuidanceEditor({
     border: "1px solid var(--paper-3)",
     background: "var(--paper)",
     font: "inherit",
-    fontSize: 13,
+    fontSize: pxToRem(13),
     lineHeight: 1.5,
     boxSizing: "border-box" as const,
   };
-  const hint = { fontSize: 11.5, color: "var(--text-paper-d)", margin: "2px 0 6px", lineHeight: 1.45 };
+  const hint = { fontSize: pxToRem(11.5), color: "var(--text-paper-d)", margin: "2px 0 6px", lineHeight: 1.45 };
 
   return (
     <section
@@ -91,12 +92,12 @@ function WikiGuidanceEditor({
     >
       <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
         <Icon name="sparkle" size={13} color="var(--accent-h)" />
-        <span className="caps" style={{ fontSize: 11 }}>
+        <span className="caps" style={{ fontSize: pxToRem(11) }}>
           Wiki guidance
         </span>
       </div>
 
-      <label htmlFor="wiki-writing-guidance" style={{ fontSize: 12.5, fontWeight: 600 }}>
+      <label htmlFor="wiki-writing-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600 }}>
         Writing guidance
       </label>
       <p style={hint}>
@@ -111,7 +112,7 @@ function WikiGuidanceEditor({
         style={ta}
       />
 
-      <label htmlFor="wiki-answering-guidance" style={{ fontSize: 12.5, fontWeight: 600, marginTop: 10 }}>
+      <label htmlFor="wiki-answering-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
         Answering guidance
       </label>
       <p style={hint}>How questions are answered. Takes effect on the next question.</p>
@@ -133,7 +134,7 @@ function WikiGuidanceEditor({
           {saveMut.isPending ? "Saving…" : "Save guidance"}
         </button>
         {saveMut.isError && (
-          <span role="alert" style={{ fontSize: 12, color: "var(--warn)" }}>
+          <span role="alert" style={{ fontSize: pxToRem(12), color: "var(--warn)" }}>
             Couldn't save — try again.
           </span>
         )}
@@ -218,7 +219,7 @@ export function WikiBrowser({
       >
         <Icon name="layers" size={15} color="var(--accent)" />
       </div>
-      <div style={{ fontSize: 14, fontWeight: 600, color: "var(--ink)" }}>
+      <div style={{ fontSize: pxToRem(14), fontWeight: 600, color: "var(--ink)" }}>
         {collectionName} <span style={{ color: "var(--text-paper-d2)", fontWeight: 400 }}>· Wiki</span>
       </div>
       <span
@@ -229,7 +230,7 @@ export function WikiBrowser({
           padding: "2px 8px",
           borderRadius: 4,
           background: "var(--paper-2)",
-          fontSize: 11,
+          fontSize: pxToRem(11),
           color: "var(--text-paper-d)",
         }}
       >
@@ -246,7 +247,7 @@ export function WikiBrowser({
             padding: "3px 9px",
             borderRadius: 4,
             background: "var(--accent-soft)",
-            fontSize: 11,
+            fontSize: pxToRem(11),
             color: "var(--accent-h)",
           }}
         >
@@ -268,7 +269,7 @@ export function WikiBrowser({
           aria-label="Confirm rebuild"
           style={{ display: "inline-flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}
         >
-          <span style={{ fontSize: 12, color: "var(--text-paper-d)", maxWidth: 320, lineHeight: 1.45 }}>
+          <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)", maxWidth: 320, lineHeight: 1.45 }}>
             {t("kb.wiki.rebuild.confirm")}
           </span>
           <button
@@ -314,7 +315,7 @@ export function WikiBrowser({
           borderRadius: 8,
           background: "color-mix(in srgb, var(--warn) 12%, transparent)",
           color: "var(--warn)",
-          fontSize: 12.5,
+          fontSize: pxToRem(12.5),
           lineHeight: 1.5,
           textAlign: "left",
           maxWidth: 460,
@@ -370,10 +371,10 @@ export function WikiBrowser({
             <Icon name="refresh" size={22} color="var(--accent-h)" />
           </div>
           <div style={{ maxWidth: 400 }}>
-            <h2 className="display" style={{ fontSize: 20, marginBottom: 6 }}>
+            <h2 className="display" style={{ fontSize: pxToRem(20), marginBottom: 6 }}>
               Updating the wiki…
             </h2>
-            <p style={{ fontSize: 13.5, color: "var(--text-paper-d)", lineHeight: 1.55, margin: 0 }}>
+            <p style={{ fontSize: pxToRem(13.5), color: "var(--text-paper-d)", lineHeight: 1.55, margin: 0 }}>
               The assistant is reading the documents and writing pages. Pages already done stay
               readable.
             </p>
@@ -389,7 +390,7 @@ export function WikiBrowser({
                     display: "flex",
                     alignItems: "center",
                     gap: 10,
-                    fontSize: 12.5,
+                    fontSize: pxToRem(12.5),
                     color: done || on ? "var(--text-paper)" : "var(--text-paper-d2)",
                   }}
                 >
@@ -410,7 +411,7 @@ export function WikiBrowser({
                   </span>
                   <span>{labelText}</span>
                   {i === STEPS.length - 1 && (status?.total ?? 0) > 0 && (
-                    <span className="mono" style={{ marginLeft: "auto", color: "var(--accent)", fontSize: 11 }}>
+                    <span className="mono" style={{ marginLeft: "auto", color: "var(--accent)", fontSize: pxToRem(11) }}>
                       {status?.done ?? 0} / {status?.total ?? 0}
                     </span>
                   )}
@@ -452,10 +453,10 @@ export function WikiBrowser({
         </div>
         {errorBanner}
         <div style={{ maxWidth: 400 }}>
-          <h2 className="display" style={{ fontSize: 20, marginBottom: 6 }}>
+          <h2 className="display" style={{ fontSize: pxToRem(20), marginBottom: 6 }}>
             The wiki hasn't been built yet
           </h2>
-          <p style={{ fontSize: 13.5, color: "var(--text-paper-d)", lineHeight: 1.55, margin: 0 }}>
+          <p style={{ fontSize: pxToRem(13.5), color: "var(--text-paper-d)", lineHeight: 1.55, margin: 0 }}>
             This collection has the wiki turned on, but no pages have been written. Build it once and
             it keeps itself current as documents are added.
           </p>

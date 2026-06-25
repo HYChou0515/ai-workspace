@@ -19,6 +19,7 @@ import { type ChipTone } from "../components/StatusChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { SanityMatrix } from "./SanityMatrix";
 import { TelemetryPanel } from "./TelemetryPanel";
+import { pxToRem } from "../lib/pxToRem";
 
 type Outcome = { label: string; tone: ChipTone };
 
@@ -62,7 +63,7 @@ function OutcomeChip({ status }: { status: HealthCheckRow["status"] }) {
         alignItems: "center",
         padding: "2px 9px",
         borderRadius: 999,
-        fontSize: 12,
+        fontSize: pxToRem(12),
         fontWeight: 600,
         whiteSpace: "nowrap",
         background: TONE_BG[o.tone],
@@ -135,7 +136,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
           }}
         >
           <div>
-            <h1 style={{ margin: 0, fontSize: 22 }}>AI diagnostics</h1>
+            <h1 style={{ margin: 0, fontSize: pxToRem(22) }}>AI diagnostics</h1>
             <p
               style={{
                 margin: "6px 0 0",
@@ -265,7 +266,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
                   <div
                     style={{
                       marginTop: 4,
-                      fontSize: 11,
+                      fontSize: pxToRem(11),
                       color: "var(--text-paper-d)",
                     }}
                   >

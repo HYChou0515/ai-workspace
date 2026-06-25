@@ -13,6 +13,7 @@ import { useRefreshFiles } from "../../hooks/useRefreshFiles";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { useT } from "../../lib/i18n";
 import { modCombo } from "../../lib/platform";
+import { pxToRem } from "../../lib/pxToRem";
 
 type Entry = {
   prompt: string;
@@ -134,7 +135,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
           flex: 1,
           overflowY: "auto",
           fontFamily: "var(--font-mono)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
           color: "var(--text-paper)",
         }}
         onClick={() => inputRef.current?.focus()}
@@ -157,7 +158,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
           borderTop: "1px solid var(--paper-3)",
           paddingTop: 4,
           fontFamily: "var(--font-mono)",
-          fontSize: 12,
+          fontSize: pxToRem(12),
         }}
       >
         <span style={{ color: "var(--accent)" }}>{prompt(investigationId)}</span>
@@ -175,7 +176,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
             outline: "none",
             background: "transparent",
             fontFamily: "var(--font-mono)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: "var(--text-paper)",
           }}
         />
@@ -192,7 +193,7 @@ export function TerminalPane({ investigationId }: { investigationId: string }) {
               border: "1px solid var(--paper-3)",
               borderRadius: "var(--radius-btn)",
               color: "var(--err)",
-              fontSize: 11,
+              fontSize: pxToRem(11),
             }}
           >
             <Icon name="x" size={11} /> Stop
@@ -217,7 +218,7 @@ function EntryView({ entry }: { entry: Entry }) {
           <span
             style={{
               color: exit === 0 ? "var(--ok)" : "var(--err)",
-              fontSize: 10,
+              fontSize: pxToRem(10),
             }}
             title={`exit ${exit}`}
           >
@@ -250,5 +251,5 @@ const preStyle: React.CSSProperties = {
   margin: 0,
   whiteSpace: "pre-wrap",
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  fontSize: pxToRem(12),
 };

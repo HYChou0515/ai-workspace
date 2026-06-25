@@ -5,6 +5,7 @@
  */
 
 import { useLocale, type Locale } from "../lib/i18n";
+import { pxToRem } from "../lib/pxToRem";
 
 const OPTIONS: { id: Locale; label: string }[] = [
   { id: "zh-TW", label: "中文" },
@@ -27,7 +28,7 @@ export function LanguageToggle() {
               padding: "6px 12px",
               border: "1px solid var(--paper-3)",
               borderRadius: "var(--radius-btn)",
-              fontSize: 12,
+              fontSize: pxToRem(12),
               background: on ? "var(--accent-soft)" : "var(--white)",
               color: on ? "var(--accent-h)" : "var(--text-paper)",
               cursor: "pointer",

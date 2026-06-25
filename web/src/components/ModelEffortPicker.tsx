@@ -31,6 +31,7 @@ import {
 } from "../lib/kbEnhancementMode";
 import { useReasoningEffort } from "../lib/reasoningEffort";
 import { Icon } from "./Icon";
+import { pxToRem } from "../lib/pxToRem";
 
 export type PickerEntry = {
   name: string;
@@ -87,7 +88,7 @@ function Segments<T extends string>({
                 border: "none",
                 background: on ? "var(--ink)" : "transparent",
                 color: on ? "var(--text-dark)" : "var(--text-paper)",
-                fontSize: 12,
+                fontSize: pxToRem(12),
                 fontWeight: on ? 600 : 400,
                 cursor: "pointer",
               }}
@@ -97,7 +98,7 @@ function Segments<T extends string>({
           );
         })}
       </div>
-      <div style={{ fontSize: 11, color: "var(--text-paper-d)", marginTop: 6, lineHeight: 1.4 }}>
+      <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", marginTop: 6, lineHeight: 1.4 }}>
         {active.note}
       </div>
     </>
@@ -132,7 +133,7 @@ function DepthSliders({
         border: "1px solid var(--paper-3)",
         borderRadius: 6,
         background: "var(--white)",
-        fontSize: 11,
+        fontSize: pxToRem(11),
         color: "var(--text-paper-d)",
       }}
     >
@@ -230,9 +231,9 @@ export function ModelEffortPicker({
         }}
       >
         <Icon name="sparkle" size={13} color="var(--accent)" />
-        <span style={{ fontSize: 12, color: "var(--ink)" }}>{active.name}</span>
+        <span style={{ fontSize: pxToRem(12), color: "var(--ink)" }}>{active.name}</span>
         <span style={{ width: 1, height: 14, background: "var(--paper-3)" }} />
-        <span style={{ fontSize: 12, color: "var(--text-paper-d)" }}>{t(`effort.${effort}`)}</span>
+        <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t(`effort.${effort}`)}</span>
         <Icon name="chev_d" size={11} color="var(--text-paper-d)" />
       </button>
 
@@ -304,7 +305,7 @@ export function ModelEffortPicker({
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                         <span
                           style={{
-                            fontSize: 12.5,
+                            fontSize: pxToRem(12.5),
                             color: "var(--ink)",
                             fontWeight: on ? 600 : 400,
                           }}
@@ -314,7 +315,7 @@ export function ModelEffortPicker({
                         {i === 0 && (
                           <span
                             style={{
-                              fontSize: 10,
+                              fontSize: pxToRem(10),
                               padding: "1px 6px",
                               borderRadius: 999,
                               background: "var(--accent-soft)",
@@ -330,7 +331,7 @@ export function ModelEffortPicker({
                       {m.description && (
                         <div
                           style={{
-                            fontSize: 11,
+                            fontSize: pxToRem(11),
                             color: "var(--text-paper-d)",
                             marginTop: 2,
                             lineHeight: 1.4,
@@ -364,7 +365,7 @@ export function ModelEffortPicker({
                       border: "none",
                       color: "var(--text-paper-d)",
                       cursor: "pointer",
-                      fontSize: 11,
+                      fontSize: pxToRem(11),
                       padding: 0,
                     }}
                   >
@@ -383,7 +384,7 @@ export function ModelEffortPicker({
                   onPick={(id) => setDepthMode(id)}
                 />
                 {depthSel.mode === "custom" && (
-                  <div style={{ fontSize: 11, color: "var(--text-paper-d)", marginTop: 4 }}>
+                  <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", marginTop: 4 }}>
                     {t("depth.custom.note")}
                   </div>
                 )}
@@ -395,7 +396,7 @@ export function ModelEffortPicker({
                       alignItems: "center",
                       gap: 8,
                       marginTop: 8,
-                      fontSize: 13,
+                      fontSize: pxToRem(13),
                       cursor: "pointer",
                     }}
                     title={t("picker.wiki.title")}
@@ -422,7 +423,7 @@ export function ModelEffortPicker({
               }}
             >
               <Icon name="clock" size={11} color="var(--text-paper-d2)" />
-              <span style={{ fontSize: 11, color: "var(--text-paper-d)" }}>
+              <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
                 {t(`picker.footer.${effort}`)}
               </span>
               <span style={{ flex: 1 }} />
@@ -432,7 +433,7 @@ export function ModelEffortPicker({
                 style={{
                   border: "none",
                   background: "none",
-                  fontSize: 12,
+                  fontSize: pxToRem(12),
                   color: "var(--accent-h)",
                   cursor: "pointer",
                   fontWeight: 500,

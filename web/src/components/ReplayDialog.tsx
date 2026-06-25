@@ -22,6 +22,7 @@ import {
 } from "../api/health";
 import { useT } from "../lib/i18n";
 import { Icon } from "./Icon";
+import { pxToRem } from "../lib/pxToRem";
 
 export type ReplayRequest =
   | { kind: "turn"; source: "rca" | "kb"; threadId: string; messageIndex: number }
@@ -38,7 +39,7 @@ function CallIntent({ call, prefix }: { call: ReplayToolCallOut; prefix?: string
     <div
       style={{
         fontFamily: "var(--font-mono)",
-        fontSize: 12,
+        fontSize: pxToRem(12),
         padding: "6px 10px",
         background: "var(--paper-2)",
         borderRadius: 6,
@@ -66,7 +67,7 @@ function RequestPanel({ request }: { request: NonNullable<ReplayOut["request"]> 
       style={{
         marginTop: 10,
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
+        fontSize: pxToRem(11),
         color: "var(--text-paper-d)",
         background: "var(--paper-2)",
         borderRadius: 6,
@@ -159,7 +160,7 @@ export function ReplayDialog({
       >
         <header style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <div style={{ flex: 1 }}>
-            <h2 style={{ margin: 0, fontSize: 16 }}>Replay with the current AI</h2>
+            <h2 style={{ margin: 0, fontSize: pxToRem(16) }}>Replay with the current AI</h2>
             <p
               style={{
                 margin: "4px 0 0",
@@ -232,7 +233,7 @@ export function ReplayDialog({
                         style={{
                           margin: "6px 0 0",
                           fontFamily: "var(--font-mono)",
-                          fontSize: 12,
+                          fontSize: pxToRem(12),
                           padding: "6px 10px",
                           background: "var(--paper-2)",
                           borderRadius: 6,
@@ -265,7 +266,7 @@ export function ReplayDialog({
                     padding: 0,
                     marginBottom: 6,
                     color: "var(--text-paper-d)",
-                    fontSize: 12,
+                    fontSize: pxToRem(12),
                     cursor: "pointer",
                     display: "inline-flex",
                     alignItems: "center",
@@ -281,7 +282,7 @@ export function ReplayDialog({
                   style={{
                     margin: "0 0 8px",
                     fontFamily: "var(--font-mono)",
-                    fontSize: 12,
+                    fontSize: pxToRem(12),
                     padding: "6px 10px",
                     background: "var(--paper-2)",
                     borderRadius: 6,
@@ -322,7 +323,7 @@ export function ReplayDialog({
                   {data.note}
                 </div>
               )}
-              <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-paper-d)" }}>
+              <div style={{ marginTop: 10, fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
                 {data.model && <span>{data.model} · </span>}
                 took {(data.latency_ms / 1000).toFixed(1)}s
               </div>

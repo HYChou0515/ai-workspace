@@ -19,6 +19,7 @@ import {
   sanityApi,
 } from "../api/sanity";
 import { qk } from "../api/queryKeys";
+import { pxToRem } from "../lib/pxToRem";
 
 function cellKey(questionKey: string, level: string): string {
   return `${questionKey}|${level}`;
@@ -137,7 +138,7 @@ function OutputModal({ open, onClose }: { open: OpenCell; onClose: () => void })
           gap: 12,
         }}
       >
-        <strong style={{ fontSize: 14 }}>
+        <strong style={{ fontSize: pxToRem(14) }}>
           {level.label} · {prompt}
         </strong>
         <div
@@ -147,14 +148,14 @@ function OutputModal({ open, onClose }: { open: OpenCell; onClose: () => void })
             overflow: "auto",
             whiteSpace: "pre-wrap",
             overflowWrap: "anywhere",
-            fontSize: 13,
+            fontSize: pxToRem(13),
             lineHeight: 1.5,
             color: cell.error ? "var(--warn)" : "var(--text-paper)",
           }}
         >
           {body}
         </div>
-        <div style={{ fontSize: 11, color: "var(--text-paper-d)" }}>{footer}</div>
+        <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{footer}</div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
             type="button"
@@ -164,7 +165,7 @@ function OutputModal({ open, onClose }: { open: OpenCell; onClose: () => void })
               height: 30,
               padding: "0 14px",
               borderRadius: "var(--radius-btn)",
-              fontSize: 13,
+              fontSize: pxToRem(13),
               cursor: "pointer",
               border: "1px solid var(--paper-3)",
               background: "var(--white)",
@@ -300,7 +301,7 @@ export function SanityMatrix({ client = sanityApi }: { client?: SanityApi }) {
                             testId={`output-${q.key}-${lvl.level}`}
                             onOpen={() => setOpenCell({ cell, level: lvl, question: q })}
                           />
-                          <div style={{ marginTop: 3, color: "var(--text-paper-d)", fontSize: 11 }}>
+                          <div style={{ marginTop: 3, color: "var(--text-paper-d)", fontSize: pxToRem(11) }}>
                             {cell.reasoned ? "reasoned" : "no reasoning"}
                             {cell.aux ? ` · ${cell.aux}` : ""}
                             {" · "}
@@ -321,7 +322,7 @@ export function SanityMatrix({ client = sanityApi }: { client?: SanityApi }) {
                                 color: "var(--accent-h)",
                                 cursor: "pointer",
                                 padding: 0,
-                                fontSize: 11,
+                                fontSize: pxToRem(11),
                               }}
                             >
                               ↻ rerun
@@ -347,7 +348,7 @@ export function SanityMatrix({ client = sanityApi }: { client?: SanityApi }) {
                             color: "var(--text-paper-d)",
                             cursor: "pointer",
                             padding: "2px 8px",
-                            fontSize: 12,
+                            fontSize: pxToRem(12),
                           }}
                         >
                           ▶ run

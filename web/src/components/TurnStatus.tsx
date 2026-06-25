@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { type AgentLog, type TurnPhase, formatMetrics, isToolRunning, turnPhase } from "../pages/investigation/agentLog";
+import { pxToRem } from "../lib/pxToRem";
 
 /** The trailing status of an in-flight turn — replaces the opaque "working…"
  * spinner. It splits the wait into legible phases (see {@link turnPhase}) and
@@ -36,7 +37,7 @@ export function TurnStatus({ log, className }: { log: AgentLog; className?: stri
   // mono, accent, indented to sit under the speaker avatar.
   const box = {
     fontFamily: "var(--font-mono)",
-    fontSize: 11,
+    fontSize: pxToRem(11),
     color: "var(--accent)",
     padding: "2px 0 0 28px",
   } as const;

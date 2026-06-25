@@ -13,9 +13,7 @@ import { DomainField } from "../../components/DomainField";
 import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
-import { useT } from "../../lib/i18n";
 import { modCombo } from "../../lib/platform";
-import { LanguageToggle } from "../../components/LanguageToggle";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { CrossHandle } from "../../components/CrossHandle";
@@ -32,7 +30,6 @@ import {
   type SplitDir,
   useEditorGroups,
 } from "../../hooks/useEditorGroups";
-import { useThemeMode } from "../../hooks/theme";
 import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { AgentProvider, useAgent } from "../../hooks/useAgent";
 import { ItemCrumbChips } from "./ItemCrumbChips";
@@ -54,6 +51,7 @@ import { basename, breadcrumbSegments, dirChildren } from "./renderer";
 import { hasEditToggle, isRawEditorView, pickRenderer } from "../../renderers/registry";
 import { SearchPanel } from "./SearchPanel";
 import { TerminalPane } from "./TerminalPane";
+import { pxToRem } from "../../lib/pxToRem";
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
@@ -161,8 +159,6 @@ function ShellBody({
   const groups = useEditorGroups(initialPaths);
   const [activityMode, setActivityMode] = useState<ActivityMode>("evidence");
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [theme, setTheme] = useThemeMode();
 
   // Resizable + collapsible panels (VSCode-style). Sizes persist; ⌘B/⌘J
   // toggle the sidebar / bottom panel.
@@ -373,11 +369,7 @@ function ShellBody({
               gated by allowed_tools), so there is no separate sandbox pane. */}
           {manifest.function.workspace && !ideCollapsed && (
             <>
-          <ActivityBar
-            mode={activityMode}
-            onMode={setActivityMode}
-            onSettings={() => setSettingsOpen(true)}
-          />
+          <ActivityBar mode={activityMode} onMode={setActivityMode} />
           {sidebarOpen && (
             <>
               <div style={{ width: sidebarW, flexShrink: 0, display: "flex", minWidth: 0 }}>
@@ -486,174 +478,8 @@ function ShellBody({
           onClose={() => setPaletteOpen(false)}
           onPick={openFile}
         />
-        <SettingsModal
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-          theme={theme}
-          onTheme={setTheme}
-          productName={manifest.title}
-        />
       </div>
     </RequestCloseContext.Provider>
-  );
-}
-
-export function SettingsModal({
-  open,
-  onClose,
-  theme,
-  onTheme,
-  productName,
-}: {
-  open: boolean;
-  onClose: () => void;
-  theme: "system" | "light" | "dark";
-  onTheme: (t: "system" | "light" | "dark") => void;
-  /** The current App's display name (manifest-driven, #160) — replaces the
-   * old hardcoded "RCA 3.0". */
-  productName: string;
-}) {
-  const t = useT();
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (!open) return null;
-  return (
-    <div
-      role="dialog"
-      aria-modal="true"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 100,
-      }}
-    >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 480,
-          maxHeight: "80vh",
-          overflow: "auto",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 12px 32px rgba(0,0,0,0.18)",
-          display: "flex",
-          flexDirection: "column",
-        }}
-      >
-        <div
-          style={{
-            padding: "12px 16px",
-            borderBottom: "1px solid var(--paper-3)",
-            display: "flex",
-            alignItems: "center",
-            gap: 10,
-          }}
-        >
-          <Icon name="settings" size={14} />
-          <strong style={{ fontSize: 13, flex: 1 }}>{t("settings.title")}</strong>
-          <button
-            type="button"
-            aria-label="close settings"
-            onClick={onClose}
-            style={{ color: "var(--text-paper-d)" }}
-          >
-            <Icon name="x" size={14} />
-          </button>
-        </div>
-
-
-        <SettingsSection label={t("settings.theme")}>
-          <div style={{ display: "flex", gap: 6 }}>
-            {(["system", "light", "dark"] as const).map((mode) => (
-              <button
-                key={mode}
-                type="button"
-                onClick={() => onTheme(mode)}
-                style={{
-                  padding: "6px 12px",
-                  border: "1px solid var(--paper-3)",
-                  borderRadius: "var(--radius-btn)",
-                  fontSize: 12,
-                  background: mode === theme ? "var(--accent-soft)" : "var(--white)",
-                  color: mode === theme ? "var(--accent-h)" : "var(--text-paper)",
-                }}
-              >
-                {t(`theme.${mode}`)}
-              </button>
-            ))}
-          </div>
-          <p style={{ marginTop: 6, fontSize: 11, color: "var(--text-paper-d)" }}>
-            {t("settings.theme.note")}
-          </p>
-        </SettingsSection>
-
-        <SettingsSection label={t("settings.language")}>
-          <LanguageToggle />
-        </SettingsSection>
-
-        <SettingsSection label={t("settings.about")}>
-          <dl
-            style={{
-              margin: 0,
-              display: "grid",
-              gridTemplateColumns: "max-content 1fr",
-              rowGap: 4,
-              columnGap: 12,
-              fontSize: 12,
-            }}
-          >
-            <dt style={{ color: "var(--text-paper-d)" }}>{t("about.product")}</dt>
-            <dd style={{ margin: 0 }}>{productName}</dd>
-            <dt style={{ color: "var(--text-paper-d)" }}>{t("about.signin")}</dt>
-            <dd style={{ margin: 0 }}>{t("about.signin.value")}</dd>
-            <dt style={{ color: "var(--text-paper-d)" }}>{t("about.docs")}</dt>
-            <dd style={{ margin: 0 }}>
-              <a href="/docs" target="_blank" rel="noreferrer">
-                {t("about.docs.link")}
-              </a>
-            </dd>
-          </dl>
-        </SettingsSection>
-      </div>
-    </div>
-  );
-}
-
-function SettingsSection({
-  label,
-  children,
-}: {
-  label: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section
-      style={{
-        padding: "12px 16px",
-        borderBottom: "1px solid var(--paper-3)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-      }}
-    >
-      <div className="caps" style={{ fontSize: 11 }}>
-        {label}
-      </div>
-      {children}
-    </section>
   );
 }
 
@@ -697,7 +523,7 @@ function EditItemModal({
           boxShadow: "var(--shadow-pop)",
         }}
       >
-        <h2 style={{ marginTop: 0, fontSize: 18 }}>Edit {manifest.item.noun}</h2>
+        <h2 style={{ marginTop: 0, fontSize: pxToRem(18) }}>Edit {manifest.item.noun}</h2>
         <ItemForm
           manifest={manifest}
           initialValues={item as Record<string, unknown>}
@@ -800,7 +626,7 @@ export function TopBar({
             gap: 6,
             padding: "0 10px",
             color: ideCollapsed ? "var(--text-paper-d)" : "var(--text-paper)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             cursor: "pointer",
           }}
         >
@@ -828,13 +654,13 @@ export function TopBar({
             gap: 8,
             padding: "0 10px",
             color: "var(--text-paper-d)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
           }}
         >
           <Icon name="search" size={13} />
           <span>Go to file, symbol, command…</span>
           <span style={{ flex: 1 }} />
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11 }}>{modCombo("P")}</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11) }}>{modCombo("P")}</span>
         </button>
       )}
 
@@ -856,7 +682,7 @@ export function TopBar({
             }}
           >
             <Icon name="users" size={15} />
-            <span style={{ fontSize: 12 }}>
+            <span style={{ fontSize: pxToRem(12) }}>
               {((item.members as string[] | undefined)?.length ?? 0) + 1}
             </span>
           </button>
@@ -898,7 +724,7 @@ export function TopBar({
         {() => (
           <div style={{ minWidth: 240, padding: "6px 0" }}>
             <div className="caps" style={{ padding: "4px 10px" }}>Notifications</div>
-            <div style={{ padding: "4px 10px", color: "var(--text-paper-d)", fontSize: 12 }}>
+            <div style={{ padding: "4px 10px", color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
               No new notifications.
             </div>
           </div>
@@ -918,7 +744,7 @@ export function TopBar({
               borderRadius: "50%",
               background: open ? "var(--paper-3)" : "var(--paper-2)",
               border: "1px solid var(--paper-3)",
-              fontSize: 11,
+              fontSize: pxToRem(11),
               fontWeight: 600,
               display: "inline-flex",
               alignItems: "center",
@@ -931,7 +757,7 @@ export function TopBar({
       >
         {() => (
           <div style={{ minWidth: 160 }}>
-            <div style={{ padding: "8px 10px", fontWeight: 600, fontSize: 12 }}>
+            <div style={{ padding: "8px 10px", fontWeight: 600, fontSize: pxToRem(12) }}>
               {item.owner}
             </div>
           </div>
@@ -986,7 +812,7 @@ function CloseInvestigationButton({
             padding: "0 10px",
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             display: "inline-flex",
             alignItems: "center",
             gap: 4,
@@ -1010,7 +836,7 @@ function CloseInvestigationButton({
           >
             <span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
               <span>{pending === "pure" ? "Closing…" : "Close (leave open)"}</span>
-              <span style={{ fontSize: 10, color: "var(--text-paper-d2)" }}>
+              <span style={{ fontSize: pxToRem(10), color: "var(--text-paper-d2)" }}>
                 Tear down the session, keep status
               </span>
             </span>
@@ -1029,7 +855,7 @@ function CloseInvestigationButton({
             </PopoverItem>
           ))}
           {alreadyClosed && (
-            <div style={{ padding: "4px 10px", fontSize: 11, color: "var(--text-paper-d2)" }}>
+            <div style={{ padding: "4px 10px", fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
               Already {currentStatus}.
             </div>
           )}
@@ -1065,7 +891,7 @@ function IdChip({ resourceId }: { resourceId: string }) {
         border: "1px solid var(--paper-3)",
         background: "var(--paper-2)",
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
+        fontSize: pxToRem(11),
         color: "var(--text-paper)",
       }}
     >
@@ -1083,7 +909,7 @@ function MemberLine({ name }: { name: string }) {
         alignItems: "center",
         gap: 8,
         padding: "4px 10px",
-        fontSize: 12,
+        fontSize: pxToRem(12),
       }}
     >
       <span
@@ -1096,7 +922,7 @@ function MemberLine({ name }: { name: string }) {
           display: "inline-flex",
           alignItems: "center",
           justifyContent: "center",
-          fontSize: 10,
+          fontSize: pxToRem(10),
           fontWeight: 600,
         }}
       >
@@ -1123,11 +949,9 @@ const iconBtn: React.CSSProperties = {
 function ActivityBar({
   mode,
   onMode,
-  onSettings,
 }: {
   mode: ActivityMode;
   onMode: (m: ActivityMode) => void;
-  onSettings: () => void;
 }) {
   const items: {
     name: IconName;
@@ -1173,15 +997,6 @@ function ActivityBar({
           <Icon name={it.name} size={18} />
         </button>
       ))}
-      <span style={{ flex: 1 }} />
-      <button
-        type="button"
-        title="Settings"
-        onClick={onSettings}
-        style={{ width: 50, height: 44, color: "var(--text-paper-d)" }}
-      >
-        <Icon name="settings" size={18} />
-      </button>
     </div>
   );
 }
@@ -1280,7 +1095,7 @@ function HistorySidebar({
       </div>
       <div className="scrollable" style={{ flex: 1, overflowY: "auto" }}>
         {items.length === 0 && (
-          <div style={{ padding: "8px 14px", color: "var(--text-paper-d)", fontSize: 12 }}>
+          <div style={{ padding: "8px 14px", color: "var(--text-paper-d)", fontSize: pxToRem(12) }}>
             History is empty.
           </div>
         )}
@@ -1307,7 +1122,7 @@ function ReviewersSidebar({ item }: { item: AppItem }) {
       <div style={sidebarHeader}>
         <span className="caps">Reviewers</span>
       </div>
-      <div style={{ padding: 12, fontSize: 12, color: "var(--text-paper)" }}>
+      <div style={{ padding: 12, fontSize: pxToRem(12), color: "var(--text-paper)" }}>
         <div style={{ marginBottom: 4 }}>
           <strong>{item.owner}</strong>{" "}
           <span style={{ color: "var(--text-paper-d)" }}>(owner)</span>
@@ -1371,7 +1186,7 @@ function SidebarFrame({
           gridTemplateColumns: "auto 1fr",
           rowGap: 4,
           columnGap: 8,
-          fontSize: 11,
+          fontSize: pxToRem(11),
         }}
       >
         {/* Domain fields follow the App's statusbar layout + schema (#89 P7b),
@@ -1424,7 +1239,7 @@ function TreeRow({
         background: active ? "var(--accent-soft)" : "transparent",
         borderLeft: active ? "2px solid var(--accent)" : "2px solid transparent",
         color: active ? "var(--accent-h)" : "var(--text-paper)",
-        fontSize: 12,
+        fontSize: pxToRem(12),
       }}
     >
       <Icon name="file" size={13} color="var(--text-paper-d)" />
@@ -1438,7 +1253,7 @@ function TreeRow({
 function FootMeta({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <>
-      <span style={{ color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)", fontSize: 10 }}>
+      <span style={{ color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)", fontSize: pxToRem(10) }}>
         {label}
       </span>
       <span style={{ color: "var(--text-paper)" }}>{children}</span>
@@ -1840,7 +1655,7 @@ function TabContextMenu({
         width: "100%",
         textAlign: "left",
         padding: "5px 14px",
-        fontSize: 12,
+        fontSize: pxToRem(12),
         color: "var(--text-paper)",
         background: "transparent",
       }}
@@ -1891,7 +1706,7 @@ const crumbBar: React.CSSProperties = {
   alignItems: "center",
   padding: "0 12px",
   background: "var(--white)",
-  fontSize: 12,
+  fontSize: pxToRem(12),
   color: "var(--text-paper-d)",
   gap: 2,
 };
@@ -1967,7 +1782,7 @@ function CrumbSegment({
             background: open ? "var(--paper-2)" : "transparent",
             color: active ? "var(--text-paper)" : "var(--text-paper-d)",
             fontWeight: active ? 600 : 400,
-            fontSize: 12,
+            fontSize: pxToRem(12),
           }}
         >
           {label}
@@ -2008,7 +1823,7 @@ function DirBrowser({
             gap: 6,
             width: "100%",
             padding: "5px 10px",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             color: "var(--text-paper-d2)",
             background: "transparent",
           }}
@@ -2017,7 +1832,7 @@ function DirBrowser({
         </button>
       )}
       {entries.length === 0 && (
-        <div style={{ padding: "6px 10px", fontSize: 12, color: "var(--text-paper-d2)" }}>
+        <div style={{ padding: "6px 10px", fontSize: pxToRem(12), color: "var(--text-paper-d2)" }}>
           Empty
         </div>
       )}
@@ -2039,7 +1854,7 @@ function DirBrowser({
             gap: 8,
             width: "100%",
             padding: "5px 10px",
-            fontSize: 12,
+            fontSize: pxToRem(12),
             textAlign: "left",
             background: "transparent",
             color: "var(--text-paper)",
@@ -2162,7 +1977,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
               }}
             >
               <Icon name={t.pinned ? "pin" : "file"} size={12} />
-              <span style={{ fontSize: 12 }}>{basename(t.path)}</span>
+              <span style={{ fontSize: pxToRem(12) }}>{basename(t.path)}</span>
               <TabClose
                 path={t.path}
                 onClose={() => requestClose(gid, t.path)}
@@ -2196,7 +2011,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
               ...iconBtn,
               padding: "0 8px",
               width: "auto",
-              fontSize: 12,
+              fontSize: pxToRem(12),
               display: "inline-flex",
               gap: 4,
               color: editMode.isEditing(active) ? "var(--accent)" : "var(--text-paper-d)",
@@ -2230,7 +2045,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
               padding: "0 8px",
               width: "auto",
               color: "var(--accent)",
-              fontSize: 12,
+              fontSize: pxToRem(12),
               display: "inline-flex",
               gap: 4,
             }}
@@ -2269,7 +2084,7 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
       }}
     >
       {dirty && !hover ? (
-        <span aria-hidden style={{ fontSize: 12, lineHeight: 1, color: "var(--text-paper-d)" }}>
+        <span aria-hidden style={{ fontSize: pxToRem(12), lineHeight: 1, color: "var(--text-paper-d)" }}>
           ●
         </span>
       ) : (
@@ -2341,7 +2156,7 @@ function BottomPanel({
                 height: 32,
                 borderBottom: active ? "2px solid var(--accent)" : "2px solid transparent",
                 color: active ? "var(--text-paper)" : "var(--text-paper-d)",
-                fontSize: 12,
+                fontSize: pxToRem(12),
                 fontWeight: active ? 600 : 500,
                 marginBottom: -1,
               }}
@@ -2383,7 +2198,7 @@ function BottomPanel({
               overflow: "auto",
               padding: "8px 14px",
               fontFamily: "var(--font-mono)",
-              fontSize: 12,
+              fontSize: pxToRem(12),
               color: "var(--text-paper)",
             }}
           >
@@ -2450,7 +2265,7 @@ function PanelBody({
                   margin: 0,
                   whiteSpace: "pre-wrap",
                   color: "var(--text-paper)",
-                  fontSize: 12,
+                  fontSize: pxToRem(12),
                 }}
               >
                 {callBody(e.call)}
@@ -2490,16 +2305,16 @@ function PanelBody({
                   {exitGlyph(e.call)}
                 </span>
                 <span style={{ fontWeight: 600 }}>{e.call.name}</span>
-                <span style={{ color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)", fontSize: 12 }}>
+                <span style={{ color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)", fontSize: pxToRem(12) }}>
                   {argsLine(e.call.args)}
                 </span>
                 <span style={{ flex: 1 }} />
-                <span style={{ color: "var(--text-paper-d2)", fontSize: 11, fontFamily: "var(--font-mono)" }}>
+                <span style={{ color: "var(--text-paper-d2)", fontSize: pxToRem(11), fontFamily: "var(--font-mono)" }}>
                   {runMeta(e.call)}
                 </span>
               </summary>
               {e.call.parseError && (
-                <div style={{ color: "var(--warn)", fontSize: 12, marginLeft: 16 }}>
+                <div style={{ color: "var(--warn)", fontSize: pxToRem(12), marginLeft: 16 }}>
                   parse-error → {e.call.parseError}
                 </div>
               )}
@@ -2529,7 +2344,7 @@ function PanelBody({
             background: "var(--paper-2)",
             color: log.metrics.phase === "final" ? "var(--text-paper-d)" : "var(--accent)",
             fontFamily: "var(--font-mono)",
-            fontSize: 12,
+            fontSize: pxToRem(12),
           }}
         >
           {log.streaming && log.metrics.phase !== "final" ? "▸" : "✓"} {formatMetrics(log.metrics)}
@@ -2554,7 +2369,7 @@ function PanelBody({
               >
                 {running ? "tool ▸" : "tool ✓"}
               </span>
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 12 }}>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(12) }}>
                 {e.call.name}({argsLine(e.call.args)})
               </span>
             </>
@@ -2725,7 +2540,7 @@ const logPre: React.CSSProperties = {
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
   fontFamily: "var(--font-mono)",
-  fontSize: 12,
+  fontSize: pxToRem(12),
   color: "var(--text-paper)",
   background: "var(--paper-2)",
   padding: "6px 8px",
@@ -2779,7 +2594,7 @@ function StatusBar({
         gap: 16,
         padding: "0 12px",
         fontFamily: "var(--font-mono)",
-        fontSize: 11,
+        fontSize: pxToRem(11),
       }}
     >
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
@@ -2845,7 +2660,7 @@ function KernelStatusPill({
           border: "1px solid rgba(255,255,255,0.2)",
           color: "var(--text-dark)",
           fontFamily: "var(--font-mono)",
-          fontSize: 10,
+          fontSize: pxToRem(10),
           cursor: state === "restarting" ? "wait" : "pointer",
         }}
       >

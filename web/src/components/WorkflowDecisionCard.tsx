@@ -13,6 +13,7 @@ import { useState } from "react";
 import { useT } from "../lib/i18n";
 import type { PendingDecision } from "../api/workflows";
 import { Icon } from "./Icon";
+import { pxToRem } from "../lib/pxToRem";
 
 const ACTION_LABEL: Record<string, string> = {
   approve: "Approve",
@@ -63,7 +64,7 @@ export function WorkflowDecisionCard({
             borderRadius: 999,
             background: "var(--warn)",
             color: "#fff",
-            fontSize: 11,
+            fontSize: pxToRem(11),
             fontWeight: 600,
             textTransform: "uppercase",
             letterSpacing: ".04em",
@@ -84,7 +85,7 @@ export function WorkflowDecisionCard({
             background: "var(--paper-2)",
             borderRadius: 6,
             padding: 8,
-            fontSize: 12,
+            fontSize: pxToRem(12),
             whiteSpace: "pre-wrap",
             wordBreak: "break-word",
           }}
@@ -99,7 +100,7 @@ export function WorkflowDecisionCard({
           onChange={(e) => setNote(e.target.value)}
           placeholder="What should change?"
           rows={3}
-          style={{ width: "100%", fontFamily: "inherit", fontSize: 12 }}
+          style={{ width: "100%", fontFamily: "inherit", fontSize: pxToRem(12) }}
         />
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
