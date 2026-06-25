@@ -13,9 +13,19 @@ import { ItemChatShell } from "./ItemChatShell";
 
 // The active chat now renders the real RCA AgentPanel (model picker, kbApi, dialogs
 // …). Stub it so these tests stay focused on the multi-chat chrome (tab rail /
-// picker / workflow launch / Continue gate) — AgentPanel has its own tests.
+// picker / workflow launch / Continue gate) — AgentPanel has its own tests. The
+// stub forwards `onNewChat` (#200) so we can assert the escape hatch is threaded
+// into the chat header exactly when the shell bar is hidden.
 vi.mock("../pages/investigation/AgentPanel", () => ({
-  AgentPanel: () => <div data-testid="agent-panel-stub" />,
+  AgentPanel: ({ onNewChat }: { onNewChat?: () => void }) => (
+    <div data-testid="agent-panel-stub">
+      {onNewChat ? (
+        <button type="button" data-testid="header-new-chat" onClick={onNewChat}>
+          + New chat
+        </button>
+      ) : null}
+    </div>
+  ),
 }));
 
 afterEach(() => {
@@ -91,7 +101,10 @@ beforeEach(() => {
   stubCollectionsFile();
 });
 
-const render = () =>
+// Defaults mirror Topic Hub's manifest (always-on switcher + a collection set),
+// so the pre-#200 tests keep seeing the full chrome. #200 tests override these to
+// the single-chat-leaning shape (chatSwitcher="auto", showCollections=false).
+const render = (over: { chatSwitcher?: "auto" | "always"; showCollections?: boolean } = {}) =>
   renderWithQuery(
     <ItemChatShell
       slug="topic-hub"
@@ -102,8 +115,16 @@ const render = () =>
       appTitle="Topic Hub"
       attachedPreset=""
       onAttachPreset={() => {}}
+      chatSwitcher={over.chatSwitcher ?? "always"}
+      showCollections={over.showCollections ?? true}
     />,
   );
+
+// A profile with no workflows — the RCA-shaped case where the only reason to show
+// the shell bar would be the switcher or collections.
+const NO_WORKFLOW_PROFILES: ProfileDTO[] = [
+  { name: "default", title: "Default", description: "", has_workflow: false, workflow: null, workflows: [] },
+];
 
 describe("ItemChatShell", () => {
   it("renders the chat switcher and a single New picker listing the profile's workflows", async () => {
@@ -195,6 +216,57 @@ describe("ItemChatShell", () => {
     await waitFor(() =>
       expect(del).toHaveBeenCalledWith("topic-hub", "it", "conversation:c2"),
     );
+  });
+
+  it("hides the whole bar for a single-chat-leaning App (auto, 1 chat, no collections, no workflows) and threads the escape hatch into the chat header (#200)", async () => {
+    vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(NO_WORKFLOW_PROFILES);
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    render({ chatSwitcher: "auto", showCollections: false });
+    await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
+    // No multi-chat chrome: switcher, "+ New" picker and collections are all absent.
+    expect(screen.queryByTestId("chat-switcher-trigger")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("new-item-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("collections-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("item-chat-shell__bar")).not.toBeInTheDocument();
+    // The lone escape hatch is threaded into the chat header instead.
+    expect(screen.getByTestId("header-new-chat")).toBeInTheDocument();
+  });
+
+  it("creates a fresh chat from the header escape hatch when the bar is hidden (#200)", async () => {
+    vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(NO_WORKFLOW_PROFILES);
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    const create = vi
+      .spyOn(itemChatApi, "createChat")
+      .mockResolvedValue(summary({ chat_id: "conversation:c2", is_default: false }));
+    render({ chatSwitcher: "auto", showCollections: false });
+    fireEvent.click(await screen.findByTestId("header-new-chat"));
+    await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
+  });
+
+  it("surfaces the switcher and drops the header escape hatch once a second chat exists in auto mode (#200)", async () => {
+    vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(NO_WORKFLOW_PROFILES);
+    stubChatApi([
+      summary({ chat_id: "conversation:c1", is_default: true }),
+      summary({ chat_id: "conversation:c2", title: "Side", is_default: false }),
+    ]);
+    render({ chatSwitcher: "auto", showCollections: false });
+    // Two chats → the bar appears with the switcher, so the user can hop back to
+    // the wedged chat or stay on the fresh one; the header hatch is now redundant.
+    await waitFor(() => expect(screen.getByTestId("chat-switcher-trigger")).toBeInTheDocument());
+    expect(screen.getByTestId("item-chat-shell__bar")).toBeInTheDocument();
+    expect(screen.queryByTestId("header-new-chat")).not.toBeInTheDocument();
+  });
+
+  it("shows the bar for an App with workflows but keeps the switcher hidden in auto mode with one chat (#200)", async () => {
+    // PROFILES (beforeEach) carries workflows → the bar must show its New picker,
+    // but with a single chat and `auto` the switcher and header hatch stay away.
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    render({ chatSwitcher: "auto", showCollections: false });
+    await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
+    expect(screen.getByTestId("item-chat-shell__bar")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-switcher-trigger")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("collections-button")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("header-new-chat")).not.toBeInTheDocument();
   });
 
   it("shows a Continue affordance on a paused workflow chat and decides on click", async () => {
