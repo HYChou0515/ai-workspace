@@ -72,3 +72,52 @@ def judge_cell(judge: ILlm, *, prompt: str, expected: str, output: str) -> tuple
         _LOGGER.warning("sanity judge raised", exc_info=True)
         return "", ""
     return _parse(reply)
+
+
+# Verdict prompt: the judge reads a digest of ALL a model's cells → fitness call.
+_VERDICT_PROMPT = """你是模型評估專家。以下是模型「{model}」在一系列能力測試的結果摘要,
+每列為「題組 | effort | 機械評分 | AI評分 | 回答節錄」。
+
+請綜合給出整體適配度評估:
+- score:0–100 的整體分數(越高越適合擔任系統角色)。
+- summary:簡短 markdown(用 - 列點),說明這個模型適合/不適合哪些角色(例如 KB 問答、
+  JSON 格式輸出、推理、中文處理、安全),弱點在哪。
+
+只輸出一行 JSON,不要其他文字:{{"score": <0-100 整數>, "summary": "<markdown>"}}
+
+結果摘要:
+{digest}"""
+
+
+def _parse_verdict(text: str) -> tuple[int, str]:
+    """Extract ``(score, summary)`` from a verdict reply. Score clamps to 0–100;
+    summary falls back to the raw reply. ``("", 0)``-equivalent is never returned —
+    an empty summary signals 'nothing usable' to the caller."""
+    score, summary = 0, ""
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m is not None:
+        try:
+            obj = json.loads(m.group(0))
+        except (ValueError, TypeError):
+            obj = None
+        if isinstance(obj, dict):
+            try:
+                score = int(obj.get("score", 0))
+            except (ValueError, TypeError):
+                score = 0
+            summary = str(obj.get("summary", "")).strip()
+    score = max(0, min(100, score))
+    if not summary:
+        summary = text.strip()[:500]
+    return score, summary
+
+
+def judge_verdict(judge: ILlm, *, model: str, digest: str) -> tuple[int, str]:
+    """Ask ``judge`` for a model's overall fitness verdict → ``(score, summary)``.
+    Streams; never raises — a failure returns ``(0, "")`` (empty summary = skip)."""
+    try:
+        reply = judge.collect(_VERDICT_PROMPT.format(model=model, digest=digest))
+    except Exception:  # noqa: BLE001 — a judge crash must not fail the run
+        _LOGGER.warning("sanity verdict judge raised", exc_info=True)
+        return 0, ""
+    return _parse_verdict(reply)

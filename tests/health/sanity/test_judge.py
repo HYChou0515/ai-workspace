@@ -7,7 +7,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from workspace_app.health.sanity.judge import judge_cell
+from workspace_app.health.sanity.judge import judge_cell, judge_verdict
 from workspace_app.kb.llm import ILlm
 
 
@@ -73,3 +73,41 @@ def test_judge_crash_is_swallowed():
 @pytest.mark.parametrize("reply", ["", "   "])
 def test_blank_reply_is_empty_verdict(reply: str):
     assert _judge(reply) == ("", "")
+
+
+# ── verdict parse ──────────────────────────────────────────────────────────
+def _verdict(reply: str, **kw) -> tuple[int, str]:
+    return judge_verdict(_StubJudge(reply, **kw), model="m", digest="d")
+
+
+def test_verdict_clean_json():
+    assert _verdict('{"score": 82, "summary": "- KB OK"}') == (82, "- KB OK")
+
+
+def test_verdict_score_clamped_to_0_100():
+    assert _verdict('{"score": 250, "summary": "s"}')[0] == 100
+    assert _verdict('{"score": -7, "summary": "s"}')[0] == 0
+
+
+def test_verdict_non_int_score_defaults_zero():
+    assert _verdict('{"score": "高", "summary": "s"}') == (0, "s")
+
+
+def test_verdict_invalid_json_falls_back_to_raw_summary():
+    score, summary = _verdict("just prose, no json")
+    assert score == 0 and summary == "just prose, no json"
+
+
+def test_verdict_braces_but_invalid_json():
+    score, summary = _verdict("{not json}")
+    assert score == 0 and summary == "{not json}"
+
+
+def test_verdict_empty_summary_falls_back_to_truncated_reply():
+    long = "y" * 600
+    score, summary = _verdict('{"score": 40, "summary": ""}' + long)
+    assert score == 40 and len(summary) == 500
+
+
+def test_verdict_judge_crash_is_swallowed():
+    assert _verdict("anything", boom=True) == (0, "")

@@ -284,6 +284,14 @@ class SanityRunStartedOut(BaseModel):
     queued: bool
 
 
+class SanityVerdictOut(BaseModel):
+    """#231: one model's overall fitness verdict (the FE renders a card each)."""
+
+    model: str
+    score: int  # 0–100
+    summary: str  # markdown, per-role fitness bullets
+
+
 def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordinator: Any) -> None:
     """The model-sanity matrix API: GET the question/level/model metadata (the FE
     draws the empty grid), POST a run (cell or auto battery). Cell results
@@ -344,3 +352,10 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
         else:
             coordinator.run_battery(body.model)
         return SanityRunStartedOut(queued=True)
+
+    @app.get("/sanity/verdicts")
+    async def get_sanity_verdicts() -> list[SanityVerdictOut]:
+        return [
+            SanityVerdictOut(model=v.model, score=v.score, summary=v.summary)
+            for v in coordinator.list_verdicts()
+        ]

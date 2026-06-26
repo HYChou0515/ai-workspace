@@ -18,9 +18,9 @@ from specstar import QB, Schema, SpecStar
 from specstar.types import TaskStatus
 
 from ...kb.llm import ILlm
-from ...resources import SanityResult, sanity_result_id
+from ...resources import SanityResult, SanityVerdict, sanity_result_id, sanity_verdict_id
 from .jobs import SanityRun, SanityRunPayload
-from .judge import judge_cell
+from .judge import judge_cell, judge_verdict
 from .questions import (
     SanityQuestion,
     auto_run_cells,
@@ -54,6 +54,7 @@ class SanityBatteryCoordinator:
         # stay empty). When wired, every cell is judged after it runs.
         self._judge = judge
         self._result_rm = spec.get_resource_manager(SanityResult)
+        self._verdict_rm = spec.get_resource_manager(SanityVerdict)
         if message_queue_factory is None:
             from specstar.message_queue import SimpleMessageQueueFactory
 
@@ -95,6 +96,47 @@ class SanityBatteryCoordinator:
             for r in self._result_rm.list_resources((QB["model"] == model).build())
             if isinstance(r.data, SanityResult)
         ]
+
+    # ── per-model fitness verdict (#231) ─────────────────────────────
+    def list_verdicts(self) -> list[SanityVerdict]:
+        """Every model's stored fitness verdict (the FE renders one card each)."""
+        return [
+            r.data
+            for r in self._verdict_rm.list_resources(QB.all().build())
+            if isinstance(r.data, SanityVerdict)
+        ]
+
+    def generate_verdict(self, model: str) -> None:
+        """Judge reads ALL of ``model``'s cells and upserts its fitness verdict
+        (score + summary). No judge / no cells / unusable reply ⇒ no-op."""
+        if self._judge is None:
+            return
+        cells = self.list_results(model)
+        if not cells:
+            return
+        score, summary = judge_verdict(self._judge, model=model, digest=self._verdict_digest(cells))
+        if not summary:
+            return  # the judge produced nothing usable — don't write a misleading verdict
+        verdict = SanityVerdict(model=model, score=score, summary=summary)
+        rid = sanity_verdict_id(model)
+        if self._verdict_rm.exists(rid):
+            self._verdict_rm.update(rid, verdict)
+        else:
+            self._verdict_rm.create(verdict, resource_id=rid)
+
+    @staticmethod
+    def _verdict_digest(cells: list[SanityResult]) -> str:
+        """A compact, judge-readable digest of one model's cells — one line per
+        cell: 題組 | effort | 機械評分 | AI評分 | 回答節錄."""
+        lines: list[str] = []
+        for c in cells:
+            q = find_question(c.question_key)
+            cat = q.category if q is not None else "?"
+            snippet = (c.output or c.error).replace("\n", " ")[:160]
+            lines.append(
+                f"[{cat}] {c.level} | 機械:{c.grade or '-'} | AI:{c.ai_grade or '-'} | {snippet}"
+            )
+        return "\n".join(lines)
 
     # ── consume (handler — runs on the consumer thread) ──────────────
     def _handle(self, job) -> None:  # job: Resource[SanityRun]

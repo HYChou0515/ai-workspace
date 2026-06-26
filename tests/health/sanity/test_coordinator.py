@@ -60,6 +60,9 @@ class _FakeJudge(ILlm):
         self.calls: list[str] = []
         self._text = text
 
+    def set_reply(self, text: str) -> None:
+        self._text = text
+
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         self.calls.append(prompt)
         yield self._text, False
@@ -274,6 +277,70 @@ async def test_judge_parse_is_lenient_and_swallows_errors():
     await coord2.aclose()  # must not raise
     r2 = _result(spec2, _MODEL, q, "none")
     assert r2.ai_grade == "" and r2.output == "台北"  # cell survives a judge crash
+
+
+async def test_generate_verdict_writes_per_model_score_and_summary():
+    """#231 P3: after a model's cells run, the judge reads them all and writes a
+    per-model fitness verdict (0–100 + markdown summary)."""
+    from workspace_app.resources import SanityVerdict, sanity_verdict_id
+
+    spec = make_spec(default_user="u")
+    judge = _FakeJudge('{"score": 82, "summary": "- KB 問答 OK\\n- JSON 格式強"}')
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="台北市"), judge=judge)
+    q = QUESTIONS[0]
+    coord.run_cell(_MODEL, question_key(q), "none")
+    coord.wait_idle()
+    coord.generate_verdict(_MODEL)
+    await coord.aclose()
+
+    rm = spec.get_resource_manager(SanityVerdict)
+    v = rm.get(sanity_verdict_id(_MODEL)).data
+    assert isinstance(v, SanityVerdict)
+    assert v.model == _MODEL and v.score == 82 and "JSON" in v.summary
+    # the verdict judge saw a digest of the model's cells (the output appears)
+    assert any("台北市" in call for call in judge.calls)
+
+    # re-generating overwrites the same verdict row (current-only)
+    judge.set_reply('{"score": 50, "summary": "退步了"}')
+    coord.generate_verdict(_MODEL)
+    await coord.aclose()
+    v2 = rm.get(sanity_verdict_id(_MODEL)).data
+    assert isinstance(v2, SanityVerdict) and v2.score == 50
+    assert rm.count_resources(QB.all().build()) == 1
+
+
+async def test_generate_verdict_is_noop_without_judge_or_cells():
+    """No judge ⇒ nothing written; a model with no cells ⇒ nothing to judge."""
+    from workspace_app.resources import SanityVerdict
+
+    spec = make_spec(default_user="u")
+    no_judge = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="x"))
+    no_judge.run_cell(_MODEL, question_key(QUESTIONS[0]), "none")
+    no_judge.wait_idle()
+    no_judge.generate_verdict(_MODEL)  # judge is None → skip
+    await no_judge.aclose()
+    assert spec.get_resource_manager(SanityVerdict).count_resources(QB.all().build()) == 0
+
+    spec2 = make_spec(default_user="u")
+    with_judge = SanityBatteryCoordinator(spec2, _FakeLlmFactory(), judge=_FakeJudge())
+    with_judge.generate_verdict("never-run-model")  # no cells → skip
+    await with_judge.aclose()
+    assert spec2.get_resource_manager(SanityVerdict).count_resources(QB.all().build()) == 0
+
+
+async def test_generate_verdict_skips_when_judge_returns_nothing():
+    """A judge that yields an unusable (empty) verdict must not write a misleading
+    score — the cell ran, but no verdict row appears."""
+    from workspace_app.resources import SanityVerdict
+
+    spec = make_spec(default_user="u")
+    judge = _FakeJudge("")  # empty reply → judge_verdict returns (0, "")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="台北"), judge=judge)
+    coord.run_cell(_MODEL, question_key(QUESTIONS[0]), "none")
+    coord.wait_idle()
+    coord.generate_verdict(_MODEL)
+    await coord.aclose()
+    assert spec.get_resource_manager(SanityVerdict).count_resources(QB.all().build()) == 0
 
 
 async def test_rerun_overwrites_the_same_cell():

@@ -148,6 +148,23 @@ def test_judge_wired_through_create_app_fills_ai_columns():
         assert row["ai_grade"] == "pass" and row["ai_note"] == "符合期望"
 
 
+def test_get_verdicts_lists_per_model_cards():
+    """#231 P3: GET /sanity/verdicts returns one fitness card per judged model."""
+    from workspace_app.resources import SanityVerdict, sanity_verdict_id
+
+    app, spec = _app_and_spec(judge=_JudgeLlm())
+    rm = spec.get_resource_manager(SanityVerdict)
+    rm.create(
+        SanityVerdict(model=_MODEL, score=77, summary="- KB 問答 OK\n- JSON 強"),
+        resource_id=sanity_verdict_id(_MODEL),
+    )
+    with TestClient(app) as client:
+        cards = client.get("/sanity/verdicts").json()
+        assert any(
+            c["model"] == _MODEL and c["score"] == 77 and "JSON" in c["summary"] for c in cards
+        )
+
+
 def test_post_run_battery_fills_multiple_cells():
     app, spec = _app_and_spec()
     with TestClient(app) as client:
