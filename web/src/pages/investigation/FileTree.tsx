@@ -112,15 +112,19 @@ export function FileTree({
     const existing = new Set(files.map((f) => f.path));
     let firstPath: string | null = null;
     for (const f of Array.from(fileList)) {
-      if (f.size > 8 * 1024 * 1024) {
-        alert(`${f.name} is over the 8 MB cap — skipped.`);
-        continue;
-      }
+      // #219: no client-side size cap — the upload streams to a blob store, so
+      // big files are fine. The server enforces its own single-file limit and
+      // rejects an over-size upload (handled below).
       // Preserve folder structure when a directory was picked.
       const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
       const path = `${targetDir}/${rel}`.replace(/\/+/g, "/");
       if (existing.has(path) && !confirm(`${path} exists. Overwrite?`)) continue;
-      await svc.writeFile(path, f);
+      try {
+        await svc.writeFile(path, f);
+      } catch {
+        alert(`${f.name} could not be uploaded — it may exceed the size limit.`);
+        continue;
+      }
       firstPath ??= path;
     }
     refresh();

@@ -100,6 +100,49 @@ def test_compose_prompt_joins_present_sections_and_skips_empty():
     assert "- `report-format`: how to lay out the report" in full
 
 
+# ─── #241 shared workspace preamble ─────────────────────────────────
+def test_compose_prompt_inserts_preamble_after_base():
+    """#241: the shared workspace preamble sits between the App's identity
+    (base) and the profile appendix. An empty preamble (a non-workspace App)
+    is omitted entirely."""
+    from workspace_app.apps.catalog import _compose_prompt
+
+    assert _compose_prompt("BASE", "APPENDIX", [], preamble="PRE") == "BASE\n\nPRE\n\nAPPENDIX"
+    assert _compose_prompt("BASE", "", [], preamble="") == "BASE"
+
+
+def test_resolved_workspace_prompt_carries_base_preamble():
+    """#241: a workspace App's resolved prompt teaches workspace awareness +
+    guardrails — prefer function tools over the shell (`list_files` / `read_image`,
+    not `exec`-ed shell), orient before answering, and stay in scope."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    assert "## Working in this workspace" in cfg.system_prompt
+    assert "list_files" in cfg.system_prompt
+    assert "read_image" in cfg.system_prompt
+    assert "scope" in cfg.system_prompt.lower()
+
+
+def test_rca_prompt_no_longer_endorses_exec_cat():
+    """#241: with the hard tool-over-shell rule in the preamble, the RCA prompt
+    must not still advertise `exec` as the way to `cat` a file — reading goes
+    through `read_file`. (The preamble's negative `exec(["cat"…])` example may
+    mention cat; this targets the old positive endorsement string.)"""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    assert "`git`, `cat`" not in cfg.system_prompt
+
+
+def test_kb_chat_prompt_has_no_workspace_preamble():
+    """#241: the KB chat agent has no workspace/sandbox — it must NOT inherit the
+    workspace preamble (it goes through the preset pipeline, not AppCatalog)."""
+    from workspace_app.kb.prompts import load_kb_system_prompt
+
+    assert "## Working in this workspace" not in load_kb_system_prompt()
+
+
 # ─── function ↔ tools coherence (startup hard error) ────────────────
 def _manifest(
     *, tools, workspace=True, sandbox=True, terminal=True, primary_surface="chat"

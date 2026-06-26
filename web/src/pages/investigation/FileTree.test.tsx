@@ -219,4 +219,27 @@ describe("<FileTree /> upload target", () => {
     await waitFor(() => expect(writeFile).toHaveBeenCalled());
     expect(writeFile.mock.calls[0]![0]).toBe("/up.md");
   });
+
+  it("uploads a file larger than the old 8 MB cap (no client-side skip) (#219)", async () => {
+    const writeFile = vi.fn(async (_path: string, _body: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
+    const big = new File([new Uint8Array(9 * 1024 * 1024)], "big.bin");
+    fireEvent.change(filesInput(), { target: { files: [big] } });
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toBe("/big.bin");
+  });
+
+  it("alerts and keeps going when the server rejects an upload (#219)", async () => {
+    const alertSpy = vi.fn();
+    vi.stubGlobal("alert", alertSpy);
+    const writeFile = vi.fn(async () => {
+      throw new Error("413");
+    });
+    renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
+    const file = new File(["x"], "up.md", { type: "text/markdown" });
+    fireEvent.change(filesInput(), { target: { files: [file] } });
+    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    expect(alertSpy.mock.calls[0]![0]).toMatch(/size limit/i);
+    vi.unstubAllGlobals();
+  });
 });

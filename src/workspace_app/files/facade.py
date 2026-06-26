@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 
 from ..filestore.protocol import FileNotFound, FileStore
 from ..sandbox.protocol import Sandbox, SandboxHandle
@@ -75,6 +76,37 @@ class WorkspaceFiles:
             await sb.upload(h, data, path)
         else:
             await self._fs.write(workspace_id, path, data)
+
+    async def write_from_path(
+        self, workspace_id: str, path: str, source: Path, content_type: str | None = None
+    ) -> None:
+        """Like `write`, but the content is a staged on-disk file `source` that
+        is streamed into its destination — so a big upload never sits whole in
+        RAM (issue #219). Warm ⇒ stream straight into the live sandbox (the
+        snapshot catches up on the next mirror, exactly like any warm write);
+        cold ⇒ stream into the FileStore blob."""
+        path = _norm(path)
+        warm = self._warm(workspace_id)
+        if warm is not None:
+            sb, h = warm
+            await sb.upload_file(h, source, path)
+        else:
+            await self._fs.write_from_path(workspace_id, path, source, content_type)
+
+    async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
+        """Like `read`, but stream the bytes out to the on-disk `dest` — RAM-free
+        for big files (issue #219). Routes warm→sandbox / cold→snapshot like
+        `read`; a missing file maps to `FileNotFound`."""
+        path = _norm(path)
+        warm = self._warm(workspace_id)
+        if warm is not None:
+            sb, h = warm
+            try:
+                await sb.download_to_file(h, path, dest)
+            except FileNotFoundError as exc:
+                raise FileNotFound(path) from exc
+        else:
+            await self._fs.read_to_file(workspace_id, path, dest)
 
     async def exists(self, workspace_id: str, path: str) -> bool:
         path = _norm(path)

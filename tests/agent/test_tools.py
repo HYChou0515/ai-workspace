@@ -7,7 +7,7 @@ from workspace_app.agent import (
     edit_file_impl,
     exec_impl,
     exists_impl,
-    ls_impl,
+    list_files_impl,
     read_file_impl,
     write_file_impl,
 )
@@ -164,10 +164,10 @@ async def test_no_drift_between_file_tools_and_exec():
     assert await fs.exists("inv-1", "/y.txt") is False
     assert await read_file_impl(ctx, "/y.txt") == "world"
 
-    # (c) THE fix: a file the shell created in the sandbox is visible to read_file/ls
+    # (c) THE fix: a file the shell created in the sandbox is visible to read_file/list_files
     await sandbox.upload(handle["inv-1"], b"from-shell", "/z.txt")  # simulate exec output
     assert await read_file_impl(ctx, "/z.txt") == "from-shell"
-    assert "/z.txt" in await ls_impl(ctx)
+    assert "/z.txt" in await list_files_impl(ctx)
 
 
 async def test_exec_returns_formatted_output(ctx: RunContextWrapper[AgentToolContext]):
@@ -210,15 +210,15 @@ async def test_file_ops_do_not_create_sandbox(
 ):
     await write_file_impl(ctx, "/x", "x")
     await read_file_impl(ctx, "/x")
-    await ls_impl(ctx)
+    await list_files_impl(ctx)
     await exists_impl(ctx, "/x")
     assert ctx.context.handle is None
 
 
-async def test_ls_after_writes(ctx: RunContextWrapper[AgentToolContext]):
+async def test_list_files_after_writes(ctx: RunContextWrapper[AgentToolContext]):
     await write_file_impl(ctx, "/a", "1")
     await write_file_impl(ctx, "/b", "2")
-    assert sorted(await ls_impl(ctx)) == ["/a", "/b"]
+    assert sorted(await list_files_impl(ctx)) == ["/a", "/b"]
 
 
 async def test_exists_returns_bool(ctx: RunContextWrapper[AgentToolContext]):
@@ -262,7 +262,7 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "read_file",
         "write_file",
         "edit_file",
-        "ls",
+        "list_files",
         "exists",
         "delete_file",
         "ask_knowledge_base",
@@ -276,6 +276,14 @@ def test_build_tools_returns_the_workspace_set_by_default():
 def test_build_tools_filters_by_allowed_list():
     tools = build_tools(allowed=["exec", "read_file"])
     assert {t.name for t in tools} == {"exec", "read_file"}
+
+
+def test_build_tools_normalizes_legacy_ls_name():
+    """A stored allowed_tools list written before the ls→list_files rename (#241)
+    still provisions the tool — the legacy name is normalised to the current
+    name, not silently dropped. The old name is NOT a callable alias."""
+    names = {t.name for t in build_tools(allowed=["ls", "read_file"])}
+    assert names == {"list_files", "read_file"}
 
 
 def test_kb_search_logs_underlying_exception_before_reraising(caplog):

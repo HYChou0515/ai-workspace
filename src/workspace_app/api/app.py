@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import re
+import tempfile
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
@@ -266,6 +268,33 @@ def _is_readonly_path(path: str) -> bool:
     return _READONLY_DIR in path.strip("/").split("/")
 
 
+async def _stream_upload_to_store(
+    workspace_id: str,
+    path: str,
+    request: Request,
+    files: WorkspaceFiles,
+    max_file_size: int,
+) -> None:
+    """Stream the request body to a staging file on disk, enforcing the
+    single-file cap as bytes arrive, then hand the file to the store (#219).
+    The staging file means a multi-GB upload never sits whole in RAM; the cap is
+    checked mid-stream so an over-size upload is rejected without buffering it
+    all. ``max_file_size`` of 0 disables the cap."""
+    fd, name = tempfile.mkstemp(prefix="ws-upload-")
+    tmp = Path(name)
+    try:
+        size = 0
+        with os.fdopen(fd, "wb") as f:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if max_file_size and size > max_file_size:
+                    raise HTTPException(status_code=413, detail="file exceeds the size limit")
+                f.write(chunk)
+        await files.write_from_path(workspace_id, path, tmp, request.headers.get("content-type"))
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 class _CreateChatBody(BaseModel):
     # #topic-hub P7 (manual §3): open a new FREE chat in an item. Title is optional;
     # a workflow chat is opened by the run endpoint (P8), not here.
@@ -515,6 +544,10 @@ def create_app(
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
     exec_output_max_chars: int = 30_000,
+    # #219: single-file upload cap in bytes (0 ⇒ no cap). Streaming keeps RAM
+    # flat, so this guards disk + sandbox-wake cost. Threaded from
+    # settings.filestore.max_file_size; per-workspace total quota is #245.
+    max_file_size: int = 2 * 1024 * 1024 * 1024,
     # Step budgets for the wiki agents (#50) — far higher than a chat reply's
     # ~10 turns; a maintenance pass writes several pages, the reader navigates.
     wiki_maintainer_max_turns: int = 40,
@@ -2468,12 +2501,14 @@ def create_app(
     )
     async def write_file(slug: str, item_id: str, path: str, request: Request) -> Response:
         investigation_id = _require_item(slug, item_id)
-        body = await request.body()
         norm = "/" + path.lstrip("/")
         if _is_readonly_path(norm):
             # #205: the `.readonly/` snapshot the human diffs against is not hand-editable.
             raise HTTPException(status_code=403, detail="this file is read-only")
-        await files.write(investigation_id, norm, body)
+        # #219: stream the body to a staging file (never the whole upload in RAM),
+        # enforcing the single-file cap as bytes arrive, then stream it into the
+        # store. `files.write_from_path` routes warm→sandbox / cold→blob.
+        await _stream_upload_to_store(investigation_id, norm, request, files, max_file_size)
         activity.record(
             "file_written",
             f"Wrote {norm}",

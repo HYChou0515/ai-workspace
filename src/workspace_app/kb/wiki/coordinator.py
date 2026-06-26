@@ -66,14 +66,14 @@ _LOGGER = logging.getLogger(__name__)
 
 # Coarse activity for the live build UI, derived from the maintainer's CURRENT
 # tool call — honest (it reflects what the agent is actually doing), not a
-# fabricated checklist. read_* = ingesting the source; search/ls/read_file =
-# locating affected pages; write/edit = writing pages.
+# fabricated checklist. read_* = ingesting the source; search/list_files/read_file
+# = locating affected pages; write/edit = writing pages.
 _PHASE_BY_TOOL = {
     "read_new_source": "reading",
     "read_source": "reading",
     "list_sources": "reading",
     "search_wiki": "identifying",
-    "ls": "identifying",
+    "list_files": "identifying",
     "read_file": "identifying",
     "write_file": "writing",
     "edit_file": "writing",

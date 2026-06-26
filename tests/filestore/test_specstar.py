@@ -1,8 +1,23 @@
 import pytest
+from specstar import BackendBinding, BackendConfig, ConnectionProfile
 
 from workspace_app.filestore.protocol import FileNotFound
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
+
+
+@pytest.fixture
+def disk_store(tmp_path) -> SpecstarFileStore:
+    """A specstar filestore on a real on-disk blob store — so the streaming
+    blob paths (DiskBlobStore upload-session + get_stream) are exercised, unlike
+    the in-memory backend the `store` fixture uses."""
+    backend = BackendConfig(
+        connections={"local": ConnectionProfile(type="disk", options={"rootdir": str(tmp_path)})},
+        meta=BackendBinding(use="local"),
+        resource=BackendBinding(use="local"),
+        blob=BackendBinding(use="local"),
+    )
+    return SpecstarFileStore(make_spec(default_user="u", backend=backend))
 
 
 async def test_second_instance_on_the_same_store_sees_the_files():
@@ -156,3 +171,54 @@ async def test_rmdir_missing_dir_in_existing_workspace_raises(store: SpecstarFil
     await store.write("ws1", "/a.txt", b"x")  # creates the workspace record
     with pytest.raises(FileNotFound):
         await store.rmdir("ws1", "/nope")
+
+
+# --- streaming write from a temp file (issue #219, no whole-file-in-RAM) ---
+
+
+async def test_write_from_path_stores_content_and_ancestor_dirs(store, tmp_path):
+    payload = b"streamed-content-larger-than-one-chunk" * 100
+    src = tmp_path / "big.bin"
+    src.write_bytes(payload)
+    await store.write_from_path("ws1", "/data/big.bin", src, "application/octet-stream")
+    assert await store.read("ws1", "/data/big.bin") == payload
+    assert await store.is_dir("ws1", "/data")
+
+
+async def test_write_from_path_overwrites_existing(store, tmp_path):
+    await store.write("ws1", "/x", b"old")
+    src = tmp_path / "new.bin"
+    src.write_bytes(b"new-streamed")
+    await store.write_from_path("ws1", "/x", src, None)
+    assert await store.read("ws1", "/x") == b"new-streamed"
+
+
+async def test_write_from_path_empty_file(store, tmp_path):
+    src = tmp_path / "empty.bin"
+    src.write_bytes(b"")
+    await store.write_from_path("ws1", "/empty", src, None)
+    assert await store.read("ws1", "/empty") == b""
+
+
+async def test_read_to_file_streams_content_out(store, tmp_path):
+    await store.write("ws1", "/a.bin", b"content-out" * 50)
+    dest = tmp_path / "out.bin"
+    await store.read_to_file("ws1", "/a.bin", dest)
+    assert dest.read_bytes() == b"content-out" * 50
+
+
+async def test_read_to_file_missing_raises(store, tmp_path):
+    with pytest.raises(FileNotFound):
+        await store.read_to_file("ws1", "/nope", tmp_path / "out.bin")
+
+
+async def test_disk_backend_streams_write_and_read(disk_store, tmp_path):
+    # Exercises DiskBlobStore: write_from_path's upload-session AND
+    # read_to_file's get_stream chunk loop (both no-ops on the memory backend).
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"disk-streamed-payload" * 1000)
+    await disk_store.write_from_path("ws1", "/big.bin", src, "application/octet-stream")
+    assert await disk_store.read("ws1", "/big.bin") == b"disk-streamed-payload" * 1000
+    out = tmp_path / "out.bin"
+    await disk_store.read_to_file("ws1", "/big.bin", out)
+    assert out.read_bytes() == b"disk-streamed-payload" * 1000

@@ -31,6 +31,20 @@ async def test_write_then_read_roundtrips():
     assert await store.read(cid, "/index.md") == b"# Index\n"
 
 
+async def test_write_from_path_and_read_to_file_roundtrip(tmp_path):
+    # #219: the FileStore streaming contract — wiki pages are small, so these
+    # delegate to read/write, but the round-trip must hold.
+    spec, cid = _spec_with_collection()
+    store = WikiFileStore(spec)
+    src = tmp_path / "src.md"
+    src.write_bytes(b"# Streamed\n")
+    await store.write_from_path(cid, "/index.md", src, "text/markdown")
+    assert await store.read(cid, "/index.md") == b"# Streamed\n"
+    dest = tmp_path / "out.md"
+    await store.read_to_file(cid, "/index.md", dest)
+    assert dest.read_bytes() == b"# Streamed\n"
+
+
 async def test_read_missing_raises_file_not_found():
     spec, cid = _spec_with_collection()
     store = WikiFileStore(spec)

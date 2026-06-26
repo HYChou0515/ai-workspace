@@ -156,7 +156,7 @@ def test_build_tools_keeps_default_workspace_tools(isolated_apps: Path):
 
     _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
     names = {t.name for t in build_tools(app_slug="rca", profile="local-lab")}
-    assert {"exec", "read_file", "write_file", "ls"} <= names
+    assert {"exec", "read_file", "write_file", "list_files"} <= names
 
 
 # ─── AgentToolContext fields exist ────────────────────────────────────

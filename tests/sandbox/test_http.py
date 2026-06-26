@@ -62,6 +62,17 @@ async def test_upload_download_roundtrip(http_sandbox: HttpSandbox):
     assert await http_sandbox.download(h, "/data/x.bin") == b"hello \x00 world"
 
 
+async def test_upload_file_download_to_file_roundtrip(http_sandbox: HttpSandbox, tmp_path):
+    h = await http_sandbox.create(SandboxSpec())
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"staged \x00 bytes")
+    await http_sandbox.upload_file(h, src, "/data/x.bin")
+    assert await http_sandbox.download(h, "/data/x.bin") == b"staged \x00 bytes"
+    out = tmp_path / "out.bin"
+    await http_sandbox.download_to_file(h, "/data/x.bin", out)
+    assert out.read_bytes() == b"staged \x00 bytes"
+
+
 async def test_download_missing_raises_file_not_found(http_sandbox: HttpSandbox):
     h = await http_sandbox.create(SandboxSpec())
     with pytest.raises(FileNotFoundError):

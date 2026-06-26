@@ -4,7 +4,34 @@ right-click menu (Delete / Rename / Move).
 
 from __future__ import annotations
 
-from .conftest import Harness
+from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.resources import make_spec
+from workspace_app.sandbox.mock import MockSandbox
+
+from ._client import TestClient as ApiTestClient
+from .conftest import Harness, register_rca_item
+
+
+def test_upload_over_single_file_cap_returns_413():
+    # #219: the upload streams to a staging file and rejects mid-stream once the
+    # cap is exceeded — a 10-byte body against an 8-byte cap is 413, while an
+    # under-cap upload still succeeds.
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        max_file_size=8,
+    )
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    over = client.put(f"/a/rca/items/{iid}/files/big.bin", content=b"0123456789")
+    assert over.status_code == 413
+    under = client.put(f"/a/rca/items/{iid}/files/ok.bin", content=b"012")
+    assert under.status_code == 204
+    assert client.get(f"/a/rca/items/{iid}/files/ok.bin").content == b"012"
 
 
 def test_refresh_files_is_ok_when_cold(harness: Harness):
