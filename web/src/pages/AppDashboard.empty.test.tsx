@@ -35,7 +35,7 @@ vi.mock("../hooks/useResources", () => ({
     agent: { picker: [] },
     default_profile: "default",
   }),
-  useAppItems: () => [],
+  useAppItems: () => ({ items: [], isPending: false }),
 }));
 
 function renderDash() {
