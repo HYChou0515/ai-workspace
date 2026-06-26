@@ -116,6 +116,36 @@ class WorkspaceFiles:
             return await sb.exists(h, path)
         return await self._fs.exists(workspace_id, path)
 
+    async def workspace_usage(self, workspace_id: str) -> int:
+        """Total durable bytes the workspace's files occupy — the #245 quota
+        basis. Always the **durable** store (the disk the quota protects), never
+        the warm sandbox, so the usage bar and the quota agree on one number. A
+        store without usage accounting (e.g. the wiki-page store) reports 0 —
+        duck-typed like the CAS pair."""
+        usage = getattr(self._fs, "workspace_usage", None)
+        return await usage(workspace_id) if usage is not None else 0
+
+    async def file_size(self, workspace_id: str, path: str) -> int | None:
+        """Durable size of one file (None if absent) — the overwrite credit for a
+        quota check. Durable store, mirroring `workspace_usage`."""
+        size = getattr(self._fs, "file_size", None)
+        return await size(workspace_id, _norm(path)) if size is not None else None
+
+    async def remaining_quota(self, workspace_id: str, path: str, quota: int) -> int | None:
+        """Bytes the file at `path` may occupy before the workspace hits `quota`
+        — the headroom the upload/edit endpoints gate on (#245). An overwrite is
+        a *replace*: the existing file's size is credited back, so re-uploading a
+        same-size file never falsely rejects. `quota` of 0 disables the cap →
+        None (no limit). Always measured against the **durable** store (the disk
+        the quota protects), never the warm sandbox — so the sandbox mirror,
+        which writes the raw store directly, is intentionally not gated (#245
+        choice B)."""
+        if not quota:
+            return None
+        used = await self.workspace_usage(workspace_id)
+        old = await self.file_size(workspace_id, path) or 0
+        return quota - (used - old)
+
     async def delete(self, workspace_id: str, path: str) -> None:
         path = _norm(path)
         warm = self._warm(workspace_id)

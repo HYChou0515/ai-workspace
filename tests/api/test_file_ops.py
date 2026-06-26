@@ -34,6 +34,82 @@ def test_upload_over_single_file_cap_returns_413():
     assert client.get(f"/a/rca/items/{iid}/files/ok.bin").content == b"012"
 
 
+def _quota_app(workspace_quota: int):
+    spec = make_spec()
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=ScriptedAgentRunner([]),
+        workspace_quota=workspace_quota,
+    )
+    return app, spec
+
+
+def test_upload_over_workspace_quota_returns_507():
+    # #245: an upload that would push the workspace past its total quota is
+    # rejected mid-stream with 507 + a structured body, and is not written.
+    app, spec = _quota_app(workspace_quota=100)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    assert client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"x" * 80).status_code == 204
+
+    over = client.put(f"/a/rca/items/{iid}/files/b.bin", content=b"y" * 50)
+    assert over.status_code == 507
+    body = over.json()["detail"]
+    assert body["error"] == "workspace_quota_exceeded"
+    assert body["quota"] == 100
+    # the rejected upload left nothing behind
+    assert client.get(f"/a/rca/items/{iid}/files/b.bin").status_code == 404
+    # exactly filling the remaining 20 bytes is allowed (boundary inclusive)
+    assert client.put(f"/a/rca/items/{iid}/files/c.bin", content=b"z" * 20).status_code == 204
+
+
+def test_overwrite_credits_old_bytes_so_same_size_replace_is_allowed():
+    # #245: overwriting a file is a replace, not an add — re-uploading a file that
+    # already fills the quota succeeds (its old bytes are credited back).
+    app, spec = _quota_app(workspace_quota=100)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    assert client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"x" * 100).status_code == 204
+    # replace it with the same size — still 204, not 507
+    assert client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"y" * 100).status_code == 204
+    # but a brand-new byte now overflows
+    assert client.put(f"/a/rca/items/{iid}/files/b.bin", content=b"z").status_code == 507
+
+
+def test_workspace_quota_zero_disables_the_cap():
+    # #245: quota of 0 means no per-workspace limit.
+    app, spec = _quota_app(workspace_quota=0)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    assert client.put(f"/a/rca/items/{iid}/files/big.bin", content=b"0" * 10_000).status_code == 204
+
+
+def test_usage_endpoint_reports_used_and_quota():
+    # #245: the usage bar reads {used, quota}; used reflects writes and deletes.
+    app, spec = _quota_app(workspace_quota=1000)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    base = client.get(f"/a/rca/items/{iid}/files/usage")
+    assert base.status_code == 200
+    assert base.json() == {"used": 0, "quota": 1000}
+
+    client.put(f"/a/rca/items/{iid}/files/a.bin", content=b"x" * 300)
+    assert client.get(f"/a/rca/items/{iid}/files/usage").json() == {"used": 300, "quota": 1000}
+
+    client.delete(f"/a/rca/items/{iid}/files/a.bin")
+    assert client.get(f"/a/rca/items/{iid}/files/usage").json() == {"used": 0, "quota": 1000}
+
+
+def test_usage_endpoint_quota_zero_surfaces_unlimited():
+    # #245: quota 0 → the FE hides the bar; the endpoint reports it plainly.
+    app, spec = _quota_app(workspace_quota=0)
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    assert client.get(f"/a/rca/items/{iid}/files/usage").json() == {"used": 0, "quota": 0}
+
+
 def test_refresh_files_is_ok_when_cold(harness: Harness):
     # No sandbox up for this investigation → flush is a no-op, endpoint still OK.
     resp = harness.client.post(harness.wpath("/files/refresh"))

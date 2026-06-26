@@ -35,6 +35,7 @@ from ..files.zip_download import (
     subtree_arcname,
     write_zip_members,
 )
+from ..filestore.blob_gc import register_gc_lease, run_blob_gc
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
 from ..health.replay import ReplayService
@@ -261,6 +262,15 @@ class _FileEntry(BaseModel):
     read_only: bool
 
 
+class _WorkspaceUsage(BaseModel):
+    """A workspace's total storage usage vs its quota (#245), for the upload
+    usage bar. ``used`` is the durable logical byte total; ``quota`` of 0 means
+    no quota (the FE then hides the bar)."""
+
+    used: int
+    quota: int
+
+
 _READONLY_DIR = ".readonly"
 # #227: how often the background index-sweeper recovers stuck fan-out runs, and
 # how long a run may go without progress before its missing batches are declared
@@ -284,12 +294,21 @@ async def _stream_upload_to_store(
     request: Request,
     files: WorkspaceFiles,
     max_file_size: int,
+    workspace_quota: int = 0,
 ) -> None:
     """Stream the request body to a staging file on disk, enforcing the
-    single-file cap as bytes arrive, then hand the file to the store (#219).
-    The staging file means a multi-GB upload never sits whole in RAM; the cap is
-    checked mid-stream so an over-size upload is rejected without buffering it
-    all. ``max_file_size`` of 0 disables the cap."""
+    single-file cap (#219) and the per-workspace quota (#245) as bytes arrive,
+    then hand the file to the store. The staging file means a multi-GB upload
+    never sits whole in RAM; both caps are checked mid-stream so an over-limit
+    upload is rejected without buffering it all. ``max_file_size`` of 0 disables
+    the single-file cap; ``workspace_quota`` of 0 disables the total quota.
+
+    The quota credits back the bytes of the file being overwritten (a replace,
+    not an add), so re-uploading a same-size file never trips it."""
+    # Headroom for this path, fetched once up front; an overwrite is a replace.
+    # None ⇒ quota disabled. Computed against the durable store, so the sandbox
+    # mirror (which writes the store directly, not via this endpoint) isn't gated.
+    remaining = await files.remaining_quota(workspace_id, path, workspace_quota)
     fd, name = tempfile.mkstemp(prefix="ws-upload-")
     tmp = Path(name)
     try:
@@ -299,6 +318,17 @@ async def _stream_upload_to_store(
                 size += len(chunk)
                 if max_file_size and size > max_file_size:
                     raise HTTPException(status_code=413, detail="file exceeds the size limit")
+                if remaining is not None and size > remaining:
+                    used = await files.workspace_usage(workspace_id)
+                    raise HTTPException(
+                        status_code=507,
+                        detail={
+                            "error": "workspace_quota_exceeded",
+                            "used": used,
+                            "quota": workspace_quota,
+                            "attempted": size,
+                        },
+                    )
                 f.write(chunk)
         await files.write_from_path(workspace_id, path, tmp, request.headers.get("content-type"))
     finally:
@@ -562,6 +592,15 @@ def create_app(
     # flat, so this guards disk + sandbox-wake cost. Threaded from
     # settings.filestore.max_file_size; per-workspace total quota is #245.
     max_file_size: int = 2 * 1024 * 1024 * 1024,
+    # #245: per-workspace total-size quota in bytes (0 ⇒ no quota). Gated at the
+    # user-facing upload/edit endpoints; threaded from
+    # settings.filestore.workspace_quota.
+    workspace_quota: int = 20 * 1024 * 1024 * 1024,
+    # #245: blob-GC sweeper. `gc_interval` None ⇒ off; `gc_t1`/`gc_t2` are the
+    # fresh-blob grace and quarantine dwell passed to `SpecStar.gc(reconcile)`.
+    gc_interval: timedelta | None = timedelta(hours=1),
+    gc_t1: str = "1h",
+    gc_t2: str = "24h",
     # Step budgets for the wiki agents (#50) — far higher than a chat reply's
     # ~10 turns; a maintenance pass writes several pages, the reader navigates.
     wiki_maintainer_max_turns: int = 40,
@@ -725,6 +764,22 @@ def create_app(
         except asyncio.CancelledError:
             return
 
+    async def _blob_gc_sweeper() -> None:
+        """#245: periodically reclaim orphaned blobs (deleted files' content) via
+        specstar's ref-count GC, so the per-workspace quota stays honest. A CAS
+        lease means only ONE pod runs the full (deleting) reconcile per window;
+        the others no-op. Run off the loop — reconcile does blocking specstar I/O.
+        ``gc_interval`` gates this caller (None ⇒ no task)."""
+        assert gc_interval is not None
+        ttl_ms = int(gc_interval.total_seconds() * 1000)
+        try:
+            while True:
+                await asyncio.sleep(gc_interval.total_seconds())
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(run_blob_gc, spec, t1=gc_t1, t2=gc_t2, ttl_ms=ttl_ms)
+        except asyncio.CancelledError:
+            return
+
     # Issue #51: the sanity-check service — latest results in memory,
     # every executed probe persisted as a CheckRun row (audit trail).
     def _persist_check_run(result: CheckResult) -> None:
@@ -773,6 +828,10 @@ def create_app(
         bg.append(asyncio.create_task(health_service.run_round()))
         if code_sync_check_interval is not None:
             bg.append(asyncio.create_task(_code_sync_sweeper()))
+        if gc_interval is not None:
+            # #245: seed the CAS lease, then run the orphan-blob GC on a schedule.
+            register_gc_lease(spec)
+            bg.append(asyncio.create_task(_blob_gc_sweeper()))
         try:
             yield
         finally:
@@ -2538,6 +2597,17 @@ def create_app(
             out.append(_FileEntry(path=p, size=len(data), read_only=_is_readonly_path(p)))
         return out
 
+    @api.get("/a/{slug}/items/{item_id}/files/usage")
+    async def workspace_files_usage(slug: str, item_id: str) -> _WorkspaceUsage:
+        """#245: the workspace's durable byte total vs its quota — backs the
+        upload usage bar. Registered before the ``/files/{path:path}`` read route
+        so the literal ``usage`` segment isn't swallowed as a file path."""
+        investigation_id = _require_item(slug, item_id)
+        return _WorkspaceUsage(
+            used=await files.workspace_usage(investigation_id),
+            quota=workspace_quota,
+        )
+
     @api.get("/a/{slug}/items/{item_id}/dirs")
     async def list_dirs(slug: str, item_id: str) -> list[str]:
         """Directory paths (incl. empty ones) for the file tree."""
@@ -2616,7 +2686,10 @@ def create_app(
         # #219: stream the body to a staging file (never the whole upload in RAM),
         # enforcing the single-file cap as bytes arrive, then stream it into the
         # store. `files.write_from_path` routes warm→sandbox / cold→blob.
-        await _stream_upload_to_store(investigation_id, norm, request, files, max_file_size)
+        # #245: also gate the per-workspace total quota mid-stream.
+        await _stream_upload_to_store(
+            investigation_id, norm, request, files, max_file_size, workspace_quota
+        )
         activity.record(
             "file_written",
             f"Wrote {norm}",

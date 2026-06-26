@@ -57,6 +57,15 @@ class MemoryFileStore:
         async with self._lock:
             return path in self._files.get(workspace_id, {})
 
+    async def workspace_usage(self, workspace_id: str) -> int:
+        async with self._lock:
+            return sum(len(b) for b in self._files.get(workspace_id, {}).values())
+
+    async def file_size(self, workspace_id: str, path: str) -> int | None:
+        async with self._lock:
+            files = self._files.get(workspace_id, {})
+            return len(files[path]) if path in files else None
+
     async def delete(self, workspace_id: str, path: str) -> None:
         async with self._lock:
             files = self._files.get(workspace_id)

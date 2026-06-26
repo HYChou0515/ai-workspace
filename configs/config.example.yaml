@@ -90,6 +90,22 @@
 #   # sandbox-wake cost, hence a generous default (~2 GB). An over-size upload
 #   # is rejected mid-stream with 413. Per-workspace TOTAL quota is #245.
 #   max_file_size: 2147483648
+#   # #245: per-workspace TOTAL-size quota in bytes (0 = no quota). The sum of one
+#   # workspace's files may not exceed this, so a single workspace can't fill the
+#   # disk root the whole deploy shares. Gated at the user upload/edit endpoints
+#   # (the sandbox mirror is NOT gated — agent work is never lost); an over-quota
+#   # upload is rejected mid-stream with 507. Default ~20 GiB. Orphaned blobs are
+#   # reclaimed by the GC sweeper (gc_* below) so the count stays honest.
+#   workspace_quota: 21474836480
+#   # #245: blob-GC sweeper (reclaims deleted files' orphaned blobs via specstar's
+#   # ref-count GC). gc_interval_sec = how often a sweep runs (0 = off); a CAS
+#   # lease means only one pod runs the full reconcile per window. gc_t1 protects
+#   # freshly-written blobs from quarantine; gc_t2 is the reversible dwell in
+#   # quarantine before permanent delete. Run on the main app (all blob-referencing
+#   # models registered there) — not a slim pod with a partial model set.
+#   gc_interval_sec: 3600
+#   gc_t1: 1h
+#   gc_t2: 24h
 
 # ─── runner (RCA agent loop) ────────────────────────────────────────
 # runner:

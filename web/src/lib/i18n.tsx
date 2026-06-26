@@ -333,6 +333,20 @@ export const messages = {
   },
   "kb.wiki.rebuild.confirm.go": { "zh-TW": "重建", en: "Rebuild" },
   "kb.wiki.rebuild.confirm.cancel": { "zh-TW": "取消", en: "Cancel" },
+
+  // #245: workspace storage usage bar + over-quota upload error.
+  "workspace.usage": {
+    "zh-TW": "已使用 {used} / {quota}",
+    en: "{used} of {quota} used",
+  },
+  "workspace.usage.full": {
+    "zh-TW": "空間已滿——請先刪除一些檔案再上傳。",
+    en: "Storage is full — delete some files before uploading more.",
+  },
+  "workspace.overQuota": {
+    "zh-TW": "空間不足，未能上傳:{names}",
+    en: "Out of space, not uploaded: {names}",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

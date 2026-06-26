@@ -66,6 +66,18 @@ async def test_mirror_copies_new_sandbox_files_into_snapshot(
     assert await fs.read("ws", "/build/out.txt") == b"shell out"
 
 
+async def test_mirror_is_not_quota_gated(fs: SpecstarFileStore, sandbox: MockSandbox):
+    # #245 choice B: the mirror writes the durable store directly (not via the
+    # quota-gated upload endpoint), so agent-created files are always persisted —
+    # the quota guards user uploads, never destroys the agent's work.
+    await fs.write("ws", "/already-big", b"x" * 50_000)  # workspace already large
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sandbox.upload(h, b"y" * 50_000, "/agent-made.bin")
+    assert await sync.mirror("ws", h) == 1
+    assert await fs.read("ws", "/agent-made.bin") == b"y" * 50_000
+
+
 async def test_mirror_skips_unchanged_via_version(fs: SpecstarFileStore, sandbox: MockSandbox):
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)

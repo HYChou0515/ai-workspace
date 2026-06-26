@@ -40,6 +40,8 @@ function renderPanel(uploadDir = "uploads") {
 beforeEach(() => {
   vi.restoreAllMocks();
   vi.spyOn(kbApi, "listCollections").mockResolvedValue([]);
+  // #245: the composer's UsageBar queries this; stub so it doesn't hit the network.
+  vi.spyOn(api, "getWorkspaceUsage").mockResolvedValue({ used: 0, quota: 0 });
 });
 
 afterEach(() => {

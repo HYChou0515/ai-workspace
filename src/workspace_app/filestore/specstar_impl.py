@@ -22,16 +22,26 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 from msgspec import Struct, field
-from specstar import QB, SpecStar
-from specstar.types import Binary, ResourceIDNotFoundError, RevisionStatus
+from specstar import QB, Schema, SpecStar, Sum
+from specstar.types import Binary, IndexableField, ResourceIDNotFoundError, RevisionStatus
 
 from .protocol import FileExists, FileNotFound, dir_ancestors
 
 _SLASH = "∕"  # division-slash look-alike (same convention as kb/doc_id.py)
 _CHUNK = 8 * 1024 * 1024  # 8 MB — read a source file into blob parts a chunk at a time
+
+
+def _reindex_only(record: Any) -> Any:
+    """No-op migration step (record unchanged) used as ``step(None,
+    _reindex_only, …)``: migrating a pre-``content_size`` row (version ``None``)
+    to ``v2`` re-extracts its indexed_data — the backfill — without touching the
+    record. Mirrors ``resources._reindex_only`` (kept local so filestore doesn't
+    depend on the resources package)."""
+    return record
 
 
 class WorkspaceFile(Struct):
@@ -75,7 +85,18 @@ class SpecstarFileStore:
         # by the store (not make_spec) so the memory-default app doesn't emit
         # these models' CRUD routes.
         with contextlib.suppress(ValueError):
-            spec.add_model(WorkspaceFile, indexed_fields=["workspace_id"])
+            # `content.size` is indexed (as the scalar `content_size`, mirroring
+            # SourceDoc — a dotted index key trips SQL backends) so per-workspace
+            # usage is one Sum aggregate (#245). The Binary keeps `size` inline in
+            # the record (only bytes are offloaded), so this needs no extra field;
+            # old rows backfill via the migrate route (`rm.migrate` re-extracts it).
+            spec.add_model(
+                Schema(WorkspaceFile, "v2").step(None, _reindex_only, source_type=WorkspaceFile),
+                indexed_fields=[
+                    "workspace_id",
+                    IndexableField("content.size", index_key="content_size"),
+                ],
+            )
         with contextlib.suppress(ValueError):
             spec.add_model(_WorkspaceDirs)
         self._files = spec.get_resource_manager(WorkspaceFile)
@@ -109,6 +130,19 @@ class SpecstarFileStore:
 
     async def exists(self, workspace_id: str, path: str) -> bool:
         return await asyncio.to_thread(self._files.exists, _fid(workspace_id, path))
+
+    async def workspace_usage(self, workspace_id: str) -> int:
+        """Total logical bytes the workspace's files occupy — the sum of every
+        live ``WorkspaceFile``'s ``content.size`` (#245). Content-addressed
+        dedup means physical ≤ this, so it's a conservative quota basis. One
+        indexed ``Sum`` aggregate scoped to the workspace, never a fetch-all."""
+        return await asyncio.to_thread(self._workspace_usage_sync, workspace_id)
+
+    async def file_size(self, workspace_id: str, path: str) -> int | None:
+        """Size of one file from its record's ``content.size`` — a point read,
+        never the blob bytes (so an overwrite quota check is cheap). None if the
+        file doesn't exist."""
+        return await asyncio.to_thread(self._file_size_sync, workspace_id, path)
 
     async def delete(self, workspace_id: str, path: str) -> None:
         await asyncio.to_thread(self._delete_sync, workspace_id, path)
@@ -191,6 +225,28 @@ class SpecstarFileStore:
         with open(dest, "wb") as f:
             for chunk in info.iterator:
                 f.write(chunk)
+
+    def _workspace_usage_sync(self, workspace_id: str) -> int:
+        rows = self._files.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
+            by=QB["workspace_id"],
+            aggregates={"used": Sum(QB["content_size"])},
+            query=(QB["workspace_id"] == workspace_id).build(),
+        )
+        # No rows ⇒ no group ⇒ 0. A group whose rows all pre-date the
+        # `content_size` index (written before #245, not yet migrated) sums to
+        # None — it under-counts as 0 until the operator runs migrate/execute.
+        used = rows[0]["used"] if rows else None
+        return int(used) if used is not None else 0
+
+    def _file_size_sync(self, workspace_id: str, path: str) -> int | None:
+        try:
+            res = self._files.get(_fid(workspace_id, path))
+        except ResourceIDNotFoundError:
+            return None
+        assert isinstance(res.data, WorkspaceFile)
+        size = res.data.content.size  # always set on a stored Binary
+        assert isinstance(size, int)
+        return size
 
     def _ls_sync(self, workspace_id: str, prefix: str) -> list[str]:
         rows = self._files.list_resources((QB["workspace_id"] == workspace_id).build())

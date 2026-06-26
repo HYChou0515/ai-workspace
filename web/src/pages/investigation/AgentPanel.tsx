@@ -4,7 +4,7 @@
  * user / agent / tool-call entries, with suggestion chips + composer.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { api } from "../../api";
@@ -16,6 +16,7 @@ import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
+import { UsageBar } from "./UsageBar";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
 import { useDialog } from "../../components/Dialog";
 import { Popover } from "../../components/Popover";
@@ -89,6 +90,7 @@ export function AgentPanel({
   // Quick-prompt chips come ONLY from the attached AgentConfig (BE) — the FE
   // never invents its own. No config suggestions → no chip row.
   const slug = useWorkspaceSlug();
+  const queryClient = useQueryClient();
   const chips = suggestions ?? [];
   const me = useCurrentUser();
   const ctxAgent = useOptionalAgent();
@@ -169,6 +171,11 @@ export function AgentPanel({
         setDraft((d) => (d ? `${ref}${d}` : ref));
         composerRef.current?.focus();
       }
+      // #245: an over-quota (507) rejection is its own line so the user sees
+      // "out of space", not a vague size error.
+      if (res.overQuota.length) {
+        alert(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
+      }
       const problems = [
         ...res.tooLarge.map((p) => `${p} — exceeds the size limit`),
         ...res.failed.map((p) => `${p} — upload failed`),
@@ -176,6 +183,8 @@ export function AgentPanel({
       if (problems.length) alert(`Some files weren't attached:\n${problems.join("\n")}`);
     } finally {
       setProgress(null);
+      // #245: refresh the usage bar — a success grew `used`, a 507 left it full.
+      queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, investigationId) });
     }
   };
 
@@ -390,6 +399,8 @@ export function AgentPanel({
             {t("kb.dropToUpload")}
           </div>
         )}
+        {/* #245: persistent storage usage gauge so the user sees they're filling up. */}
+        <UsageBar slug={slug} itemId={investigationId} />
         {progress && (
           <div data-testid="attach-progress" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <div
