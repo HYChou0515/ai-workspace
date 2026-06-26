@@ -1,8 +1,8 @@
-"""`python -m workspace_app.sandbox_host` — run the sandbox host service.
+"""`python -m sandbox_host` — run the standalone sandbox host service.
 
 Serve glue only (uvicorn, boot fail-loud, drain + reaper wiring); the testable
-build logic lives in `service.py` and the operational logic in
-`sandbox.host.app`. Excluded from coverage like the app's top-level `__main__`.
+build logic lives in `service.py` and the operational logic in `app.py`.
+Excluded from coverage (serve glue).
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ import signal
 
 import uvicorn
 
-from ..config.loader import load
-from ..sandbox.host.app import check_cgroup_ready
+from .app import check_cgroup_ready
+from .config import load_settings
 from .service import build_host_app, resolve_cgroup_root
 
 
@@ -46,13 +46,13 @@ async def _serve(app, controller, bind_host: str, bind_port: int) -> None:
 
 
 def main() -> None:
-    settings = load()
-    host = settings.sandbox_host
-    bind_host, bind_port = host.bind.rsplit(":", 1)
-    cgroup_root = resolve_cgroup_root(host)
+    settings = load_settings(os.environ)
+    bind_host, bind_port = settings.bind.rsplit(":", 1)
+    cgroup_root = resolve_cgroup_root(settings)
     print(
         f"→ sandbox host: cgroup_root={cgroup_root} "
-        f"uid={host.uid_min}..{host.uid_max} bind={host.bind}",
+        f"uid={settings.uid_min}..{settings.uid_max} bind={settings.bind} "
+        f"tools_dir={settings.tools_dir}",
         flush=True,
     )
     check_cgroup_ready(cgroup_root)  # fail loud: isolation needs cgroup v2

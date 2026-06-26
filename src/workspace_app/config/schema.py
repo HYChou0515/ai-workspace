@@ -68,13 +68,11 @@ class SandboxSettings:
 
 @dataclass(frozen=True)
 class SandboxHostSettings:
-    """`python -m workspace_app.sandbox_host` — the host half (its own pod).
-
-    Wraps an `IsolatedProcessSandbox`: each handle runs as a pooled numeric
-    uid (`uid_min..uid_max`) under a cgroup capped by `memory_max` (e.g. "512M")
-    / `cpu_cores` / `pids_max`. `cgroup_root` is the delegated cgroup v2 subtree
-    (null = auto-detect this pod's own). `idle_ttl` reaps sandboxes orphaned by
-    an app-pod crash (0 = off). The command timeouts mirror SandboxSettings."""
+    """LEGACY (#251): the sandbox host is now a standalone service (`sandbox-host/`)
+    configured by `SANDBOX_HOST_*` env vars, NOT this file. The app no longer
+    reads these fields; they are retained only so configs that still carry a
+    `sandbox_host:` section keep validating (the loader rejects unknown keys).
+    See `docs/sandbox-host.md`. Safe to delete from your config."""
 
     bind: str = "0.0.0.0:8000"
     uid_min: int = 100000

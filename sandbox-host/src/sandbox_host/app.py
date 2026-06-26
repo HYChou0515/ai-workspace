@@ -2,7 +2,8 @@
 
 The host is backend-agnostic: it holds a single `Sandbox` instance (production
 injects `IsolatedProcessSandbox`; tests inject `MockSandbox`) and proxies each
-protocol method to it. The matching client is `sandbox.http_client.HttpSandbox`.
+operation to it. The matching client is the workspace app's `HttpSandbox` — the
+two share NO Python modules, only the HTTP wire contract (`docs/sandbox-host-wire.md`).
 
 `create` returns the host's own directly-addressable URL (`advertise_url`, set
 from the pod's `POD_IP`) plus the backend's local handle id; the client encodes
@@ -27,7 +28,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ..protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
 
 # A readiness probe: raises with a reason when the host can't safely serve.
 ReadinessCheck = Callable[[], None]
@@ -84,12 +85,12 @@ async def _exec_ndjson(
     """Run `exec` and yield NDJSON frames as output arrives.
 
     `{"o": b64}` per live chunk (forwarded to the caller's `on_output`; stdout
-    and stderr interleaved, mirroring `LocalProcessSandbox`'s single sink), then
-    a final `{"exit", "out", "err"}` with the separated buffers, or
-    `{"error", "detail"}` if `exec` raised (the response status is already 200,
-    so errors must travel in-band as a frame). The live bytes are re-sent in the
-    final frame so the client can rebuild the separated `ExecResult` — small for
-    typical output, and faithful to the protocol's two outputs.
+    and stderr interleaved, mirroring the backend's single sink), then a final
+    `{"exit", "out", "err"}` with the separated buffers, or `{"error", "detail"}`
+    if `exec` raised (the response status is already 200, so errors must travel
+    in-band as a frame). The live bytes are re-sent in the final frame so the
+    client can rebuild the separated `ExecResult` — small for typical output,
+    and faithful to the protocol's two outputs.
     """
     queue: asyncio.Queue[tuple[str, object]] = asyncio.Queue()
 

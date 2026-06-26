@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from workspace_app.sandbox.isolated_process import (
+from sandbox_host.isolated_process import (
     IsolatedProcessSandbox,
     _acl_argv,
     _CgroupManager,
@@ -26,7 +26,7 @@ from workspace_app.sandbox.isolated_process import (
     _setpriv_cgroup_argv,
     _UidPool,
 )
-from workspace_app.sandbox.protocol import SandboxSpec
+from sandbox_host.protocol import SandboxSpec
 
 
 @pytest.fixture
@@ -182,7 +182,7 @@ def test_run_setfacl_invokes_subprocess():
 
 
 async def test_kill_unknown_handle_has_no_identity_and_raises(isolated):
-    from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound
+    from sandbox_host.protocol import SandboxHandle, SandboxNotFound
 
     # No identity recorded for an uncreated handle ⇒ skip cgroup/uid teardown,
     # then the inherited kill reports the unknown handle.
