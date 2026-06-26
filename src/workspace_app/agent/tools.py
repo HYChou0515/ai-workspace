@@ -364,6 +364,10 @@ def kb_search_impl(
     expand: int | None = None,
     hyde: int | None = None,
     rerank: bool | None = None,
+    document: str | None = None,
+    page_from: int | None = None,
+    page_to: int | None = None,
+    sheet: str | None = None,
 ) -> str:
     """Semantic search over the knowledge base; returns numbered passages to cite as [n].
 
@@ -385,9 +389,18 @@ def kb_search_impl(
     query needs more recall (raise `expand` / `hyde`) or when a quick lookup
     doesn't need the rerank LLM round-trip. The operator's `max` clamps
     whatever you pass, so requesting `expand=99` is safe.
+
+    To fetch by EXACT location — "analyse page 30 of report.pdf", "the Summary
+    sheet of Q3.xlsx", "why X failed, per pages 30-90" — pass `document` (the
+    filename) together with `page_from`/`page_to` (a single page: just
+    `page_from`; a range: both bounds) or `sheet`. This narrows retrieval to that
+    location AND still ranks by `query`, so pair it with a real question. A
+    page/sheet filter REQUIRES `document` (a page number is meaningless without a
+    file). Use the filename the user gave — its folder is optional.
     """
+    from ..kb.doc_resolve import resolve_document
     from ..kb.provenance import format_location
-    from ..kb.retriever import Enhancements
+    from ..kb.retriever import Enhancements, LocationFilter
 
     retriever = ctx.context.retriever
     assert retriever is not None  # kb_search implies a KB context
@@ -404,6 +417,33 @@ def kb_search_impl(
             f"Search budget exhausted for this reply ({cap} of {cap} used). "
             "Answer the user now using the passages already retrieved above; "
             "do not call kb_search again."
+        )
+
+    # #263: optional structural scope. A page/sheet filter is meaningless without
+    # "which file", so it requires `document`; we resolve the filename to its
+    # source-doc id within the active collections (the opaque id never touches
+    # the model). Resolution failures are recoverable messages the model fixes,
+    # not exceptions — and they return BEFORE the budget is spent.
+    location: LocationFilter | None = None
+    if document is not None or page_from is not None or page_to is not None or sheet is not None:
+        if document is None:
+            return (
+                "To fetch by location, also pass `document` (the filename) — a page "
+                "or sheet on its own doesn't say which file."
+            )
+        spec = ctx.context.spec
+        assert spec is not None  # a KB context always wires spec
+        res = resolve_document(spec, ctx.context.collection_ids, document)
+        if res.status == "not_found":
+            return (
+                f"No document matching {document!r} in the current knowledge base — "
+                "check the filename (try kb_search without a document filter first)."
+            )
+        if res.status == "ambiguous":
+            opts = ", ".join(res.candidates)
+            return f"{document!r} matches several files; pass the full path, one of: {opts}"
+        location = LocationFilter(
+            source_doc_id=res.doc_id, page_from=page_from, page_to=page_to, sheet=sheet
         )
 
     registry = ctx.context.kb_passages
@@ -440,6 +480,7 @@ def kb_search_impl(
             ctx.context.collection_ids,
             on_progress,
             enhancements=effective,
+            location=location,
         ):
             key = (passage.document_id, passage.start, passage.end)
             idx = seen.get(key)
