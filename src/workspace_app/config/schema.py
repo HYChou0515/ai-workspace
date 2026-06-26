@@ -302,6 +302,13 @@ class KbSettings:
     retrieval_llm: RetrievalLlmRef | None = field(
         default_factory=lambda: RetrievalLlmRef(preset="kb-retrieval"),
     )
+    # #175: the LLM that drafts context cards from documents (自動 context card).
+    # Same usage-entry shape as `retrieval_llm`; default = the bundled
+    # `card-drafter` preset. `None` ⇒ card drafting disabled (the feature stays
+    # mounted but proposes nothing).
+    card_drafter: RetrievalLlmRef | None = field(
+        default_factory=lambda: RetrievalLlmRef(preset="card-drafter"),
+    )
     # Retriever behaviour knobs (expand / hyde / rerank defaults + LLM
     # ceilings). Independent from `retrieval_llm` — that names which LLM
     # to call; this controls how many calls and how aggressively.
@@ -547,6 +554,13 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
     # (e.g. hosted OpenAI while agents stay local) override just this
     # preset's `model` / `llm` in config.yaml.
     "kb-retrieval": {
+        "model": "ollama_chat/qwen3:14b",
+    },
+    # `card-drafter` (#175) — the LLM-only preset `kb.card_drafter` references to
+    # draft context cards from documents. Same default model as retrieval;
+    # operators override just this preset's `model` / `llm` to draft on a
+    # different provider.
+    "card-drafter": {
         "model": "ollama_chat/qwen3:14b",
     },
     # `kb-vlm` — the LLM-only preset referenced by `kb.vlm_llm` for

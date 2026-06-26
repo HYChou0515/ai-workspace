@@ -503,6 +503,16 @@ def get_kb_llm(settings: Settings) -> ILlm | None:
     return _llm_from_chain(resolve_llm_chain(settings, settings.kb.retrieval_llm))
 
 
+def get_card_drafter_llm(settings: Settings) -> ILlm | None:
+    """The LLM that drafts context cards from documents (#175 自動 context card).
+
+    `kb.card_drafter` is a usage-entry reference to a named preset (default
+    `card-drafter`), resolved through the same cascade + failover chain as every
+    other role. `None` ⇒ card drafting disabled (the generation feature stays
+    mounted but the drafter proposes nothing)."""
+    return _llm_from_chain(resolve_llm_chain(settings, settings.kb.card_drafter))
+
+
 def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
     """Stage-2 formatter for vision parsers (issue #115): the text LLM that
     re-emits the VLM's output as clean Markdown so the chunker splits it on
