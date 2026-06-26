@@ -25,6 +25,7 @@ import datetime as dt
 import logging
 import math
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -32,9 +33,10 @@ from specstar import QB, Schema, SpecStar
 from specstar.events import OnSuccessPatch, do
 from specstar.types import ResourceAction, ResourceIDNotFoundError, TaskStatus
 
-from ..resources import IndexRun, IndexUnitText, SourceDoc
+from ..resources import DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
 from .index_run import IndexRunStore
+from .job_audit import preserve_job_creator
 
 if TYPE_CHECKING:
     from specstar.events import EventContext
@@ -66,10 +68,17 @@ class IndexCoordinator:
         message_queue_factory: object | None = None,
         unit_batch_sizes: dict[str, int] | None = None,
         default_unit_batch: int = 8,
+        get_user_id: Callable[[], str] | None = None,
     ) -> None:
         self._spec = spec
         self._ingestor = ingestor
         self._wiki = wiki_coordinator
+        # #186: who an enqueue is credited to. In a request that's the real user
+        # (specstar resolves it as the spec default on any manager that still
+        # carries it — e.g. SourceDoc); production injects the same `get_user_id`.
+        # Only ever called on the request-side `enqueue`; the worker fan-out reuses
+        # the run's requester (`job.info.created_by`) instead.
+        self._get_user_id = get_user_id or (lambda: self._spec.get_resource_manager(SourceDoc).user)
         # #227 fan-out: units-per-process-job, per parser class. PDF/PPTX go to
         # the VLM (~slow seconds/page) so they batch small; row-based parsers
         # (CSV/Excel/JSON) batch large (cheap parse, the embed is the cost). Each
@@ -101,6 +110,10 @@ class IndexCoordinator:
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )
         self._job_rm = spec.get_resource_manager(IndexJob)
+        # #186: let specstar's job lifecycle preserve each job's creator instead
+        # of stamping the worker's default. Every enqueue below sets the user via
+        # `using()`, so the manager needs no fallback default.
+        preserve_job_creator(self._job_rm)
         self._consuming = False
 
     # ── enqueue (producer) ───────────────────────────────────────────
@@ -134,12 +147,15 @@ class IndexCoordinator:
         # the RabbitMQ backend ignores) against two runs racing _delete_chunks.
         if self._has_pending_job(doc_id) or self._runs.is_active(doc_id):
             return False
-        self._job_rm.create(
-            IndexJob(
-                payload=IndexJobPayload(doc_id=doc_id, collection_id=collection_id),
-                partition_key=doc_id,
+        # #186: stamp the split job with the requester (this runs in their
+        # request). specstar then preserves it across the whole fan-out lifecycle.
+        with self._job_rm.using(user=self._get_user_id()):
+            self._job_rm.create(
+                IndexJob(
+                    payload=IndexJobPayload(doc_id=doc_id, collection_id=collection_id),
+                    partition_key=doc_id,
+                )
             )
-        )
         return True
 
     def _has_pending_job(self, doc_id: str) -> bool:
@@ -234,12 +250,21 @@ class IndexCoordinator:
         """Dispatch one index step by ``kind`` (#227). Runs OFF the request path
         (the consumer's own thread)."""
         payload = job.data.payload
+        # #186: the human who triggered this run. The initial split job is created
+        # in the requester's request (the producer runs there), so get_user_id
+        # stamps its ``created_by`` with the real user; the worker then propagates
+        # that onto every derived artifact it writes (fan-out jobs + chunks). The
+        # SourceDoc itself is NOT credited to the requester — its content was not
+        # re-authored, so it stays its own owner (#83, via _last_updater).
+        requester = job.info.created_by
         if payload.kind == "process":
-            self._handle_process(payload)
+            self._handle_process(payload, requester)
         elif payload.kind == "finalize":
-            self._handle_finalize(payload)
+            # finalize writes the SourceDoc (credited to its own owner, #83); the
+            # requester only rides into the wiki hook it chains.
+            self._handle_finalize(payload, requester)
         else:
-            self._handle_split(payload)
+            self._handle_split(payload, requester)
 
     def _last_updater(self, doc_id: str) -> str | None:
         """The doc's last updater (#83): a job pod has no request user, so the
@@ -250,7 +275,7 @@ class IndexCoordinator:
         except ResourceIDNotFoundError:
             return None
 
-    def _handle_split(self, payload) -> None:
+    def _handle_split(self, payload, requester: str) -> None:
         """Plan the index: run it whole (small / multi-parser / no-parser), or
         fan it out into per-unit-range ``process`` jobs when one parser reports
         many units. Seeds the ``IndexRun`` join state BEFORE enqueuing any
@@ -265,44 +290,55 @@ class IndexCoordinator:
             _LOGGER.exception("IndexCoordinator: fan-out planning failed for %s", doc_id)
             units, parser_id = 1, ""
         if units <= 1:
-            self._index_whole(doc_id, updater)
+            self._index_whole(doc_id, updater, requester)
             return
         batch = self._unit_batch_sizes.get(parser_id, self._default_unit_batch)
         nbatches = math.ceil(units / batch)
         self._ingestor.prepare_fanout(doc_id)  # clear chunks ONCE before fan-out
         self._runs.start(doc_id, cid, total=nbatches)
-        for b in range(nbatches):
-            start = b * batch
-            self._job_rm.create(
-                IndexJob(
-                    payload=IndexJobPayload(
-                        doc_id=doc_id,
-                        collection_id=cid,
-                        kind="process",
-                        unit_start=start,
-                        unit_end=min(units, start + batch),
-                        batch_index=b,
-                    ),
-                    # No partition_key (#227): process jobs are meant to parallelize
-                    # across pods; the CAS join, not the queue, guards correctness.
-                    partition_key=None,
+        # #186: credit the fan-out jobs to the requester (not the bare worker
+        # default) so the chain reading job.created_by stays the real user.
+        with self._job_rm.using(user=requester):
+            for b in range(nbatches):
+                start = b * batch
+                self._job_rm.create(
+                    IndexJob(
+                        payload=IndexJobPayload(
+                            doc_id=doc_id,
+                            collection_id=cid,
+                            kind="process",
+                            unit_start=start,
+                            unit_end=min(units, start + batch),
+                            batch_index=b,
+                        ),
+                        # No partition_key (#227): process jobs are meant to parallelize
+                        # across pods; the CAS join, not the queue, guards correctness.
+                        partition_key=None,
+                    )
                 )
-            )
 
-    def _index_whole(self, doc_id: str, updater: str) -> None:
+    def _index_whole(self, doc_id: str, updater: str, requester: str) -> None:
         """The unchanged single-job path: chunk + embed the whole doc, flip its
         status, run the wiki hook. Errors are logged + swallowed (the Ingestor
-        marks the doc status=error; a bad doc must not wedge the queue)."""
+        marks the doc status=error; a bad doc must not wedge the queue).
+
+        Two acting users are bound at once (#186): the SourceDoc stays its own
+        owner (``updater``, #83), while the regenerated DocChunks are credited to
+        the ``requester`` who triggered the run. Both managers are spec
+        singletons, so binding them here covers every write the (synchronous,
+        same-thread) Ingestor makes through ``get_resource_manager`` — no Ingestor
+        change needed."""
         doc_rm = self._spec.get_resource_manager(SourceDoc)
+        chunk_rm = self._spec.get_resource_manager(DocChunk)
         try:
-            with doc_rm.using(user=updater):
+            with doc_rm.using(user=updater), chunk_rm.using(user=requester):
                 self._ingestor.index(doc_id, source_doc_rm=doc_rm)
         except Exception:  # noqa: BLE001 — doc is marked error by the Ingestor
             _LOGGER.exception("IndexCoordinator: indexing failed for %s", doc_id)
             return
-        self._wiki_hook(doc_id)
+        self._wiki_hook(doc_id, requester)
 
-    def _handle_process(self, payload) -> None:
+    def _handle_process(self, payload, requester: str) -> None:
         """Index ONE unit batch end-to-end, stage its text, record it done, and —
         if it's the one that completes the set — win the finalize gate and enqueue
         the finalize job. A failure RE-RAISES so the broker retries it; a
@@ -312,10 +348,12 @@ class IndexCoordinator:
         if updater is None:
             return  # doc deleted between split and run
         doc_rm = self._spec.get_resource_manager(SourceDoc)
+        chunk_rm = self._spec.get_resource_manager(DocChunk)
         # #227 SEQ_STRIDE: each batch numbers its chunks from batch_index*stride so
         # independent process jobs never collide on seq (cosmetic ordering only).
         seq_base = payload.batch_index * _SEQ_STRIDE
-        with doc_rm.using(user=updater):
+        # #186: SourceDoc → its owner (updater); DocChunks → the requester.
+        with doc_rm.using(user=updater), chunk_rm.using(user=requester):
             text = self._ingestor.index_units(
                 doc_id,
                 (payload.unit_start, payload.unit_end),
@@ -325,19 +363,24 @@ class IndexCoordinator:
         self._stage_text(doc_id, payload.batch_index, text)
         self._runs.mark_done(doc_id, payload.batch_index)
         if self._runs.claim_finalize(doc_id):
-            self._enqueue_finalize(doc_id, payload.collection_id)
+            self._enqueue_finalize(doc_id, payload.collection_id, requester)
 
-    def _enqueue_finalize(self, doc_id: str, collection_id: str) -> None:
-        self._job_rm.create(
-            IndexJob(
-                payload=IndexJobPayload(
-                    doc_id=doc_id, collection_id=collection_id, kind="finalize"
-                ),
-                partition_key=None,
+    def _enqueue_finalize(self, doc_id: str, collection_id: str, requester: str) -> None:
+        # #186: the job manager has no default user, so a finalize job MUST be
+        # stamped explicitly — with the run's requester (preserved through the
+        # fan-out) on the normal path, or the doc's owner as a best-effort
+        # fallback on the safety-sweep recovery path.
+        with self._job_rm.using(user=requester):
+            self._job_rm.create(
+                IndexJob(
+                    payload=IndexJobPayload(
+                        doc_id=doc_id, collection_id=collection_id, kind="finalize"
+                    ),
+                    partition_key=None,
+                )
             )
-        )
 
-    def _handle_finalize(self, payload) -> None:
+    def _handle_finalize(self, payload, requester: str) -> None:
         """Exactly-once close-out of a fan-out: rejoin the staged batch text into
         ``SourceDoc.text``, flip status (``error`` if any batch failed, else
         ``ready``), clear staging, close the run, and run the wiki hook."""
@@ -371,7 +414,7 @@ class IndexCoordinator:
         # ready/error verdict. `error` keeps the failed batches visible for ops.
         self._runs.finish(doc_id, status="error" if run.failed else "done")
         if status == "ready":
-            self._wiki_hook(doc_id)
+            self._wiki_hook(doc_id, requester)
 
     # ── safety sweep (#227): recover the fan-out failure branch ──────
     def sweep_stuck_runs(self, *, stuck_after_seconds: float = 3600.0) -> list[str]:
@@ -404,26 +447,35 @@ class IndexCoordinator:
                 for i in range(run.total):
                     if i not in accounted:
                         self._runs.mark_failed(doc_id, i)
+            # #186: the sweep runs in a worker with no request and no original
+            # requester to recover, so the re-driven finalize job is credited to
+            # the doc's owner (best effort). A gone doc has no owner — its finalize
+            # would no-op anyway, so skip it (and avoid a bare, user-less create).
+            requester = self._last_updater(doc_id)
+            if requester is None:
+                continue
             # Gate is now met (already, or after marking the missing failed).
             if self._runs.claim_finalize(doc_id):
-                self._enqueue_finalize(doc_id, run.collection_id)  # we won → drive finalize
+                self._enqueue_finalize(doc_id, run.collection_id, requester)  # won → finalize
                 acted.append(doc_id)
             elif run.finalized and age >= stuck_after_seconds:
                 # Claimed earlier but the run never closed out — the finalize job
                 # was lost (winner crashed after claiming). Re-drive it; finalize
                 # is idempotent, and the grace avoids spamming a healthy in-flight
                 # finalize.
-                self._enqueue_finalize(doc_id, run.collection_id)
+                self._enqueue_finalize(doc_id, run.collection_id, requester)
                 acted.append(doc_id)
         return acted
 
-    def _wiki_hook(self, doc_id: str) -> None:
+    def _wiki_hook(self, doc_id: str, requester: str) -> None:
         if self._wiki is None:
             return
         try:
             # on_doc_indexed is async (it enqueues a wiki job); drive it with a
-            # fresh loop since we're on the consumer's worker thread.
-            asyncio.run(self._wiki.on_doc_indexed(doc_id))
+            # fresh loop since we're on the consumer's worker thread. #186: this
+            # runs in a worker with no request, so hand it the run's requester to
+            # credit the wiki job + build-state to.
+            asyncio.run(self._wiki.on_doc_indexed(doc_id, requested_by=requester))
         except Exception:  # noqa: BLE001 — a wiki-hook failure must not fail the index job
             _LOGGER.exception("IndexCoordinator: wiki hook failed for %s", doc_id)
 

@@ -155,6 +155,69 @@ async def test_unfold_stamps_the_pages_with_the_deleter_not_the_worker():
     assert page.info.updated_by == "deleter-bob"  # the deleter who triggered the scrub
 
 
+async def test_fold_credits_the_job_and_build_state_to_the_run_requester():
+    """#186: the maintenance JOB and the build-state row are derived artifacts of
+    the index run, credited to its requester (handed in by the index worker, which
+    has no request). Both must survive the worker's own status writes — the
+    WikiPage, separately, still goes to the source's uploader (#83)."""
+    from specstar.types import TaskStatus
+
+    from workspace_app.kb.wiki.store import _rid
+    from workspace_app.resources import WikiBuildState, WikiPage
+
+    who = {"u": "alice"}
+    spec = make_spec(default_user=lambda: who["u"])
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    doc = _add_source_as(spec, cid, "alice", "report.md", "ALICE: zone 3 setpoint 245C")
+
+    who["u"] = "wiki-worker"  # the consumer runs with no request user
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+    # The index worker triggers the fold AS the run's requester (bob reindexed).
+    await coord.on_doc_indexed(doc, requested_by="bob")
+    await coord.aclose()
+
+    jrm = spec.get_resource_manager(WikiMaintenanceJob)
+    jobs = list(jrm.list_resources(QB["status"].eq(TaskStatus.COMPLETED).build()))
+    assert jobs  # the fold job ran to completion
+    # #186: the job's audit is the requester, not the worker default.
+    assert {j.info.created_by for j in jobs} == {"bob"}  # ty: ignore[unresolved-attribute]
+    assert {j.info.updated_by for j in jobs} == {"bob"}  # ty: ignore[unresolved-attribute]
+    state = spec.get_resource_manager(WikiBuildState).get(cid)
+    assert state.info.updated_by == "bob"  # #186: build-state credited to the requester
+    page = spec.get_resource_manager(WikiPage).get(_rid(cid, "/entities/page-1.md"))
+    assert page.info.updated_by == "alice"  # WikiPage stays the uploader (#83)
+
+
+async def test_unfold_credits_the_build_state_to_the_deleter():
+    """#186: an unfold's build-state writes are credited to the deleter (the job's
+    creator), matching the WikiPage scrub credit."""
+    from workspace_app.resources import WikiBuildState
+
+    who = {"u": "alice"}
+    spec = make_spec(default_user=lambda: who["u"])
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    doc = _add_source_as(spec, cid, "alice", "report.md", "ALICE secret fact")
+
+    who["u"] = "deleter-bob"  # bob presses delete (request context)
+    coord = WikiMaintenanceCoordinator(spec, _RecordingRunner())
+    await coord.on_doc_deleted(doc)
+    spec.get_resource_manager(SourceDoc).permanently_delete(doc)
+
+    who["u"] = "wiki-worker"  # the unfold runs later in a job pod
+    await coord.aclose()
+
+    state = spec.get_resource_manager(WikiBuildState).get(cid)
+    assert state.info.updated_by == "deleter-bob"
+
+
 async def test_deleting_a_source_without_use_wiki_does_not_unfold():
     """No wiki on the collection ⇒ nothing to scrub, no unfold pass."""
     spec = make_spec(default_user="u")

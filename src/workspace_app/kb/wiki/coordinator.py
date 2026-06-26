@@ -47,6 +47,7 @@ from specstar.types import (
 )
 
 from ...resources import AgentConfig, Collection, SourceDoc, WikiBuildState
+from ..job_audit import preserve_job_creator
 from .guidance import with_collection_guidance
 from .jobs import WikiJobPayload, WikiMaintenanceJob
 from .maintainer import (
@@ -129,10 +130,15 @@ class WikiMaintenanceCoordinator:
         unfolder_config: AgentConfig | None = None,
         maintainer_max_turns: int = 40,
         message_queue_factory: object | None = None,
+        get_user_id: Callable[[], str] | None = None,
     ) -> None:
         self._spec = spec
         self._runner = runner
         self._wiki_store = WikiFileStore(spec)
+        # #186: who an enqueue is credited to — the real user in a request
+        # (resolved off the spec default any non-job manager still carries);
+        # production injects the same get_user_id.
+        self._get_user_id = get_user_id or (lambda: spec.get_resource_manager(SourceDoc).user)
         self._agent_config = agent_config or default_wiki_maintainer_config()
         self._unfolder_config = unfolder_config or default_wiki_unfolder_config()
         self._maintainer_max_turns = maintainer_max_turns
@@ -156,6 +162,10 @@ class WikiMaintenanceCoordinator:
             message_queue_factory=message_queue_factory,  # ty: ignore[invalid-argument-type]
         )
         self._job_rm = spec.get_resource_manager(WikiMaintenanceJob)
+        # #186: preserve each maintenance job's creator across its lifecycle
+        # instead of stamping the worker default; producers below set the user
+        # explicitly via using().
+        preserve_job_creator(self._job_rm)
         self._consuming = False
 
     # ── status (read) ────────────────────────────────────────────────
@@ -187,10 +197,15 @@ class WikiMaintenanceCoordinator:
         return self._job_rm.count_resources(q.build())
 
     # ── enqueue (producer) ───────────────────────────────────────────
-    async def on_doc_indexed(self, doc_id: str) -> None:
+    async def on_doc_indexed(self, doc_id: str, *, requested_by: str | None = None) -> None:
         """Enqueue ``doc_id``'s source for its collection's wiki if (and only
         if) that collection has ``use_wiki`` on. Returns immediately — the
-        maintenance runs in the background consumer (this or another pod)."""
+        maintenance runs in the background consumer (this or another pod).
+
+        ``requested_by`` (#186) is the user this enqueue is credited to. A route
+        calls this directly inside a request and leaves it ``None`` → the current
+        request user; the index worker passes the index run's requester
+        explicitly (it has no request)."""
         try:
             doc = self._doc_rm.get(doc_id).data
         except ResourceIDNotFoundError:
@@ -204,23 +219,27 @@ class WikiMaintenanceCoordinator:
         if not (isinstance(coll, Collection) and coll.use_wiki):
             return  # wiki path not enabled for this collection
 
+        actor = requested_by if requested_by is not None else self._get_user_id()
         # Start (or grow) the build epoch's source counter. A fresh batch (no
         # active jobs) resets the counter so the FE shows "1/N" not "29/N".
-        fresh = self._active_count(cid) == 0
-        self._update_state(
-            cid,
-            lambda s: (
-                WikiBuildState(collection_id=cid, total=1)
-                if fresh
-                else msgspec.structs.replace(s, total=s.total + 1)
-            ),
-        )
-        self._job_rm.create(
-            WikiMaintenanceJob(
-                payload=WikiJobPayload(collection_id=cid, source_path=doc.path, doc_id=doc_id),
-                partition_key=cid,
+        # #186: the build-state row + the job are both credited to the requester
+        # (the job manager carries no default, so its create MUST set a user).
+        with self._state_rm.using(user=actor), self._job_rm.using(user=actor):
+            fresh = self._active_count(cid) == 0
+            self._update_state(
+                cid,
+                lambda s: (
+                    WikiBuildState(collection_id=cid, total=1)
+                    if fresh
+                    else msgspec.structs.replace(s, total=s.total + 1)
+                ),
             )
-        )
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(collection_id=cid, source_path=doc.path, doc_id=doc_id),
+                    partition_key=cid,
+                )
+            )
 
     async def on_doc_deleted(self, doc_id: str) -> None:
         """A source is being deleted — enqueue an un-fold pass to scrub its
@@ -245,19 +264,23 @@ class WikiMaintenanceCoordinator:
         ref = SpecstarWikiSources(self._spec, cid).ref_by_id(doc_id)
         if ref is None:  # pragma: no cover — race: doc deleted between the get above and here
             return
-        self._job_rm.create(
-            WikiMaintenanceJob(
-                payload=WikiJobPayload(
-                    collection_id=cid,
-                    source_path=doc.path,
-                    doc_id=doc_id,
-                    op="unfold",
-                    removed_label=ref.path,
-                    removed_text=ref.text,
-                ),
-                partition_key=cid,
+        # #186: this runs inside the deleter's request — credit the unfold job to
+        # them (the job manager has no default, so the create MUST set a user).
+        # The downstream scrub reads job.created_by as `triggered_by`.
+        with self._job_rm.using(user=self._get_user_id()):
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(
+                        collection_id=cid,
+                        source_path=doc.path,
+                        doc_id=doc_id,
+                        op="unfold",
+                        removed_label=ref.path,
+                        removed_text=ref.text,
+                    ),
+                    partition_key=cid,
+                )
             )
-        )
 
     def _ensure_consuming(self) -> None:
         """Start this process's background consumer once (idempotent).
@@ -293,13 +316,21 @@ class WikiMaintenanceCoordinator:
         un-fold (#43); exceptions are recorded + swallowed by the pass — one bad
         source must not wedge the partition. Returning normally → COMPLETED."""
         payload = job.data.payload
-        if payload.op == "unfold":
-            # #83: the source is gone by now, so there's no updater to preserve —
-            # credit the scrub to whoever triggered it, i.e. the job's creator
-            # (the user who deleted the source, captured at enqueue time).
-            self._handle_unfold(payload, triggered_by=job.info.created_by)
-        else:
-            self._handle_fold(payload)
+        # #186: this maintenance job's creator is the requester (the deleter for
+        # an unfold, the indexer/uploader for a fold) — preserved across the job
+        # lifecycle now the manager carries no default. Credit every WikiBuildState
+        # write in this pass to them. (WikiPage writes keep their own acting-user
+        # inside the handlers: the source's updater for a fold, the deleter for an
+        # unfold — #83.)
+        actor = job.info.created_by
+        with self._state_rm.using(user=actor):
+            if payload.op == "unfold":
+                # #83: the source is gone by now, so there's no updater to
+                # preserve — credit the scrub to whoever triggered it (the job's
+                # creator, i.e. the user who deleted the source).
+                self._handle_unfold(payload, triggered_by=actor)
+            else:
+                self._handle_fold(payload)
 
     def _maintainer_config(self, cid: str, base: AgentConfig) -> AgentConfig:
         """Append the collection's maintainer guidance (#90) onto ``base`` — the
