@@ -472,6 +472,8 @@ describe("KbCollectionsPage", () => {
     renderKb(client);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    // #224: the retry lives behind the default-closed failure disclosure.
+    await userEvent.click(await screen.findByRole("button", { name: /1 份處理失敗/ }));
     // The failure strip surfaces a one-click retry that re-queues ONLY the
     // failed docs (not the healthy `ready` one) — issue #223.
     const btn = await screen.findByTestId("kb-reindex-failed");
@@ -681,6 +683,8 @@ describe("KbCollectionsPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     const strip = await screen.findByTestId("kb-index-status");
     expect(strip).toHaveTextContent(/1 份處理失敗/);
+    // #224: expand the default-closed disclosure to reveal the per-doc rows.
+    await userEvent.click(within(strip).getByRole("button", { name: /1 份處理失敗/ }));
     // the failed doc is named (by basename) + its reason is shown, not hidden
     expect(strip).toHaveTextContent("a.md");
     expect(strip).toHaveTextContent(/PdfParser: page 12/);
@@ -698,6 +702,8 @@ describe("KbCollectionsPage", () => {
     renderKb(client, "/kb/collections", openDoc);
 
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    // #224: expand the default-closed disclosure to reach the failed-doc row.
+    await userEvent.click(await screen.findByRole("button", { name: /1 份處理失敗/ }));
     await userEvent.click(await screen.findByRole("button", { name: /查看 a\.md 的失敗原因/ }));
     // clicking the failure row routes to the doc viewer by its opaque id
     expect(openDoc).toHaveBeenCalledWith("c1/me/a.md");
@@ -718,7 +724,40 @@ describe("KbCollectionsPage", () => {
     // #170 + #171: a failed doc with no detail falls back to the de-jargoned
     // "處理失敗" reason (and the count header reads "1 份處理失敗").
     expect(strip).toHaveTextContent(/1 份處理失敗/);
-    expect(strip).toHaveTextContent("處理失敗");
+    // #224: expand to reveal the per-doc row carrying the fallback reason —
+    // asserted as its own element, not the count text (which also ends "處理失敗").
+    await userEvent.click(within(strip).getByRole("button", { name: /1 份處理失敗/ }));
+    expect(within(strip).getByText("a.md")).toBeInTheDocument();
+    expect(within(strip).getByText("處理失敗")).toBeInTheDocument();
+  });
+
+  it("tucks the failure list behind a default-closed disclosure (#224)", async () => {
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "error", status_detail: "boom" },
+        ]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    const strip = await screen.findByTestId("kb-index-status");
+    // The count is always visible as the disclosure trigger, but the failed-doc
+    // rows + the retry action are tucked away by default (#224, 預設關).
+    const trigger = within(strip).getByRole("button", { name: /1 份處理失敗/ });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(within(strip).queryByText("a.md")).not.toBeInTheDocument();
+    expect(within(strip).queryByTestId("kb-reindex-failed")).not.toBeInTheDocument();
+    // Expanding reveals the per-doc rows + the retry action.
+    await userEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(within(strip).getByText("a.md")).toBeInTheDocument();
+    expect(within(strip).getByTestId("kb-reindex-failed")).toBeInTheDocument();
+    // Collapsing again hides them.
+    await userEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(within(strip).queryByText("a.md")).not.toBeInTheDocument();
   });
 
   it("hides the index-status strip once every doc is ready (#162)", async () => {
