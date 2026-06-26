@@ -296,10 +296,24 @@ function KbStatusBar({ doc }: { doc?: KbDocument }) {
     <div className={`kb-ide__status kb-ide__status--${doc.status}`} data-testid="kb-ide-status">
       <span className="kb-ide__status-path mono">{doc.path}</span>
       <span className="kb-ide__status-spacer" />
-      {doc.status_detail && (
-        <span className="kb-ide__status-detail" title={doc.status_detail}>
-          {doc.status_detail}
+      {doc.status === "indexing" && (doc.units_total ?? 0) > 0 ? (
+        // #248: a REAL done/total bar from the fan-out aggregate — only ever
+        // climbs, unlike the old per-page status_detail string that N parallel
+        // batches clobbered (making it jump backward).
+        <span className="kb-ide__status-progress mono" data-testid="kb-index-progress">
+          <progress
+            className="kb-ide__status-bar"
+            value={doc.units_done ?? 0}
+            max={doc.units_total}
+          />
+          {doc.units_done ?? 0} / {doc.units_total}
         </span>
+      ) : (
+        doc.status_detail && (
+          <span className="kb-ide__status-detail" title={doc.status_detail}>
+            {doc.status_detail}
+          </span>
+        )
       )}
       <span className="kb-ide__status-state">{status}</span>
       {(chunksLabel || rest.length > 0) && (

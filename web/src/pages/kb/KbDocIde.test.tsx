@@ -139,6 +139,34 @@ describe("KbDocIde", () => {
     expect(bar).toHaveTextContent("cited 2×");
   });
 
+  it("shows a monotonic unit progress bar while a fanned-out doc indexes (#248)", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(
+      <KbDocIde
+        collectionId="c1"
+        client={stubClient([
+          doc({ path: "/big.pdf", status: "indexing", units_done: 8, units_total: 24 }),
+        ])}
+      />,
+    );
+    await user.click(await screen.findByText("big.pdf"));
+    const bar = await screen.findByTestId("kb-ide-status");
+    expect(within(bar).getByTestId("kb-index-progress")).toHaveTextContent("8 / 24");
+  });
+
+  it("shows no unit bar for a single-job / ready doc (#248)", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(
+      <KbDocIde
+        collectionId="c1"
+        client={stubClient([doc({ path: "/note.md", status: "ready", units_total: 0 })])}
+      />,
+    );
+    await user.click(await screen.findByText("note.md"));
+    await screen.findByTestId("kb-ide-status");
+    expect(screen.queryByTestId("kb-index-progress")).not.toBeInTheDocument();
+  });
+
   it("creates a new file inside an inferred (relative-stored) folder, not at root", async () => {
     const user = userEvent.setup();
     const uploadDocument = vi.fn(async (_c: string, _f: File, _p?: string) => ["doc-new"]);
