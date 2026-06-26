@@ -284,6 +284,13 @@ class IndexRun(Struct):  # → resource "index-run"
     failed: list[int] = field(default_factory=list)  # batch indices that gave up
     finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
     status: str = "running"  # running | done | error
+    # #248: a real progress aggregate for the FE bar. `units_total` is the doc's
+    # unit count (e.g. PDF pages) seeded at fan-out; `units_done` is the sum of
+    # completed batches' unit counts, bumped once per batch under the same CAS as
+    # `done` — so it only ever climbs (parallel batches finishing out of order
+    # can't make it go backward, unlike the old per-page status_detail string).
+    units_total: int = 0
+    units_done: int = 0
 
 
 class IndexUnitText(Struct):  # → resource "index-unit-text"
