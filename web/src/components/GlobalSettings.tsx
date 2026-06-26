@@ -7,6 +7,7 @@
 
 import { type ReactNode, useState } from "react";
 
+import { API_PREFIX } from "../api/http";
 import { type ThemeMode, useThemeMode } from "../hooks/theme";
 import { useT } from "../lib/i18n";
 import { FontSizeSlider } from "./FontSizeSlider";
@@ -111,7 +112,7 @@ export function GlobalSettings() {
                 <dd style={{ margin: 0 }}>{t("about.signin.value")}</dd>
                 <dt style={{ color: "var(--text-paper-d)" }}>{t("about.docs")}</dt>
                 <dd style={{ margin: 0 }}>
-                  <a href="/docs" target="_blank" rel="noreferrer">
+                  <a href={`${API_PREFIX}/docs`} target="_blank" rel="noreferrer">
                     {t("about.docs.link")}
                   </a>
                 </dd>

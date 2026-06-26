@@ -36,7 +36,13 @@ from .kb import (
     WikiPage,
 )
 from .notification import Notification
-from .sanity import SanityResult, sanity_result_id
+from .sanity import (
+    CustomSanityQuestion,
+    SanityResult,
+    SanityVerdict,
+    sanity_result_id,
+    sanity_verdict_id,
+)
 
 __all__ = [
     "AgentConfig",
@@ -44,6 +50,7 @@ __all__ = [
     "Collection",
     "ContextCard",
     "Conversation",
+    "CustomSanityQuestion",
     "DocChunk",
     "IndexRun",
     "IndexUnitText",
@@ -51,11 +58,13 @@ __all__ = [
     "Message",
     "Notification",
     "SanityResult",
+    "SanityVerdict",
     "SourceDoc",
     "WikiBuildState",
     "WikiPage",
     "make_spec",
     "sanity_result_id",
+    "sanity_verdict_id",
 ]
 
 
@@ -147,14 +156,56 @@ def _register_all(spec: SpecStar) -> None:
     # a full scan (issue #14: ~100 docs hung). content.size is indexed (as a
     # scalar `content_size`) so the collection cards can SUM blob sizes per
     # collection via one `exp_aggregate_by` instead of materialising every doc.
+    #
+    # #263: `path` indexed so resolving a user-supplied filename → its
+    # source-doc id is a query (exact or basename via `.contains`), the lookup
+    # that backs the location-filtered kb_search. Bumped v2 → v3 with steps from
+    # BOTH `None` (the bulk of production rows) AND `v2` (rows already migrated
+    # once): adding an index to an already-`v2` model would NOT re-extract those
+    # v2 rows (migrate is a no-op when a row is already at the target version),
+    # so the new `path` index would silently miss them. v3 forces every row to
+    # re-extract on the next `POST /source-doc/migrate/execute`.
     spec.add_model(
-        Schema(SourceDoc, "v2").step(None, _reindex_only, source_type=SourceDoc),
-        indexed_fields=["collection_id", IndexableField("content.size", index_key="content_size")],
+        Schema(SourceDoc, "v3")
+        .step(None, _reindex_only, to="v3", source_type=SourceDoc)
+        .step("v2", _reindex_only, to="v3", source_type=SourceDoc),
+        indexed_fields=[
+            "collection_id",
+            IndexableField("content.size", index_key="content_size"),
+            IndexableField("path", str),
+        ],
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the
     # retriever's per-collection lookup) is a query — a non-indexed filter would
     # load + deserialize every chunk's embedding Vector, which is the hang.
-    spec.add_model(DocChunk, indexed_fields=["source_doc_id", "collection_id"])
+    # #263: provenance locators indexed so a chunk can be fetched by its
+    # structural location (page range / sheet) — a deterministic WHERE that
+    # composes with the dense/sparse retrieval (the same way collection_id
+    # already filters the vector query). `provenance` is a dict[str, Any] and
+    # specstar's `_extract_by_path` walks INTO it, so `provenance.page` extracts
+    # the subkey natively. int locators support range queries (operator-driven
+    # ::numeric cast on every backend); str locators (sheet) use exact match.
+    #
+    # Schema v3 with steps from BOTH `None` and `v2` so an operator can backfill
+    # the provenance indexes onto pre-existing chunks via
+    # `POST /doc-chunk/migrate/execute` — re-extracting indexed_data from the
+    # `provenance` already stored on each chunk, NOT re-parsing/re-embedding
+    # (#263). DocChunk carried no Schema before, so its rows are version `None`;
+    # the `v2` edge is defensive (harmless if no v2 row exists).
+    spec.add_model(
+        Schema(DocChunk, "v3")
+        .step(None, _reindex_only, to="v3", source_type=DocChunk)
+        .step("v2", _reindex_only, to="v3", source_type=DocChunk),
+        indexed_fields=[
+            "source_doc_id",
+            "collection_id",
+            IndexableField("provenance.page", int, index_key="page"),
+            IndexableField("provenance.slide", int, index_key="slide"),
+            IndexableField("provenance.sheet", str, index_key="sheet"),
+            IndexableField("provenance.row", int, index_key="row"),
+            IndexableField("provenance.jsonl_line", int, index_key="line"),
+        ],
+    )
     # #227: fan-out join state, one row per doc (id = doc id). `status` indexed
     # so the safety sweep can find runs still "running" with no live jobs; the
     # per-doc active-run guard is a point get by id.
@@ -198,3 +249,11 @@ def _register_all(spec: SpecStar) -> None:
     # Model-sanity matrix cells (current-only). model indexed so the FE lists
     # one model's grid without a full scan; auto routes serve GET /sanity-result.
     spec.add_model(SanityResult, indexed_fields=["model"])
+    # #231: one fitness verdict per model (current-only). model indexed so a
+    # verdict get/list is a query; auto routes serve GET /sanity-verdict.
+    spec.add_model(SanityVerdict, indexed_fields=["model"])
+    # #231: user-authored sanity questions (AI-only graded). Few rows (operator
+    # authored via the 題目管理 panel), so the coordinator lists them all + filters
+    # in Python; auto-CRUD routes (POST/GET/PUT/DELETE /custom-sanity-question)
+    # own the lifecycle. category indexed for a possible 題組 filter.
+    spec.add_model(CustomSanityQuestion, indexed_fields=["category"])

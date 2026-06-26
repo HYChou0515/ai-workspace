@@ -24,10 +24,12 @@ def _mounted_paths() -> set[str]:
 
 def test_app_mounts_migrate_execute_for_backfill_targets() -> None:
     paths = _mounted_paths()
-    # The two models whose indexes post-date their data — the ones an operator
-    # actually backfills.
+    # The models whose indexes post-date their data — the ones an operator
+    # actually backfills. #263 added the `provenance` indexes on doc-chunk and
+    # the `path` index on source-doc, both backfilled this way (no re-parse).
     assert "/source-doc/migrate/execute" in paths
     assert "/citation-event/migrate/execute" in paths
+    assert "/doc-chunk/migrate/execute" in paths
 
 
 def test_migrate_template_is_global() -> None:

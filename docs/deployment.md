@@ -449,6 +449,22 @@ RCA 的 system prompt 是純 markdown，存在
   RCA 預設較長（8 小時閒置）以支援「開著、晚點再回來」的調查流程。
 - **LLM 連線**：用本機 Ollama 時確認 `ollama serve` 已啟動、模型已 `ollama pull`；
   用 hosted 時設好對應的 API key 環境變數。
+- **索引回填（#263，升級後一次性）**：本版替 `DocChunk` 加了 `provenance`
+  位置索引（page / sheet / …，供「分析某檔第 N 頁」這類定位過濾），並替
+  `SourceDoc` 加了 `path` 索引（檔名→文件解析），兩個 model 都升到 schema
+  `v3`。specstar 在**寫入時**才抽取 `indexed_data`，不會自動回填舊資料，所以
+  升級後**既有的 chunk / 文件查不到這些位置過濾**，直到 operator 跑一次遷移
+  （它從已存的 `provenance` / `path` **重抽索引、不重新 parse 也不重算
+  embedding**）：
+
+  ```bash
+  curl -X POST http://<host>/api/doc-chunk/migrate/execute
+  curl -X POST http://<host>/api/source-doc/migrate/execute
+  ```
+
+  升 v3（而非沿用 v2）是因為生產資料多為 `None`、少數已是 `v2`；只在 v2 上加
+  索引不會重抽那些已 v2 的列，跳 v3 才會讓**全部**列重抽。新寫入的列已直接帶
+  索引，不需處理。
 
 ---
 

@@ -266,6 +266,8 @@ class SanityResultRow(BaseModel):
     output: str
     reasoned: bool
     grade: str  # "pass" | "fail" | "" (eyeball)
+    ai_grade: str  # #231: AI judge verdict "pass" | "fail" | "" (not judged yet)
+    ai_note: str  # #231: AI judge one-line rationale; "" when not judged
     aux: str
     error: str
     latency_ms: int
@@ -282,21 +284,51 @@ class SanityRunStartedOut(BaseModel):
     queued: bool
 
 
+class SanityVerdictOut(BaseModel):
+    """#231: one model's overall fitness verdict (the FE renders a card each)."""
+
+    model: str
+    score: int  # 0–100
+    summary: str  # markdown, per-role fitness bullets
+
+
+class SanityRunMissingBody(BaseModel):
+    models: list[str]
+    category: str | None = None  # narrow to one 題組; None ⇒ every question
+
+
+class SanityRescoreBody(BaseModel):
+    models: list[str]
+
+
+class SanityCountOut(BaseModel):
+    count: int  # cells enqueued (run-missing) / re-judged (rescore)
+
+
+class CustomQuestionBody(BaseModel):
+    category: str
+    prompt: str
+    expected: str
+    levels: list[str] = []  # none|low|medium|high
+    enabled: bool = True
+
+
+class CustomQuestionOut(CustomQuestionBody):
+    id: str  # specstar resource id (for edit/delete)
+
+
 def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordinator: Any) -> None:
     """The model-sanity matrix API: GET the question/level/model metadata (the FE
     draws the empty grid), POST a run (cell or auto battery). Cell results
     themselves are a specstar resource — the FE lists ``/sanity-result`` directly
     (auto route), so there's no custom read for them here."""
-    from ..health.sanity.questions import (
-        ALL_LEVELS,
-        LEVEL_LABELS,
-        QUESTIONS,
-        find_question,
-        question_key,
-    )
+    from ..health.sanity.questions import ALL_LEVELS, LEVEL_LABELS, question_key
+    from ..resources import CustomSanityQuestion
 
     @app.get("/sanity/questions")
     async def get_sanity_meta() -> SanityMetaOut:
+        # #231: built-ins ∪ enabled custom questions (the coordinator merges them),
+        # so the FE matrix shows user-authored questions alongside the bundled 19.
         return SanityMetaOut(
             models=list(models),
             levels=[SanityLevelOut(level=lvl, label=LEVEL_LABELS[lvl]) for lvl in ALL_LEVELS],
@@ -309,7 +341,7 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
                     auto_run=q.auto_run,
                     auto_levels=list(q.auto_levels),
                 )
-                for q in QUESTIONS
+                for q in coordinator.all_questions()
             ],
         )
 
@@ -322,6 +354,8 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
                 output=r.output,
                 reasoned=r.reasoned,
                 grade=r.grade,
+                ai_grade=r.ai_grade,
+                ai_note=r.ai_note,
                 aux=r.aux,
                 error=r.error,
                 latency_ms=r.latency_ms,
@@ -332,7 +366,7 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
     @app.post("/sanity/run", status_code=202)
     async def run_sanity(body: SanityRunBody) -> SanityRunStartedOut:
         if body.scope == "cell":
-            if find_question(body.question_key) is None:
+            if coordinator.find_question(body.question_key) is None:
                 raise HTTPException(404, detail=f"unknown question {body.question_key!r}")
             if body.level not in ALL_LEVELS:
                 raise HTTPException(422, detail=f"unknown level {body.level!r}")
@@ -340,3 +374,66 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
         else:
             coordinator.run_battery(body.model)
         return SanityRunStartedOut(queued=True)
+
+    @app.get("/sanity/verdicts")
+    async def get_sanity_verdicts() -> list[SanityVerdictOut]:
+        return [
+            SanityVerdictOut(model=v.model, score=v.score, summary=v.summary)
+            for v in coordinator.list_verdicts()
+        ]
+
+    @app.post("/sanity/run-missing", status_code=202)
+    async def run_missing(body: SanityRunMissingBody) -> SanityCountOut:
+        """#231: one-click 'fill all blanks' — enqueue only the never-run coverage
+        cells for the selected models (optionally one 題組)."""
+        total = sum(coordinator.run_missing(m, category=body.category) for m in body.models)
+        return SanityCountOut(count=total)
+
+    @app.post("/sanity/rescore")
+    async def rescore(body: SanityRescoreBody) -> SanityCountOut:
+        """#231: '重新 AI 評分' — re-judge stored cell outputs (no model re-run) and
+        refresh each model's verdict. Offloaded to a thread (it makes live judge
+        LLM calls) so the event loop stays free."""
+        total = 0
+        for model in body.models:
+            total += await asyncio.to_thread(coordinator.rescore, model)
+        return SanityCountOut(count=total)
+
+    def _cq(body: CustomQuestionBody) -> CustomSanityQuestion:
+        return CustomSanityQuestion(
+            category=body.category,
+            prompt=body.prompt,
+            expected=body.expected,
+            levels=body.levels,
+            enabled=body.enabled,
+        )
+
+    @app.get("/sanity/custom-questions")
+    async def list_custom_questions() -> list[CustomQuestionOut]:
+        return [
+            CustomQuestionOut(
+                id=qid,
+                category=c.category,
+                prompt=c.prompt,
+                expected=c.expected,
+                levels=c.levels,
+                enabled=c.enabled,
+            )
+            for qid, c in coordinator.list_custom()
+        ]
+
+    @app.post("/sanity/custom-questions", status_code=201)
+    async def create_custom_question(body: CustomQuestionBody) -> CustomQuestionOut:
+        qid = coordinator.create_custom(_cq(body))
+        return CustomQuestionOut(id=qid, **body.model_dump())
+
+    @app.put("/sanity/custom-questions/{qid:path}")
+    async def update_custom_question(qid: str, body: CustomQuestionBody) -> CustomQuestionOut:
+        if not coordinator.update_custom(qid, _cq(body)):
+            raise HTTPException(404, detail=f"unknown question {qid!r}")
+        return CustomQuestionOut(id=qid, **body.model_dump())
+
+    @app.delete("/sanity/custom-questions/{qid:path}", status_code=204)
+    async def delete_custom_question(qid: str) -> None:
+        if not coordinator.delete_custom(qid):
+            raise HTTPException(404, detail=f"unknown question {qid!r}")

@@ -17,6 +17,7 @@ import posixpath
 from dataclasses import dataclass
 
 from specstar import QB, SpecStar
+from specstar.query import ConditionBuilder
 from specstar.types import ResourceIDNotFoundError
 from specstar.util.vector_distance import cosine_distance
 
@@ -56,6 +57,53 @@ class Enhancements:
 
 
 @dataclass(frozen=True)
+class LocationFilter:
+    """Issue #263: a deterministic structural scope for retrieval — "this
+    document, pages 30-90" / "this sheet". It NARROWS the candidate chunk set
+    (pushed into both the dense vector query and the BM25/MMR corpus) BEFORE
+    ranking, so a scoped query like "為什麼 XXX，據 30-90 頁" is vector ranking
+    within the range, not a separate path. All fields optional; an all-None
+    filter is a no-op (same as today's unscoped search).
+
+    Page semantics: both bounds → inclusive range; exactly one bound → that
+    single page (the tool sends `page_from` only for "page 30"). `sheet` is an
+    exact match.
+    """
+
+    source_doc_id: str | None = None
+    page_from: int | None = None
+    page_to: int | None = None
+    sheet: str | None = None
+
+    def is_empty(self) -> bool:
+        return (
+            self.source_doc_id is None
+            and self.page_from is None
+            and self.page_to is None
+            and self.sheet is None
+        )
+
+    def conditions(self) -> list[ConditionBuilder]:
+        """The QB predicates this filter contributes — AND-combined onto the
+        collection scope in both retrieval queries. Each locator is an indexed
+        field on DocChunk (see `resources` add_model), so this is a real indexed
+        WHERE, never a Python post-filter."""
+        conds: list[ConditionBuilder] = []
+        if self.source_doc_id is not None:
+            conds.append(QB["source_doc_id"] == self.source_doc_id)
+        lo, hi = self.page_from, self.page_to
+        if lo is not None and hi is not None:
+            conds.append(QB["page"].between(lo, hi))
+        elif lo is not None:
+            conds.append(QB["page"] == lo)
+        elif hi is not None:
+            conds.append(QB["page"] == hi)
+        if self.sheet is not None:
+            conds.append(QB["sheet"] == self.sheet)
+        return conds
+
+
+@dataclass(frozen=True)
 class _ResolvedEnhancements:
     expand: int
     hyde: int
@@ -87,6 +135,17 @@ def _resolve_enhancements(
         hyde=min(max(0, hyde_raw), defaults.hyde.max),
         rerank=bool(rerank_raw) and bool(defaults.rerank.max),
     )
+
+
+def _scoped(base: ConditionBuilder, location: LocationFilter | None) -> ConditionBuilder:
+    """AND the location filter's predicates onto a base query. `None`/empty ⇒
+    the base unchanged (unscoped)."""
+    if location is None:
+        return base
+    out = base
+    for cond in location.conditions():
+        out = out & cond
+    return out
 
 
 def _chunk_vec(chunk: DocChunk) -> list[float]:
@@ -132,14 +191,21 @@ class Retriever:
         on_progress: OnChunk | None = None,
         *,
         enhancements: Enhancements | None = None,
+        location: LocationFilter | None = None,
     ) -> list[RetrievedPassage]:
         """`enhancements` is the per-call override: any field set to a
         concrete value wins over the operator default for that knob,
         then is clamped against the operator's `max`. Fields left
         `None` (or the whole arg `None`) inherit from the operator
         default. When the LLM isn't wired, all three are forced off
-        regardless of the resolved values."""
-        chunks = self._load_chunks(collection_ids)  # {chunk_id: DocChunk}
+        regardless of the resolved values.
+
+        `location` (#263) is a deterministic structural scope (document /
+        page range / sheet) pushed into BOTH the dense vector query and the
+        BM25/MMR corpus, so ranking happens within the scope. `None` (or an
+        empty filter) ⇒ unscoped, exactly as before."""
+        loc = location if location is not None and not location.is_empty() else None
+        chunks = self._load_chunks(collection_ids, loc)  # {chunk_id: DocChunk}
         if not chunks:
             return []
 
@@ -167,14 +233,16 @@ class Retriever:
         ranked_lists: list[list[str]] = []
         for q in queries:
             qv = self._embedder.embed_query(q)
-            ranked_lists.append(self._dense_order(collection_ids, qv, field="embedding"))
+            ranked_lists.append(
+                self._dense_order(collection_ids, qv, field="embedding", location=loc)
+            )
             # P3.0 fan-out: a separate dense pass for the code-vector field
             # (when wired). Each field uses its own embedder, so the query
             # vector is in the right geometry.
             if self._code_embedder is not None:
                 qv_alt = self._code_embedder.embed_query(q)
                 ranked_lists.append(
-                    self._dense_order(collection_ids, qv_alt, field="embedding_alt")
+                    self._dense_order(collection_ids, qv_alt, field="embedding_alt", location=loc)
                 )
             ranked_lists.append(bm25_rank(q, corpus))
 
@@ -195,11 +263,15 @@ class Retriever:
             ]
             for doc in hyde_docs:
                 hv = self._embedder.embed_documents([doc])[0]
-                ranked_lists.append(self._dense_order(collection_ids, hv, field="embedding"))
+                ranked_lists.append(
+                    self._dense_order(collection_ids, hv, field="embedding", location=loc)
+                )
                 if self._code_embedder is not None:
                     hv_alt = self._code_embedder.embed_documents([doc])[0]
                     ranked_lists.append(
-                        self._dense_order(collection_ids, hv_alt, field="embedding_alt")
+                        self._dense_order(
+                            collection_ids, hv_alt, field="embedding_alt", location=loc
+                        )
                     )
 
         fused = reciprocal_rank_fusion(ranked_lists)[: self._candidates]
@@ -245,16 +317,24 @@ class Retriever:
         return passages[: self._top_k]
 
     def _dense_order(
-        self, collection_ids: list[str], vec: list[float], *, field: str = "embedding"
+        self,
+        collection_ids: list[str],
+        vec: list[float],
+        *,
+        field: str = "embedding",
+        location: LocationFilter | None = None,
     ) -> list[str]:
         """Top candidate chunk ids nearest `vec` in the given vector `field`
         (``embedding`` or ``embedding_alt``), via specstar's native vector
         query (pgvector-indexed when available; computed in-store otherwise).
-        Ordered nearest-first by cosine distance."""
+        Ordered nearest-first by cosine distance. A `location` filter (#263)
+        AND-narrows the candidate set on the indexed provenance fields BEFORE
+        the vector sort — index filter + vector order in ONE query, the same
+        way `collection_id` already scopes it."""
         rm = self._spec.get_resource_manager(DocChunk)
+        scope = _scoped(QB["collection_id"].in_(collection_ids), location)
         query = (
-            QB["collection_id"]
-            .in_(collection_ids)
+            scope
             # specstar's order_by type union omits VectorDistanceSort (works at runtime)
             .order_by(QB[field].cosine(vec).asc())  # ty: ignore[invalid-argument-type]
             .limit(self._candidates)
@@ -265,11 +345,17 @@ class Retriever:
             for r in rm.list_resources(query)
         ]
 
-    def _load_chunks(self, collection_ids: list[str]) -> dict[str, DocChunk]:
+    def _load_chunks(
+        self, collection_ids: list[str], location: LocationFilter | None = None
+    ) -> dict[str, DocChunk]:
+        """The chunk universe for BM25 + MMR + passage metadata. A `location`
+        filter scopes it the SAME way as the dense query, so every retrieval
+        signal sees the same narrowed candidate set."""
         rm = self._spec.get_resource_manager(DocChunk)
         out: dict[str, DocChunk] = {}
         for cid in collection_ids:
-            for r in rm.list_resources((QB["collection_id"] == cid).build()):
+            scope = _scoped(QB["collection_id"] == cid, location)
+            for r in rm.list_resources(scope.build()):
                 data = r.data
                 assert isinstance(data, DocChunk)
                 out[r.info.resource_id] = data  # ty: ignore[unresolved-attribute]
