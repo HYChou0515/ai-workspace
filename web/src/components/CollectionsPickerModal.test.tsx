@@ -56,7 +56,16 @@ function fakeFileService(content: string | { notFound: true }): {
   });
   const svc = {
     scopeId: "it",
-    caps: { write: true, create: true, upload: true, delete: true, move: true, copy: true, folders: true },
+    caps: {
+      write: true,
+      create: true,
+      upload: true,
+      delete: true,
+      move: true,
+      copy: true,
+      folders: true,
+      download: true,
+    },
     listFiles: async () => [],
     listDirs: async () => [],
     readFile,
@@ -67,6 +76,9 @@ function fakeFileService(content: string | { notFound: true }): {
     mkdir: async () => {},
     refreshFiles: async () => {},
     fileUrl: () => "",
+    fileDownloadUrl: () => "",
+    prepareDirDownload: async () => ({ download_id: "d", filename: "f.zip", size: 0 }),
+    dirDownloadUrl: () => "",
   } satisfies FileService;
   return { svc, writes };
 }

@@ -24,6 +24,7 @@ const WIKI_CAPS: FileCaps = {
   move: true,
   copy: true,
   folders: true,
+  download: false, // #247 covers KB docs + workspace; the wiki keeps no download
 };
 
 type WikiKb = Pick<KbApi, "getWikiPage" | "writeWikiPage" | "moveWikiPage" | "deleteWikiPage">;
@@ -114,5 +115,13 @@ export function wikiFileService(
     // Wiki markdown refs ([[wikilink]] / Sources) are resolved by the wiki
     // preview itself, not as file URLs; nothing to resolve here.
     fileUrl: (src) => src ?? "",
+
+    // Download is off for the wiki (caps.download=false), so these never run —
+    // present only to satisfy the FileService shape (#247).
+    fileDownloadUrl: () => "",
+    prepareDirDownload: async () => {
+      throw new Error("wiki download is not supported");
+    },
+    dirDownloadUrl: () => "",
   };
 }

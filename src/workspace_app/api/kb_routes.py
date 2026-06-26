@@ -5,10 +5,7 @@ and the document render endpoint. Registered onto the app by `create_app`.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import posixpath
-import re
-import uuid
 from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
@@ -22,15 +19,20 @@ from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.aggregates import Count, ForeignAggregate, Max, Sum
 from specstar.types import Binary, ResourceIDNotFoundError
-from starlette.background import BackgroundTask
 
+from ..files.zip_download import (
+    DownloadPrepared,
+    prepare_zip,
+    prepared_path,
+    safe_zip_filename,
+    stream_prepared_zip,
+)
 from ..kb.cited import chunk_cited, collection_cited, doc_cited_count, doc_cited_for_ids
 from ..kb.code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..kb.collection_export import (
     build_collection_zip,
+    build_kb_subtree_zip,
     collection_zip_filename,
-    downloads_dir,
-    sweep_stale_downloads,
 )
 from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
@@ -215,16 +217,6 @@ class DocumentRow(BaseModel):
     updated_at: int  # epoch ms
 
 
-class DownloadPrepared(BaseModel):
-    """Issue #101: result of POST .../download/prepare — the handle the FE
-    anchor-navigates to (GET .../download/{download_id}) to stream the zip.
-    `size` lets the FE show the export size before/while downloading."""
-
-    download_id: str
-    filename: str
-    size: int
-
-
 class CollectionImported(BaseModel):
     """Issue #101: result of importing an exported zip. `collection_id` is the
     target — a freshly created one (new-collection import) or the existing one
@@ -252,13 +244,6 @@ class DocumentsPage(BaseModel):
 
 def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
-
-
-def _unlink_quietly(path: Path) -> None:
-    """Delete a streamed export zip after the response is sent. Best-effort —
-    a missing file (double-send race) is fine."""
-    with contextlib.suppress(OSError):
-        path.unlink()
 
 
 def register_kb_routes(
@@ -403,25 +388,21 @@ def register_kb_routes(
         except ResourceIDNotFoundError as e:
             raise HTTPException(status_code=404, detail="collection not found") from e
         assert isinstance(coll, Collection)
-        sweep_stale_downloads()
-        download_id = uuid.uuid4().hex
-        out_path = downloads_dir() / f"{download_id}.zip"
-        await asyncio.to_thread(build_collection_zip, spec, collection_id, out_path)
+        download_id, size = await prepare_zip(
+            lambda out: build_collection_zip(spec, collection_id, out)
+        )
         return DownloadPrepared(
             download_id=download_id,
             filename=collection_zip_filename(coll.name),
-            size=out_path.stat().st_size,
+            size=size,
         )
 
     @app.get("/kb/collections/{collection_id}/download/{download_id}")
     async def stream_collection_download(collection_id: str, download_id: str) -> FileResponse:
-        """Stream a prepared export zip once, then delete it. `download_id` is a
-        uuid hex — validated so it can't escape `downloads_dir()`. 404 when the
-        id is malformed or the file was already streamed / reaped / never made."""
-        if not re.fullmatch(r"[0-9a-f]{32}", download_id):
-            raise HTTPException(status_code=404, detail="download not found")
-        path = downloads_dir() / f"{download_id}.zip"
-        if not path.exists():
+        """Stream a prepared export zip once, then delete it. 404 when the id is
+        malformed / already streamed / reaped, or the collection is gone."""
+        path = prepared_path(download_id)
+        if path is None:
             raise HTTPException(status_code=404, detail="download not found")
         rm = spec.get_resource_manager(Collection)
         try:
@@ -429,12 +410,47 @@ def register_kb_routes(
         except ResourceIDNotFoundError as e:
             raise HTTPException(status_code=404, detail="collection not found") from e
         assert isinstance(coll, Collection)
-        return FileResponse(
-            path,
-            media_type="application/zip",
-            filename=collection_zip_filename(coll.name),
-            background=BackgroundTask(_unlink_quietly, path),
+        return stream_prepared_zip(path, collection_zip_filename(coll.name))
+
+    # ── Issue #247: raw folder/root download (no manifest) ────────────────
+    @app.post("/kb/collections/{collection_id}/folder-download/prepare")
+    async def prepare_folder_download(collection_id: str, prefix: str = "") -> DownloadPrepared:
+        """Build a plain ZIP of the raw bytes of every doc under `prefix`
+        (`prefix=""` = the whole collection), entries re-rooted at the folder.
+        404 when the collection is unknown."""
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as e:
+            raise HTTPException(status_code=404, detail="collection not found") from e
+        assert isinstance(coll, Collection)
+        folder = prefix.strip("/").rsplit("/", 1)[-1] or coll.name
+        download_id, size = await prepare_zip(
+            lambda out: build_kb_subtree_zip(spec, collection_id, prefix, out)
         )
+        return DownloadPrepared(
+            download_id=download_id,
+            filename=safe_zip_filename(folder),
+            size=size,
+        )
+
+    @app.get("/kb/collections/{collection_id}/folder-download/{download_id}")
+    async def stream_folder_download(
+        collection_id: str, download_id: str, prefix: str = ""
+    ) -> FileResponse:
+        """Stream a prepared folder ZIP once, then delete it. 404 when the id is
+        malformed / already streamed / reaped, or the collection is gone."""
+        path = prepared_path(download_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="download not found")
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as e:
+            raise HTTPException(status_code=404, detail="collection not found") from e
+        assert isinstance(coll, Collection)
+        folder = prefix.strip("/").rsplit("/", 1)[-1] or coll.name
+        return stream_prepared_zip(path, safe_zip_filename(folder))
 
     @app.post("/kb/collections/import")
     async def import_new_collection(

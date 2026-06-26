@@ -297,6 +297,12 @@ export interface KbApi {
   /** The URL to navigate to (native streaming download) for a prepared export.
    * Not a fetch — an `<a href>` so the browser streams straight to disk. */
   streamCollectionDownloadUrl(collectionId: string, downloadId: string): string;
+  /** Issue #247: build a raw (no-manifest) zip of the docs under `prefix`
+   * (`""` = the whole collection) and return its handle. */
+  prepareFolderDownload(collectionId: string, prefix: string): Promise<DownloadPrepared>;
+  /** Issue #247: the `<a href>` URL to stream a prepared folder zip; `prefix` is
+   * echoed so the streamed file is named after the folder. */
+  folderDownloadUrl(collectionId: string, downloadId: string, prefix: string): string;
   /** Issue #101: import an exported zip as a NEW collection (settings + cards
    * restored from its manifest; a manifest-less zip becomes a plain-files
    * import named after the file). Returns the new collection id. */
@@ -454,6 +460,19 @@ export const realKbApi: KbApi = {
   },
   streamCollectionDownloadUrl(collectionId, downloadId) {
     return `${API_PREFIX}/kb/collections/${encodeURIComponent(collectionId)}/download/${encodeURIComponent(downloadId)}`;
+  },
+  async prepareFolderDownload(collectionId, prefix) {
+    const resp = await ok(
+      await apiFetch(
+        `/kb/collections/${encodeURIComponent(collectionId)}/folder-download/prepare?prefix=${encodeURIComponent(prefix)}`,
+        { method: "POST" },
+      ),
+      "prepare folder download",
+    );
+    return resp.json();
+  },
+  folderDownloadUrl(collectionId, downloadId, prefix) {
+    return `${API_PREFIX}/kb/collections/${encodeURIComponent(collectionId)}/folder-download/${encodeURIComponent(downloadId)}?prefix=${encodeURIComponent(prefix)}`;
   },
   async importCollectionNew(file) {
     const form = new FormData();

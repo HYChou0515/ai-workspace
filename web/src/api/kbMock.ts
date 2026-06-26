@@ -196,6 +196,13 @@ export const mockKbApi: KbApi = {
   streamCollectionDownloadUrl(collectionId, downloadId) {
     return `/kb/collections/${collectionId}/download/${downloadId}`;
   },
+  async prepareFolderDownload(_collectionId, prefix) {
+    const folder = prefix.replace(/\/+$/, "").split("/").pop() || "download";
+    return { download_id: "mockdl00000000000000000000000000", filename: `${folder}.zip`, size: 512 };
+  },
+  folderDownloadUrl(collectionId, downloadId, prefix) {
+    return `/kb/collections/${collectionId}/folder-download/${downloadId}?prefix=${encodeURIComponent(prefix)}`;
+  },
   async importCollectionNew(file) {
     // Simulate a new collection materialised from the uploaded zip, named after
     // the file (mirrors the BE manifest-less fallback the tests exercise).

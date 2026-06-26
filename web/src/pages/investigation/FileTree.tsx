@@ -250,6 +250,44 @@ export function FileTree({
     refresh();
   };
 
+  // #247: native-anchor download (the browser streams straight to disk). The
+  // `download` attr names the saved file so a KB blob isn't saved as its hash.
+  const triggerDownload = (url: string, filename: string) => {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+  // A file downloads its bytes directly; a folder is zipped server-side first
+  // (prepare → stream), entries rooted at the folder.
+  const downloadNode = async (node: TreeNode) => {
+    if (node.isDir) {
+      const prep = await svc.prepareDirDownload(node.path);
+      triggerDownload(svc.dirDownloadUrl(prep.download_id, node.path), prep.filename);
+    } else {
+      triggerDownload(svc.fileDownloadUrl(node.path), basename(node.path));
+    }
+  };
+  // The whole tree (root, prefix ""). Confirmed first since it can be a lot of
+  // files; per-folder / per-file downloads are explicit and skip the prompt.
+  const downloadAll = async () => {
+    const n = files.length;
+    const choice = await dialog.confirm({
+      title: "Download all",
+      body: `Download all ${n} file${n === 1 ? "" : "s"} as a zip?`,
+      actions: [
+        { id: "download", label: "Download" },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (choice !== "download") return;
+    const prep = await svc.prepareDirDownload("");
+    triggerDownload(svc.dirDownloadUrl(prep.download_id, ""), prep.filename);
+  };
+
   return (
     <div>
       {/* "Files" header with the three actions: new file, new folder, upload. */}
@@ -272,6 +310,17 @@ export function FileTree({
         >
           <Icon name="refresh" size={13} />
         </button>
+        {caps.download && (
+          <button
+            type="button"
+            title="Download all"
+            aria-label="download all"
+            onClick={() => void downloadAll()}
+            style={{ color: "var(--text-paper-d)", padding: 2 }}
+          >
+            <Icon name="download" size={13} />
+          </button>
+        )}
         {caps.create && (
           <button
             type="button"
@@ -499,6 +548,7 @@ export function FileTree({
           onDelete={(n) => void deletePaths(targetsFor(n.path))}
           onReindex={onReindex ? (n) => onReindex(targetsFor(n.path)) : undefined}
           onCopyPath={(p) => void navigator.clipboard?.writeText(p)}
+          onDownload={(n) => void downloadNode(n)}
           onOpenInSplit={onOpenInSplit}
         />
       )}
@@ -797,6 +847,7 @@ function TreeContextMenu({
   onDelete,
   onReindex,
   onCopyPath,
+  onDownload,
   onOpenInSplit,
 }: {
   node: TreeNode;
@@ -815,6 +866,8 @@ function TreeContextMenu({
   onDelete: (n: TreeNode) => void;
   onReindex?: (n: TreeNode) => void;
   onCopyPath: (p: string) => void;
+  /** #247: download this node — a file streams its bytes, a folder a zip. */
+  onDownload: (n: TreeNode) => void;
   onOpenInSplit?: (p: string) => void;
 }) {
   // For a folder the "containing dir" is itself; for a file it's its parent.
@@ -901,6 +954,7 @@ function TreeContextMenu({
               {caps.delete && item("Delete", () => onDelete(node))}
               {(topGroup || mutateGroup) && sep}
               {item("Copy path", () => onCopyPath(node.path))}
+              {caps.download && item("Download", () => onDownload(node))}
             </>
           );
           })()

@@ -15,7 +15,7 @@ from typing import Any, Literal
 import msgspec
 from agents.tracing import set_trace_processors
 from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from specstar import SpecStar
@@ -26,6 +26,15 @@ from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import AgentToolContext
 from ..config.schema import EnhancementSettings
 from ..files import WorkspaceFiles
+from ..files.zip_download import (
+    DownloadPrepared,
+    prepare_zip,
+    prepared_path,
+    safe_zip_filename,
+    stream_prepared_zip,
+    subtree_arcname,
+    write_zip_members,
+)
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
 from ..health.replay import ReplayService
@@ -2492,6 +2501,57 @@ def create_app(
         investigation_id = _require_item(slug, item_id)
         await registry.flush(investigation_id)
         return {"ok": True}
+
+    # Issue #247: raw folder/root download (no manifest). Registered before the
+    # `{path:path}` routes so `files/download/...` isn't swallowed as a file path.
+    async def _collect_download_members(
+        investigation_id: str, prefix: str
+    ) -> list[tuple[str, bytes]]:
+        """Every workspace file under `prefix`, re-rooted at it, as
+        `(arcname, bytes)`. Reserved `.readonly/` agent snapshots are skipped —
+        they're internal diff state, not user content."""
+        members: list[tuple[str, bytes]] = []
+        for p in sorted(await files.ls(investigation_id, "")):
+            if _is_readonly_path(p):
+                continue
+            arcname = subtree_arcname(p, prefix)
+            if arcname is None:
+                continue
+            members.append((arcname, await files.read(investigation_id, p)))
+        return members
+
+    def _workspace_zip_name(investigation_id: str, prefix: str) -> str:
+        folder = prefix.strip("/").rsplit("/", 1)[-1]
+        # subfolder → its name; root → the item title; untitled → "workspace".
+        name = folder or _load_item_title(investigation_id) or ""
+        return safe_zip_filename(name, fallback="workspace")
+
+    @api.post("/a/{slug}/items/{item_id}/files/download/prepare")
+    async def prepare_files_download(slug: str, item_id: str, prefix: str = "") -> DownloadPrepared:
+        """Build a plain ZIP of the raw bytes of every file under `prefix`
+        (`prefix=""` = the whole workspace), entries re-rooted at the folder.
+        Reading routes warm→sandbox / cold→snapshot via the facade; only the
+        compression runs off the event loop."""
+        investigation_id = _require_item(slug, item_id)
+        members = await _collect_download_members(investigation_id, prefix)
+        download_id, size = await prepare_zip(lambda out: write_zip_members(out, members))
+        return DownloadPrepared(
+            download_id=download_id,
+            filename=_workspace_zip_name(investigation_id, prefix),
+            size=size,
+        )
+
+    @api.get("/a/{slug}/items/{item_id}/files/download/{download_id}")
+    async def stream_files_download(
+        slug: str, item_id: str, download_id: str, prefix: str = ""
+    ) -> FileResponse:
+        """Stream a prepared workspace ZIP once, then delete it. 404 when the id
+        is malformed / already streamed / reaped."""
+        investigation_id = _require_item(slug, item_id)
+        path = prepared_path(download_id)
+        if path is None:
+            raise HTTPException(status_code=404, detail="download not found")
+        return stream_prepared_zip(path, _workspace_zip_name(investigation_id, prefix))
 
     @api.put(
         "/a/{slug}/items/{item_id}/files/{path:path}",

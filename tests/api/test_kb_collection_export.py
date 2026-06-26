@@ -18,13 +18,10 @@ from collections.abc import AsyncIterator
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import AgentEvent
+from workspace_app.files.zip_download import downloads_dir, sweep_stale_downloads
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
-from workspace_app.kb.collection_export import (
-    collection_zip_filename,
-    downloads_dir,
-    sweep_stale_downloads,
-)
+from workspace_app.kb.collection_export import collection_zip_filename
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM

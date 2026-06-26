@@ -57,12 +57,48 @@ describe("investigationFileService", () => {
       move: true,
       copy: true,
       folders: true,
+      download: true,
     });
   });
 
   it("builds file URLs on the investigation file route (with the deploy base)", () => {
     const svc = investigationFileService("rca", "inv1");
     expect(svc.fileUrl("./plot.png")).toBe("/sub/api/a/rca/items/inv1/files/plot.png");
+  });
+
+  it("builds a single-file download URL on the file route (#247)", () => {
+    const svc = investigationFileService("rca", "inv1");
+    expect(svc.fileDownloadUrl("/data/a.csv")).toBe("/sub/api/a/rca/items/inv1/files/data/a.csv");
+  });
+
+  it("builds a folder download stream URL carrying the prefix (#247)", () => {
+    const svc = investigationFileService("rca", "inv1");
+    expect(svc.dirDownloadUrl("dl123", "/data")).toBe(
+      "/sub/api/a/rca/items/inv1/files/download/dl123?prefix=%2Fdata",
+    );
+  });
+
+  it("prepares a folder download via POST and returns the handle (#247)", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ download_id: "d1", filename: "data.zip", size: 9 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const res = await investigationFileService("rca", "inv1").prepareDirDownload("/data");
+    expect(res).toEqual({ download_id: "d1", filename: "data.zip", size: 9 });
+    const url = String(fetchSpy.mock.calls[0][0]);
+    expect(url).toContain("/a/rca/items/inv1/files/download/prepare?prefix=%2Fdata");
+    expect(fetchSpy.mock.calls[0][1]).toMatchObject({ method: "POST" });
+    fetchSpy.mockRestore();
+  });
+
+  it("rejects a failed folder-download prepare (#247)", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response("nope", { status: 404 }));
+    await expect(investigationFileService("rca", "inv1").prepareDirDownload("/x")).rejects.toThrow();
+    fetchSpy.mockRestore();
   });
 
   it("delegates each op to the investigation file API with the bound id", async () => {

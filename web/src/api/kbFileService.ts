@@ -29,6 +29,7 @@ const KB_CAPS: FileCaps = {
   move: true, // rename / move (re-keys the doc — see the BE move route)
   copy: true,
   folders: true, // a folder is a hidden .gitkeep placeholder
+  download: true, // file → content blob; folder/root → raw zip (#247)
 };
 
 function basename(path: string): string {
@@ -73,7 +74,14 @@ type DocEnvelope = {
 export function kbFileService(
   collectionId: string,
   docs: readonly KbDocument[],
-  kb: Pick<KbApi, "deleteDocument" | "uploadDocument" | "moveDocument">,
+  kb: Pick<
+    KbApi,
+    | "deleteDocument"
+    | "uploadDocument"
+    | "moveDocument"
+    | "prepareFolderDownload"
+    | "folderDownloadUrl"
+  >,
   onChanged?: () => void,
 ): FileService {
   // Indexed by the canonical (leading-slash) path: a doc stored relative
@@ -228,5 +236,16 @@ export function kbFileService(
       if (!sibling || !sibling.file_id) return src;
       return `${API_PREFIX}/source-doc/${encodeURIComponent(sibling.resource_id)}/blobs/${encodeURIComponent(sibling.file_id)}`;
     },
+
+    // #247: a single doc downloads its content blob verbatim. Unknown path / a
+    // doc with no blob yet → "" (the tree hides the action rather than 404).
+    fileDownloadUrl: (path) => {
+      const doc = docFor(path);
+      if (!doc || !doc.file_id) return "";
+      return `${API_PREFIX}/source-doc/${encodeURIComponent(doc.resource_id)}/blobs/${encodeURIComponent(doc.file_id)}`;
+    },
+    prepareDirDownload: (prefix) => kb.prepareFolderDownload(collectionId, prefix),
+    dirDownloadUrl: (downloadId, prefix) =>
+      kb.folderDownloadUrl(collectionId, downloadId, prefix),
   };
 }

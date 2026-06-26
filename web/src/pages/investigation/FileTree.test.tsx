@@ -172,6 +172,89 @@ describe("<FileTree /> context menu position (#99)", () => {
   });
 });
 
+describe("<FileTree /> download (#247)", () => {
+  function spyService(over: Partial<FileService>): FileService {
+    return { ...investigationFileService("rca", "inv"), ...over };
+  }
+  function renderWith(svc: FileService, fs: FileInfo[] = files) {
+    render(
+      <FileServiceProvider value={svc}>
+        <DialogProvider>
+          <FileTree files={fs} dirs={[]} activePath={null} onOpen={vi.fn()} />
+        </DialogProvider>
+      </FileServiceProvider>,
+    );
+  }
+
+  it("toolbar Download all confirms, then prepares + streams the root zip", async () => {
+    const user = userEvent.setup();
+    const prepareDirDownload = vi.fn(async () => ({
+      download_id: "d1",
+      filename: "inv.zip",
+      size: 5,
+    }));
+    const dirDownloadUrl = vi.fn(() => "/dl/d1");
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    renderWith(spyService({ prepareDirDownload, dirDownloadUrl }));
+
+    await user.click(screen.getByRole("button", { name: /download all/i }));
+    await user.click(screen.getByRole("button", { name: "Download" })); // confirm
+    await waitFor(() => expect(prepareDirDownload).toHaveBeenCalledWith(""));
+    expect(dirDownloadUrl).toHaveBeenCalledWith("d1", "");
+    expect(click).toHaveBeenCalled();
+    click.mockRestore();
+  });
+
+  it("cancelling the Download all prompt downloads nothing", async () => {
+    const user = userEvent.setup();
+    const prepareDirDownload = vi.fn(async () => ({ download_id: "x", filename: "x.zip", size: 0 }));
+    renderWith(spyService({ prepareDirDownload }));
+    await user.click(screen.getByRole("button", { name: /download all/i }));
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(prepareDirDownload).not.toHaveBeenCalled();
+  });
+
+  it("context-menu Download on a file links its bytes with a clean name", async () => {
+    const user = userEvent.setup();
+    const fileDownloadUrl = vi.fn((p: string) => `/files${p}`);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    renderWith(spyService({ fileDownloadUrl }));
+
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    await user.click(screen.getByText("Download"));
+    expect(fileDownloadUrl).toHaveBeenCalledWith("/a.md");
+    const a = click.mock.instances[0] as HTMLAnchorElement;
+    expect(a.getAttribute("download")).toBe("a.md"); // basename, not the URL tail
+    click.mockRestore();
+  });
+
+  it("context-menu Download on a folder prepares its subtree zip", async () => {
+    const user = userEvent.setup();
+    const prepareDirDownload = vi.fn(async () => ({
+      download_id: "d2",
+      filename: "mydir.zip",
+      size: 3,
+    }));
+    const dirDownloadUrl = vi.fn(() => "/dl/d2");
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+    renderWith(spyService({ prepareDirDownload, dirDownloadUrl }), [{ path: "/mydir/x.md", size: 1 }]);
+
+    fireEvent.contextMenu(screen.getByText("mydir"));
+    await user.click(screen.getByText("Download"));
+    await waitFor(() => expect(prepareDirDownload).toHaveBeenCalledWith("/mydir"));
+    expect(dirDownloadUrl).toHaveBeenCalledWith("d2", "/mydir");
+    click.mockRestore();
+  });
+
+  it("hides the download UI when the service can't download", () => {
+    const base = investigationFileService("rca", "inv");
+    renderWith(spyService({ caps: { ...base.caps, download: false } }));
+    expect(screen.queryByRole("button", { name: /download all/i })).toBeNull();
+    fireEvent.contextMenu(screen.getByText("a.md"));
+    expect(screen.queryByText("Download")).toBeNull();
+  });
+});
+
 describe("<FileTree /> upload target", () => {
   function spyService(over: Partial<FileService>): FileService {
     return { ...investigationFileService("rca", "inv"), ...over };
