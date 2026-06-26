@@ -402,6 +402,9 @@ _TOP_SCHEMA: dict[str, Any] = {
     "health": {
         "checks": set(),
         "checks_disabled": set(),
+        # #231: the Diagnostics AI judge follows the same usage-entry shape as
+        # kb.retrieval_llm / kb.card_drafter (preset ref + optional overrides).
+        "judge_llm": "__retrieval_llm__",
     },
     "agents": "__agents__",  # sentinel — handled by _check_agents_keys
     # Issue #58/#59: durable wiki-maintenance queue backend selection.
