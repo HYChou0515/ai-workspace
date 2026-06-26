@@ -9,7 +9,6 @@
       { "id": "review", "title": "Review" },
       { "id": "ingest", "title": "Ingest to collection" }
     ],
-    "input_json": "inputs/input.json",
     "config": { "collections": ["kb-docs", "kb-logs"] }
   }
 }

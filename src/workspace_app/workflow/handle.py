@@ -78,6 +78,7 @@ class WorkflowHandle:
         workspace_id: str,
         workflow_id: str = "",
         config: dict[str, Any] | None = None,
+        upload_dir: str = "uploads",
         user: str = "",
         drive_turn: DriveTurn | None = None,
         run_sandbox: RunSandbox | None = None,
@@ -97,6 +98,11 @@ class WorkflowHandle:
         their own folder instead of scattered at the workspace root."""
         self.config = config or {}
         """The profile's config (manual §20 reads ``wf.config["collections"]``)."""
+        self.upload_dir = upload_dir
+        """#198: the profile's staging folder — where a chat attach lands and what a
+        workflow globs for dropped files (``{upload_dir}/*``). Injected from the active
+        profile's ``ProfileManifest.upload_dir`` so the attach landing and the glob never
+        drift (replaces the hardcoded ``uploads/`` of #234). Defaults to ``uploads``."""
         self.user = user
         """The captured acting user (manual §15)."""
         self.drive_turn = drive_turn

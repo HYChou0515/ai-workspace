@@ -40,10 +40,13 @@ def test_profile_json_without_workflow_is_interactive():
     assert pm.workflow is None
 
 
-def test_workflow_manifest_defaults_input_json_location():
-    """input_json defaults to the conventional inputs/input.json when omitted."""
+def test_workflow_manifest_input_json_omitted_means_derive_from_upload_dir():
+    """#198: an omitted input_json is the empty sentinel — the orchestrator derives
+    ``{profile.upload_dir}/input.json`` at run time (default ``uploads/input.json``),
+    so the control file shares the staging folder a chat attach lands in. A pinned
+    value still wins."""
     wf = msgspec.json.decode(b"{}", type=WorkflowManifest)
-    assert wf.input_json == "inputs/input.json"
+    assert wf.input_json == ""
     assert wf.phases == []
 
 

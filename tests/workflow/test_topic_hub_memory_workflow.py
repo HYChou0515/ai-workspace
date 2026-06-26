@@ -41,6 +41,26 @@ async def test_memory_workflow_digests_uploads_then_refreshes_the_index():
     assert len(calls) == 2  # one digest + one index turn
 
 
+async def test_memory_workflow_globs_the_handles_upload_dir_not_a_hardcoded_folder():
+    """#198: the digest globs ``wf.upload_dir`` (injected from the profile), not the
+    old hardcoded ``uploads/`` (#234) — so a profile that stages into a different
+    folder still works and stays in sync with where the chat attach lands."""
+    run = _run()
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u", upload_dir="dropbox")
+    calls: list[str] = []
+
+    async def drive_turn(prompt, tools):
+        calls.append(prompt)
+        return "note" if len(calls) == 1 else "# Memory\n- x"
+
+    wf.drive_turn = drive_turn
+    await wf.write("dropbox/doc.txt", b"content")
+    await wf.write("dropbox/input.json", b"{}")  # the control file is excluded, not digested
+    result = await run(wf, {})
+    assert result == {"status": "done", "notes": 1}
+    assert await wf.exists("memory/dropbox_doc.md")
+
+
 async def test_memory_workflow_overwrites_seeded_files_from_agent_reply():
     """#107 decision/action: MEMORY.md is seeded at Hub creation, but the agent never
     calls write_file (long-content tool args are unreliable). It REPLIES with the

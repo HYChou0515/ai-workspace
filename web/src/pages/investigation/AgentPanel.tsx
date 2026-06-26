@@ -32,27 +32,8 @@ import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
 import { pxToRem } from "../../lib/pxToRem";
-
-const TEXT_EXTENSIONS = new Set([
-  ".md",
-  ".markdown",
-  ".txt",
-  ".csv",
-  ".tsv",
-  ".json",
-  ".log",
-  ".py",
-  ".yaml",
-  ".yml",
-  ".xml",
-  ".html",
-]);
-
-function isTextFile(name: string): boolean {
-  const idx = name.lastIndexOf(".");
-  if (idx === -1) return false;
-  return TEXT_EXTENSIONS.has(name.slice(idx).toLowerCase());
-}
+import { useT } from "../../lib/i18n";
+import { type AttachProgress, attachPrompt, runAttach } from "./attach";
 
 export function AgentPanel({
   investigationId,
@@ -68,6 +49,7 @@ export function AgentPanel({
   appIcon,
   appColor,
   onNewChat,
+  uploadDir = "uploads",
 }: {
   investigationId: string;
   /** The agent conversation state. Defaults to the surrounding
@@ -100,6 +82,9 @@ export function AgentPanel({
    * is the lone, low-key place to escape a wedged chat. Absent → no header button
    * (the shell bar already carries a creator, or this is a bare RCA chat). */
   onNewChat?: () => void;
+  /** #198: the folder the composer's attach stages files into — the item's profile's
+   * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
+  uploadDir?: string;
 }) {
   // Quick-prompt chips come ONLY from the attached AgentConfig (BE) — the FE
   // never invents its own. No config suggestions → no chip row.
@@ -135,9 +120,13 @@ export function AgentPanel({
     }
   };
   const chatScrollRef = useStickToBottom<HTMLDivElement>(log);
+  const t = useT();
   const [draft, setDraft] = useState("");
   const [mentions, setMentions] = useState<string[]>([]);
-  const [attaching, setAttaching] = useState(false);
+  // #198: live upload state for the composer attach — null when idle, else the
+  // aggregate byte/file progress driving the bar. `dragging` flags the drop overlay.
+  const [progress, setProgress] = useState<AttachProgress | null>(null);
+  const [dragging, setDragging] = useState(false);
   // #51 P6: replay diagnostic for one past entry (assistant / tool).
   const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
   // Handoff 3.0 composer model picker. Picking a model here CHANGES THE item's
@@ -151,31 +140,42 @@ export function AgentPanel({
   });
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+  const attaching = progress !== null;
 
-  const onAttach = async (file: File) => {
-    if (!isTextFile(file.name)) {
-      alert(
-        `Only text files (.md/.txt/.csv/.json/.py/etc.) can be attached in v1. Got: ${file.name}`,
-      );
-      return;
-    }
-    if (file.size > 256 * 1024) {
-      alert(`File too large (${(file.size / 1024).toFixed(0)} KB) — v1 cap is 256 KB.`);
-      return;
-    }
-    setAttaching(true);
+  // #198: stage one or more files (or a whole folder) into the profile's upload_dir,
+  // then drop their path(s) into the draft. Any type, any size — the backend's 413 cap
+  // is the only gate; an over-size / failed file is reported and the rest still land.
+  const doAttach = async (files: File[]) => {
+    if (!files.length || attaching) return;
+    setProgress({
+      loadedBytes: 0,
+      totalBytes: files.reduce((n, f) => n + f.size, 0),
+      doneFiles: 0,
+      totalFiles: files.length,
+    });
     try {
-      const text = await file.text();
-      const path = `/uploads/${file.name}`;
-      await api.writeFile(slug, investigationId, path, text);
-      const ref = `I've attached \`${path}\` — please review it.\n\n`;
-      setDraft((d) => (d ? `${ref}${d}` : ref));
-      composerRef.current?.focus();
-    } catch (err) {
-      console.error("attach failed", err);
-      alert(`Attach failed: ${err instanceof Error ? err.message : String(err)}`);
+      const res = await runAttach({
+        files,
+        uploadDir,
+        upload: (path, file, onChunk) =>
+          api.uploadFile(slug, investigationId, path, file, {
+            onProgress: (loaded) => onChunk?.(loaded),
+          }),
+        onProgress: setProgress,
+      });
+      if (res.uploaded.length) {
+        const ref = attachPrompt(res.uploaded) + "\n\n";
+        setDraft((d) => (d ? `${ref}${d}` : ref));
+        composerRef.current?.focus();
+      }
+      const problems = [
+        ...res.tooLarge.map((p) => `${p} — exceeds the size limit`),
+        ...res.failed.map((p) => `${p} — upload failed`),
+      ];
+      if (problems.length) alert(`Some files weren't attached:\n${problems.join("\n")}`);
     } finally {
-      setAttaching(false);
+      setProgress(null);
     }
   };
 
@@ -347,6 +347,18 @@ export function AgentPanel({
           e.preventDefault();
           submit();
         }}
+        // #198: drop files anywhere on the composer to stage them into upload_dir.
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!dragging) setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragging(false);
+          const files = Array.from(e.dataTransfer.files);
+          if (files.length) void doAttach(files);
+        }}
         style={{
           padding: 12,
           borderTop: "1px solid var(--paper-3)",
@@ -354,8 +366,49 @@ export function AgentPanel({
           display: "flex",
           flexDirection: "column",
           gap: 6,
+          position: "relative",
         }}
       >
+        {dragging && (
+          <div
+            data-testid="attach-drop-overlay"
+            style={{
+              position: "absolute",
+              inset: 0,
+              zIndex: 3,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "color-mix(in srgb, var(--accent) 12%, var(--white))",
+              border: "2px dashed var(--accent)",
+              borderRadius: "var(--radius-btn)",
+              fontSize: pxToRem(13),
+              color: "var(--accent)",
+              pointerEvents: "none",
+            }}
+          >
+            {t("kb.dropToUpload")}
+          </div>
+        )}
+        {progress && (
+          <div data-testid="attach-progress" style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <div
+              style={{ height: 4, background: "var(--paper-3)", borderRadius: 2, overflow: "hidden" }}
+            >
+              <div
+                style={{
+                  height: "100%",
+                  width: `${progress.totalBytes ? Math.round((progress.loadedBytes / progress.totalBytes) * 100) : 0}%`,
+                  background: "var(--accent)",
+                  transition: "width 80ms linear",
+                }}
+              />
+            </div>
+            <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+              Uploading {progress.doneFiles}/{progress.totalFiles}…
+            </span>
+          </div>
+        )}
         {mentions.length > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
             <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>Summon:</span>
@@ -414,11 +467,23 @@ export function AgentPanel({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".md,.markdown,.txt,.csv,.tsv,.json,.log,.py,.yaml,.yml,.xml,.html"
+            multiple
             onChange={(e) => {
-              const f = e.target.files?.[0];
+              const files = Array.from(e.target.files ?? []);
               e.target.value = "";
-              if (f) void onAttach(f);
+              if (files.length) void doAttach(files);
+            }}
+            style={{ display: "none" }}
+          />
+          <input
+            ref={folderInputRef}
+            type="file"
+            // @ts-expect-error — non-standard but widely supported; mirrors FileTree.
+            webkitdirectory=""
+            onChange={(e) => {
+              const files = Array.from(e.target.files ?? []);
+              e.target.value = "";
+              if (files.length) void doAttach(files);
             }}
             style={{ display: "none" }}
           />
@@ -454,7 +519,7 @@ export function AgentPanel({
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={attaching}
-            title="Attach a text file (≤256 KB)"
+            title="Attach files (or drop them here)"
             style={{
               color: "var(--text-paper-d)",
               display: "inline-flex",
@@ -465,6 +530,21 @@ export function AgentPanel({
           >
             <Icon name="plus" size={14} />
             {attaching ? "uploading…" : "attach"}
+          </button>
+          <button
+            type="button"
+            onClick={() => folderInputRef.current?.click()}
+            disabled={attaching}
+            title="Attach a whole folder"
+            style={{
+              color: "var(--text-paper-d)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: pxToRem(12),
+            }}
+          >
+            <Icon name="folder" size={14} /> folder
           </button>
           <span style={{ flex: 1 }} />
           <span

@@ -26,3 +26,19 @@ async def test_glob_accepts_a_single_pattern_string(wf: WorkflowHandle):
     await wf.write("data/y.csv", "2")
     await wf.write("readme.md", "z")
     assert await wf.glob("data/*.csv") == ["/data/x.csv", "/data/y.csv"]
+
+
+async def test_upload_dir_defaults_to_uploads(wf: WorkflowHandle):
+    """#198: the run-scoped staging folder a workflow globs — fed from the profile's
+    ``upload_dir`` so the glob default and the chat attach landing stay in sync.
+    Omitted ⇒ ``uploads``."""
+    assert wf.upload_dir == "uploads"
+
+
+async def test_upload_dir_is_injectable():
+    """The orchestrator injects the active profile's ``upload_dir`` so a workflow
+    globs ``{upload_dir}/*`` without hardcoding the folder (the old #234 string)."""
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    h = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", upload_dir="docs")
+    assert h.upload_dir == "docs"

@@ -45,7 +45,8 @@ def _base(item_id: str) -> str:
 
 
 def _put_input(client: TestClient, item_id: str, payload: str) -> None:
-    r = client.put(f"{_base(item_id)}/files/inputs/input.json", content=payload)
+    # #198: the workflow's input.json now lives in the profile's upload_dir (uploads/).
+    r = client.put(f"{_base(item_id)}/files/uploads/input.json", content=payload)
     assert r.status_code == 204
 
 
@@ -110,17 +111,17 @@ def test_run_accepts_uploaded_input_file_then_runs():
     """#197: an external trigger uploads the workflow's input FILES in the same
     multipart POST (we talk to workflows through the workspace). Each part lands at
     its filename'd path, then the run starts and reads them — here the uploaded
-    ``inputs/input.json`` steers ``n`` so the result proves the file was read."""
+    ``uploads/input.json`` steers ``n`` so the result proves the file was read."""
     app, _spec, item_id = _app()
     with TestClient(app) as client:
         r = client.post(
             f"{_base(item_id)}/run",
-            files={"file": ("inputs/input.json", b'{"n": 9}', "application/json")},
+            files={"file": ("uploads/input.json", b'{"n": 9}', "application/json")},
         )
         assert r.status_code == 202
         run_id = r.json()["run_id"]
         data = _poll(client, item_id, run_id, "done")
-        assert client.get(f"{_base(item_id)}/files/inputs/input.json").content == b'{"n": 9}'
+        assert client.get(f"{_base(item_id)}/files/uploads/input.json").content == b'{"n": 9}'
     assert data["result"] == {"status": "done", "n": 9}
 
 
