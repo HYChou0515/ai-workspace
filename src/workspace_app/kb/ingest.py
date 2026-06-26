@@ -655,7 +655,11 @@ class Ingestor:
                     source,
                     filename=doc.path,
                     mime=mime,
-                    on_progress=lambda m: self._set_status_detail(doc_id, m),
+                    # #248: NO per-page status_detail on the fan-out path — N
+                    # parallel batches each overwrite the one shared field, so the
+                    # value is meaningless (last-writer-wins, non-monotonic). The
+                    # FE reads real progress from IndexRun.units_done/total instead.
+                    on_progress=None,
                     unit_range=unit_range,
                 )
             )

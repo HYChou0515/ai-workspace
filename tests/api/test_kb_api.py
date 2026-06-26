@@ -168,6 +168,41 @@ def test_upload_document_and_list():
     assert blob.status_code == 200 and blob.content == b"# Guide\none two three"
 
 
+def test_list_documents_exposes_unit_progress_for_an_indexing_fanout_doc():
+    """#248: a fanned-out doc that is still indexing carries a real done/total
+    unit count so the FE can draw a monotonic progress bar (not parse a string)."""
+    from specstar.types import Binary
+
+    from workspace_app.kb.index_run import IndexRunStore
+    from workspace_app.resources import SourceDoc
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    drm = spec.get_resource_manager(SourceDoc)
+    doc_id = drm.create(
+        SourceDoc(collection_id=cid, path="big.pdf", content=Binary(data=b"x"), status="indexing")
+    ).resource_id
+    runs = IndexRunStore(spec)
+    runs.start(doc_id, cid, total=3, units_total=24)  # 24-page PDF
+    runs.mark_done(doc_id, 0, batch_units=8)  # one batch (8 pages) done
+
+    items = client.get(f"/kb/collections/{cid}/documents").json()["items"]
+    row = next(d for d in items if d["resource_id"] == doc_id)
+    assert (row["units_done"], row["units_total"]) == (8, 24)
+
+
+def test_list_documents_reports_zero_units_for_a_doc_without_a_fanout_run():
+    """A small / single-job doc has no IndexRun → 0/0, so the FE shows no bar."""
+    client = _client()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents", files={"file": ("a.md", b"hi there", "text/markdown")}
+    )
+    _drain(client)
+    row = client.get(f"/kb/collections/{cid}/documents").json()["items"][0]
+    assert (row["units_done"], row["units_total"]) == (0, 0)
+
+
 def test_move_document_rekeys_and_preserves_content():
     # #87: a doc's id encodes its path, so rename/move re-keys — the doc moves
     # to a new id at the new path, same bytes, then re-indexes.

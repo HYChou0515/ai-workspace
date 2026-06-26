@@ -78,6 +78,8 @@ async def test_large_csv_fans_out_then_finalizes_to_ready():
     # The join state closed out, and the transient staging was cleaned up.
     run = spec.get_resource_manager(IndexRun).get(doc_id).data
     assert (run.total, sorted(run.done), run.failed, run.status) == (3, [0, 1, 2], [], "done")
+    # #248: the progress aggregate covered every unit (5 rows across the 3 batches).
+    assert (run.units_total, run.units_done) == (5, 5)
     staged = spec.get_resource_manager(IndexUnitText).list_resources(
         (QB["doc_id"] == doc_id).build()
     )
@@ -278,6 +280,47 @@ async def test_finalize_is_idempotent_does_not_wipe_text():
         IndexJobPayload(doc_id=doc_id, collection_id=cid, kind="finalize"), "bob"
     )
     assert spec.get_resource_manager(SourceDoc).get(doc_id).data.text == text_before
+
+
+# ── #248: a fan-out batch must NOT clobber the shared status_detail ────
+
+
+class _ProgressParser:
+    """A parser that, IF handed an on_progress sink, writes a per-page string —
+    exactly the racy write a fan-out must suppress (N parallel batches would each
+    overwrite the one status_detail field, making the old bar jump backward)."""
+
+    def matches(self, *, filename, mime, source) -> bool:
+        return True
+
+    def count_units(self, source, *, filename, mime) -> int:
+        return 1
+
+    def parse(self, source, *, filename, mime, on_progress=None, on_preview=None, unit_range=None):
+        from llama_index.core.schema import Document
+
+        if on_progress is not None:
+            on_progress("page 99/99")  # the racy write under test
+        return [Document(text="hello world")]
+
+
+async def test_fanout_index_units_does_not_write_per_page_status_detail():
+    from workspace_app.kb.parsers.registry import ParserRegistry
+
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    emb = HashEmbedder(dim=EMBED_DIM)
+    reg = ParserRegistry()
+    reg.register(_ProgressParser())  # ty: ignore[invalid-argument-type]
+    ing = Ingestor(
+        spec, pipeline=build_doc_pipeline(embedder=emb), embedder=emb, parser_registry=reg
+    )
+    (doc_id,) = ing.store(collection_id=cid, user="u", filename="a.txt", data=b"hello world")
+
+    ing.index_units(doc_id, (0, 1), seq_base=0)  # one fan-out batch
+
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert doc.status_detail == ""  # the per-page progress write is suppressed on fan-out
 
 
 # ── #249: transient vs permanent failure of a fan-out process job ─────

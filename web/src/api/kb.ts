@@ -92,10 +92,15 @@ export type KbDocument = {
   created_by: string;
   /** Indexing lifecycle: "indexing" | "ready" | "error". */
   status: string;
-  /** Issue #39 Q11: short progress / error line beside the status —
-   * "PdfParser: page 12/50 → VLM" while a long parse runs, the
-   * exception summary on `status="error"`. Empty when idle. */
+  /** Issue #39 Q11: short progress / error line beside the status — now the
+   * exception summary on `status="error"`. Empty while indexing (the racy
+   * per-page string was dropped in #248 — use the unit counts below). */
   status_detail?: string;
+  /** #248: real fan-out progress — units (e.g. PDF pages) done / total. Both 0
+   * (or absent) for a single-job / ready doc, which means "no progress bar".
+   * Monotonic while indexing. */
+  units_done?: number;
+  units_total?: number;
   /** Indexed chunk count + how many times this doc was cited. */
   chunks?: number;
   cited?: number;

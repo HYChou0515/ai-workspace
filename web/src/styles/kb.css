@@ -2175,6 +2175,18 @@
 }
 .kb-ide__status-state { text-transform: capitalize; }
 .kb-ide__status-meta { font-family: var(--font-mono); }
+/* #248: the fan-out unit progress bar — a slim track + its done/total label. */
+.kb-ide__status-progress {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.kb-ide__status-bar {
+  inline-size: 64px;
+  block-size: 6px;
+  accent-color: var(--accent);
+}
 
 /* #106 Context Cards tab — left list + center editor (mirrors the docs IDE). */
 /* #180 Cap the box to the viewport (like the docs IDE's bounded height) so the

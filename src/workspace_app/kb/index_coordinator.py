@@ -312,7 +312,9 @@ class IndexCoordinator:
         batch = self._unit_batch_sizes.get(parser_id, self._default_unit_batch)
         nbatches = math.ceil(units / batch)
         self._ingestor.prepare_fanout(doc_id)  # clear chunks ONCE before fan-out
-        self._runs.start(doc_id, cid, total=nbatches)
+        # #248: seed the run with the doc's unit count (PDF pages, CSV rows, …) so
+        # the FE can show a real done/total progress bar.
+        self._runs.start(doc_id, cid, total=nbatches, units_total=units)
         # #186: credit the fan-out jobs to the requester (not the bare worker
         # default) so the chain reading job.created_by stays the real user.
         with self._job_rm.using(user=requester):
@@ -417,7 +419,11 @@ class IndexCoordinator:
                 raise NoRetry(str(exc)) from exc  # permanent → dead-letter now
             raise  # transient → broker re-delivers this batch
         self._stage_text(doc_id, payload.batch_index, text)
-        self._runs.mark_done(doc_id, payload.batch_index)
+        # #248: this batch covered [unit_start, unit_end) — add its units so the
+        # run's progress aggregate climbs as each batch finishes.
+        self._runs.mark_done(
+            doc_id, payload.batch_index, batch_units=payload.unit_end - payload.unit_start
+        )
         if self._runs.claim_finalize(doc_id):
             self._enqueue_finalize(doc_id, payload.collection_id, requester)
 

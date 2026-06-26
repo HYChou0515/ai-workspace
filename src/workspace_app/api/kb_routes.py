@@ -36,6 +36,7 @@ from ..kb.collection_export import (
 )
 from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
+from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
 from ..kb.preview import preview_markdown
@@ -215,6 +216,11 @@ class DocumentRow(BaseModel):
     cited: int
     size: int
     updated_at: int  # epoch ms
+    # #248: real fan-out progress for the FE bar — units (e.g. PDF pages) done /
+    # total. 0/0 for a doc with no in-flight fan-out (small / single-job / ready),
+    # which the FE reads as "no unit bar". Monotonic while indexing (see IndexRun).
+    units_done: int = 0
+    units_total: int = 0
 
 
 class CollectionImported(BaseModel):
@@ -735,11 +741,18 @@ def register_kb_routes(
                 if isinstance(sid, str):  # pragma: no branch
                     chunk_counts[sid] += 1
 
+        # #248: unit progress for the docs still fanning out on this page. The run
+        # is keyed by doc id and only exists for an in-flight (or just-finished)
+        # fan-out, so this is a bounded per-indexing-doc lookup, never a scan.
+        runs = IndexRunStore(spec)
         for r in data_page:
             data = r.data
             assert isinstance(data, SourceDoc)
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
             chunks = chunk_counts[rid]
+            run = runs.get(rid) if data.status == "indexing" else None
+            units_done = run.units_done if run is not None else 0
+            units_total = run.units_total if run is not None else 0
             # specstar computes the blob size on store; updated_time is the
             # current revision's timestamp (epoch ms for the wire).
             size = data.content.size
@@ -767,6 +780,8 @@ def register_kb_routes(
                     cited=cited.get(rid, 0),
                     size=size,
                     updated_at=_ms(updated),
+                    units_done=units_done,
+                    units_total=units_total,
                 )
             )
         return DocumentsPage(
