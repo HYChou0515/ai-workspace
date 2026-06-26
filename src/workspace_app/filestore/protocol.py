@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Protocol
 
 
@@ -30,9 +31,24 @@ class FileStore(Protocol):
         auto-creating ancestor directories."""
         ...
 
+    async def write_from_path(
+        self, workspace_id: str, path: str, source: Path, content_type: str | None
+    ) -> None:
+        """Like `write`, but stream the content from the on-disk file `source`
+        instead of taking it as in-memory `bytes` — so a big upload never
+        materialises whole in RAM. `content_type` is an optional hint (None ⇒
+        let the backend sniff/default)."""
+        ...
+
     async def read(self, workspace_id: str, path: str) -> bytes:
         """Return the bytes at `path`; raise `FileNotFound` if it doesn't exist
         (or is a directory)."""
+        ...
+
+    async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
+        """Like `read`, but stream the content out to the on-disk file `dest`
+        instead of returning it — so restoring a big file into a sandbox never
+        holds it whole in RAM. Raises `FileNotFound` if `path` is absent."""
         ...
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:

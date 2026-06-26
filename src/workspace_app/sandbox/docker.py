@@ -11,9 +11,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import io
+import os
+import shutil
 import tarfile
+import tempfile
 import uuid
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from .protocol import (
@@ -129,6 +132,26 @@ class DockerSandbox:
         data = b"".join(stream)
         return _extract_single_file_from_tar(data, target.name)
 
+    async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
+        container = self._require(handle)
+        target = PurePosixPath(_WORKDIR) / remote_path.lstrip("/")
+        parent = target.parent
+        await asyncio.to_thread(self._mkdir_p, container, str(parent))
+        await asyncio.to_thread(
+            _put_archive_from_file, container, str(parent), target.name, local_path
+        )
+
+    async def download_to_file(
+        self, handle: SandboxHandle, remote_path: str, local_path: Path
+    ) -> None:
+        container = self._require(handle)
+        target = PurePosixPath(_WORKDIR) / remote_path.lstrip("/")
+        try:
+            stream, _stat = await asyncio.to_thread(container.get_archive, str(target))
+        except Exception as exc:  # noqa: BLE001
+            raise FileNotFoundError(remote_path) from exc
+        await asyncio.to_thread(_extract_tar_stream_to_file, stream, target.name, local_path)
+
     def _target(self, remote_path: str) -> str:
         return str(PurePosixPath(_WORKDIR) / remote_path.lstrip("/"))
 
@@ -214,6 +237,47 @@ def _extract_single_file_from_tar(tar_bytes: bytes, name: str) -> bytes:
         if f is None:  # pragma: no cover — only triggered for non-regular members
             raise FileNotFoundError(name)
         return f.read()
+
+
+def _put_archive_from_file(container: Container, parent: str, name: str, local_path: Path) -> None:
+    """Tar `local_path` to a temp file on disk (streaming the source in chunks),
+    then stream that tar into the container — so a big upload never sits whole in
+    RAM (issue #219)."""
+    with tempfile.NamedTemporaryFile(suffix=".tar", delete=False) as tf:
+        tarpath = tf.name
+    try:
+        with tarfile.open(tarpath, mode="w") as tar:
+            info = tarfile.TarInfo(name=name)
+            info.size = local_path.stat().st_size
+            info.mode = 0o644
+            with open(local_path, "rb") as src:
+                tar.addfile(info, src)
+        with open(tarpath, "rb") as stream:
+            ok = container.put_archive(parent, stream)
+        if not ok:  # pragma: no cover — docker SDK edge case, no reliable trigger
+            raise RuntimeError(f"docker put_archive failed for {name}")
+    finally:
+        os.unlink(tarpath)
+
+
+def _extract_tar_stream_to_file(stream: Any, name: str, local_path: Path) -> None:
+    """Spool the get_archive tar stream to disk, then stream the single member
+    out to `local_path` — the reverse of `_put_archive_from_file`, RAM-free."""
+    with tempfile.NamedTemporaryFile(suffix=".tar", delete=False) as tf:
+        tarpath = tf.name
+    try:
+        with open(tarpath, "wb") as f:
+            for chunk in stream:
+                f.write(chunk)
+        with tarfile.open(tarpath, mode="r") as tar:
+            member = tar.getmember(name)
+            src = tar.extractfile(member)
+            if src is None:  # pragma: no cover — only for non-regular members
+                raise FileNotFoundError(name)
+            with open(local_path, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+    finally:
+        os.unlink(tarpath)
 
 
 def _parse_find_output(output: bytes, base: str):

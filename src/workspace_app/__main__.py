@@ -188,6 +188,8 @@ def main() -> None:
             get_user_id=get_user_id,
             sandbox=sandbox,
             filestore=get_filestore(settings, spec),
+            # #219: single-file upload cap (streaming keeps RAM flat regardless).
+            max_file_size=settings.filestore.max_file_size,
             runner=get_runner(settings),
             agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
             kb_embedder=embedder,

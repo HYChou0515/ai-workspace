@@ -22,6 +22,7 @@ from page paths); the wiki doesn't need empty folders.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from specstar import QB, SpecStar
 from specstar.types import (
@@ -81,6 +82,12 @@ class WikiFileStore:
         assert isinstance(data, bytes)
         return data
 
+    async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
+        # Wiki pages are small markdown — no real streaming needed; satisfies the
+        # FileStore contract (#219) by spilling the bytes to `dest`.
+        data = await self.read(workspace_id, path)
+        await asyncio.to_thread(dest.write_bytes, data)
+
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         return await asyncio.to_thread(
             lambda: [p for p in self._paths(workspace_id) if p.startswith(prefix)]
@@ -92,6 +99,14 @@ class WikiFileStore:
     # ── writes (draft modify → no revision bloat) ────────────────────
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         await asyncio.to_thread(self._write_sync, workspace_id, path, data)
+
+    async def write_from_path(
+        self, workspace_id: str, path: str, source: Path, content_type: str | None = None
+    ) -> None:
+        # Wiki pages are small markdown — read the staged file and store it (the
+        # FileStore streaming contract, #219, with no real streaming needed).
+        data = await asyncio.to_thread(source.read_bytes)
+        await self.write(workspace_id, path, data)
 
     def _write_sync(self, workspace_id: str, path: str, data: bytes) -> None:
         rid = _rid(workspace_id, path)

@@ -408,6 +408,22 @@ class LocalProcessSandbox:
         target = self._resolve(cwd, remote_path)
         return await asyncio.to_thread(target.read_bytes)
 
+    async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
+        cwd = self._workspace(handle)
+        target = self._resolve(cwd, remote_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # copyfile streams in chunks (shutil.COPY_BUFSIZE) — no whole-file in RAM.
+        await asyncio.to_thread(shutil.copyfile, local_path, target)
+
+    async def download_to_file(
+        self, handle: SandboxHandle, remote_path: str, local_path: Path
+    ) -> None:
+        cwd = self._workspace(handle)
+        target = self._resolve(cwd, remote_path)
+        if not await asyncio.to_thread(target.is_file):
+            raise FileNotFoundError(remote_path)
+        await asyncio.to_thread(shutil.copyfile, target, local_path)
+
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         cwd = self._workspace(handle)
         return await asyncio.to_thread(self._resolve(cwd, path).is_file)

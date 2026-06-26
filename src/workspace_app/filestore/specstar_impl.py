@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from pathlib import Path
 from urllib.parse import quote
 
 from msgspec import Struct, field
@@ -30,6 +31,7 @@ from specstar.types import Binary, ResourceIDNotFoundError, RevisionStatus
 from .protocol import FileExists, FileNotFound, dir_ancestors
 
 _SLASH = "∕"  # division-slash look-alike (same convention as kb/doc_id.py)
+_CHUNK = 8 * 1024 * 1024  # 8 MB — read a source file into blob parts a chunk at a time
 
 
 class WorkspaceFile(Struct):
@@ -83,8 +85,24 @@ class SpecstarFileStore:
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         await asyncio.to_thread(self._write_sync, workspace_id, path, data)
 
+    async def write_from_path(
+        self, workspace_id: str, path: str, source: Path, content_type: str | None
+    ) -> None:
+        """Stream a file's bytes from ``source`` into the blob store a chunk at
+        a time (never the whole file in RAM), then point a ``WorkspaceFile`` at
+        the resulting blob. The big-file ingest path — the upload endpoint
+        streams the request body to ``source`` first."""
+        await asyncio.to_thread(
+            self._write_from_path_sync, workspace_id, path, source, content_type
+        )
+
     async def read(self, workspace_id: str, path: str) -> bytes:
         return await asyncio.to_thread(self._read_sync, workspace_id, path)
+
+    async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
+        """Stream a file's bytes out to ``dest`` a chunk at a time (never the
+        whole file in RAM) — the restore path uses this to seed a sandbox."""
+        await asyncio.to_thread(self._read_to_file_sync, workspace_id, path, dest)
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         return await asyncio.to_thread(self._ls_sync, workspace_id, prefix)
@@ -110,9 +128,13 @@ class SpecstarFileStore:
         )
 
     # ── files (per-resource Binary) ──────────────────────────────────────
-    def _write_sync(self, workspace_id: str, path: str, data: bytes) -> None:
+    def _put_record(self, workspace_id: str, path: str, content: Binary) -> None:
+        """Create-or-overwrite the ``WorkspaceFile`` at ``path`` with ``content``
+        (a Binary holding either inline bytes or a finalized blob ``file_id``),
+        and record the path's ancestor dirs. Draft ``modify`` so high-churn
+        rewrites don't bloat revision history."""
         rid = _fid(workspace_id, path)
-        rec = WorkspaceFile(workspace_id=workspace_id, path=path, content=Binary(data=data))
+        rec = WorkspaceFile(workspace_id=workspace_id, path=path, content=content)
         if self._files.exists(rid):
             self._files.modify(rid, rec, status=RevisionStatus.draft)
         else:
@@ -120,6 +142,27 @@ class SpecstarFileStore:
         ancestors = dir_ancestors(path)
         if ancestors:
             self._add_dirs(workspace_id, ancestors)
+
+    def _write_sync(self, workspace_id: str, path: str, data: bytes) -> None:
+        self._put_record(workspace_id, path, Binary(data=data))
+
+    def _write_from_path_sync(
+        self, workspace_id: str, path: str, source: Path, content_type: str | None
+    ) -> None:
+        if source.stat().st_size == 0:
+            # finalize rejects a session with no parts; an empty file is inline.
+            self._put_record(workspace_id, path, Binary(data=b""))
+            return
+        bs = self._files.blob_store  # ty: ignore[unresolved-attribute]
+        session = bs.create_upload_session(
+            key=None, content_type=content_type, size=None, total_parts=None
+        )
+        part = 0
+        with open(source, "rb") as f:
+            while chunk := f.read(_CHUNK):
+                part += 1
+                bs.upload_to_session(session.upload_id, chunk, part_number=part)
+        self._put_record(workspace_id, path, bs.finalize_upload_session(session.upload_id))
 
     def _read_sync(self, workspace_id: str, path: str) -> bytes:
         try:
@@ -129,6 +172,25 @@ class SpecstarFileStore:
         data = self._files.restore_binary(res.data).content.data
         assert isinstance(data, bytes)
         return data
+
+    def _read_to_file_sync(self, workspace_id: str, path: str, dest: Path) -> None:
+        try:
+            res = self._files.get(_fid(workspace_id, path))
+        except ResourceIDNotFoundError as exc:
+            raise FileNotFound(f"{workspace_id}:{path}") from exc
+        assert isinstance(res.data, WorkspaceFile)
+        file_id = res.data.content.file_id
+        bs = self._files.blob_store  # ty: ignore[unresolved-attribute]
+        info = bs.get_stream(file_id) if isinstance(file_id, str) else None
+        if info is None:
+            # Backend without streaming (in-memory) or an inline/empty blob:
+            # fall back to a single restore. Big files only land on a disk blob
+            # store, whose get_stream is the streaming path below.
+            dest.write_bytes(self._read_sync(workspace_id, path))
+            return
+        with open(dest, "wb") as f:
+            for chunk in info.iterator:
+                f.write(chunk)
 
     def _ls_sync(self, workspace_id: str, prefix: str) -> list[str]:
         rows = self._files.list_resources((QB["workspace_id"] == workspace_id).build())

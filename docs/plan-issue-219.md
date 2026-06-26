@@ -71,21 +71,40 @@ before P1's model change is deployed).
 
 ## Phases (flat)
 
-- **P1** — `WorkspaceFile` model + rewrite `SpecstarFileStore` over per-file
-  `Binary` (read/write/ls/exists/delete; dirs via a small per-workspace record;
-  move/copy as metadata). FileStore protocol surface unchanged. Rewrite the
-  filestore tests.
-- **P2** — one-time migration (old inline bytes → new structure); deploy-safe.
-- **P3** — streaming upload (cold): facade `write_stream` (temp-file) + endpoint
-  `request.stream()` → blob session → finalize. No RAM.
-- **P4** — Sandbox protocol `upload_file` / `download_to_file` (Local/Docker/
-  Mock) + warm dual-write (blob + container + seed version) + streaming mirror.
-- **P5** — configurable single-file cap (default 2 GB) + `ignore.py` alignment +
-  big-file download streams via `/blobs`.
-- **P6** — FE: drop FileTree 8 MB cap; `writeFile` → XHR for upload progress;
-  drag-drop overlay; progress UI.
-- **P7** — FE: chat-composer 📎 attach (upload to `uploads/`, send disabled
-  until done, path injection on send); replaces old attach.
+Delivered in this PR (P1–P6 core):
+
+- **P1** ✅ — `WorkspaceFile` model + rewrite `SpecstarFileStore` over per-file
+  `Binary` (read/write/ls/exists/delete; dirs via a small per-workspace
+  `_WorkspaceDirs` record). FileStore protocol surface preserved; the 23
+  existing filestore tests pass unchanged.
+- **P2** ✅ — one-time `migrate_inline_to_binary` (old inline bytes → new shape),
+  wired as an idempotent boot step for the specstar filestore.
+- **P3** ✅ — streaming upload: `FileStore.write_from_path` (temp-file → blob
+  upload-session → finalize) + the `PUT /files/{path}` endpoint streams
+  `request.stream()` to a staging file. No whole-upload-in-RAM.
+- **P4** ✅ — Sandbox protocol `upload_file` / `download_to_file` (Local / Docker
+  / Mock / Http) + facade `write_from_path` / `read_to_file` routing (warm →
+  sandbox, cold → blob) + `SandboxSync` restore/mirror stream through a staging
+  file. Warm uploads land in the sandbox; durability follows on the next mirror
+  (same invariant as any warm write). **Simplification vs the original plan**:
+  no "dual-write + seed version" — warm→sandbox + streaming mirror is enough and
+  matches the existing model.
+- **P5** ✅ — configurable single-file cap (`filestore.max_file_size`, default
+  ~2 GB; enforced mid-stream → 413) + `sync/ignore.py` aligns its reverse-sync
+  cap to it.
+- **P6** ✅ (minimal) — FE: drop the FileTree 8 MB client cap so big files
+  actually upload; graceful error when the server rejects an over-size upload.
+
+Deferred (not in this PR — the storage migration + OOM-safety is self-contained;
+these are FE-feature / download-side layers on top):
+
+- **Download-side streaming** — `read_file` still reads whole bytes (it's the IDE
+  viewer, mostly small/text; the warm path is whole-bytes anyway). Big-file
+  download streaming via `/blobs` is a follow-up.
+- **Richer P6** — `writeFile` → XHR upload progress; drag-drop overlay.
+- **P7 attach UX** — chat-composer 📎 (upload to `uploads/`, send disabled until
+  done, path injection on send) replacing the old attach.
+- **Per-workspace total quota + blob GC** — tracked in **#245**.
 
 ## Touch map
 

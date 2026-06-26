@@ -26,6 +26,25 @@ async def test_upload_download_roundtrip():
     assert await sandbox.download(h, "/tmp/x") == b"hello world"
 
 
+async def test_upload_file_download_to_file_roundtrip(tmp_path):
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"streamed-via-file")
+    await sandbox.upload_file(h, src, "/tmp/x")
+    assert await sandbox.download(h, "/tmp/x") == b"streamed-via-file"
+    out = tmp_path / "out.bin"
+    await sandbox.download_to_file(h, "/tmp/x", out)
+    assert out.read_bytes() == b"streamed-via-file"
+
+
+async def test_download_to_file_missing_raises(tmp_path):
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    with pytest.raises(FileNotFoundError):
+        await sandbox.download_to_file(h, "/nope", tmp_path / "out.bin")
+
+
 async def test_exec_cat_reads_uploaded_file():
     sandbox = MockSandbox()
     h = await sandbox.create(SandboxSpec())

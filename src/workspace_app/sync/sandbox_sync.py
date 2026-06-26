@@ -14,9 +14,29 @@ Two operations now that the sandbox is authoritative (sandbox-as-SoT redesign):
 
 from __future__ import annotations
 
+import contextlib
+import os
+import tempfile
+from collections.abc import Iterator
+from pathlib import Path
+
 from ..filestore.protocol import FileStore
 from ..sandbox.protocol import Sandbox, SandboxHandle
 from .ignore import DEFAULT_IGNORES, should_ignore
+
+
+@contextlib.contextmanager
+def _staging_file() -> Iterator[Path]:
+    """A short-lived on-disk hand-off file for streaming one file between the
+    sandbox and the FileStore — so neither side holds the whole file in RAM
+    (issue #219). Removed on exit."""
+    fd, name = tempfile.mkstemp(prefix="wsfile-")
+    os.close(fd)
+    tmp = Path(name)
+    try:
+        yield tmp
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 class SandboxSync:
@@ -37,8 +57,11 @@ class SandboxSync:
     async def restore(self, workspace_id: str, handle: SandboxHandle) -> int:
         n = 0
         for path in await self._fs.ls(workspace_id):
-            data = await self._fs.read(workspace_id, path)
-            await self._sb.upload(handle, data, path)
+            # Stream FileStore → sandbox through a staging file so a big file
+            # never sits whole in RAM on wake (issue #219).
+            with _staging_file() as tmp:
+                await self._fs.read_to_file(workspace_id, path, tmp)
+                await self._sb.upload_file(handle, tmp, path)
             n += 1
         # Seed the diff state from the just-restored sandbox so the first mirror
         # after a wake is a no-op (nothing has changed yet).
@@ -63,8 +86,11 @@ class SandboxSync:
             seen[entry.path] = entry.version
             if prev.get(entry.path) == entry.version:
                 continue  # unchanged since last mirror
-            data = await self._sb.download(handle, entry.path)
-            await self._fs.write(workspace_id, entry.path, data)
+            # Stream sandbox → FileStore through a staging file so a big file
+            # the agent produced never sits whole in RAM (issue #219).
+            with _staging_file() as tmp:
+                await self._sb.download_to_file(handle, entry.path, tmp)
+                await self._fs.write_from_path(workspace_id, entry.path, tmp, None)
             n += 1
         for path in prev:
             if path not in seen and await self._fs.exists(workspace_id, path):

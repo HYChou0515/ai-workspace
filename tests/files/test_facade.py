@@ -84,6 +84,50 @@ async def test_warm_ops_hit_sandbox_not_snapshot():
     assert await files.exists(WS, "/b.txt") is False
 
 
+async def test_write_from_path_cold_hits_snapshot(tmp_path):
+    files, fs, _sb, _h = await _wired()
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"streamed-cold")
+    await files.write_from_path(WS, "/up/a.bin", src, "application/octet-stream")
+    assert await fs.read(WS, "/up/a.bin") == b"streamed-cold"  # snapshot, not sandbox
+    assert await files.read(WS, "/up/a.bin") == b"streamed-cold"
+
+
+async def test_write_from_path_warm_hits_sandbox_not_snapshot(tmp_path):
+    files, fs, sb, handle = await _wired()
+    handle["h"] = await sb.create(SandboxSpec())
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"streamed-warm")
+    await files.write_from_path(WS, "/up/b.bin", src)
+    assert await sb.download(handle["h"], "/up/b.bin") == b"streamed-warm"
+    assert await fs.exists(WS, "/up/b.bin") is False  # durability waits for mirror
+    assert await files.read(WS, "/up/b.bin") == b"streamed-warm"
+
+
+async def test_read_to_file_cold_streams_from_snapshot(tmp_path):
+    files, _fs, _sb, _h = await _wired()
+    await files.write(WS, "/a.bin", b"cold-out")
+    dest = tmp_path / "out.bin"
+    await files.read_to_file(WS, "/a.bin", dest)
+    assert dest.read_bytes() == b"cold-out"
+
+
+async def test_read_to_file_warm_streams_from_sandbox(tmp_path):
+    files, _fs, sb, handle = await _wired()
+    handle["h"] = await sb.create(SandboxSpec())
+    await files.write(WS, "/b.bin", b"warm-out")
+    dest = tmp_path / "out.bin"
+    await files.read_to_file(WS, "/b.bin", dest)
+    assert dest.read_bytes() == b"warm-out"
+
+
+async def test_read_to_file_warm_missing_maps_to_filenotfound(tmp_path):
+    files, _fs, sb, handle = await _wired()
+    handle["h"] = await sb.create(SandboxSpec())
+    with pytest.raises(FileNotFound):
+        await files.read_to_file(WS, "/nope", tmp_path / "out.bin")
+
+
 async def test_warm_read_missing_maps_to_filenotfound():
     files, _fs, sb, handle = await _wired()
     handle["h"] = await sb.create(SandboxSpec())
