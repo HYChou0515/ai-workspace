@@ -17,7 +17,9 @@ import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
 import { type ChipTone } from "../components/StatusChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
-import { SanityMatrix } from "./SanityMatrix";
+import { SanityQuestions } from "./SanityQuestions";
+import { SanityTable } from "./SanityTable";
+import { SanityVerdicts } from "./SanityVerdicts";
 import { TelemetryPanel } from "./TelemetryPanel";
 import { pxToRem } from "../lib/pxToRem";
 
@@ -106,7 +108,13 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
       data-testid="page-diagnostics"
       style={{ minHeight: "100%", background: "var(--paper)", overflow: "auto" }}
     >
-      <div style={{ maxWidth: 760, margin: "0 auto", padding: "28px 20px 60px" }}>
+      <div
+        style={{
+          maxWidth: tab === "matrix" ? 1180 : 760,
+          margin: "0 auto",
+          padding: "28px 20px 60px",
+        }}
+      >
         <button
           type="button"
           onClick={() => navigate(-1)}
@@ -215,7 +223,13 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
 
         {tab === "traces" && <TelemetryPanel />}
 
-        {tab === "matrix" && <SanityMatrix />}
+        {tab === "matrix" && (
+          <>
+            <SanityVerdicts />
+            <SanityTable />
+            <SanityQuestions />
+          </>
+        )}
 
         {tab === "checks" && running && (
           <div

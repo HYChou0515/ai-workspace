@@ -36,7 +36,13 @@ from .kb import (
     WikiPage,
 )
 from .notification import Notification
-from .sanity import SanityResult, sanity_result_id
+from .sanity import (
+    CustomSanityQuestion,
+    SanityResult,
+    SanityVerdict,
+    sanity_result_id,
+    sanity_verdict_id,
+)
 
 __all__ = [
     "AgentConfig",
@@ -44,6 +50,7 @@ __all__ = [
     "Collection",
     "ContextCard",
     "Conversation",
+    "CustomSanityQuestion",
     "DocChunk",
     "IndexRun",
     "IndexUnitText",
@@ -51,11 +58,13 @@ __all__ = [
     "Message",
     "Notification",
     "SanityResult",
+    "SanityVerdict",
     "SourceDoc",
     "WikiBuildState",
     "WikiPage",
     "make_spec",
     "sanity_result_id",
+    "sanity_verdict_id",
 ]
 
 
@@ -240,3 +249,11 @@ def _register_all(spec: SpecStar) -> None:
     # Model-sanity matrix cells (current-only). model indexed so the FE lists
     # one model's grid without a full scan; auto routes serve GET /sanity-result.
     spec.add_model(SanityResult, indexed_fields=["model"])
+    # #231: one fitness verdict per model (current-only). model indexed so a
+    # verdict get/list is a query; auto routes serve GET /sanity-verdict.
+    spec.add_model(SanityVerdict, indexed_fields=["model"])
+    # #231: user-authored sanity questions (AI-only graded). Few rows (operator
+    # authored via the 題目管理 panel), so the coordinator lists them all + filters
+    # in Python; auto-CRUD routes (POST/GET/PUT/DELETE /custom-sanity-question)
+    # own the lifecycle. category indexed for a possible 題組 filter.
+    spec.add_model(CustomSanityQuestion, indexed_fields=["category"])

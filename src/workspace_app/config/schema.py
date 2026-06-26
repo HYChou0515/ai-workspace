@@ -689,6 +689,12 @@ class HealthSettings:
 
     checks: list[str] = field(default_factory=list)
     checks_disabled: list[str] = field(default_factory=list)
+    # #231: the LLM-as-judge that scores sanity-matrix cells (ai_grade/ai_note)
+    # and the per-model fitness verdict. Same usage-entry shape + preset cascade
+    # as `kb.retrieval_llm`; a preset with `fallbacks` becomes a busy-aware
+    # `FallbackLlm` (#196). `None` ⇒ AI scoring off (the ai columns stay empty).
+    # Should be a capable model distinct from the models under test (no self-grade).
+    judge_llm: RetrievalLlmRef | None = None
 
 
 # ─── message queue (#58/#59/#82: durable background job queues) ────────
