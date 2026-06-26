@@ -63,7 +63,6 @@ branch = true
 source = ["src/workspace_app"]
 omit = [
     "src/workspace_app/__main__.py",
-    "src/workspace_app/sandbox_host/__main__.py",  # serve glue (uvicorn), like the app entrypoint
 ]
 # parallel + sitecustomize's process_startup() let each pytest-xdist worker
 # subprocess record its own .coverage.* file; `coverage combine` merges them.
@@ -83,11 +82,12 @@ exclude_also = [
 line-length = 100
 target-version = "py312"
 # sample-tools/* are standalone example projects (own pyproject + venv); they're
-# linted/typed on their own, not as part of this package.
-extend-exclude = ["sample-tools"]
+# linted/typed on their own, not as part of this package. sandbox-host/ is a
+# fully independent project (own pyproject + uv.lock + CI job) — see #251.
+extend-exclude = ["sample-tools", "sandbox-host"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 
 [tool.ty.src]
-exclude = ["src/workspace_app/rca/templates/*/**", "sample-tools/**"]
+exclude = ["src/workspace_app/rca/templates/*/**", "sample-tools/**", "sandbox-host/**"]

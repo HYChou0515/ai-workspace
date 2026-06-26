@@ -1,4 +1,4 @@
-"""IsolatedProcessSandbox — the production backend the HTTP host injects.
+"""IsolatedProcessSandbox — the production backend this host runs.
 
 A `LocalProcessSandbox` subclass that adds the isolation a *sandbox* must have
 (otherwise it would be no better than the plain local backend): each handle runs
@@ -10,7 +10,7 @@ Per handle, `create` allocates a numeric uid/gid from a pool, owns the workspace
 to it (`chmod 700` + a default POSIX ACL so files the root host later writes stay
 writable by the uid), and makes a cgroup with memory/cpu/pids caps; `exec` wraps
 the command so it joins the cgroup and drops privilege via `setpriv`; `kill`
-frees the uid and removes the cgroup. The 8 file ops + the exec pump/timeout are
+frees the uid and removes the cgroup. The file ops + the exec pump/timeout are
 inherited from `LocalProcessSandbox` unchanged.
 """
 
@@ -154,11 +154,11 @@ AclRunner = Callable[[list[str]], None]
 class IsolatedProcessSandbox(LocalProcessSandbox):
     """`LocalProcessSandbox` + per-handle uid/gid + cgroup isolation (no jail).
 
-    Inherits the 8 file ops and the exec pump/timeout unchanged; overrides only
+    Inherits the file ops and the exec pump/timeout unchanged; overrides only
     `create` (allocate identity, own + ACL the workspace, make the cgroup),
     `kill` (free the identity, reap the cgroup), and the `_exec_argv` seam (wrap
-    the command in a cgroup-join + `setpriv` privilege drop). `expose_port` stays
-    inherited but unused. The host process must run as root to setuid/chown.
+    the command in a cgroup-join + `setpriv` privilege drop). The host process
+    must run as root to setuid/chown.
     """
 
     def __init__(

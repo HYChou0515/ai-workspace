@@ -19,8 +19,8 @@ import shutil
 
 import pytest
 
-from workspace_app.sandbox.isolated_process import IsolatedProcessSandbox
-from workspace_app.sandbox.protocol import SandboxSpec
+from sandbox_host.isolated_process import IsolatedProcessSandbox
+from sandbox_host.protocol import SandboxSpec
 
 pytestmark = pytest.mark.integration
 

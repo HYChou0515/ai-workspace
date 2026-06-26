@@ -1,28 +1,128 @@
-"""HttpSandbox client ⇄ FastAPI host wire tests (L1, unit, no isolation, no root).
+"""HttpSandbox client wire tests (L1, unit, no isolation, no root).
 
-The host wraps a `MockSandbox`; the client talks to it over an in-process ASGI
-transport (`httpx.ASGITransport`) — so the full request/response round-trip
-(serialization, NDJSON exec streaming, raw-byte files, handle encode/decode,
-error→exception mapping) is exercised with no network and no privilege.
+The sandbox host is now a SEPARATE service (`sandbox-host/`, its own package +
+deps) — the app shares no Python modules with it, only the HTTP wire contract
+(`docs/sandbox-host-wire.md`). So the client is tested against a **fake host**
+defined right here: a minimal ASGI app that mirrors the wire contract over an
+in-process transport (`httpx.ASGITransport`). The app owns the contract, so this
+fake is its reference of it; the real host has its own conformance tests. The
+full client round-trip (serialization, NDJSON exec streaming, raw-byte files,
+handle encode/decode, error→exception mapping) is exercised with no network and
+no privilege.
 """
 
 from __future__ import annotations
 
 import base64
+import json
 import socket
+from collections.abc import AsyncIterator
 
 import httpx
 import pytest
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import ASGITransport
 
-from workspace_app.sandbox.host.app import make_host_app
 from workspace_app.sandbox.http_client import HttpSandbox, _encode_handle
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
 
 _ADVERTISE = "http://sandbox-host-pod:8000"
+
+
+def _err(exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=404, content={"error": type(exc).__name__, "detail": str(exc)})
+
+
+def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
+    """A minimal ASGI mirror of the sandbox-host wire contract, backed by an
+    in-memory `MockSandbox`. Independent of the real host package — it exists so
+    the client can be exercised against the contract the app defines."""
+    app = FastAPI()
+
+    @app.exception_handler(SandboxNotFound)
+    async def _nf(_r: Request, exc: SandboxNotFound) -> JSONResponse:
+        return _err(exc)
+
+    @app.exception_handler(FileNotFoundError)
+    async def _fnf(_r: Request, exc: FileNotFoundError) -> JSONResponse:
+        return _err(exc)
+
+    @app.post("/sandboxes")
+    async def create(body: dict) -> dict[str, str]:
+        h = await backend.create(SandboxSpec())
+        return {"pod_url": advertise_url, "remote_id": h.id}
+
+    @app.delete("/sandboxes/{rid}", status_code=204)
+    async def kill(rid: str) -> None:
+        await backend.kill(SandboxHandle(id=rid))
+
+    @app.put("/sandboxes/{rid}/file", status_code=204)
+    async def upload(rid: str, path: str, request: Request) -> None:
+        await backend.upload(SandboxHandle(id=rid), await request.body(), path)
+
+    @app.get("/sandboxes/{rid}/file")
+    async def download(rid: str, path: str) -> Response:
+        data = await backend.download(SandboxHandle(id=rid), path)
+        return Response(content=data, media_type="application/octet-stream")
+
+    @app.get("/sandboxes/{rid}/exists")
+    async def exists(rid: str, path: str) -> dict[str, bool]:
+        return {"exists": await backend.exists(SandboxHandle(id=rid), path)}
+
+    @app.get("/sandboxes/{rid}/walk")
+    async def walk(rid: str, root: str) -> dict[str, list[dict]]:
+        entries = await backend.walk(SandboxHandle(id=rid), root)
+        return {
+            "entries": [{"path": e.path, "size": e.size, "version": e.version} for e in entries]
+        }
+
+    @app.delete("/sandboxes/{rid}/file", status_code=204)
+    async def delete(rid: str, path: str) -> None:
+        await backend.delete(SandboxHandle(id=rid), path)
+
+    @app.post("/sandboxes/{rid}/mkdir", status_code=204)
+    async def mkdir(rid: str, body: dict) -> None:
+        await backend.mkdir(SandboxHandle(id=rid), body["path"])
+
+    @app.delete("/sandboxes/{rid}/dir", status_code=204)
+    async def rmdir(rid: str, path: str) -> None:
+        await backend.rmdir(SandboxHandle(id=rid), path)
+
+    @app.post("/sandboxes/{rid}/rename", status_code=204)
+    async def rename(rid: str, body: dict) -> None:
+        await backend.rename(SandboxHandle(id=rid), body["src"], body["dst"])
+
+    @app.post("/sandboxes/{rid}/exec")
+    async def exec_(rid: str, body: dict) -> StreamingResponse:
+        async def gen() -> AsyncIterator[bytes]:
+            chunks: list[bytes] = []
+            try:
+                result = await backend.exec(
+                    SandboxHandle(id=rid), body["cmd"], on_output=chunks.append
+                )
+            except Exception as exc:  # noqa: BLE001 — relayed in-band as an error frame
+                yield (
+                    json.dumps({"error": type(exc).__name__, "detail": str(exc)}) + "\n"
+                ).encode()
+                return
+            for c in chunks:
+                yield (json.dumps({"o": base64.b64encode(c).decode()}) + "\n").encode()
+            yield (
+                json.dumps(
+                    {
+                        "exit": result.exit_code,
+                        "out": base64.b64encode(result.stdout).decode(),
+                        "err": base64.b64encode(result.stderr).decode(),
+                    }
+                )
+                + "\n"
+            ).encode()
+
+        return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+    return app
 
 
 def _closed_port() -> int:
@@ -36,7 +136,7 @@ def _closed_port() -> int:
 @pytest.fixture
 async def http_sandbox():
     backend = MockSandbox()
-    app = make_host_app(backend, advertise_url=_ADVERTISE)
+    app = _fake_host(backend, _ADVERTISE)
     transport = ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport) as client:
         yield HttpSandbox(base_url=_ADVERTISE, client=client)

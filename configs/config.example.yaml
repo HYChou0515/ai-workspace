@@ -43,22 +43,26 @@
 #   #   base_url: http://sandbox-host:8000   # the host's ClusterIP Service
 #   #   read_timeout: 0          # 0 = no HTTP read deadline (host timeouts bound it)
 
-# ─── sandbox_host (the `python -m workspace_app.sandbox_host` service) ─
-# Only read by the host process; runs each sandbox as a pooled numeric uid
-# under a cgroup v2. Deploy it in its own pod/HPA and point sandbox.http at it.
+# ─── sandbox_host ─ MOVED to a standalone service (#251) ─────────────
+# The sandbox host is now its OWN project (`sandbox-host/`, own deps/image) and
+# is configured by `SANDBOX_HOST_*` ENV VARS, not this file — see
+# `deploy/sandbox-host.example.yaml` and `docs/sandbox-host.md`. The app only
+# needs `sandbox.kind: http` + `sandbox.http.base_url` above to reach it.
+# (This block is retained, commented, only so existing configs that still carry
+# a `sandbox_host:` section keep validating; the app no longer reads it.)
 # sandbox_host:
-#   bind: 0.0.0.0:8000
-#   uid_min: 100000            # per-handle uid/gid allocated from this range
+#   bind: 0.0.0.0:8000         # → env SANDBOX_HOST_BIND on the host pod
+#   uid_min: 100000            # → SANDBOX_HOST_UID_MIN / _UID_MAX
 #   uid_max: 199999
-#   memory_max: 512M           # per-sandbox cgroup memory.max
-#   cpu_cores: 1.0             # per-sandbox cgroup cpu.max
-#   pids_max: 512              # per-sandbox cgroup pids.max
-#   cgroup_root: null          # null = this pod's own delegated cgroup v2 subtree
-#   root: null                 # workspace root; null = tmpdir per sandbox
-#   exec_timeout: 60.0
-#   log_timeout: 60.0
-#   tools_dir: null
-#   idle_ttl: 1800.0           # reap sandboxes orphaned by an app-pod crash; 0 = off
+#   memory_max: 512M           # → SANDBOX_HOST_MEMORY_MAX (per-sandbox cgroup)
+#   cpu_cores: 1.0             # → SANDBOX_HOST_CPU_CORES
+#   pids_max: 512              # → SANDBOX_HOST_PIDS_MAX
+#   cgroup_root: null          # → SANDBOX_HOST_CGROUP_ROOT (null = auto-detect)
+#   root: null                 # → SANDBOX_HOST_ROOT
+#   exec_timeout: 60.0         # → SANDBOX_HOST_EXEC_TIMEOUT
+#   log_timeout: 60.0          # → SANDBOX_HOST_LOG_TIMEOUT
+#   tools_dir: null            # → SANDBOX_HOST_TOOLS_DIR (prebuilt tools at /.tools)
+#   idle_ttl: 1800.0           # → SANDBOX_HOST_IDLE_TTL (reap orphaned; 0 = off)
 
 # ─── tools (how RCA tool packages are provisioned) ──────────────────
 # tools:

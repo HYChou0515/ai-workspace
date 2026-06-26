@@ -1,0 +1,58 @@
+[project]
+name = "sandbox-host"
+version = "0.1.0"
+description = "Standalone HTTP sandbox host — isolated process execution for the workspace agent"
+requires-python = ">=3.12"
+# Deliberately minimal — the host is a security-sensitive root service and
+# shares NO dependencies with workspace-app (no litellm / llama-index / specstar
+# / data-science stack). Just an HTTP shell over an isolated-process backend.
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "pydantic>=2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sandbox_host"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+    "ty",
+    "coverage>=7",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "integration: requires real subprocess sandbox / root / cgroup v2; excluded from default CI via -m 'not integration'",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/sandbox_host"]
+omit = ["src/sandbox_host/__main__.py"]  # serve glue (uvicorn)
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
