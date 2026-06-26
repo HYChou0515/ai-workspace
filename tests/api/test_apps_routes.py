@@ -106,6 +106,13 @@ def test_get_app_manifest_includes_the_profile_list():
     assert m["default_profile"] == "default"
 
 
+def test_get_app_manifest_profile_carries_upload_dir():
+    """#198: each profile entry exposes its ``upload_dir`` so the FE chat attach
+    knows which folder to stage files into (resolved from the item's profile)."""
+    by_name = {p["name"]: p for p in _client().get("/apps/rca").json()["profiles"]}
+    assert by_name["default"]["upload_dir"] == "uploads"
+
+
 def test_get_app_manifest_carries_onboarding_teaching():
     """#161 — the per-App welcome teaching flows to the FE through the manifest
     endpoint (version + title + read-only points)."""

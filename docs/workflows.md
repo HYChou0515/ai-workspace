@@ -125,8 +125,8 @@ Lives in `_profile.json`:
     "phases": [                                   // the static skeleton for the diagram (§12)
       { "id": "classify", "title": "Classify + digest" },
       { "id": "ingest",   "title": "Ingest to collection" }
-    ],
-    "input_json": "inputs/input.json"             // the ONE thing the platform knows about inputs (§14)
+    ]
+    // input_json omitted ⇒ derives `{profile.upload_dir}/input.json` (§14); pin only to override
   }
 }
 ```
@@ -426,10 +426,13 @@ business, using the existing free workspace.
 
 1. **Config: where `input.json` is** (`MANIFEST.workflow.input_json`). The platform
    surfaces this file's parsed content to `run()` as `inputs`; it does not validate
-   it or mandate its shape. The profile **seeds** a default `input.json` (e.g.
-   `{"files":["inputs/*"],"except":["inputs/input.json"]}`); a human may freely edit
-   it like any file before pressing Run — **the pre-run workspace behaves exactly
-   like a non-workflow item.**
+   it or mandate its shape. **Omit it** (#198) and the platform derives
+   `{profile.upload_dir}/input.json` — the same staging folder a chat attach lands in
+   (`upload_dir` defaults to `uploads`), so attach and the workflow that consumes the
+   files never drift; pin an explicit path only to override. The profile **seeds** a
+   default `input.json` (e.g. `{"files":["uploads/*"],"except":["uploads/input.json"]}`);
+   a human may freely edit it like any file before pressing Run — **the pre-run
+   workspace behaves exactly like a non-workflow item.**
 2. **Run** — `POST /a/{slug}/items/{item_id}/run` (async; API-triggerable). Starts
    the orchestrator on the item; the run reads `inputs` + the workspace as the
    profile dictates. The body is optional:
@@ -542,7 +545,8 @@ to a user** (§1, §5.1).
 
 Use case 2 as a profile-level workflow, showing the canonical **produce → review →
 commit** shape. The collection set is **pre-defined in the profile**; the seeded
-`input.json` says "files are in `inputs/`"; the user drops files and presses Run.
+`input.json` says "files are in the profile's `upload_dir`" (default `uploads/`, the
+same folder a chat attach lands in, #198); the user drops files and presses Run.
 
 ```python
 async def run(wf, inputs):

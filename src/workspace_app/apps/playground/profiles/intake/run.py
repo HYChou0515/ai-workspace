@@ -24,9 +24,10 @@ def _plan_path(f: str) -> str:
 
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     allowed = wf.config["collections"]  # pre-defined in the profile, not per-run
+    up = wf.upload_dir.rstrip("/")  # #198: the profile's staging folder (default uploads)
     files = await wf.glob(
-        inputs.get("files", ["inputs/*"]),
-        exclude=inputs.get("except", ["inputs/input.json"]),
+        inputs.get("files", [f"{up}/*"]),
+        exclude=inputs.get("except", [f"{up}/input.json"]),
     )
 
     # Phase 1 — PRODUCE: classify+digest every file. Safe — only writes plan/<f>.json.

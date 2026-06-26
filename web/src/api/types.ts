@@ -172,8 +172,9 @@ export type AppManifest = AppSummary & {
    * Absent → no per-App welcome. */
   onboarding?: Onboarding;
   /** The App's profiles (starter-content bundles) — the create flow offers a
-   * picker when there's more than one. */
-  profiles: { name: string; title: string; description: string }[];
+   * picker when there's more than one. `upload_dir` is the folder a chat attach
+   * stages files into (#198), resolved from the active item's profile. */
+  profiles: { name: string; title: string; description: string; upload_dir: string }[];
   /** specstar CRUD route for this App's items, e.g. "/rca-investigation". */
   resource_route: string;
 };
@@ -352,10 +353,20 @@ export interface ApiClient {
   readFile(slug: string, investigationId: string, path: string): Promise<FileContent>;
   /** Raw write. `body` may be a string (UTF-8) or a binary Blob/ArrayBuffer
    * — the FE uploads notebook JSON as string, attachments as Blob. */
-  writeFile(slug: string, 
+  writeFile(slug: string,
     investigationId: string,
     path: string,
     body: string | Blob | ArrayBuffer,
+  ): Promise<void>;
+  /** Like `writeFile` but streams via XHR so the caller can show upload progress
+   * (#198 chat attach). `onProgress(loaded, total)` fires as bytes go out; a 413
+   * (over the size cap) rejects with `HttpError.status === 413`. */
+  uploadFile(
+    slug: string,
+    investigationId: string,
+    path: string,
+    body: Blob,
+    opts?: { onProgress?: (loaded: number, total: number) => void },
   ): Promise<void>;
   /** POST /a/{slug}/items/{id}/files/mkdir — create an empty folder (real
    * directory; no .keep placeholder). 409 if a file occupies the path. */

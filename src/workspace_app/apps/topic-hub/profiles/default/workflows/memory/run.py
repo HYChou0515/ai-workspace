@@ -25,9 +25,12 @@ def _slug(path: str) -> str:
 
 
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
+    # #198: glob the profile's staging folder (``wf.upload_dir``), not a hardcoded
+    # ``uploads/`` (#234) — so it stays in sync with where the chat attach lands.
+    up = wf.upload_dir.rstrip("/")
     files = await wf.glob(
-        inputs.get("files", ["uploads/*"]),
-        exclude=inputs.get("except", ["uploads/input.json"]),
+        inputs.get("files", [f"{up}/*"]),
+        exclude=inputs.get("except", [f"{up}/input.json"]),
     )
     if not files:
         return {"status": "empty", "notes": 0}

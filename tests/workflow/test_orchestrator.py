@@ -98,7 +98,9 @@ async def test_happy_path_records_done_progress_and_releases(spec_instance: Spec
         return {"processed": inputs["n"]}
 
     store = MemoryFileStore()
-    await store.write("rca/i1", "/inputs/input.json", b'{"n": 3}')
+    # #198: the manifest omits input_json, so the run reads it from the profile's
+    # upload_dir (default `uploads`) — `uploads/input.json`, not the old `inputs/`.
+    await store.write("rca/i1", "/uploads/input.json", b'{"n": 3}')
     orch, fakes = _orch(spec_instance, run, store=store)
     run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
     await asyncio.sleep(0)  # let the background task finish
@@ -111,6 +113,47 @@ async def test_happy_path_records_done_progress_and_releases(spec_instance: Spec
     think = next(p for p in got.phases if p.phase == "think")
     assert think.status == "passed" and think.done == 1
     assert fakes.released == [("rca/i1", True)]  # sandbox freed on terminal (§16)
+
+
+async def test_inputs_and_handle_follow_the_profiles_upload_dir(spec_instance: SpecStar):
+    """#198: the orchestrator injects the active profile's ``upload_dir`` onto the
+    handle and derives the run's ``input.json`` location from it — so a profile that
+    stages into ``docs/`` reads ``docs/input.json`` and globs ``docs/*`` without any
+    hardcoded folder, and the chat attach (which lands in the same folder) lines up."""
+    seen: dict = {}
+
+    async def run(wf, inputs):
+        seen["upload_dir"] = wf.upload_dir
+        seen["inputs"] = inputs
+        return {"ok": True}
+
+    store = MemoryFileStore()
+    await store.write("rca/i1", "/docs/input.json", b'{"n": 7}')
+    orch, _fakes = _orch(spec_instance, run, store=store, load_upload_dir=lambda _s, _p: "docs")
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    assert spec_instance.get_resource_manager(WorkflowRun).get(run_id).data.status is RunStatus.DONE
+    assert seen == {"upload_dir": "docs", "inputs": {"n": 7}}
+
+
+async def test_explicit_input_json_overrides_the_upload_dir_default(spec_instance: SpecStar):
+    """#198: a workflow that pins ``input_json`` reads exactly that path, ignoring the
+    profile's ``upload_dir`` — the override branch of the derive-from-upload_dir rule."""
+    seen: dict = {}
+
+    async def run(wf, inputs):
+        seen.update(inputs)
+        return {"ok": True}
+
+    store = MemoryFileStore()
+    await store.write("rca/i1", "/custom/cfg.json", b'{"n": 5}')
+    pinned = WorkflowManifest(phases=[WorkflowPhase(id="think")], input_json="custom/cfg.json")
+    orch, _fakes = _orch(spec_instance, run, store=store, load_upload_dir=lambda _s, _p: "uploads")
+    orch.load_manifest = lambda _s, _p, _w="": pinned
+    run_id = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    assert spec_instance.get_resource_manager(WorkflowRun).get(run_id).data.status is RunStatus.DONE
+    assert seen == {"n": 5}
 
 
 async def test_run_journals_under_its_per_workflow_dir(spec_instance: SpecStar):
@@ -576,7 +619,7 @@ async def test_concurrency_cap_queues_excess(spec_instance: SpecStar):
         return {}
 
     store = MemoryFileStore()
-    await store.write("c1", "/inputs/input.json", b'{"block": true}')
+    await store.write("c1", "/uploads/input.json", b'{"block": true}')  # #198: derived default
     orch, _ = _orch(spec_instance, run, store=store, concurrency=1)
     r1 = await orch.start(slug="rca", item_id="c1", profile="echo", captured_user="u")
     await asyncio.sleep(0)

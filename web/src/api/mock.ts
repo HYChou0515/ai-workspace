@@ -583,13 +583,14 @@ export const mockApi: ApiClient = {
       ],
       default_profile: "default",
       profiles: [
-        { name: "default", title: "Default", description: "Standard RCA workspace." },
-        { name: "tool-demo", title: "Tool demo", description: "Smoke-test the analysis tools." },
-        { name: "local-lab", title: "Local lab", description: "RCA SOP sandbox." },
+        { name: "default", title: "Default", description: "Standard RCA workspace.", upload_dir: "uploads" },
+        { name: "tool-demo", title: "Tool demo", description: "Smoke-test the analysis tools.", upload_dir: "uploads" },
+        { name: "local-lab", title: "Local lab", description: "RCA SOP sandbox.", upload_dir: "uploads" },
         {
           name: "smt-reflow-example",
           title: "SMT reflow (worked example)",
           description: "A fully-populated worked example.",
+          upload_dir: "uploads",
         },
       ],
       resource_route: "/rca-investigation",
@@ -711,7 +712,14 @@ export const mockApi: ApiClient = {
     for (const d of dirAncestors(path)) ensureDirs(investigationId).add(d);
   },
 
-  async *subscribeInvestigation(_slug: string, 
+  async uploadFile(_slug, investigationId, path, body, opts) {
+    await delay(20);
+    opts?.onProgress?.(body.size, body.size);
+    ensureFiles(investigationId).set(path, { text: null, bytes: body.size });
+    for (const d of dirAncestors(path)) ensureDirs(investigationId).add(d);
+  },
+
+  async *subscribeInvestigation(_slug: string,
     id: string,
     signal?: AbortSignal,
   ): AsyncGenerator<AgentEvent> {
