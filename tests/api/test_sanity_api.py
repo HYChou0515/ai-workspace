@@ -249,6 +249,35 @@ def test_custom_question_authored_via_crud_appears_in_meta_and_runs():
         assert cell.grade == "" and cell.ai_grade == "pass"  # no mechanical grader; judge ran
 
 
+def test_custom_question_crud_lifecycle():
+    """#231 P8 backend: typed /sanity/custom-questions CRUD — create → list →
+    update → delete, with 404 on an unknown id."""
+    app, _ = _app_and_spec()
+    with TestClient(app) as client:
+        body = {"category": "自訂", "prompt": "p", "expected": "e", "levels": ["none"]}
+        created = client.post("/sanity/custom-questions", json=body)
+        assert created.status_code == 201
+        qid = created.json()["id"]
+
+        listed = client.get("/sanity/custom-questions").json()
+        assert any(q["id"] == qid and q["prompt"] == "p" for q in listed)
+
+        upd = client.put(
+            f"/sanity/custom-questions/{qid}",
+            json={**body, "prompt": "p2", "enabled": False},
+        )
+        assert upd.status_code == 200 and upd.json()["prompt"] == "p2"
+        after = client.get("/sanity/custom-questions").json()
+        assert any(q["id"] == qid and q["prompt"] == "p2" and q["enabled"] is False for q in after)
+
+        assert client.delete(f"/sanity/custom-questions/{qid}").status_code == 204
+        assert client.get("/sanity/custom-questions").json() == []
+
+        # unknown id ⇒ 404 on both update and delete
+        assert client.put("/sanity/custom-questions/nope", json=body).status_code == 404
+        assert client.delete("/sanity/custom-questions/nope").status_code == 404
+
+
 def test_post_run_cell_validates_question_and_level():
     app, _ = _app_and_spec()
     client = TestClient(app)

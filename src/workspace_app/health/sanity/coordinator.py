@@ -141,6 +141,30 @@ class SanityBatteryCoordinator:
     def find_question(self, key: str) -> SanityQuestion | None:
         return next((q for q in self.all_questions() if question_key(q) == key), None)
 
+    # ── custom-question CRUD (the 題目管理 panel's backend) ───────────
+    def list_custom(self) -> list[tuple[str, CustomSanityQuestion]]:
+        """Every user-authored question with its resource id (for edit/delete)."""
+        return [
+            (r.info.resource_id, r.data)  # ty: ignore[unresolved-attribute]
+            for r in self._custom_rm.list_resources(QB.all().build())
+            if isinstance(r.data, CustomSanityQuestion)
+        ]
+
+    def create_custom(self, cq: CustomSanityQuestion) -> str:
+        return self._custom_rm.create(cq).resource_id
+
+    def update_custom(self, qid: str, cq: CustomSanityQuestion) -> bool:
+        if not self._custom_rm.exists(qid):
+            return False
+        self._custom_rm.update(qid, cq)
+        return True
+
+    def delete_custom(self, qid: str) -> bool:
+        if not self._custom_rm.exists(qid):
+            return False
+        self._custom_rm.permanently_delete(qid)
+        return True
+
     # ── coverage: fill the never-run blanks (#231) ───────────────────
     def run_missing(self, model: str, *, category: str | None = None) -> int:
         """Enqueue a cell job for every *expected* coverage cell of ``model`` that

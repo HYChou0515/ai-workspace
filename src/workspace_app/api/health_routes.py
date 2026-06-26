@@ -305,12 +305,25 @@ class SanityCountOut(BaseModel):
     count: int  # cells enqueued (run-missing) / re-judged (rescore)
 
 
+class CustomQuestionBody(BaseModel):
+    category: str
+    prompt: str
+    expected: str
+    levels: list[str] = []  # none|low|medium|high
+    enabled: bool = True
+
+
+class CustomQuestionOut(CustomQuestionBody):
+    id: str  # specstar resource id (for edit/delete)
+
+
 def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordinator: Any) -> None:
     """The model-sanity matrix API: GET the question/level/model metadata (the FE
     draws the empty grid), POST a run (cell or auto battery). Cell results
     themselves are a specstar resource — the FE lists ``/sanity-result`` directly
     (auto route), so there's no custom read for them here."""
     from ..health.sanity.questions import ALL_LEVELS, LEVEL_LABELS, question_key
+    from ..resources import CustomSanityQuestion
 
     @app.get("/sanity/questions")
     async def get_sanity_meta() -> SanityMetaOut:
@@ -385,3 +398,42 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
         for model in body.models:
             total += await asyncio.to_thread(coordinator.rescore, model)
         return SanityCountOut(count=total)
+
+    def _cq(body: CustomQuestionBody) -> CustomSanityQuestion:
+        return CustomSanityQuestion(
+            category=body.category,
+            prompt=body.prompt,
+            expected=body.expected,
+            levels=body.levels,
+            enabled=body.enabled,
+        )
+
+    @app.get("/sanity/custom-questions")
+    async def list_custom_questions() -> list[CustomQuestionOut]:
+        return [
+            CustomQuestionOut(
+                id=qid,
+                category=c.category,
+                prompt=c.prompt,
+                expected=c.expected,
+                levels=c.levels,
+                enabled=c.enabled,
+            )
+            for qid, c in coordinator.list_custom()
+        ]
+
+    @app.post("/sanity/custom-questions", status_code=201)
+    async def create_custom_question(body: CustomQuestionBody) -> CustomQuestionOut:
+        qid = coordinator.create_custom(_cq(body))
+        return CustomQuestionOut(id=qid, **body.model_dump())
+
+    @app.put("/sanity/custom-questions/{qid:path}")
+    async def update_custom_question(qid: str, body: CustomQuestionBody) -> CustomQuestionOut:
+        if not coordinator.update_custom(qid, _cq(body)):
+            raise HTTPException(404, detail=f"unknown question {qid!r}")
+        return CustomQuestionOut(id=qid, **body.model_dump())
+
+    @app.delete("/sanity/custom-questions/{qid:path}", status_code=204)
+    async def delete_custom_question(qid: str) -> None:
+        if not coordinator.delete_custom(qid):
+            raise HTTPException(404, detail=f"unknown question {qid!r}")
