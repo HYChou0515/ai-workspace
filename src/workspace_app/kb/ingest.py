@@ -284,11 +284,22 @@ class Ingestor:
         return self._store_file(collection_id, user, path, data)
 
     def index(
-        self, doc_id: str, *, source_doc_rm: IResourceManager[SourceDoc] | None = None
+        self,
+        doc_id: str,
+        *,
+        source_doc_rm: IResourceManager[SourceDoc] | None = None,
+        reraise: bool = False,
     ) -> None:
         """Slow path: (re)build a stored doc's chunks — chunk + embed — then
         flip its status to ``ready`` (``error`` if embedding fails). Safe to run
         off the request thread.
+
+        ``reraise`` (#249): when True, a failure is NOT mapped to ``status=error``
+        here — it propagates so the caller (the IndexCoordinator job handler) can
+        tell a transient blip (re-deliver the job, show "retrying") from a
+        permanent error (mark ``error``). The synchronous path leaves it False —
+        it has no job to requeue, so a failure is terminal and surfaced as the
+        doc's ``error`` status as before.
 
         Issue #39: a file with no matching parser still flips to
         ``status="ready"`` with ``chunks=0`` — the upload survives on
@@ -313,29 +324,34 @@ class Ingestor:
         assert isinstance(doc, SourceDoc)
         raw = drm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)
-        detail = ""
-        preview: Binary | None = None
-        text: str | None = None
         try:
             self._delete_chunks(doc_id)
             text, preview = self._index(doc.collection_id, doc_id, doc.path, raw)
-            status = "ready"
         except Exception as exc:  # noqa: BLE001 — surface failure as doc status, don't crash the worker
-            status = "error"
+            if reraise:
+                raise  # #249: let the job handler decide status + whether to requeue
             # Don't lose the cause: the status flip alone is opaque (a missing
             # embedding model, a dim mismatch, …). Log the traceback so it's
-            # visible in the server logs instead of a silent "error" badge.
+            # visible in the server logs instead of a silent "error" badge, and
+            # surface a one-line summary on the doc row.
             logger.exception("indexing failed for %s", doc_id)
-            # Surface a one-line summary on the doc row too so the FE
-            # operator sees what blew up without combing through server
-            # logs. Truncate to a sensible width.
-            detail = f"{type(exc).__name__}: {exc!s}"[:240]
+            drm.update(
+                doc_id,
+                msgspec.structs.replace(
+                    doc,
+                    status="error",
+                    status_detail=f"{type(exc).__name__}: {exc!s}"[:240],
+                    preview=None,
+                    text=None,
+                ),
+            )
+            return
         # `preview` and `text` are derived + current-only like the chunks: each
         # (re)index round's hand-back wins; None clears a stale one.
         drm.update(
             doc_id,
             msgspec.structs.replace(
-                doc, status=status, status_detail=detail, preview=preview, text=text
+                doc, status="ready", status_detail="", preview=preview, text=text
             ),
         )
 

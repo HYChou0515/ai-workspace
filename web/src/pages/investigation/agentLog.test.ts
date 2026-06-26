@@ -667,3 +667,35 @@ describe("workflow step events in the feed (#100 observability)", () => {
     }
   });
 });
+
+describe("failover switch (#249/#131)", () => {
+  it("records a failover_switch as a transient field, NOT a transcript entry", () => {
+    const log = reduceAgent(EMPTY_LOG, { type: "failover_switch", from_model: "m1" }, 123);
+    expect(log.failover).toEqual({ at: 123 });
+    expect(log.entries).toHaveLength(0); // ephemeral — never enters the transcript
+  });
+
+  it("clears the notice when the next turn opens (agent_metrics 'up')", () => {
+    const switched = reduceAgent(EMPTY_LOG, { type: "failover_switch", from_model: "m1" }, 1);
+    const next = reduceAgent(switched, {
+      type: "agent_metrics",
+      phase: "up",
+      prompt_tokens: 10,
+      completion_tokens: 0,
+      elapsed_ms: 0,
+    });
+    expect(next.failover).toBeNull(); // a fresh turn starts clean
+  });
+
+  it("keeps the notice through a 'down' metrics tick (same turn, still switching)", () => {
+    const switched = reduceAgent(EMPTY_LOG, { type: "failover_switch", from_model: "m1" }, 1);
+    const same = reduceAgent(switched, {
+      type: "agent_metrics",
+      phase: "down",
+      prompt_tokens: 10,
+      completion_tokens: 1,
+      elapsed_ms: 5,
+    });
+    expect(same.failover).toEqual({ at: 1 });
+  });
+});
