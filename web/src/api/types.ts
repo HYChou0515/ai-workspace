@@ -65,7 +65,13 @@ export type MessageCitation = {
   end: number;
   source_chunk_ids: string[];
   snippet: string;
+  /** #254 — aggregated source location ({ page: [3, 4], section: ["Ch.2 > 2.1"] }). */
+  provenance?: Provenance;
 };
+
+/** #254 — a passage's structural location, aggregated across its merged
+ * chunks: each locator key → its distinct values. */
+export type Provenance = Record<string, Array<string | number>>;
 
 export type Conversation = {
   resource_id: string;

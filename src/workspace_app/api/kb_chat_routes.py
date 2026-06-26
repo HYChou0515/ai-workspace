@@ -513,6 +513,7 @@ def _message_dict(m: KbMessage) -> dict:
                 "end": c.end,
                 "source_chunk_ids": c.source_chunk_ids,
                 "snippet": c.snippet,
+                "provenance": c.provenance,
             }
             for c in m.citations
         ],

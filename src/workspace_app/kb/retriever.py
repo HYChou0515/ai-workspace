@@ -232,6 +232,7 @@ class Retriever:
                 start=chunks[cid].start,
                 end=chunks[cid].end,
                 score=relevance[cid],
+                provenance=chunks[cid].provenance,
             )
             for cid in order
         ]

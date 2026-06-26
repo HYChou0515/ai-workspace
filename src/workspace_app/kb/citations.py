@@ -33,6 +33,7 @@ def parse_citations(answer: str, passages: list[RetrievedPassage]) -> list[Citat
                     end=p.end,
                     source_chunk_ids=p.source_chunk_ids,
                     snippet=p.text,
+                    provenance=p.provenance,
                 )
             )
     return out

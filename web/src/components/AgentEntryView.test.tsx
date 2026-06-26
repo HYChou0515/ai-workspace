@@ -54,6 +54,69 @@ describe("EntryView — ask_knowledge_base tool card citations", () => {
     expect(screen.getByText(/Zone 3 setpoint/)).toBeInTheDocument();
   });
 
+  it("renders the #254 source-location chip when a citation has provenance", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "tool_call",
+          call: {
+            call_id: "c1",
+            name: "ask_knowledge_base",
+            args: {},
+            status: "done",
+            output: "answer with [1]",
+            citations: [
+              {
+                marker: 1,
+                collection_id: "col",
+                document_id: "doc",
+                filename: "rca.pdf",
+                start: 0,
+                end: 50,
+                source_chunk_ids: ["ck"],
+                snippet: "setpoint drift",
+                provenance: { page: [3, 4], section: ["Failure Analysis > Root Cause"] },
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    // Page range + section breadcrumb (the prefix word is locale-dependent, so
+    // assert on the verbatim, locale-independent tail).
+    expect(screen.getByText(/3–4 · Failure Analysis > Root Cause/)).toBeInTheDocument();
+  });
+
+  it("renders no location chip when a citation has no provenance", () => {
+    render(
+      <EntryView
+        entry={{
+          kind: "tool_call",
+          call: {
+            call_id: "c1",
+            name: "ask_knowledge_base",
+            args: {},
+            status: "done",
+            output: "answer",
+            citations: [
+              {
+                marker: 1,
+                collection_id: "col",
+                document_id: "doc",
+                filename: "plain.md",
+                start: 0,
+                end: 5,
+                source_chunk_ids: ["ck"],
+                snippet: "snip",
+              },
+            ],
+          },
+        }}
+      />,
+    );
+    expect(document.querySelector(".kb-cite__loc")).toBeNull();
+  });
+
   it("clicking a citation fires onOpenCitation with the picked citation", () => {
     const cite = {
       marker: 1,

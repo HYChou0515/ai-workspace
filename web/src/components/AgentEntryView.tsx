@@ -16,10 +16,37 @@ import type { Message, MessageCitation } from "../api/types";
 import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
+import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
 import { UserChip } from "./UserChip";
 import { pxToRem } from "../lib/pxToRem";
+
+// One reference card under an answer / ask_knowledge_base tool card. Shared by
+// the assistant-answer Sources block and the tool-card block so they stay in
+// lockstep. #254: a citation with provenance also shows its source location
+// (page / section / sheet …) as a chip between the filename and the snippet.
+function CitationCard({
+  c,
+  onOpen,
+}: {
+  c: MessageCitation;
+  onOpen?: (c: MessageCitation) => void;
+}) {
+  const t = useT();
+  const loc = formatProvenance(c.provenance, t);
+  return (
+    <button type="button" className="kb-cite" onClick={() => onOpen?.(c)}>
+      <span className="kb-cite__marker">[{c.marker}]</span>
+      <span className="kb-cite__body">
+        <span className="kb-cite__file">{c.filename}</span>
+        {loc && <span className="kb-cite__loc">{loc}</span>}
+        <span className="kb-cite__snippet">{c.snippet}</span>
+      </span>
+      <Icon name="arrow_r" size={12} color="var(--text-paper-d2)" />
+    </button>
+  );
+}
 
 // #160: present each tool as a behavior, never its raw name(args). A friendly
 // label (localized) + the single most meaningful argument in plain text.
@@ -425,19 +452,11 @@ function MessageBlock({
           <div className="kb-cites" style={{ marginLeft: 28 }}>
             <div className="kb-cites__label">{t("entry.sources")}</div>
             {message.citations.map((c) => (
-              <button
+              <CitationCard
                 key={`${c.marker}:${c.document_id}#${c.start}`}
-                type="button"
-                className="kb-cite"
-                onClick={() => onOpenCitation?.(c)}
-              >
-                <span className="kb-cite__marker">[{c.marker}]</span>
-                <span className="kb-cite__body">
-                  <span className="kb-cite__file">{c.filename}</span>
-                  <span className="kb-cite__snippet">{c.snippet}</span>
-                </span>
-                <Icon name="arrow_r" size={12} color="var(--text-paper-d2)" />
-              </button>
+                c={c}
+                onOpen={onOpenCitation}
+              />
             ))}
           </div>
         )}
@@ -641,19 +660,7 @@ function ToolCallCard({
         <div className="kb-cites" style={{ marginTop: 6 }}>
           <div className="kb-cites__label">{t("entry.sources")}</div>
           {call.citations.map((c) => (
-            <button
-              key={c.marker}
-              type="button"
-              className="kb-cite"
-              onClick={() => onOpenCitation?.(c)}
-            >
-              <span className="kb-cite__marker">[{c.marker}]</span>
-              <span className="kb-cite__body">
-                <span className="kb-cite__file">{c.filename}</span>
-                <span className="kb-cite__snippet">{c.snippet}</span>
-              </span>
-              <Icon name="arrow_r" size={12} color="var(--text-paper-d2)" />
-            </button>
+            <CitationCard key={c.marker} c={c} onOpen={onOpenCitation} />
           ))}
         </div>
       )}

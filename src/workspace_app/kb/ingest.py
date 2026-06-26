@@ -75,6 +75,19 @@ _ARCHIVE_MIMES = {"application/zip", "application/x-tar", "application/gzip"}
 # CodeSplitter (tree-sitter, function-boundary aware).
 _CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
 
+# Issue #254: the splitter-node metadata keys that describe WHERE a chunk lives
+# (vs. ``filename`` / ``mime`` / ``content_format``, which are routing hints, and
+# LlamaIndex's own ``Header_N`` markdown keys, which are already folded into the
+# embedded breadcrumb). Only these are persisted on ``DocChunk.provenance``.
+# Adding a new parser locator means adding its key here.
+_PROVENANCE_KEYS = frozenset({"page", "section", "slide", "sheet", "jsonl_line", "row"})
+
+
+def _collect_provenance(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Pick the location-bearing keys out of a node's metadata (issue #254).
+    Order-stable on ``_PROVENANCE_KEYS`` so equal provenance compares equal."""
+    return {k: metadata[k] for k in _PROVENANCE_KEYS if k in metadata}
+
 
 def normalize_text(raw: str) -> str:
     """Canonical text: strip a leading BOM and normalize line endings, so chunk
@@ -545,6 +558,7 @@ class Ingestor:
                 embedding=None if use_alt else (n.embedding or None),
                 embedding_alt=alt_vecs[i] if (use_alt and alt_vecs is not None) else None,
                 parser_id=parser_id,
+                provenance=_collect_provenance(n.metadata),
             )
             if deterministic:
                 chrm.create_or_update(chunk_id(doc_id, seq), chunk)
