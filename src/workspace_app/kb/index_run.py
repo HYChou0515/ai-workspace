@@ -42,11 +42,15 @@ class IndexRunStore:
         self._rm = spec.get_resource_manager(IndexRun)
 
     # ── seed / read ──────────────────────────────────────────────────
-    def start(self, doc_id: str, collection_id: str, total: int) -> None:
+    def start(self, doc_id: str, collection_id: str, total: int, units_total: int = 0) -> None:
         """Seed (or reset) the run for a fresh fan-out — overwrites any prior
-        terminal run for this doc. Written as a draft revision so the process
-        jobs can ``modify`` it in place under CAS (modify requires draft)."""
-        run = IndexRun(doc_id=doc_id, collection_id=collection_id, total=total)
+        terminal run for this doc. ``units_total`` is the doc's unit count (e.g.
+        PDF pages) for the #248 progress bar. Written as a draft revision so the
+        process jobs can ``modify`` it in place under CAS (modify requires
+        draft)."""
+        run = IndexRun(
+            doc_id=doc_id, collection_id=collection_id, total=total, units_total=units_total
+        )
         self._rm.create_or_update(doc_id, run, status=RevisionStatus.draft)
 
     def get(self, doc_id: str) -> IndexRun | None:
@@ -64,10 +68,12 @@ class IndexRunStore:
         return run is not None and run.status == "running"
 
     # ── CAS mutations ────────────────────────────────────────────────
-    def mark_done(self, doc_id: str, batch_index: int) -> None:
-        """Idempotently record that batch ``batch_index`` finished OK. Re-running
-        the same process job (at-least-once redelivery) is a no-op."""
-        self._cas(doc_id, lambda run: _with_index(run, "done", batch_index))
+    def mark_done(self, doc_id: str, batch_index: int, batch_units: int = 0) -> None:
+        """Idempotently record that batch ``batch_index`` finished OK, adding its
+        ``batch_units`` to the run's ``units_done`` (#248). Re-running the same
+        process job (at-least-once redelivery) is a no-op — the unit count is
+        bumped once, under the same CAS, only when the batch is newly recorded."""
+        self._cas(doc_id, lambda run: _with_done(run, batch_index, batch_units))
 
     def mark_failed(self, doc_id: str, batch_index: int) -> None:
         """Idempotently record that batch ``batch_index`` gave up (dead-lettered
@@ -138,3 +144,14 @@ def _with_index(run: IndexRun, field_name: str, batch_index: int) -> IndexRun | 
     if batch_index in current:
         return None
     return msgspec.structs.replace(run, **{field_name: [*current, batch_index]})
+
+
+def _with_done(run: IndexRun, batch_index: int, batch_units: int) -> IndexRun | None:
+    """Like :func:`_with_index` for ``done``, but also adds ``batch_units`` to
+    ``units_done`` (#248) — both under one CAS so the progress aggregate moves
+    in lockstep with the batch set and is never double-counted on redelivery."""
+    if batch_index in run.done:
+        return None  # idempotent — already counted, including its units
+    return msgspec.structs.replace(
+        run, done=[*run.done, batch_index], units_done=run.units_done + batch_units
+    )

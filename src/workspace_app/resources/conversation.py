@@ -34,6 +34,10 @@ class Citation(Struct):
     end: int  # max end
     source_chunk_ids: list[str]  # original DocChunk ids merged
     snippet: str = ""
+    # Issue #254: the cited passage's aggregated source location
+    # (``{"page": [3, 4], "section": ["Ch.2 > 2.1"]}``) so the FE can render a
+    # "p.3 §2.1" chip on the reference card. ``{}`` when the source had none.
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 class Message(Struct):

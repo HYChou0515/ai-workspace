@@ -48,6 +48,29 @@ def test_start_seeds_a_running_run():
     assert store.is_active(doc_id) is True
 
 
+def _units(store: IndexRunStore, doc_id: str) -> tuple[int, int]:
+    run = store.get(doc_id)
+    assert run is not None
+    return run.units_done, run.units_total
+
+
+def test_units_done_climbs_monotonically_as_batches_complete():
+    """#248: the progress bar reads a real aggregate (units done across all
+    batches / total units), seeded at start and bumped per completed batch — so
+    it only ever moves forward, even as parallel batches finish out of order."""
+    spec, cid, doc_id = _spec_with_doc()
+    store = IndexRunStore(spec)
+    store.start(doc_id, cid, total=3, units_total=24)  # 24-page PDF, 3 batches of 8
+    assert _units(store, doc_id) == (0, 24)
+
+    store.mark_done(doc_id, 0, batch_units=8)
+    assert _units(store, doc_id) == (8, 24)
+    store.mark_done(doc_id, 2, batch_units=8)  # out of order — still climbs
+    assert _units(store, doc_id) == (16, 24)
+    store.mark_done(doc_id, 0, batch_units=8)  # redelivery — idempotent, no double count
+    assert _units(store, doc_id) == (16, 24)
+
+
 def test_get_missing_run_is_none():
     spec, _cid, doc_id = _spec_with_doc()
     assert IndexRunStore(spec).get(doc_id) is None
@@ -74,6 +97,17 @@ def test_mark_done_is_idempotent():
     run = store.get(doc_id)
     assert run is not None
     assert sorted(run.done) == [0, 1]  # 1 recorded once, not twice
+
+
+def test_mark_failed_is_idempotent():
+    spec, cid, doc_id = _spec_with_doc()
+    store = IndexRunStore(spec)
+    store.start(doc_id, cid, total=3)
+    store.mark_failed(doc_id, 2)
+    store.mark_failed(doc_id, 2)  # redelivery of the same dead-lettered batch
+    run = store.get(doc_id)
+    assert run is not None
+    assert run.failed == [2]  # recorded once, not twice
 
 
 def test_finalize_gate_opens_only_when_all_batches_accounted_for():

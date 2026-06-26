@@ -39,6 +39,7 @@ def _reflow_passage() -> RetrievedPassage:
         end=16,
         source_chunk_ids=["c/u/reflow.md#0"],
         text="zone three drift",
+        provenance={"page": [3], "section": ["Root Cause"]},
     )
 
 
@@ -248,6 +249,8 @@ def test_send_message_streams_and_persists_answer_with_citations():
     assert cite["marker"] == 1
     assert cite["document_id"] == "c/u/reflow.md"
     assert cite["filename"] == "reflow.md"
+    # #254: the source location rides the persisted citation to the FE.
+    assert cite["provenance"] == {"page": [3], "section": ["Root Cause"]}
 
 
 def test_run_error_is_streamed_and_persisted_as_an_error_message():

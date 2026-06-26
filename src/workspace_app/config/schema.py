@@ -159,7 +159,6 @@ class EmbedderSettings:
     query_prefix: str = ""
     doc_prefix: str = ""
     timeout: float = 60.0
-    num_retries: int = 2
     batch_size: int = 64
     base_url: str = ""
     api_key: str = ""
@@ -168,8 +167,8 @@ class EmbedderSettings:
     # running the identical model; a different embedding model would produce
     # vectors in an incompatible space and corrupt the index). When non-empty,
     # the primary `base_url` plus these replicas form the priority chain; on a
-    # busy/failed endpoint the embedder switches to the next and cools the failed
-    # one. `api_key` is shared across replicas (same service).
+    # transient failure the embedder retries with backoff then switches to the
+    # next (#249). `api_key` is shared across replicas (same service).
     fallbacks: list[str] = field(default_factory=list)
 
 
@@ -301,6 +300,13 @@ class KbSettings:
     # preset, so a fresh deploy gets enhancements out of the box.
     retrieval_llm: RetrievalLlmRef | None = field(
         default_factory=lambda: RetrievalLlmRef(preset="kb-retrieval"),
+    )
+    # #175: the LLM that drafts context cards from documents (自動 context card).
+    # Same usage-entry shape as `retrieval_llm`; default = the bundled
+    # `card-drafter` preset. `None` ⇒ card drafting disabled (the feature stays
+    # mounted but proposes nothing).
+    card_drafter: RetrievalLlmRef | None = field(
+        default_factory=lambda: RetrievalLlmRef(preset="card-drafter"),
     )
     # Retriever behaviour knobs (expand / hyde / rerank defaults + LLM
     # ceilings). Independent from `retrieval_llm` — that names which LLM
@@ -547,6 +553,13 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
     # (e.g. hosted OpenAI while agents stay local) override just this
     # preset's `model` / `llm` in config.yaml.
     "kb-retrieval": {
+        "model": "ollama_chat/qwen3:14b",
+    },
+    # `card-drafter` (#175) — the LLM-only preset `kb.card_drafter` references to
+    # draft context cards from documents. Same default model as retrieval;
+    # operators override just this preset's `model` / `llm` to draft on a
+    # different provider.
+    "card-drafter": {
         "model": "ollama_chat/qwen3:14b",
     },
     # `kb-vlm` — the LLM-only preset referenced by `kb.vlm_llm` for

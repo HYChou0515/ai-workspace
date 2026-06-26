@@ -105,6 +105,8 @@ class DispatchSplitter(TransformComponent):
                 out.extend(self._split_code(node, code_lang))
             else:
                 out.extend(self.sentence_splitter.get_nodes_from_documents([node]))
+        for n in out:
+            _fold_section(n)
         return out
 
     def _split_markdown(self, node: BaseNode) -> list[BaseNode]:
@@ -172,6 +174,23 @@ class DispatchSplitter(TransformComponent):
             splitter = CodeSplitter(language=language)
             self.code_splitters[language] = splitter
         return splitter.get_nodes_from_documents([node])
+
+
+def _fold_section(node: BaseNode) -> None:
+    """Issue #254: prepend the outline ``section`` breadcrumb to a node's text
+    so the embedding captures the chapter context the bare char span loses.
+    Only the section (semantic) is folded — the ``page`` number is pure noise
+    to the vector and stays in provenance only. The char span is left pointing
+    at the breadcrumb-free canonical text (same contract as the Markdown
+    heading breadcrumb). No-op when the node has no section, isn't a TextNode,
+    or already opens with the breadcrumb."""
+    section = node.metadata.get("section")
+    if not section or not isinstance(node, TextNode):
+        return
+    section = str(section)
+    if node.get_content().startswith(section):
+        return
+    node.text = f"{section}\n\n{node.get_content()}"
 
 
 def _code_language_for(filename: str) -> str | None:

@@ -3704,6 +3704,7 @@ dependencies = [
     { name = "pypdfium2" },
     { name = "pyyaml" },
     { name = "specstar", extra = ["magic"] },
+    { name = "tenacity" },
     { name = "tree-sitter" },
     { name = "tree-sitter-languages" },
 ]
@@ -3753,6 +3754,7 @@ requires-dist = [
     { name = "scipy", marker = "extra == 'process-sandbox'", specifier = ">=1.17.1" },
     { name = "seaborn", marker = "extra == 'process-sandbox'", specifier = ">=0.13.2" },
     { name = "specstar", extras = ["magic"], specifier = ">=0.11.9" },
+    { name = "tenacity", specifier = ">=8.5.0" },
     { name = "tree-sitter", specifier = "<0.22" },
     { name = "tree-sitter-languages", specifier = ">=1.10.2" },
 ]

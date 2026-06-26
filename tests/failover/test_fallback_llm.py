@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 
+import pytest
+
 from workspace_app.factories import LlmEndpoint
 from workspace_app.failover.cooldown import CooldownRegistry
 from workspace_app.failover.llm import FallbackLlm, FallbackVlm
@@ -105,13 +107,20 @@ def test_fallback_llm_does_not_build_a_cooling_endpoint():
     assert built == ["spare"]  # 'busy' is cooling → never materialised
 
 
-def test_fallback_vlm_switches_and_passes_images():
-    reg = CooldownRegistry(clock=_Clock())
+class _Transient(Exception):
+    status_code = 503  # a busy/blip endpoint, like litellm's 503
+
+
+class _BadRequest(Exception):
+    status_code = 400  # a permanent error switching can't fix
+
+
+def test_fallback_vlm_retries_a_transient_then_switches_and_passes_images():
     seen: list[Sequence[tuple[bytes, str]]] = []
 
     def make(e: LlmEndpoint) -> IVlm:
         if e.model == "busy":
-            return _FakeVlm(error=RuntimeError("busy"))
+            return _FakeVlm(error=_Transient())  # transient blip → retry, then switch
 
         class _Recorder(_FakeVlm):
             def stream(self, prompt, *, images):
@@ -120,7 +129,36 @@ def test_fallback_vlm_switches_and_passes_images():
 
         return _Recorder([("described", False)])
 
-    vlm = FallbackVlm([_ep("busy"), _ep("spare")], reg, make_vlm=make)
+    # #249: the WHOLE describe is one retryable unit, yielded as a single chunk.
+    switched: list[str] = []
+    vlm = FallbackVlm(
+        [_ep("busy"), _ep("spare")],
+        make_vlm=make,
+        on_switch=lambda label, exc: switched.append(label),
+        sleep=lambda _s: None,
+    )
     out = vlm.collect("describe", images=[(b"img", "image/png")])
-    assert out == "described"
-    assert seen == [[(b"img", "image/png")]]
+    assert out == "described"  # switched to the spare after the busy endpoint blipped
+    assert seen == [[(b"img", "image/png")]]  # images rode along to the winning endpoint
+    assert switched == ["busy"]  # the degradation notice fired for the blipping endpoint
+
+
+def test_fallback_vlm_switch_without_an_on_switch_hook_is_silent():
+    def make(e: LlmEndpoint) -> IVlm:
+        return _FakeVlm(error=_Transient()) if e.model == "busy" else _FakeVlm([("ok", False)])
+
+    vlm = FallbackVlm([_ep("busy"), _ep("spare")], make_vlm=make, sleep=lambda _s: None)
+    assert vlm.collect("d", images=[]) == "ok"  # no on_switch wired → the switch is silent
+
+
+def test_fallback_vlm_aborts_on_a_permanent_error_without_switching():
+    built: list[str] = []
+
+    def make(e: LlmEndpoint) -> IVlm:
+        built.append(e.model)
+        return _FakeVlm(error=_BadRequest())  # a 400 can't be fixed by switching
+
+    vlm = FallbackVlm([_ep("first"), _ep("spare")], make_vlm=make, sleep=lambda _s: None)
+    with pytest.raises(_BadRequest):
+        vlm.collect("describe", images=[(b"img", "image/png")])
+    assert built == ["first"]  # the spare is never even built — a bad request is terminal

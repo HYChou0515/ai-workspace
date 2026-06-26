@@ -153,6 +153,20 @@ class AgentMetrics:
     type: Literal["agent_metrics"] = "agent_metrics"
 
 
+@dataclass(frozen=True)
+class FailoverSwitch:
+    """#249/#131: the chat model was busy/blipped before its first token, so the
+    turn switched to the next model in the preset's failover chain. Ephemeral —
+    a live "the backend degraded gracefully, hang on" signal the FE shows as a
+    transient status line; it is NOT persisted to the transcript. ``from_model``
+    is the model that gave way (for logs/telemetry); the FE shows a de-jargoned
+    notice and never the raw id."""
+
+    from_model: str
+    reason: str = ""
+    type: Literal["failover_switch"] = "failover_switch"
+
+
 AgentEvent = (
     MessageDelta
     | ToolStart
@@ -165,6 +179,7 @@ AgentEvent = (
     | MaxTurnsExceeded
     | RepetitionStopped  # #113: model degenerated into a repetition loop
     | AgentMetrics
+    | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)
     | PhaseEntered  # #100: workflow phase/step observability (manual §12)

@@ -115,6 +115,7 @@ const render = (over: { chatSwitcher?: "auto" | "always"; showCollections?: bool
       appTitle="Topic Hub"
       attachedPreset=""
       onAttachPreset={() => {}}
+      uploadDir="uploads"
       chatSwitcher={over.chatSwitcher ?? "always"}
       showCollections={over.showCollections ?? true}
     />,

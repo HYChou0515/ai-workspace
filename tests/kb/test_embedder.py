@@ -29,7 +29,7 @@ def test_litellm_embedder_constructs_and_reports_its_dim():
     e = LitellmEmbedder("ollama/qwen3-embedding", dim=1024, query_prefix="Q: ")
     assert isinstance(e, LitellmEmbedder)
     assert e.dim == 1024  # must match the DocChunk Vector dim (KB_EMBED_DIM)
-    assert e._timeout == 60.0 and e._num_retries == 2 and e._batch_size == 64  # defaults
+    assert e._timeout == 60.0 and e._batch_size == 64  # defaults
 
 
 def test_litellm_embedder_batches_requests_and_preserves_order(monkeypatch):

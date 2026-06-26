@@ -28,6 +28,12 @@ _NON_PROFILE = {"__pycache__"}
 class ProfileManifest(Struct):
     title: str = ""
     description: str = ""
+    upload_dir: str = "uploads"
+    """#198: the staging folder a chat attach lands in — ``{upload_dir}/<name>`` —
+    and the default the profile's workflows glob (``wf.upload_dir``) / where their
+    ``input_json`` lives (``{upload_dir}/input.json``). One source so attach and the
+    workflows that consume the files never drift apart (the old hardcoded ``uploads/``
+    in #234). Omitted ⇒ ``uploads``."""
     suggestions: list[Suggestion] = field(default_factory=list)
     tools: list[str] | UnsetType = UNSET  # ⊆ app.tools; UNSET → inherit all
     presets: list[str] | UnsetType = UNSET  # ⊆ app.picker; UNSET → inherit all

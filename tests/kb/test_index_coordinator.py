@@ -20,7 +20,9 @@ class _FakeIngestor:
     def __init__(self) -> None:
         self.indexed: list[str] = []
 
-    def index(self, doc_id: str, *, source_doc_rm: object | None = None) -> None:
+    def index(
+        self, doc_id: str, *, source_doc_rm: object | None = None, reraise: bool = False
+    ) -> None:
         self.indexed.append(doc_id)
 
 
@@ -142,7 +144,9 @@ async def test_a_failing_doc_does_not_wedge_the_queue():
         def __init__(self) -> None:
             self.indexed: list[str] = []
 
-        def index(self, doc_id: str, *, source_doc_rm: object | None = None) -> None:
+        def index(
+            self, doc_id: str, *, source_doc_rm: object | None = None, reraise: bool = False
+        ) -> None:
             self.indexed.append(doc_id)
             if doc_id == d1:
                 raise RuntimeError("embed crashed")
@@ -156,6 +160,104 @@ async def test_a_failing_doc_does_not_wedge_the_queue():
     # the bad doc was attempted AND the next one still ran — the partition drained.
     assert d1 in ing.indexed
     assert d2 in ing.indexed
+
+
+# ── #249: single-job transient retry vs permanent error ───────────────
+
+
+class _StatusError(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+class _FlakyEmbedder:
+    """An embedder whose first ``fail_times`` calls raise ``error``."""
+
+    def __init__(self, *, fail_times: int, error: Exception) -> None:
+        from workspace_app.resources.kb import EMBED_DIM
+
+        self._dim = EMBED_DIM
+        self._fail_times = fail_times
+        self._error = error
+        self.calls = 0
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            raise self._error
+        return [[0.0] * self._dim for _ in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return [0.0] * self._dim
+
+
+def _real_coord(spec, embedder, **kw):
+    from workspace_app.kb.chunker import FixedTokenChunker
+    from workspace_app.kb.ingest import Ingestor
+
+    ing = Ingestor(
+        spec, chunker=FixedTokenChunker(max_tokens=8, overlap_tokens=2), embedder=embedder
+    )
+    return ing, IndexCoordinator(spec, ing, wiki_coordinator=None, **kw)
+
+
+async def test_transient_failure_retries_and_recovers_to_ready():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    emb = _FlakyEmbedder(fail_times=1, error=_StatusError(503))  # blips once, then works
+    ing, coord = _real_coord(spec, emb, job_max_retries=3)
+    doc_id = ing.store(collection_id=cid, user="u", filename="a.md", data=b"hello world")[0]
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    got = spec.get_resource_manager(SourceDoc).get(doc_id)
+    assert got.data.status == "ready"  # the re-delivered job succeeded
+    assert emb.calls == 2  # one blip, one recovery — no permanent error
+
+
+async def test_transient_failure_shows_retrying_then_errors_when_exhausted():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    emb = _FlakyEmbedder(fail_times=99, error=_StatusError(502))  # never recovers
+    ing, coord = _real_coord(spec, emb, job_max_retries=2)
+    doc_id = ing.store(collection_id=cid, user="u", filename="a.md", data=b"hello world")[0]
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    got = spec.get_resource_manager(SourceDoc).get(doc_id)
+    assert got.data.status == "error"  # only after exhausting the retries
+    assert emb.calls == 3  # delivered max_retries + 1 times (retries 0,1,2)
+
+
+async def test_permanent_failure_errors_at_once_without_retrying():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    emb = _FlakyEmbedder(fail_times=99, error=_StatusError(400))  # a bad request never recovers
+    ing, coord = _real_coord(spec, emb, job_max_retries=3)
+    doc_id = ing.store(collection_id=cid, user="u", filename="a.md", data=b"hello world")[0]
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    got = spec.get_resource_manager(SourceDoc).get(doc_id)
+    assert got.data.status == "error"
+    assert "400" in got.data.status_detail  # the cause is surfaced
+    assert emb.calls == 1  # no retry on a permanent error
+
+
+async def test_set_doc_status_is_a_noop_when_the_doc_was_deleted():
+    """A doc cascaded away between a failed attempt and the status write must not
+    crash the worker (#249, mirrors _last_updater's deleted-doc guard)."""
+    spec = make_spec(default_user="u")
+    _, coord = _real_coord(spec, _FlakyEmbedder(fail_times=0, error=_StatusError(500)))
+    coord._set_doc_status("gone", "u", status="error", detail="x")  # noqa: SLF001 — no raise
 
 
 async def test_indexing_in_a_worker_preserves_the_docs_last_updater(monkeypatch):

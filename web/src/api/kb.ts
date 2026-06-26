@@ -11,7 +11,7 @@ import type { AgentEvent } from "../events";
 import { API_PREFIX, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
-import type { ReasoningEffort } from "./types";
+import type { Provenance, ReasoningEffort } from "./types";
 
 export type KbCollection = {
   resource_id: string;
@@ -92,10 +92,15 @@ export type KbDocument = {
   created_by: string;
   /** Indexing lifecycle: "indexing" | "ready" | "error". */
   status: string;
-  /** Issue #39 Q11: short progress / error line beside the status —
-   * "PdfParser: page 12/50 → VLM" while a long parse runs, the
-   * exception summary on `status="error"`. Empty when idle. */
+  /** Issue #39 Q11: short progress / error line beside the status — now the
+   * exception summary on `status="error"`. Empty while indexing (the racy
+   * per-page string was dropped in #248 — use the unit counts below). */
   status_detail?: string;
+  /** #248: real fan-out progress — units (e.g. PDF pages) done / total. Both 0
+   * (or absent) for a single-job / ready doc, which means "no progress bar".
+   * Monotonic while indexing. */
+  units_done?: number;
+  units_total?: number;
   /** Indexed chunk count + how many times this doc was cited. */
   chunks?: number;
   cited?: number;
@@ -159,6 +164,9 @@ export type KbCitation = {
   end: number;
   source_chunk_ids: string[];
   snippet: string;
+  /** #254 — aggregated source location ({ page: [3, 4], section: ["Ch.2 > 2.1"] });
+   * distinct values per locator. Absent/empty when the source had none. */
+  provenance?: Provenance;
 };
 
 export type KbChatMessage = {
@@ -250,6 +258,33 @@ export type KbContextCardInput = {
   title: string;
   body: string;
 };
+
+/** #175 自動 context card — where a proposed card came from (the audit "依據"). */
+export type KbCardProvenance = { doc_id: string; path: string; snippet: string };
+
+/** #175 — one reviewable card proposal off a generation job's artifact. `mode`
+ * is `new` or `update` (then `target_card_id` is the card to overwrite);
+ * `confident=false` marks an uncertain draft (⚠️, defaulted out of commit);
+ * `decision` is the reviewer's verdict, persisted on the job (resumable). */
+export type KbProposedCard = {
+  keys: string[];
+  title: string;
+  body: string;
+  confident: boolean;
+  mode: "new" | "update";
+  target_card_id: string | null;
+  provenance: KbCardProvenance[];
+  decision: "pending" | "accepted" | "rejected";
+};
+
+/** #175 — a generation run's status + its current proposals. */
+export type KbCardGenStatus = {
+  status: "pending" | "processing" | "completed" | "failed";
+  proposals: KbProposedCard[];
+};
+
+/** #175 — the tallies returned by committing a run's accepted proposals. */
+export type KbCardGenCommit = { created: number; updated: number; skipped: number };
 
 export interface KbApi {
   /** The KB agent picker (issue #32): an ARRAY of {name, model,
@@ -353,6 +388,16 @@ export interface KbApi {
   updateContextCard(id: string, patch: Omit<KbContextCardInput, "collection_id">): Promise<void>;
   /** Permanently remove a card — specstar's native hard delete. */
   deleteContextCard(id: string): Promise<void>;
+
+  /** #175 自動 context card: start a generation run over the selected documents;
+   * returns the job id to poll. */
+  generateContextCards(collectionId: string, docIds: string[]): Promise<string>;
+  /** Poll a generation run — its status + current proposals (resumable). */
+  getCardGenStatus(jobId: string): Promise<KbCardGenStatus>;
+  /** Persist the reviewer's edited / decided proposals back onto the run. */
+  reviewCardGen(jobId: string, proposals: KbProposedCard[]): Promise<KbCardGenStatus>;
+  /** Commit the run's accepted proposals to real cards; returns the tallies. */
+  commitCardGen(jobId: string): Promise<KbCardGenCommit>;
 
   listChats(): Promise<KbChatSummary[]>;
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
@@ -605,6 +650,40 @@ export const realKbApi: KbApi = {
       await apiFetch(`/context-card/${encodeURIComponent(id)}/permanently`, { method: "DELETE" }),
       "delete context card",
     );
+  },
+
+  async generateContextCards(collectionId, docIds) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/context-cards/generate`;
+    const resp = await ok(
+      await apiFetch(url, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ doc_ids: docIds }),
+      }),
+      "generate context cards",
+    );
+    return (await resp.json()).job_id;
+  },
+  async getCardGenStatus(jobId) {
+    const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}`;
+    return (await ok(await apiFetch(url), "card gen status")).json();
+  },
+  async reviewCardGen(jobId, proposals) {
+    const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}/review`;
+    return (
+      await ok(
+        await apiFetch(url, {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ proposals }),
+        }),
+        "review card gen",
+      )
+    ).json();
+  },
+  async commitCardGen(jobId) {
+    const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}/commit`;
+    return (await ok(await apiFetch(url, { method: "POST" }), "commit card gen")).json();
   },
 
   async listChats() {

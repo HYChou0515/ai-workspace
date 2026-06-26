@@ -14,7 +14,7 @@
 
 import type { AgentEvent, CellEvent } from "../events";
 import { decodeBytes } from "./encoding";
-import { apiFetch } from "./http";
+import { API_PREFIX, apiFetch } from "./http";
 import { parseSseStream } from "./sse";
 import type {
   ActivityEntry,
@@ -289,6 +289,27 @@ export const realApi: ApiClient = {
     if (!resp.ok) {
       throw new HttpError(resp.status, `write ${path} failed: ${resp.status}`);
     }
+  },
+
+  // #198: XHR (not fetch) so the chat attach can report upload progress — fetch has
+  // no upload-progress event. Same PUT files endpoint + 413 size-cap semantics.
+  uploadFile(slug, investigationId, path, body, opts) {
+    return new Promise<void>((resolve, reject) => {
+      const url = `${API_PREFIX}/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`;
+      const xhr = new XMLHttpRequest();
+      xhr.open("PUT", url);
+      if (opts?.onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) opts.onProgress?.(e.loaded, e.total);
+        };
+      }
+      xhr.onload = () =>
+        xhr.status >= 200 && xhr.status < 300
+          ? resolve()
+          : reject(new HttpError(xhr.status, `write ${path} failed: ${xhr.status}`));
+      xhr.onerror = () => reject(new HttpError(0, `write ${path} failed: network error`));
+      xhr.send(body);
+    });
   },
 
   async deleteFile(slug: string, investigationId: string, path: string) {

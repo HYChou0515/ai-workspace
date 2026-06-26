@@ -94,4 +94,17 @@ describe("TurnStatus", () => {
       vi.useRealTimers();
     }
   });
+
+  it("shows a de-jargoned switch notice while waiting after a failover (#249/#131)", () => {
+    // waiting phase (metrics 'up', no token yet) + a failover this turn.
+    render(<TurnStatus log={streaming({ metrics: up, failover: { at: 1 } })} />);
+    expect(screen.getByText(/已自動切換/)).toBeInTheDocument();
+    expect(screen.queryByText(/等候模型回應/)).not.toBeInTheDocument(); // the notice replaces it
+  });
+
+  it("does not show the switch notice once the model is answering", () => {
+    const log = fold([{ type: "message_delta", text: "hi", reasoning: false }]);
+    render(<TurnStatus log={{ ...log, streaming: true, metrics: down, failover: { at: 1 } }} />);
+    expect(screen.queryByText(/已自動切換/)).not.toBeInTheDocument(); // a token arrived → gone
+  });
 });

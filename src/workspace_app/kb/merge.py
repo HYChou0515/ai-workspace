@@ -9,10 +9,12 @@ descending score order.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from typing import Any
 
-from msgspec import Struct
+from msgspec import Struct, field
 
 from ..resources.kb import RetrievedPassage
+from .provenance import aggregate_provenance
 
 
 class ScoredChunk(Struct, frozen=True):
@@ -26,6 +28,9 @@ class ScoredChunk(Struct, frozen=True):
     start: int
     end: int
     score: float
+    # Issue #254: the chunk's structural location, carried through merge so the
+    # merged passage can summarise where it came from.
+    provenance: dict[str, Any] = field(default_factory=dict)
 
 
 def merge_passages(
@@ -55,13 +60,15 @@ def _passage(run: list[ScoredChunk], text_of: Callable[[str], str]) -> Retrieved
     start = min(c.start for c in run)
     end = max(c.end for c in run)
     doc_id = run[0].document_id
+    by_seq = sorted(run, key=lambda c: c.seq)
     return RetrievedPassage(
         collection_id=run[0].collection_id,
         document_id=doc_id,
         filename=run[0].filename,
         start=start,
         end=end,
-        source_chunk_ids=[c.chunk_id for c in sorted(run, key=lambda c: c.seq)],
+        source_chunk_ids=[c.chunk_id for c in by_seq],
         text=text_of(doc_id)[start:end],
         score=max(c.score for c in run),
+        provenance=aggregate_provenance(c.provenance for c in by_seq),
     )

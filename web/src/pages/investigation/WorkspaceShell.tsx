@@ -19,6 +19,7 @@ import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { ItemChatShell } from "../../components/ItemChatShell";
+import { resolveUploadDir } from "./attach";
 import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
@@ -455,6 +456,12 @@ function ShellBody({
               slug={manifest.slug}
               itemId={item.resource_id}
               profile={String(item.profile ?? manifest.default_profile)}
+              // #198: where the composer's attach stages files — the item's profile's
+              // upload_dir (default uploads/), the same folder its workflows glob.
+              uploadDir={resolveUploadDir(
+                manifest.profiles,
+                String(item.profile ?? manifest.default_profile),
+              )}
               chatSwitcher={manifest.layout.chat_switcher}
               // Derived, not a flag: an App manages a collection set iff its agent
               // injects collections.json each turn (Topic Hub §5).

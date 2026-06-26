@@ -7,7 +7,6 @@
     "phases": [
       { "id": "think", "title": "Think" },
       { "id": "review", "title": "Review" }
-    ],
-    "input_json": "inputs/input.json"
+    ]
   }
 }

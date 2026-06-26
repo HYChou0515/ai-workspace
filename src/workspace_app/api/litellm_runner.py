@@ -14,7 +14,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -46,6 +46,7 @@ from ..tooling.registry import PackageInfo, build_function_tools
 from .events import (
     AgentEvent,
     AgentMetrics,
+    FailoverSwitch,
     MaxTurnsExceeded,
     MessageDelta,
     RunDone,
@@ -227,6 +228,7 @@ def _agent_for(
     template_profile: str | None = None,
     fallback_chains: FallbackChains | None = None,
     cooldown_registry: CooldownRegistry | None = None,
+    on_failover_switch: Callable[[str, str], None] | None = None,
 ) -> Agent[AgentToolContext]:
     base = config.system_prompt or ""
     if extra_instructions:
@@ -366,11 +368,21 @@ def _agent_for(
         from ..failover.model import FallbackModel
         from ..failover.observe import make_switch_logger
 
+        log_switch = make_switch_logger("agent")
+
+        def on_switch(model_label: str, cause: BaseException) -> None:
+            log_switch(model_label, cause)
+            # #249/#131: also surface the switch live so the FE can show a
+            # transient "model busy, switched" notice (the deferred in-chat
+            # degradation note). Logging stays regardless.
+            if on_failover_switch is not None:
+                on_failover_switch(model_label, type(cause).__name__)
+
         model: Model = FallbackModel(
             chain,
             cooldown_registry,
             make_model=lambda e: _build_model(e.model, e.base_url, e.api_key, e.idle_s),
-            on_switch=make_switch_logger("agent"),
+            on_switch=on_switch,
         )
     else:
         model = _build_model(config.model, eff_base_url, eff_api_key)
@@ -381,6 +393,18 @@ def _agent_for(
         model_settings=model_settings,
         tools=tools,  # ty: ignore[invalid-argument-type]  # list[FunctionTool] ⊂ list[Tool]
     )
+
+
+def _failover_emitter(queue: asyncio.Queue[AgentEvent | object]) -> Callable[[str, str], None]:
+    """#249/#131: a per-turn sink that turns a FallbackModel switch into a live
+    ``FailoverSwitch`` event on this turn's stream (so the FE shows a transient
+    'model busy, switched' notice). ``put_nowait`` is safe — the switch fires on
+    the same event loop that drains the queue."""
+
+    def emit(from_model: str, reason: str) -> None:
+        queue.put_nowait(FailoverSwitch(from_model=from_model, reason=reason))
+
+    return emit
 
 
 # Retry hints for the three ways a small model botches a tool call (#76).
@@ -716,6 +740,17 @@ class LitellmAgentRunner:
             async for ev in self._run_once_nonstream(prompt, ctx, feedback):
                 yield ev
             return
+        # The SDK delivers model output via stream_events(), but a running
+        # tool (a long exec) produces stdout *between* those events with no
+        # SDK channel to surface it. So we fan both into one queue: a producer
+        # task drives stream_events(), and the exec tool pushes ToolLog chunks
+        # via ctx.on_exec_output — the drain loop yields whichever arrives
+        # first, so tool output shows up live while the command is still
+        # running. The queue is created BEFORE the agent so a FallbackModel
+        # switch (#249/#131) can push a live FailoverSwitch notice into it too.
+        queue: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
+        done = object()
+        ctx.on_exec_output = lambda b: queue.put_nowait(ToolLog(text=b.decode("utf-8", "replace")))
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
@@ -727,20 +762,10 @@ class LitellmAgentRunner:
             template_profile=ctx.template_profile,
             fallback_chains=self._fallback_chains,
             cooldown_registry=self._cooldown_registry,
+            on_failover_switch=_failover_emitter(queue),
         )
         t0 = time.monotonic()
         prompt_tok = _approx_tokens(len(prompt))
-
-        # The SDK delivers model output via stream_events(), but a running
-        # tool (a long exec) produces stdout *between* those events with no
-        # SDK channel to surface it. So we fan both into one queue: a producer
-        # task drives stream_events(), and the exec tool pushes ToolLog chunks
-        # via ctx.on_exec_output — the drain loop yields whichever arrives
-        # first, so tool output shows up live while the command is still
-        # running.
-        queue: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
-        done = object()
-        ctx.on_exec_output = lambda b: queue.put_nowait(ToolLog(text=b.decode("utf-8", "replace")))
 
         # Tag the SDK trace with the run flavour (workflow_name) + the
         # investigation/collection id (group_id) so the live monitor can

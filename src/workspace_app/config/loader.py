@@ -363,6 +363,8 @@ _TOP_SCHEMA: dict[str, Any] = {
         "embedder": _dataclass_keys(EmbedderSettings),
         "chunker": _dataclass_keys(ChunkerSettings),
         "retrieval_llm": "__retrieval_llm__",
+        # #175: the card-drafting LLM follows the same usage-entry shape.
+        "card_drafter": "__retrieval_llm__",
         # Issue #39: same usage-entry shape as retrieval_llm (preset
         # ref + optional model/llm override deltas).
         "vlm_llm": "__retrieval_llm__",
@@ -599,6 +601,7 @@ def _check_retrieval_llm_reference(merged: dict[str, Any], *, source: str) -> No
     wiki = kb.get("wiki")
     refs = [
         ("kb.retrieval_llm", kb.get("retrieval_llm")),
+        ("kb.card_drafter", kb.get("card_drafter")),
         ("kb.vlm_llm", kb.get("vlm_llm")),
         ("kb.vlm_format_llm", kb.get("vlm_format_llm")),
         ("kb.wiki.llm", wiki.get("llm") if isinstance(wiki, dict) else None),
@@ -650,6 +653,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             embedder=_build(EmbedderSettings, d["kb"]["embedder"]),
             chunker=_build(ChunkerSettings, d["kb"]["chunker"]),
             retrieval_llm=_build_retrieval_llm(d["kb"]["retrieval_llm"]),
+            card_drafter=_build_retrieval_llm(d["kb"].get("card_drafter")),
             retrieval=_build_retrieval(d["kb"]["retrieval"]),
             max_searches_per_turn=d["kb"]["max_searches_per_turn"],
             code_embedder=_build(CodeEmbedderSettings, d["kb"]["code_embedder"]),

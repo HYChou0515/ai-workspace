@@ -53,11 +53,11 @@ _WARN = "⚠️"
 # appears in a natural body, renders invisibly, and stays visible/editable in the diff.
 _SENTINEL = "<!-- card -->"
 
-# The Hub's upload staging folder (#234). Uploaded files live under ``uploads/`` in the
-# workspace; this prefix is stripped before a file is ingested so it lands in the
-# collection at its bare path (``a.txt``, not ``uploads/a.txt``). Hardcoded for now —
-# making the folder profile-configurable is #198.
-_UPLOADS = "uploads/"
+# The Hub's upload staging folder is now per-profile (#198): ``wf.upload_dir`` (default
+# ``uploads``), fed from ``ProfileManifest.upload_dir`` so it stays in sync with where a
+# chat attach lands. ``run()`` derives the ``{dir}/`` prefix locally; the prefix is
+# stripped before a file is ingested so the doc lands at its bare path (``a.txt``, not
+# ``uploads/a.txt``).
 
 # Human-readable reasons for the "did nothing" outcomes (#100 observability). A
 # no-op used to return a bare status token the UI showed as raw JSON; these are
@@ -380,9 +380,11 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     collections = await _read_collections(wf)
     if not collections:
         return await _no_collections_result(wf)
+    up = wf.upload_dir.rstrip("/")  # #198: the profile's staging folder, not hardcoded
+    uploads_prefix = f"{up}/"
     files = await wf.glob(
-        inputs.get("files", [f"{_UPLOADS}*"]),
-        exclude=inputs.get("except", [f"{_UPLOADS}input.json"]),
+        inputs.get("files", [f"{up}/*"]),
+        exclude=inputs.get("except", [f"{up}/input.json"]),
     )
     if not files:
         return {"status": "empty", "files": 0, "message": _MSG_NO_FILES}
@@ -432,7 +434,7 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
         # collection — strip it so the doc lands at its bare path (``a.txt``, not
         # ``uploads/a.txt``). The same stripped path feeds the landing check so both
         # resolve to the same natural-key id.
-        dest = f.removeprefix("/").removeprefix(_UPLOADS)
+        dest = f.removeprefix("/").removeprefix(uploads_prefix)
         await wf.ingest_to_collection(coll, dest, phase="commit")
         if (await collection_has(coll, dest)(wf, None)).ok:
             ingested += 1

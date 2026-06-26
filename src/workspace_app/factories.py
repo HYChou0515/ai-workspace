@@ -290,15 +290,12 @@ def get_embedder(settings: Settings) -> Embedder:
             query_prefix=e.query_prefix,
             doc_prefix=e.doc_prefix,
             timeout=e.timeout,
-            num_retries=e.num_retries,
             batch_size=e.batch_size,
             base_url=e.base_url or None,
             api_key=e.api_key or None,
-            # #196 same-model replica failover (only when the operator lists
-            # replica endpoints — otherwise the single-endpoint path is unchanged).
+            # #196 same-model replica failover + #249 transient-error retry over
+            # the [primary, *replicas] chain (call_with_failover owns the retry).
             fallback_base_urls=list(e.fallbacks),
-            cooldown_registry=get_cooldown_registry() if e.fallbacks else None,
-            cooldown_s=settings.failover.cooldown_s,
         )
     return HashEmbedder(dim=EMBED_DIM)
 
@@ -320,7 +317,6 @@ def get_code_embedder(settings: Settings) -> Embedder | None:
         query_prefix=ce.query_prefix,
         doc_prefix=ce.doc_prefix,
         timeout=eb.timeout,
-        num_retries=eb.num_retries,
         batch_size=eb.batch_size,
         base_url=ce.base_url or None,
         api_key=ce.api_key or None,
@@ -519,6 +515,16 @@ def get_kb_llm(settings: Settings) -> ILlm | None:
     return _llm_from_chain(resolve_llm_chain(settings, settings.kb.retrieval_llm))
 
 
+def get_card_drafter_llm(settings: Settings) -> ILlm | None:
+    """The LLM that drafts context cards from documents (#175 自動 context card).
+
+    `kb.card_drafter` is a usage-entry reference to a named preset (default
+    `card-drafter`), resolved through the same cascade + failover chain as every
+    other role. `None` ⇒ card drafting disabled (the generation feature stays
+    mounted but the drafter proposes nothing)."""
+    return _llm_from_chain(resolve_llm_chain(settings, settings.kb.card_drafter))
+
+
 def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
     """Stage-2 formatter for vision parsers (issue #115): the text LLM that
     re-emits the VLM's output as clean Markdown so the chunker splits it on
@@ -701,12 +707,7 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
     if len(chain) == 1:
         e = chain[0]
         return LitellmVlm(e.model, base_url=e.base_url, api_key=e.api_key)
-    return FallbackVlm(
-        chain,
-        get_cooldown_registry(),
-        make_vlm=_litellm_vlm_for,
-        on_switch=make_switch_logger("vlm"),
-    )
+    return FallbackVlm(chain, make_vlm=_litellm_vlm_for, on_switch=make_switch_logger("vlm"))
 
 
 def get_kb_describer(settings: Settings):  # -> VlmDescriber | None

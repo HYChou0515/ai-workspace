@@ -70,6 +70,7 @@ from ..workflow.orchestrator import (
 )
 from ..workflow.run import RunStatus, WorkflowRun
 from .activity import ActivityLog
+from .card_gen_routes import register_card_gen_routes
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .events import (
     AgentEvent,
@@ -533,6 +534,10 @@ def create_app(
     sanity_models: list[str] | None = None,
     insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
+    # #175: the LLM that drafts context cards from documents (自動 context card).
+    # None ⇒ a no-op drafter (the feature stays mounted but proposes nothing).
+    # __main__ passes factories.get_card_drafter_llm(settings).
+    card_drafter_llm: ILlm | None = None,
     # #112: the VLM describer the `read_image` agent tool uses to read a
     # workspace image. None ⇒ no VLM configured; `read_image` reports it's
     # unavailable. __main__ passes factories.get_kb_describer(settings) — the
@@ -760,6 +765,9 @@ def create_app(
         if app.state.sanity_coordinator is not None:
             with boot_step("start model-sanity consumer"):
                 app.state.sanity_coordinator.start_consuming()
+        # #175: every pod drains the shared context-card generation queue too.
+        with boot_step("start context-card generation consumer"):
+            app.state.card_gen_coordinator.start_consuming()
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
         bg.append(asyncio.create_task(_index_sweeper()))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(health_service.run_round()))
@@ -782,6 +790,8 @@ def create_app(
             if app.state.sanity_coordinator is not None:
                 with contextlib.suppress(BaseException):
                     await app.state.sanity_coordinator.aclose()
+            with contextlib.suppress(BaseException):
+                await app.state.card_gen_coordinator.aclose()
             await kernels.shutdown_all()
             await registry.close_all()
 
@@ -875,7 +885,16 @@ def create_app(
         app_profiles = []
         for n in list_profiles(slug):
             p = load_profile(slug, n)
-            app_profiles.append({"name": n, "title": p.title or n, "description": p.description})
+            app_profiles.append(
+                {
+                    "name": n,
+                    "title": p.title or n,
+                    "description": p.description,
+                    # #198: the folder a chat attach stages files into; the FE
+                    # resolves the active item's profile → this.
+                    "upload_dir": p.upload_dir,
+                }
+            )
         data["profiles"] = app_profiles
         if m.icon.endswith(".svg"):
             with contextlib.suppress(FileNotFoundError, IsADirectoryError, OSError):
@@ -1111,6 +1130,22 @@ def create_app(
     # after the coordinator exists (the handler needs it).
     index_coordinator.install_reindex_on_edit()
     app.state.index_coordinator = index_coordinator
+    # #175: 自動 context card — a background job drafts cards from a collection's
+    # selected documents for human review (mirrors the wiki/index coordinators).
+    from ..kb.card_drafter import LlmCardDrafter, NullCardDrafter
+    from ..kb.card_gen_coordinator import CardGenCoordinator
+
+    card_drafter = (
+        LlmCardDrafter(card_drafter_llm) if card_drafter_llm is not None else NullCardDrafter()
+    )
+    card_gen_coordinator = CardGenCoordinator(
+        spec,
+        card_drafter,
+        message_queue_factory=message_queue_factory,
+        get_user_id=get_user_id,
+    )
+    app.state.card_gen_coordinator = card_gen_coordinator
+    register_card_gen_routes(api, card_gen_coordinator)
     # Model-sanity battery: a background consumer runs matrix cells (heavy live
     # LLM) off the request path, like the index/wiki coordinators. Only mounted
     # when an LLM factory is wired (it's a live probe).
@@ -1502,7 +1537,13 @@ def create_app(
     # ── Workflows (#100) ─────────────────────────────────────────────
     # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
     # the orchestrator overlays phase/step events on the same per-chat stream.
-    from ..apps.profiles import load_profile_workflow
+    from ..apps.profiles import load_profile, load_profile_workflow
+
+    def _wf_upload_dir(slug: str, profile: str) -> str:
+        """#198: the active profile's staging folder — the orchestrator threads it onto
+        the handle (``wf.upload_dir``) and derives the run's ``input.json`` from it, so a
+        workflow globs the same folder the chat attach lands in."""
+        return load_profile(slug, profile).upload_dir
 
     async def _wf_drive_turn(
         item_id: str, chat_key: str, captured_user: str, prompt: str, tools: list[str] | None
@@ -1714,6 +1755,7 @@ def create_app(
         store=files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
         load_run=load_run_callable,
         load_manifest=load_profile_workflow,
+        load_upload_dir=_wf_upload_dir,
         wire_handle=_wf_wire_handle,
         publish=turn_engine.publish,
         release=_wf_release,

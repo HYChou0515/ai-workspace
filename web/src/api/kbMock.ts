@@ -8,6 +8,7 @@
 import type { AgentEvent } from "../events";
 import type {
   KbApi,
+  KbCardGenStatus,
   KbChatDetail,
   KbChatMessage,
   KbChatSummary,
@@ -15,6 +16,7 @@ import type {
   KbContextCard,
   KbDocChunk,
   KbDocument,
+  KbProposedCard,
   KbRenderedDoc,
   SendKbMessageArgs,
 } from "./kb";
@@ -28,6 +30,12 @@ const docChunks = new Map<string, KbDocChunk[]>();
 const chats = new Map<string, KbChatDetail>();
 // collectionId → its context cards (#106), keyed by collection like documents.
 const contextCards = new Map<string, KbContextCard[]>();
+// jobId → a 自動 context card generation run (#175). The mock completes the run
+// synchronously (status "completed") with one proposal per selected document.
+const cardGenJobs = new Map<
+  string,
+  { collectionId: string; status: KbCardGenStatus["status"]; proposals: KbProposedCard[] }
+>();
 
 /** Faithful mirror of the BE `norm()` — NFKC, casefold, collapse whitespace —
  * then deduped + sorted, so the mock's `norm_keys` look like production's. */
@@ -416,6 +424,70 @@ export const mockKbApi: KbApi = {
       if (next.length !== list.length) contextCards.set(cid, next);
     }
   },
+
+  async generateContextCards(collectionId, docIds) {
+    // One proposal per selected doc, keyed by the doc's path stem; an existing
+    // card with that normalised key makes it an `update`, mirroring the BE.
+    const docs = documents.get(collectionId) ?? [];
+    const existing = contextCards.get(collectionId) ?? [];
+    const proposals: KbProposedCard[] = docIds.map((docId) => {
+      const path = docs.find((d) => d.resource_id === docId)?.path ?? docId;
+      const key = stem(path);
+      const hit = existing.find((c) => c.norm_keys.includes(normKey(key)));
+      return {
+        keys: [key],
+        title: key,
+        body: `Auto-drafted from ${path}.`,
+        confident: true,
+        mode: hit ? "update" : "new",
+        target_card_id: hit?.id ?? null,
+        provenance: [{ doc_id: docId, path, snippet: `…relevant passage from ${path}…` }],
+        decision: "pending",
+      };
+    });
+    const jobId = nextId("cardgen");
+    cardGenJobs.set(jobId, { collectionId, status: "completed", proposals });
+    return jobId;
+  },
+  async getCardGenStatus(jobId) {
+    const j = cardGenJobs.get(jobId);
+    return { status: j?.status ?? "completed", proposals: j ? [...j.proposals] : [] };
+  },
+  async reviewCardGen(jobId, proposals) {
+    const j = cardGenJobs.get(jobId);
+    if (j) j.proposals = proposals;
+    return { status: j?.status ?? "completed", proposals };
+  },
+  async commitCardGen(jobId) {
+    const j = cardGenJobs.get(jobId);
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    for (const p of j?.proposals ?? []) {
+      if (p.decision !== "accepted" || deriveNormKeys(p.keys).length === 0) {
+        skipped++;
+        continue;
+      }
+      if (p.mode === "update" && p.target_card_id) {
+        await this.updateContextCard(p.target_card_id, {
+          keys: p.keys,
+          title: p.title,
+          body: p.body,
+        });
+        updated++;
+      } else {
+        await this.createContextCard({
+          collection_id: j?.collectionId ?? "",
+          keys: p.keys,
+          title: p.title,
+          body: p.body,
+        });
+        created++;
+      }
+    }
+    return { created, updated, skipped };
+  },
+
   async cancelMessage(_chatId) {
     // No server turn to cancel in the mock; the FE aborts the stream locally.
   },
@@ -515,5 +587,6 @@ export const _resetKbMock = () => {
   wikiPages.clear();
   wikiStatus.clear();
   contextCards.clear();
+  cardGenJobs.clear();
   seq = 0;
 };

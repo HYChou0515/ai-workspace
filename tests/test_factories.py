@@ -335,6 +335,19 @@ def test_get_kb_llm_enabled_via_bundled_ref_disabled_via_none():
     assert get_kb_llm(disabled) is None
 
 
+def test_get_card_drafter_llm_enabled_via_bundled_ref_disabled_via_none():
+    """#175: default `Settings()` ships `kb.card_drafter = RetrievalLlmRef(
+    preset='card-drafter')`, which resolves to the bundled preset → LitellmLlm.
+    `card_drafter=None` disables drafting — the factory returns None (the feature
+    stays mounted but proposes nothing)."""
+    from workspace_app.factories import get_card_drafter_llm
+
+    assert isinstance(get_card_drafter_llm(Settings()), LitellmLlm)
+
+    disabled = replace(Settings(), kb=replace(Settings().kb, card_drafter=None))
+    assert get_card_drafter_llm(disabled) is None
+
+
 def test_get_kb_llm_threads_the_configured_reasoning_effort():
     """kb_search's retrieval LLM (multi-query / HyDE / rerank) honours
     `kb.retrieval_llm.reasoning_effort` — e.g. "none" so qwen3 doesn't <think>

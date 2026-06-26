@@ -288,8 +288,10 @@ def test_pptx_converts_via_soffice_then_reuses_pdf_page_logic(monkeypatch, tmp_p
     )
     assert len(docs) == 1
     assert "Hello PDF World" in docs[0].text
-    # Slide context, not page: the VLM prompt / metadata speak "slide".
-    assert docs[0].metadata["page"] == 1
+    # Slide context, not page: the VLM prompt / metadata speak "slide" (#254 —
+    # the locator key now follows page_word so provenance reads "slide N").
+    assert docs[0].metadata["slide"] == 1
+    assert "page" not in docs[0].metadata
     assert vlm.calls == []  # healthy text layer → no VLM spend
 
 

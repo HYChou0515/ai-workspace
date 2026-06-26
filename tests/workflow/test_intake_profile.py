@@ -21,7 +21,7 @@ def _handle(*, ingested: list, collection: str = "kb-docs") -> WorkflowHandle:
 
     async def drive_turn(prompt: str, tools: list[str] | None) -> str:
         # The agent's decision, recorded as data: write plan/<f>.json (the gate clamps it).
-        await wf.write_json("plan/inputs_a.txt.json", {"collection": collection, "digest": "d"})
+        await wf.write_json("plan/uploads_a.txt.json", {"collection": collection, "digest": "d"})
         return "done"
 
     async def ingest(coll: str, path: str) -> str:
@@ -34,8 +34,9 @@ def _handle(*, ingested: list, collection: str = "kb-docs") -> WorkflowHandle:
 
 
 async def _seed_input(wf: WorkflowHandle) -> None:
-    await wf.write("inputs/a.txt", b"hello")
-    await wf.write("inputs/input.json", b"{}")
+    # #198: the intake profile now stages into the default upload_dir (uploads/).
+    await wf.write("uploads/a.txt", b"hello")
+    await wf.write("uploads/input.json", b"{}")
 
 
 async def test_discovery_loads_the_intake_run():
@@ -50,7 +51,7 @@ async def test_approve_classifies_then_ingests():
     await record_decision(wf, phase="review", choice="approve")  # human already approved
     result = await run(wf, {})
     assert result == {"status": "approved", "committed": 1}
-    assert ingested == [("kb-docs", "/inputs/a.txt")]
+    assert ingested == [("kb-docs", "/uploads/a.txt")]
 
 
 async def test_reject_commits_nothing():
