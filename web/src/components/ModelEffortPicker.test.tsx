@@ -97,6 +97,31 @@ describe("ModelEffortPicker", () => {
     expect(getStored().mode).toBe("thorough");
   });
 
+  it("#246: model name uses a theme-aware text color (legible in dark mode)", async () => {
+    // --ink is always near-black in both themes, so on a dark popover/chip it
+    // vanished. The model name must use a token that flips with the theme.
+    renderWithQuery(
+      <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} />,
+    );
+    // Trigger chip (closed): the active model name.
+    expect(screen.getByText("qwen3-local").style.color).toBe("var(--text-paper)");
+
+    // Popover list item names must adapt too.
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+    expect(screen.getByText("claude-opus").style.color).toBe("var(--text-paper)");
+  });
+
+  it("#256: trigger chip uses min-height so a larger system font can't clip it", () => {
+    // Font scale (#226) grows rem text but not fixed px boxes — a fixed `height`
+    // clipped the chip at large scale. min-height lets it grow with the text.
+    renderWithQuery(
+      <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} />,
+    );
+    const chip = screen.getByRole("button", { name: /模型與思考深度/ });
+    expect(chip.style.minHeight).toBe("28px");
+    expect(chip.style.height).toBe("");
+  });
+
   it("advanced sliders survive the redesign with plain-language labels", async () => {
     // The old expand / hyde / rerank knobs must not be lost — power users
     // still tune exact values (mode auto-flips to custom) — but the labels

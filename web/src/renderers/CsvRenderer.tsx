@@ -20,7 +20,10 @@ export function CsvRenderer({ path }: { path: string }) {
   const editing = isEditing(path);
 
   const text = entry.status === "ready" ? entry.text : "";
-  const rows = useMemo(() => parseCsv(text), [text]);
+  // .tsv is tab-separated; everything else routed here (.csv) is comma-separated.
+  // The backend preview (kb/preview.py, kb/parsers/tabular.py) splits the same way.
+  const delimiter = path.toLowerCase().endsWith(".tsv") ? "\t" : ",";
+  const rows = useMemo(() => parseCsv(text, delimiter), [text, delimiter]);
 
   if (editing) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
@@ -29,7 +32,7 @@ export function CsvRenderer({ path }: { path: string }) {
   if (entry.status === "error") {
     return <div style={{ color: "var(--err)" }}>{entry.error ?? "load failed"}</div>;
   }
-  if (rows.length === 0) return <div style={{ color: "var(--text-paper-d)" }}>Empty CSV.</div>;
+  if (rows.length === 0) return <div style={{ color: "var(--text-paper-d)" }}>Empty file.</div>;
 
   const [header, ...body] = rows;
   const shown = body.slice(0, MAX_ROWS);
