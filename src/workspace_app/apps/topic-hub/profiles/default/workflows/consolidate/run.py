@@ -38,7 +38,7 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
             f"(read_file first), and delete_file for a note that is wholly obsolete. Output "
             f"nothing else."
         ),
-        tools=["read_file", "write_file", "edit_file", "ls", "delete_file"],
+        tools=["read_file", "write_file", "edit_file", "list_files", "delete_file"],
         check=file_nonempty("MEMORY.md"),
         retries=2,
     )

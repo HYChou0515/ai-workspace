@@ -16,7 +16,7 @@
   "function": { "workspace": true, "sandbox": false, "terminal": false },
   "agent": {
     "prompt_file": "prompts/system.md",
-    "tools": ["read_file", "write_file", "edit_file", "ls", "exists", "delete_file"],
+    "tools": ["read_file", "write_file", "edit_file", "list_files", "exists", "delete_file"],
     "picker": [{ "preset": "qwen3-local", "name": "My App · Qwen3 (local)" }],
     "suggestions": [{ "label": "Summarise", "prompt": "Summarise this item." }]
   },

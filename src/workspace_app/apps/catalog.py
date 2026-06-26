@@ -34,7 +34,9 @@ if TYPE_CHECKING:
 _APPS_PKG = "workspace_app.apps"
 
 # Builtin file tools — meaningful only when the App enables `workspace`.
-_FILE_TOOLS = frozenset({"read_file", "write_file", "edit_file", "ls", "exists", "delete_file"})
+_FILE_TOOLS = frozenset(
+    {"read_file", "write_file", "edit_file", "list_files", "exists", "delete_file"}
+)
 # Tools that need a compute sandbox. Package tools (data-fetch, …) also run in
 # the sandbox, but their names are deploy-specific; `exec` is the universal one.
 _SANDBOX_TOOLS = frozenset({"exec"})
@@ -105,8 +107,21 @@ def _read_app_text(app_slug: str, rel: str) -> str:
     return (resources.files(_APPS_PKG) / app_slug / rel).read_text("utf-8")
 
 
-def _compose_prompt(base: str, appendix: str, skills: list[SkillMeta]) -> str:
+def _read_base_preamble() -> str:
+    """The shared workspace preamble (#241) — workspace awareness + guardrails
+    prepended to every *workspace* App's prompt. A bundled `_`-prefixed file so
+    `discover_app_slugs` never mistakes it for an App."""
+    return (resources.files(_APPS_PKG) / "_base.md").read_text("utf-8")
+
+
+def _compose_prompt(
+    base: str, appendix: str, skills: list[SkillMeta], *, preamble: str = ""
+) -> str:
     parts = [base.rstrip()] if base else []
+    # #241: the shared workspace preamble sits after the App's identity (base)
+    # and before the profile appendix. Empty for non-workspace Apps → omitted.
+    if preamble:
+        parts.append(preamble.rstrip())
     if appendix:
         parts.append(appendix.rstrip())
     # §A skill index (#29 / #89): advertise the profile's `read_skill`-loadable
@@ -168,6 +183,7 @@ class AppCatalog:
             _read_app_text(app_slug, manifest.agent.prompt_file),
             load_profile_appendix(app_slug, profile),
             list_skills(app_slug, profile),
+            preamble=_read_base_preamble() if manifest.function.workspace else "",
         )
         suggestions = list(prof.suggestions or manifest.agent.suggestions)
         name = next((p.name for p in manifest.agent.picker if p.preset == chosen), chosen)

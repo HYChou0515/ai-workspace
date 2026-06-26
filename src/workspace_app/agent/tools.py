@@ -229,8 +229,9 @@ async def edit_file_impl(
     )
 
 
-async def ls_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> list[str]:
-    """List files in the workspace file store, optionally filtered by prefix."""
+async def list_files_impl(ctx: RunContextWrapper[AgentToolContext], prefix: str = "") -> list[str]:
+    """List files in the workspace, optionally filtered by prefix. This is your
+    workspace's directory listing — use it instead of `exec(["ls", ...])`."""
     fs, inv = _workspace(ctx)
     return await fs.ls(inv, prefix)
 
@@ -858,7 +859,7 @@ _IMPLS = {
     "read_image": read_image_impl,
     "write_file": write_file_impl,
     "edit_file": edit_file_impl,
-    "ls": ls_impl,
+    "list_files": list_files_impl,
     "exists": exists_impl,
     "delete_file": delete_file_impl,
     "mention_user": mention_user_impl,
@@ -891,13 +892,20 @@ _WORKSPACE_TOOLS = [
     "read_file",
     "write_file",
     "edit_file",
-    "ls",
+    "list_files",
     "exists",
     "delete_file",
     "ask_knowledge_base",
     "infer_modules",
     "mention_user",
 ]
+
+# Legacy tool names in a *stored* `allowed_tools` list, mapped to their current
+# name so an AgentConfig persisted before a rename still provisions the tool.
+# This is input normalisation only — the old name is NOT a callable alias (the
+# model still calls the tool by its current registered name), it just keeps old
+# config data working. #241: `ls` was renamed to `list_files`.
+_LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 
 
 def build_tools(
@@ -913,6 +921,7 @@ def build_tools(
     `read_skill` is appended (issue #29 / §A — "skill index + tool same flag
     in/out"). Set per turn from the item's App + profile."""
     names = allowed if allowed is not None else _WORKSPACE_TOOLS
+    names = [_LEGACY_TOOL_RENAMES.get(n, n) for n in names]
     # Skip names that aren't built-ins — they may be provisioned tool-package
     # commands (#21, #25), which the runner adds separately via
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax

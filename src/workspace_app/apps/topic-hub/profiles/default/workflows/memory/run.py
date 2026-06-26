@@ -66,7 +66,7 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
             f"it tight; detail stays in the notes. Reply with ONLY the Markdown index content — "
             f"no preamble, no code fences. Your entire reply is saved verbatim as MEMORY.md."
         ),
-        tools=["read_file", "ls"],
+        tools=["read_file", "list_files"],
         retries=2,
     )
     return {"status": "done", "notes": len(notes)}

@@ -1,7 +1,7 @@
 {
   "title": "Intake — classify & file uploads",
   "description": "Produce → review → commit: classify dropped files, a human approves, then ingest into KB collections.",
-  "tools": ["read_file", "write_file", "ls", "exists"],
+  "tools": ["read_file", "write_file", "list_files", "exists"],
   "workflow": {
     "title": "Classify & file uploads into collections",
     "phases": [
