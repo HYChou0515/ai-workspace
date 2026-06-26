@@ -46,6 +46,8 @@ export const qk = {
   sanity: {
     meta: ["sanity", "meta"] as const,
     results: (model: string) => ["sanity", "results", model] as const,
+    verdicts: ["sanity", "verdicts"] as const,
+    custom: ["sanity", "custom"] as const,
   },
 
   kb: {

@@ -279,3 +279,11 @@ def auto_run_cells() -> list[tuple[SanityQuestion, Effort]]:
     """Every (question, level) the battery pre-runs — auto_run questions crossed
     with their own auto_levels."""
     return [(q, lvl) for q in QUESTIONS if q.auto_run for lvl in q.auto_levels]
+
+
+def coverage_levels(q: SanityQuestion) -> tuple[Effort, ...]:
+    """The effort levels a question is *expected* to be tested at in the coverage
+    grid (#231) — its ``auto_levels``, or a single ``OFF`` cell when it declares
+    none. The FE applies the identical rule so its blanks match what run-missing
+    fills. (The FE mirror: ``q.auto_levels.length ? q.auto_levels : ["none"]``.)"""
+    return q.auto_levels or (OFF,)

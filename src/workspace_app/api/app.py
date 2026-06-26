@@ -532,6 +532,9 @@ def create_app(
     # SAME (model, level) -> ILlm seam kb_search runs on.
     sanity_llm_factory: object | None = None,  # Callable[[str, str], ILlm]
     sanity_models: list[str] | None = None,
+    # #231: LLM-as-judge for the sanity matrix (ai_grade/ai_note + per-model
+    # verdict). None ⇒ AI scoring off. __main__ passes get_sanity_judge_llm.
+    sanity_judge_llm: ILlm | None = None,
     insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
     # #175: the LLM that drafts context cards from documents (自動 context card).
@@ -1156,6 +1159,7 @@ def create_app(
         sanity_coordinator = SanityBatteryCoordinator(
             spec,
             sanity_llm_factory,  # ty: ignore[invalid-argument-type]
+            judge=sanity_judge_llm,
             message_queue_factory=message_queue_factory,
         )
         register_sanity_routes(api, sanity_models or [], sanity_coordinator)

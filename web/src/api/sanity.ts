@@ -33,6 +33,8 @@ export type SanityCell = {
   output: string;
   reasoned: boolean;
   grade: string; // "pass" | "fail" | "" (eyeball)
+  ai_grade: string; // #231: AI judge verdict "pass" | "fail" | ""
+  ai_note: string; // #231: AI judge one-line rationale
   aux: string;
   error: string;
   latency_ms: number;
@@ -45,10 +47,32 @@ export type SanityRunBody = {
   level?: string;
 };
 
+/** #231: one model's overall fitness verdict (a card above the table). */
+export type SanityVerdict = { model: string; score: number; summary: string };
+
+/** #231: a user-authored question (題目管理 panel). `id` is the resource id. */
+export type CustomQuestion = {
+  id: string;
+  category: string;
+  prompt: string;
+  expected: string;
+  levels: string[];
+  enabled: boolean;
+};
+
+export type CustomQuestionBody = Omit<CustomQuestion, "id">;
+
 export type SanityApi = {
   getMeta(): Promise<SanityMeta>;
   getResults(model: string): Promise<SanityCell[]>;
   run(body: SanityRunBody): Promise<{ queued: boolean }>;
+  getVerdicts(): Promise<SanityVerdict[]>;
+  runMissing(models: string[], category?: string | null): Promise<{ count: number }>;
+  rescore(models: string[]): Promise<{ count: number }>;
+  listCustom(): Promise<CustomQuestion[]>;
+  createCustom(body: CustomQuestionBody): Promise<CustomQuestion>;
+  updateCustom(id: string, body: CustomQuestionBody): Promise<CustomQuestion>;
+  deleteCustom(id: string): Promise<void>;
 };
 
 export const realSanityApi: SanityApi = {
@@ -70,6 +94,58 @@ export const realSanityApi: SanityApi = {
     });
     if (!r.ok) throw new Error(`sanity run failed: ${r.status}`);
     return (await r.json()) as { queued: boolean };
+  },
+  async getVerdicts() {
+    const r = await apiFetch("/sanity/verdicts");
+    if (!r.ok) throw new Error(`sanity verdicts failed: ${r.status}`);
+    return (await r.json()) as SanityVerdict[];
+  },
+  async runMissing(models: string[], category?: string | null) {
+    const r = await apiFetch("/sanity/run-missing", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ models, category: category ?? null }),
+    });
+    if (!r.ok) throw new Error(`sanity run-missing failed: ${r.status}`);
+    return (await r.json()) as { count: number };
+  },
+  async rescore(models: string[]) {
+    const r = await apiFetch("/sanity/rescore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ models }),
+    });
+    if (!r.ok) throw new Error(`sanity rescore failed: ${r.status}`);
+    return (await r.json()) as { count: number };
+  },
+  async listCustom() {
+    const r = await apiFetch("/sanity/custom-questions");
+    if (!r.ok) throw new Error(`custom questions failed: ${r.status}`);
+    return (await r.json()) as CustomQuestion[];
+  },
+  async createCustom(body: CustomQuestionBody) {
+    const r = await apiFetch("/sanity/custom-questions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`create custom question failed: ${r.status}`);
+    return (await r.json()) as CustomQuestion;
+  },
+  async updateCustom(id: string, body: CustomQuestionBody) {
+    const r = await apiFetch(`/sanity/custom-questions/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`update custom question failed: ${r.status}`);
+    return (await r.json()) as CustomQuestion;
+  },
+  async deleteCustom(id: string) {
+    const r = await apiFetch(`/sanity/custom-questions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (!r.ok) throw new Error(`delete custom question failed: ${r.status}`);
   },
 };
 
@@ -110,6 +186,8 @@ const mockCells: Record<string, SanityCell[]> = {
       output: "台北市。",
       reasoned: false,
       grade: "pass",
+      ai_grade: "pass",
+      ai_note: "正確點出台北",
       aux: "",
       error: "",
       latency_ms: 420,
@@ -126,12 +204,24 @@ const mockCells: Record<string, SanityCell[]> = {
         "對人類而言,海洋既是糧食與資源的寶庫,也是需要共同守護的脆弱家園。",
       reasoned: true,
       grade: "",
+      ai_grade: "pass",
+      ai_note: "長度與通順度符合",
       aux: "143 字",
       error: "",
       latency_ms: 3120,
     },
   ],
 };
+
+const mockVerdicts: SanityVerdict[] = [
+  {
+    model: "ollama_chat/qwen3:14b",
+    score: 82,
+    summary: "- 適合 KB 問答、JSON 格式輸出\n- 中文處理穩定\n- ⚠️ reasoning-off 偶有跳針",
+  },
+];
+
+const mockCustom: CustomQuestion[] = [];
 
 export const mockSanityApi: SanityApi = {
   async getMeta() {
@@ -142,6 +232,27 @@ export const mockSanityApi: SanityApi = {
   },
   async run() {
     return { queued: true };
+  },
+  async getVerdicts() {
+    return mockVerdicts;
+  },
+  async runMissing() {
+    return { count: 0 };
+  },
+  async rescore() {
+    return { count: 0 };
+  },
+  async listCustom() {
+    return mockCustom;
+  },
+  async createCustom(body) {
+    return { id: "mock-1", ...body };
+  },
+  async updateCustom(id, body) {
+    return { id, ...body };
+  },
+  async deleteCustom() {
+    return;
   },
 };
 

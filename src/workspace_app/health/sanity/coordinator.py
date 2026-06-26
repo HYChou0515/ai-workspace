@@ -14,19 +14,48 @@ import logging
 import time
 from collections.abc import Callable
 
+from msgspec.structs import replace as struct_replace
 from specstar import QB, Schema, SpecStar
 from specstar.types import TaskStatus
 
 from ...kb.llm import ILlm
-from ...resources import SanityResult, sanity_result_id
+from ...resources import (
+    CustomSanityQuestion,
+    SanityResult,
+    SanityVerdict,
+    sanity_result_id,
+    sanity_verdict_id,
+)
 from .jobs import SanityRun, SanityRunPayload
+from .judge import judge_cell, judge_verdict
 from .questions import (
+    ALL_LEVELS,
+    QUESTIONS,
     SanityQuestion,
     auto_run_cells,
-    find_question,
+    coverage_levels,
     messages_to_prompt,
     question_key,
+    user,
 )
+
+
+def _custom_to_question(c: CustomSanityQuestion) -> SanityQuestion:
+    """Adapt a user-authored ``CustomSanityQuestion`` to the in-code
+    ``SanityQuestion`` shape so it runs/judges/covers exactly like a built-in —
+    minus a mechanical grader (``grade=None`` ⇒ AI-only). Invalid effort strings
+    are dropped; ``auto_run`` follows whether any valid level remains."""
+    levels = tuple(lvl for lvl in c.levels if lvl in ALL_LEVELS)
+    return SanityQuestion(
+        category=c.category,
+        messages=[user(c.prompt)],
+        expected=c.expected,
+        auto_run=bool(levels),
+        auto_levels=levels,  # ty: ignore[invalid-argument-type]
+        grade=None,
+        aux=None,
+    )
+
 
 _LOGGER = logging.getLogger(__name__)
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
@@ -44,11 +73,17 @@ class SanityBatteryCoordinator:
         spec: SpecStar,
         llm_factory: LlmFactory,
         *,
+        judge: ILlm | None = None,
         message_queue_factory: object | None = None,
     ) -> None:
         self._spec = spec
         self._llm_factory = llm_factory
+        # #231: optional LLM-as-judge. None ⇒ AI scoring off (ai_grade/ai_note
+        # stay empty). When wired, every cell is judged after it runs.
+        self._judge = judge
         self._result_rm = spec.get_resource_manager(SanityResult)
+        self._verdict_rm = spec.get_resource_manager(SanityVerdict)
+        self._custom_rm = spec.get_resource_manager(CustomSanityQuestion)
         if message_queue_factory is None:
             from specstar.message_queue import SimpleMessageQueueFactory
 
@@ -91,6 +126,126 @@ class SanityBatteryCoordinator:
             if isinstance(r.data, SanityResult)
         ]
 
+    # ── question source: built-ins ∪ enabled custom (#231) ───────────
+    def all_questions(self) -> list[SanityQuestion]:
+        """Every question in the matrix: the built-in 19 plus the enabled
+        user-authored ones (adapted to the same shape). The route's meta + the
+        coverage/run/judge paths all read this so custom questions are first-class."""
+        customs = [
+            r.data
+            for r in self._custom_rm.list_resources(QB.all().build())
+            if isinstance(r.data, CustomSanityQuestion) and r.data.enabled
+        ]
+        return [*QUESTIONS, *(_custom_to_question(c) for c in customs)]
+
+    def find_question(self, key: str) -> SanityQuestion | None:
+        return next((q for q in self.all_questions() if question_key(q) == key), None)
+
+    # ── custom-question CRUD (the 題目管理 panel's backend) ───────────
+    def list_custom(self) -> list[tuple[str, CustomSanityQuestion]]:
+        """Every user-authored question with its resource id (for edit/delete)."""
+        return [
+            (r.info.resource_id, r.data)  # ty: ignore[unresolved-attribute]
+            for r in self._custom_rm.list_resources(QB.all().build())
+            if isinstance(r.data, CustomSanityQuestion)
+        ]
+
+    def create_custom(self, cq: CustomSanityQuestion) -> str:
+        return self._custom_rm.create(cq).resource_id
+
+    def update_custom(self, qid: str, cq: CustomSanityQuestion) -> bool:
+        if not self._custom_rm.exists(qid):
+            return False
+        self._custom_rm.update(qid, cq)
+        return True
+
+    def delete_custom(self, qid: str) -> bool:
+        if not self._custom_rm.exists(qid):
+            return False
+        self._custom_rm.permanently_delete(qid)
+        return True
+
+    # ── coverage: fill the never-run blanks (#231) ───────────────────
+    def run_missing(self, model: str, *, category: str | None = None) -> int:
+        """Enqueue a cell job for every *expected* coverage cell of ``model`` that
+        has no result yet (optionally narrowed to one 題組/``category``). Returns the
+        count enqueued — this is the one-click 'fill all blanks'."""
+        have = {(c.question_key, c.level) for c in self.list_results(model)}
+        queued = 0
+        for q in self.all_questions():
+            if category is not None and q.category != category:
+                continue
+            for level in coverage_levels(q):
+                if (question_key(q), level) not in have:
+                    self.run_cell(model, question_key(q), level)
+                    queued += 1
+        return queued
+
+    def rescore(self, model: str) -> int:
+        """Re-judge every existing cell of ``model`` against its STORED output (no
+        model re-run) and refresh the verdict — the '重新 AI 評分' action. Returns
+        the number of cells re-judged. No judge ⇒ 0."""
+        if self._judge is None:
+            return 0
+        rejudged = 0
+        for c in self.list_results(model):
+            q = self.find_question(c.question_key)
+            if c.error or q is None:
+                continue  # nothing to judge / question gone
+            ai_grade, ai_note = judge_cell(
+                self._judge,
+                prompt=messages_to_prompt(q.messages),
+                expected=q.expected,
+                output=c.output,
+            )
+            self._result_rm.update(
+                sanity_result_id(model, c.question_key, c.level),
+                struct_replace(c, ai_grade=ai_grade, ai_note=ai_note),
+            )
+            rejudged += 1
+        self.generate_verdict(model)
+        return rejudged
+
+    # ── per-model fitness verdict (#231) ─────────────────────────────
+    def list_verdicts(self) -> list[SanityVerdict]:
+        """Every model's stored fitness verdict (the FE renders one card each)."""
+        return [
+            r.data
+            for r in self._verdict_rm.list_resources(QB.all().build())
+            if isinstance(r.data, SanityVerdict)
+        ]
+
+    def generate_verdict(self, model: str) -> None:
+        """Judge reads ALL of ``model``'s cells and upserts its fitness verdict
+        (score + summary). No judge / no cells / unusable reply ⇒ no-op."""
+        if self._judge is None:
+            return
+        cells = self.list_results(model)
+        if not cells:
+            return
+        score, summary = judge_verdict(self._judge, model=model, digest=self._verdict_digest(cells))
+        if not summary:
+            return  # the judge produced nothing usable — don't write a misleading verdict
+        verdict = SanityVerdict(model=model, score=score, summary=summary)
+        rid = sanity_verdict_id(model)
+        if self._verdict_rm.exists(rid):
+            self._verdict_rm.update(rid, verdict)
+        else:
+            self._verdict_rm.create(verdict, resource_id=rid)
+
+    def _verdict_digest(self, cells: list[SanityResult]) -> str:
+        """A compact, judge-readable digest of one model's cells — one line per
+        cell: 題組 | effort | 機械評分 | AI評分 | 回答節錄."""
+        lines: list[str] = []
+        for c in cells:
+            q = self.find_question(c.question_key)
+            cat = q.category if q is not None else "?"
+            snippet = (c.output or c.error).replace("\n", " ")[:160]
+            lines.append(
+                f"[{cat}] {c.level} | 機械:{c.grade or '-'} | AI:{c.ai_grade or '-'} | {snippet}"
+            )
+        return "\n".join(lines)
+
     # ── consume (handler — runs on the consumer thread) ──────────────
     def _handle(self, job) -> None:  # job: Resource[SanityRun]
         payload = job.data.payload
@@ -103,7 +258,7 @@ class SanityBatteryCoordinator:
             for q, level in auto_run_cells():
                 self.run_cell(payload.model, question_key(q), level)
             return
-        q = find_question(payload.question_key)
+        q = self.find_question(payload.question_key)
         if q is None:
             return  # the prompt was edited away between enqueue and run
         self._run_one(payload.model, q, payload.level)
@@ -132,6 +287,15 @@ class SanityBatteryCoordinator:
 
         grade = self._grade(q, output) if not error else ""
         aux = self._aux(q, output) if not error else ""
+        # #231: AI judge grades the answer (when wired + the run produced output).
+        ai_grade, ai_note = "", ""
+        if self._judge is not None and not error:
+            ai_grade, ai_note = judge_cell(
+                self._judge,
+                prompt=messages_to_prompt(q.messages),
+                expected=q.expected,
+                output=output,
+            )
         result = SanityResult(
             model=model,
             question_key=key,
@@ -139,6 +303,8 @@ class SanityBatteryCoordinator:
             output=output,
             reasoned=reasoned,
             grade=grade,
+            ai_grade=ai_grade,
+            ai_note=ai_note,
             aux=aux,
             error=error,
             latency_ms=latency,
