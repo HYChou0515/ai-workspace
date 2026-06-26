@@ -5,7 +5,29 @@ module; this test exercises it so coverage sees the module-level definitions.
 
 from __future__ import annotations
 
+import tomllib
 from pathlib import Path
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def test_python_stack_ships_office_libs():
+    """The `python-stack` venv carrier bundles the office document stack
+    (#252) alongside its data-science deps, so the agent's raw
+    `exec(["python", ...])` calls can read/write Excel + PowerPoint files:
+
+    - openpyxl: read/write .xlsx (also pandas' .xlsx engine)
+    - XlsxWriter: write .xlsx with formatting / charts
+    - python-pptx: read/write .pptx
+
+    Mirrors `test_image.py`'s contract check on the data stack — guards the
+    pinned dependency list rather than building the bundle.
+    """
+    pyproject = _REPO / "sample-tools" / "python-stack" / "pyproject.toml"
+    deps = tomllib.loads(pyproject.read_text())["project"]["dependencies"]
+    names = {d.split(">=")[0].split("==")[0].split("[")[0].strip().lower() for d in deps}
+    for lib in ("python-pptx", "openpyxl", "xlsxwriter"):
+        assert lib in names, f"{lib} not pinned in python-stack/pyproject.toml"
 
 
 def test_packages_dict_exists_with_expected_entries():

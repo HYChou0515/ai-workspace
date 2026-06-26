@@ -1,7 +1,7 @@
 [project]
 name = "python-stack"
 version = "0.1.0"
-description = "Sandbox venv carrier — bundles the pandas / numpy / scipy / matplotlib data stack so the agent's raw `exec([\"python\", ...])` calls have working imports. No CLI commands of its own; the jail bootstrap shims `python` to this bundle's launcher when the package is provisioned."
+description = "Sandbox venv carrier — bundles the pandas / numpy / scipy / matplotlib data stack plus the openpyxl / XlsxWriter / python-pptx office stack so the agent's raw `exec([\"python\", ...])` calls have working imports. No CLI commands of its own; the jail bootstrap shims `python` to this bundle's launcher when the package is provisioned."
 requires-python = ">=3.12"
 
 # Heavy-deps strategy as data-fetch / csv-column-summary / rca-tools:
@@ -13,6 +13,14 @@ dependencies = [
     "pandas>=2.0",
     "scipy>=1.10",
     "matplotlib>=3.7",
+    # Office document stack (#252): read/write the spreadsheet + slide
+    # formats users routinely drop into a workspace. openpyxl doubles as
+    # pandas' .xlsx engine; XlsxWriter adds formatting/charts on write;
+    # python-pptx covers PowerPoint. Pure-Python — no LibreOffice, so the
+    # bundle stays small (rendering / →PDF is intentionally out of scope).
+    "python-pptx>=0.6",
+    "openpyxl>=3.1",
+    "XlsxWriter>=3.1",
 ]
 
 # Intentionally NO [project.scripts]: this package is a venv carrier,
@@ -22,7 +30,8 @@ dependencies = [
 # sandbox's jail bootstrap then routes the raw `python` shim to this
 # bundle's launcher when it's present, so the agent's
 # `exec(["python", "script.py"])` calls see pandas / numpy / scipy /
-# matplotlib without any extra import gymnastics.
+# matplotlib / openpyxl / xlsxwriter / pptx without any extra import
+# gymnastics.
 
 [build-system]
 requires = ["hatchling"]

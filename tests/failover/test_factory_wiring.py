@@ -17,6 +17,36 @@ def _settings(tmp_path, body: str):
     return load(config_path=p, env={})
 
 
+def _endpoint(model: str = "m1"):
+    from workspace_app.factories import LlmEndpoint
+
+    return LlmEndpoint(
+        model=model,
+        base_url="http://x",
+        api_key=None,
+        reasoning_effort=None,
+        ttft_s=5.0,
+        idle_s=7.0,
+        cooldown_s=30.0,
+    )
+
+
+def test_litellm_for_builds_the_inner_per_endpoint_llm():
+    """The FallbackLlm's per-endpoint factory (#196): builds a plain LitellmLlm so the
+    failover loop can attempt each endpoint in turn."""
+    from workspace_app.factories import _litellm_for
+
+    assert isinstance(_litellm_for(_endpoint()), LitellmLlm)
+
+
+def test_litellm_vlm_for_builds_the_inner_per_endpoint_vlm():
+    """Vision-side mirror (#131 / #196): the FallbackVlm's per-endpoint factory builds a
+    plain LitellmVlm."""
+    from workspace_app.factories import _litellm_vlm_for
+
+    assert isinstance(_litellm_vlm_for(_endpoint()), LitellmVlm)
+
+
 def test_retrieval_llm_without_fallbacks_is_plain_litellm(tmp_path):
     settings = _settings(
         tmp_path,

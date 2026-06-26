@@ -1,9 +1,15 @@
 """DockerSandbox — runs each sandbox as its own Docker container.
 
-Default adapter for production-ish deployments per grill-me Q12. Requires
-a Docker daemon reachable via `docker.from_env()`. Container lifecycle:
-`create` starts a long-lived container running `sleep infinity`; `exec`
-uses `container.exec_run`; `kill` removes the container.
+**Deprecated** (#252): production sandboxes now run in their own pod via
+the sandbox-host service (`sandbox.kind: http`, backed by
+IsolatedProcessSandbox under a cgroup), which the Docker-per-sandbox model
+predates. This adapter is kept working for local one-off use but is no
+longer maintained — its image (`docker/Dockerfile.workspace`) is not kept
+in sync with the python-stack tool bundle. Prefer `sandbox.kind: http`.
+
+Requires a Docker daemon reachable via `docker.from_env()`. Container
+lifecycle: `create` starts a long-lived container running `sleep
+infinity`; `exec` uses `container.exec_run`; `kill` removes the container.
 """
 
 from __future__ import annotations
@@ -16,6 +22,7 @@ import shutil
 import tarfile
 import tempfile
 import uuid
+import warnings
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +46,12 @@ _WORKDIR = "/workspace"
 
 class DockerSandbox:
     def __init__(self, *, client: DockerClient | None = None) -> None:
+        warnings.warn(
+            "DockerSandbox is deprecated (#252); run sandboxes via the "
+            "sandbox-host service instead (sandbox.kind: http).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         if client is None:
             import docker
 

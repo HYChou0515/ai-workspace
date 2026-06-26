@@ -50,7 +50,6 @@ React SPA (web/) ─► FastAPI app (api/) ─► OpenAI Agents SDK (api/litellm
                           ├─► Sandbox Protocol (sandbox/protocol.py)
                           │     - MockSandbox: in-memory, for tests
                           │     - LocalProcessSandbox: subprocess + temp dir, default for VM deploys
-                          │     - DockerSandbox: one container per sandbox
                           │
                           ├─► FileStore Protocol (filestore/protocol.py)
                           │     - SpecstarFileStore: per-workspace blob inside specstar
