@@ -2,7 +2,7 @@ from workspace_app.kb.citations import parse_citations
 from workspace_app.resources.kb import RetrievedPassage
 
 
-def _passage(doc: str, text: str, chunks: list[str]) -> RetrievedPassage:
+def _passage(doc: str, text: str, chunks: list[str], provenance=None) -> RetrievedPassage:
     return RetrievedPassage(
         collection_id="c1",
         document_id=doc,
@@ -11,7 +11,16 @@ def _passage(doc: str, text: str, chunks: list[str]) -> RetrievedPassage:
         end=len(text),
         source_chunk_ids=chunks,
         text=text,
+        provenance=provenance or {},
     )
+
+
+def test_citation_carries_passage_provenance():
+    """Issue #254: the resolved Citation keeps the passage's source location so
+    the FE can render a 'p.3 §2.1' chip under the answer."""
+    passages = [_passage("c1/u/a.pdf", "root cause", ["a#0"], {"page": [3], "section": ["RCA"]})]
+    cites = parse_citations("cause [1].", passages)
+    assert cites[0].provenance == {"page": [3], "section": ["RCA"]}
 
 
 def test_parses_marker_into_citation_from_registry():

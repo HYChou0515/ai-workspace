@@ -386,6 +386,7 @@ def kb_search_impl(
     doesn't need the rerank LLM round-trip. The operator's `max` clamps
     whatever you pass, so requesting `expand=99` is safe.
     """
+    from ..kb.provenance import format_location
     from ..kb.retriever import Enhancements
 
     retriever = ctx.context.retriever
@@ -446,7 +447,11 @@ def kb_search_impl(
                 idx = len(registry)
                 seen[key] = idx
                 registry.append(passage)
-            lines.append(f"[{idx + 1}] {passage.filename}: {passage.text}")
+            # Issue #254: prefix the passage's source location so the model can
+            # cite "p.3 §2.1" in prose, not just an opaque filename.
+            loc = format_location(passage.provenance)
+            where = f"{passage.filename} ({loc})" if loc else passage.filename
+            lines.append(f"[{idx + 1}] {where}: {passage.text}")
     except Exception:
         # Log the real cause (with traceback) to the server log so the
         # operator sees what actually broke — connection refused,
