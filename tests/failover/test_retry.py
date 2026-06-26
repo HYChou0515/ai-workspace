@@ -11,6 +11,8 @@ Sleeping is injected so the suite never actually waits.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import pytest
 
 from workspace_app.failover.core import CallProvider
@@ -36,7 +38,7 @@ class _Status(Exception):
         self.status_code = status_code
 
 
-def _recording_sleep() -> tuple[list[float], object]:
+def _recording_sleep() -> tuple[list[float], Callable[[float], None]]:
     slept: list[float] = []
     return slept, slept.append
 
