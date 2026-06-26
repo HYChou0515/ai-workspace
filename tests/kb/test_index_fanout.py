@@ -278,3 +278,65 @@ async def test_finalize_is_idempotent_does_not_wipe_text():
         IndexJobPayload(doc_id=doc_id, collection_id=cid, kind="finalize"), "bob"
     )
     assert spec.get_resource_manager(SourceDoc).get(doc_id).data.text == text_before
+
+
+# ── #249: transient vs permanent failure of a fan-out process job ─────
+
+
+class _Status(Exception):
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"HTTP {status_code}")
+        self.status_code = status_code
+
+
+class _FailEmbedder:
+    """An embedder whose every embed_documents call raises ``error``."""
+
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+        self._dim = EMBED_DIM
+        self.calls = 0
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        raise self._error
+
+    def embed_query(self, text: str) -> list[float]:
+        return [0.0] * self._dim
+
+
+def _build_failing(spec: SpecStar, error: Exception):
+    emb = _FailEmbedder(error)
+    ingestor = Ingestor(spec, pipeline=build_doc_pipeline(embedder=emb), embedder=emb)
+    coord = IndexCoordinator(
+        spec, ingestor, wiki_coordinator=None, unit_batch_sizes={"CsvParser": 1}
+    )
+    return emb, ingestor, coord
+
+
+async def test_fanout_permanent_error_deadletters_each_batch_without_retry():
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    emb, ingestor, coord = _build_failing(spec, _Status(400))  # a bad request never recovers
+    doc_id = _store_csv(ingestor, cid, rows=2)  # 2 rows / batch 1 → 2 process jobs
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert emb.calls == 2  # each batch embedded once — NoRetry dead-lettered it, no requeue
+
+
+async def test_fanout_transient_error_is_redelivered_by_the_broker():
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    emb, ingestor, coord = _build_failing(spec, _Status(503))  # transient — broker retries
+    doc_id = _store_csv(ingestor, cid, rows=2)  # 2 process jobs
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert emb.calls > 2  # each batch was re-delivered (more calls than batches)
