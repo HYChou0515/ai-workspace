@@ -28,7 +28,7 @@ class _FakeWiki:
     def __init__(self) -> None:
         self.hooked: list[str] = []
 
-    async def on_doc_indexed(self, doc_id: str) -> None:
+    async def on_doc_indexed(self, doc_id: str, *, requested_by: str | None = None) -> None:
         self.hooked.append(doc_id)
 
 
@@ -193,6 +193,47 @@ async def test_indexing_in_a_worker_preserves_the_docs_last_updater(monkeypatch)
     assert got.info.updated_by == "alice"  # …but updated_by stays the uploader, not the worker
 
 
+async def test_chunks_are_credited_to_the_requester_not_the_doc_owner():
+    """#186: bob reindexes alice's doc. The worker runs in a job pod with NO
+    request user. The SourceDoc stays alice's (its content was not re-authored,
+    #83), but the DocChunks the run regenerates are derived artifacts credited to
+    the *requester* who triggered the run — read off the index job's created_by,
+    NOT the bare worker default."""
+    from workspace_app.kb.chunker import FixedTokenChunker
+    from workspace_app.kb.embedder import HashEmbedder
+    from workspace_app.kb.ingest import Ingestor
+    from workspace_app.resources import DocChunk
+    from workspace_app.resources.kb import EMBED_DIM
+
+    who = {"u": "alice"}
+    spec = make_spec(default_user=lambda: who["u"])
+    cid = _collection(spec)
+    ing = Ingestor(
+        spec,
+        chunker=FixedTokenChunker(max_tokens=8, overlap_tokens=2),
+        embedder=HashEmbedder(dim=EMBED_DIM),
+    )
+    # alice uploads → the SourceDoc is stamped as alice (request path).
+    doc_id = ing.store(collection_id=cid, user="alice", filename="a.md", data=b"hello world")[0]
+    # bob clicks reindex — the producer runs in bob's request, so the IndexJob's
+    # created_by is bob (the requester), captured via get_user_id at enqueue.
+    who["u"] = "bob"
+    coord = IndexCoordinator(spec, ing, wiki_coordinator=None)
+    coord.enqueue(doc_id, cid)
+    # The job pod has no request user — the consumer runs as the bare default.
+    who["u"] = "index-worker"
+    await coord.aclose()
+
+    drm = spec.get_resource_manager(SourceDoc)
+    assert drm.get(doc_id).info.updated_by == "alice"  # content owner unchanged (#83)
+    chrm = spec.get_resource_manager(DocChunk)
+    chunks = chrm.list_resources((QB["source_doc_id"] == doc_id).build())
+    assert chunks  # the worker really wrote chunks
+    # #186: every chunk this run wrote is credited to the requester, not the worker.
+    assert all(c.info.created_by == "bob" for c in chunks)  # ty: ignore[unresolved-attribute]
+    assert all(c.info.updated_by == "bob" for c in chunks)  # ty: ignore[unresolved-attribute]
+
+
 async def test_doc_deleted_before_the_index_job_runs_is_a_graceful_noop():
     """#83: reading the doc's updater up front means a doc deleted between
     enqueue and run is a no-op (it's gone — nothing to index), not a crash."""
@@ -324,15 +365,17 @@ def test_a_processing_job_does_not_block_a_fresh_reindex():
     coord = IndexCoordinator(spec, _FakeIngestor(), wiki_coordinator=None)  # ty: ignore
 
     assert coord.enqueue(doc_id, cid) is True
-    # Flip the queued job to PROCESSING, as the consumer does when it claims it.
+    # Flip the queued job to PROCESSING, as the consumer does when it claims it
+    # (credited to the job's creator — the manager carries no default user, #186).
     jrm = spec.get_resource_manager(IndexJob)
     job = next(iter(jrm.list_resources(QB["status"].eq(TaskStatus.PENDING).build())))
     data = job.data
     assert isinstance(data, IndexJob)
-    jrm.update(
-        job.info.resource_id,  # ty: ignore[unresolved-attribute]
-        msgspec.structs.replace(data, status=TaskStatus.PROCESSING),
-    )
+    with jrm.using(user=job.info.created_by):  # ty: ignore[unresolved-attribute]
+        jrm.update(
+            job.info.resource_id,  # ty: ignore[unresolved-attribute]
+            msgspec.structs.replace(data, status=TaskStatus.PROCESSING),
+        )
 
     # A fresh reindex must still enqueue (it can't ride on the in-flight job).
     assert coord.enqueue(doc_id, cid) is True

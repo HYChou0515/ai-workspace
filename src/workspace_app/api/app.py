@@ -1049,6 +1049,7 @@ def create_app(
         agent_config=_wiki_cfg("wiki_maintainer", default_wiki_maintainer_config),
         maintainer_max_turns=wiki_maintainer_max_turns,
         message_queue_factory=message_queue_factory,
+        get_user_id=get_user_id,
     )
     app.state.wiki_coordinator = wiki_coordinator
     # #82: indexing runs off the request path on a durable, cross-pod job queue
@@ -1061,6 +1062,7 @@ def create_app(
         ingestor,
         wiki_coordinator=wiki_coordinator,
         message_queue_factory=message_queue_factory,
+        get_user_id=get_user_id,
     )
     # #87: a content edit (the FE's blob-upload + CAS PATCH /source-doc/{id})
     # auto-enqueues a reindex via a SourceDoc patch event_handler — wired here,
