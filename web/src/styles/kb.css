@@ -909,16 +909,40 @@
   flex-direction: column;
   gap: 4px;
 }
-.kb-index-status__fails-head {
+/* #224: the failure list is a default-closed disclosure — this row is the
+   always-visible trigger (✗ + count + chevron). The chevron sits at the right
+   because the count span eats the remaining space. */
+.kb-index-status__fails-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
   color: var(--err);
+  font: inherit;
   font-weight: 500;
 }
-/* #223: one-click "retry the failed docs", pushed to the right of the head. */
+.kb-index-status__fails-toggle:hover {
+  background: color-mix(in srgb, var(--err) 10%, transparent);
+}
+.kb-index-status__fails-toggle > span {
+  margin-right: auto;
+}
+/* The revealed body: retry action above the per-doc rows. */
+.kb-index-status__fails-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 4px;
+}
+/* #223: one-click "retry the failed docs", right-aligned above the list. */
 .kb-index-status__retry {
-  margin-left: auto;
+  align-self: flex-end;
   display: inline-flex;
   align-items: center;
   gap: 4px;

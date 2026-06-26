@@ -79,6 +79,10 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     false,
   );
   const [showRetrieval, setShowRetrieval] = useState(false);
+  // The failure list is a default-closed disclosure (#224): the count is always
+  // visible, the per-doc rows + retry stay tucked away until expanded. Transient
+  // (not persisted) — a failed run is short-lived, so we don't remember it.
+  const [failsOpen, setFailsOpen] = useState(false);
   const [iconOpen, setIconOpen] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
@@ -132,6 +136,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     setEditingDesc(false);
     setConfirmDel(false);
     setShowRetrieval(false);
+    setFailsOpen(false);
     setImportFile(null);
   }, [cid]);
 
@@ -577,45 +582,59 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             <span className="kb-index-status__ready">{t("kb.status.allReady")}</span>
           )}
 
-          {/* Persistent failure list (#170): each failed doc by name + reason,
-              click to open it (the viewer shows the full status_detail). */}
+          {/* Persistent failure list (#170), tucked behind a default-closed
+              disclosure (#224): the count stays visible as the trigger, while
+              the per-doc rows + retry are revealed on demand. Each failed doc is
+              named by reason, click to open it (the viewer shows the full
+              status_detail). */}
           {erroredCount > 0 && (
             <div className="kb-index-status__fails">
-              <div className="kb-index-status__fails-head">
+              <button
+                type="button"
+                className="kb-index-status__fails-toggle"
+                aria-expanded={failsOpen}
+                aria-controls="kb-index-fails-panel"
+                onClick={() => setFailsOpen((v) => !v)}
+              >
                 <Icon name="x" size={13} color="var(--err)" />
                 <span>{t("kb.status.failed", { n: erroredCount })}</span>
-                {/* #223: re-queue ONLY the failed docs in one click — recover
-                    after a transient outage without re-embedding the rest. */}
-                <button
-                  type="button"
-                  className="kb-btn kb-index-status__retry"
-                  data-testid="kb-reindex-failed"
-                  disabled={reindexFailedMut.isPending}
-                  onClick={() => reindexFailedMut.mutate()}
-                >
-                  <Icon name="refresh" size={12} /> {t("kb.status.retryFailed")}
-                </button>
-              </div>
-              <ul className="kb-index-status__fail-list">
-                {erroredDocs.map((d) => {
-                  const name = d.path.split("/").pop() ?? d.path;
-                  return (
-                    <li key={d.resource_id}>
-                      <button
-                        type="button"
-                        className="kb-index-status__fail"
-                        aria-label={t("kb.status.openFailed", { name })}
-                        onClick={() => openDoc(d.resource_id)}
-                      >
-                        <span className="kb-index-status__fail-name">{name}</span>
-                        <span className="kb-index-status__fail-reason">
-                          {d.status_detail || t("kb.doc.processingFailed")}
-                        </span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+                <Icon name={failsOpen ? "chev_d" : "chev_r"} size={11} />
+              </button>
+              {failsOpen && (
+                <div id="kb-index-fails-panel" className="kb-index-status__fails-panel">
+                  {/* #223: re-queue ONLY the failed docs in one click — recover
+                      after a transient outage without re-embedding the rest. */}
+                  <button
+                    type="button"
+                    className="kb-btn kb-index-status__retry"
+                    data-testid="kb-reindex-failed"
+                    disabled={reindexFailedMut.isPending}
+                    onClick={() => reindexFailedMut.mutate()}
+                  >
+                    <Icon name="refresh" size={12} /> {t("kb.status.retryFailed")}
+                  </button>
+                  <ul className="kb-index-status__fail-list">
+                    {erroredDocs.map((d) => {
+                      const name = d.path.split("/").pop() ?? d.path;
+                      return (
+                        <li key={d.resource_id}>
+                          <button
+                            type="button"
+                            className="kb-index-status__fail"
+                            aria-label={t("kb.status.openFailed", { name })}
+                            onClick={() => openDoc(d.resource_id)}
+                          >
+                            <span className="kb-index-status__fail-name">{name}</span>
+                            <span className="kb-index-status__fail-reason">
+                              {d.status_detail || t("kb.doc.processingFailed")}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </div>
