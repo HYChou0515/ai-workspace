@@ -2272,3 +2272,61 @@
 .kb-chats__row--skeleton { padding: 0; border: 0; background: none; }
 .kb-skel--chat-row { height: 38px; border-radius: 8px; }
 .kb-cards__none[aria-busy="true"] { display: flex; flex-direction: column; gap: 6px; }
+
+/* #175 自動 context card — the in-tab auto-generate trigger + review modal. */
+.kb-cards__autogen {
+  text-align: left; padding: 3px 6px; font-size: 0.75rem; border: 1px dashed var(--accent);
+  border-radius: var(--radius-btn); background: var(--accent-soft, transparent); color: var(--accent);
+  cursor: pointer; flex-shrink: 0;
+}
+.kb-cardgen__backdrop {
+  position: fixed; inset: 0; background: rgba(20, 22, 28, 0.35); backdrop-filter: blur(2px);
+  z-index: 62; display: flex; align-items: center; justify-content: center;
+  animation: kb-fade 200ms ease;
+}
+.kb-cardgen__modal {
+  width: min(720px, 94vw); max-height: 88vh; display: flex; flex-direction: column;
+  background: var(--paper); border: 1px solid var(--paper-3); border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(20, 22, 28, 0.25);
+}
+.kb-cardgen__head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 12px 16px; border-bottom: 1px solid var(--paper-3);
+}
+.kb-cardgen__head button { background: transparent; border: none; cursor: pointer; color: var(--text-paper-d); font-size: 1rem; }
+.kb-cardgen__body { padding: 14px 16px; overflow: auto; display: flex; flex-direction: column; gap: 10px; }
+.kb-cardgen__body > input,
+.kb-cardgen__todo,
+.kb-cardgen__proposal textarea,
+.kb-cardgen__proposal input {
+  padding: 6px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn);
+  background: var(--paper); color: var(--text-paper); font: inherit; width: 100%;
+}
+.kb-cardgen__todo { min-height: 320px; font-family: ui-monospace, monospace; font-size: 0.8125rem; }
+.kb-cardgen__docs, .kb-cardgen__proposals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 48vh; overflow: auto; }
+.kb-cardgen__docs label { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 0.8125rem; }
+.kb-cardgen__none { color: var(--text-paper-d2); padding: 12px; }
+.kb-cardgen__viewtoggle { display: flex; gap: 6px; }
+.kb-cardgen__viewtoggle button { padding: 3px 10px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: transparent; cursor: pointer; color: var(--text-paper-d); }
+.kb-cardgen__viewtoggle button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.kb-cardgen__proposal {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px;
+  border: 1px solid var(--paper-3); border-radius: 8px; background: var(--paper);
+}
+.kb-cardgen__proposal.is-accepted { border-color: var(--accent); }
+.kb-cardgen__proposal.is-rejected { opacity: 0.5; }
+.kb-cardgen__badges { display: flex; gap: 6px; }
+.kb-cardgen__badge { font-size: 0.6875rem; padding: 1px 6px; border-radius: 999px; background: var(--paper-2); color: var(--text-paper-d); }
+.kb-cardgen__badge.is-update { background: var(--accent-soft); color: var(--accent); }
+.kb-cardgen__badge.is-uncertain { background: #f6e2b3; color: #7a5a00; }
+.kb-cardgen__keys { font-size: 0.75rem; color: var(--text-paper-d); }
+.kb-cardgen__prov { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.kb-cardgen__prov li { font-size: 0.7rem; color: var(--text-paper-d2); display: flex; gap: 6px; }
+.kb-cardgen__prov-path { font-family: ui-monospace, monospace; color: var(--text-paper-d); }
+.kb-cardgen__diff pre { white-space: pre-wrap; background: var(--paper-2); padding: 6px 8px; border-radius: 6px; font-size: 0.75rem; }
+.kb-cardgen__decide { display: flex; gap: 6px; }
+.kb-cardgen__decide button { padding: 3px 12px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: transparent; cursor: pointer; color: var(--text-paper); }
+.kb-cardgen__decide button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.kb-cardgen__foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding-top: 8px; border-top: 1px solid var(--paper-3); margin-top: 4px; }
+.kb-cardgen__foot button { padding: 5px 14px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); cursor: pointer; color: var(--text-paper); }
+.kb-cardgen__foot button:disabled { opacity: 0.45; cursor: not-allowed; }
