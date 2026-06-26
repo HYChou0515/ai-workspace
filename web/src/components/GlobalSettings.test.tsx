@@ -51,4 +51,12 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "關閉" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
+
+  // #250: the docs link was hardcoded to `/docs`, but #177 moved the backend
+  // (incl. the Swagger UI) under `/api`. The link must point at `/api/docs`.
+  it("points the API reference link at the backend docs under /api", () => {
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "設定" }));
+    expect(screen.getByRole("link", { name: "API 文件" })).toHaveAttribute("href", "/api/docs");
+  });
 });
