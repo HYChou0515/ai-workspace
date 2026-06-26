@@ -3,6 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import type { MessageCitation } from "../api/types";
 import { EntryView } from "./AgentEntryView";
 
 // UserChip pulls /users/{id} — stub so happy-dom doesn't hit the network.
@@ -50,7 +51,9 @@ describe("EntryView — ask_knowledge_base tool card citations", () => {
       />,
     );
     expect(screen.getByText("reflow-spec.md")).toBeInTheDocument();
-    expect(screen.getByText("[1]")).toBeInTheDocument();
+    // The card's own marker chip (the body's inline [1] is now also clickable —
+    // #221 — so target the card chip specifically, not getByText("[1]")).
+    expect(document.querySelector(".kb-cite__marker")?.textContent).toBe("[1]");
     expect(screen.getByText(/Zone 3 setpoint/)).toBeInTheDocument();
   });
 
@@ -432,5 +435,98 @@ describe("EntryView — workflow step/phase lines (#100 observability)", () => {
       />,
     );
     expect(screen.getByTestId("wf-step-output")).toHaveTextContent("compiling…");
+  });
+});
+
+describe("EntryView — clickable inline [n] in an assistant answer (#221)", () => {
+  const answer = (content: string, citations: MessageCitation[]) =>
+    ({
+      kind: "message",
+      message: { role: "assistant", content, citations },
+    }) as const;
+
+  it("renders an inline [n] in the answer body as a clickable pill that opens the citation", () => {
+    const cite = {
+      marker: 1,
+      collection_id: "col",
+      document_id: "doc",
+      filename: "reflow.md",
+      start: 0,
+      end: 10,
+      source_chunk_ids: ["ck"],
+      snippet: "snip",
+    };
+    const onOpen = vi.fn();
+    const { container } = render(
+      <EntryView entry={answer("Zone 3 drifted [1].", [cite])} onOpenCitation={onOpen} />,
+    );
+    const pill = container.querySelector(".kb-cite-inline");
+    expect(pill).not.toBeNull();
+    fireEvent.click(pill as Element);
+    expect(onOpen).toHaveBeenCalledWith(cite);
+  });
+
+  it("leaves an inline marker with no matching citation as non-clickable text", () => {
+    const cite = {
+      marker: 1,
+      collection_id: "col",
+      document_id: "doc",
+      filename: "reflow.md",
+      start: 0,
+      end: 10,
+      source_chunk_ids: ["ck"],
+      snippet: "snip",
+    };
+    const { container } = render(
+      // body cites [9] but the turn only resolved [1]
+      <EntryView entry={answer("See [9] for more.", [cite])} />,
+    );
+    // the muted marker keeps the literal text but is not a button
+    const muted = container.querySelector("span.kb-cite-inline");
+    expect(muted).not.toBeNull();
+    expect(muted?.textContent).toBe("[9]");
+  });
+});
+
+describe("EntryView — clickable inline [n] in an ask_knowledge_base tool card (#221)", () => {
+  const cite = {
+    marker: 1,
+    collection_id: "col",
+    document_id: "doc",
+    filename: "reflow.md",
+    start: 0,
+    end: 10,
+    source_chunk_ids: ["ck"],
+    snippet: "snip",
+  };
+  const toolCard = (output: string, citations: MessageCitation[]) =>
+    ({
+      kind: "tool_call",
+      call: {
+        call_id: "c1",
+        name: "ask_knowledge_base",
+        args: {},
+        status: "done",
+        output,
+        citations,
+      },
+    }) as const;
+
+  it("renders the tool body's [n] as a restrained clickable that opens the citation", () => {
+    const onOpen = vi.fn();
+    const { container } = render(
+      <EntryView entry={toolCard("Zone 3 drifted [1].", [cite])} onOpenCitation={onOpen} />,
+    );
+    const hit = container.querySelector(".kb-cite-pre");
+    expect(hit).not.toBeNull();
+    expect(hit?.textContent).toBe("[1]");
+    fireEvent.click(hit as Element);
+    expect(onOpen).toHaveBeenCalledWith(cite);
+  });
+
+  it("keeps the raw <pre> look — no pill chrome, body text round-trips", () => {
+    const { container } = render(<EntryView entry={toolCard("answer with [1] end", [cite])} />);
+    expect(container.querySelector(".kb-cite-inline")).toBeNull();
+    expect(container.querySelector("pre")?.textContent).toBe("answer with [1] end");
   });
 });

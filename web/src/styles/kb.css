@@ -250,6 +250,25 @@
   background: var(--accent-soft, var(--paper-2));
 }
 
+/* Restrained `[N]` marker for plain-text (`<pre>`) bodies — the
+ * `ask_knowledge_base` tool card (#221). Unlike `.kb-cite-inline` it adds no
+ * pill chrome: it inherits the pre's monospace font/size and only tints the
+ * marker + underlines on hover, so the raw output keeps its look while the
+ * marker stays clickable. */
+.kb-cite-pre {
+  font: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: none;
+}
+.kb-cite-pre:hover {
+  text-decoration: underline;
+}
+
 /* footer: suggestions + composer */
 .kb-drawer__foot {
   border-top: 1px solid var(--paper-3);

@@ -23,6 +23,7 @@ import { Icon } from "../../components/Icon";
 import { MonacoEditor } from "../../components/MonacoEditor";
 import { docHref } from "../../pages/kb/kbLinks";
 import type { MessageCitation } from "../../api/types";
+import { buildByMarker, kbCiteAnchor, kbCiteUrlTransform } from "../kbCite";
 import { remarkKbCitation } from "./remarkKbCitation";
 import {
   type ReportVersion,
@@ -357,21 +358,10 @@ function ReportBody({
   const svc = useFileService();
   const { log } = useAgent();
   const citations = useMemo(() => collectCitations(log.entries), [log.entries]);
-  // marker → every citation chunk that shares it. Different ask_kb calls
-  // can each return their own `[5]` against different documents, so a
-  // single marker may map to multiple chunks. The inline-pill click opens
-  // them as separate tabs (one window.open per chunk) and the tooltip
-  // lists all of them, so the user sees the ambiguity instead of one of
-  // them silently winning.
-  const byMarker = useMemo(() => {
-    const m = new Map<number, MessageCitation[]>();
-    for (const c of citations) {
-      const list = m.get(c.marker);
-      if (list) list.push(c);
-      else m.set(c.marker, [c]);
-    }
-    return m;
-  }, [citations]);
+  // marker → every citation chunk that shares it (a single `[5]` can map to
+  // multiple chunks when re-used). See `buildByMarker` / `kbCiteAnchor` in
+  // `../kbCite` for the shared resolution rules.
+  const byMarker = useMemo(() => buildByMarker(citations), [citations]);
   // New tab — keeps the investigation in the current tab so the user
   // doesn't lose context when sanity-checking a citation. `docHref`
   // includes the deploy basename so the URL works outside the router.
@@ -443,6 +433,9 @@ function ReportBody({
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath, remarkKbCitation]}
             rehypePlugins={[rehypeKatex]}
+            // Preserve the `kb-cite:N` hrefs remarkKbCitation emits — the default
+            // sanitizer would drop them to '' before our `a` handler runs.
+            urlTransform={kbCiteUrlTransform}
             components={{
               // Resolve workspace-relative image paths (./xxx.png, xxx.png)
               // to the file API. Without this, `![](./plot.png)` would try
@@ -458,45 +451,13 @@ function ReportBody({
                 );
               },
               // `[N]` markers in the body are transformed by remarkKbCitation
-              // into links with `kb-cite:N` urls; render those as inline
-              // pills that open the matching KB document on click. Anything
-              // else is a normal markdown link.
+              // into links with `kb-cite:N` urls; the shared `kbCiteAnchor`
+              // renders those as inline pills that open the matching KB
+              // document on click (`null` ⇒ not a citation, fall through to
+              // the normal markdown-link handling below).
               a: ({ href, children, ...rest }) => {
-                if (typeof href === "string" && href.startsWith("kb-cite:")) {
-                  const marker = Number.parseInt(href.slice("kb-cite:".length), 10);
-                  const matches = byMarker.get(marker);
-                  // Marker not in this turn's citation pool — keep the
-                  // literal `[N]` text so the agent's intent stays visible,
-                  // but mute the pill styling (no click).
-                  if (!matches || matches.length === 0) {
-                    return (
-                      <span
-                        className="kb-cite-inline"
-                        style={{ cursor: "default", opacity: 0.55 }}
-                      >
-                        {children}
-                      </span>
-                    );
-                  }
-                  // tooltip lists every chunk the marker maps to (one per
-                  // line); click opens the first match — for the rare
-                  // case where the agent re-used a marker across calls,
-                  // the Sources panel below still shows every chunk
-                  // separately so the user can disambiguate.
-                  const title = matches
-                    .map((c) => `${c.filename} — ${c.snippet}`)
-                    .join("\n");
-                  return (
-                    <button
-                      type="button"
-                      className="kb-cite-inline"
-                      title={title}
-                      onClick={() => openCitation(matches[0])}
-                    >
-                      {children}
-                    </button>
-                  );
-                }
+                const cite = kbCiteAnchor({ href, children }, byMarker, openCitation);
+                if (cite) return cite;
                 // A workspace-relative link (`[chart](/step2-download/abc.png)`)
                 // resolves to the file API so the user can open it; external
                 // URLs / #fragments pass through. Resolved files open in a new
