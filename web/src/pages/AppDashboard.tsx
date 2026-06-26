@@ -65,7 +65,7 @@ export function AppDashboard() {
   const { slug = "" } = useParams();
   const [params] = useSearchParams();
   const manifest = useAppManifest(slug);
-  const items = useAppItems(slug, manifest?.resource_route);
+  const { items, isPending: itemsPending } = useAppItems(slug, manifest?.resource_route);
   const { isPinned, toggle, pinned } = usePinned(slug);
   const { recent, record } = useRecentlyViewed(slug);
   const users = useUsers();
@@ -84,7 +84,13 @@ export function AppDashboard() {
     manifest ? [{ label: "Home", to: "/" }, { label: manifest.title }] : [{ label: "Home", to: "/" }],
   );
 
-  if (!manifest) {
+  // Loading covers two waits: the manifest, then the items list. Gate the items
+  // wait on `itemsPending` too (#225) — an empty list before the first response
+  // is "we don't know yet", not "no items", so falling through would flash the
+  // first-user "create your first" hero (and a misleading create button). The
+  // manifest is loaded by the time `itemsPending` matters, but `!manifest`
+  // still shares the skeleton since the items query is disabled until then.
+  if (!manifest || itemsPending) {
     return (
       <div data-testid="page-app-dashboard" style={{ padding: 28 }} aria-busy="true">
         {/* Skeleton, not bare "Loading…" (#170): a title bar + a few list rows so
@@ -94,7 +100,7 @@ export function AppDashboard() {
           <Skeleton key={i} style={{ height: 44, marginBottom: 8, borderRadius: 8 }} />
         ))}
         {/* Keep the nested create route (`/a/:slug/new`) mounted while the
-            dashboard's manifest is still loading. */}
+            dashboard is still loading. */}
         <Outlet />
       </div>
     );
