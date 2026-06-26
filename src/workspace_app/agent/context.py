@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from ..resources.conversation import Citation
     from ..resources.kb import RetrievedPassage
     from ..tooling.registry import PackageInfo
+    from ..users.protocol import User
 
 
 @dataclass
@@ -144,6 +145,11 @@ class AgentToolContext:
     # context cards stamp `created_by`/`updated_by` as this user). Set per-turn
     # from the message author; empty for contexts with no card-write tools.
     acting_user: str = ""
+    # #242: the resolved current speaker (name / handle / section) for the
+    # per-turn system note that tells the agent who it is replying to in a
+    # shared, multi-collaborator workspace. Set per-turn by the API layer from
+    # `users.get(author)`; None when unwired (single-user / replay).
+    speaker: User | None = None
     # Per-turn enhancement override the *caller* (KB chat composer,
     # ask_knowledge_base bridge, …) wants the kb_search tool to apply
     # on top of the operator's retriever defaults. LLM-set tool args

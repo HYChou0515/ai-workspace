@@ -43,6 +43,7 @@ from ..agent.repairing_model import RepairingModel
 from ..agent.tools import build_tools
 from ..resources import AgentConfig
 from ..tooling.registry import PackageInfo, build_function_tools
+from ..users.labels import speaker_note
 from .events import (
     AgentEvent,
     AgentMetrics,
@@ -215,6 +216,15 @@ def _final_tokens(
     if usage is None:
         return prompt_tok, approx_completion
     return (usage[0] or prompt_tok, usage[1] or approx_completion)
+
+
+def _turn_instructions(ctx: AgentToolContext, feedback: str | None) -> str | None:
+    """Per-turn additions to the system prompt: the #242 speaker note (who the
+    agent is replying to in a shared workspace) followed by any retry feedback.
+    `None` when neither is present, so `_agent_for` leaves the base prompt
+    unchanged."""
+    parts = [s for s in (speaker_note(ctx.speaker), feedback) if s]
+    return "\n\n".join(parts) if parts else None
 
 
 def _agent_for(
@@ -754,7 +764,7 @@ class LitellmAgentRunner:
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
-            extra_instructions=feedback,
+            extra_instructions=_turn_instructions(ctx, feedback),
             base_url=self._base_url,
             api_key=self._api_key,
             reasoning_effort=ctx.reasoning_effort,
@@ -903,7 +913,7 @@ class LitellmAgentRunner:
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,
-            extra_instructions=feedback,
+            extra_instructions=_turn_instructions(ctx, feedback),
             base_url=self._base_url,
             api_key=self._api_key,
             reasoning_effort=ctx.reasoning_effort,

@@ -30,3 +30,18 @@ def speaker_label(user: User) -> str:
     if not name or name == handle:
         return name or handle
     return f"{name} ({handle})"
+
+
+def speaker_note(user: User | None) -> str:
+    """A per-turn system instruction (#242) telling the agent who, in a shared
+    multi-collaborator workspace, it is replying to right now — and how to read
+    the per-speaker prefixes on earlier messages. Empty when no speaker is
+    resolved (single-user / unwired) so the base prompt is left untouched."""
+    if user is None:
+        return ""
+    where = f" from {user.section}" if user.section else ""
+    return (
+        "You are in a shared workspace where teammates may message you in the "
+        "same thread; each earlier user message is prefixed with its sender as "
+        f"[Name (handle)]:. You are now replying to {speaker_label(user)}{where}."
+    )

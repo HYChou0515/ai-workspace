@@ -2176,6 +2176,9 @@ def create_app(
             collection_ids=hub_collection_ids,
             # #111: card create/update agent tools stamp this user on the write.
             acting_user=author,
+            # #242: the resolved speaker for the per-turn "who am I replying to"
+            # system note in this shared, multi-collaborator workspace.
+            speaker=users.get(author),
         )
 
         def persist(produced: list[TurnMessage]) -> None:
