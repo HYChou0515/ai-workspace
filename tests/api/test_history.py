@@ -2,6 +2,32 @@ import pytest
 
 from workspace_app.api.litellm_runner import _build_input
 from workspace_app.api.turns import history_items
+from workspace_app.users import User
+
+
+class _Dir:
+    """Minimal UserDirectory for attribution tests — resolves seeded ids and
+    returns a graceful empty-name placeholder for unknown ones."""
+
+    def __init__(self, *users: User) -> None:
+        self._by_id = {u.id: u for u in users}
+
+    def get(self, user_id: str) -> User:
+        return self._by_id.get(user_id, User(id=user_id, name=""))
+
+    def all_users(self) -> list[User]:
+        return list(self._by_id.values())
+
+
+class _UM:
+    """Duck-typed message carrying an `author` (like RCA `Message`)."""
+
+    def __init__(self, role: str, content: str, author: str | None = None) -> None:
+        self.role = role
+        self.content = content
+        self.author = author
+        self.tool_call_id = self.tool_name = self.tool_args = None
+        self.error_kind = None
 
 
 class _M:
@@ -352,3 +378,62 @@ def test_history_items_token_budget_zero_means_no_token_cap():
     msgs = [_M2("user", "x" * 100_000), _M2("assistant", "ok")]
     items = history_items(msgs, max_messages=100, max_tokens=0)
     assert len(items) == 2  # nothing dropped
+
+
+def test_history_items_attributes_user_messages_to_their_author():
+    """#242 — a multi-collaborator thread must let the model tell who said
+    what. When a `UserDirectory` is supplied, each user message is prefixed
+    with its author as `[Name (handle)]:` (handle = email local-part)."""
+    directory = _Dir(User(id="u1", name="Alice Chen", email="alice.chen@corp.com"))
+    msgs = [_UM("user", "what's the root cause?", author="u1")]
+    items = history_items(msgs, max_messages=100, users=directory)
+    assert items == [
+        {"role": "user", "content": "[Alice Chen (alice.chen)]: what's the root cause?"},
+    ]
+
+
+def test_history_items_labels_each_speaker_and_never_an_assistant_turn():
+    """Multi-collaborator: each user message carries its own author; the
+    assistant's own turns are NEVER prefixed (the agent is not a 'speaker')."""
+    directory = _Dir(
+        User(id="u1", name="Alice Chen", email="alice.chen@acme.test"),
+        User(id="u2", name="Bob Liu", email="bob.liu@acme.test"),
+    )
+    msgs = [
+        _UM("user", "why did reflow drift?", author="u1"),
+        _UM("assistant", "Likely the oven profile.", author="agent"),
+        _UM("user", "what did she mean by drift?", author="u2"),
+    ]
+    items = history_items(msgs, max_messages=100, users=directory)
+    assert items == [
+        {"role": "user", "content": "[Alice Chen (alice.chen)]: why did reflow drift?"},
+        {"role": "assistant", "content": "Likely the oven profile."},
+        {"role": "user", "content": "[Bob Liu (bob.liu)]: what did she mean by drift?"},
+    ]
+
+
+def test_history_items_handle_falls_back_to_id_without_email():
+    """No email in the directory ⇒ the handle is the stable id."""
+    directory = _Dir(User(id="u9", name="Eve"))
+    msgs = [_UM("user", "ping", author="u9")]
+    items = history_items(msgs, max_messages=100, users=directory)
+    assert items == [{"role": "user", "content": "[Eve (u9)]: ping"}]
+
+
+def test_history_items_without_a_directory_projects_text_verbatim():
+    """Back-compat: with no `UserDirectory` (replay, or before wiring) user
+    messages are projected unprefixed even when they carry an author."""
+    msgs = [_UM("user", "verbatim please", author="u1")]
+    assert history_items(msgs, max_messages=100) == [
+        {"role": "user", "content": "verbatim please"},
+    ]
+
+
+def test_history_items_user_without_an_author_is_not_prefixed():
+    """A user message with no author (e.g. legacy rows) is left as-is even when
+    a directory is present."""
+    directory = _Dir(User(id="u1", name="Alice", email="alice@acme.test"))
+    msgs = [_UM("user", "anonymous", author=None)]
+    assert history_items(msgs, max_messages=100, users=directory) == [
+        {"role": "user", "content": "anonymous"},
+    ]

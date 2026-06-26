@@ -1587,6 +1587,7 @@ def create_app(
                 conv.messages,
                 max_messages=history_max_messages,
                 max_tokens=history_max_context_tokens,
+                users=users,
             ),
             packages=packages or [],
             prebuilt_dir=prebuilt_dir,
@@ -2154,6 +2155,7 @@ def create_app(
                 conv.messages[:-1],
                 max_messages=history_max_messages,
                 max_tokens=history_max_context_tokens,
+                users=users,
             ),
             # Provisionable tool packages (installed into the sandbox on
             # create; the runner exposes the allowed-via-colon commands).
