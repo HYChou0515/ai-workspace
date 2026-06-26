@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 
-from msgspec import Struct
+from msgspec import Struct, field
 
 
 def sanity_result_id(model: str, question_key: str, level: str) -> str:
@@ -49,3 +49,17 @@ class SanityVerdict(Struct):  # → resource "sanity-verdict"
     model: str  # litellm model string (indexed — one verdict per model)
     score: int = 0  # 0–100 overall fitness
     summary: str = ""  # markdown; per-role fitness bullets ("good for X, weak at Y")
+
+
+class CustomSanityQuestion(Struct):  # → resource "custom-sanity-question"
+    """#231: a user-authored sanity question. Unlike the built-in 19 (which carry
+    Python graders), a custom question has NO mechanical grader — it is AI-only
+    graded (the judge scores ``prompt``'s answer against ``expected``). It joins
+    the built-in battery in the matrix; specstar's auto-CRUD routes own its
+    lifecycle (the FE's 題目管理 panel)."""
+
+    category: str  # 題組 tag (groups questions; mirrors the built-in `category`)
+    prompt: str  # the single user-turn question text
+    expected: str  # 參考答案 / expected behaviour, fed to the judge
+    levels: list[str] = field(default_factory=list)  # efforts to run (none|low|medium|high)
+    enabled: bool = True  # disabled questions are hidden from the matrix

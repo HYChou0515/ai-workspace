@@ -424,6 +424,55 @@ async def test_rescore_skips_errored_cells():
     await coord.aclose()
 
 
+def _add_custom(spec, **kw):
+    from workspace_app.resources import CustomSanityQuestion
+
+    defaults = {"category": "自訂", "prompt": "2+2 等於多少?", "expected": "4", "levels": ["none"]}
+    rm = spec.get_resource_manager(CustomSanityQuestion)
+    rm.create(CustomSanityQuestion(**{**defaults, **kw}))
+
+
+async def test_custom_question_runs_ai_only_graded():
+    """#231 P5: a user-authored question joins the matrix and is AI-only graded
+    (no mechanical grader) — grade stays empty, ai_grade comes from the judge."""
+    spec = make_spec(default_user="u")
+    _add_custom(spec, prompt="台灣最高的山是?", expected="玉山")
+    coord = SanityBatteryCoordinator(
+        spec, _FakeLlmFactory(output="玉山"), judge=_FakeJudge('{"grade":"pass","note":"對"}')
+    )
+    cq = next(q for q in coord.all_questions() if q.category == "自訂")
+    coord.run_cell(_MODEL, question_key(cq), "none")
+    coord.wait_idle()
+    await coord.aclose()
+
+    r = _result(spec, _MODEL, cq, "none")
+    assert r.grade == ""  # no mechanical grader for custom questions
+    assert r.ai_grade == "pass" and r.output == "玉山"
+
+
+async def test_disabled_custom_question_is_hidden_and_invalid_levels_dropped():
+    spec = make_spec(default_user="u")
+    _add_custom(spec, category="啟用", levels=["none", "bogus"])  # bogus level dropped
+    _add_custom(spec, category="停用", enabled=False)  # hidden
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="x"))
+    cats = {q.category for q in coord.all_questions()}
+    assert "啟用" in cats and "停用" not in cats
+    enabled_q = next(q for q in coord.all_questions() if q.category == "啟用")
+    assert enabled_q.auto_levels == ("none",)  # only the valid level survived
+
+
+async def test_run_missing_covers_custom_questions():
+    spec = make_spec(default_user="u")
+    _add_custom(spec, category="自訂", levels=["none", "medium"])
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="x"))
+    cq = next(q for q in coord.all_questions() if q.category == "自訂")
+    coord.run_missing(_MODEL, category="自訂")
+    coord.wait_idle()
+    await coord.aclose()
+    got = _cells_for(spec, _MODEL)
+    assert got == {(question_key(cq), "none"), (question_key(cq), "medium")}
+
+
 async def test_rerun_overwrites_the_same_cell():
     spec = make_spec(default_user="u")
     q = QUESTIONS[0]

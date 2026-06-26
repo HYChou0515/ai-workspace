@@ -220,6 +220,35 @@ def test_rescore_endpoint_rejudges_and_returns_count():
         assert resp.status_code == 200 and resp.json()["count"] == 1
 
 
+def test_custom_question_authored_via_crud_appears_in_meta_and_runs():
+    """#231 P5: a user-authored question (specstar auto-CRUD) shows up in the
+    matrix metadata and runs AI-only (no mechanical grader)."""
+    app, spec = _app_and_spec(judge=_JudgeLlm())
+    with TestClient(app) as client:
+        created = client.post(
+            "/custom-sanity-question",
+            json={
+                "category": "自訂",
+                "prompt": "台灣最高的山?",
+                "expected": "玉山",
+                "levels": ["none"],
+            },
+        )
+        assert created.status_code in (200, 201)
+
+        meta = client.get("/sanity/questions").json()
+        custom = next((q for q in meta["questions"] if q["category"] == "自訂"), None)
+        assert custom is not None and custom["expected"] == "玉山"
+
+        client.post(
+            "/sanity/run",
+            json={"model": _MODEL, "scope": "cell", "question_key": custom["key"], "level": "none"},
+        )
+        rm = spec.get_resource_manager(SanityResult)
+        cell = _poll_exists(rm, sanity_result_id(_MODEL, custom["key"], "none"))
+        assert cell.grade == "" and cell.ai_grade == "pass"  # no mechanical grader; judge ran
+
+
 def test_post_run_cell_validates_question_and_level():
     app, _ = _app_and_spec()
     client = TestClient(app)

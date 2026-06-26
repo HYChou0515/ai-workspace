@@ -310,16 +310,12 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
     draws the empty grid), POST a run (cell or auto battery). Cell results
     themselves are a specstar resource — the FE lists ``/sanity-result`` directly
     (auto route), so there's no custom read for them here."""
-    from ..health.sanity.questions import (
-        ALL_LEVELS,
-        LEVEL_LABELS,
-        QUESTIONS,
-        find_question,
-        question_key,
-    )
+    from ..health.sanity.questions import ALL_LEVELS, LEVEL_LABELS, question_key
 
     @app.get("/sanity/questions")
     async def get_sanity_meta() -> SanityMetaOut:
+        # #231: built-ins ∪ enabled custom questions (the coordinator merges them),
+        # so the FE matrix shows user-authored questions alongside the bundled 19.
         return SanityMetaOut(
             models=list(models),
             levels=[SanityLevelOut(level=lvl, label=LEVEL_LABELS[lvl]) for lvl in ALL_LEVELS],
@@ -332,7 +328,7 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
                     auto_run=q.auto_run,
                     auto_levels=list(q.auto_levels),
                 )
-                for q in QUESTIONS
+                for q in coordinator.all_questions()
             ],
         )
 
@@ -357,7 +353,7 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
     @app.post("/sanity/run", status_code=202)
     async def run_sanity(body: SanityRunBody) -> SanityRunStartedOut:
         if body.scope == "cell":
-            if find_question(body.question_key) is None:
+            if coordinator.find_question(body.question_key) is None:
                 raise HTTPException(404, detail=f"unknown question {body.question_key!r}")
             if body.level not in ALL_LEVELS:
                 raise HTTPException(422, detail=f"unknown level {body.level!r}")
