@@ -26,6 +26,7 @@ describe("wikiFileService", () => {
       move: true,
       copy: true,
       folders: true,
+      download: false, // #247 covers KB docs + workspace, not the wiki
     });
   });
 

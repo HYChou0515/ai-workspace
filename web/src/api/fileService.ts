@@ -13,7 +13,8 @@ import { useQuery } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
 
 import { api } from "./index";
-import { API_PREFIX } from "./http";
+import { API_PREFIX, apiFetch } from "./http";
+import type { DownloadPrepared } from "./kb";
 import { qk } from "./queryKeys";
 import type { FileContent, FileInfo } from "./types";
 
@@ -27,6 +28,7 @@ export type FileCaps = {
   move: boolean; // rename / move
   copy: boolean;
   folders: boolean; // mkdir / empty folders
+  download: boolean; // download a file (direct) or a folder/root (zip) — #247
 };
 
 export type FileService = {
@@ -49,10 +51,21 @@ export type FileService = {
    * doc-relative refs (KB sibling docs); the investigation service ignores it
    * and treats refs as workspace-root-relative. */
   fileUrl(src: string | undefined, fromPath?: string): string;
+  /** #247: the URL a native `<a download>` points at to save ONE file verbatim
+   * (KB → its content blob; investigation → the file route). The caller sets the
+   * anchor's `download` to the basename so the saved name is clean. */
+  fileDownloadUrl(path: string): string;
+  /** #247: build a zip of the folder `prefix` (`""` = the whole tree) server-side
+   * and return the handle to stream it. */
+  prepareDirDownload(prefix: string): Promise<DownloadPrepared>;
+  /** #247: the URL a native `<a download>` points at to stream a prepared folder
+   * zip. `prefix` is echoed so the streamed file is named after the folder. */
+  dirDownloadUrl(downloadId: string, prefix: string): string;
 };
 
 // ── investigation binding (existing behaviour, just scoped) ────────────────
 export function investigationFileService(slug: string, investigationId: string): FileService {
+  const filesBase = `a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files`;
   return {
     scopeId: investigationId, // matches existing qk.file/qk.files keys
     caps: {
@@ -63,6 +76,7 @@ export function investigationFileService(slug: string, investigationId: string):
       move: true,
       copy: true,
       folders: true,
+      download: true,
     },
     listFiles: (prefix) => api.listFiles(slug, investigationId, prefix),
     listDirs: () => api.listDirs(slug, investigationId),
@@ -73,11 +87,18 @@ export function investigationFileService(slug: string, investigationId: string):
     copyFile: (from, to) => api.copyFile(slug, investigationId, from, to),
     mkdir: (path) => api.mkdir(slug, investigationId, path),
     refreshFiles: () => api.refreshFiles(slug, investigationId),
-    fileUrl: (src) =>
-      resolveServiceUrl(
-        `a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files`,
-        src,
-      ),
+    fileUrl: (src) => resolveServiceUrl(filesBase, src),
+    fileDownloadUrl: (path) => resolveServiceUrl(filesBase, path),
+    prepareDirDownload: async (prefix) => {
+      const resp = await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/download/prepare?prefix=${encodeURIComponent(prefix)}`,
+        { method: "POST" },
+      );
+      if (!resp.ok) throw new Error(`prepare folder download failed: ${resp.status}`);
+      return resp.json();
+    },
+    dirDownloadUrl: (downloadId, prefix) =>
+      `${API_PREFIX}/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/download/${encodeURIComponent(downloadId)}?prefix=${encodeURIComponent(prefix)}`,
   };
 }
 

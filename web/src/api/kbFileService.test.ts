@@ -77,6 +77,14 @@ function makeKb() {
     deleteDocument: vi.fn(async (_documentId: string) => {}),
     uploadDocument: vi.fn(async (_collectionId: string, _file: File, _path?: string) => ["doc-new"]),
     moveDocument: vi.fn(async (_documentId: string, _to: string) => {}),
+    prepareFolderDownload: vi.fn(async (_collectionId: string, _prefix: string) => ({
+      download_id: "d1",
+      filename: "guides.zip",
+      size: 5,
+    })),
+    folderDownloadUrl: vi.fn(
+      (_collectionId: string, _downloadId: string, _prefix: string) => "kb-folder-url",
+    ),
   };
 }
 
@@ -91,6 +99,34 @@ describe("kbFileService", () => {
   it("scopes to the collection (kb:<id>)", () => {
     const svc = kbFileService("col-1", docs, makeKb());
     expect(svc.scopeId).toBe("kb:col-1");
+  });
+
+  it("advertises the download capability (#247)", () => {
+    expect(kbFileService("col-1", docs, makeKb()).caps.download).toBe(true);
+  });
+
+  it("fileDownloadUrl points at the doc's content blob (#247)", () => {
+    const svc = kbFileService("col-1", docs, makeKb());
+    expect(svc.fileDownloadUrl("/guides/diagram.png")).toBe("/api/source-doc/img-1/blobs/imgfid");
+  });
+
+  it("fileDownloadUrl is empty for an unknown path or a doc with no blob (#247)", () => {
+    const svc = kbFileService("col-1", docs, makeKb());
+    expect(svc.fileDownloadUrl("/nope.md")).toBe(""); // unknown path
+    expect(svc.fileDownloadUrl("/notes.md")).toBe(""); // doc-1 carries no file_id
+  });
+
+  it("prepareDirDownload delegates to the KB folder-download API (#247)", async () => {
+    const kb = makeKb();
+    const res = await kbFileService("col-1", docs, kb).prepareDirDownload("/guides");
+    expect(kb.prepareFolderDownload).toHaveBeenCalledWith("col-1", "/guides");
+    expect(res).toEqual({ download_id: "d1", filename: "guides.zip", size: 5 });
+  });
+
+  it("dirDownloadUrl delegates to the KB folder-download URL builder (#247)", () => {
+    const kb = makeKb();
+    expect(kbFileService("col-1", docs, kb).dirDownloadUrl("d1", "/guides")).toBe("kb-folder-url");
+    expect(kb.folderDownloadUrl).toHaveBeenCalledWith("col-1", "d1", "/guides");
   });
 
   it("listFiles maps the document list to FileInfo (flat, no dirs)", async () => {
@@ -180,6 +216,7 @@ describe("kbFileService", () => {
       move: true,
       copy: true,
       folders: true,
+      download: true,
     });
   });
 

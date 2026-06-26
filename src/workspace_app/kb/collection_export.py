@@ -14,15 +14,13 @@ deletes it. ``sweep_stale_downloads`` reaps temp files a caller never streamed.
 from __future__ import annotations
 
 import json
-import re
-import tempfile
-import time
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from specstar import QB
 
+from ..files.zip_download import safe_zip_filename, subtree_arcname
 from ..resources.kb import Collection, ContextCard, SourceDoc
 
 if TYPE_CHECKING:
@@ -33,38 +31,42 @@ if TYPE_CHECKING:
 MANIFEST_PATH = ".kb-collection/manifest.json"
 MANIFEST_DIR = ".kb-collection/"
 MANIFEST_VERSION = 1
-# Abandoned prepares (no stream call) are reaped after this long.
-DOWNLOAD_TTL_SECONDS = 3600
-
-
-def downloads_dir() -> Path:
-    """The temp directory holding prepared (but not-yet-streamed) export zips."""
-    d = Path(tempfile.gettempdir()) / "workspace_kb_downloads"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def sweep_stale_downloads(ttl_seconds: int = DOWNLOAD_TTL_SECONDS) -> None:
-    """Delete prepared zips older than ``ttl_seconds`` (callers who never
-    streamed their download). Best-effort: races/permission errors are ignored."""
-    now = time.time()
-    for f in downloads_dir().glob("*.zip"):
-        try:
-            if now - f.stat().st_mtime > ttl_seconds:
-                f.unlink()
-        except OSError:  # pragma: no cover - defensive against races
-            pass
 
 
 def collection_zip_filename(name: str) -> str:
     """A filesystem-safe ``{name}.zip`` for the Content-Disposition header."""
-    safe = re.sub(r"[^\w.\- ]+", "_", name).strip()
-    return f"{safe or 'collection'}.zip"
+    return safe_zip_filename(name, fallback="collection")
 
 
 def _content_type(doc: SourceDoc) -> str:
     ct = doc.content.content_type
     return ct if isinstance(ct, str) else "application/octet-stream"
+
+
+# A folder placeholder, not user content — never included in a raw export.
+GITKEEP = ".gitkeep"
+
+
+def build_kb_subtree_zip(spec: SpecStar, collection_id: str, prefix: str, out_path: Path) -> None:
+    """Issue #247: write a plain ZIP of the ORIGINAL bytes of every SourceDoc in
+    ``collection_id`` under the folder ``prefix`` (``""`` = the whole collection)
+    to ``out_path``. Entries are re-rooted at ``prefix``; ``.gitkeep`` folder
+    placeholders are skipped. No manifest — this is "get the files out".
+
+    Raises ``ResourceIDNotFoundError`` when the collection does not exist.
+    """
+    spec.get_resource_manager(Collection).get(collection_id)  # 404 on unknown
+    doc_rm = spec.get_resource_manager(SourceDoc)
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rev in doc_rm.list_resources((QB["collection_id"] == collection_id).build()):
+            doc = rev.data
+            assert isinstance(doc, SourceDoc)
+            arcname = subtree_arcname(doc.path, prefix)
+            if arcname is None or arcname.rsplit("/", 1)[-1] == GITKEEP:
+                continue
+            raw = doc_rm.restore_binary(doc).content.data
+            assert isinstance(raw, bytes)
+            zf.writestr(arcname, raw)
 
 
 def build_collection_zip(spec: SpecStar, collection_id: str, out_path: Path) -> None:
