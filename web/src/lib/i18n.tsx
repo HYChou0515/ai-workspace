@@ -272,6 +272,25 @@ export const messages = {
     en: "The AI searches these collections when answering",
   },
 
+  // Shared collections checklist (CollectionsChecklist) — used by both the
+  // topic-hub picker modal and the KB chat collection modal (#271).
+  "collections.search": { "zh-TW": "搜尋知識庫…", en: "Search collections…" },
+  "collections.docCount": { "zh-TW": "{n} 份", en: "{n} docs" },
+  "collections.selectAll": { "zh-TW": "全選", en: "Select all" },
+  "collections.clear": { "zh-TW": "清除", en: "Clear" },
+  "collections.noMatch": {
+    "zh-TW": "沒有符合「{q}」的知識庫。",
+    en: "No collections match “{q}”.",
+  },
+  "collections.none": { "zh-TW": "目前沒有任何知識庫可選。", en: "No collections to choose from." },
+  // KB chat collection modal (KbCollectionsModal) — #271.
+  "collections.more": { "zh-TW": "更多 · {n}", en: "More · {n}" },
+  "collections.kbTitle": { "zh-TW": "在哪些知識庫裡搜尋", en: "Which collections to search" },
+  "collections.kbDesc": {
+    "zh-TW": "勾選這次對話要搜尋的知識庫；預設是你最常用的幾個。",
+    en: "Pick the collections this chat searches; defaults to the ones you use most.",
+  },
+
   // KB collection page (KbCollectionPage) (#172)
   "kb.reindexAll": { "zh-TW": "重新索引全部", en: "Re-index all" },
   "kb.uploadFiles": { "zh-TW": "上傳檔案", en: "Upload files" },

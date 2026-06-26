@@ -1730,6 +1730,16 @@
   color: var(--accent-h);
   font-weight: 600;
 }
+/* The "more" pill (#271): opens the full collection modal. A dashed border
+   reads as "expand", distinct from the toggleable collection pills. */
+.kb-chip--more {
+  border-style: dashed;
+  color: var(--text-paper-d2);
+}
+.kb-chip--more:hover {
+  border-color: var(--accent);
+  color: var(--accent-h);
+}
 
 /* ----------------------- Chat panel (drawer + view) ----------------------- */
 

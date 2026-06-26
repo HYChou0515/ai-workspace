@@ -222,8 +222,11 @@ unchanged.
   retrieve); non-empty → a quiet **「知識庫 (N)」** badge. It is item-level (the set is
   shared by every chat + the agent), so it sits on the shell bar, not inside a chat.
 - **Modal = a checklist over the live collection list** (`GET /kb/collections`) with a
-  search box; each row shows the collection's icon, name, and doc count, pre-checked
-  from `collections.json`.
+  search box + a **select-all / clear** bar; each row shows the collection's icon, name,
+  and doc count, pre-checked from `collections.json`. The checklist body is the shared
+  `CollectionsChecklist` component (#271) — the same one the KB chat's collection modal
+  renders — so select-all and search behave identically in both. Select-all / clear act
+  on the **currently filtered** rows (so "search, then select all matches" works).
 - **Display + write-back use LIVE names**, so a renamed collection self-heals and the
   file stays fresh for the every-turn context injection (§6).
 - **Persistence = last-write-wins** (the locked "有爆炸就給它爆"): the modal reads the

@@ -5,8 +5,8 @@ import type { FileService } from "../api/fileService";
 import { kbApi, type KbApi } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { useItemCollections, COLLECTIONS_PATH } from "../hooks/useItemCollections";
+import { CollectionsChecklist } from "./CollectionsChecklist";
 import { serializeCollectionsFile, type CollectionEntry } from "./collectionsFile";
-import { Icon, type IconName } from "./Icon";
 import { pxToRem } from "../lib/pxToRem";
 
 /**
@@ -36,7 +36,6 @@ export function CollectionsPickerModal({
 
   const [checked, setChecked] = useState<Set<string> | null>(null);
   const [initial, setInitial] = useState<Set<string> | null>(null);
-  const [search, setSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -66,8 +65,6 @@ export function CollectionsPickerModal({
       return next;
     });
 
-  const term = search.trim().toLowerCase();
-  const visible = available.filter((c) => c.name.toLowerCase().includes(term));
   const orphans = checked
     ? fileEntries.filter((e) => checked.has(e.id) && !available.some((c) => c.resource_id === e.id))
     : [];
@@ -166,70 +163,17 @@ export function CollectionsPickerModal({
           </div>
         )}
 
-        <div style={{ position: "relative" }}>
-          <input
-            data-testid="collections-search"
-            placeholder="搜尋知識庫…"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            style={{
-              width: "100%",
-              height: 30,
-              boxSizing: "border-box",
-              padding: "0 10px",
-              fontSize: pxToRem(13),
-              borderRadius: "var(--radius-btn)",
-              border: "1px solid var(--paper-3)",
-              background: "var(--paper-1, var(--white))",
-              color: "var(--text-paper)",
-            }}
-          />
-        </div>
-
-        <div style={{ overflowY: "auto", minHeight: 0, flex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
-          {!ready && <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>載入中…</p>}
-
-          {fileQ.isError && (
-            <p style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>無法讀取 collections.json。</p>
-          )}
-
-          {ready &&
-            visible.map((c) => (
-              <label
-                key={c.resource_id}
-                data-testid={`collection-row-${c.resource_id}`}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "6px 6px",
-                  borderRadius: "var(--radius-btn)",
-                  cursor: "pointer",
-                  fontSize: pxToRem(13),
-                }}
-              >
-                <input
-                  type="checkbox"
-                  data-testid={`collection-check-${c.resource_id}`}
-                  checked={checked!.has(c.resource_id)}
-                  onChange={() => toggle(c.resource_id)}
-                />
-                <Icon name={(c.icon || "layers") as IconName} size={15} color="var(--accent-h)" />
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {c.name}
-                </span>
-                <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{c.doc_count} 份</span>
-              </label>
-            ))}
-
-          {ready && visible.length === 0 && available.length > 0 && (
-            <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>沒有符合「{search}」的知識庫。</p>
-          )}
-
-          {ready && available.length === 0 && (
-            <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>目前沒有任何知識庫可選。</p>
-          )}
-        </div>
+        {!ready ? (
+          <div style={{ flex: 1, minHeight: 0 }}>
+            {fileQ.isError ? (
+              <p style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>無法讀取 collections.json。</p>
+            ) : (
+              <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>載入中…</p>
+            )}
+          </div>
+        ) : (
+          <CollectionsChecklist collections={available} selected={checked!} onChange={setChecked} />
+        )}
 
         {ready && (fileQ.data?.ignored ?? 0) > 0 && (
           <div data-testid="collections-ignored-note" style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>

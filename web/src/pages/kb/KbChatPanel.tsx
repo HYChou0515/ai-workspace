@@ -14,11 +14,19 @@ import { EntryView } from "../../components/AgentEntryView";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { useT } from "../../lib/i18n";
 import { useKbAgentName } from "../../lib/kbAgent";
 import { modCombo } from "../../lib/platform";
+import { rankCollections } from "../../lib/rankCollections";
 import { useKbChat } from "../../hooks/useKbChat";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { TurnStatus } from "../../components/TurnStatus";
+import { KbCollectionsModal } from "./KbCollectionsModal";
+
+/** How many ranked collections to surface as quick-pick pills (#271); the rest
+ * live behind the "more" modal. */
+const PILL_COUNT = 6;
 
 export function KbChatPanel({
   chatId = null,
@@ -31,15 +39,27 @@ export function KbChatPanel({
   onChatCreated?: (chatId: string) => void;
   client?: KbApi;
 }) {
+  const t = useT();
+  const me = useCurrentUser();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [draft, setDraft] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
   // #51 P6: replay diagnostic for one past entry (answer / kb_search).
   const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
 
-  const { data: collections = [] } = useQuery({
+  const collectionsQ = useQuery({
     queryKey: qk.kb.collections,
     queryFn: () => client.listCollections(),
   });
+  const collections = useMemo(() => collectionsQ.data ?? [], [collectionsQ.data]);
+  // #271: the user's past chats rank the collections (most-used first), so the
+  // pill shortlist surfaces what they actually reach for.
+  const chatsQ = useQuery({ queryKey: qk.kb.chats, queryFn: () => client.listChats() });
+  const ranked = useMemo(
+    () => rankCollections(collections, chatsQ.data ?? [], me),
+    [collections, chatsQ.data, me],
+  );
+  const pills = useMemo(() => ranked.slice(0, PILL_COUNT), [ranked]);
   // Issue #32: /kb/agent returns an array — one entry per kb_chat
   // picker row. Suggestions come from the CURRENTLY-CHOSEN entry so
   // changing models also swaps the empty-state chips.
@@ -52,14 +72,20 @@ export function KbChatPanel({
   const activeAgent = agents.find((a) => a.name === pickedAgent) ?? agents[0];
   const suggestions = activeAgent?.suggestions ?? [];
 
-  // Default: search every collection — seed the selection once they load.
+  // #271 default: pre-select the pill shortlist (the user's most-used
+  // collections), but only once BOTH the collections AND the chat history that
+  // ranks them have settled — otherwise an early seed (cited-only cold-start
+  // order) wouldn't match the pills shown after the history loads.
   const seededRef = useRef(false);
   useEffect(() => {
-    if (!seededRef.current && collections.length > 0) {
-      setSelected(new Set(collections.map((c) => c.resource_id)));
+    // Wait for the chat history to *settle* (success OR error → `isFetched`), not
+    // just succeed: if listing chats fails we still seed, treating it as no
+    // history (cold-start ranking) rather than leaving the selection empty.
+    if (!seededRef.current && collectionsQ.isSuccess && chatsQ.isFetched && collections.length > 0) {
+      setSelected(new Set(ranked.slice(0, PILL_COUNT).map((c) => c.resource_id)));
       seededRef.current = true;
     }
-  }, [collections]);
+  }, [collectionsQ.isSuccess, chatsQ.isFetched, collections.length, ranked]);
 
   const collectionIds = useMemo(() => [...selected], [selected]);
   const { log, send, cancel } = useKbChat({ collectionIds, chatId, client, onChatCreated });
@@ -118,7 +144,7 @@ export function KbChatPanel({
         {showPicker && (
           <div className="kb-picker" aria-label="Collections to search">
             <span className="kb-picker__label">Search in</span>
-            {collections.map((c) => {
+            {pills.map((c) => {
               const on = selected.has(c.resource_id);
               return (
                 <button
@@ -133,6 +159,17 @@ export function KbChatPanel({
                 </button>
               );
             })}
+            {collections.length > PILL_COUNT && (
+              <button
+                type="button"
+                className="kb-chip kb-chip--more"
+                data-testid="kb-collections-more"
+                onClick={() => setPickerOpen(true)}
+              >
+                <Icon name="layers" size={10} />
+                {t("collections.more", { n: selected.size })}
+              </button>
+            )}
           </div>
         )}
         {empty && suggestions.length > 0 && (
@@ -195,6 +232,14 @@ export function KbChatPanel({
           </div>
         </div>
       </div>
+      {showPicker && pickerOpen && (
+        <KbCollectionsModal
+          collections={collections}
+          selected={selected}
+          onChange={setSelected}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
       {replayReq && <ReplayDialog request={replayReq} onClose={() => setReplayReq(null)} />}
     </div>
   );
