@@ -266,6 +266,8 @@ class SanityResultRow(BaseModel):
     output: str
     reasoned: bool
     grade: str  # "pass" | "fail" | "" (eyeball)
+    ai_grade: str  # #231: AI judge verdict "pass" | "fail" | "" (not judged yet)
+    ai_note: str  # #231: AI judge one-line rationale; "" when not judged
     aux: str
     error: str
     latency_ms: int
@@ -322,6 +324,8 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
                 output=r.output,
                 reasoned=r.reasoned,
                 grade=r.grade,
+                ai_grade=r.ai_grade,
+                ai_note=r.ai_note,
                 aux=r.aux,
                 error=r.error,
                 latency_ms=r.latency_ms,

@@ -20,6 +20,7 @@ from specstar.types import TaskStatus
 from ...kb.llm import ILlm
 from ...resources import SanityResult, sanity_result_id
 from .jobs import SanityRun, SanityRunPayload
+from .judge import judge_cell
 from .questions import (
     SanityQuestion,
     auto_run_cells,
@@ -44,10 +45,14 @@ class SanityBatteryCoordinator:
         spec: SpecStar,
         llm_factory: LlmFactory,
         *,
+        judge: ILlm | None = None,
         message_queue_factory: object | None = None,
     ) -> None:
         self._spec = spec
         self._llm_factory = llm_factory
+        # #231: optional LLM-as-judge. None ⇒ AI scoring off (ai_grade/ai_note
+        # stay empty). When wired, every cell is judged after it runs.
+        self._judge = judge
         self._result_rm = spec.get_resource_manager(SanityResult)
         if message_queue_factory is None:
             from specstar.message_queue import SimpleMessageQueueFactory
@@ -132,6 +137,15 @@ class SanityBatteryCoordinator:
 
         grade = self._grade(q, output) if not error else ""
         aux = self._aux(q, output) if not error else ""
+        # #231: AI judge grades the answer (when wired + the run produced output).
+        ai_grade, ai_note = "", ""
+        if self._judge is not None and not error:
+            ai_grade, ai_note = judge_cell(
+                self._judge,
+                prompt=messages_to_prompt(q.messages),
+                expected=q.expected,
+                output=output,
+            )
         result = SanityResult(
             model=model,
             question_key=key,
@@ -139,6 +153,8 @@ class SanityBatteryCoordinator:
             output=output,
             reasoned=reasoned,
             grade=grade,
+            ai_grade=ai_grade,
+            ai_note=ai_note,
             aux=aux,
             error=error,
             latency_ms=latency,

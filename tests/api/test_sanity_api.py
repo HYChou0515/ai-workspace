@@ -37,7 +37,7 @@ def _sanity_llm_factory(model: str, level: str) -> ILlm:
     return _FakeLlm()
 
 
-def _app_and_spec():
+def _app_and_spec(*, judge: ILlm | None = None):
     spec = make_spec()
     app = create_app(
         spec=spec,
@@ -47,8 +47,14 @@ def _app_and_spec():
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         sanity_llm_factory=_sanity_llm_factory,
         sanity_models=[_MODEL],
+        sanity_judge_llm=judge,
     )
     return app, spec
+
+
+class _JudgeLlm(ILlm):
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        yield '{"grade": "pass", "note": "符合期望"}', False
 
 
 def _poll_exists(rm, rid: str, timeout: float = 5.0) -> SanityResult:
@@ -97,6 +103,49 @@ def test_post_run_cell_executes_grades_and_persists():
         assert cellrow["output"] == "首都是台北市" and cellrow["grade"] == "pass"
         # a different model has no cells yet
         assert client.get("/sanity/results", params={"model": "other"}).json() == []
+
+
+def test_results_row_exposes_ai_grade_and_note():
+    """#231 P1: each cell row carries the AI judge's verdict + note alongside the
+    mechanical grade. No judge is wired here, so both are empty — but the contract
+    fields exist (the FE table renders an ai評分/ai評語 column)."""
+    app, spec = _app_and_spec()
+    with TestClient(app) as client:
+        meta = client.get("/sanity/questions").json()
+        taipei = next(q for q in meta["questions"] if q["category"] == "基礎知識")
+        client.post(
+            "/sanity/run",
+            json={"model": _MODEL, "scope": "cell", "question_key": taipei["key"], "level": "none"},
+        )
+        rm = spec.get_resource_manager(SanityResult)
+        _poll_exists(rm, sanity_result_id(_MODEL, taipei["key"], "none"))
+        row = next(
+            r
+            for r in client.get("/sanity/results", params={"model": _MODEL}).json()
+            if r["question_key"] == taipei["key"]
+        )
+        assert row["ai_grade"] == "" and row["ai_note"] == ""
+
+
+def test_judge_wired_through_create_app_fills_ai_columns():
+    """#231 P2: a judge wired via create_app grades each cell end-to-end — the
+    FE-shaped row carries the AI verdict + note."""
+    app, spec = _app_and_spec(judge=_JudgeLlm())
+    with TestClient(app) as client:
+        meta = client.get("/sanity/questions").json()
+        taipei = next(q for q in meta["questions"] if q["category"] == "基礎知識")
+        client.post(
+            "/sanity/run",
+            json={"model": _MODEL, "scope": "cell", "question_key": taipei["key"], "level": "none"},
+        )
+        rm = spec.get_resource_manager(SanityResult)
+        _poll_exists(rm, sanity_result_id(_MODEL, taipei["key"], "none"))
+        row = next(
+            r
+            for r in client.get("/sanity/results", params={"model": _MODEL}).json()
+            if r["question_key"] == taipei["key"]
+        )
+        assert row["ai_grade"] == "pass" and row["ai_note"] == "符合期望"
 
 
 def test_post_run_battery_fills_multiple_cells():

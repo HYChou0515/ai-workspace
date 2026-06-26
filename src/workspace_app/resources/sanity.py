@@ -28,6 +28,8 @@ class SanityResult(Struct):  # → resource "sanity-result"
     output: str = ""  # the model's answer (non-reasoning content)
     reasoned: bool = False  # did the model emit thinking on this run?
     grade: str = ""  # "pass" | "fail" | "" (no mechanical grader → eyeball)
+    ai_grade: str = ""  # #231: AI judge verdict "pass" | "fail" | "" (not judged yet)
+    ai_note: str = ""  # #231: AI judge one-line rationale; "" when not judged
     aux: str = ""  # display-only hint (e.g. "312 字"); "" when none
     error: str = ""  # set when the run itself failed (the cell shows it red)
     latency_ms: int = 0

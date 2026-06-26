@@ -448,6 +448,23 @@
 #     - { preset: kb-default,    name: "KB · Qwen (local)" }   # default
 #     - { preset: hosted-claude, name: "KB · Claude" }
 
+# ─── Diagnostics: AI judge for the sanity matrix (issue #231) ───────
+#
+# `health.judge_llm` wires an LLM-as-judge that scores every sanity-matrix
+# cell pass/fail (the AI verdict + note columns) and writes a per-model
+# fitness verdict. Same usage-entry shape + preset cascade as
+# `kb.retrieval_llm`; a preset whose `fallbacks` are set becomes a busy-aware
+# FallbackLlm (#196). Omit / `null` ⇒ AI scoring off (the AI columns stay
+# empty). Point it at a CAPABLE model DISTINCT from the models under test —
+# never let a model grade itself.
+#
+# health:
+#   judge_llm:
+#     preset: kb-retrieval                  # ← any bundled LLM-only preset
+#     # model: openai/gpt-4o-mini           # ← optional inline model override
+#     # reasoning_effort: low               # ← none|low|medium|high
+#   # judge_llm: null                       # ← off (default): no AI scoring
+
 # ─── prompt_file value forms ────────────────────────────────────────
 #   pkg:<dotted-package>/<file.md>   bundled (ships with the wheel)
 #   /absolute/path.md                absolute filesystem path

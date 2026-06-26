@@ -674,6 +674,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         health=HealthSettings(
             checks=list(d.get("health", {}).get("checks", [])),
             checks_disabled=list(d.get("health", {}).get("checks_disabled", [])),
+            judge_llm=_build_retrieval_llm(d.get("health", {}).get("judge_llm")),
         ),
         message_queue=_build_message_queue(d["message_queue"]),
         observability=ObservabilitySettings(

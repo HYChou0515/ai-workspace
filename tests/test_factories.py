@@ -348,6 +348,20 @@ def test_get_card_drafter_llm_enabled_via_bundled_ref_disabled_via_none():
     assert get_card_drafter_llm(disabled) is None
 
 
+def test_get_sanity_judge_llm_off_by_default_and_enabled_via_ref():
+    """#231: `health.judge_llm` defaults to None (AI scoring off → factory None);
+    a preset reference resolves through the same cascade → a real ILlm."""
+    from workspace_app.config.schema import RetrievalLlmRef
+    from workspace_app.factories import get_sanity_judge_llm
+
+    assert get_sanity_judge_llm(Settings()) is None
+    enabled = replace(
+        Settings(),
+        health=replace(Settings().health, judge_llm=RetrievalLlmRef(preset="card-drafter")),
+    )
+    assert isinstance(get_sanity_judge_llm(enabled), LitellmLlm)
+
+
 def test_get_kb_llm_threads_the_configured_reasoning_effort():
     """kb_search's retrieval LLM (multi-query / HyDE / rerank) honours
     `kb.retrieval_llm.reasoning_effort` — e.g. "none" so qwen3 doesn't <think>

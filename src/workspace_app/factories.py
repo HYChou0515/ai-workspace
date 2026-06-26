@@ -525,6 +525,17 @@ def get_card_drafter_llm(settings: Settings) -> ILlm | None:
     return _llm_from_chain(resolve_llm_chain(settings, settings.kb.card_drafter))
 
 
+def get_sanity_judge_llm(settings: Settings) -> ILlm | None:
+    """The LLM-as-judge for the Diagnostics sanity matrix (#231): scores each cell
+    pass/fail (ai_grade/ai_note) and writes the per-model fitness verdict.
+
+    `health.judge_llm` is a usage-entry reference resolved through the same cascade
+    + failover chain as every other role; a preset with `fallbacks` becomes a
+    busy-aware `FallbackLlm` (#196). `None` ⇒ AI scoring off (the ai columns stay
+    empty, no verdict). Should be a capable model distinct from those under test."""
+    return _llm_from_chain(resolve_llm_chain(settings, settings.health.judge_llm))
+
+
 def get_kb_vlm_formatter(settings: Settings) -> ILlm | None:
     """Stage-2 formatter for vision parsers (issue #115): the text LLM that
     re-emits the VLM's output as clean Markdown so the chunker splits it on

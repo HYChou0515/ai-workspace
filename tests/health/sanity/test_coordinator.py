@@ -52,6 +52,19 @@ class _FakeLlmFactory:
         return _Llm()
 
 
+class _FakeJudge(ILlm):
+    """A judge ``ILlm`` that records the prompts it sees and yields a canned
+    verdict text (the coordinator parses it for pass/fail + note)."""
+
+    def __init__(self, text: str = '{"grade": "pass", "note": "ok"}') -> None:
+        self.calls: list[str] = []
+        self._text = text
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        self.calls.append(prompt)
+        yield self._text, False
+
+
 def _q(pred):
     return next(q for q in QUESTIONS if pred(q))
 
@@ -193,6 +206,74 @@ def test_grade_and_aux_swallow_grader_exceptions():
     plain = SanityQuestion("x", [user("hi")], "e")
     assert SanityBatteryCoordinator._grade(plain, "o") == ""
     assert SanityBatteryCoordinator._aux(plain, "o") == ""
+
+
+async def test_judge_grades_cell_when_wired():
+    """#231 P2: when a judge ILlm is wired, each cell is also graded by the AI —
+    ai_grade/ai_note land alongside the mechanical grade. The judge sees the
+    question, the expected answer, and the model's output."""
+    spec = make_spec(default_user="u")
+    judge = _FakeJudge('{"grade": "fail", "note": "答錯了,首都是台北"}')
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="高雄"), judge=judge)
+    taipei = QUESTIONS[0]
+    coord.run_cell(_MODEL, question_key(taipei), "none")
+    await coord.aclose()
+
+    r = _result(spec, _MODEL, taipei, "none")
+    assert r.grade == "fail"  # mechanical: 高雄 doesn't contain 台北
+    assert r.ai_grade == "fail"  # AI judge agreed
+    assert r.ai_note == "答錯了,首都是台北"
+    assert taipei.expected in judge.calls[0] and "高雄" in judge.calls[0]
+
+
+async def test_no_judge_leaves_ai_columns_empty():
+    """#231 P2: judge unconfigured (None) ⇒ AI scoring gracefully off."""
+    spec = make_spec(default_user="u")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="台北"))
+    q = QUESTIONS[0]
+    coord.run_cell(_MODEL, question_key(q), "none")
+    await coord.aclose()
+    r = _result(spec, _MODEL, q, "none")
+    assert r.ai_grade == "" and r.ai_note == ""
+
+
+async def test_judge_not_called_on_run_error():
+    """A failed run has no output to judge — the judge stays untouched."""
+    spec = make_spec(default_user="u")
+    judge = _FakeJudge()
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(fail=True), judge=judge)
+    q = QUESTIONS[0]
+    coord.run_cell(_MODEL, question_key(q), "none")
+    await coord.aclose()
+    r = _result(spec, _MODEL, q, "none")
+    assert r.error and r.ai_grade == "" and r.ai_note == ""
+    assert judge.calls == []
+
+
+async def test_judge_parse_is_lenient_and_swallows_errors():
+    """#231 P2: small local judges are messy — a bare 'fail' verdict (no JSON)
+    still yields a grade; a judge that raises must not wreck the cell."""
+    spec = make_spec(default_user="u")
+    judge = _FakeJudge("這題我覺得 FAIL,因為答非所問")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="台北"), judge=judge)
+    q = QUESTIONS[0]
+    coord.run_cell(_MODEL, question_key(q), "none")
+    await coord.aclose()
+    r = _result(spec, _MODEL, q, "none")
+    assert r.ai_grade == "fail"  # scanned out of prose
+    assert r.grade == "pass"  # mechanical unaffected
+
+    class _BoomJudge(ILlm):
+        def stream(self, prompt: str):
+            raise RuntimeError("judge down")
+            yield  # pragma: no cover
+
+    spec2 = make_spec(default_user="u")
+    coord2 = SanityBatteryCoordinator(spec2, _FakeLlmFactory(output="台北"), judge=_BoomJudge())
+    coord2.run_cell(_MODEL, question_key(q), "none")
+    await coord2.aclose()  # must not raise
+    r2 = _result(spec2, _MODEL, q, "none")
+    assert r2.ai_grade == "" and r2.output == "台北"  # cell survives a judge crash
 
 
 async def test_rerun_overwrites_the_same_cell():

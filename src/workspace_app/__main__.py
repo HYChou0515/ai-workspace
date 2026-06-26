@@ -40,6 +40,7 @@ from workspace_app.factories import (
     get_replay_service,
     get_runner,
     get_sandbox,
+    get_sanity_judge_llm,
     get_sanity_llm_factory,
     get_sanity_models,
     get_spec,
@@ -177,6 +178,8 @@ def main() -> None:
         kb_llm = get_kb_llm(settings)
     with boot_step("init card-drafter LLM"):
         card_drafter_llm = get_card_drafter_llm(settings)
+    with boot_step("init sanity judge LLM"):
+        sanity_judge_llm = get_sanity_judge_llm(settings)
     # #56: the wiki agents' model/endpoint resolve from kb.wiki.llm (the
     # preset-reference pattern), not the old flat runner.wiki_*. Empty
     # ⇒ create_app's wiki configs keep their in-code default model.
@@ -216,6 +219,7 @@ def main() -> None:
             # kb_search uses.
             sanity_llm_factory=get_sanity_llm_factory(settings),
             sanity_models=get_sanity_models(settings),
+            sanity_judge_llm=sanity_judge_llm,
             # P2: chat → knowledge insight extraction (None when no KB llm wired).
             kb_chat_pipeline=get_chat_pipeline(settings, embedder, kb_llm),
             kb_llm=kb_llm,
