@@ -686,9 +686,7 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
     if len(chain) == 1:
         e = chain[0]
         return LitellmVlm(e.model, base_url=e.base_url, api_key=e.api_key)
-    return FallbackVlm(
-        chain, get_cooldown_registry(), make_vlm=make_vlm, on_switch=make_switch_logger("vlm")
-    )
+    return FallbackVlm(chain, make_vlm=make_vlm, on_switch=make_switch_logger("vlm"))
 
 
 def get_kb_describer(settings: Settings):  # -> VlmDescriber | None
