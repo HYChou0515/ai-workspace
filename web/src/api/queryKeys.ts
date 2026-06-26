@@ -70,5 +70,7 @@ export const qk = {
     wikiStatus: (collectionId: string) => ["kb", "wiki-status", collectionId] as const,
     // #106: a collection's context cards (the lightweight glossary).
     contextCards: (collectionId: string) => ["kb", "context-cards", collectionId] as const,
+    // #175: a 自動 context card generation run (status + proposals, polled).
+    cardGen: (jobId: string) => ["kb", "card-gen", jobId] as const,
   },
 } as const;

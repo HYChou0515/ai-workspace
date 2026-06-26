@@ -18,6 +18,7 @@ import { qk } from "../../api/queryKeys";
 import { MonacoEditor } from "../../components/MonacoEditor";
 import { Skeleton } from "../../components/Skeleton";
 import { useT } from "../../lib/i18n";
+import { AutoGenerateCards } from "./AutoGenerateCards";
 import { lookupByName, scanPassage } from "./cardSearch";
 
 type SearchMode = "name" | "text";
@@ -51,6 +52,7 @@ export function ContextCardsTab({
   const [term, setTerm] = useState("");
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("name");
+  const [showAutoGen, setShowAutoGen] = useState(false); // #175 自動 context card modal
   // Two ways to find a card, mirroring the backend: "name" = exact key lookup;
   // "text" = scan a pasted passage for mentioned cards. Empty query → browse all.
   const shown = !query.trim()
@@ -167,6 +169,21 @@ export function ContextCardsTab({
         >
           + New card
         </button>
+        <button
+          type="button"
+          className="kb-cards__autogen"
+          onClick={() => setShowAutoGen(true)}
+        >
+          ⚡ 自動生成
+        </button>
+        {showAutoGen && (
+          <AutoGenerateCards
+            collectionId={collectionId}
+            client={client}
+            onClose={() => setShowAutoGen(false)}
+            onCommitted={() => invalidate()}
+          />
+        )}
         <ul className="kb-cards__items">
           {isPending ? (
             <li className="kb-cards__none" aria-busy="true" data-testid="kb-cards-loading">
