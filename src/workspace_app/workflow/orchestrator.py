@@ -84,6 +84,11 @@ def _noop_publish(_item_id: str, _event: Any) -> None:
     pass
 
 
+def _default_upload_dir(_slug: str, _profile: str) -> str:
+    """Fallback profile staging folder when the API layer injects no resolver (#198)."""
+    return "uploads"
+
+
 @dataclass
 class WorkflowOrchestrator:
     spec: SpecStar
@@ -95,6 +100,10 @@ class WorkflowOrchestrator:
     # workflow chat, or the item's broadcast stream legacy). Typed ``Any`` event so
     # the API can pass ``turn_engine.publish`` (narrower AgentEvent union) cleanly.
     publish: Callable[[str, Any], None] = _noop_publish
+    # #198: resolve the active profile's staging folder — ``(slug, profile) → upload_dir``.
+    # Injected from ``load_profile(...).upload_dir``; the handle carries it (``wf.upload_dir``)
+    # and the run's ``input.json`` location derives from it. Default ⇒ ``uploads``.
+    load_upload_dir: Callable[[str, str], str] = _default_upload_dir
     # Release the run's resources (manual §16): ``release(item_id, terminal, chat_key)``.
     # ``terminal`` is True on done/error/cancelled (tear down sandbox + the run's turn
     # session), False on an ``awaiting_human`` pause (free the sandbox but keep the
@@ -259,7 +268,10 @@ class WorkflowOrchestrator:
         chat_id: str,
     ) -> None:
         key = chat_id or item_id
-        wf = self._build_handle(run_id, item_id, captured_user, manifest, key, workflow_id)
+        upload_dir = self.load_upload_dir(slug, profile)
+        wf = self._build_handle(
+            run_id, item_id, captured_user, manifest, key, workflow_id, upload_dir
+        )
         profile_run = self.load_run(slug, profile, workflow_id)
         inputs = await self._read_inputs(wf, manifest)
         self._step_counts[run_id] = 0
@@ -291,9 +303,12 @@ class WorkflowOrchestrator:
 
     async def _read_inputs(self, wf: WorkflowHandle, manifest: WorkflowManifest) -> Any:
         """Parsed ``input.json`` (manual §14) — ``{}`` when the file is absent so a
-        no-input workflow just runs."""
-        if await wf.exists(manifest.input_json):
-            return await wf.read_json(manifest.input_json)
+        no-input workflow just runs. The location is the manifest's ``input_json`` if
+        pinned, else ``{upload_dir}/input.json`` (#198) so the control file sits in the
+        same staging folder the chat attach lands in."""
+        path = manifest.input_json or f"{wf.upload_dir.rstrip('/')}/input.json"
+        if await wf.exists(path):
+            return await wf.read_json(path)
         return {}
 
     def _build_handle(
@@ -304,6 +319,7 @@ class WorkflowOrchestrator:
         manifest: WorkflowManifest | None,
         key: str,
         workflow_id: str = "",
+        upload_dir: str = "uploads",
     ) -> WorkflowHandle:
         credential = ""
         if self.credentials is not None:
@@ -318,6 +334,7 @@ class WorkflowOrchestrator:
             workspace_id=item_id,
             workflow_id=workflow_id,
             config=dict(manifest.config) if manifest is not None else {},
+            upload_dir=upload_dir,
             user=captured_user,
             emit=lambda ev: self._on_event(run_id, key, ev),
             credential=credential,
@@ -411,7 +428,13 @@ class WorkflowOrchestrator:
         key = data.chat_id or item_id
         manifest = self.load_manifest(slug, profile, data.workflow_id)
         wf = self._build_handle(
-            run_id, item_id, data.captured_user, manifest, key, data.workflow_id
+            run_id,
+            item_id,
+            data.captured_user,
+            manifest,
+            key,
+            data.workflow_id,
+            self.load_upload_dir(slug, profile),
         )
         await record_decision(wf, phase=phase, choice=choice, input=input, decided_by=decided_by)
         assert manifest is not None

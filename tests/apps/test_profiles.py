@@ -49,6 +49,13 @@ def test_default_profile_inherits_the_app_ceiling_and_has_an_appendix():
     assert "canvas" not in appendix.lower()  # dropped per house rule
 
 
+def test_profile_upload_dir_defaults_to_uploads():
+    """#198: the per-profile staging folder a chat attach lands in (and the
+    workflows glob). Omitted ⇒ ``uploads`` — the single source feeding FE attach,
+    ``wf.upload_dir`` and the ``input_json`` default."""
+    assert load_profile("rca", "default").upload_dir == "uploads"
+
+
 def test_tool_demo_profile_narrows_tools_and_presets_to_a_subset():
     p = load_profile("rca", "tool-demo")
     assert p.presets == ["qwen3-local"]

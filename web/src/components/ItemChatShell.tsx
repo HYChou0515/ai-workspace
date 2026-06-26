@@ -30,6 +30,9 @@ type AgentChrome = {
   appColor?: string;
   attachedPreset: string;
   onAttachPreset: (preset: string) => void;
+  /** #198: the folder the composer's attach stages files into (the item's profile's
+   * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
+  uploadDir: string;
 };
 
 /**
@@ -56,6 +59,7 @@ export function ItemChatShell({
   appColor,
   attachedPreset,
   onAttachPreset,
+  uploadDir,
 }: {
   slug: string;
   itemId: string;
@@ -192,6 +196,7 @@ export function ItemChatShell({
           appColor={appColor}
           attachedPreset={attachedPreset}
           onAttachPreset={onAttachPreset}
+          uploadDir={uploadDir}
         />
       ) : (
         <p className="item-chat-panel__empty" data-testid="no-chat">
@@ -215,6 +220,7 @@ function ItemChatPanel({
   appColor,
   attachedPreset,
   onAttachPreset,
+  uploadDir,
 }: {
   slug: string;
   itemId: string;
@@ -286,6 +292,7 @@ function ItemChatPanel({
         appTitle={appTitle}
         appIcon={appIcon}
         appColor={appColor}
+        uploadDir={uploadDir}
       />
     </div>
   );

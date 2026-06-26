@@ -54,9 +54,12 @@ export function TurnStatus({ log, className }: { log: AgentLog; className?: stri
   }
 
   const elapsedSec = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
+  // #249/#131: while we wait on the model and it just failed over, say so —
+  // a transient, de-jargoned reassurance (never the raw model id).
+  const switched = phase === "waiting" && log.failover != null;
   return (
     <div className={className} style={box}>
-      {statusText(phase, elapsedSec)}
+      {switched ? "模型忙線,已自動切換,稍候…" : statusText(phase, elapsedSec)}
       {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
     </div>
   );

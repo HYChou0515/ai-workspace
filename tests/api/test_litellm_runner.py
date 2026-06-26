@@ -9,6 +9,7 @@ exercised even on a CI box without a GPU.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,7 +17,15 @@ import httpx
 import pytest
 
 from workspace_app.agent import AgentToolContext
-from workspace_app.api.events import MessageDelta, RunDone, RunError, ToolEnd, ToolStart
+from workspace_app.api.events import (
+    FailoverSwitch,
+    MessageDelta,
+    RunDone,
+    RunError,
+    ToolEnd,
+    ToolStart,
+    to_sse,
+)
 from workspace_app.api.litellm_runner import (
     _NONSTREAM_TOOL_EVENT,
     LitellmAgentRunner,
@@ -24,6 +33,7 @@ from workspace_app.api.litellm_runner import (
     _approx_tokens,
     _delta_channel,
     _exact_usage,
+    _failover_emitter,
     _final_tokens,
     _ItemEvent,
     _map_event,
@@ -33,6 +43,19 @@ from workspace_app.api.litellm_runner import (
     diagnose_error,
 )
 from workspace_app.resources import AgentConfig, make_spec
+
+
+def test_failover_emitter_pushes_a_failover_switch_event():
+    """#249/#131: a model switch becomes a live FailoverSwitch on the turn's queue."""
+    queue: asyncio.Queue = asyncio.Queue()
+    _failover_emitter(queue)("ollama/qwen3", "ConnectionError")
+    assert queue.get_nowait() == FailoverSwitch(from_model="ollama/qwen3", reason="ConnectionError")
+
+
+def test_failover_switch_serializes_to_an_sse_frame():
+    frame = to_sse(FailoverSwitch(from_model="m1", reason="TimeoutError"))
+    assert '"type": "failover_switch"' in frame
+    assert '"from_model": "m1"' in frame and '"reason": "TimeoutError"' in frame
 
 
 def test_final_tokens_prefers_exact_but_falls_back_when_zero_or_absent():

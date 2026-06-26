@@ -126,6 +126,13 @@ export const messages = {
   "tool.streamingHint": { "zh-TW": "即時輸出，可能未完成", en: "Live output — may be incomplete" },
   "entry.retry": { "zh-TW": "重試：", en: "Retry: " },
   "entry.sources": { "zh-TW": "來源", en: "Sources" },
+  // #254 — citation source-location chip labels. The formatter adds one space
+  // before the value, so labels carry none (the i18n layer has no interpolation).
+  "cite.loc.page": { "zh-TW": "頁碼", en: "p." },
+  "cite.loc.slide": { "zh-TW": "投影片", en: "Slide" },
+  "cite.loc.sheet": { "zh-TW": "工作表", en: "Sheet" },
+  "cite.loc.line": { "zh-TW": "行", en: "Line" },
+  "cite.loc.row": { "zh-TW": "列", en: "Row" },
   "reasoning.thinking": { "zh-TW": "思考中…", en: "Thinking…" },
   "reasoning.thought": { "zh-TW": "已思考", en: "Thought" },
   "repetition.answered": {

@@ -218,7 +218,6 @@
 #     query_prefix: ""
 #     doc_prefix: ""
 #     timeout: 60.0
-#     num_retries: 2
 #     batch_size: 64
 #     base_url: ""
 #     api_key: ${KB_EMBED_API_KEY}

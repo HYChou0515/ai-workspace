@@ -71,6 +71,10 @@ export type AgentLog = {
   error: string | null;
   /** Live token telemetry for the current turn (null until first event). */
   metrics: AgentMetricsState | null;
+  /** #249/#131: set when the model failed over mid-turn — a transient "switched"
+   * notice shown while we wait for the next model's first token. NEVER persisted
+   * (cleared at each turn start); reset on reload. */
+  failover: { at: number } | null;
 };
 
 export const EMPTY_LOG: AgentLog = {
@@ -78,6 +82,7 @@ export const EMPTY_LOG: AgentLog = {
   streaming: false,
   error: null,
   metrics: null,
+  failover: null,
 };
 
 export function logFromMessages(messages: readonly Message[]): AgentLog {
@@ -119,7 +124,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
     }
   }
-  return { entries, streaming: false, error: null, metrics: null };
+  return { entries, streaming: false, error: null, metrics: null, failover: null };
 }
 
 /** How many whole turns to undo to remove everything from `entries[index]`
@@ -251,6 +256,9 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "agent_metrics":
       return {
         ...log,
+        // The "up" tick opens a fresh turn — drop any stale failover notice from
+        // the previous one so it can't bleed into this turn's wait (#249).
+        failover: ev.phase === "up" ? null : log.failover,
         metrics: {
           phase: ev.phase,
           promptTokens: ev.prompt_tokens,
@@ -258,6 +266,12 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           elapsedMs: ev.elapsed_ms,
         },
       };
+
+    case "failover_switch":
+      // #249/#131: ephemeral — record that the model switched so TurnStatus can
+      // show a transient "model busy, switched" line while the next model warms
+      // up. NOT pushed to `entries`: it never enters the transcript.
+      return { ...log, failover: { at: now } };
 
     case "message_delta": {
       const idx = lastAssistantIdx(entries);

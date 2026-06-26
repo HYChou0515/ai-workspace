@@ -6,8 +6,7 @@
     {
       "id": "alpha",
       "title": "Alpha workflow",
-      "phases": [{ "id": "think", "title": "Think" }],
-      "input_json": "inputs/input.json"
+      "phases": [{ "id": "think", "title": "Think" }]
     },
     {
       "id": "beta",

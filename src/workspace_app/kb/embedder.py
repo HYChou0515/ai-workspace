@@ -13,13 +13,13 @@ from __future__ import annotations
 
 import hashlib
 import struct
-from typing import TYPE_CHECKING, Protocol
+import time
+from collections.abc import Callable
+from typing import Protocol
 
-from ..failover.core import CallProvider, failover_call
+from ..failover.core import CallProvider
 from ..failover.observe import make_switch_logger
-
-if TYPE_CHECKING:
-    from ..failover.cooldown import CooldownRegistry
+from ..failover.retry import call_with_failover
 
 
 class Embedder(Protocol):
@@ -110,29 +110,26 @@ class LitellmEmbedder(_PrefixedEmbedder):
         query_prefix: str = "",
         doc_prefix: str = "",
         timeout: float = 60.0,
-        num_retries: int = 2,
         batch_size: int = 64,
         base_url: str | None = None,
         api_key: str | None = None,
         fallback_base_urls: list[str] | None = None,
-        cooldown_registry: CooldownRegistry | None = None,
-        cooldown_s: float = 30.0,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(query_prefix=query_prefix, doc_prefix=doc_prefix)
         self._model = model
         self._dim = dim
         self._timeout = timeout
-        self._num_retries = num_retries
         self._batch_size = batch_size
         # Embedder endpoint (separate from the chat LLM). None → Ollama/env.
         self._base_url = base_url
         self._api_key = api_key
         # #196 same-model replica failover: extra endpoint URLs for the SAME model.
-        # When set (with a shared cooldown registry), the primary + replicas form
-        # a priority chain — a busy/failed endpoint switches to the next.
+        # The primary + replicas form a priority chain; #249 adds transient-error
+        # retry-with-backoff over that chain (see ``call_with_failover``). ``sleep``
+        # is injectable so tests never wait on the backoff.
         self._fallback_base_urls = fallback_base_urls or []
-        self._registry = cooldown_registry
-        self._cooldown_s = cooldown_s
+        self._sleep = sleep
 
     @property
     def dim(self) -> int:
@@ -148,22 +145,23 @@ class LitellmEmbedder(_PrefixedEmbedder):
         return out
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
-        # No replicas (or no shared registry) → the single-endpoint path, exactly
-        # as before. With replicas, fail over across [primary, *replicas] (same
-        # model, different endpoint) on a busy/failed endpoint.
-        if not self._fallback_base_urls or self._registry is None:
-            return self._embed_at(texts, self._base_url)
+        # Sweep [primary, *replicas] (all the SAME model, different endpoints),
+        # switching on a transient failure; a transient blip on the only endpoint
+        # is retried with backoff. A single endpoint is just a one-provider chain
+        # — it still gets the retry (#249).
         providers = [
             CallProvider(
                 key=(self._model, base_url or ""),
                 label=base_url or self._model,
                 call=lambda base_url=base_url: self._embed_at(texts, base_url),
-                cooldown_s=self._cooldown_s,
+                cooldown_s=0.0,  # unused on the retry path (no cooldown here)
             )
             for base_url in [self._base_url, *self._fallback_base_urls]
         ]
         log = make_switch_logger("embedder")
-        return failover_call(providers, self._registry, on_switch=lambda p, exc: log(p.label, exc))
+        return call_with_failover(
+            providers, sleep=self._sleep, on_switch=lambda p, exc: log(p.label, exc)
+        )
 
     def _embed_at(
         self, texts: list[str], base_url: str | None
@@ -174,7 +172,7 @@ class LitellmEmbedder(_PrefixedEmbedder):
             model=self._model,
             input=texts,
             timeout=self._timeout,
-            num_retries=self._num_retries,
+            num_retries=0,  # #249: call_with_failover owns retry, not litellm
             api_base=base_url,
             api_key=self._api_key,
         )

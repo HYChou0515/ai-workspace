@@ -875,7 +875,16 @@ def create_app(
         app_profiles = []
         for n in list_profiles(slug):
             p = load_profile(slug, n)
-            app_profiles.append({"name": n, "title": p.title or n, "description": p.description})
+            app_profiles.append(
+                {
+                    "name": n,
+                    "title": p.title or n,
+                    "description": p.description,
+                    # #198: the folder a chat attach stages files into; the FE
+                    # resolves the active item's profile → this.
+                    "upload_dir": p.upload_dir,
+                }
+            )
         data["profiles"] = app_profiles
         if m.icon.endswith(".svg"):
             with contextlib.suppress(FileNotFoundError, IsADirectoryError, OSError):
@@ -1502,7 +1511,13 @@ def create_app(
     # ── Workflows (#100) ─────────────────────────────────────────────
     # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
     # the orchestrator overlays phase/step events on the same per-chat stream.
-    from ..apps.profiles import load_profile_workflow
+    from ..apps.profiles import load_profile, load_profile_workflow
+
+    def _wf_upload_dir(slug: str, profile: str) -> str:
+        """#198: the active profile's staging folder — the orchestrator threads it onto
+        the handle (``wf.upload_dir``) and derives the run's ``input.json`` from it, so a
+        workflow globs the same folder the chat attach lands in."""
+        return load_profile(slug, profile).upload_dir
 
     async def _wf_drive_turn(
         item_id: str, chat_key: str, captured_user: str, prompt: str, tools: list[str] | None
@@ -1714,6 +1729,7 @@ def create_app(
         store=files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
         load_run=load_run_callable,
         load_manifest=load_profile_workflow,
+        load_upload_dir=_wf_upload_dir,
         wire_handle=_wf_wire_handle,
         publish=turn_engine.publish,
         release=_wf_release,

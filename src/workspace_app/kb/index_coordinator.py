@@ -31,8 +31,10 @@ from typing import TYPE_CHECKING
 import msgspec
 from specstar import QB, Schema, SpecStar
 from specstar.events import OnSuccessPatch, do
+from specstar.message_queue import NoRetry
 from specstar.types import ResourceAction, ResourceIDNotFoundError, TaskStatus
 
+from ..failover.retry import is_transient
 from ..resources import DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
 from .index_run import IndexRunStore
@@ -69,10 +71,15 @@ class IndexCoordinator:
         unit_batch_sizes: dict[str, int] | None = None,
         default_unit_batch: int = 8,
         get_user_id: Callable[[], str] | None = None,
+        job_max_retries: int = 3,
     ) -> None:
         self._spec = spec
         self._ingestor = ingestor
         self._wiki = wiki_coordinator
+        # #249: how many times specstar re-delivers a single-job split before it
+        # dead-letters. Stamped on the split job so the handler can tell a
+        # mid-retry "retrying" from the terminal "error" (see `_index_whole`).
+        self._job_max_retries = job_max_retries
         # #186: who an enqueue is credited to. In a request that's the real user
         # (specstar resolves it as the spec default on any manager that still
         # carries it — e.g. SourceDoc); production injects the same `get_user_id`.
@@ -154,6 +161,7 @@ class IndexCoordinator:
                 IndexJob(
                     payload=IndexJobPayload(doc_id=doc_id, collection_id=collection_id),
                     partition_key=doc_id,
+                    max_retries=self._job_max_retries,  # #249 single-job transient retry
                 )
             )
         return True
@@ -264,7 +272,16 @@ class IndexCoordinator:
             # requester only rides into the wiki hook it chains.
             self._handle_finalize(payload, requester)
         else:
-            self._handle_split(payload, requester)
+            # #249: the split job is the single-job retry unit — its delivery
+            # count (vs its stamped max_retries) tells a mid-retry from the end.
+            retries = job.data.retries
+            max_retries = job.data.max_retries
+            self._handle_split(
+                payload,
+                requester,
+                retries,
+                max_retries if max_retries is not None else self._job_max_retries,
+            )
 
     def _last_updater(self, doc_id: str) -> str | None:
         """The doc's last updater (#83): a job pod has no request user, so the
@@ -275,7 +292,7 @@ class IndexCoordinator:
         except ResourceIDNotFoundError:
             return None
 
-    def _handle_split(self, payload, requester: str) -> None:
+    def _handle_split(self, payload, requester: str, retries: int, max_retries: int) -> None:
         """Plan the index: run it whole (small / multi-parser / no-parser), or
         fan it out into per-unit-range ``process`` jobs when one parser reports
         many units. Seeds the ``IndexRun`` join state BEFORE enqueuing any
@@ -290,7 +307,7 @@ class IndexCoordinator:
             _LOGGER.exception("IndexCoordinator: fan-out planning failed for %s", doc_id)
             units, parser_id = 1, ""
         if units <= 1:
-            self._index_whole(doc_id, updater, requester)
+            self._index_whole(doc_id, updater, requester, retries, max_retries)
             return
         batch = self._unit_batch_sizes.get(parser_id, self._default_unit_batch)
         nbatches = math.ceil(units / batch)
@@ -319,10 +336,17 @@ class IndexCoordinator:
                     )
                 )
 
-    def _index_whole(self, doc_id: str, updater: str, requester: str) -> None:
-        """The unchanged single-job path: chunk + embed the whole doc, flip its
-        status, run the wiki hook. Errors are logged + swallowed (the Ingestor
-        marks the doc status=error; a bad doc must not wedge the queue).
+    def _index_whole(
+        self, doc_id: str, updater: str, requester: str, retries: int, max_retries: int
+    ) -> None:
+        """The single-job path: chunk + embed the whole doc, flip its status, run
+        the wiki hook.
+
+        #249: a transient failure (a gateway blip on the only endpoint that even
+        the embedder's in-process backoff couldn't ride out) is NOT terminal —
+        re-raise so specstar re-delivers the split job, and show an honest
+        "retrying" until the last delivery, which marks ``error``. A permanent
+        failure (a bad doc, a 400) marks ``error`` at once and does not requeue.
 
         Two acting users are bound at once (#186): the SourceDoc stays its own
         owner (``updater``, #83), while the regenerated DocChunks are credited to
@@ -334,17 +358,44 @@ class IndexCoordinator:
         chunk_rm = self._spec.get_resource_manager(DocChunk)
         try:
             with doc_rm.using(user=updater), chunk_rm.using(user=requester):
-                self._ingestor.index(doc_id, source_doc_rm=doc_rm)
-        except Exception:  # noqa: BLE001 — doc is marked error by the Ingestor
+                self._ingestor.index(doc_id, source_doc_rm=doc_rm, reraise=True)
+        except Exception as exc:  # noqa: BLE001 — mapped to doc status + maybe a requeue
             _LOGGER.exception("IndexCoordinator: indexing failed for %s", doc_id)
+            will_retry = is_transient(exc) and retries < max_retries
+            if will_retry:
+                self._set_doc_status(
+                    doc_id,
+                    updater,
+                    status="indexing",
+                    detail=f"retrying after a temporary error ({retries + 1}/{max_retries + 1})",
+                )
+                raise  # the split job re-raises → specstar re-delivers it (#249)
+            self._set_doc_status(
+                doc_id, updater, status="error", detail=f"{type(exc).__name__}: {exc!s}"[:240]
+            )
             return
         self._wiki_hook(doc_id, requester)
+
+    def _set_doc_status(self, doc_id: str, updater: str, *, status: str, detail: str) -> None:
+        """Stamp a SourceDoc's terminal/interim status (#249), AS its real
+        updater so a worker run never erases ``updated_by`` (#83). A no-op if the
+        doc was deleted between enqueue and run."""
+        doc_rm = self._spec.get_resource_manager(SourceDoc)
+        try:
+            doc = doc_rm.get(doc_id).data
+        except ResourceIDNotFoundError:
+            return
+        assert isinstance(doc, SourceDoc)
+        with doc_rm.using(user=updater):
+            doc_rm.update(doc_id, msgspec.structs.replace(doc, status=status, status_detail=detail))
 
     def _handle_process(self, payload, requester: str) -> None:
         """Index ONE unit batch end-to-end, stage its text, record it done, and —
         if it's the one that completes the set — win the finalize gate and enqueue
-        the finalize job. A failure RE-RAISES so the broker retries it; a
-        permanent failure dead-letters and the safety sweep records it failed."""
+        the finalize job. A transient failure RE-RAISES so the broker retries the
+        batch; a permanent failure raises ``NoRetry`` to dead-letter it at once
+        (#249) so the safety sweep records it failed without burning redeliveries
+        on a doc that can never succeed."""
         doc_id = payload.doc_id
         updater = self._last_updater(doc_id)
         if updater is None:
@@ -355,13 +406,18 @@ class IndexCoordinator:
         # independent process jobs never collide on seq (cosmetic ordering only).
         seq_base = payload.batch_index * _SEQ_STRIDE
         # #186: SourceDoc → its owner (updater); DocChunks → the requester.
-        with doc_rm.using(user=updater), chunk_rm.using(user=requester):
-            text = self._ingestor.index_units(
-                doc_id,
-                (payload.unit_start, payload.unit_end),
-                seq_base=seq_base,
-                source_doc_rm=doc_rm,
-            )
+        try:
+            with doc_rm.using(user=updater), chunk_rm.using(user=requester):
+                text = self._ingestor.index_units(
+                    doc_id,
+                    (payload.unit_start, payload.unit_end),
+                    seq_base=seq_base,
+                    source_doc_rm=doc_rm,
+                )
+        except Exception as exc:
+            if not is_transient(exc):
+                raise NoRetry(str(exc)) from exc  # permanent → dead-letter now
+            raise  # transient → broker re-delivers this batch
         self._stage_text(doc_id, payload.batch_index, text)
         # #248: this batch covered [unit_start, unit_end) — add its units so the
         # run's progress aggregate climbs as each batch finishes.

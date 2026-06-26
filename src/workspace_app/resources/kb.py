@@ -248,6 +248,15 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     # operator selectively reindex a single parser's output, or the
     # FE label chunks by their source.
     parser_id: str = ""
+    # Issue #254: structural source location the parser knew but the bare
+    # ``start``/``end`` offsets lose — ``{"page": 3, "section": "Ch.2 > 2.1"}``
+    # for a PDF, ``{"sheet": "Q3"}`` for Excel, ``{"slide": 4}`` /
+    # ``{"jsonl_line": 12}`` elsewhere. Collected from the splitter node's
+    # metadata at emit time (see ``ingest._PROVENANCE_KEYS``); ``{}`` when the
+    # parser exposed no location (graceful degrade). Threaded through retrieval
+    # → merge → Citation so the LLM and the FE can say "p.3 §2.1", not an
+    # opaque char span. Not embedded — see the breadcrumb fold in li_pipeline.
+    provenance: dict[str, Any] = field(default_factory=dict)
     # P3.0: exactly one of `embedding` / `embedding_alt` is populated per
     # chunk — `embedder_id == 0` chunks use `embedding` (default text model),
     # `embedder_id != 0` chunks use `embedding_alt` (code-specialised model).
@@ -374,3 +383,7 @@ class RetrievedPassage(Struct, frozen=True):
     source_chunk_ids: list[str]
     text: str
     score: float = 0.0
+    # Issue #254: the merged passage's aggregated source location
+    # (``{"page": [3, 4], "section": ["Ch.2 > 2.1"]}``) — distinct values in
+    # seq order across the merged chunks. ``{}`` when no chunk had provenance.
+    provenance: dict[str, Any] = field(default_factory=dict)

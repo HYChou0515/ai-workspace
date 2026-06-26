@@ -36,9 +36,12 @@ class WorkflowManifest(Struct):
     leaves it ``""`` — the sentinel for the profile-root ``run.py`` layout."""
     title: str = ""
     phases: list[WorkflowPhase] = field(default_factory=list)
-    input_json: str = "inputs/input.json"
+    input_json: str = ""
     """Where the run's ``input.json`` lives — the platform surfaces it to ``run()``;
-    its content + the file layout are the profile's business (manual §14)."""
+    its content + the file layout are the profile's business (manual §14). Empty (#198)
+    ⇒ derive ``{profile.upload_dir}/input.json`` at run time, so the control file sits
+    in the same staging folder a chat attach lands in (default ``uploads/input.json``).
+    Set it explicitly only to pin a different location."""
     config: dict[str, Any] = field(default_factory=dict)
     """Profile-level config surfaced to ``run()`` as ``wf.config`` — pre-defined,
     not per-run (manual §20 reads ``wf.config["collections"]``)."""

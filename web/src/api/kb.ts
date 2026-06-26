@@ -11,7 +11,7 @@ import type { AgentEvent } from "../events";
 import { API_PREFIX, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
-import type { ReasoningEffort } from "./types";
+import type { Provenance, ReasoningEffort } from "./types";
 
 export type KbCollection = {
   resource_id: string;
@@ -164,6 +164,9 @@ export type KbCitation = {
   end: number;
   source_chunk_ids: string[];
   snippet: string;
+  /** #254 — aggregated source location ({ page: [3, 4], section: ["Ch.2 > 2.1"] });
+   * distinct values per locator. Absent/empty when the source had none. */
+  provenance?: Provenance;
 };
 
 export type KbChatMessage = {

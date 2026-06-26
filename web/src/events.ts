@@ -75,6 +75,16 @@ export type AgentMetrics = {
   elapsed_ms: number;
 };
 
+/** #249/#131: the chat model was busy/blipped before its first token, so the turn
+ * switched to the next model in the preset's failover chain. Ephemeral — shown as
+ * a transient status line while the turn runs, NEVER added to the transcript. The
+ * raw model id is for telemetry only; the UI shows a de-jargoned notice. */
+export type FailoverSwitch = {
+  type: "failover_switch";
+  from_model: string;
+  reason?: string;
+};
+
 /** #43: a human message posted to a SHARED investigation, broadcast on the
  * per-investigation stream so every viewer sees who said what — live, before
  * the agent turn it triggers. Broadcast-only (GET /investigations/{id}/stream). */
@@ -167,6 +177,7 @@ export type AgentEvent =
   | MaxTurnsExceeded
   | RepetitionStopped
   | AgentMetrics
+  | FailoverSwitch
   | UserMessage
   | FileChanged
   | WorkflowEvent;

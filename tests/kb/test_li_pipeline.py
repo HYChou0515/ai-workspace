@@ -385,6 +385,51 @@ def test_dispatch_splitter_routes_content_format_markdown_to_markdown_parser():
     assert "Tables and chart data" in table_nodes[0].get_content()
 
 
+def test_dispatch_splitter_folds_pdf_section_into_text_for_embedding():
+    """Issue #254: a PDF text page carrying an outline ``section`` gets that
+    breadcrumb prepended to every chunk's text so the embedding captures the
+    chapter context — but the ``page`` number (pure noise to the vector) is
+    NOT folded in; it lives in provenance only."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    doc = Document(
+        text="The reflow oven temperature exceeded the spec during the night shift.",
+        metadata={
+            "filename": "rca.pdf",
+            "mime": "application/pdf",
+            "page": 3,
+            "section": "Failure Analysis > Root Cause",
+        },
+    )
+    nodes = DispatchSplitter()([doc])
+    assert nodes
+    # Section breadcrumb folded in (structure-aware embedding)…
+    assert all(n.get_content().startswith("Failure Analysis > Root Cause") for n in nodes)
+    assert all("night shift" in n.get_content() for n in nodes)
+    # …yet the char span still indexes the clean canonical text, breadcrumb-free.
+    for n in nodes:
+        assert "Failure Analysis" not in doc.text[n.start_char_idx : n.end_char_idx]
+
+
+def test_dispatch_splitter_does_not_double_fold_a_section_already_present():
+    """Issue #254: if a chunk's text already opens with its section breadcrumb,
+    the fold is a no-op (no doubled prefix)."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    section = "Failure Analysis > Root Cause"
+    doc = Document(
+        text=f"{section}\n\nthe oven drifted overnight",
+        metadata={"filename": "rca.pdf", "mime": "application/pdf", "section": section},
+    )
+    nodes = DispatchSplitter()([doc])
+    assert nodes
+    assert all(n.get_content().count(section) == 1 for n in nodes)
+
+
 def test_dispatch_splitter_explodes_large_table_into_rows_spanning_the_table():
     """Issue #116: a LARGE Markdown table (> table_max_rows) becomes one chunk
     per row, each embedded as `col: value` (column names travel) — and every
