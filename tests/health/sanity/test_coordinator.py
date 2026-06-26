@@ -72,6 +72,15 @@ def _q(pred):
     return next(q for q in QUESTIONS if pred(q))
 
 
+def _cells_for(spec, model) -> set[tuple[str, str]]:
+    rm = spec.get_resource_manager(SanityResult)
+    return {
+        (r.data.question_key, r.data.level)
+        for r in rm.list_resources((QB["model"] == model).build())
+        if isinstance(r.data, SanityResult)
+    }
+
+
 def _result(spec, model, q, level) -> SanityResult:
     rid = sanity_result_id(model, question_key(q), level)
     data = spec.get_resource_manager(SanityResult).get(rid).data
@@ -341,6 +350,78 @@ async def test_generate_verdict_skips_when_judge_returns_nothing():
     coord.generate_verdict(_MODEL)
     await coord.aclose()
     assert spec.get_resource_manager(SanityVerdict).count_resources(QB.all().build()) == 0
+
+
+async def test_run_missing_enqueues_only_uncovered_cells():
+    """#231 P4: run_missing fills exactly the never-run coverage cells (every
+    question × its coverage_levels), skipping ones that already have a result."""
+    from workspace_app.health.sanity.questions import coverage_levels
+
+    spec = make_spec(default_user="u")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="x"))
+    want = {(question_key(q), lvl) for q in QUESTIONS for lvl in coverage_levels(q)}
+
+    # seed one cell, then fill the rest
+    first = next(iter(want))
+    coord.run_cell(_MODEL, first[0], first[1])
+    coord.wait_idle()
+    queued = coord.run_missing(_MODEL)
+    coord.wait_idle()
+    await coord.aclose()
+
+    assert queued == len(want) - 1  # all but the already-run cell
+    assert _cells_for(spec, _MODEL) == want
+
+
+async def test_run_missing_can_narrow_to_one_category():
+    spec = make_spec(default_user="u")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="x"))
+    coord.run_missing(_MODEL, category="格式輸出")
+    coord.wait_idle()
+    await coord.aclose()
+    got = _cells_for(spec, _MODEL)
+    fmt_keys = {question_key(q) for q in QUESTIONS if q.category == "格式輸出"}
+    assert got and {k for k, _ in got} == fmt_keys  # only that 題組 ran
+
+
+async def test_rescore_rejudges_stored_output_without_rerunning_the_model():
+    """#231 P4: rescore re-judges existing cells against their STORED output (the
+    model is NOT called again) and refreshes the verdict."""
+    spec = make_spec(default_user="u")
+    factory = _FakeLlmFactory(output="台北")
+    coord = SanityBatteryCoordinator(spec, factory, judge=_FakeJudge('{"grade":"pass","note":"a"}'))
+    q = QUESTIONS[0]
+    coord.run_cell(_MODEL, question_key(q), "none")
+    coord.wait_idle()
+    runs_after_first = len(factory.calls)
+
+    # swap the judge's verdict, then rescore — no new model call, ai_grade updates
+    coord._judge = _FakeJudge('{"grade":"fail","note":"重新判為錯"}')  # ty: ignore[invalid-assignment]
+    n = coord.rescore(_MODEL)
+    await coord.aclose()
+
+    assert n == 1
+    assert len(factory.calls) == runs_after_first  # model NOT re-run
+    r = _result(spec, _MODEL, q, "none")
+    assert r.output == "台北" and r.ai_grade == "fail" and r.ai_note == "重新判為錯"
+
+
+async def test_rescore_without_judge_is_a_noop():
+    spec = make_spec(default_user="u")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(output="x"))
+    coord.run_cell(_MODEL, question_key(QUESTIONS[0]), "none")
+    coord.wait_idle()
+    assert coord.rescore(_MODEL) == 0
+    await coord.aclose()
+
+
+async def test_rescore_skips_errored_cells():
+    spec = make_spec(default_user="u")
+    coord = SanityBatteryCoordinator(spec, _FakeLlmFactory(fail=True), judge=_FakeJudge())
+    coord.run_cell(_MODEL, question_key(QUESTIONS[0]), "none")
+    coord.wait_idle()
+    assert coord.rescore(_MODEL) == 0  # the only cell errored → nothing to judge
+    await coord.aclose()
 
 
 async def test_rerun_overwrites_the_same_cell():

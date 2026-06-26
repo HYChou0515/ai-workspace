@@ -183,6 +183,43 @@ def test_post_run_battery_fills_multiple_cells():
         assert rm.count_resources((QB["model"] == _MODEL).build()) > 5
 
 
+def test_run_missing_endpoint_fills_blanks_for_models():
+    """#231 P4: POST /sanity/run-missing enqueues the never-run coverage cells for
+    the selected models and reports how many it queued."""
+    from specstar import QB
+
+    app, spec = _app_and_spec()
+    with TestClient(app) as client:
+        resp = client.post("/sanity/run-missing", json={"models": [_MODEL]})
+        assert resp.status_code == 202 and resp.json()["count"] > 5
+
+        rm = spec.get_resource_manager(SanityResult)
+        deadline = time.monotonic() + 8.0
+        while time.monotonic() < deadline:
+            if rm.count_resources((QB["model"] == _MODEL).build()) > 5:
+                break
+            time.sleep(0.05)
+        assert rm.count_resources((QB["model"] == _MODEL).build()) > 5
+
+
+def test_rescore_endpoint_rejudges_and_returns_count():
+    """#231 P4: POST /sanity/rescore re-judges stored cell outputs and reports the
+    count (here: the one cell that was run)."""
+    app, spec = _app_and_spec(judge=_JudgeLlm())
+    with TestClient(app) as client:
+        meta = client.get("/sanity/questions").json()
+        taipei = next(q for q in meta["questions"] if q["category"] == "基礎知識")
+        client.post(
+            "/sanity/run",
+            json={"model": _MODEL, "scope": "cell", "question_key": taipei["key"], "level": "none"},
+        )
+        rm = spec.get_resource_manager(SanityResult)
+        _poll_exists(rm, sanity_result_id(_MODEL, taipei["key"], "none"))
+
+        resp = client.post("/sanity/rescore", json={"models": [_MODEL]})
+        assert resp.status_code == 200 and resp.json()["count"] == 1
+
+
 def test_post_run_cell_validates_question_and_level():
     app, _ = _app_and_spec()
     client = TestClient(app)

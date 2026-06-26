@@ -14,6 +14,7 @@ import logging
 import time
 from collections.abc import Callable
 
+from msgspec.structs import replace as struct_replace
 from specstar import QB, Schema, SpecStar
 from specstar.types import TaskStatus
 
@@ -22,9 +23,10 @@ from ...resources import SanityResult, SanityVerdict, sanity_result_id, sanity_v
 from .jobs import SanityRun, SanityRunPayload
 from .judge import judge_cell, judge_verdict
 from .questions import (
+    QUESTIONS,
     SanityQuestion,
     auto_run_cells,
-    find_question,
+    coverage_levels,
     messages_to_prompt,
     question_key,
 )
@@ -97,6 +99,56 @@ class SanityBatteryCoordinator:
             if isinstance(r.data, SanityResult)
         ]
 
+    # ── question source (built-ins; P5 merges custom questions here) ──
+    def _all_questions(self) -> list[SanityQuestion]:
+        """Every question in the matrix. Built-ins for now; #231 P5 appends the
+        user-authored ``CustomSanityQuestion`` rows so they share run/judge/cover."""
+        return list(QUESTIONS)
+
+    def _find_question(self, key: str) -> SanityQuestion | None:
+        return next((q for q in self._all_questions() if question_key(q) == key), None)
+
+    # ── coverage: fill the never-run blanks (#231) ───────────────────
+    def run_missing(self, model: str, *, category: str | None = None) -> int:
+        """Enqueue a cell job for every *expected* coverage cell of ``model`` that
+        has no result yet (optionally narrowed to one 題組/``category``). Returns the
+        count enqueued — this is the one-click 'fill all blanks'."""
+        have = {(c.question_key, c.level) for c in self.list_results(model)}
+        queued = 0
+        for q in self._all_questions():
+            if category is not None and q.category != category:
+                continue
+            for level in coverage_levels(q):
+                if (question_key(q), level) not in have:
+                    self.run_cell(model, question_key(q), level)
+                    queued += 1
+        return queued
+
+    def rescore(self, model: str) -> int:
+        """Re-judge every existing cell of ``model`` against its STORED output (no
+        model re-run) and refresh the verdict — the '重新 AI 評分' action. Returns
+        the number of cells re-judged. No judge ⇒ 0."""
+        if self._judge is None:
+            return 0
+        rejudged = 0
+        for c in self.list_results(model):
+            q = self._find_question(c.question_key)
+            if c.error or q is None:
+                continue  # nothing to judge / question gone
+            ai_grade, ai_note = judge_cell(
+                self._judge,
+                prompt=messages_to_prompt(q.messages),
+                expected=q.expected,
+                output=c.output,
+            )
+            self._result_rm.update(
+                sanity_result_id(model, c.question_key, c.level),
+                struct_replace(c, ai_grade=ai_grade, ai_note=ai_note),
+            )
+            rejudged += 1
+        self.generate_verdict(model)
+        return rejudged
+
     # ── per-model fitness verdict (#231) ─────────────────────────────
     def list_verdicts(self) -> list[SanityVerdict]:
         """Every model's stored fitness verdict (the FE renders one card each)."""
@@ -124,13 +176,12 @@ class SanityBatteryCoordinator:
         else:
             self._verdict_rm.create(verdict, resource_id=rid)
 
-    @staticmethod
-    def _verdict_digest(cells: list[SanityResult]) -> str:
+    def _verdict_digest(self, cells: list[SanityResult]) -> str:
         """A compact, judge-readable digest of one model's cells — one line per
         cell: 題組 | effort | 機械評分 | AI評分 | 回答節錄."""
         lines: list[str] = []
         for c in cells:
-            q = find_question(c.question_key)
+            q = self._find_question(c.question_key)
             cat = q.category if q is not None else "?"
             snippet = (c.output or c.error).replace("\n", " ")[:160]
             lines.append(
@@ -150,7 +201,7 @@ class SanityBatteryCoordinator:
             for q, level in auto_run_cells():
                 self.run_cell(payload.model, question_key(q), level)
             return
-        q = find_question(payload.question_key)
+        q = self._find_question(payload.question_key)
         if q is None:
             return  # the prompt was edited away between enqueue and run
         self._run_one(payload.model, q, payload.level)

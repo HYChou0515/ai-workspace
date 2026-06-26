@@ -292,6 +292,19 @@ class SanityVerdictOut(BaseModel):
     summary: str  # markdown, per-role fitness bullets
 
 
+class SanityRunMissingBody(BaseModel):
+    models: list[str]
+    category: str | None = None  # narrow to one 題組; None ⇒ every question
+
+
+class SanityRescoreBody(BaseModel):
+    models: list[str]
+
+
+class SanityCountOut(BaseModel):
+    count: int  # cells enqueued (run-missing) / re-judged (rescore)
+
+
 def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordinator: Any) -> None:
     """The model-sanity matrix API: GET the question/level/model metadata (the FE
     draws the empty grid), POST a run (cell or auto battery). Cell results
@@ -359,3 +372,20 @@ def register_sanity_routes(app: FastAPI | APIRouter, models: list[str], coordina
             SanityVerdictOut(model=v.model, score=v.score, summary=v.summary)
             for v in coordinator.list_verdicts()
         ]
+
+    @app.post("/sanity/run-missing", status_code=202)
+    async def run_missing(body: SanityRunMissingBody) -> SanityCountOut:
+        """#231: one-click 'fill all blanks' — enqueue only the never-run coverage
+        cells for the selected models (optionally one 題組)."""
+        total = sum(coordinator.run_missing(m, category=body.category) for m in body.models)
+        return SanityCountOut(count=total)
+
+    @app.post("/sanity/rescore")
+    async def rescore(body: SanityRescoreBody) -> SanityCountOut:
+        """#231: '重新 AI 評分' — re-judge stored cell outputs (no model re-run) and
+        refresh each model's verdict. Offloaded to a thread (it makes live judge
+        LLM calls) so the event loop stays free."""
+        total = 0
+        for model in body.models:
+            total += await asyncio.to_thread(coordinator.rescore, model)
+        return SanityCountOut(count=total)
