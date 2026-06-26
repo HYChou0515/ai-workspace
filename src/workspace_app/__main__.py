@@ -196,6 +196,16 @@ def main() -> None:
             filestore=get_filestore(settings, spec),
             # #219: single-file upload cap (streaming keeps RAM flat regardless).
             max_file_size=settings.filestore.max_file_size,
+            # #245: per-workspace total-size quota (protects the shared disk root).
+            workspace_quota=settings.filestore.workspace_quota,
+            # #245: blob-GC sweeper — reclaims orphaned blobs (0 ⇒ off).
+            gc_interval=(
+                timedelta(seconds=settings.filestore.gc_interval_sec)
+                if settings.filestore.gc_interval_sec
+                else None
+            ),
+            gc_t1=settings.filestore.gc_t1,
+            gc_t2=settings.filestore.gc_t2,
             runner=get_runner(settings),
             agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
             kb_embedder=embedder,

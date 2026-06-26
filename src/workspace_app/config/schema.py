@@ -104,6 +104,20 @@ class FilestoreSettings:
     # of size, so this guards disk + sandbox-wake cost, not memory — hence a
     # generous default (~2 GB). 0 ⇒ no cap. Per-workspace total quota is #245.
     max_file_size: int = 2 * 1024 * 1024 * 1024
+    # #245: per-workspace total-size quota in bytes — the sum of a workspace's
+    # files may not exceed this, so one workspace can't fill the disk root the
+    # whole deploy shares. Enforced at the user-facing upload/edit endpoints
+    # (the sandbox mirror is intentionally not gated — never lose agent work).
+    # Default ~20 GiB (generous; normal use never hits it). 0 ⇒ no quota.
+    workspace_quota: int = 20 * 1024 * 1024 * 1024
+    # #245: blob-GC sweeper — reclaims orphaned blobs (deleted files' content) so
+    # the quota stays honest. `gc_interval_sec` is how often a sweep runs (a CAS
+    # lease means only one pod runs the full reconcile per window); 0 ⇒ sweeper
+    # off. `gc_t1` protects freshly-written blobs from quarantine; `gc_t2` is the
+    # reversible dwell in quarantine before a blob is permanently deleted.
+    gc_interval_sec: float = 3600.0
+    gc_t1: str = "1h"
+    gc_t2: str = "24h"
 
 
 # ─── runner ─────────────────────────────────────────────────────────────

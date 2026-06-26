@@ -686,6 +686,13 @@ export const mockApi: ApiClient = {
       .sort((a, b) => a.path.localeCompare(b.path));
   },
 
+  async getWorkspaceUsage(_slug: string, investigationId: string) {
+    await delay(10);
+    const tree = files.get(investigationId);
+    const used = tree ? Array.from(tree.values()).reduce((n, f) => n + f.bytes, 0) : 0;
+    return { used, quota: 20 * 1024 * 1024 * 1024 }; // 20 GiB, mirrors the default
+  },
+
   async refreshFiles(_slug: string, _investigationId) {
     // Mock has no separate sandbox/snapshot — the in-memory map IS the
     // source of truth. Flushing is a no-op; we just delay a tick.

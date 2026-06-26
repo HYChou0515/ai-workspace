@@ -96,6 +96,21 @@ describe("runAttach (#198)", () => {
     expect(res.uploaded).toEqual(["/uploads/ok.csv"]);
   });
 
+  it("routes a 507 (over the workspace quota) to overQuota and keeps going", async () => {
+    const upload = vi.fn(async (path: string) => {
+      if (path === "/uploads/big.bin")
+        throw Object.assign(new Error("out of space"), { status: 507 });
+    });
+    const res = await runAttach({
+      files: [new File(["x"], "big.bin"), new File(["y"], "ok.csv")],
+      uploadDir: "uploads",
+      upload,
+    });
+    expect(res.overQuota).toEqual(["/uploads/big.bin"]);
+    expect(res.tooLarge).toEqual([]);
+    expect(res.uploaded).toEqual(["/uploads/ok.csv"]);
+  });
+
   it("routes a non-413 error to failed and keeps going", async () => {
     const upload = vi.fn(async (path: string) => {
       if (path === "/uploads/x.csv") throw Object.assign(new Error("boom"), { status: 500 });

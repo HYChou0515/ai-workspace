@@ -55,8 +55,11 @@ export function attachPrompt(paths: string[]): string {
 export interface AttachResult {
   /** Paths that landed in the store, in input order. */
   uploaded: string[];
-  /** Paths the server rejected for exceeding the size cap (413). */
+  /** Paths the server rejected for exceeding the single-file size cap (413). */
   tooLarge: string[];
+  /** Paths the server rejected because the workspace is over its total quota
+   * (507, #245) — distinct from `tooLarge` so the UI can say "out of space". */
+  overQuota: string[];
   /** Paths that failed for any other reason. */
   failed: string[];
 }
@@ -94,6 +97,7 @@ export async function runAttach(opts: {
 
   const uploaded: (string | null)[] = new Array(totalFiles).fill(null);
   const tooLarge: (string | null)[] = new Array(totalFiles).fill(null);
+  const overQuota: (string | null)[] = new Array(totalFiles).fill(null);
   const failed: (string | null)[] = new Array(totalFiles).fill(null);
 
   await mapWithConcurrency(files, concurrency, async (file, i) => {
@@ -106,7 +110,9 @@ export async function runAttach(opts: {
       loaded[i] = file.size;
       uploaded[i] = path;
     } catch (err) {
-      if ((err as { status?: number }).status === 413) tooLarge[i] = path;
+      const status = (err as { status?: number }).status;
+      if (status === 413) tooLarge[i] = path;
+      else if (status === 507) overQuota[i] = path;
       else failed[i] = path;
     } finally {
       doneFiles++;
@@ -115,5 +121,10 @@ export async function runAttach(opts: {
   });
 
   const drop = (xs: (string | null)[]): string[] => xs.filter((x): x is string => x !== null);
-  return { uploaded: drop(uploaded), tooLarge: drop(tooLarge), failed: drop(failed) };
+  return {
+    uploaded: drop(uploaded),
+    tooLarge: drop(tooLarge),
+    overQuota: drop(overQuota),
+    failed: drop(failed),
+  };
 }

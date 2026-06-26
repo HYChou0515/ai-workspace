@@ -29,6 +29,7 @@ import type {
   SearchParams,
   ExecuteCellArgs,
   FileInfo,
+  WorkspaceUsage,
   NotebookRef,
   NotificationItem,
   SearchOptions,
@@ -251,6 +252,14 @@ export const realApi: ApiClient = {
       }
       throw err;
     }
+  },
+
+  async getWorkspaceUsage(slug: string, investigationId: string) {
+    return json<WorkspaceUsage>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/usage`,
+      ),
+    );
   },
 
   async refreshFiles(slug: string, investigationId) {

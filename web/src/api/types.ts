@@ -83,6 +83,11 @@ export type Conversation = {
 // renders non-editable (the diff "before" snapshot). Optional for older backends.
 export type FileInfo = { path: string; size: number; read_only?: boolean };
 
+/** A workspace's storage usage vs its quota (#245), for the upload usage bar.
+ * `quota` of 0 means unlimited (the bar is hidden). Mirrors the backend
+ * `_WorkspaceUsage` model. */
+export type WorkspaceUsage = { used: number; quota: number };
+
 /** An agent profile the picker offers — model + prompt live BE-side; the
  * FE only needs enough to label the radio and PATCH the attachment.
  *
@@ -351,6 +356,9 @@ export interface ApiClient {
   getConversation(investigationId: string): Promise<Conversation | null>;
 
   listFiles(slug: string, investigationId: string, prefix?: string): Promise<FileInfo[]>;
+  /** GET /a/{slug}/items/{id}/files/usage — the workspace's storage usage vs its
+   * quota (#245), for the upload usage bar. `quota` 0 means unlimited. */
+  getWorkspaceUsage(slug: string, investigationId: string): Promise<WorkspaceUsage>;
   /** POST /a/{slug}/items/{id}/files/refresh — force-mirror the live sandbox
    * to the snapshot (don't wait for the throttled sweep). Call this before a
    * read whenever the sandbox may have changed out-of-band (terminal `rm`,

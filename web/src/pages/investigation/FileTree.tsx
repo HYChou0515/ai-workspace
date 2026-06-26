@@ -121,8 +121,15 @@ export function FileTree({
       if (existing.has(path) && !confirm(`${path} exists. Overwrite?`)) continue;
       try {
         await svc.writeFile(path, f);
-      } catch {
-        alert(`${f.name} could not be uploaded — it may exceed the size limit.`);
+      } catch (err) {
+        // #245: a 507 is the workspace quota (out of space), distinct from the
+        // 413 single-file size cap — say which so the fix is obvious.
+        const status = (err as { status?: number }).status;
+        alert(
+          status === 507
+            ? `${f.name} could not be uploaded — the workspace is out of space.`
+            : `${f.name} could not be uploaded — it may exceed the size limit.`,
+        );
         continue;
       }
       firstPath ??= path;

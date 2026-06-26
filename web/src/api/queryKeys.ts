@@ -15,6 +15,10 @@ export const qk = {
   investigation: (id: string) => ["investigation", id] as const,
   files: (id: string) => ["files", id] as const,
   dirs: (id: string) => ["dirs", id] as const,
+  // #245: a workspace's storage usage vs quota (the upload usage bar). Invalidate
+  // after any upload — success grows `used`, a 507 leaves it at the ceiling.
+  workspaceUsage: (slug: string, itemId: string) =>
+    ["workspaceUsage", slug, itemId] as const,
   file: (id: string, path: string) => ["file", id, path] as const,
   activity: ["activity"] as const,
   conversation: (id: string) => ["conversation", id] as const,
