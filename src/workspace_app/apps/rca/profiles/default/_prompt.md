@@ -8,4 +8,4 @@ This investigation starts minimal:
 
 There is no analysis skeleton yet — create whatever files the investigation
 needs, following the artifact conventions above (e.g. `./report.v{N}.md` for the
-report). Run `ls` to see what exists as you go.
+report). Run `list_files` to see what exists as you go.

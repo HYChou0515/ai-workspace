@@ -14,7 +14,7 @@ their commands like any other tool; their output files land in the workspace.
 
 1. Call `data-fetch` with `name="alloy-batches"` and `rows=500` (small, fast) —
    it writes `alloy-batches.csv` into the workspace.
-2. Call `ls` to confirm the file is there.
+2. Call `list_files` to confirm the file is there.
 3. Call `summarise` with `csv="alloy-batches.csv"`.
 4. Call `plot` with `csv="alloy-batches.csv"` — it writes the two PNGs.
 5. Report the per-column summary, and tell the user the PNG files it wrote.

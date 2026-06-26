@@ -22,7 +22,7 @@
       "read_image",
       "write_file",
       "edit_file",
-      "ls",
+      "list_files",
       "exists",
       "delete_file",
       "lookup_glossary",

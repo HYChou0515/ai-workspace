@@ -2,7 +2,7 @@
 
 The reader is the SAME agent runner given a sandbox-free wiki context: its
 ``filestore`` is the per-page ``WikiFileStore`` and ``investigation_id`` is the
-collection id, so the existing file tools (ls / read_file) plus ``search_wiki``
+collection id, so the existing file tools (list_files / read_file) plus ``search_wiki``
 (grep) navigate the wiki pages. It grounds answers in the underlying source
 documents via ``read_source`` (read-only) and cites them.
 
@@ -42,10 +42,10 @@ _READER_PROMPT = (Path(__file__).parent.parent / "prompts" / "wiki_reader.md").r
 # settings.kb.wiki.reader_max_turns; this is the fallback default.
 _DEFAULT_READER_MAX_TURNS = 24
 
-# The reader's tools: navigate the wiki (ls / read_file / search_wiki), reach
-# the raw sources to ground + cite (list_sources / read_source). NO writes.
+# The reader's tools: navigate the wiki (list_files / read_file / search_wiki),
+# reach the raw sources to ground + cite (list_sources / read_source). NO writes.
 _WIKI_READER_TOOLS = [
-    "ls",
+    "list_files",
     "read_file",
     "search_wiki",
     "list_sources",

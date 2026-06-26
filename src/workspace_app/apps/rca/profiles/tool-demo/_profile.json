@@ -3,7 +3,7 @@
   "description": "Smoke-test the provisioned analysis tools (data-fetch + csv-column-summary).",
   "presets": ["qwen3-local"],
   "tools": [
-    "exec", "read_file", "write_file", "edit_file", "ls", "exists",
+    "exec", "read_file", "write_file", "edit_file", "list_files", "exists",
     "delete_file", "data-fetch", "csv-column-summary"
   ],
   "suggestions": [

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,6 +16,10 @@ vi.mock("../hooks/useUsers", () => ({
   useUser: (id: string) => ({ id, name: id, section: "", email: "", photo_url: null }),
 }));
 
+// #225: the manifest has loaded but the items request is still in flight. The
+// list is momentarily empty — but that's "we don't know yet", not "no items".
+// The dashboard must show a loading skeleton, NOT the first-user "create your
+// first" hero (which would otherwise flash a misleading create button).
 vi.mock("../hooks/useResources", () => ({
   useAppManifest: () => ({
     slug: "rca",
@@ -33,19 +37,8 @@ vi.mock("../hooks/useResources", () => ({
     function: { workspace: true, sandbox: true, terminal: true },
     agent: { picker: [] },
     default_profile: "default",
-    onboarding: {
-      version: "1",
-      title: "Welcome to Root Cause Analysis",
-      intro: "Investigate failures end to end.",
-      points: [{ title: "Add your evidence", body: "Upload logs and data." }],
-    },
   }),
-  useAppItems: () => ({
-    items: [
-      { resource_id: "rca-investigation/1", title: "Oven drift", owner: "u", severity: "P1", status: "triaging", product: "MX-7" },
-    ],
-    isPending: false,
-  }),
+  useAppItems: () => ({ items: [], isPending: true }),
 }));
 
 function renderDash() {
@@ -60,26 +53,14 @@ function renderDash() {
   );
 }
 
-describe("AppDashboard onboarding", () => {
-  it("auto-shows the App's welcome teaching on first entry", () => {
+describe("AppDashboard items still loading (#225)", () => {
+  it("shows a loading skeleton, not the 'create your first' hero", () => {
     renderDash();
-    expect(
-      screen.getByRole("dialog", { name: /welcome to root cause analysis/i }),
-    ).toBeInTheDocument();
-    expect(screen.getByText("Add your evidence")).toBeInTheDocument();
-  });
-
-  it("'Don't show again' stops the auto-popup, but the ? reopens it", () => {
-    renderDash();
-    fireEvent.click(screen.getByRole("button", { name: /don't show again/i }));
-    cleanup();
-
-    renderDash();
-    expect(screen.queryByRole("dialog", { name: /welcome to root cause analysis/i })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: /about root cause analysis/i }));
-    expect(
-      screen.getByRole("dialog", { name: /welcome to root cause analysis/i }),
-    ).toBeInTheDocument();
+    // The first-user hero (and its create CTA) must NOT appear while we still
+    // don't know whether the App has items.
+    expect(screen.queryByText(/no investigations yet/i)).toBeNull();
+    // The skeleton container marks itself busy so the wait reads as content
+    // arriving rather than an empty App.
+    expect(screen.getByTestId("page-app-dashboard")).toHaveAttribute("aria-busy", "true");
   });
 });

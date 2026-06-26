@@ -18,7 +18,7 @@
   "agent": {
     "prompt_file": "prompts/system.md",
     "tools": [
-      "exec", "read_file", "read_image", "write_file", "edit_file", "ls", "exists",
+      "exec", "read_file", "read_image", "write_file", "edit_file", "list_files", "exists",
       "delete_file", "ask_knowledge_base", "python-stack"
     ],
     "picker": [{ "preset": "qwen3-local", "name": "Playground · Qwen3 (local)" }],

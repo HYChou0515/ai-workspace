@@ -113,5 +113,5 @@ async def test_reader_run_error_surfaces_and_yields_no_citations():
 def test_reader_config_is_read_only():
     cfg = default_wiki_reader_config()
     allowed = set(cfg.allowed_tools or [])
-    assert {"search_wiki", "read_source", "read_file", "ls", "list_sources"} <= allowed
+    assert {"search_wiki", "read_source", "read_file", "list_files", "list_sources"} <= allowed
     assert not ({"write_file", "edit_file", "delete_file"} & allowed)

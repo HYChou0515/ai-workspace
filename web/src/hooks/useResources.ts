@@ -26,14 +26,23 @@ export function useAppManifest(slug: string): AppManifest | undefined {
   return data;
 }
 
-/** An App's items, fetched from its `resource_route` (skipped until known). */
-export function useAppItems(slug: string, resourceRoute: string | undefined): AppItem[] {
-  const { data } = useQuery({
+/** An App's items, fetched from its `resource_route` (skipped until known).
+ *
+ * Exposes `isPending` (#225) so the dashboard can tell "still loading" apart
+ * from "no items": an empty list before the first response would otherwise
+ * flash the first-user "create your first" hero. `isPending` is true only when
+ * there's no cached data yet, so a refetch (e.g. after creating an item) keeps
+ * the list on screen instead of flickering back to a skeleton. */
+export function useAppItems(
+  slug: string,
+  resourceRoute: string | undefined,
+): { items: AppItem[]; isPending: boolean } {
+  const { data, isPending } = useQuery({
     queryKey: qk.appItems(slug),
     queryFn: () => api.listAppItems(resourceRoute as string),
     enabled: !!resourceRoute,
   });
-  return data ?? [];
+  return { items: data ?? [], isPending };
 }
 
 /** One App item by id (skipped until the App's resource_route is known). */

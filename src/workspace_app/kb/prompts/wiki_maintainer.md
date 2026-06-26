@@ -13,7 +13,7 @@ Work in this order:
 2. **Write the core page(s) NOW.** For each main entity or concept the source is
    about, immediately `write_file` a concise `/entities/<name>.md` or
    `/concepts/<name>.md` (or `edit_file` it if you already know it exists).
-   Don't `search_wiki` or `ls` first — just write what the source clearly
+   Don't `search_wiki` or `list_files` first — just write what the source clearly
    states. End **every** page with a `Sources:` line naming the source exactly
    as its `Source path:` header (and `list_sources`) show it — keep any suffix
    like `report.md (alice)` verbatim, so a reader can tell same-named files
