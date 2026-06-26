@@ -51,7 +51,7 @@ _DEFAULT_MAINTAINER_MAX_TURNS = 40
 # The maintainer's tools: the existing file tools (over the WikiFileStore)
 # + the wiki-specific tools. No exec/sandbox.
 _WIKI_MAINTAINER_TOOLS = [
-    "ls",
+    "list_files",
     "read_file",
     "write_file",
     "edit_file",

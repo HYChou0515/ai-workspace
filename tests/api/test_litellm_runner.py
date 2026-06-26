@@ -314,7 +314,7 @@ def test_map_event_tool_called_with_empty_args():
     ev = _StreamEvent(
         type="run_item_stream_event",
         name="tool_called",
-        item=_Item(raw_item=_RawToolCall(call_id="c3", name="ls", arguments="")),
+        item=_Item(raw_item=_RawToolCall(call_id="c3", name="list_files", arguments="")),
     )
     out = _map_event(ev)
     assert isinstance(out, ToolStart)
@@ -357,13 +357,13 @@ def test_map_event_tool_called_with_dict_raw_item():
         name="tool_called",
         item=_Item(
             # some providers hand arguments as an already-parsed dict
-            raw_item={"call_id": "c10", "name": "ls", "arguments": {"prefix": "/"}},
+            raw_item={"call_id": "c10", "name": "list_files", "arguments": {"prefix": "/"}},
         ),
     )
     out = _map_event(ev)
     assert isinstance(out, ToolStart)
     assert out.call_id == "c10"
-    assert out.name == "ls"
+    assert out.name == "list_files"
     assert out.args == {"prefix": "/"}
 
 
@@ -922,10 +922,10 @@ def test_item_event_adapts_run_items_for_map_event_reuse():
     _ItemEvent; the RunItem.type → event-name table must hit tool start/end."""
     assert _NONSTREAM_TOOL_EVENT["tool_call_item"] == "tool_called"
     assert _NONSTREAM_TOOL_EVENT["tool_call_output_item"] == "tool_output"
-    call = _Item(raw_item=_RawToolCall(call_id="c1", name="ls", arguments=""))
+    call = _Item(raw_item=_RawToolCall(call_id="c1", name="list_files", arguments=""))
     start = _map_event(_ItemEvent("tool_called", call))
     assert isinstance(start, ToolStart)
-    assert start.name == "ls" and start.call_id == "c1"
+    assert start.name == "list_files" and start.call_id == "c1"
     out = _Item(raw_item=_RawToolOutput(call_id="c1"), output="ok")
     end = _map_event(_ItemEvent("tool_output", out))
     assert isinstance(end, ToolEnd)
