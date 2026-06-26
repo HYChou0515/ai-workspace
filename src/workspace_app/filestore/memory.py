@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
+from pathlib import Path
 
 from .protocol import FileExists, FileNotFound, dir_ancestors
 
@@ -30,12 +31,23 @@ class MemoryFileStore:
             self._files[workspace_id][path] = data
             self._dirs[workspace_id].update(dir_ancestors(path))
 
+    async def write_from_path(
+        self, workspace_id: str, path: str, source: Path, content_type: str | None
+    ) -> None:
+        # In-memory store keeps bytes in RAM regardless (test-only backend), so
+        # there's nothing to stream — just read the staged file and store it.
+        await self.write(workspace_id, path, await asyncio.to_thread(source.read_bytes))
+
     async def read(self, workspace_id: str, path: str) -> bytes:
         async with self._lock:
             files = self._files.get(workspace_id, {})
             if path not in files:
                 raise FileNotFound(f"{workspace_id}:{path}")
             return files[path]
+
+    async def read_to_file(self, workspace_id: str, path: str, dest: Path) -> None:
+        data = await self.read(workspace_id, path)
+        await asyncio.to_thread(dest.write_bytes, data)
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         async with self._lock:

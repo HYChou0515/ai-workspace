@@ -26,6 +26,7 @@ contracts; nothing else in the app needs to change (it's injected via
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 # Sink for streaming a command's stdout as it arrives. `exec` calls it once per
@@ -142,6 +143,22 @@ class Sandbox(Protocol):
         """Read and return the bytes of `remote_path` (workspace-root-relative).
         Raises `FileNotFoundError` if it doesn't exist. Used by SandboxSync to
         pull sandbox changes back into the FileStore."""
+        ...
+
+    async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
+        """Like `upload`, but copy the content from the on-disk `local_path`
+        rather than taking it as in-memory `bytes` — so a big upload streams in
+        without the whole file ever sitting in RAM (issue #219). Overwrites an
+        existing file; creates parent dirs."""
+        ...
+
+    async def download_to_file(
+        self, handle: SandboxHandle, remote_path: str, local_path: Path
+    ) -> None:
+        """Like `download`, but stream the bytes of `remote_path` out to the
+        on-disk `local_path` rather than returning them — so the reverse-sync
+        mirror can persist a big sandbox file without it sitting in RAM (issue
+        #219). Raises `FileNotFoundError` if `remote_path` doesn't exist."""
         ...
 
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:

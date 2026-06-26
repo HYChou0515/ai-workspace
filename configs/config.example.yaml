@@ -81,6 +81,11 @@
 #   # fast with a clear "connection ... timed out" instead. 0 = wait forever
 #   # (old behaviour). An explicit connect_timeout=… already in pg_dsn wins.
 #   pg_connect_timeout: 10
+#   # #219: single-file upload cap in bytes (0 = no cap). Uploads stream to the
+#   # blob store, so RAM stays flat regardless of size — this guards disk +
+#   # sandbox-wake cost, hence a generous default (~2 GB). An over-size upload
+#   # is rejected mid-stream with 413. Per-workspace TOTAL quota is #245.
+#   max_file_size: 2147483648
 
 # ─── runner (RCA agent loop) ────────────────────────────────────────
 # runner:

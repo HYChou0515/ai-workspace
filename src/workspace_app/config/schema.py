@@ -102,6 +102,10 @@ class FilestoreSettings:
     # no timeout). 0 ⇒ disabled (libpq waits indefinitely — the old behaviour).
     # Override by putting connect_timeout=… straight in pg_dsn (that wins).
     pg_connect_timeout: int = 10
+    # #219: single-file upload cap in bytes. Streaming keeps RAM flat regardless
+    # of size, so this guards disk + sandbox-wake cost, not memory — hence a
+    # generous default (~2 GB). 0 ⇒ no cap. Per-workspace total quota is #245.
+    max_file_size: int = 2 * 1024 * 1024 * 1024
 
 
 # ─── runner ─────────────────────────────────────────────────────────────

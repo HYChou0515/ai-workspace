@@ -88,6 +88,23 @@ async def test_upload_download_roundtrip(sandbox: DockerSandbox):
     assert await sandbox.download(h, "/notes.txt") == b"payload"
 
 
+async def test_upload_file_download_to_file_roundtrip(sandbox: DockerSandbox, tmp_path):
+    h = await sandbox.create(SandboxSpec(image=_IMAGE))
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"streamed-docker-payload" * 1000)
+    await sandbox.upload_file(h, src, "/sub/big.bin")
+    assert await sandbox.download(h, "/sub/big.bin") == b"streamed-docker-payload" * 1000
+    out = tmp_path / "out.bin"
+    await sandbox.download_to_file(h, "/sub/big.bin", out)
+    assert out.read_bytes() == b"streamed-docker-payload" * 1000
+
+
+async def test_download_to_file_missing_raises(sandbox: DockerSandbox, tmp_path):
+    h = await sandbox.create(SandboxSpec(image=_IMAGE))
+    with pytest.raises(FileNotFoundError):
+        await sandbox.download_to_file(h, "/nope.bin", tmp_path / "out.bin")
+
+
 async def test_exec_cat_reads_uploaded_file(sandbox: DockerSandbox):
     h = await sandbox.create(SandboxSpec(image=_IMAGE))
     await sandbox.upload(h, b"docker content", "/data.txt")

@@ -121,6 +121,15 @@ def main() -> None:
     # names itself. The Postgres-down stall lands in create_app's `spec.apply`.
     with boot_step("connect backend & register models (get_spec)"):
         spec = get_spec(settings, get_user_id=get_user_id)
+    # #219: one-time migration of any pre-#219 inline-bytes workspace files into
+    # the per-file Binary shape the rewritten SpecstarFileStore now expects.
+    # Idempotent (returns 0 once the legacy rows are consumed) and only relevant
+    # for the specstar filestore — memory is non-persistent, so nothing to move.
+    if settings.filestore.kind == "specstar":
+        with boot_step("migrate workspace files (#219)"):
+            from workspace_app.filestore.migrate import migrate_inline_to_binary
+
+            migrate_inline_to_binary(spec)
     # Deploy-level provisionable tool packages (#25). discover_packages reads
     # the prebuilt bundles under PREBUILT_DIR (run `scripts/prebuild_tools.py`);
     # a real deployment swaps tool_packages.PACKAGES for its own dict. They're
@@ -179,6 +188,8 @@ def main() -> None:
             get_user_id=get_user_id,
             sandbox=sandbox,
             filestore=get_filestore(settings, spec),
+            # #219: single-file upload cap (streaming keeps RAM flat regardless).
+            max_file_size=settings.filestore.max_file_size,
             runner=get_runner(settings),
             agent_config_catalog=get_agent_config_catalog(settings, config_dir=config_dir),
             kb_embedder=embedder,

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -142,6 +143,18 @@ class HttpSandbox:
     async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
         resp = await self._request(handle, "GET", "/file", params={"path": remote_path})
         return resp.content
+
+    async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
+        # The host's /file endpoint takes a whole body; HttpSandbox doesn't yet
+        # stream over the wire (a host-protocol change), so this satisfies the
+        # #219 contract by reading the staged file and PUTting it. The default
+        # Local/Docker backends stream for real.
+        await self.upload(handle, local_path.read_bytes(), remote_path)
+
+    async def download_to_file(
+        self, handle: SandboxHandle, remote_path: str, local_path: Path
+    ) -> None:
+        local_path.write_bytes(await self.download(handle, remote_path))
 
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         resp = await self._request(handle, "GET", "/exists", params={"path": path})

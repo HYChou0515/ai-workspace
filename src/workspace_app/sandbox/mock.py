@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from pathlib import Path
 
 from .protocol import (
     ExecResult,
@@ -96,6 +97,18 @@ class MockSandbox:
         if remote_path not in fs:
             raise FileNotFoundError(remote_path)
         return fs[remote_path]
+
+    async def upload_file(self, handle: SandboxHandle, local_path: Path, remote_path: str) -> None:
+        fs = self._require(handle)
+        fs[remote_path] = local_path.read_bytes()
+
+    async def download_to_file(
+        self, handle: SandboxHandle, remote_path: str, local_path: Path
+    ) -> None:
+        fs = self._require(handle)
+        if remote_path not in fs:
+            raise FileNotFoundError(remote_path)
+        local_path.write_bytes(fs[remote_path])
 
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         fs = self._require(handle)
