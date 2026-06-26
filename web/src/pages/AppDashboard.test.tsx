@@ -63,26 +63,29 @@ vi.mock("../hooks/useResources", () => ({
     agent: { picker: [] },
     default_profile: "default",
   })),
-  useAppItems: () => [
-    {
-      resource_id: "rca-investigation/1",
-      title: "Oven drift",
-      owner: "u",
-      severity: "P1",
-      status: "triaging",
-      product: "MX-7",
-      topics: ["Reflow"],
-    },
-    {
-      resource_id: "rca-investigation/2",
-      title: "Sealed batch",
-      owner: "u",
-      severity: "P2",
-      status: "resolved",
-      product: "Display",
-      topics: ["Panel"],
-    },
-  ],
+  useAppItems: () => ({
+    items: [
+      {
+        resource_id: "rca-investigation/1",
+        title: "Oven drift",
+        owner: "u",
+        severity: "P1",
+        status: "triaging",
+        product: "MX-7",
+        topics: ["Reflow"],
+      },
+      {
+        resource_id: "rca-investigation/2",
+        title: "Sealed batch",
+        owner: "u",
+        severity: "P2",
+        status: "resolved",
+        product: "Display",
+        topics: ["Panel"],
+      },
+    ],
+    isPending: false,
+  }),
 }));
 
 function renderDashAt(entry: string, extra?: React.ReactNode) {
