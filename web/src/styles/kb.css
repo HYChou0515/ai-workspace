@@ -312,7 +312,9 @@
   align-items: center;
   justify-content: center;
   gap: 5px;
-  height: 32px;
+  /* min-height (not height) so the button grows with a larger system font
+     instead of clipping its label (#256 / font scale #226). */
+  min-height: 32px;
   box-sizing: border-box;
   padding: 0 12px;
   border-radius: var(--radius-btn);
@@ -486,7 +488,7 @@
 .kb-input {
   flex: 1;
   min-width: 0;
-  height: 34px;
+  min-height: 34px;
   padding: 0 10px;
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-btn);
@@ -1914,7 +1916,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 34px;
+  min-height: 34px;
   padding: 0 12px;
   margin-bottom: 12px;
   background: var(--white);

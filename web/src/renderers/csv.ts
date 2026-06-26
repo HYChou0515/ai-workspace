@@ -1,7 +1,8 @@
-/** Minimal RFC-4180-ish CSV parser → rows of string cells. Handles quoted
- * fields (commas + embedded newlines inside quotes), `""` escapes, and CRLF.
- * A trailing newline does not produce an empty final row. */
-export function parseCsv(text: string): string[][] {
+/** Minimal RFC-4180-ish delimited-text parser → rows of string cells. Handles
+ * quoted fields (delimiter + embedded newlines inside quotes), `""` escapes, and
+ * CRLF. A trailing newline does not produce an empty final row. The delimiter
+ * defaults to a comma (CSV); pass `"\t"` for TSV (#255). */
+export function parseCsv(text: string, delimiter: string = ","): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -27,7 +28,7 @@ export function parseCsv(text: string): string[][] {
     if (c === '"') {
       inQuotes = true;
       i += 1;
-    } else if (c === ",") {
+    } else if (c === delimiter) {
       row.push(field);
       field = "";
       i += 1;
