@@ -345,6 +345,10 @@ class KbMessage(Struct):
 
     role: str  # user / assistant / tool / error
     content: str = ""
+    # #242: the sender's user id (mirrors RCA `Message.author`) — stamped
+    # server-side on user messages so a shared thread tells who said what and
+    # the LLM history projection can attribute each message to its author.
+    author: str | None = None
     reasoning: str | None = None
     tool_call_id: str | None = None
     tool_name: str | None = None

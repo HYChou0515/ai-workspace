@@ -32,6 +32,7 @@ from ..kb.context_cards import match as match_cards
 from ..kb.retriever import Enhancements, Retriever
 from ..resources import AgentConfig
 from ..resources.kb import Citation, KbChat, KbMessage
+from ..users.protocol import UserDirectory
 from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolLog, ToolStart
 from .notifications import notify
 from .runner import AgentRunner
@@ -233,6 +234,7 @@ def register_kb_chat_routes(
     engine: ChatTurnEngine,
     retriever: Retriever,
     get_user_id: Callable[[], str],
+    users: UserDirectory,
     *,
     kb_agent_configs: list[AgentConfig],
     history_max_messages: int = 40,
@@ -385,7 +387,9 @@ def register_kb_chat_routes(
         if owner != get_user_id():
             # Shares are read-only — only the owner drives the thread.
             raise HTTPException(status_code=403, detail="this chat is read-only for you")
-        chat.messages.append(KbMessage(role="user", content=body.content, created_at=_now_ms()))
+        chat.messages.append(
+            KbMessage(role="user", content=body.content, author=get_user_id(), created_at=_now_ms())
+        )
         chat_rm.update(chat_id, chat)
 
         # Issue #32: resolve the picker selection. Default = first
@@ -415,12 +419,17 @@ def register_kb_chat_routes(
             # can read this collection's context cards — deterministic glossary
             # path beside kb_search (unknown term → glossary, question → search).
             spec=spec,
-            # Cross-turn memory: prior dialogue (excludes the user msg just added).
+            # Cross-turn memory: prior dialogue (excludes the user msg just added),
+            # each message attributed to its author (#242).
             history=history_items(
                 chat.messages[:-1],
                 max_messages=history_max_messages,
                 max_tokens=history_max_context_tokens,
+                users=users,
             ),
+            # #242: who the agent is replying to (here, always the owner — shares
+            # are read-only). Feeds the per-turn "you are replying to …" note.
+            speaker=users.get(get_user_id()),
             # Per-message reasoning effort from the UI selector.
             reasoning_effort=body.reasoning_effort,
             kb_enhancements=caller_enh,
@@ -487,6 +496,7 @@ def _message_dict(m: KbMessage) -> dict:
     return {
         "role": m.role,
         "content": m.content,
+        "author": m.author,  # #242 — sender id (mirrors RCA Message)
         "reasoning": m.reasoning,
         "tool_name": m.tool_name,
         "tool_args": m.tool_args,

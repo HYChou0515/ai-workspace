@@ -1207,6 +1207,7 @@ def create_app(
         kb_turn_engine,
         kb_retriever,
         get_user_id,
+        users,
         kb_agent_configs=kb_agent_configs,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
