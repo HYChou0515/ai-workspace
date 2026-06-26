@@ -85,7 +85,6 @@ def test_kb_section_is_nested_dataclasses():
     kb: KbSettings = Settings().kb
     assert kb.embedder.model == "ollama/bge-m3"
     assert kb.embedder.timeout == 60.0
-    assert kb.embedder.num_retries == 2
     assert kb.embedder.batch_size == 64
     assert kb.chunker.max_tokens == 256
     assert kb.chunker.overlap == 32

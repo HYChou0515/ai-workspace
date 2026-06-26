@@ -159,7 +159,6 @@ class EmbedderSettings:
     query_prefix: str = ""
     doc_prefix: str = ""
     timeout: float = 60.0
-    num_retries: int = 2
     batch_size: int = 64
     base_url: str = ""
     api_key: str = ""
@@ -168,8 +167,8 @@ class EmbedderSettings:
     # running the identical model; a different embedding model would produce
     # vectors in an incompatible space and corrupt the index). When non-empty,
     # the primary `base_url` plus these replicas form the priority chain; on a
-    # busy/failed endpoint the embedder switches to the next and cools the failed
-    # one. `api_key` is shared across replicas (same service).
+    # transient failure the embedder retries with backoff then switches to the
+    # next (#249). `api_key` is shared across replicas (same service).
     fallbacks: list[str] = field(default_factory=list)
 
 
