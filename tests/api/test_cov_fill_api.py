@@ -82,6 +82,7 @@ def test_register_kb_chat_routes_rejects_empty_configs():
     """line 244: an empty kb_agent_configs is a misconfiguration (the FE picker
     would be empty) — fail loud at registration."""
     from workspace_app.api.kb_chat_routes import register_kb_chat_routes
+    from workspace_app.users import MockUserDirectory
 
     spec = make_spec(default_user="u")
     engine = ChatTurnEngine(_NoopRunner())
@@ -92,6 +93,7 @@ def test_register_kb_chat_routes_rejects_empty_configs():
             engine,
             _NoopRetriever(),  # ty: ignore[invalid-argument-type]
             lambda: "u",
+            MockUserDirectory(),
             kb_agent_configs=[],
         )
 

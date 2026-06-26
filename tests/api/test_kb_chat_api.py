@@ -116,12 +116,27 @@ def test_agent_sees_prior_turns_as_history():
     client.post(f"/kb/chats/{cid}/messages", json={"content": "q1"})
     client.post(f"/kb/chats/{cid}/messages", json={"content": "q2"})
 
-    # turn 1 had no history; turn 2 replays turn 1's user + assistant dialogue
+    # turn 1 had no history; turn 2 replays turn 1's user + assistant dialogue.
+    # The user message is attributed to its sender (#242) — the default dev user
+    # resolves to "You (you)" via the MockUserDirectory.
     assert runner.seen_history[0] == []
     assert runner.seen_history[1] == [
-        {"role": "user", "content": "q1"},
+        {"role": "user", "content": "[You (you)]: q1"},
         {"role": "assistant", "content": "answer to q1"},
     ]
+
+
+def test_kb_chat_stamps_the_sender_on_the_user_message():
+    """#242 — a KB chat user message records its sender server-side (`author`)
+    so the thread and the LLM history can attribute it. KbMessage gained the
+    field; the send route stamps it from `get_user_id()` (never the body)."""
+    runner = _HistoryRecordingRunner()
+    client = _client(runner)
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "q1"})
+    msgs = client.get(f"/kb/chats/{cid}").json()["messages"]
+    user_msg = next(m for m in msgs if m["role"] == "user")
+    assert user_msg["author"] == "default-user"
 
 
 class _SpecCapturingRunner:

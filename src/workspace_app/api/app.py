@@ -1207,6 +1207,7 @@ def create_app(
         kb_turn_engine,
         kb_retriever,
         get_user_id,
+        users,
         kb_agent_configs=kb_agent_configs,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
@@ -1587,6 +1588,7 @@ def create_app(
                 conv.messages,
                 max_messages=history_max_messages,
                 max_tokens=history_max_context_tokens,
+                users=users,
             ),
             packages=packages or [],
             prebuilt_dir=prebuilt_dir,
@@ -2154,6 +2156,7 @@ def create_app(
                 conv.messages[:-1],
                 max_messages=history_max_messages,
                 max_tokens=history_max_context_tokens,
+                users=users,
             ),
             # Provisionable tool packages (installed into the sandbox on
             # create; the runner exposes the allowed-via-colon commands).
@@ -2174,6 +2177,9 @@ def create_app(
             collection_ids=hub_collection_ids,
             # #111: card create/update agent tools stamp this user on the write.
             acting_user=author,
+            # #242: the resolved speaker for the per-turn "who am I replying to"
+            # system note in this shared, multi-collaborator workspace.
+            speaker=users.get(author),
         )
 
         def persist(produced: list[TurnMessage]) -> None:

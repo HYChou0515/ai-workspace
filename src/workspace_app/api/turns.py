@@ -25,6 +25,8 @@ from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
 from ..resources.conversation import MessageMetrics
+from ..users.labels import speaker_label
+from ..users.protocol import UserDirectory
 from .events import (
     AgentEvent,
     AgentMetrics,
@@ -96,8 +98,22 @@ def _fold_cancellation_marker(items: list[dict[str, Any]]) -> None:
         items.append({"role": "assistant", "content": _INTERRUPTED_MARKER})
 
 
+def _attribute(content: str, author: str | None, users: UserDirectory | None) -> str:
+    """#242 — prefix a user message with its speaker (`[Name (handle)]: …`) so a
+    multi-collaborator thread tells the model who said what. No directory or no
+    author ⇒ unchanged (back-compat: single-user threads and replay project the
+    text verbatim)."""
+    if users is None or not author:
+        return content
+    return f"[{speaker_label(users.get(author))}]: {content}"
+
+
 def history_items(
-    messages: Iterable[Any], *, max_messages: int, max_tokens: int = 0
+    messages: Iterable[Any],
+    *,
+    max_messages: int,
+    max_tokens: int = 0,
+    users: UserDirectory | None = None,
 ) -> list[dict[str, Any]]:
     """Map persisted messages → SDK input items for cross-turn memory.
 
@@ -149,7 +165,12 @@ def history_items(
                 _fold_cancellation_marker(items)
             continue
         if m.role == "user" and m.content:
-            items.append({"role": "user", "content": m.content})
+            items.append(
+                {
+                    "role": "user",
+                    "content": _attribute(m.content, getattr(m, "author", None), users),
+                }
+            )
         elif m.role == "assistant" and m.content:
             # Skip empty-content assistant turns: they marked a tool_call
             # decision that the following tool message will reconstruct.
