@@ -6,7 +6,7 @@
  * rendered as clickable source cards.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -14,6 +14,13 @@ import remarkMath from "remark-math";
 
 import type { Message, MessageCitation } from "../api/types";
 import type { AgentEntry, StepView, ToolCallView } from "../pages/investigation/agentLog";
+import {
+  buildByMarker,
+  kbCiteAnchor,
+  kbCiteUrlTransform,
+  renderCitedText,
+} from "../renderers/kbCite";
+import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { formatProvenance } from "../lib/provenance";
@@ -354,6 +361,10 @@ function MessageBlock({
   onUndo?: () => void;
 }) {
   const t = useT();
+  // #221: resolve the answer body's `[n]` markers against this message's
+  // citations so each inline marker becomes a clickable pill (same target as
+  // the Sources cards below). Empty map ⇒ markers render as muted text.
+  const byMarker = useMemo(() => buildByMarker(message.citations ?? []), [message.citations]);
   if (message.role === "user") {
     return (
       <div>
@@ -441,7 +452,25 @@ function MessageBlock({
           <ReasoningBlock text={message.reasoning} answered={message.content.trim().length > 0} />
         )}
         <div className="md-body md-compact" style={{ marginLeft: 28, marginTop: 4 }}>
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkMath, remarkKbCitation]}
+            rehypePlugins={[rehypeKatex]}
+            urlTransform={kbCiteUrlTransform}
+            components={{
+              // #221: remarkKbCitation rewrites `[N]` → `kb-cite:N`; render those
+              // as clickable inline pills (opens the cited doc via the same
+              // handler as the Sources cards). Non-citation links stay normal.
+              a: ({ href, children, ...rest }) => {
+                const cite = kbCiteAnchor({ href, children }, byMarker, onOpenCitation);
+                if (cite) return cite;
+                return (
+                  <a href={href} {...rest}>
+                    {children}
+                  </a>
+                );
+              },
+            }}
+          >
             {message.content}
           </ReactMarkdown>
         </div>
@@ -567,6 +596,10 @@ function ToolCallCard({
   // final formatted output supersedes it. Auto-expand a streaming tool.
   const body = call.status === "done" ? call.output : (call.liveOutput ?? call.output);
   const streamingLive = call.status === "running" && !!call.liveOutput;
+  // #221: resolve the body's `[n]` markers (ask_knowledge_base attaches its KB
+  // citations here) so each becomes a restrained clickable. Empty while
+  // streaming / for tools with no citations ⇒ the body stays plain text.
+  const byMarker = useMemo(() => buildByMarker(call.citations ?? []), [call.citations]);
   // Follow streaming stdout to the bottom unless the user scrolls up.
   const preRef = useStickToBottom<HTMLPreElement>(body);
   const labelKey = TOOL_LABEL[call.name];
@@ -649,7 +682,7 @@ function ToolCallCard({
             overflow: "auto",
           }}
         >
-          {body}
+          {renderCitedText(body, byMarker, onOpenCitation)}
         </pre>
       )}
       {call.citations && call.citations.length > 0 && (
