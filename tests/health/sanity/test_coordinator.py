@@ -396,7 +396,7 @@ async def test_rescore_rejudges_stored_output_without_rerunning_the_model():
     runs_after_first = len(factory.calls)
 
     # swap the judge's verdict, then rescore — no new model call, ai_grade updates
-    coord._judge = _FakeJudge('{"grade":"fail","note":"重新判為錯"}')  # ty: ignore[invalid-assignment]
+    coord._judge = _FakeJudge('{"grade":"fail","note":"重新判為錯"}')
     n = coord.rescore(_MODEL)
     await coord.aclose()
 
@@ -424,12 +424,27 @@ async def test_rescore_skips_errored_cells():
     await coord.aclose()
 
 
-def _add_custom(spec, **kw):
+def _add_custom(
+    spec,
+    *,
+    category: str = "自訂",
+    prompt: str = "2+2 等於多少?",
+    expected: str = "4",
+    levels: list[str] | None = None,
+    enabled: bool = True,
+):
     from workspace_app.resources import CustomSanityQuestion
 
-    defaults = {"category": "自訂", "prompt": "2+2 等於多少?", "expected": "4", "levels": ["none"]}
     rm = spec.get_resource_manager(CustomSanityQuestion)
-    rm.create(CustomSanityQuestion(**{**defaults, **kw}))
+    rm.create(
+        CustomSanityQuestion(
+            category=category,
+            prompt=prompt,
+            expected=expected,
+            levels=levels or ["none"],
+            enabled=enabled,
+        )
+    )
 
 
 async def test_custom_question_runs_ai_only_graded():
