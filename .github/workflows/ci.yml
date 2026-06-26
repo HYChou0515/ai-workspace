@@ -67,6 +67,41 @@ jobs:
           # full local suite (CLAUDE.md), not CI.
           fail_ci_if_error: false
 
+  sandbox-host-test:
+    # The sandbox host is a fully independent project (own pyproject + uv.lock,
+    # no workspace-app deps) — #251. It gets its own lean CI: lint + type + unit
+    # tests. Integration tests (real subprocess / root / cgroup v2) are excluded
+    # here, same as the backend job; the 100% gate is the full local suite.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sandbox-host
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check
+
+      - name: Ruff format
+        run: uv run ruff format --check
+
+      - name: Type check
+        run: uv run ty check src tests
+
+      - name: Tests (unit only)
+        run: |
+          uv run coverage run -m pytest -m "not integration"
+          uv run coverage report
+
   frontend-test:
     runs-on: ubuntu-latest
     defaults:

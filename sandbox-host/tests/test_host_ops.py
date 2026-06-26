@@ -8,8 +8,8 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-from workspace_app.sandbox.host.app import check_cgroup_ready, make_host_app
-from workspace_app.sandbox.mock import MockSandbox
+from sandbox_host.app import check_cgroup_ready, make_host_app
+from sandbox_host.mock import MockSandbox
 
 
 def _client(app) -> httpx.AsyncClient:

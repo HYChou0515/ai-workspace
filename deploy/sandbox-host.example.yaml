@@ -1,8 +1,10 @@
-# Example deployment of the HTTP sandbox host (#60).
+# Example deployment of the standalone HTTP sandbox host (#60, #251).
 #
-# The host runs `python -m workspace_app.sandbox_host` from the SAME image as the
-# app, in its own Deployment + HPA, and the app talks to it over the in-cluster
-# ClusterIP Service (set `sandbox.kind: http` + `sandbox.http.base_url:
+# The host is now its OWN service/image (`sandbox-host/`, built from
+# `sandbox-host/Dockerfile`) — it shares no code or deps with the app. It runs
+# `python -m sandbox_host` in its own Deployment + HPA, configured entirely via
+# `SANDBOX_HOST_*` env vars (no shared config file), and the app talks to it over
+# the in-cluster ClusterIP Service (set `sandbox.kind: http` + `sandbox.http.base_url:
 # http://sandbox-host:8000` in the app's config). Each sandbox runs as a pooled
 # numeric uid under a per-handle cgroup v2 — so the pod needs root + a delegated
 # cgroup subtree (see the securityContext notes). Adjust names/namespace/limits.
@@ -26,8 +28,8 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: sandbox-host
-          image: workspace-app:latest # same image as the app
-          command: ["python", "-m", "workspace_app.sandbox_host"]
+          image: sandbox-host:latest # built from sandbox-host/Dockerfile
+          command: ["python", "-m", "sandbox_host"]
           ports:
             - containerPort: 8000
           env:
@@ -36,6 +38,18 @@ spec:
             - name: POD_IP
               valueFrom:
                 fieldRef: { fieldPath: status.podIP }
+            # Standalone host config — all SANDBOX_HOST_* (see SandboxHostSettings).
+            # The image bakes the agent's prebuilt tools at /opt/tools and points
+            # here by default; override only to relocate or to disable tools.
+            - { name: SANDBOX_HOST_TOOLS_DIR, value: "/opt/tools" }
+            - { name: SANDBOX_HOST_UID_MIN, value: "100000" }
+            - { name: SANDBOX_HOST_UID_MAX, value: "199999" }
+            - { name: SANDBOX_HOST_MEMORY_MAX, value: "512M" }
+            - { name: SANDBOX_HOST_CPU_CORES, value: "1.0" }
+            - { name: SANDBOX_HOST_PIDS_MAX, value: "512" }
+            # cgroup_root unset ⇒ the host auto-detects this pod's own delegated
+            # cgroup v2 subtree. idle_ttl reaps sandboxes orphaned by an app crash.
+            - { name: SANDBOX_HOST_IDLE_TTL, value: "1800" }
           securityContext:
             # The host must setuid/chown to foreign uids and write the cgroup
             # subtree, so it runs as root. Per-sandbox isolation is uid + cgroup

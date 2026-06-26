@@ -1,5 +1,11 @@
 # Plan — HTTP Sandbox (#60)
 
+> **Superseded in part by #251:** the host described below as part of
+> `workspace_app` is now a **standalone project** (`sandbox-host/`, own deps/image,
+> env-based config, no shared modules). The wire contract is
+> `docs/sandbox-host-wire.md`; operator docs are `docs/sandbox-host.md`. This
+> document is kept for the original design rationale.
+
 > A fourth `Sandbox` backend, **`HttpSandbox`** (the client), plus a self-hosted
 > **sandbox host service** it talks to over HTTP. The host runs in its own
 > pod/Deployment (later HPA), so sandbox execution is decoupled from the app
