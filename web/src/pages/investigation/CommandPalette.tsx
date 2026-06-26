@@ -146,6 +146,10 @@ export function CommandPalette({
                 }}
                 style={{
                   width: "100%",
+                  // Let the flex children shrink so a long path ellipsizes
+                  // instead of overflowing the fixed-width modal (which clips
+                  // it) when a larger system font is in use (#256).
+                  minWidth: 0,
                   textAlign: "left",
                   padding: "8px 14px",
                   display: "flex",
@@ -157,13 +161,17 @@ export function CommandPalette({
                 }}
               >
                 <Icon name="file" size={13} color={isActive ? "var(--accent-h)" : "var(--text-paper-d)"} />
-                <span>{basename(f.path)}</span>
-                <span style={{ flex: 1 }} />
+                <span style={{ flexShrink: 0 }}>{basename(f.path)}</span>
+                <span style={{ flex: 1, minWidth: 8 }} />
                 <span
                   style={{
                     fontFamily: "var(--font-mono)",
                     fontSize: pxToRem(11),
                     color: isActive ? "var(--accent-h)" : "var(--text-paper-d2)",
+                    minWidth: 0,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
                   }}
                 >
                   {f.path}

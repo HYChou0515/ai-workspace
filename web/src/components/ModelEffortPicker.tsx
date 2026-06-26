@@ -221,7 +221,7 @@ export function ModelEffortPicker({
           display: "inline-flex",
           alignItems: "center",
           gap: 6,
-          height: 28,
+          minHeight: 28,
           padding: "0 8px",
           border: `1px solid ${open ? "var(--accent)" : "var(--paper-3)"}`,
           borderRadius: 6,
@@ -231,7 +231,7 @@ export function ModelEffortPicker({
         }}
       >
         <Icon name="sparkle" size={13} color="var(--accent)" />
-        <span style={{ fontSize: pxToRem(12), color: "var(--ink)" }}>{active.name}</span>
+        <span style={{ fontSize: pxToRem(12), color: "var(--text-paper)" }}>{active.name}</span>
         <span style={{ width: 1, height: 14, background: "var(--paper-3)" }} />
         <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t(`effort.${effort}`)}</span>
         <Icon name="chev_d" size={11} color="var(--text-paper-d)" />
@@ -306,7 +306,7 @@ export function ModelEffortPicker({
                         <span
                           style={{
                             fontSize: pxToRem(12.5),
-                            color: "var(--ink)",
+                            color: "var(--text-paper)",
                             fontWeight: on ? 600 : 400,
                           }}
                         >
