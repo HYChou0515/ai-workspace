@@ -411,6 +411,21 @@ def test_find_overwrite_target_is_none_for_a_new_card(spec_instance: SpecStar):
     assert card is None and ambiguity == 0
 
 
+def test_find_overwrite_target_falls_back_to_title_when_no_usable_key(spec_instance: SpecStar):
+    """#205 mirror of ``upsert``'s title fallback: with no normalisable key, the title
+    itself becomes the lookup key — so the review 'before' snapshot still resolves the
+    card a keyless, title-only upsert would overwrite."""
+    from workspace_app.workflow.capabilities import find_overwrite_target, upsert_context_card
+
+    cid = _collection(spec_instance)
+    upsert_context_card(
+        spec_instance, collection=cid, keys=["Metal 4"], title="Metal 4", body="b", user="u"
+    )
+    card, ambiguity = find_overwrite_target(spec_instance, collection=cid, keys=[], title="Metal 4")
+    assert card is not None and card.title == "Metal 4"
+    assert ambiguity == 1
+
+
 def test_find_overwrite_target_counts_ambiguous_keys(spec_instance: SpecStar):
     """Two cards sharing a key (keys are many-to-many, no uniqueness) → ambiguity 2; only
     the first is the upsert target, surfaced so the overwrite isn't silently to one of N."""

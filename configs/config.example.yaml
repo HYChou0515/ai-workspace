@@ -31,7 +31,7 @@
 
 # ─── sandbox (agent execution environment) ──────────────────────────
 # sandbox:
-#   kind: local                # local | docker | mock | http
+#   kind: local                # local | http | mock  (docker deprecated #252 — use http)
 #   root: null                 # null = tmpdir per sandbox
 #   exec_timeout: 60.0         # TOTAL wall-clock cap per command; 0 = no cap
 #   log_timeout: 60.0          # IDLE cap (#70): kill if no stdout/stderr output

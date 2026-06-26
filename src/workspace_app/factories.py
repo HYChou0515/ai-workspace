@@ -466,6 +466,22 @@ def _litellm_for(endpoint: LlmEndpoint) -> ILlm:
     )
 
 
+def _litellm_vlm_for(endpoint: LlmEndpoint) -> IVlm:
+    """Vision-side mirror of `_litellm_for` (#131 / #196): the per-call `timeout` is
+    the endpoint's idle ceiling and `num_retries=0` because the failover loop owns
+    retry-by-switching. Module-level (not nested in `get_kb_vlm`) so it's unit-testable
+    in isolation, exactly like `_litellm_for`."""
+    from .kb.vlm import LitellmVlm
+
+    return LitellmVlm(
+        endpoint.model,
+        base_url=endpoint.base_url,
+        api_key=endpoint.api_key,
+        timeout=endpoint.idle_s,
+        num_retries=0,
+    )
+
+
 def _llm_from_chain(chain: list[LlmEndpoint]) -> ILlm | None:
     """An ILlm for a resolved chain: `[]` → None (role off); a single endpoint →
     a plain `LitellmLlm` (no failover machinery — there's nowhere to switch, so
@@ -679,11 +695,6 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
     becomes a busy-aware `FallbackVlm` (#131 / #196)."""
     from .kb.vlm import LitellmVlm
 
-    def make_vlm(e: LlmEndpoint) -> IVlm:
-        return LitellmVlm(
-            e.model, base_url=e.base_url, api_key=e.api_key, timeout=e.idle_s, num_retries=0
-        )
-
     chain = resolve_llm_chain(settings, settings.kb.vlm_llm)
     if not chain:
         return None
@@ -691,7 +702,10 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
         e = chain[0]
         return LitellmVlm(e.model, base_url=e.base_url, api_key=e.api_key)
     return FallbackVlm(
-        chain, get_cooldown_registry(), make_vlm=make_vlm, on_switch=make_switch_logger("vlm")
+        chain,
+        get_cooldown_registry(),
+        make_vlm=_litellm_vlm_for,
+        on_switch=make_switch_logger("vlm"),
     )
 
 
