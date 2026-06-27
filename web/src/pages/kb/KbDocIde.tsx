@@ -33,6 +33,7 @@ import { FileView } from "../../renderers/FileView";
 import { hasEditToggle, pickRenderer } from "../../renderers/registry";
 import { FileTree } from "../investigation/FileTree";
 import { docHref } from "./kbLinks";
+import { QualityBadge } from "./QualityBadge";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { pxToRem } from "../../lib/pxToRem";
 
@@ -239,7 +240,10 @@ export function KbDocIde({
                     onChanged={refetch}
                     onReindex={(paths) => void reindexPaths(paths)}
                     decorate={(path) => (
-                      <KbRowBadge path={path} status={docByPath.get(path)?.status} />
+                      <>
+                        <QualityBadge score={docByPath.get(path)?.quality_score} />
+                        <KbRowBadge path={path} status={docByPath.get(path)?.status} />
+                      </>
                     )}
                   />
                 </div>
@@ -316,6 +320,19 @@ function KbStatusBar({ doc }: { doc?: KbDocument }) {
         )
       )}
       <span className="kb-ide__status-state">{status}</span>
+      {typeof doc.quality_score === "number" && (
+        // #105: the AI quality verdict — the coloured grade + a short rationale
+        // ("why good/bad"), title-truncated. Only when the doc has been judged.
+        <span className="kb-ide__status-quality" data-testid="kb-ide-quality">
+          <span className="kb-ide__status-quality-label">{t("kb.quality.heading")}</span>
+          <QualityBadge score={doc.quality_score} />
+          {doc.quality_rationale ? (
+            <span className="kb-ide__status-quality-why" title={doc.quality_rationale}>
+              {doc.quality_rationale}
+            </span>
+          ) : null}
+        </span>
+      )}
       {(chunksLabel || rest.length > 0) && (
         <span className="kb-ide__status-meta">
           {chunksLabel && (

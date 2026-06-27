@@ -96,6 +96,9 @@ class CollectionOut(BaseModel):
     # current values. Blank ⇒ the bundled wiki prompt is used verbatim.
     wiki_maintainer_guidance: str = ""
     wiki_reader_guidance: str = ""
+    # #105: the per-collection quality rubric, so the editor can prefill it.
+    # Blank ⇒ the collection is not scored.
+    quality_rubric: str = ""
 
 
 class SyncOut(BaseModel):
@@ -189,6 +192,13 @@ class RenderedDoc(BaseModel):
     # handed back (PptxParser's soffice-converted PDF) — the FE iframes
     # `/blobs/{preview_file_id}` when set. "" = no preview.
     preview_file_id: str = ""
+    # #105: the AI quality verdict shown when the doc is opened — the holistic
+    # 0–100 `quality_score` (null = un-scored), the `quality_rationale` ("why
+    # good/bad"), and the per-dimension `quality_breakdown` (keys named by the
+    # collection's rubric). Display-only.
+    quality_score: int | None = None
+    quality_rationale: str = ""
+    quality_breakdown: dict[str, float] = {}
 
 
 class DocDeletedOut(BaseModel):
@@ -225,6 +235,14 @@ class DocumentRow(BaseModel):
     # which the FE reads as "no unit bar". Monotonic while indexing (see IndexRun).
     units_done: int = 0
     units_total: int = 0
+    # #105: the AI's quality grade (0–100) for this doc as a knowledge source, or
+    # null when un-scored (no rubric / not yet judged) — the FE draws a quality
+    # badge from it and can sort the list by it. The short `quality_rationale`
+    # rides the row too so the doc IDE's status bar can show "why" without a
+    # per-doc render call; the (larger) per-dimension breakdown stays on the
+    # `render_document` detail.
+    quality_score: int | None = None
+    quality_rationale: str = ""
 
 
 class CollectionImported(BaseModel):
@@ -305,6 +323,7 @@ def register_kb_routes(
             use_wiki=data.use_wiki,
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
+            quality_rubric=data.quality_rubric,
         )
 
     @app.post("/kb/collections")
@@ -697,13 +716,19 @@ def register_kb_routes(
         collection_id: str,
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=500),
+        sort: str = Query("recent"),
     ) -> DocumentsPage:
         """Paged list of a collection's documents. `collection_id` is the
         indexed filter; specstar serves the page through
         `QB[...].offset(offset).limit(limit)` so the BE never fetches the
         full collection just to slice it (see
         `feedback_specstar_indexed_queries`). `total` is computed via the
-        same filter — counts only, no row materialisation."""
+        same filter — counts only, no row materialisation.
+
+        `sort` (#105): `recent` (default) = newest first; `quality` = worst
+        quality first (the indexed `quality_score` ascending) so the FE's "sort
+        by quality" surfaces the docs that drag retrieval down. `resource_id` is
+        the total-order tiebreak in both."""
         rm = spec.get_resource_manager(SourceDoc)
         q = QB["collection_id"] == collection_id
         total = rm.count_resources(q.build())
@@ -715,15 +740,15 @@ def register_kb_routes(
         # the front and slide the window, double-counting one row and dropping
         # another in the fetch-all loop (#184). Both are meta-level fields
         # specstar indexes implicitly — no `add_model(indexed_fields=...)`.
-        items: list[DocumentRow] = []
-        data_page = list(
-            rm.list_resources(
-                q.sort(QB.created_time().desc(), QB.resource_id().asc())
-                .offset(offset)
-                .limit(limit)
-                .build()
-            )
+        # `quality` sort intentionally pages on the (mutable) score — a re-score
+        # CAN shift the window, the inherent cost of sorting by a live signal.
+        ordering = (
+            q.sort(QB["quality_score"].asc(), QB.resource_id().asc())
+            if sort == "quality"
+            else q.sort(QB.created_time().desc(), QB.resource_id().asc())
         )
+        items: list[DocumentRow] = []
+        data_page = list(rm.list_resources(ordering.offset(offset).limit(limit).build()))
         # `r.info.resource_id` (NOT `r.meta.*`) is the resource_id stored on
         # `DocChunk.source_doc_id` / on a `CitationEvent.document_id` at ingest —
         # the IN filters keyed below must use the SAME attribute, and the lookups
@@ -779,6 +804,8 @@ def register_kb_routes(
                     updated_at=_ms(updated),
                     units_done=units_done,
                     units_total=units_total,
+                    quality_score=data.quality_score,
+                    quality_rationale=data.quality_rationale,
                 )
             )
         return DocumentsPage(
@@ -865,6 +892,11 @@ def register_kb_routes(
                 if doc.preview is not None and isinstance(doc.preview.file_id, str)
                 else ""
             ),
+            quality_score=doc.quality_score,
+            quality_rationale=doc.quality_rationale,
+            quality_breakdown={
+                k: float(v) for k, v in doc.quality_breakdown.items() if isinstance(v, (int, float))
+            },
         )
 
     @app.post("/kb/documents/reindex")

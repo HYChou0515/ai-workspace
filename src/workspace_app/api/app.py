@@ -625,6 +625,10 @@ def create_app(
     # None ⇒ a no-op drafter (the feature stays mounted but proposes nothing).
     # __main__ passes factories.get_card_drafter_llm(settings).
     card_drafter_llm: ILlm | None = None,
+    # #105: the LLM-as-judge that scores a doc's quality at index time. None ⇒
+    # scoring off (docs stay un-scored = neutral; search ranking unaffected).
+    # __main__ passes factories.get_kb_quality_judge_llm(settings).
+    quality_judge_llm: ILlm | None = None,
     # #112: the VLM describer the `read_image` agent tool uses to read a
     # workspace image. None ⇒ no VLM configured; `read_image` reports it's
     # unavailable. __main__ passes factories.get_kb_describer(settings) — the
@@ -694,6 +698,10 @@ def create_app(
     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
     kb_retrieval_enhancements: EnhancementSettings | None = None,
+    # #105: the document-quality prior's strength + optional hard floor.
+    # __main__ threads `settings.kb.retrieval.quality_weight / quality_floor`.
+    kb_quality_weight: float = 0.10,
+    kb_quality_floor: int | None = None,
     # #195: per-turn cap on `kb_search` calls for the KB chat turn + the
     # ask_knowledge_base bridge. `None` ⇒ unlimited (also what other surfaces
     # like Topic Hub use). __main__ threads `settings.kb.max_searches_per_turn`
@@ -1238,10 +1246,20 @@ def create_app(
     # coordinator is handed in here rather than called from the routes.
     from ..kb.index_coordinator import IndexCoordinator
 
+    # #105: the doc-quality judge. Built only when a `kb.quality_judge` model is
+    # configured; otherwise None ⇒ the index coordinator skips scoring entirely
+    # (docs stay un-scored = neutral).
+    quality_coordinator = None
+    if quality_judge_llm is not None:
+        from ..kb.quality import QualityScorer
+        from ..kb.quality_coordinator import QualityCoordinator
+
+        quality_coordinator = QualityCoordinator(spec, QualityScorer(quality_judge_llm))
     index_coordinator = IndexCoordinator(
         spec,
         ingestor,
         wiki_coordinator=wiki_coordinator,
+        quality_coordinator=quality_coordinator,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
     )
@@ -1300,6 +1318,8 @@ def create_app(
         llm=kb_llm,
         code_embedder=kb_code_embedder,
         enhancement_defaults=kb_retrieval_enhancements,
+        quality_weight=kb_quality_weight,
+        quality_floor=kb_quality_floor,
     )
     # One turn engine drives the RCA workspace; one cancellable in-flight turn
     # per conversation, SSE streaming, cancel hook.

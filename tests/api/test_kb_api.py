@@ -190,6 +190,71 @@ def test_upload_document_and_list():
     assert blob.status_code == 200 and blob.content == b"# Guide\none two three"
 
 
+def _upload(client, cid, name, data=b"hello there"):
+    return client.post(
+        f"/kb/collections/{cid}/documents", files={"file": (name, data, "text/markdown")}
+    )
+
+
+def _set_quality(spec, doc_id, *, score, rationale="", breakdown=None):
+    import msgspec
+
+    rm = spec.get_resource_manager(SourceDoc)
+    doc = rm.get(doc_id).data
+    rm.update(
+        doc_id,
+        msgspec.structs.replace(
+            doc, quality_score=score, quality_rationale=rationale, quality_breakdown=breakdown or {}
+        ),
+    )
+
+
+def test_list_documents_exposes_quality_score():
+    # #105: the per-doc quality score rides the list row so the FE can draw a
+    # quality badge + sort. Un-scored docs report null (neutral).
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    _upload(client, cid, "a.md")
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+    row = next(d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"])
+    assert row["quality_score"] is None  # un-scored = neutral
+    assert row["quality_rationale"] == ""
+    _set_quality(spec, doc_id, score=73, rationale="Clear and complete.")
+    row = next(d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"])
+    assert row["quality_score"] == 73
+    assert row["quality_rationale"] == "Clear and complete."
+
+
+def test_list_documents_can_sort_by_quality_worst_first():
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    for name in ("good.md", "bad.md", "mid.md"):
+        _upload(client, cid, name)
+    _drain(client)
+    _set_quality(spec, encode_doc_id(cid, "good.md"), score=88)
+    _set_quality(spec, encode_doc_id(cid, "bad.md"), score=14)
+    _set_quality(spec, encode_doc_id(cid, "mid.md"), score=50)
+
+    items = client.get(f"/kb/collections/{cid}/documents?sort=quality").json()["items"]
+    scored = [d["path"] for d in items if d["quality_score"] is not None]
+    assert scored == ["bad.md", "mid.md", "good.md"]
+
+
+def test_render_document_exposes_quality_rationale_and_breakdown():
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    _upload(client, cid, "a.md")
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+    _set_quality(spec, doc_id, score=42, rationale="Thin and noisy.", breakdown={"noise": 0.7})
+
+    rd = client.get(f"/kb/documents?id={doc_id}").json()
+    assert rd["quality_score"] == 42
+    assert rd["quality_rationale"] == "Thin and noisy."
+    assert rd["quality_breakdown"] == {"noise": 0.7}
+
+
 def test_list_documents_exposes_unit_progress_for_an_indexing_fanout_doc():
     """#248: a fanned-out doc that is still indexing carries a real done/total
     unit count so the FE can draw a monotonic progress bar (not parse a string)."""

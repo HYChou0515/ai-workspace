@@ -40,6 +40,11 @@ export type KbCollection = {
    * wiki answers. Blank ⇒ the bundled prompt is used as-is. */
   wiki_maintainer_guidance: string;
   wiki_reader_guidance: string;
+  /** #105: the per-collection quality rubric — what makes a doc a good/bad
+   * knowledge source + which dimensions to assess. Blank ⇒ the collection is
+   * not scored and its search ranking is unaffected. Optional on the wire (the
+   * real BE always sends it, defaulting to ""); absent ⇒ treat as "". */
+  quality_rubric?: string;
 };
 
 /** Issue #101: result of preparing a collection export — the handle to stream
@@ -111,6 +116,13 @@ export type KbDocument = {
   /** Stored blob size in bytes + the resource's last-update time (epoch ms). */
   size?: number;
   updated_at?: number;
+  /** #105: the AI quality grade (0–100) of this doc as a knowledge source, or
+   * null/absent when un-scored (no rubric / not yet judged). Drives the quality
+   * badge + the "sort by quality" control. `quality_rationale` ("why good/bad")
+   * rides the row so the doc IDE's status bar shows it without a render call;
+   * the per-dimension breakdown stays on `KbRenderedDoc`. */
+  quality_score?: number | null;
+  quality_rationale?: string;
 };
 
 /** One page of documents inside a collection. The BE pages through specstar's
@@ -156,6 +168,12 @@ export type KbRenderedDoc = {
    * handed back (pptx → soffice-converted PDF). The viewer iframes
    * `/blobs/{preview_file_id}` when set; "" / absent = no preview. */
   preview_file_id?: string;
+  /** #105: the AI quality verdict shown when the doc is open — holistic 0–100
+   * score (null = un-scored), the rationale ("why good/bad"), and the
+   * per-dimension breakdown (keys named by the collection's rubric). */
+  quality_score?: number | null;
+  quality_rationale?: string;
+  quality_breakdown?: Record<string, number>;
 };
 
 /** A resolved [n] marker — points at a span of a source document. */
@@ -312,6 +330,9 @@ export interface KbApi {
       use_wiki?: boolean;
       wiki_maintainer_guidance?: string;
       wiki_reader_guidance?: string;
+      /** #105: the per-collection quality rubric (what makes a doc a good/bad
+       * knowledge source + which dimensions to assess). Blank = not scored. */
+      quality_rubric?: string;
     },
   ): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
@@ -323,7 +344,7 @@ export interface KbApi {
   reindexCollection(id: string, opts?: { only?: "failed" }): Promise<void>;
   listDocuments(
     collectionId: string,
-    page?: { offset?: number; limit?: number },
+    page?: { offset?: number; limit?: number; sort?: "recent" | "quality" },
   ): Promise<KbDocumentsPage>;
   /** Multipart upload; returns the ingested document ids (one per archive
    * member). `path` overrides the stored filename — used for folder uploads to
@@ -480,6 +501,7 @@ export const realKbApi: KbApi = {
     const qs = new URLSearchParams();
     if (page?.offset != null) qs.set("offset", String(page.offset));
     if (page?.limit != null) qs.set("limit", String(page.limit));
+    if (page?.sort != null) qs.set("sort", page.sort);
     const path = `/kb/collections/${encodeURIComponent(collectionId)}/documents`;
     const url = qs.size ? `${path}?${qs.toString()}` : path;
     const resp = await apiFetch(url);

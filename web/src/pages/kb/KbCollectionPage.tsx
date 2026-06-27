@@ -32,6 +32,7 @@ import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionForm
 import { ContextCardsTab } from "./ContextCardsTab";
 import { fetchAllDocs, KbDocIde } from "./KbDocIde";
 import { useKbOutlet } from "./KbHome";
+import { QualityRubricEditor } from "./QualityRubricEditor";
 import { RetrievalToggles } from "./RetrievalToggles";
 import { WikiBrowser } from "./WikiBrowser";
 import { pxToRem } from "../../lib/pxToRem";
@@ -673,6 +674,15 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
               updateMut.mutate({ use_rag: docSearch, use_wiki: wiki });
             }}
           />
+          {/* #105: the quality rubric lives with the other search-ranking
+              settings — it shapes how docs are scored + down-weighted. */}
+          <div style={{ marginTop: 12 }}>
+            <QualityRubricEditor
+              collectionId={selected.resource_id}
+              rubric={selected.quality_rubric ?? ""}
+              client={client}
+            />
+          </div>
         </div>
       )}
 

@@ -65,6 +65,7 @@ __all__ = [
     "get_doc_pipeline",
     "get_chat_pipeline",
     "get_kb_llm",
+    "get_kb_quality_judge_llm",
     "get_kb_vlm",
     "get_designed_pptx_vlm",
     "get_kb_describer",
@@ -524,6 +525,15 @@ def get_card_drafter_llm(settings: Settings) -> ILlm | None:
     other role. `None` ⇒ card drafting disabled (the generation feature stays
     mounted but the drafter proposes nothing)."""
     return _llm_from_chain(resolve_llm_chain(settings, settings.kb.card_drafter))
+
+
+def get_kb_quality_judge_llm(settings: Settings) -> ILlm | None:
+    """The LLM-as-judge that scores a document's quality as a knowledge source at
+    index time (#105). `kb.quality_judge` is a usage-entry reference resolved
+    through the same cascade + failover chain as every other role. `None` (the
+    default) ⇒ quality scoring off (docs stay un-scored = neutral; search ranking
+    unaffected)."""
+    return _llm_from_chain(resolve_llm_chain(settings, settings.kb.quality_judge))
 
 
 def get_sanity_judge_llm(settings: Settings) -> ILlm | None:
