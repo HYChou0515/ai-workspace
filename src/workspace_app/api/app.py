@@ -63,12 +63,13 @@ from ..tooling.registry import PackageInfo
 from ..users import MockUserDirectory, UserDirectory
 from ..workflow.capabilities import CollectionNotFound, ingest_to_collection, upsert_context_card
 from ..workflow.credential import CredentialBroker
-from ..workflow.discovery import load_run_callable
+from ..workflow.discovery import load_preflight_callable, load_run_callable
 from ..workflow.handle import WorkflowHandle
 from ..workflow.orchestrator import (
     NotAwaitingDecision,
     WorkflowOrchestrator,
 )
+from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import RunStatus, WorkflowRun
 from .activity import ActivityLog
 from .card_gen_routes import register_card_gen_routes
@@ -437,6 +438,33 @@ class _CardBody(BaseModel):
     keys: list[str] = Field(default_factory=list)
     title: str = ""
     body: str = ""
+
+
+class _PreflightCheckOut(BaseModel):
+    # #283: one pre-flight checklist line in the launch dialog.
+    label: str
+    ok: bool
+    severity: str  # "required" | "advisory"
+    reason: str = ""
+
+
+class _PhaseOut(BaseModel):
+    id: str
+    title: str = ""
+
+
+class _PreflightPreviewOut(BaseModel):
+    # #283: what the launch dialog renders BEFORE a run starts — the workflow's
+    # identity + phases, plus (when the author wrote a ``preflight``) a human summary
+    # of what the run will do and a checklist of its preconditions.
+    workflow_id: str
+    title: str
+    description: str
+    phases: list[_PhaseOut]
+    summary: str
+    checks: list[_PreflightCheckOut]
+    can_run: bool
+    has_preflight: bool
 
 
 async def _staged_run_uploads(
@@ -1951,6 +1979,53 @@ def create_app(
             )
         out.sort(key=lambda d: d.get("started") or 0, reverse=True)
         return out
+
+    @api.get("/a/{slug}/items/{item_id}/runs/preview")
+    async def preview_workflow_run(
+        slug: str, item_id: str, workflow_id: str = Query("")
+    ) -> _PreflightPreviewOut:
+        """#283 (manual §18): the launch dialog's pre-flight — what THIS workflow will do
+        + whether its preconditions are met, WITHOUT starting a run. Reads the staged
+        ``input.json`` (manual §14) and calls the author's optional ``preflight(wf, inputs)``
+        over a read-only handle (no turn/sandbox drivers — pre-flight only inspects the
+        workspace). A workflow with no ``preflight`` previews its phases alone (runnable).
+        Registered before ``/runs/{run_id}`` so ``preview`` isn't read as a run id."""
+        investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
+        upload_dir = _wf_upload_dir(slug, profile)
+        wf = WorkflowHandle(
+            store=files,
+            workspace_id=investigation_id,
+            workflow_id=workflow_id,
+            config=dict(manifest.config),
+            upload_dir=upload_dir,
+            user=get_user_id(),
+        )
+        input_path = manifest.input_json or f"{upload_dir.rstrip('/')}/input.json"
+        inputs = await wf.read_json(input_path) if await wf.exists(input_path) else {}
+        preflight = load_preflight_callable(slug, profile, workflow_id)
+        summary = ""
+        checks: list[_PreflightCheckOut] = []
+        allowed = True
+        if preflight is not None:
+            report = await preflight(wf, inputs)
+            summary = report.summary
+            checks = [
+                _PreflightCheckOut(
+                    label=c.label, ok=c.ok, severity=c.severity.value, reason=c.reason
+                )
+                for c in report.checks
+            ]
+            allowed = _preflight_can_run(report)
+        return _PreflightPreviewOut(
+            workflow_id=workflow_id,
+            title=manifest.title or workflow_id or "Workflow",
+            description=manifest.description,
+            phases=[_PhaseOut(id=p.id, title=p.title) for p in manifest.phases],
+            summary=summary,
+            checks=checks,
+            can_run=allowed,
+            has_preflight=preflight is not None,
+        )
 
     @api.get("/a/{slug}/items/{item_id}/runs/{run_id}")
     async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:

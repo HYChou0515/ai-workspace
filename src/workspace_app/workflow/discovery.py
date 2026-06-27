@@ -24,6 +24,7 @@ from typing import Any
 from ..apps.profiles import load_profile, workflow_profiles
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest
+from .preflight import Preflight
 
 _APPS_PKG = "workspace_app.apps"
 
@@ -35,19 +36,37 @@ class WorkflowNotFound(LookupError):
     ``run.py`` / no ``run()`` callable in it."""
 
 
-def _exec_run(path: Path, label: str) -> ProfileRun:
-    """Exec a ``run.py`` at ``path`` (by file path, so a hyphenated profile dir
-    works) and return its ``run`` callable. Raises ``WorkflowNotFound`` if there is
-    no ``run`` callable."""
+def _exec_module(path: Path, label: str):
+    """Exec a ``run.py`` at ``path`` (by file path, so a hyphenated profile dir works)
+    and return the loaded module. Its functions (``run``, optional ``preflight``) are
+    pulled off by the callers below."""
     mod_name = "_wf_" + re.sub(r"\W", "_", label)
     spec = importlib.util.spec_from_file_location(mod_name, path)
     assert spec is not None and spec.loader is not None  # a real file always yields a loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    run = getattr(mod, "run", None)
+    return mod
+
+
+def _exec_run(path: Path, label: str) -> ProfileRun:
+    """Exec a ``run.py`` and return its ``run`` callable. Raises ``WorkflowNotFound``
+    if there is no ``run`` callable."""
+    run = getattr(_exec_module(path, label), "run", None)
     if not callable(run):
         raise WorkflowNotFound(f"{label}/run.py has no run() callable")
     return run
+
+
+def _run_py_path(app_slug: str, profile: str, workflow_id: str):
+    """The ``run.py`` traversable for a workflow: the list-form
+    ``profiles/<profile>/workflows/<workflow_id>/run.py`` when ``workflow_id`` is set,
+    else the legacy profile-root ``run.py``."""
+    base = resources.files(_APPS_PKG) / app_slug / "profiles" / profile
+    return base / "workflows" / workflow_id / "run.py" if workflow_id else base / "run.py"
+
+
+def _run_py_label(app_slug: str, profile: str, workflow_id: str) -> str:
+    return f"{app_slug}_{profile}" + (f"_{workflow_id}" if workflow_id else "")
 
 
 def load_run_callable(app_slug: str, profile: str, workflow_id: str = "") -> ProfileRun:
@@ -57,14 +76,27 @@ def load_run_callable(app_slug: str, profile: str, workflow_id: str = "") -> Pro
     (``profiles/<profile>/workflows/<workflow_id>/run.py``); the default ``""`` is the
     legacy singular layout (``run.py`` at the profile root). Raises ``WorkflowNotFound``
     when the file or the ``run`` callable is missing."""
-    base = resources.files(_APPS_PKG) / app_slug / "profiles" / profile
-    run_path = base / "workflows" / workflow_id / "run.py" if workflow_id else base / "run.py"
+    run_path = _run_py_path(app_slug, profile, workflow_id)
     if not run_path.is_file():
         where = f"workflows/{workflow_id}/run.py" if workflow_id else "run.py"
         raise WorkflowNotFound(f"{app_slug}/{profile} has no {where}")
-    label = f"{app_slug}_{profile}" + (f"_{workflow_id}" if workflow_id else "")
     with resources.as_file(run_path) as p:
-        return _exec_run(p, label)
+        return _exec_run(p, _run_py_label(app_slug, profile, workflow_id))
+
+
+def load_preflight_callable(app_slug: str, profile: str, workflow_id: str = "") -> Preflight | None:
+    """A workflow's optional ``preflight`` coroutine (#283), loaded from the same
+    ``run.py`` as ``run``. Returns ``None`` when the file or the ``preflight`` callable
+    is absent — pre-flight is opt-in, so the launch dialog falls back to the workflow's
+    phases. Never raises (an absent hook is normal, not an error)."""
+    run_path = _run_py_path(app_slug, profile, workflow_id)
+    if not run_path.is_file():
+        return None
+    with resources.as_file(run_path) as p:
+        pf = getattr(
+            _exec_module(p, _run_py_label(app_slug, profile, workflow_id)), "preflight", None
+        )
+    return pf if callable(pf) else None
 
 
 def _check_phase_ids(manifest: WorkflowManifest, label: str) -> None:
