@@ -39,6 +39,7 @@ from ..resources import DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
 from .index_run import IndexRunStore
 from .job_audit import preserve_job_creator
+from .tokens import count_tokens
 
 if TYPE_CHECKING:
     from specstar.events import EventContext
@@ -468,7 +469,11 @@ class IndexCoordinator:
             doc_rm.update(
                 doc_id,
                 msgspec.structs.replace(
-                    doc, status=status, status_detail=detail, text=text or None
+                    doc,
+                    status=status,
+                    status_detail=detail,
+                    text=text or None,
+                    token_count=count_tokens(text or ""),  # #88: chunk-based token estimate
                 ),
             )
         self._clear_staged_text(doc_id)

@@ -33,7 +33,7 @@ export function fmtDate(ms: number): string {
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/** Compact count for the token estimate (≈ bytes/4): 12_400_000 → "12.4 M". */
+/** Compact count for the chunk-based token estimate (#88): 12_400_000 → "12.4 M". */
 export function fmtCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)} M`;
   if (n >= 1_000) return `${Math.round(n / 1_000)} K`;

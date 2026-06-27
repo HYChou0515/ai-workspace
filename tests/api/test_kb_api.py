@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 
-from specstar import SpecStar
+from specstar import QB, SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
@@ -10,7 +10,7 @@ from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
-from workspace_app.resources.kb import EMBED_DIM
+from workspace_app.resources.kb import EMBED_DIM, SourceDoc
 from workspace_app.sandbox.mock import MockSandbox
 
 from ._client import TestClient
@@ -129,6 +129,28 @@ def test_collection_card_aggregates_docs_size_and_updated():
     assert card["doc_count"] == 2
     assert card["size"] == len(b"hello") + len(b"worldwide")  # summed bytes
     assert card["updated_at"] > 0
+
+
+def test_collection_card_aggregates_doc_token_counts():
+    # #88: the card's "≈ N tokens" is the SUM of each ready doc's chunk-based
+    # token_count (a CJK-aware estimate of the extracted text), not raw bytes/4.
+    client, spec = _client_and_spec()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", "資料科學 報告".encode(), "text/markdown")},
+    )
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("b.md", b"hello world foo bar baz", "text/markdown")},
+    )
+    _drain(client)  # token_count is set only once indexing reaches "ready"
+
+    docs = spec.get_resource_manager(SourceDoc).list_resources((QB["collection_id"] == cid).build())
+    expected = sum(d.data.token_count for d in docs)  # ty: ignore[unresolved-attribute]
+    assert expected > 0
+    card = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert card["tokens"] == expected
 
 
 def _new_collection(client: TestClient) -> str:

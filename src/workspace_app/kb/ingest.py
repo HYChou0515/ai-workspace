@@ -36,6 +36,7 @@ from .parsers.llamaindex_readers import DocxParser, HtmlParser
 from .parsers.pdf import PdfParser
 from .parsers.slides import PptxParser
 from .parsers.tabular import CsvParser, ExcelParser
+from .tokens import count_tokens
 
 if TYPE_CHECKING:
     from specstar.types import IResourceManager
@@ -351,7 +352,12 @@ class Ingestor:
         drm.update(
             doc_id,
             msgspec.structs.replace(
-                doc, status="ready", status_detail="", preview=preview, text=text
+                doc,
+                status="ready",
+                status_detail="",
+                preview=preview,
+                text=text,
+                token_count=count_tokens(text or ""),  # #88: chunk-based token estimate
             ),
         )
 

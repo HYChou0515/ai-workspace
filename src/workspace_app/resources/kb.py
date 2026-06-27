@@ -221,6 +221,12 @@ class SourceDoc(Struct):  # → resource "source-doc"
     # minutes. Cleared on success; carries the exception summary when
     # status flips to "error".
     status_detail: str = ""
+    # Issue #88: a CJK-aware token estimate of `text` (see kb.tokens), computed
+    # at index time and indexed so the collection grid can SUM a chunk-based
+    # "≈ N tokens" figure per collection — instead of the old raw-blob bytes/4
+    # estimate that was wildly wrong for binary formats (a 10 MB PDF whose
+    # extracted text is 50 KB). 0 while indexing / on error (no text yet).
+    token_count: int = 0
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"
