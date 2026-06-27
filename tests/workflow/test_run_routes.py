@@ -229,6 +229,21 @@ def test_preview_without_preflight_falls_back_to_phases():
     assert [p["id"] for p in body["phases"]][0] == "plan"
 
 
+def test_preview_advisory_check_passes_when_files_are_staged():
+    """With a real file staged in uploads/, echo's advisory staged-files check is ok and
+    the run is allowed (the advisory never blocks)."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        assert (
+            client.put(f"{_base(item_id)}/files/uploads/doc.txt", content=b"hi").status_code == 204
+        )
+        body = client.get(f"{_base(item_id)}/runs/preview").json()
+    assert body["can_run"] is True
+    staged = next(c for c in body["checks"] if "uploads" in c["label"])
+    assert staged["ok"] is True and staged["severity"] == "advisory"
+
+
 def test_preview_unknown_workflow_422():
     app, _spec, item_id = _app(profile="multi")
     with TestClient(app) as client:

@@ -65,6 +65,7 @@ from ..workflow.capabilities import CollectionNotFound, ingest_to_collection, up
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_preflight_callable, load_run_callable
 from ..workflow.handle import WorkflowHandle
+from ..workflow.inputs import resolve_inputs
 from ..workflow.orchestrator import (
     NotAwaitingDecision,
     WorkflowOrchestrator,
@@ -1991,17 +1992,15 @@ def create_app(
         workspace). A workflow with no ``preflight`` previews its phases alone (runnable).
         Registered before ``/runs/{run_id}`` so ``preview`` isn't read as a run id."""
         investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
-        upload_dir = _wf_upload_dir(slug, profile)
         wf = WorkflowHandle(
             store=files,
             workspace_id=investigation_id,
             workflow_id=workflow_id,
             config=dict(manifest.config),
-            upload_dir=upload_dir,
+            upload_dir=_wf_upload_dir(slug, profile),
             user=get_user_id(),
         )
-        input_path = manifest.input_json or f"{upload_dir.rstrip('/')}/input.json"
-        inputs = await wf.read_json(input_path) if await wf.exists(input_path) else {}
+        inputs = await resolve_inputs(wf, manifest)
         preflight = load_preflight_callable(slug, profile, workflow_id)
         summary = ""
         checks: list[_PreflightCheckOut] = []
@@ -2018,7 +2017,9 @@ def create_app(
             allowed = _preflight_can_run(report)
         return _PreflightPreviewOut(
             workflow_id=workflow_id,
-            title=manifest.title or workflow_id or "Workflow",
+            # The dialog falls back to the workflow id when title is empty (FE side), so
+            # send the raw title — no server-side or-chain (keeps the branch coverage clean).
+            title=manifest.title,
             description=manifest.description,
             phases=[_PhaseOut(id=p.id, title=p.title) for p in manifest.phases],
             summary=summary,
