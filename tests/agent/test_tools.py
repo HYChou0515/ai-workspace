@@ -485,9 +485,7 @@ async def test_ask_knowledge_base_scopes_the_subagent_to_the_requested_rank():
         seen["scope"] = collection_ids
         return "ans", []
 
-    actx = AgentToolContext(
-        run_subagent=fake_run, collection_tiers=[["a", "b"], ["c"], ["d"]]
-    )
+    actx = AgentToolContext(run_subagent=fake_run, collection_tiers=[["a", "b"], ["c"], ["d"]])
     ctx = RunContextWrapper(actx)
 
     out0 = await ask_knowledge_base_impl(ctx, "q", rank=0)
