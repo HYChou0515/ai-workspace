@@ -30,6 +30,7 @@ from workspace_app.factories import (
     get_chat_pipeline,
     get_check_registry,
     get_code_embedder,
+    get_designed_pptx_vlm,
     get_doc_pipeline,
     get_embedder,
     get_filestore,
@@ -237,6 +238,7 @@ def main() -> None:
             # #112: the VLM describer the read_image agent tool uses (shared with
             # the VLM-backed ingestion parsers); None when kb.vlm_llm is unset.
             vlm_describer=get_kb_describer(settings),
+            deck_vlm=get_designed_pptx_vlm(settings),
             kb_retrieval_enhancements=settings.kb.retrieval.enhancements,
             # #195: per-turn kb_search cap for the KB chat turn + ask_knowledge_base
             # bridge (null in config ⇒ unlimited).

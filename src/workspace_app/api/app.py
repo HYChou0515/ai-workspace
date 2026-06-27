@@ -46,7 +46,7 @@ from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
 from ..kb.llm import ILlm
 from ..kb.retriever import Enhancements, Retriever
-from ..kb.vlm import VlmDescriber
+from ..kb.vlm import IVlm, VlmDescriber
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
@@ -576,6 +576,10 @@ def create_app(
     # unavailable. __main__ passes factories.get_kb_describer(settings) — the
     # same describer KB ingestion's VLM parsers use.
     vlm_describer: VlmDescriber | None = None,
+    # #284: the multimodal model the `make_deck` tool drives (sees rendered
+    # slides + writes pptxgenjs). None ⇒ make_deck reports it's unavailable.
+    # __main__ passes factories.get_designed_pptx_vlm(settings).
+    deck_vlm: IVlm | None = None,
     get_user_id: Callable[[], str] | None = None,
     users: UserDirectory | None = None,
     monitor: IMonitor | None = None,
@@ -1644,6 +1648,7 @@ def create_app(
             run_subagent=_run_subagent,
             mention=_agent_mention,
             describer=vlm_describer,
+            deck_vlm=deck_vlm,
             read_file_max_lines=read_file_max_lines,
             read_file_max_chars=read_file_max_chars,
             exec_output_max_chars=exec_output_max_chars,
@@ -2203,6 +2208,7 @@ def create_app(
             # impls each pass their own purpose name + formatted payload.
             run_subagent=_run_subagent_with_depth,
             describer=vlm_describer,
+            deck_vlm=deck_vlm,
             # The turn's depth override also rides the ctx so any direct
             # kb tool on the RCA agent applies the same cascade.
             kb_enhancements=caller_enh,
