@@ -19,6 +19,7 @@ agent knows which skills apply) and reads the body on demand via the
 from __future__ import annotations
 
 import logging
+import re
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -207,6 +208,22 @@ def workspace_skills_block(metas: list[SkillMeta]) -> str:
 async def build_workspace_skills_block(files: WorkspaceFiles, workspace_id: str) -> str:
     """Read the workspace's `.skill/` live and render the index block (or ``""``)."""
     return workspace_skills_block(await workspace_skill_metas(files, workspace_id))
+
+
+def slugify_skill_name(name: str) -> str:
+    """A skill name → kebab-case slug (lowercase; non-alphanumeric runs become a
+    single ``-``; trimmed). ``save_skill`` uses this so the frontmatter ``name``
+    always equals the folder name and the loader never silently skips it. Returns
+    ``""`` when nothing usable remains (caller rejects)."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def render_skill_md(slug: str, description: str, body: str) -> str:
+    """Assemble a well-formed SKILL.md: minimal `name`+`description` frontmatter
+    (#298 Q9) + body. ``description`` is collapsed to a single line because the
+    frontmatter parser is line-based — a newline would truncate it."""
+    desc = " ".join(description.split())
+    return f"---\nname: {slug}\ndescription: {desc}\n---\n\n{body.strip()}\n"
 
 
 # ─── internals ───────────────────────────────────────────────────────

@@ -882,6 +882,49 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
         return f"error: {e}. available skills: {avail}"
 
 
+async def save_skill_impl(
+    ctx: RunContextWrapper[AgentToolContext], name: str, description: str, body: str
+) -> str:
+    """Save a reusable skill into THIS workspace so you (and the user) can load it
+    later with `read_skill`. Use this once the user has approved a skill you drafted
+    together — it captures a repeatable procedure, the terminology, and the preferred
+    output style for a kind of task.
+
+    `name` is a short title (it's slugified to kebab-case — e.g. "SMT Reflow Triage"
+    → `smt-reflow-triage`); `description` is a one-line "when to use this" shown in the
+    skill index; `body` is the methodology in markdown. This owns the file format, so
+    you only supply these three fields — it can't be silently dropped by a bad
+    frontmatter. Re-saving the same name overwrites (refine freely). For a skill that
+    needs reference docs or scripts, write them with `write_file` into the same
+    `.skill/<name>/` folder (e.g. `.skill/<name>/references/…`, `.skill/<name>/scripts/…`)
+    and point to them from the body. Returns a confirmation or an `error:` note."""
+    from ..apps.skills import (
+        SKILL_BODY_CAP,
+        WORKSPACE_SKILL_DIR,
+        render_skill_md,
+        slugify_skill_name,
+    )
+
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is None or inv is None:
+        return "error: save_skill needs a workspace (none on this turn)"
+    slug = slugify_skill_name(name)
+    if not slug:
+        return f"error: {name!r} has no letters or digits to make a skill name from"
+    if len(body) > SKILL_BODY_CAP:
+        return (
+            f"error: skill body is {len(body)} chars, over the {SKILL_BODY_CAP} cap — "
+            "split it into smaller skills"
+        )
+    path = f"/{WORKSPACE_SKILL_DIR}/{slug}/SKILL.md"
+    await files.write(inv, path, render_skill_md(slug, description, body).encode("utf-8"))
+    return (
+        f"saved skill '{slug}' to {path}. Load it any time with read_skill('{slug}'). "
+        "To reuse it elsewhere, download the .skill folder from the Skills panel."
+    )
+
+
 def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) -> str:
     """Resolve a collection id-or-name to its canonical {id, name} (JSON).
 
@@ -1053,6 +1096,10 @@ _IMPLS = {
     # template profile has any skills. `build_tools(profile=)` handles
     # the conditional injection — never present in `_WORKSPACE_TOOLS`.
     "read_skill": read_skill_impl,
+    # `save_skill` (#298) is a normal opt-in tool — listed in an App's
+    # `agent.tools` like any other (the workspace apps that ship the
+    # `author-skill` meta-skill grant it). Deterministic SKILL.md write.
+    "save_skill": save_skill_impl,
 }
 
 # The RCA workspace toolset — what `build_tools(None)` hands out. It includes
