@@ -34,10 +34,13 @@ def test_resolve_composes_the_profile_skill_index_into_the_prompt():
     assert "report-format" in cfg.system_prompt
 
 
-def test_resolve_default_profile_has_no_skill_index():
-    """The default profile ships no skills → no skill index section."""
+def test_resolve_default_profile_advertises_the_apps_shared_skill():
+    """#298: the App opts into the shared author-skill (agent.skills), so even the
+    default profile — which ships no package skills of its own — advertises it. The
+    co-authoring entry point is reachable in every profile."""
     cfg = _app_catalog().resolve(app_slug="rca", profile="default", attached_preset=None)
-    assert "## Available skills" not in cfg.system_prompt
+    assert "## Available skills" in cfg.system_prompt
+    assert "author-skill" in cfg.system_prompt
 
 
 def test_resolve_unknown_item_returns_none():
