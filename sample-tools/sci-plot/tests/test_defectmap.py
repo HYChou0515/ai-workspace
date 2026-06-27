@@ -58,6 +58,16 @@ def test_nan_coords_dropped():
     plt.close(fig)
 
 
+def test_explicit_wafer_center():
+    df = _df(6)
+    fig = Defectmap().draw(
+        df, {"x": "x", "y": "y"}, DefectmapOptions(center_x=0.0, center_y=0.0, wafer_diameter=12.0)
+    )
+    circle = next(p for p in fig.axes[0].patches if isinstance(p, Circle))
+    assert circle.center == (0.0, 0.0) and circle.radius == 6.0
+    plt.close(fig)
+
+
 def test_no_defects_raises():
     df = pd.DataFrame({"x": [np.nan], "y": [np.nan]})
     with pytest.raises(ValueError, match="no defect coordinates"):

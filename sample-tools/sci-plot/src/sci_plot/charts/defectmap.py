@@ -25,6 +25,10 @@ class DefectmapOptions(BaseModel):
     wafer_diameter: float | None = Field(
         None, description="Wafer circle diameter (coord units); None auto-fits to the defects."
     )
+    center_x: float | None = Field(
+        None, description="Wafer-centre x (the wafer centre need not be the defect-cloud midpoint)."
+    )
+    center_y: float | None = Field(None, description="Wafer-centre y.")
     notch: str = Field("bottom", description="Orientation notch: bottom/top/left/right/none.")
     die_pitch: float | None = Field(
         None, description="If set, draw a faint die grid spaced this far apart for reference."
@@ -66,13 +70,24 @@ class Defectmap(IChart):
             raise ValueError("no defect coordinates to plot")
 
         fig, ax = plt.subplots()
-        center, radius = grid_geometry(xs_a, ys_a, options.wafer_diameter)
+        ctr = (
+            (options.center_x, options.center_y)
+            if options.center_x is not None and options.center_y is not None
+            else None
+        )
+        center, radius = grid_geometry(xs_a, ys_a, options.wafer_diameter, center=ctr)
         draw_outline(ax, center, radius, options.notch)
         if options.die_pitch:
             _draw_die_grid(ax, center, radius, options.die_pitch)
         ax.scatter(
-            xs_a, ys_a, marker="s", s=options.marker_size, c=options.color,
-            edgecolors="none", zorder=3, label="defect",
+            xs_a,
+            ys_a,
+            marker="s",
+            s=options.marker_size,
+            c=options.color,
+            edgecolors="none",
+            zorder=3,
+            label="defect",
         )
         apply_view(ax, center, radius, xs_a, ys_a)
         if options.title:

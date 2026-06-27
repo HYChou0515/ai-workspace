@@ -99,6 +99,31 @@ def test_missing_die_positions_dropped_and_empty_raises():
         Wafermap().draw(df, {"die_x": "die_x", "die_y": "die_y", "value": "v"}, WafermapOptions())
 
 
+def test_rectangular_die():
+    df = _grid_df(2)
+    fig = Wafermap().draw(
+        df,
+        {"die_x": "die_x", "die_y": "die_y", "value": "v"},
+        WafermapOptions(die_w=2.0, die_h=1.0),
+    )
+    die = _dies(fig.axes[0])[0]
+    assert die.get_width() == 2.0 and die.get_height() == 1.0  # rectangular cell
+    plt.close(fig)
+
+
+def test_explicit_wafer_center():
+    # the centre die need not be the grid midpoint — pin it explicitly.
+    df = _grid_df(3)  # die indices 0..2
+    fig = Wafermap().draw(
+        df,
+        {"die_x": "die_x", "die_y": "die_y", "value": "v"},
+        WafermapOptions(center_x=0, center_y=0, wafer_diameter=6.0),
+    )
+    circle = next(p for p in fig.axes[0].patches if isinstance(p, Circle))
+    assert circle.center == (0.0, 0.0) and circle.radius == 3.0
+    plt.close(fig)
+
+
 def test_view_is_equal_aspect_and_y_inverted():
     df = _grid_df(3)
     fig = Wafermap().draw(df, {"die_x": "die_x", "die_y": "die_y", "value": "v"}, WafermapOptions())
@@ -138,6 +163,11 @@ def test_grid_geometry_explicit_diameter():
     ys = np.array([0.0, 4.0])
     (cx, cy), r = grid_geometry(xs, ys, diameter=6.0)
     assert (cx, cy) == (2.0, 2.0) and r == 3.0
+
+
+def test_grid_geometry_explicit_center_overrides_midpoint():
+    (cx, cy), r = grid_geometry(np.array([0.0, 4.0]), np.array([0.0, 4.0]), 6.0, center=(1.0, 2.0))
+    assert (cx, cy) == (1.0, 2.0) and r == 3.0
 
 
 def test_grid_geometry_autofit_encloses_die():
