@@ -4,6 +4,8 @@ caller may see, single-resource access is gated, and owners set permissions.
 Tests drive the HTTP surface as different users via a mutable `holder["id"]`.
 """
 
+import datetime as dt
+
 import msgspec
 from specstar import SpecStar
 
@@ -33,11 +35,12 @@ def _client_and_spec(holder: dict[str, str]) -> tuple[TestClient, SpecStar]:
     return TestClient(app), spec
 
 
-def _set_permission(spec: SpecStar, cid: str, permission: Permission) -> None:
+def _set_permission(spec: SpecStar, cid: str, permission: Permission, *, by: str = "bob") -> None:
     rm = spec.get_resource_manager(Collection)
     coll = rm.get(cid).data
     assert isinstance(coll, Collection)
-    rm.update(cid, msgspec.structs.replace(coll, permission=permission))
+    with rm.using(by, dt.datetime.now(dt.UTC)):
+        rm.update(cid, msgspec.structs.replace(coll, permission=permission))
 
 
 def _names(client: TestClient) -> set[str]:
@@ -57,3 +60,16 @@ def test_list_collections_hides_a_private_collection_from_a_non_owner():
     names = _names(client)
     assert "open" in names
     assert "secret" not in names
+
+
+def test_single_collection_get_is_hidden_from_a_non_owner():
+    """specstar's access_scope makes a private collection a uniform 404 on the
+    auto-CRUD `GET /collection/{id}` (the FE's primary single-resource path) —
+    not just the hand-written list."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    secret = client.post("/kb/collections", json={"name": "secret"}).json()["resource_id"]
+    _set_permission(spec, secret, Permission(visibility="private"))
+    assert client.get(f"/collection/{secret}").status_code == 200  # the owner reads it
+    holder["id"] = "alice"
+    assert client.get(f"/collection/{secret}").status_code == 404  # hidden from others
