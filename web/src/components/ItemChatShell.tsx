@@ -9,9 +9,16 @@ import { phaseView, workflowApi, type WorkflowManifestDTO } from "../api/workflo
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
-import { useDecide, useRun, useWorkflowProfiles } from "../hooks/useWorkflow";
+import {
+  useConfirmSteer,
+  useDecide,
+  useRun,
+  useSteerRun,
+  useWorkflowProfiles,
+} from "../hooks/useWorkflow";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
 import { CardDiffReview } from "./CardDiffReview";
+import { SteerConfirmCard } from "./SteerConfirmCard";
 import { ChatSwitcher } from "./ChatSwitcher";
 import { CollectionsButton } from "./CollectionsButton";
 import { CollectionsPickerModal } from "./CollectionsPickerModal";
@@ -254,7 +261,12 @@ function ItemChatPanel({
   // Poll the driving run only for a workflow chat — to surface its human gate.
   const run = useRun(slug, itemId, chat.run_id ?? undefined);
   const decide = useDecide(slug, itemId, chat.run_id ?? "");
+  const steer = useSteerRun(slug, itemId, chat.run_id ?? "");
+  const confirmSteer = useConfirmSteer(slug, itemId, chat.run_id ?? "");
   const gate = run.data?.status === "awaiting_human" ? run.data.pending_decision : null;
+  // #288: a steer plan awaiting confirm — pinned like the gate. The steer card and the
+  // gate card are mutually exclusive (the backend sets one pending field, not both).
+  const steerPlan = run.data?.pending_steer ?? null;
   // The real linear step bar: the run's workflow declares the phase skeleton,
   // merged with its live per-phase progress. A free chat (no run_id) → no bar.
   const declared = workflows.find((w) => w.id === run.data?.workflow_id)?.phases ?? [];
@@ -296,12 +308,29 @@ function ItemChatPanel({
         </div>
       )}
 
+      {steerPlan && (
+        <div
+          className="item-chat-panel__steer"
+          data-testid="workflow-steer"
+          // Pin the steer plan to the top like the gate (#288) — it's the same
+          // "it's your turn to act" moment, just for a redirect instead of a gate.
+          style={{ flex: "0 0 auto", position: "sticky", top: 0, zIndex: 2, padding: "6px 8px" }}
+        >
+          <SteerConfirmCard
+            plan={steerPlan}
+            busy={confirmSteer.isPending}
+            onConfirm={(approve) => confirmSteer.mutate(approve)}
+          />
+        </div>
+      )}
+
       <AgentPanel
         investigationId={itemId}
         agent={agent}
         fill
         phases={phases}
         onNewChat={onNewChat}
+        onSteer={chat.run_id ? (text) => steer.mutate(text) : undefined}
         picker={picker}
         suggestions={suggestions}
         attachedPreset={attachedPreset}

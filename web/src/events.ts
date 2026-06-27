@@ -154,6 +154,14 @@ export type StepRetrying = {
  * decision card. Terminal for the run task (resumed via the decisions endpoint). */
 export type AwaitingHuman = { type: "awaiting_human"; phase: string; title: string };
 
+/** A steer plan is ready for review (#288, manual §10) — the FE renders the steer
+ * confirm card and refetches the run for the full plan. */
+export type SteerProposed = {
+  type: "steer_proposed";
+  instruction: string;
+  rationale: string;
+};
+
 export type WorkflowEvent =
   | PhaseEntered
   | StepStarted
@@ -162,7 +170,8 @@ export type WorkflowEvent =
   | StepFailed
   | StepSkipped
   | StepRetrying
-  | AwaitingHuman;
+  | AwaitingHuman
+  | SteerProposed;
 
 export type AgentEvent =
   | MessageDelta

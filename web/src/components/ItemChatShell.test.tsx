@@ -318,4 +318,37 @@ describe("ItemChatShell", () => {
     fireEvent.click(screen.getByText("Approve"));
     await waitFor(() => expect(decide).toHaveBeenCalledWith("topic-hub", "it", "r1", { choice: "approve" }));
   });
+
+  it("pins the steer confirm card on a pending_steer and applies it on click (#288)", async () => {
+    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
+    const run: WorkflowRunDTO = {
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "awaiting_human",
+      current_phase: "",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: null,
+      result: null,
+      pending_decision: null,
+      pending_steer: {
+        instruction: "use the a collection and redo ingest",
+        rationale: "switch ingest target",
+        input_edits: [{ path: "collections.json", content: "[]" }],
+        invalidate: ["ingest"],
+        decided_by: "",
+      },
+    };
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run);
+    const confirm = vi.spyOn(workflowApi, "confirmSteer").mockResolvedValue();
+    render();
+    await waitFor(() => expect(screen.getByTestId("workflow-steer")).toBeInTheDocument());
+    expect(screen.getByTestId("workflow-steer")).toHaveStyle({ position: "sticky" });
+    expect(screen.getByText("use the a collection and redo ingest")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("wf-steer-approve"));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith("topic-hub", "it", "r1", true));
+  });
 });

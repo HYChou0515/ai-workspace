@@ -78,6 +78,30 @@ class PendingDecision(Struct):
     decided_by: str = ""
 
 
+class SteerInputEdit(Struct):
+    """One input-file rewrite in a steer plan (#288, manual §10): the full new
+    ``content`` for ``path`` (a workspace path *outside* the journal). Full-content
+    writes — not diffs — dodge the tool-arg unreliability that bites long content (#107)."""
+
+    path: str
+    content: str
+
+
+class SteerPlan(Struct):
+    """A proposed steer (#288, manual §10), produced by the read-only steerer turn and
+    reviewed before it applies. Two generic moves: rewrite ``input_edits`` + ``invalidate``
+    steps (delete their artifacts → force re-run; downstream cascades via input-hash, §9).
+    ``instruction`` is the human's free-text ask; ``rationale`` is the steerer's summary;
+    ``decided_by`` records who confirmed (audit, §15). Stored as ``WorkflowRun.pending_steer``
+    while awaiting confirm."""
+
+    instruction: str = ""
+    rationale: str = ""
+    input_edits: list[SteerInputEdit] = field(default_factory=list)
+    invalidate: list[str] = field(default_factory=list)
+    decided_by: str = ""
+
+
 class WorkflowRun(Struct):
     item_id: str
     """Indexed — the owning item (any App's WorkItem ``resource_id``; #89). One
@@ -114,6 +138,10 @@ class WorkflowRun(Struct):
     """The ``run()`` return value (a summary), persisted on terminal."""
     pending_decision: PendingDecision | None = None
     """Set while ``awaiting_human`` — the open gate the FE renders (manual §10)."""
+    pending_steer: SteerPlan | None = None
+    """Set while ``awaiting_human`` for a steer plan awaiting confirm (#288). Mutually
+    exclusive with ``pending_decision`` — the FE picks the steer card vs. the gate card by
+    which is set, and ``decide()`` guards on ``pending_decision`` so they never collide."""
 
 
 # What the platform registers: the resource + its indexes (manual §13). item_id

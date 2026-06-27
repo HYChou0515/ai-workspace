@@ -95,3 +95,26 @@ export function useDecide(slug: string, itemId: string, runId: string) {
     },
   });
 }
+
+/** #288: steer a run in words. The proposed plan arrives on the run record
+ * (`pending_steer`), so invalidate the run query to pick it up. */
+export function useSteerRun(slug: string, itemId: string, runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (instruction: string) => workflowApi.steer(slug, itemId, runId, instruction),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+    },
+  });
+}
+
+/** #288: confirm (apply + resume) or reject (discard) a pending steer plan. */
+export function useConfirmSteer(slug: string, itemId: string, runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (approve: boolean) => workflowApi.confirmSteer(slug, itemId, runId, approve),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+    },
+  });
+}
