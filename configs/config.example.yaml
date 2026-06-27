@@ -295,6 +295,14 @@
 #   #                                       #   instead of truncating tables/sections. Same usage-entry
 #   #                                       #   shape as the others. OMIT = reuse retrieval_llm; both
 #   #                                       #   off = stage 2 skipped (raw VLM text used as-is).
+#   # deck_vlm:                             # issue #284: the multimodal model the `make_deck` tool
+#   #   preset: kb-vlm                      #   drives — it SEES rendered slides + WRITES the pptxgenjs
+#   #                                       #   fix, so it MUST be multimodal AND strong enough to do
+#   #                                       #   both (a bigger Qwen-VL, not the tiny ingest VLM, pays
+#   #                                       #   off here). OMIT = reuse vlm_llm; both off = make_deck
+#   #                                       #   reports it's unavailable (fail-loud, like read_image).
+#   #                                       #   Needs the deck sandbox image (docker/Dockerfile.workspace-deck:
+#   #                                       #   node + pptxgenjs + libreoffice + poppler + Noto CJK).
 #   wiki:                                   # issue #56: the LLM wiki (maintainer / reader / merge)
 #     llm:                                  # ← which model drives the wiki agents. SAME preset-ref
 #       preset: wiki-default                #   shape as retrieval_llm / vlm_llm. The agents own

@@ -16,6 +16,39 @@ from typing import Any
 
 from workspace_app.workflow import agent_write_step
 from workspace_app.workflow.handle import WorkflowHandle
+from workspace_app.workflow.preflight import PreflightItem, PreflightReport
+
+
+async def _staged_files(wf: WorkflowHandle, inputs: dict[str, Any]) -> list[str]:
+    """The uploads this run would digest — the SAME glob ``run()`` uses, so the
+    pre-flight count never drifts from what actually runs (#283)."""
+    up = wf.upload_dir.rstrip("/")
+    return await wf.glob(
+        inputs.get("files", [f"{up}/*"]),
+        exclude=inputs.get("except", [f"{up}/input.json"]),
+    )
+
+
+async def preflight(wf: WorkflowHandle, inputs: dict[str, Any]) -> PreflightReport:
+    """#283 pre-flight: count what will be digested + block the empty-uploads no-op
+    BEFORE launch (the run would otherwise return ``status="empty"`` silently)."""
+    files = await _staged_files(wf, inputs)
+    n = len(files)
+    up = wf.upload_dir.rstrip("/")
+    return PreflightReport(
+        summary=(
+            f"消化 uploads/ 裡的 {n} 個檔案成記憶筆記，再更新 MEMORY.md。"
+            if n
+            else "沒有暫存任何檔案，這次執行會空轉。"
+        ),
+        checks=[
+            PreflightItem(
+                label="uploads/ 內有待消化的檔案",
+                ok=n > 0,
+                reason="" if n else f"先把要消化的檔案放進 {up}/ 再執行。",
+            )
+        ],
+    )
 
 
 def _slug(path: str) -> str:
@@ -26,12 +59,9 @@ def _slug(path: str) -> str:
 
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     # #198: glob the profile's staging folder (``wf.upload_dir``), not a hardcoded
-    # ``uploads/`` (#234) — so it stays in sync with where the chat attach lands.
-    up = wf.upload_dir.rstrip("/")
-    files = await wf.glob(
-        inputs.get("files", [f"{up}/*"]),
-        exclude=inputs.get("except", [f"{up}/input.json"]),
-    )
+    # ``uploads/`` (#234) — so it stays in sync with where the chat attach lands. The
+    # pre-flight (#283) globs the same way (``_staged_files``) so its count never drifts.
+    files = await _staged_files(wf, inputs)
     if not files:
         return {"status": "empty", "notes": 0}
 

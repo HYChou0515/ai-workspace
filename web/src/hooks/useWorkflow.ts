@@ -26,6 +26,22 @@ export function useWorkflowManifest(slug: string | undefined, profile: string | 
   return { ...q, manifest: entry?.workflow ?? null, hasWorkflow: !!entry?.has_workflow };
 }
 
+/** #283: the launch dialog's pre-flight — fetched on demand (the dialog mounts), so the
+ * checklist reflects the workspace AT launch time. `enabled` gates it on an open dialog. */
+export function usePreviewRun(
+  slug: string,
+  itemId: string,
+  workflowId: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: qk.workflowPreview(slug, itemId, workflowId),
+    queryFn: () => workflowApi.previewRun(slug, itemId, workflowId),
+    enabled,
+    staleTime: 0, // always re-check preconditions when the dialog (re)opens
+  });
+}
+
 export function useItemRuns(slug: string | undefined, itemId: string | undefined) {
   return useQuery({
     queryKey: qk.workflowRuns(slug ?? "", itemId ?? ""),

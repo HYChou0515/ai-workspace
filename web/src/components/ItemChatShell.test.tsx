@@ -170,8 +170,18 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
   });
 
-  it("launches a workflow via the New picker (startRun with the workflow id)", async () => {
+  it("launches a workflow via the New picker — pre-flight dialog first, then startRun", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "collections",
+      title: "File uploads into collections",
+      description: "",
+      phases: [{ id: "classify", title: "Classify" }],
+      summary: "把 1 個檔案歸檔",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
     const start = vi
       .spyOn(workflowApi, "startRun")
       .mockResolvedValue({ run_id: "r1", item_id: "it", chat_id: "conversation:wf1" });
@@ -179,6 +189,10 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("new-item-button"));
     fireEvent.click(await screen.findByTestId("new-item-workflow-collections"));
+    // the dialog opens first; nothing starts until the operator confirms
+    await screen.findByTestId("wf-launch-dialog");
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("wf-launch-run"));
     await waitFor(() => expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections"));
   });
 

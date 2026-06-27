@@ -48,6 +48,7 @@ from .events import (
 )
 from .gate import record_decision
 from .handle import WorkflowHandle
+from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
 from .run import PhaseState, RunStatus, StepState, WorkflowRun
 
@@ -273,7 +274,7 @@ class WorkflowOrchestrator:
             run_id, item_id, captured_user, manifest, key, workflow_id, upload_dir
         )
         profile_run = self.load_run(slug, profile, workflow_id)
-        inputs = await self._read_inputs(wf, manifest)
+        inputs = await resolve_inputs(wf, manifest)
         self._step_counts[run_id] = 0
         coro = run_workflow(
             self.spec,
@@ -300,16 +301,6 @@ class WorkflowOrchestrator:
         # On a real Stop the inner CancelledError propagates out of here (skipping the
         # post-run step); `cancel()` does the sandbox release for that path.
         await self._post_run(run_id, item_id, key)
-
-    async def _read_inputs(self, wf: WorkflowHandle, manifest: WorkflowManifest) -> Any:
-        """Parsed ``input.json`` (manual §14) — ``{}`` when the file is absent so a
-        no-input workflow just runs. The location is the manifest's ``input_json`` if
-        pinned, else ``{upload_dir}/input.json`` (#198) so the control file sits in the
-        same staging folder the chat attach lands in."""
-        path = manifest.input_json or f"{wf.upload_dir.rstrip('/')}/input.json"
-        if await wf.exists(path):
-            return await wf.read_json(path)
-        return {}
 
     def _build_handle(
         self,

@@ -352,6 +352,12 @@ class KbSettings:
     # both off = stage 2 skipped (the raw VLM text is used as-is). Same
     # usage-entry shape as `retrieval_llm` / `vlm_llm`.
     vlm_format_llm: RetrievalLlmRef | None = None
+    # Issue #284: the multimodal model that drives the `make_deck` build loop —
+    # it both *sees* rendered slides and *writes* the pptxgenjs fix. Same
+    # usage-entry shape as `vlm_llm`; MUST be multimodal (it reads slide images).
+    # `None` (the default) ⇒ reuse `vlm_llm` (the read_image / ingest VLM); both
+    # off ⇒ `make_deck` reports no model configured (fail-loud, like read_image).
+    deck_vlm: RetrievalLlmRef | None = None
     # Issue #56: wiki-agent LLM (preset ref) + step budgets. `wiki.llm:
     # null` disables the wiki subsystem.
     wiki: WikiSettings = field(default_factory=WikiSettings)

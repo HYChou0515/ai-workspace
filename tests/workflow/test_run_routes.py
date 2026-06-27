@@ -185,6 +185,71 @@ def test_run_requires_workflow_profile():
         assert client.post(f"{_base(item_id)}/run").status_code == 422
 
 
+# ── #283: pre-flight preview (launch dialog) ─────────────────────────────
+
+
+def test_preview_describes_and_allows_when_preconditions_met():
+    """The pre-flight preview returns the workflow's title/phases + the author's
+    summary + checklist, and allows 'Run' when every required check passes."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        r = client.get(f"{_base(item_id)}/runs/preview")
+        assert r.status_code == 200
+        body = r.json()
+    assert body["can_run"] is True
+    assert body["has_preflight"] is True
+    assert "out/note.json" in body["summary"]
+    assert body["title"]  # the manifest title, for the dialog header
+    assert any(p["id"] == "think" for p in body["phases"])
+    n_check = next(c for c in body["checks"] if "n" in c["label"])
+    assert n_check["ok"] is True and n_check["severity"] == "required"
+
+
+def test_preview_blocks_when_required_check_fails():
+    """A missing required precondition (no ``n`` in input.json) makes can_run False and
+    surfaces the fix-it reason — so the dialog can disable 'Run' and explain why."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, "{}")
+        body = client.get(f"{_base(item_id)}/runs/preview").json()
+    assert body["can_run"] is False
+    n_check = next(c for c in body["checks"] if "n" in c["label"])
+    assert n_check["ok"] is False and "input.json" in n_check["reason"]
+
+
+def test_preview_without_preflight_falls_back_to_phases():
+    """A workflow with no ``preflight`` still previews: phases only, no checks, runnable."""
+    app, _spec, item_id = _app(profile="multi")
+    with TestClient(app) as client:
+        body = client.get(f"{_base(item_id)}/runs/preview?workflow_id=beta").json()
+    assert body["has_preflight"] is False
+    assert body["can_run"] is True
+    assert body["checks"] == []
+    assert [p["id"] for p in body["phases"]][0] == "plan"
+
+
+def test_preview_advisory_check_passes_when_files_are_staged():
+    """With a real file staged in uploads/, echo's advisory staged-files check is ok and
+    the run is allowed (the advisory never blocks)."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        assert (
+            client.put(f"{_base(item_id)}/files/uploads/doc.txt", content=b"hi").status_code == 204
+        )
+        body = client.get(f"{_base(item_id)}/runs/preview").json()
+    assert body["can_run"] is True
+    staged = next(c for c in body["checks"] if "uploads" in c["label"])
+    assert staged["ok"] is True and staged["severity"] == "advisory"
+
+
+def test_preview_unknown_workflow_422():
+    app, _spec, item_id = _app(profile="multi")
+    with TestClient(app) as client:
+        assert client.get(f"{_base(item_id)}/runs/preview?workflow_id=nope").status_code == 422
+
+
 def test_parallel_runs_each_open_their_own_chat():
     """Topic-hub P8 (manual §3): the one-active-run-per-item rule is lifted — a second
     run launches in parallel, in its own workflow chat, even while the first is paused."""

@@ -44,6 +44,9 @@ export const qk = {
     ["workflowRuns", slug, itemId] as const,
   workflowRun: (slug: string, itemId: string, runId: string) =>
     ["workflowRun", slug, itemId, runId] as const,
+  // #283: the launch dialog's pre-flight preview for one workflow.
+  workflowPreview: (slug: string, itemId: string, workflowId: string) =>
+    ["workflowPreview", slug, itemId, workflowId] as const,
   health: ["health"] as const,
   monitor: ["monitor"] as const,
 
