@@ -7,13 +7,82 @@
  */
 
 import type { ChipTone } from "../api/types";
-import { isRunTerminal, phaseView, type PhaseDef, type RunStatus } from "../api/workflows";
+import {
+  fmtElapsed,
+  isRunTerminal,
+  phaseView,
+  type PhaseDef,
+  type RunStatus,
+  type WorkflowRunDTO,
+} from "../api/workflows";
 import { useCancelRun, useDecide, useRun } from "../hooks/useWorkflow";
+import { usePersistentBoolean } from "../hooks/usePersistentBoolean";
+import { useT } from "../lib/i18n";
 import { chipStyle } from "./StatusChip";
 import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
 import { WorkflowPhaseDiagram } from "./WorkflowPhaseDiagram";
 import { WorkflowStepBoard } from "./WorkflowStepBoard";
+import { WorkflowTimeline } from "./WorkflowTimeline";
 import { pxToRem } from "../lib/pxToRem";
+
+/** A glanceable metrics strip above the views (#283): how long the run has taken, how
+ * many steps finished, and how many retries it cost. View-independent. */
+function WorkflowMetrics({ run }: { run: WorkflowRunDTO }) {
+  const t = useT();
+  if (run.started == null) return null;
+  const elapsed = Math.max(0, (run.ended ?? Date.now()) - run.started);
+  const done = run.phases.reduce((n, p) => n + p.done, 0);
+  const failed = run.phases.reduce((n, p) => n + p.failed, 0);
+  const retries = run.steps.reduce((n, s) => n + s.attempts, 0);
+  return (
+    <div
+      data-testid="wf-metrics"
+      style={{ display: "flex", gap: 10, flexWrap: "wrap", fontSize: pxToRem(11.5), color: "var(--text-paper-d)" }}
+    >
+      <span>
+        {t("wf.metrics.elapsed")} {fmtElapsed(elapsed)}
+      </span>
+      <span>
+        {done} {t("wf.metrics.steps")}
+        {failed > 0 ? ` · ✗${failed}` : ""}
+      </span>
+      {retries > 0 && <span>{t("wf.metrics.retries", { n: retries })}</span>}
+    </div>
+  );
+}
+
+function ViewTab({
+  active,
+  onClick,
+  testid,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  testid: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={active}
+      data-testid={testid}
+      onClick={onClick}
+      style={{
+        padding: "3px 12px",
+        border: "none",
+        background: active ? "var(--accent, var(--info))" : "var(--white)",
+        color: active ? "#fff" : "var(--text-paper-d)",
+        cursor: "pointer",
+        fontSize: pxToRem(11.5),
+        fontWeight: active ? 600 : 400,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
 
 function runTone(status: RunStatus): ChipTone {
   switch (status) {
@@ -50,10 +119,14 @@ export function WorkflowRunPanel({
   runId: string;
   declaredPhases: PhaseDef[];
 }) {
+  const t = useT();
   const runQuery = useRun(slug, itemId, runId);
   const run = runQuery.data;
   const cancel = useCancelRun(slug, itemId);
   const decide = useDecide(slug, itemId, runId);
+  // #283: the simple step board stays the default; the timeline is the opt-in second
+  // view, the choice remembered across runs/reloads.
+  const [timeline, setTimeline] = usePersistentBoolean("wf.view.timeline", false);
 
   if (!run) return <div data-testid="wf-run-loading">Loading run…</div>;
 
@@ -119,9 +192,29 @@ export function WorkflowRunPanel({
 
       <WorkflowPhaseDiagram nodes={nodes} />
 
-      {/* #178: per-step board — which step is running and for how long, so a long
-          deterministic step doesn't look dead. Reload-safe (poll-driven). */}
-      <WorkflowStepBoard nodes={nodes} steps={run.steps} />
+      {/* #283: run metrics + a step-board / timeline view toggle, both always above
+          whichever view is showing. */}
+      <WorkflowMetrics run={run} />
+      <div
+        role="tablist"
+        aria-label="run view"
+        style={{ display: "flex", gap: 0, alignSelf: "flex-start", borderRadius: 6, overflow: "hidden", border: "1px solid var(--paper-3)" }}
+      >
+        <ViewTab active={!timeline} onClick={() => setTimeline(false)} testid="wf-view-steps">
+          {t("wf.view.steps")}
+        </ViewTab>
+        <ViewTab active={timeline} onClick={() => setTimeline(true)} testid="wf-view-timeline">
+          {t("wf.view.timeline")}
+        </ViewTab>
+      </div>
+
+      {/* #178 step board (default) / #283 timeline — which step ran when + for how long,
+          so a long deterministic step or a gate wait doesn't look dead. Poll-driven. */}
+      {timeline ? (
+        <WorkflowTimeline steps={run.steps} live={!terminal} />
+      ) : (
+        <WorkflowStepBoard nodes={nodes} steps={run.steps} />
+      )}
 
       {run.status === "awaiting_human" && run.pending_decision && (
         <WorkflowDecisionCard

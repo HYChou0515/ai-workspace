@@ -98,6 +98,30 @@ export type WorkflowRunDTO = {
   pending_decision: PendingDecision | null;
 };
 
+/** One pre-flight checklist line in the launch dialog (#283). `severity` is
+ * "required" (a failing one blocks 'Run') or "advisory" (a warning you can proceed past). */
+export type PreflightCheckDTO = {
+  label: string;
+  ok: boolean;
+  severity: "required" | "advisory";
+  reason: string;
+};
+
+/** What the launch dialog shows BEFORE a run starts (#283): the workflow's identity +
+ * phases, plus (when the author wrote a `preflight`) a human summary of what the run
+ * will do and a checklist of its preconditions. `can_run` is false when a required
+ * check fails; `has_preflight` is false when the author wrote none (phases-only preview). */
+export type PreflightPreviewDTO = {
+  workflow_id: string;
+  title: string;
+  description: string;
+  phases: PhaseDef[];
+  summary: string;
+  checks: PreflightCheckDTO[];
+  can_run: boolean;
+  has_preflight: boolean;
+};
+
 export const RUN_TERMINAL: RunStatus[] = ["done", "error", "cancelled"];
 
 export function isRunTerminal(status: RunStatus): boolean {
@@ -241,6 +265,20 @@ export const workflowApi = {
       await apiFetch(`${base(slug, itemId)}/run${qs}`, { method: "POST" }),
       "start run",
     ) as Promise<{ run_id: string; item_id: string; chat_id: string }>;
+  },
+
+  async previewRun(
+    slug: string,
+    itemId: string,
+    workflowId = "",
+  ): Promise<PreflightPreviewDTO> {
+    // #283: the launch dialog's pre-flight — what this workflow will do + whether its
+    // preconditions are met, WITHOUT starting a run.
+    const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : "";
+    return jsonOrThrow(
+      await apiFetch(`${base(slug, itemId)}/runs/preview${qs}`),
+      "preview run",
+    ) as Promise<PreflightPreviewDTO>;
   },
 
   async getRun(slug: string, itemId: string, runId: string): Promise<WorkflowRunDTO> {

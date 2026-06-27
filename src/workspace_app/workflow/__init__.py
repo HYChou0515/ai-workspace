@@ -18,6 +18,7 @@ from .engine import CheckResult, StepFailed, fail, run_step
 from .gate import AwaitingHuman, Decision, human_gate, record_decision
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
+from .preflight import PreflightItem, PreflightReport, Severity, can_run
 from .run import Failure, PendingDecision, PhaseState, RunStatus, WorkflowRun
 from .steps import agent_step, agent_write_step, sandbox_node
 
@@ -28,7 +29,10 @@ __all__ = [
     "Failure",
     "PendingDecision",
     "PhaseState",
+    "PreflightItem",
+    "PreflightReport",
     "RunStatus",
+    "Severity",
     "StepFailed",
     "WorkflowHandle",
     "WorkflowManifest",
@@ -36,6 +40,7 @@ __all__ = [
     "WorkflowRun",
     "agent_step",
     "agent_write_step",
+    "can_run",
     "choice_in",
     "collection_has",
     "fail",

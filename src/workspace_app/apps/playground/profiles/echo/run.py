@@ -22,6 +22,32 @@ from workspace_app.workflow import (
     sandbox_node,
 )
 from workspace_app.workflow.handle import WorkflowHandle
+from workspace_app.workflow.preflight import PreflightItem, PreflightReport, Severity
+
+
+async def preflight(wf: WorkflowHandle, inputs: dict[str, Any]) -> PreflightReport:
+    """#283 pre-flight: describe what the run will do + verify its preconditions so the
+    launch dialog can confirm before triggering. The required ``n`` check exercises the
+    block-on-missing-precondition path; the advisory staged-files check exercises the
+    warn-but-allow path."""
+    n = inputs.get("n")
+    staged = await wf.glob([f"{wf.upload_dir}/*"], exclude=[f"{wf.upload_dir}/input.json"])
+    return PreflightReport(
+        summary=f"Acknowledge note n={n} and write out/note.json.",
+        checks=[
+            PreflightItem(
+                label="An 'n' value is set in input.json",
+                ok=n is not None,
+                reason="" if n is not None else 'set "n" in uploads/input.json',
+            ),
+            PreflightItem(
+                label="Files staged in uploads/",
+                ok=bool(staged),
+                severity=Severity.ADVISORY,
+                reason="" if staged else "drop files into uploads/ (optional for echo)",
+            ),
+        ],
+    )
 
 
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:

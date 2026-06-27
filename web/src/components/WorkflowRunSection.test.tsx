@@ -59,21 +59,49 @@ describe("WorkflowRunSection", () => {
     expect(container.querySelector('[data-testid="wf-run-section"]')).toBeNull();
   });
 
-  it("shows the Run button on a workflow profile and starts a run", async () => {
+  it("Run opens the pre-flight dialog, then confirming starts the run", async () => {
     vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
     vi.spyOn(workflowApi, "listRuns").mockResolvedValue([]);
     vi.spyOn(workflowApi, "getRun").mockResolvedValue(run());
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "",
+      title: "Echo",
+      description: "",
+      phases: [{ id: "think", title: "Think" }],
+      summary: "will acknowledge a note",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
     const start = vi
       .spyOn(workflowApi, "startRun")
       .mockResolvedValue({ run_id: "r1", item_id: "i1", chat_id: "conversation:c1" });
 
     renderWithQuery(<WorkflowRunSection slug="playground" itemId="i1" profile="echo" />);
-    const btn = await screen.findByTestId("wf-run-button");
-    fireEvent.click(btn);
+    fireEvent.click(await screen.findByTestId("wf-run-button"));
+    // the dialog opens first — the run hasn't started yet
+    await screen.findByTestId("wf-launch-dialog");
+    expect(start).not.toHaveBeenCalled();
+    // confirm runs it
+    fireEvent.click(await screen.findByTestId("wf-launch-run"));
     await waitFor(() => expect(start).toHaveBeenCalled());
-    // the started run's panel renders with its phase diagram
     await waitFor(() => expect(screen.getByTestId("wf-run-panel")).toBeInTheDocument());
-    expect(screen.getByText(/Think/)).toBeInTheDocument();
+  });
+
+  it("lists past runs as a first-class, always-visible list and opens one on click", async () => {
+    vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
+    vi.spyOn(workflowApi, "listRuns").mockResolvedValue([
+      run({ run_id: "r2", status: "done", started: 200, ended: 260 }),
+      run({ run_id: "r1", status: "error", started: 100, ended: 130 }),
+    ]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run({ run_id: "r2" }));
+    renderWithQuery(<WorkflowRunSection slug="playground" itemId="i1" profile="echo" />);
+    // the runs list is visible without expanding anything (not a <details>)
+    const items = await screen.findAllByTestId("wf-run-list-item");
+    expect(items).toHaveLength(2);
+    // newest-first; selecting an older run opens its panel
+    fireEvent.click(items[1]);
+    await waitFor(() => expect(screen.getByTestId("wf-run-panel")).toBeInTheDocument());
   });
 
   it("disables Run while a run is already active", async () => {

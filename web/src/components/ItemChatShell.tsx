@@ -18,6 +18,7 @@ import { CollectionsPickerModal } from "./CollectionsPickerModal";
 import { ManageChatsModal } from "./ManageChatsModal";
 import { NewItemPicker } from "./NewItemPicker";
 import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
+import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
@@ -78,6 +79,9 @@ export function ItemChatShell({
   const workflows = profilesQ.data?.find((p) => p.name === profile)?.workflows ?? [];
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [managing, setManaging] = useState(false);
+  // #283: a workflow launch opens the pre-flight dialog first; the real start (which
+  // opens a workflow chat) happens only on confirm.
+  const [pendingWorkflow, setPendingWorkflow] = useState<string | null>(null);
   const reopening = useRef(false);
 
   // The item's collection set (topic-hub §5, #142) is a workspace file shared by
@@ -113,7 +117,11 @@ export function ItemChatShell({
   const onFreeChat = async () => {
     setActiveChatId((await createFreeChat()).chat_id);
   };
-  const onWorkflow = async (workflowId: string) => {
+  const onWorkflow = (workflowId: string) => setPendingWorkflow(workflowId);
+  const confirmWorkflow = async () => {
+    if (pendingWorkflow == null) return;
+    const workflowId = pendingWorkflow;
+    setPendingWorkflow(null);
     const { chat_id } = await workflowApi.startRun(slug, itemId, workflowId);
     void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
     setActiveChatId(chat_id);
@@ -177,6 +185,15 @@ export function ItemChatShell({
       )}
       {pickerOpen && (
         <CollectionsPickerModal fileService={fileService} onClose={() => setPickerOpen(false)} />
+      )}
+      {pendingWorkflow != null && (
+        <WorkflowLaunchDialog
+          slug={slug}
+          itemId={itemId}
+          workflowId={pendingWorkflow}
+          onConfirm={confirmWorkflow}
+          onClose={() => setPendingWorkflow(null)}
+        />
       )}
       {active ? (
         <ItemChatPanel

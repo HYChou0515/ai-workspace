@@ -14,15 +14,26 @@ import re
 import pytest
 
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.workflow.discovery import load_run_callable, validate_workflow_profiles
+from workspace_app.workflow.discovery import (
+    load_preflight_callable,
+    load_run_callable,
+    validate_workflow_profiles,
+)
 from workspace_app.workflow.gate import AwaitingHuman, record_decision
 from workspace_app.workflow.handle import WorkflowHandle
+from workspace_app.workflow.preflight import Severity, can_run
 
 _OUT_RE = re.compile(r"(plan/\S+?\.json)")
 
 
 def _run():
     return load_run_callable("topic-hub", "default", "collections")
+
+
+def _preflight():
+    pf = load_preflight_callable("topic-hub", "default", "collections")
+    assert pf is not None
+    return pf
 
 
 def _confident(term="M4", definition="The fourth metal layer."):
@@ -95,6 +106,37 @@ async def test_collections_workflow_is_discovered_and_coherent():
     validate_workflow_profiles("topic-hub")
     fn = _run()
     assert callable(fn) and fn.__name__ == "run"
+
+
+async def test_collections_preflight_blocks_without_collections():
+    """#283: the user's exact pain — a long run that no-ops because collections aren't
+    configured. Pre-flight catches it as a failing REQUIRED check before launch."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await wf.write("uploads/a.txt", b"x")
+    await wf.write("uploads/input.json", b"{}")  # files staged, but no collections.json
+    report = await _preflight()(wf, {})
+    assert can_run(report) is False
+    coll = next(c for c in report.checks if not c.ok)
+    assert coll.severity is Severity.REQUIRED and coll.reason
+
+
+async def test_collections_preflight_blocks_without_files():
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
+    await wf.write("uploads/input.json", b"{}")  # collections set, but nothing staged
+    report = await _preflight()(wf, {})
+    assert can_run(report) is False
+    files = next(c for c in report.checks if not c.ok)
+    assert files.severity is Severity.REQUIRED and files.reason
+
+
+async def test_collections_preflight_describes_target_collections_when_ready():
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await _seed(wf)
+    report = await _preflight()(wf, {})
+    assert can_run(report) is True
+    assert "Defects" in report.summary  # the concrete target collection name
+    assert "1" in report.summary  # the staged file count
 
 
 async def test_no_collection_set_short_circuits_with_a_human_reason():
