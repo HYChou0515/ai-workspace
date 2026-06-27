@@ -90,6 +90,9 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
   // Library-wide aggregates for the landing header.
   const totalDocs = collections.reduce((s, c) => s + c.doc_count, 0);
   const totalSize = collections.reduce((s, c) => s + c.size, 0);
+  // #88: a chunk-based token estimate summed from the BE (each doc's CJK-aware
+  // token_count of the extracted text), replacing the old raw-blob `size / 4`.
+  const totalTokens = collections.reduce((s, c) => s + c.tokens, 0);
   const mineCount = collections.filter((c) => c.owner === me).length;
   const sharedCount = collections.length - mineCount;
   const pinnedCount = collections.filter((c) => pinned.has(c.resource_id)).length;
@@ -129,7 +132,7 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
           <div className="kb-metric">
             <span className="kb-metric__label">Total size</span>
             <span className="kb-metric__value">{fmtBytes(totalSize)}</span>
-            <span className="kb-metric__sub">≈ {fmtCount(Math.round(totalSize / 4))} tokens</span>
+            <span className="kb-metric__sub">≈ {fmtCount(totalTokens)} tokens</span>
           </div>
           <div className="kb-metric">
             <span className="kb-metric__label">Most cited</span>

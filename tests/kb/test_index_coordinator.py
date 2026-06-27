@@ -60,6 +60,47 @@ async def test_enqueued_doc_is_indexed_then_handed_to_the_wiki():
     assert wiki.hooked == [doc_id]  # …then chained the index → wiki hook
 
 
+class _FakeQuality:
+    def __init__(self) -> None:
+        self.scored: list[tuple[str, str]] = []
+
+    def score_doc(self, doc_id: str, acting_user: str) -> None:
+        self.scored.append((doc_id, acting_user))
+
+
+async def test_enqueued_doc_is_scored_after_indexing():
+    # #105: once a doc reaches "ready", the index worker hands it to the quality
+    # coordinator (off the request path), crediting the doc's owner.
+    spec = make_spec(default_user="owner")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    ing, quality = _FakeIngestor(), _FakeQuality()
+    coord = IndexCoordinator(spec, ing, quality_coordinator=quality)  # ty: ignore[invalid-argument-type]
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert ing.indexed == [doc_id]
+    assert quality.scored == [(doc_id, "owner")]  # scored as the doc's owner
+
+
+async def test_quality_hook_failure_does_not_fail_the_index_job():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+
+    class _BoomQuality:
+        def score_doc(self, doc_id: str, acting_user: str) -> None:
+            raise RuntimeError("ollama is down")
+
+    ing = _FakeIngestor()
+    coord = IndexCoordinator(spec, ing, quality_coordinator=_BoomQuality())  # ty: ignore
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert ing.indexed == [doc_id]  # indexing succeeded despite the judge blowing up
+
+
 async def test_indexing_without_a_wiki_coordinator_still_works():
     spec = make_spec(default_user="u")
     cid = _collection(spec)

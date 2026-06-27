@@ -273,6 +273,13 @@ class RetrievalSettings:
     `enhancements` here to dial cost vs. recall."""
 
     enhancements: EnhancementSettings = field(default_factory=EnhancementSettings)
+    # #105: the document-quality prior. `quality_weight` (w) is its strength —
+    # SMALL by default (Vertex AI Search recommends "0.1 or less" for a boost)
+    # so a real relevance gap always wins; 0 disables the prior. `quality_floor`
+    # is an OPTIONAL absolute hard cutoff (docs scored below it are dropped from
+    # results); null (default) = soft only, never exclude.
+    quality_weight: float = 0.10
+    quality_floor: int | None = None
 
 
 @dataclass(frozen=True)
@@ -357,6 +364,19 @@ class KbSettings:
     # both off = stage 2 skipped (the raw VLM text is used as-is). Same
     # usage-entry shape as `retrieval_llm` / `vlm_llm`.
     vlm_format_llm: RetrievalLlmRef | None = None
+    # Issue #284: the multimodal model that drives the `make_deck` build loop —
+    # it both *sees* rendered slides and *writes* the pptxgenjs fix. Same
+    # usage-entry shape as `vlm_llm`; MUST be multimodal (it reads slide images).
+    # `None` (the default) ⇒ reuse `vlm_llm` (the read_image / ingest VLM); both
+    # off ⇒ `make_deck` reports no model configured (fail-loud, like read_image).
+    deck_vlm: RetrievalLlmRef | None = None
+    # Issue #105: the LLM-as-judge that scores a document's quality as a knowledge
+    # source at index time (a chunk-based windowed map-reduce against the
+    # collection's `quality_rubric`). Same usage-entry shape + preset cascade as
+    # `retrieval_llm`. `None` (the default) ⇒ quality scoring off (docs stay
+    # un-scored = neutral; search ranking unaffected). A judge failure leaves a
+    # doc un-scored, never un-indexed.
+    quality_judge: RetrievalLlmRef | None = None
     # Issue #56: wiki-agent LLM (preset ref) + step budgets. `wiki.llm:
     # null` disables the wiki subsystem.
     wiki: WikiSettings = field(default_factory=WikiSettings)

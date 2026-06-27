@@ -12,6 +12,7 @@ from workspace_app.workflow.engine import CheckResult, run_step
 from workspace_app.workflow.events import (
     AwaitingHumanEvent,
     PhaseEntered,
+    SteerProposed,
     StepOutput,
     StepSkipped,
 )
@@ -20,6 +21,7 @@ from workspace_app.workflow.manifest import WorkflowManifest, WorkflowPhase
 from workspace_app.workflow.orchestrator import (
     ActiveRunExists,
     NotAwaitingDecision,
+    NotAwaitingSteer,
     WorkflowOrchestrator,
 )
 from workspace_app.workflow.run import RunStatus, WorkflowRun
@@ -61,7 +63,7 @@ class _Fakes:
         return [type(e).__name__ for _i, e in self.events]
 
 
-def _orch(spec, run_fn, fakes=None, *, store=None, **kw):
+def _orch(spec, run_fn, fakes=None, *, store=None, wire=None, **kw):
     fakes = fakes or _Fakes()
     return (
         WorkflowOrchestrator(
@@ -69,7 +71,7 @@ def _orch(spec, run_fn, fakes=None, *, store=None, **kw):
             store=store or MemoryFileStore(),
             load_run=lambda _s, _p, _w="": run_fn,
             load_manifest=lambda _s, _p, _w="": MANIFEST,
-            wire_handle=lambda *_a: None,
+            wire_handle=wire or (lambda *_a: None),
             publish=fakes.publish,
             release=fakes.release,
             notify_failure=fakes.notify,
@@ -631,3 +633,218 @@ async def test_concurrency_cap_queues_excess(spec_instance: SpecStar):
     release_first.set()
     await asyncio.sleep(0.02)  # r1 finishes → frees the slot → r2 acquires + runs
     assert rm.get(r2).data.status is RunStatus.DONE
+
+
+# ── steer-and-resume (#288 P5) ─────────────────────────────────────────────
+
+_STEER_PLAN = (
+    '{"rationale": "switch ingest target",'
+    ' "input_edits": [{"path": "collections.json", "content": "new-target"}],'
+    ' "invalidate": ["ingest"]}'
+)
+
+
+def _steer_wire(reply: str):
+    def wire(wf, *_a):
+        async def drive_turn(prompt, tools):
+            return reply
+
+        wf.drive_turn = drive_turn
+
+    return wire
+
+
+def _rec(calls: list, name: str):
+    async def execute(_fb):
+        calls.append(name)
+        return {name: True}
+
+    return execute
+
+
+async def _ran(orch, run_id, spec):
+    await asyncio.sleep(0)
+    return spec.get_resource_manager(WorkflowRun).get(run_id).data
+
+
+async def test_steer_proposes_then_confirm_resumes_incrementally(spec_instance: SpecStar):
+    """The heart of #288: a steer edits an input + invalidates a step; on approve the
+    run resumes, the still-valid expensive step SKIPS, only the affected step re-runs."""
+    calls: list[str] = []
+
+    async def run(wf, inputs):
+        await run_step(
+            wf, name="expensive", phase="think", args={"x": 1}, execute=_rec(calls, "expensive")
+        )
+        target = (
+            await wf.read_text("collections.json")
+            if await wf.exists("collections.json")
+            else "none"
+        )
+        await run_step(
+            wf,
+            name="ingest",
+            phase="review",
+            args={"target": target},
+            execute=_rec(calls, "ingest"),
+        )
+        return {"target": target}
+
+    orch, _ = _orch(spec_instance, run, wire=_steer_wire(_STEER_PLAN))
+    run_id = await orch.start(slug="rca", item_id="iST", profile="echo", captured_user="u")
+    assert (await _ran(orch, run_id, spec_instance)).status is RunStatus.DONE
+    assert calls == ["expensive", "ingest"]
+
+    await orch.steer(
+        slug="rca",
+        item_id="iST",
+        profile="echo",
+        run_id=run_id,
+        instruction="use the new-target collection",
+    )
+    got = await _ran(orch, run_id, spec_instance)
+    assert got.status is RunStatus.AWAITING_HUMAN
+    assert got.pending_steer is not None
+    assert got.pending_steer.invalidate == ["ingest"]
+    assert got.pending_steer.instruction == "use the new-target collection"
+
+    await orch.confirm_steer(
+        slug="rca", item_id="iST", profile="echo", run_id=run_id, approve=True, decided_by="alice"
+    )
+    got = await _ran(orch, run_id, spec_instance)
+    assert got.status is RunStatus.DONE
+    assert got.pending_steer is None
+    assert got.result == {"target": "new-target"}
+    assert calls == ["expensive", "ingest", "ingest"]  # expensive skipped; ingest re-ran
+
+
+async def test_steer_auto_stops_a_running_run_first(spec_instance: SpecStar):
+    """A mid-run steer Stops the live run before proposing — otherwise the run task
+    still owns the item and the steerer could never suspend it."""
+    started = asyncio.Event()
+
+    async def run(wf, inputs):
+        started.set()
+        await asyncio.Event().wait()  # blocks until cancelled
+
+    orch, fakes = _orch(spec_instance, run, wire=_steer_wire(_STEER_PLAN))
+    run_id = await orch.start(slug="rca", item_id="iRun", profile="echo", captured_user="u")
+    await started.wait()
+    await orch.steer(
+        slug="rca", item_id="iRun", profile="echo", run_id=run_id, instruction="redirect"
+    )
+    got = await _ran(orch, run_id, spec_instance)
+    assert got.status is RunStatus.AWAITING_HUMAN  # the live run was Stopped, then steered
+    assert got.pending_steer is not None
+    assert ("iRun", True) in fakes.released  # the auto-Stop released the sandbox
+
+
+async def test_reject_steer_on_a_terminal_run_leaves_it_stopped(spec_instance: SpecStar):
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    orch, _ = _orch(spec_instance, run, wire=_steer_wire(_STEER_PLAN))
+    run_id = await orch.start(slug="rca", item_id="iRej", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+    await orch.steer(slug="rca", item_id="iRej", profile="echo", run_id=run_id, instruction="x")
+    assert (await _ran(orch, run_id, spec_instance)).pending_steer is not None
+    await orch.confirm_steer(
+        slug="rca", item_id="iRej", profile="echo", run_id=run_id, approve=False
+    )
+    got = await _ran(orch, run_id, spec_instance)
+    assert got.status is RunStatus.CANCELLED
+    assert got.pending_steer is None
+
+
+async def test_reject_steer_at_a_gate_returns_to_the_gate(spec_instance: SpecStar):
+    """Steering coexists with a gate: rejecting the steer restores the open gate so the
+    human can still approve/reject it (the steer was an optional detour)."""
+
+    async def run(wf, inputs):
+        await human_gate(wf, phase="review", title="ok?", allow=["approve", "reject"])
+        return {"ok": True}
+
+    orch, _ = _orch(spec_instance, run, wire=_steer_wire(_STEER_PLAN))
+    run_id = await orch.start(slug="rca", item_id="iGate", profile="echo", captured_user="u")
+    assert (await _ran(orch, run_id, spec_instance)).pending_decision is not None
+    await orch.steer(slug="rca", item_id="iGate", profile="echo", run_id=run_id, instruction="x")
+    assert (await _ran(orch, run_id, spec_instance)).pending_steer is not None
+    await orch.confirm_steer(
+        slug="rca", item_id="iGate", profile="echo", run_id=run_id, approve=False
+    )
+    got = await _ran(orch, run_id, spec_instance)
+    assert got.status is RunStatus.AWAITING_HUMAN
+    assert got.pending_steer is None
+    assert got.pending_decision is not None  # the gate is back
+
+
+async def test_confirm_steer_without_a_pending_plan_is_rejected(spec_instance: SpecStar):
+    async def run(wf, inputs):
+        return {}
+
+    orch, _ = _orch(spec_instance, run)
+    run_id = await orch.start(slug="rca", item_id="iNo", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+    with pytest.raises(NotAwaitingSteer):
+        await orch.confirm_steer(
+            slug="rca", item_id="iNo", profile="echo", run_id=run_id, approve=True
+        )
+
+
+async def test_failed_steer_proposal_leaves_the_run_stopped_with_a_reason(spec_instance: SpecStar):
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    orch, _ = _orch(spec_instance, run, wire=_steer_wire("not json at all"))
+    run_id = await orch.start(slug="rca", item_id="iFail", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+    await orch.steer(slug="rca", item_id="iFail", profile="echo", run_id=run_id, instruction="x")
+    got = await _ran(orch, run_id, spec_instance)
+    assert got.status is RunStatus.CANCELLED
+    assert got.pending_steer is None
+    assert "steer_error" in (got.result or {})
+
+
+async def test_steer_publishes_a_steer_proposed_event(spec_instance: SpecStar):
+    """When the steerer has a plan it publishes SteerProposed on the run's stream, so
+    the FE shows the confirm card live instead of only on the next poll."""
+
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    orch, fakes = _orch(spec_instance, run, wire=_steer_wire(_STEER_PLAN))
+    run_id = await orch.start(slug="rca", item_id="iEv", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+    fakes.events.clear()
+    await orch.steer(
+        slug="rca", item_id="iEv", profile="echo", run_id=run_id, instruction="bump it"
+    )
+    await _ran(orch, run_id, spec_instance)
+    proposed = [e for _k, e in fakes.events if isinstance(e, SteerProposed)]
+    assert proposed and proposed[0].instruction == "bump it"
+
+
+async def test_stop_during_a_steer_proposal_settles_the_run_cancelled(spec_instance: SpecStar):
+    """If the operator hits Stop while the steerer is still proposing, the run settles
+    `cancelled` rather than wedging at `running` (no driver owns the propose task)."""
+    blocked = asyncio.Event()
+
+    def wire(wf, *_a):
+        async def drive_turn(_prompt, _tools):
+            blocked.set()
+            await asyncio.Event().wait()  # the steerer hangs until cancelled
+
+        wf.drive_turn = drive_turn
+
+    async def run(wf, inputs):
+        return {"ok": True}
+
+    orch, _ = _orch(spec_instance, run, wire=wire)
+    run_id = await orch.start(slug="rca", item_id="iStop", profile="echo", captured_user="u")
+    await _ran(orch, run_id, spec_instance)
+    await orch.steer(slug="rca", item_id="iStop", profile="echo", run_id=run_id, instruction="x")
+    await blocked.wait()  # the steerer is mid-proposal
+    assert await orch.cancel(run_id, "iStop") is True
+    got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
+    assert got.status is RunStatus.CANCELLED
+    assert got.pending_steer is None

@@ -39,6 +39,14 @@ class UserDirectory(Protocol):
         old record never breaks rendering."""
         ...
 
+    def find_by_handle(self, handle: str) -> User | None:
+        """Reverse of `get`: resolve a *handle* (the email local-part shown to
+        the agent as ``[Name (handle)]:``, #242) back to its `User`, so the
+        agent can act on a person it can only see by handle (#275). Strict —
+        an unknown handle returns ``None`` (not a placeholder), so the caller
+        can tell the agent the handle was unrecognised."""
+        ...
+
     def all_users(self) -> list[User]:
         """Every user (the directory is small — a few hundred), so pickers can
         fetch once and filter client-side."""

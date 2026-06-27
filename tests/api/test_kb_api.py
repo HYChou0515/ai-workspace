@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator
 
-from specstar import SpecStar
+from specstar import QB, SpecStar
 
 from workspace_app.agent.context import AgentToolContext
 from workspace_app.api import create_app
@@ -10,7 +10,7 @@ from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.resources import make_spec
-from workspace_app.resources.kb import EMBED_DIM
+from workspace_app.resources.kb import EMBED_DIM, SourceDoc
 from workspace_app.sandbox.mock import MockSandbox
 
 from ._client import TestClient
@@ -131,6 +131,28 @@ def test_collection_card_aggregates_docs_size_and_updated():
     assert card["updated_at"] > 0
 
 
+def test_collection_card_aggregates_doc_token_counts():
+    # #88: the card's "≈ N tokens" is the SUM of each ready doc's chunk-based
+    # token_count (a CJK-aware estimate of the extracted text), not raw bytes/4.
+    client, spec = _client_and_spec()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", "資料科學 報告".encode(), "text/markdown")},
+    )
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("b.md", b"hello world foo bar baz", "text/markdown")},
+    )
+    _drain(client)  # token_count is set only once indexing reaches "ready"
+
+    docs = spec.get_resource_manager(SourceDoc).list_resources((QB["collection_id"] == cid).build())
+    expected = sum(d.data.token_count for d in docs)  # ty: ignore[unresolved-attribute]
+    assert expected > 0
+    card = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert card["tokens"] == expected
+
+
 def _new_collection(client: TestClient) -> str:
     return client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
 
@@ -166,6 +188,71 @@ def test_upload_document_and_list():
     assert match["file_id"]
     blob = client.get(f"/source-doc/{guide_id}/blobs/{match['file_id']}")
     assert blob.status_code == 200 and blob.content == b"# Guide\none two three"
+
+
+def _upload(client, cid, name, data=b"hello there"):
+    return client.post(
+        f"/kb/collections/{cid}/documents", files={"file": (name, data, "text/markdown")}
+    )
+
+
+def _set_quality(spec, doc_id, *, score, rationale="", breakdown=None):
+    import msgspec
+
+    rm = spec.get_resource_manager(SourceDoc)
+    doc = rm.get(doc_id).data
+    rm.update(
+        doc_id,
+        msgspec.structs.replace(
+            doc, quality_score=score, quality_rationale=rationale, quality_breakdown=breakdown or {}
+        ),
+    )
+
+
+def test_list_documents_exposes_quality_score():
+    # #105: the per-doc quality score rides the list row so the FE can draw a
+    # quality badge + sort. Un-scored docs report null (neutral).
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    _upload(client, cid, "a.md")
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+    row = next(d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"])
+    assert row["quality_score"] is None  # un-scored = neutral
+    assert row["quality_rationale"] == ""
+    _set_quality(spec, doc_id, score=73, rationale="Clear and complete.")
+    row = next(d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"])
+    assert row["quality_score"] == 73
+    assert row["quality_rationale"] == "Clear and complete."
+
+
+def test_list_documents_can_sort_by_quality_worst_first():
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    for name in ("good.md", "bad.md", "mid.md"):
+        _upload(client, cid, name)
+    _drain(client)
+    _set_quality(spec, encode_doc_id(cid, "good.md"), score=88)
+    _set_quality(spec, encode_doc_id(cid, "bad.md"), score=14)
+    _set_quality(spec, encode_doc_id(cid, "mid.md"), score=50)
+
+    items = client.get(f"/kb/collections/{cid}/documents?sort=quality").json()["items"]
+    scored = [d["path"] for d in items if d["quality_score"] is not None]
+    assert scored == ["bad.md", "mid.md", "good.md"]
+
+
+def test_render_document_exposes_quality_rationale_and_breakdown():
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    _upload(client, cid, "a.md")
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+    _set_quality(spec, doc_id, score=42, rationale="Thin and noisy.", breakdown={"noise": 0.7})
+
+    rd = client.get(f"/kb/documents?id={doc_id}").json()
+    assert rd["quality_score"] == 42
+    assert rd["quality_rationale"] == "Thin and noisy."
+    assert rd["quality_breakdown"] == {"noise": 0.7}
 
 
 def test_list_documents_exposes_unit_progress_for_an_indexing_fanout_doc():
@@ -957,3 +1044,66 @@ def test_list_documents_surfaces_scoped_cited_counts():
     items = client.get(f"/kb/collections/{cid}/documents").json()["items"]
     by_path = {d["path"]: d["cited"] for d in items}
     assert by_path == {"cited.md": 2, "lonely.md": 0}
+
+
+def _upload_two_chunky_docs(client) -> str:
+    cid = _new_collection(client)
+    for path in ("a.md", "b.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents",
+            files={"file": (path, b"# h\none two three four five six seven", "text/markdown")},
+        )
+    _drain(client)
+    return cid
+
+
+def test_list_documents_reports_chunk_counts_per_doc():
+    # The listing surfaces each doc's chunk count; a multi-chunk doc reports its
+    # real total (cross-checked against a direct per-doc count of DocChunk).
+    from workspace_app.resources.kb import DocChunk
+
+    client, spec = _client_and_spec()
+    cid = _upload_two_chunky_docs(client)
+    chrm = spec.get_resource_manager(DocChunk)
+    truth = {
+        path: chrm.count_resources((QB["source_doc_id"] == encode_doc_id(cid, path)).build())
+        for path in ("a.md", "b.md")
+    }
+    assert all(v > 0 for v in truth.values())  # the docs really did chunk
+    items = client.get(f"/kb/collections/{cid}/documents").json()["items"]
+    assert {d["path"]: d["chunks"] for d in items} == truth
+
+
+def test_list_documents_counts_chunks_via_aggregate_pushdown_not_materialisation(monkeypatch):
+    # #103: the documents list tallies each doc's chunks through a scoped
+    # `Count` GROUP BY push-down (`doc_chunks_for_ids` → `exp_aggregate_by`),
+    # which the store answers as a single COUNT — NOT by streaming every chunk
+    # row into Python to add 1. WHY this guard: the counts are identical either
+    # way, so a plain behaviour test stays green if a refactor re-introduces the
+    # old `DocChunk.search_resources(...)` materialisation loop — but that loop
+    # IS the #103 slowness (it loads each chunk's body: text + two embedding
+    # vectors). So we pin the MECHANISM: the listing must reach DocChunk through
+    # `exp_aggregate_by` (a loop would never call it), and the counts stay right.
+    from workspace_app.resources.kb import DocChunk
+
+    client, spec = _client_and_spec()
+    cid = _upload_two_chunky_docs(client)
+
+    chrm = spec.get_resource_manager(DocChunk)
+    agg_calls = 0
+    real = chrm.exp_aggregate_by  # ty: ignore[unresolved-attribute]
+
+    def _spy(*a, **k):
+        nonlocal agg_calls
+        agg_calls += 1
+        return real(*a, **k)
+
+    monkeypatch.setattr(chrm, "exp_aggregate_by", _spy)
+    items = client.get(f"/kb/collections/{cid}/documents").json()["items"]
+
+    truth = {
+        path: chrm.count_resources((QB["source_doc_id"] == encode_doc_id(cid, path)).build())
+        for path in ("a.md", "b.md")
+    }
+    assert {d["path"]: d["chunks"] for d in items} == truth  # counts correct ...
+    assert agg_calls >= 1  # ... reached via the GROUP BY push-down, not a loop.

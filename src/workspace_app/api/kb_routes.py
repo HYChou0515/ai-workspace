@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
-from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +26,7 @@ from ..files.zip_download import (
     safe_zip_filename,
     stream_prepared_zip,
 )
+from ..kb.chunk_counts import doc_chunks_for_ids
 from ..kb.cited import chunk_cited, collection_cited, doc_cited_count, doc_cited_for_ids
 from ..kb.code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..kb.collection_export import (
@@ -106,6 +106,10 @@ class CollectionOut(BaseModel):
     cited: int
     doc_count: int
     size: int  # total bytes across the collection's documents
+    # #88: chunk-based token estimate — SUM of each ready doc's token_count (a
+    # CJK-aware estimate of the EXTRACTED text). Replaces the FE's old raw-blob
+    # bytes/4 guess, which was wildly wrong for binary formats.
+    tokens: int
     updated_at: int  # epoch ms — the most recently updated doc (or the collection)
     owner: str  # created_by
     # P3.0 code-repo metadata (None for non-code Collections). `git_token` is
@@ -123,6 +127,9 @@ class CollectionOut(BaseModel):
     # current values. Blank ⇒ the bundled wiki prompt is used verbatim.
     wiki_maintainer_guidance: str = ""
     wiki_reader_guidance: str = ""
+    # #105: the per-collection quality rubric, so the editor can prefill it.
+    # Blank ⇒ the collection is not scored.
+    quality_rubric: str = ""
 
 
 class SyncOut(BaseModel):
@@ -216,6 +223,13 @@ class RenderedDoc(BaseModel):
     # handed back (PptxParser's soffice-converted PDF) — the FE iframes
     # `/blobs/{preview_file_id}` when set. "" = no preview.
     preview_file_id: str = ""
+    # #105: the AI quality verdict shown when the doc is opened — the holistic
+    # 0–100 `quality_score` (null = un-scored), the `quality_rationale` ("why
+    # good/bad"), and the per-dimension `quality_breakdown` (keys named by the
+    # collection's rubric). Display-only.
+    quality_score: int | None = None
+    quality_rationale: str = ""
+    quality_breakdown: dict[str, float] = {}
 
 
 class DocDeletedOut(BaseModel):
@@ -252,6 +266,14 @@ class DocumentRow(BaseModel):
     # which the FE reads as "no unit bar". Monotonic while indexing (see IndexRun).
     units_done: int = 0
     units_total: int = 0
+    # #105: the AI's quality grade (0–100) for this doc as a knowledge source, or
+    # null when un-scored (no rubric / not yet judged) — the FE draws a quality
+    # badge from it and can sort the list by it. The short `quality_rationale`
+    # rides the row too so the doc IDE's status bar can show "why" without a
+    # per-doc render call; the (larger) per-dimension breakdown stays on the
+    # `render_document` detail.
+    quality_score: int | None = None
+    quality_rationale: str = ""
 
 
 class CollectionImported(BaseModel):
@@ -335,6 +357,7 @@ def register_kb_routes(
             cited=cited.get(rid, 0),
             doc_count=row.doc_count,
             size=row.size_total or 0,
+            tokens=row.token_total or 0,
             updated_at=updated,
             owner=res.meta.created_by,  # resource-level creator (the original owner)
             git_url=data.git_url,
@@ -347,6 +370,7 @@ def register_kb_routes(
             use_wiki=data.use_wiki,
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
+            quality_rubric=data.quality_rubric,
         )
 
     @app.post("/kb/collections")
@@ -374,6 +398,7 @@ def register_kb_routes(
             cited=0,
             doc_count=0,
             size=0,
+            tokens=0,
             updated_at=_ms(rev.updated_time),
             owner=rev.created_by,
             git_url=body.git_url,
@@ -439,6 +464,8 @@ def register_kb_routes(
             aggregates={
                 "doc_count": ForeignAggregate(doc_rm, by_coll, Count()),
                 "size_total": ForeignAggregate(doc_rm, by_coll, Sum(QB["content_size"])),
+                # #88: chunk-based token estimate summed in the SAME pass as size.
+                "token_total": ForeignAggregate(doc_rm, by_coll, Sum(QB["token_count"])),
                 "latest_doc": ForeignAggregate(doc_rm, by_coll, Max(QB.updated_time())),
             },
         )
@@ -818,15 +845,20 @@ def register_kb_routes(
         collection_id: str,
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=500),
+        sort: str = Query("recent"),
     ) -> DocumentsPage:
         """Paged list of a collection's documents. `collection_id` is the
         indexed filter; specstar serves the page through
         `QB[...].offset(offset).limit(limit)` so the BE never fetches the
         full collection just to slice it (see
         `feedback_specstar_indexed_queries`). `total` is computed via the
-        same filter — counts only, no row materialisation."""
+        same filter — counts only, no row materialisation.
+
+        `sort` (#105): `recent` (default) = newest first; `quality` = worst
+        quality first (the indexed `quality_score` ascending) so the FE's "sort
+        by quality" surfaces the docs that drag retrieval down. `resource_id` is
+        the total-order tiebreak in both."""
         rm = spec.get_resource_manager(SourceDoc)
-        chrm = spec.get_resource_manager(DocChunk)
         q = QB["collection_id"] == collection_id
         total = rm.count_resources(q.build())
         # Sort by IMMUTABLE keys BEFORE paging — `created_time` (the resource's
@@ -837,38 +869,28 @@ def register_kb_routes(
         # the front and slide the window, double-counting one row and dropping
         # another in the fetch-all loop (#184). Both are meta-level fields
         # specstar indexes implicitly — no `add_model(indexed_fields=...)`.
-        items: list[DocumentRow] = []
-        data_page = list(
-            rm.list_resources(
-                q.sort(QB.created_time().desc(), QB.resource_id().asc())
-                .offset(offset)
-                .limit(limit)
-                .build()
-            )
+        # `quality` sort intentionally pages on the (mutable) score — a re-score
+        # CAN shift the window, the inherent cost of sorting by a live signal.
+        ordering = (
+            q.sort(QB["quality_score"].asc(), QB.resource_id().asc())
+            if sort == "quality"
+            else q.sort(QB.created_time().desc(), QB.resource_id().asc())
         )
-        # Batched chunk-per-doc count: one query against DocChunk filtered
-        # by `source_doc_id IN (this page's resource_ids)`, then bucket
-        # locally. Replaces N per-doc `count_resources` calls (d530644).
-        # `r.info.resource_id` (NOT `r.meta.*`) is the resource_id stored
-        # on `DocChunk.source_doc_id` at ingest — the IN filter and the
-        # bucket lookup must use the SAME attribute.
+        items: list[DocumentRow] = []
+        data_page = list(rm.list_resources(ordering.offset(offset).limit(limit).build()))
+        # `r.info.resource_id` (NOT `r.meta.*`) is the resource_id stored on
+        # `DocChunk.source_doc_id` / on a `CitationEvent.document_id` at ingest —
+        # the IN filters keyed below must use the SAME attribute, and the lookups
+        # further down read back by it.
         ids = [r.info.resource_id for r in data_page]  # ty: ignore[unresolved-attribute]
-        # Cited counts for just THIS page's docs (an indexed `document_id IN`
-        # push-down), not a global group-by over the whole citation log.
+        # Per-page counts for THIS page's docs only. Both are scoped, indexed
+        # `... IN (ids)` `Count` GROUP BY push-downs returning {doc_id: n}: no
+        # global group-by over the whole log, and — crucially for #103 — no
+        # chunk-body materialisation just to tally (the old per-page
+        # `DocChunk.search_resources` loop streamed every chunk's text + two
+        # embedding vectors into Python only to add 1).
         cited = doc_cited_for_ids(spec, ids)
-        chunk_counts: defaultdict[str, int] = defaultdict(int)
-        if ids:
-            for ch in chrm.search_resources(QB["source_doc_id"].in_(ids).build()):
-                # `indexed_data` is `dict | UnsetType` to ty — assert-narrow
-                # (the IN query only returns rows with indexed fields).
-                indexed = ch.indexed_data
-                assert isinstance(indexed, dict)
-                sid = indexed.get("source_doc_id")
-                # `source_doc_id` is a required `str` field, so its indexed value
-                # is always a str when the IN query returns the row; the guard is
-                # belt-and-suspenders narrowing for ty and can't be False here.
-                if isinstance(sid, str):  # pragma: no branch
-                    chunk_counts[sid] += 1
+        chunk_counts = doc_chunks_for_ids(spec, ids)
 
         # #248: unit progress for the docs still fanning out on this page. The run
         # is keyed by doc id and only exists for an in-flight (or just-finished)
@@ -878,7 +900,7 @@ def register_kb_routes(
             data = r.data
             assert isinstance(data, SourceDoc)
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            chunks = chunk_counts[rid]
+            chunks = chunk_counts.get(rid, 0)
             run = runs.get(rid) if data.status == "indexing" else None
             units_done = run.units_done if run is not None else 0
             units_total = run.units_total if run is not None else 0
@@ -911,6 +933,8 @@ def register_kb_routes(
                     updated_at=_ms(updated),
                     units_done=units_done,
                     units_total=units_total,
+                    quality_score=data.quality_score,
+                    quality_rationale=data.quality_rationale,
                 )
             )
         return DocumentsPage(
@@ -997,6 +1021,11 @@ def register_kb_routes(
                 if doc.preview is not None and isinstance(doc.preview.file_id, str)
                 else ""
             ),
+            quality_score=doc.quality_score,
+            quality_rationale=doc.quality_rationale,
+            quality_breakdown={
+                k: float(v) for k, v in doc.quality_breakdown.items() if isinstance(v, (int, float))
+            },
         )
 
     @app.post("/kb/documents/reindex")

@@ -42,6 +42,7 @@ from workspace_app.workflow import (
 )
 from workspace_app.workflow.engine import CheckResult, run_step
 from workspace_app.workflow.handle import WorkflowHandle
+from workspace_app.workflow.preflight import PreflightItem, PreflightReport
 
 # The proposed cards (editable, committed) + the read-only "before" snapshot the human
 # diffs it against (#205). ``.readonly/`` is server-enforced read-only (api/app.py).
@@ -376,16 +377,52 @@ async def _assemble_step(
     )
 
 
+async def _staged_files(wf: WorkflowHandle, inputs: dict[str, Any]) -> list[str]:
+    """The uploads this run would file — the SAME glob ``run()`` uses, so the
+    pre-flight count never drifts from what actually runs (#283)."""
+    up = wf.upload_dir.rstrip("/")
+    return await wf.glob(
+        inputs.get("files", [f"{up}/*"]),
+        exclude=inputs.get("except", [f"{up}/input.json"]),
+    )
+
+
+async def preflight(wf: WorkflowHandle, inputs: dict[str, Any]) -> PreflightReport:
+    """#283 pre-flight: catch the two ways this run no-ops — no collection set yet, or no
+    files staged — as failing REQUIRED checks BEFORE launch, and otherwise describe exactly
+    what it will do (e.g. 把 uploads/ 裡的 3 個檔案歸檔到 Defects, Tooling)."""
+    collections = await _read_collections(wf)
+    files = await _staged_files(wf, inputs)
+    n = len(files)
+    return PreflightReport(
+        summary=(
+            f"把 uploads/ 裡的 {n} 個檔案分類、草擬詞彙定義，經你審核後歸檔到："
+            f"{'、'.join(collections)}。"
+            if collections and n
+            else "依下方檢查清單，這次執行會空轉。"
+        ),
+        checks=[
+            PreflightItem(
+                label="已設定至少一個知識庫（collections.json）",
+                ok=bool(collections),
+                reason="" if collections else "先在 collections.json 加入至少一個知識庫再執行。",
+            ),
+            PreflightItem(
+                label="uploads/ 內有待歸檔的檔案",
+                ok=n > 0,
+                reason="" if n else f"先把要歸檔的檔案放進 {wf.upload_dir.rstrip('/')}/ 再執行。",
+            ),
+        ],
+    )
+
+
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     collections = await _read_collections(wf)
     if not collections:
         return await _no_collections_result(wf)
     up = wf.upload_dir.rstrip("/")  # #198: the profile's staging folder, not hardcoded
     uploads_prefix = f"{up}/"
-    files = await wf.glob(
-        inputs.get("files", [f"{up}/*"]),
-        exclude=inputs.get("except", [f"{up}/input.json"]),
-    )
+    files = await _staged_files(wf, inputs)
     if not files:
         return {"status": "empty", "files": 0, "message": _MSG_NO_FILES}
 

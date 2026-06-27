@@ -15,6 +15,9 @@ class _Dir:
     def get(self, user_id: str) -> User:
         return self._by_id.get(user_id, User(id=user_id, name=""))
 
+    def find_by_handle(self, handle: str) -> User | None:
+        return None
+
     def all_users(self) -> list[User]:
         return list(self._by_id.values())
 

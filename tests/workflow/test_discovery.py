@@ -8,6 +8,7 @@ from workspace_app.workflow.discovery import (
     _check_phase_ids,
     _check_workflow_ids,
     _exec_run,
+    load_preflight_callable,
     load_run_callable,
     validate_workflow_profiles,
 )
@@ -95,3 +96,23 @@ def test_check_workflow_ids_rejects_duplicate_ids():
     bad = [WorkflowManifest(id="dup"), WorkflowManifest(id="dup")]
     with pytest.raises(ValueError, match="duplicate workflow id"):
         _check_workflow_ids(bad, "app/profile")
+
+
+# ── #283: optional pre-flight hook ───────────────────────────────────────
+
+
+def test_load_preflight_callable_returns_the_hook_when_present():
+    """echo/run.py declares ``preflight`` alongside ``run`` — discovery loads it."""
+    pf = load_preflight_callable("playground", "echo")
+    assert callable(pf) and pf.__name__ == "preflight"  # ty: ignore[unresolved-attribute]
+
+
+def test_load_preflight_callable_returns_none_when_absent():
+    """Pre-flight is optional: a run.py without one yields None (the dialog then just
+    shows the workflow's phases)."""
+    assert load_preflight_callable("playground", "multi", "beta") is None
+
+
+def test_load_preflight_callable_missing_run_py_is_none():
+    """No run.py at all ⇒ no pre-flight (defensive — never raises)."""
+    assert load_preflight_callable("playground", "multi", "nope") is None

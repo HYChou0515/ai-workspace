@@ -64,6 +64,7 @@ branch = true
 source = ["src/workspace_app"]
 omit = [
     "src/workspace_app/__main__.py",
+    "src/workspace_app/workflow/__main__.py",
 ]
 # parallel + sitecustomize's process_startup() let each pytest-xdist worker
 # subprocess record its own .coverage.* file; `coverage combine` merges them.

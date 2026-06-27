@@ -3,12 +3,23 @@ and refresh ``MEMORY.md``. Driven directly through the file-path-loaded ``run()`
 a fake agent turn (the live LLM exercise is a separate canned check)."""
 
 from workspace_app.filestore.memory import MemoryFileStore
-from workspace_app.workflow.discovery import load_run_callable, validate_workflow_profiles
+from workspace_app.workflow.discovery import (
+    load_preflight_callable,
+    load_run_callable,
+    validate_workflow_profiles,
+)
 from workspace_app.workflow.handle import WorkflowHandle
+from workspace_app.workflow.preflight import Severity, can_run
 
 
 def _run():
     return load_run_callable("topic-hub", "default", "memory")
+
+
+def _preflight():
+    pf = load_preflight_callable("topic-hub", "default", "memory")
+    assert pf is not None
+    return pf
 
 
 async def test_memory_workflow_is_discovered_and_coherent():
@@ -108,3 +119,24 @@ async def test_memory_workflow_is_empty_with_no_uploads():
     wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
     await wf.write("uploads/input.json", b"{}")
     assert await run(wf, {}) == {"status": "empty", "notes": 0}
+
+
+async def test_memory_preflight_blocks_when_no_files_staged():
+    """#283: the same empty-uploads no-op the run guards against is caught BEFORE launch —
+    a failing REQUIRED check so the dialog can disable 'Run' and say why."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await wf.write("uploads/input.json", b"{}")  # the control file isn't a staged upload
+    report = await _preflight()(wf, {})
+    assert can_run(report) is False
+    blocked = [c for c in report.checks if not c.ok]
+    assert blocked and blocked[0].severity is Severity.REQUIRED and blocked[0].reason
+
+
+async def test_memory_preflight_counts_staged_files_when_ready():
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await wf.write("uploads/a.txt", b"x")
+    await wf.write("uploads/b.txt", b"y")
+    await wf.write("uploads/input.json", b"{}")
+    report = await _preflight()(wf, {})
+    assert can_run(report) is True
+    assert "2" in report.summary  # surfaces the concrete count it will act on

@@ -126,4 +126,26 @@ describe("WorkflowRunPanel — no-op / terminal clarity (#100)", () => {
     expect(screen.getByTestId("wf-step-board")).toBeInTheDocument();
     expect(screen.getByTestId("wf-step-row")).toHaveTextContent("classify_a");
   });
+
+  it("toggles between the step board and the timeline, keeping the board the default (#283)", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    localStorage.removeItem("wf.view.timeline"); // default = board
+    run.current = mkRun({
+      status: "done",
+      phases: [{ phase: "classify", status: "passed", done: 1, total: 1, failed: 0 }],
+      steps: [
+        { phase: "classify", name: "classify_a", key: "", status: "passed", attempts: 0, reason: "", started: 1, ended: 50 },
+      ],
+    });
+    render(<WorkflowRunPanel slug="topic-hub" itemId="topic-hub:1" runId="r1" declaredPhases={PHASES} />);
+    // default view is the simple step board
+    expect(screen.getByTestId("wf-step-board")).toBeInTheDocument();
+    expect(screen.queryByTestId("wf-timeline")).toBeNull();
+    // a metrics strip sits above either view
+    expect(screen.getByTestId("wf-metrics")).toBeInTheDocument();
+    // switching to the timeline swaps the view
+    fireEvent.click(screen.getByTestId("wf-view-timeline"));
+    expect(screen.getByTestId("wf-timeline")).toBeInTheDocument();
+    expect(screen.queryByTestId("wf-step-board")).toBeNull();
+  });
 });

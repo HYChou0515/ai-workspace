@@ -170,8 +170,18 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(create).toHaveBeenCalledWith("topic-hub", "it", ""));
   });
 
-  it("launches a workflow via the New picker (startRun with the workflow id)", async () => {
+  it("launches a workflow via the New picker — pre-flight dialog first, then startRun", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "collections",
+      title: "File uploads into collections",
+      description: "",
+      phases: [{ id: "classify", title: "Classify" }],
+      summary: "把 1 個檔案歸檔",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
     const start = vi
       .spyOn(workflowApi, "startRun")
       .mockResolvedValue({ run_id: "r1", item_id: "it", chat_id: "conversation:wf1" });
@@ -179,6 +189,10 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(screen.getByTestId("new-item-button")).toBeInTheDocument());
     fireEvent.click(screen.getByTestId("new-item-button"));
     fireEvent.click(await screen.findByTestId("new-item-workflow-collections"));
+    // the dialog opens first; nothing starts until the operator confirms
+    await screen.findByTestId("wf-launch-dialog");
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("wf-launch-run"));
     await waitFor(() => expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections"));
   });
 
@@ -303,5 +317,38 @@ describe("ItemChatShell", () => {
     expect(screen.getByText("Filled in the glossary? Continue to commit?")).toBeInTheDocument();
     fireEvent.click(screen.getByText("Approve"));
     await waitFor(() => expect(decide).toHaveBeenCalledWith("topic-hub", "it", "r1", { choice: "approve" }));
+  });
+
+  it("pins the steer confirm card on a pending_steer and applies it on click (#288)", async () => {
+    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
+    const run: WorkflowRunDTO = {
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "awaiting_human",
+      current_phase: "",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: null,
+      result: null,
+      pending_decision: null,
+      pending_steer: {
+        instruction: "use the a collection and redo ingest",
+        rationale: "switch ingest target",
+        input_edits: [{ path: "collections.json", content: "[]" }],
+        invalidate: ["ingest"],
+        decided_by: "",
+      },
+    };
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run);
+    const confirm = vi.spyOn(workflowApi, "confirmSteer").mockResolvedValue();
+    render();
+    await waitFor(() => expect(screen.getByTestId("workflow-steer")).toBeInTheDocument());
+    expect(screen.getByTestId("workflow-steer")).toHaveStyle({ position: "sticky" });
+    expect(screen.getByText("use the a collection and redo ingest")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("wf-steer-approve"));
+    await waitFor(() => expect(confirm).toHaveBeenCalledWith("topic-hub", "it", "r1", true));
   });
 });

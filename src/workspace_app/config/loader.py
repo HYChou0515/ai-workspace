@@ -370,6 +370,10 @@ _TOP_SCHEMA: dict[str, Any] = {
         "vlm_llm": "__retrieval_llm__",
         # Issue #115: text LLM that reformats VLM output to clean Markdown.
         "vlm_format_llm": "__retrieval_llm__",
+        # Issue #284: the multimodal model driving the make_deck build loop.
+        "deck_vlm": "__retrieval_llm__",
+        # Issue #105: the doc-quality judge follows the same usage-entry shape.
+        "quality_judge": "__retrieval_llm__",
         # Issue #56: wiki LLM follows the same preset-reference pattern
         # (`llm` is a usage-entry ref); the step budgets are scalar
         # leaves alongside it.
@@ -384,6 +388,10 @@ _TOP_SCHEMA: dict[str, Any] = {
                 "hyde": _dataclass_keys(EnhancementInt),
                 "rerank": _dataclass_keys(EnhancementBool),
             },
+            # #105: scalar leaves (float, and int|null) — the shape walk skips
+            # their non-dict values, like `max_searches_per_turn` below.
+            "quality_weight": set(),
+            "quality_floor": set(),
         },
         # Issue #195: scalar leaf (int or null). The shape walk skips its
         # non-dict value; the value range is checked by `_check_max_searches`.
@@ -607,6 +615,8 @@ def _check_retrieval_llm_reference(merged: dict[str, Any], *, source: str) -> No
         ("kb.card_drafter", kb.get("card_drafter")),
         ("kb.vlm_llm", kb.get("vlm_llm")),
         ("kb.vlm_format_llm", kb.get("vlm_format_llm")),
+        ("kb.deck_vlm", kb.get("deck_vlm")),
+        ("kb.quality_judge", kb.get("quality_judge")),
         ("kb.wiki.llm", wiki.get("llm") if isinstance(wiki, dict) else None),
     ]
     for path, ref in refs:
@@ -663,6 +673,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             git=_build(GitSettings, d["kb"]["git"]),
             vlm_llm=_build_retrieval_llm(d["kb"]["vlm_llm"]),
             vlm_format_llm=_build_retrieval_llm(d["kb"].get("vlm_format_llm")),
+            deck_vlm=_build_retrieval_llm(d["kb"].get("deck_vlm")),
             wiki=_build_wiki(d["kb"]["wiki"]),
             parsers=list(d["kb"].get("parsers", [])),
             parsers_disabled=list(d["kb"].get("parsers_disabled", [])),

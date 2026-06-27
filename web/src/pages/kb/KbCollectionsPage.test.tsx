@@ -58,6 +58,7 @@ function col(over: Record<string, unknown>) {
     cited: 0,
     doc_count: 0,
     size: 0,
+    tokens: 0,
     updated_at: Date.UTC(2026, 4, 20),
     owner: "alice",
     ...over,
@@ -194,6 +195,24 @@ describe("KbCollectionsPage", () => {
     expect(card).toHaveTextContent("3 docs");
     expect(card).toHaveTextContent("2 KB");
     expect(card).toHaveTextContent("cited 7×");
+  });
+
+  it("header tokens metric sums each collection's chunk-based token_count, not bytes/4 (#88)", async () => {
+    // sizes sum to 800 (old bytes/4 ⇒ 200); tokens sum to 210 — distinct so the
+    // assertion fails if the header still derives tokens from raw blob bytes.
+    const client = {
+      listCollections: async () => [
+        col({ resource_id: "c1", name: "Alpha", size: 400, tokens: 120 }),
+        col({ resource_id: "c2", name: "Zeta", size: 400, tokens: 90 }),
+      ],
+      listDocuments: async () => page([]),
+    } as unknown as Client;
+    renderKb(client);
+
+    await screen.findByRole("button", { name: "Open Alpha" });
+    const metric = screen.getByText("Total size").closest(".kb-metric")!;
+    expect(metric.textContent).toContain("≈ 210 tokens");
+    expect(metric.textContent).not.toContain("200 tokens");
   });
 
   it("pins a collection (persisted), floating it to the top", async () => {

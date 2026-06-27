@@ -108,3 +108,29 @@ describe("AgentPanel attach (#198)", () => {
     expect(alertSpy.mock.calls[0][0]).toContain("size limit");
   });
 });
+
+describe("AgentPanel steer (#288)", () => {
+  it("a run-chat composer steers the run instead of sending an interactive turn", () => {
+    const onSteer = vi.fn();
+    const agent = stubAgent();
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          onSteer={onSteer}
+        />
+      </DialogProvider>,
+    );
+    const composer = screen.getByPlaceholderText(/Tell the run what to change/) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "use the X collection" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(onSteer).toHaveBeenCalledWith("use the X collection");
+    expect(agent.send).not.toHaveBeenCalled(); // NOT a normal interactive turn
+    expect(composer.value).toBe(""); // draft cleared
+  });
+});

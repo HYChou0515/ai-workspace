@@ -390,6 +390,19 @@ def test_get_sanity_judge_llm_off_by_default_and_enabled_via_ref():
     assert isinstance(get_sanity_judge_llm(enabled), LitellmLlm)
 
 
+def test_get_kb_quality_judge_llm_off_by_default_and_enabled_via_ref():
+    """#105: `kb.quality_judge` defaults to None (doc scoring off → factory None);
+    a preset reference resolves through the same cascade → a real ILlm."""
+    from workspace_app.config.schema import RetrievalLlmRef
+    from workspace_app.factories import get_kb_quality_judge_llm
+
+    assert get_kb_quality_judge_llm(Settings()) is None
+    enabled = replace(
+        Settings(), kb=replace(Settings().kb, quality_judge=RetrievalLlmRef(preset="card-drafter"))
+    )
+    assert isinstance(get_kb_quality_judge_llm(enabled), LitellmLlm)
+
+
 def test_get_kb_llm_threads_the_configured_reasoning_effort():
     """kb_search's retrieval LLM (multi-query / HyDE / rerank) honours
     `kb.retrieval_llm.reasoning_effort` — e.g. "none" so qwen3 doesn't <think>
@@ -767,3 +780,39 @@ def test_message_queue_factory_unknown_kind_raises():
     s = replace(Settings(), message_queue=MessageQueueSettings(kind="kafka"))
     with pytest.raises(ValueError, match="kafka"):
         build_message_queue_factory(s)
+
+
+def test_get_designed_pptx_vlm_reuses_vlm_llm_then_off(monkeypatch):
+    """#284: `make_deck`'s multimodal model. `kb.deck_vlm` unset reuses
+    `kb.vlm_llm` (the read_image / ingest VLM) — default Settings() ships a
+    bundled `kb-vlm` preset → a single-endpoint LitellmVlm. Both unset ⇒ None
+    (fail-loud at the tool). An explicit `deck_vlm` ref wins; a preset declaring
+    `fallbacks` resolves to a busy-aware FallbackVlm."""
+    from workspace_app.config.schema import Preset, RetrievalLlmRef
+    from workspace_app.factories import get_designed_pptx_vlm
+    from workspace_app.failover.llm import FallbackVlm
+    from workspace_app.kb.vlm import LitellmVlm
+
+    # unset deck_vlm → reuse the bundled vlm_llm preset.
+    assert isinstance(get_designed_pptx_vlm(Settings()), LitellmVlm)
+
+    # both unset → no model (the tool then reports it's unavailable).
+    off = replace(Settings(), kb=replace(Settings().kb, deck_vlm=None, vlm_llm=None))
+    assert get_designed_pptx_vlm(off) is None
+
+    # explicit deck_vlm ref wins over vlm_llm.
+    explicit = replace(
+        Settings(),
+        kb=replace(Settings().kb, deck_vlm=RetrievalLlmRef(preset="kb-vlm"), vlm_llm=None),
+    )
+    assert isinstance(get_designed_pptx_vlm(explicit), LitellmVlm)
+
+    # a preset with fallbacks → a FallbackVlm chain (≥2 endpoints).
+    presets = dict(Settings().agents.presets)
+    presets["deck-multi"] = Preset(model="vlm-primary", fallbacks=["kb-vlm"])
+    multi = replace(
+        Settings(),
+        agents=replace(Settings().agents, presets=presets),
+        kb=replace(Settings().kb, deck_vlm=RetrievalLlmRef(preset="deck-multi")),
+    )
+    assert isinstance(get_designed_pptx_vlm(multi), FallbackVlm)

@@ -21,9 +21,12 @@ from workspace_app.resources.kb import Collection
 from workspace_app.sandbox.mock import MockSandbox
 
 
-def _app(profile: str = "echo") -> tuple[FastAPI, SpecStar, str]:
+def _app(profile: str = "echo", *, reply: str = "ack") -> tuple[FastAPI, SpecStar, str]:
     spec = make_spec()
-    runner = ScriptedAgentRunner([MessageDelta(text="ack"), RunDone()])
+    # The scripted agent answers `reply` every turn — #288 steer tests pass a JSON plan
+    # so the read-only steerer turn yields a usable SteerPlan (echo's gate reads a file
+    # the run writes, so a non-"ack" agent answer still passes the gate).
+    runner = ScriptedAgentRunner([MessageDelta(text=reply), RunDone()])
     app = create_app(
         spec=spec, sandbox=MockSandbox(), filestore=SpecstarFileStore(spec), runner=runner
     )
@@ -183,6 +186,71 @@ def test_run_requires_workflow_profile():
     app, _spec, item_id = _app(profile="default")
     with TestClient(app) as client:
         assert client.post(f"{_base(item_id)}/run").status_code == 422
+
+
+# ── #283: pre-flight preview (launch dialog) ─────────────────────────────
+
+
+def test_preview_describes_and_allows_when_preconditions_met():
+    """The pre-flight preview returns the workflow's title/phases + the author's
+    summary + checklist, and allows 'Run' when every required check passes."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        r = client.get(f"{_base(item_id)}/runs/preview")
+        assert r.status_code == 200
+        body = r.json()
+    assert body["can_run"] is True
+    assert body["has_preflight"] is True
+    assert "out/note.json" in body["summary"]
+    assert body["title"]  # the manifest title, for the dialog header
+    assert any(p["id"] == "think" for p in body["phases"])
+    n_check = next(c for c in body["checks"] if "n" in c["label"])
+    assert n_check["ok"] is True and n_check["severity"] == "required"
+
+
+def test_preview_blocks_when_required_check_fails():
+    """A missing required precondition (no ``n`` in input.json) makes can_run False and
+    surfaces the fix-it reason — so the dialog can disable 'Run' and explain why."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, "{}")
+        body = client.get(f"{_base(item_id)}/runs/preview").json()
+    assert body["can_run"] is False
+    n_check = next(c for c in body["checks"] if "n" in c["label"])
+    assert n_check["ok"] is False and "input.json" in n_check["reason"]
+
+
+def test_preview_without_preflight_falls_back_to_phases():
+    """A workflow with no ``preflight`` still previews: phases only, no checks, runnable."""
+    app, _spec, item_id = _app(profile="multi")
+    with TestClient(app) as client:
+        body = client.get(f"{_base(item_id)}/runs/preview?workflow_id=beta").json()
+    assert body["has_preflight"] is False
+    assert body["can_run"] is True
+    assert body["checks"] == []
+    assert [p["id"] for p in body["phases"]][0] == "plan"
+
+
+def test_preview_advisory_check_passes_when_files_are_staged():
+    """With a real file staged in uploads/, echo's advisory staged-files check is ok and
+    the run is allowed (the advisory never blocks)."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        assert (
+            client.put(f"{_base(item_id)}/files/uploads/doc.txt", content=b"hi").status_code == 204
+        )
+        body = client.get(f"{_base(item_id)}/runs/preview").json()
+    assert body["can_run"] is True
+    staged = next(c for c in body["checks"] if "uploads" in c["label"])
+    assert staged["ok"] is True and staged["severity"] == "advisory"
+
+
+def test_preview_unknown_workflow_422():
+    app, _spec, item_id = _app(profile="multi")
+    with TestClient(app) as client:
+        assert client.get(f"{_base(item_id)}/runs/preview?workflow_id=nope").status_code == 422
 
 
 def test_parallel_runs_each_open_their_own_chat():
@@ -459,3 +527,75 @@ async def test_run_stream_endpoint_returns_an_sse_response():
     )
     assert isinstance(resp, StreamingResponse)
     assert resp.media_type == "text/event-stream"
+
+
+# ── #288: conversational steer + incremental resume ──────────────────────
+
+# A steer plan the scripted steerer turn returns: bump n in input.json + invalidate the
+# "think" step. On approve the run re-reads input.json (n=42) and re-runs the affected step.
+_STEER_PLAN = (
+    '{"rationale": "bump n to 42",'
+    ' "input_edits": [{"path": "uploads/input.json", "content": "{\\"n\\": 42}"}],'
+    ' "invalidate": ["think"]}'
+)
+
+
+def test_steer_unknown_run_is_404():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.post(f"{_base(item_id)}/runs/nope/steer", json={"instruction": "x"})
+    assert r.status_code == 404
+
+
+def test_confirm_steer_without_a_pending_plan_is_409():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 1}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")  # terminal, no steer pending
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/steer/confirm", json={"approve": True})
+    assert r.status_code == 409
+
+
+def test_steer_proposes_a_plan_then_confirm_resumes_with_the_new_input():
+    """End-to-end #288: steer a finished run in words → the steerer proposes a plan
+    (visible as pending_steer) → approve → the input edit applies, the invalidated step
+    re-runs, and the run resumes to done with the NEW input (n=42, not the original 7)."""
+    app, _spec, item_id = _app(reply=_STEER_PLAN)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        assert _poll(client, item_id, run_id, "done")["result"]["n"] == 7
+
+        r = client.post(
+            f"{_base(item_id)}/runs/{run_id}/steer",
+            json={"instruction": "use n=42 instead and redo think"},
+        )
+        assert r.status_code == 202
+        paused = _poll(client, item_id, run_id, "awaiting_human")
+        assert paused["pending_steer"]["invalidate"] == ["think"]
+        assert paused["pending_steer"]["instruction"].startswith("use n=42")
+        assert paused["pending_decision"] is None  # a steer card, not a gate card
+
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/steer/confirm", json={"approve": True})
+        assert r.status_code == 202
+        resumed = _poll(client, item_id, run_id, "done")
+    assert resumed["result"]["n"] == 42  # the steer changed the input; the run re-ran
+    assert resumed["pending_steer"] is None
+
+
+def test_reject_steer_discards_the_plan():
+    """Rejecting a proposed steer discards it (no edits applied) and leaves the run
+    stopped — the operator can re-instruct or take over."""
+    app, _spec, item_id = _app(reply=_STEER_PLAN)
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 7}')
+        run_id = client.post(f"{_base(item_id)}/run").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        client.post(f"{_base(item_id)}/runs/{run_id}/steer", json={"instruction": "x"})
+        _poll(client, item_id, run_id, "awaiting_human")
+        r = client.post(f"{_base(item_id)}/runs/{run_id}/steer/confirm", json={"approve": False})
+        assert r.status_code == 202
+        stopped = _poll(client, item_id, run_id, "cancelled")
+    assert stopped["pending_steer"] is None
+    assert stopped["result"]["n"] == 7  # the input edit was NOT applied

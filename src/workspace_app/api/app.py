@@ -46,7 +46,7 @@ from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
 from ..kb.llm import ILlm
 from ..kb.retriever import Enhancements, Retriever
-from ..kb.vlm import VlmDescriber
+from ..kb.vlm import IVlm, VlmDescriber
 from ..kernels import KernelService
 from ..monitor import IMonitor, InMemoryMonitor, MonitorProcessor
 from ..observability.boot import boot_step
@@ -63,12 +63,15 @@ from ..tooling.registry import PackageInfo
 from ..users import MockUserDirectory, UserDirectory
 from ..workflow.capabilities import CollectionNotFound, ingest_to_collection, upsert_context_card
 from ..workflow.credential import CredentialBroker
-from ..workflow.discovery import load_run_callable
+from ..workflow.discovery import load_preflight_callable, load_run_callable
 from ..workflow.handle import WorkflowHandle
+from ..workflow.inputs import resolve_inputs
 from ..workflow.orchestrator import (
     NotAwaitingDecision,
+    NotAwaitingSteer,
     WorkflowOrchestrator,
 )
+from ..workflow.preflight import can_run as _preflight_can_run
 from ..workflow.run import RunStatus, WorkflowRun
 from .activity import ActivityLog
 from .card_gen_routes import register_card_gen_routes
@@ -425,6 +428,30 @@ class _DecisionBody(BaseModel):
     input: str = ""
 
 
+class _SteerBody(BaseModel):
+    # #288 (manual §10): a free-text instruction to redirect a run. The read-only
+    # steerer turns it into a reviewable plan (edit inputs + invalidate steps).
+    instruction: str
+
+
+class _SteerConfirmBody(BaseModel):
+    # #288: the human's verdict on the proposed steer plan — apply + resume, or discard.
+    approve: bool
+
+
+class _SteerAck(BaseModel):
+    # #288: the steer was accepted; the steerer runs in the background and, once it has a
+    # plan, the run goes `awaiting_human` with `pending_steer` set (the FE refetches).
+    run_id: str
+    steering: bool = True
+
+
+class _SteerConfirmOut(BaseModel):
+    # #288: the plan was applied + the run resumed (approve=True), or discarded (False).
+    run_id: str
+    applied: bool
+
+
 class _IngestBody(BaseModel):
     # #100: a deterministic node's ingest capability call (manual §8).
     collection: str
@@ -437,6 +464,33 @@ class _CardBody(BaseModel):
     keys: list[str] = Field(default_factory=list)
     title: str = ""
     body: str = ""
+
+
+class _PreflightCheckOut(BaseModel):
+    # #283: one pre-flight checklist line in the launch dialog.
+    label: str
+    ok: bool
+    severity: str  # "required" | "advisory"
+    reason: str = ""
+
+
+class _PhaseOut(BaseModel):
+    id: str
+    title: str = ""
+
+
+class _PreflightPreviewOut(BaseModel):
+    # #283: what the launch dialog renders BEFORE a run starts — the workflow's
+    # identity + phases, plus (when the author wrote a ``preflight``) a human summary
+    # of what the run will do and a checklist of its preconditions.
+    workflow_id: str
+    title: str
+    description: str
+    phases: list[_PhaseOut]
+    summary: str
+    checks: list[_PreflightCheckOut]
+    can_run: bool
+    has_preflight: bool
 
 
 async def _staged_run_uploads(
@@ -571,11 +625,19 @@ def create_app(
     # None ⇒ a no-op drafter (the feature stays mounted but proposes nothing).
     # __main__ passes factories.get_card_drafter_llm(settings).
     card_drafter_llm: ILlm | None = None,
+    # #105: the LLM-as-judge that scores a doc's quality at index time. None ⇒
+    # scoring off (docs stay un-scored = neutral; search ranking unaffected).
+    # __main__ passes factories.get_kb_quality_judge_llm(settings).
+    quality_judge_llm: ILlm | None = None,
     # #112: the VLM describer the `read_image` agent tool uses to read a
     # workspace image. None ⇒ no VLM configured; `read_image` reports it's
     # unavailable. __main__ passes factories.get_kb_describer(settings) — the
     # same describer KB ingestion's VLM parsers use.
     vlm_describer: VlmDescriber | None = None,
+    # #284: the multimodal model the `make_deck` tool drives (sees rendered
+    # slides + writes pptxgenjs). None ⇒ make_deck reports it's unavailable.
+    # __main__ passes factories.get_designed_pptx_vlm(settings).
+    deck_vlm: IVlm | None = None,
     get_user_id: Callable[[], str] | None = None,
     # #262: user ids with UNRESTRICTED collection access — threaded into the
     # route-level `authorize(...)` guards (the dedicated permission endpoint +
@@ -642,6 +704,10 @@ def create_app(
     # `None` ⇒ bundled `EnhancementSettings()` (light: expand=1, hyde=0,
     # rerank=on). __main__ threads `settings.kb.retrieval.enhancements`.
     kb_retrieval_enhancements: EnhancementSettings | None = None,
+    # #105: the document-quality prior's strength + optional hard floor.
+    # __main__ threads `settings.kb.retrieval.quality_weight / quality_floor`.
+    kb_quality_weight: float = 0.10,
+    kb_quality_floor: int | None = None,
     # #195: per-turn cap on `kb_search` calls for the KB chat turn + the
     # ask_knowledge_base bridge. `None` ⇒ unlimited (also what other surfaces
     # like Topic Hub use). __main__ threads `settings.kb.max_searches_per_turn`
@@ -1186,10 +1252,20 @@ def create_app(
     # coordinator is handed in here rather than called from the routes.
     from ..kb.index_coordinator import IndexCoordinator
 
+    # #105: the doc-quality judge. Built only when a `kb.quality_judge` model is
+    # configured; otherwise None ⇒ the index coordinator skips scoring entirely
+    # (docs stay un-scored = neutral).
+    quality_coordinator = None
+    if quality_judge_llm is not None:
+        from ..kb.quality import QualityScorer
+        from ..kb.quality_coordinator import QualityCoordinator
+
+        quality_coordinator = QualityCoordinator(spec, QualityScorer(quality_judge_llm))
     index_coordinator = IndexCoordinator(
         spec,
         ingestor,
         wiki_coordinator=wiki_coordinator,
+        quality_coordinator=quality_coordinator,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
     )
@@ -1249,6 +1325,8 @@ def create_app(
         llm=kb_llm,
         code_embedder=kb_code_embedder,
         enhancement_defaults=kb_retrieval_enhancements,
+        quality_weight=kb_quality_weight,
+        quality_floor=kb_quality_floor,
     )
     # One turn engine drives the RCA workspace; one cancellable in-flight turn
     # per conversation, SSE streaming, cancel hook.
@@ -1651,6 +1729,7 @@ def create_app(
             run_subagent=_run_subagent,
             mention=_agent_mention,
             describer=vlm_describer,
+            deck_vlm=deck_vlm,
             read_file_max_lines=read_file_max_lines,
             read_file_max_chars=read_file_max_chars,
             exec_output_max_chars=exec_output_max_chars,
@@ -1959,6 +2038,53 @@ def create_app(
         out.sort(key=lambda d: d.get("started") or 0, reverse=True)
         return out
 
+    @api.get("/a/{slug}/items/{item_id}/runs/preview")
+    async def preview_workflow_run(
+        slug: str, item_id: str, workflow_id: str = Query("")
+    ) -> _PreflightPreviewOut:
+        """#283 (manual §18): the launch dialog's pre-flight — what THIS workflow will do
+        + whether its preconditions are met, WITHOUT starting a run. Reads the staged
+        ``input.json`` (manual §14) and calls the author's optional ``preflight(wf, inputs)``
+        over a read-only handle (no turn/sandbox drivers — pre-flight only inspects the
+        workspace). A workflow with no ``preflight`` previews its phases alone (runnable).
+        Registered before ``/runs/{run_id}`` so ``preview`` isn't read as a run id."""
+        investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
+        wf = WorkflowHandle(
+            store=files,
+            workspace_id=investigation_id,
+            workflow_id=workflow_id,
+            config=dict(manifest.config),
+            upload_dir=_wf_upload_dir(slug, profile),
+            user=get_user_id(),
+        )
+        inputs = await resolve_inputs(wf, manifest)
+        preflight = load_preflight_callable(slug, profile, workflow_id)
+        summary = ""
+        checks: list[_PreflightCheckOut] = []
+        allowed = True
+        if preflight is not None:
+            report = await preflight(wf, inputs)
+            summary = report.summary
+            checks = [
+                _PreflightCheckOut(
+                    label=c.label, ok=c.ok, severity=c.severity.value, reason=c.reason
+                )
+                for c in report.checks
+            ]
+            allowed = _preflight_can_run(report)
+        return _PreflightPreviewOut(
+            workflow_id=workflow_id,
+            # The dialog falls back to the workflow id when title is empty (FE side), so
+            # send the raw title — no server-side or-chain (keeps the branch coverage clean).
+            title=manifest.title,
+            description=manifest.description,
+            phases=[_PhaseOut(id=p.id, title=p.title) for p in manifest.phases],
+            summary=summary,
+            checks=checks,
+            can_run=allowed,
+            has_preflight=preflight is not None,
+        )
+
     @api.get("/a/{slug}/items/{item_id}/runs/{run_id}")
     async def get_workflow_run(slug: str, item_id: str, run_id: str) -> dict:
         """#100 (manual §14): poll a run — status + result + per-phase progress."""
@@ -2020,6 +2146,54 @@ def create_app(
         except NotAwaitingDecision as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"run_id": run_id, "resumed": True}
+
+    @api.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/steer",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def steer_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _SteerBody
+    ) -> _SteerAck:
+        """#288 (manual §10): steer a run in words. Stops it first if it is still going,
+        then runs the read-only steerer in the background — it streams into the run's
+        chat and, when it has a plan, suspends the run `awaiting_human` with
+        `pending_steer` set for the human to confirm (the FE refetches the run)."""
+        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        try:
+            await workflow_orchestrator.steer(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                instruction=body.instruction,
+            )
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        return _SteerAck(run_id=run_id)
+
+    @api.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/steer/confirm",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def confirm_steer_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _SteerConfirmBody
+    ) -> _SteerConfirmOut:
+        """#288 (manual §10): resolve a pending steer plan — approve to apply the edits +
+        invalidate the steps and resume the same run (the valid prefix skips, §9), or
+        reject to discard it (the run returns to its gate or to a stopped state)."""
+        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        try:
+            await workflow_orchestrator.confirm_steer(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                approve=body.approve,
+                decided_by=get_user_id(),
+            )
+        except NotAwaitingSteer as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _SteerConfirmOut(run_id=run_id, applied=body.approve)
 
     @api.post("/a/{slug}/items/{item_id}/capabilities/ingest")
     async def capability_ingest(
@@ -2210,6 +2384,7 @@ def create_app(
             # impls each pass their own purpose name + formatted payload.
             run_subagent=_run_subagent_with_depth,
             describer=vlm_describer,
+            deck_vlm=deck_vlm,
             # The turn's depth override also rides the ctx so any direct
             # kb tool on the RCA agent applies the same cascade.
             kb_enhancements=caller_enh,
@@ -2250,6 +2425,9 @@ def create_app(
             # #242: the resolved speaker for the per-turn "who am I replying to"
             # system note in this shared, multi-collaborator workspace.
             speaker=users.get(author),
+            # #275: the directory the `lookup_user` tool resolves a teammate's
+            # handle → id/section/email through (handle is all the agent sees).
+            users=users,
         )
 
         def persist(produced: list[TurnMessage]) -> None:

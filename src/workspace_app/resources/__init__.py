@@ -15,6 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+import msgspec
 from specstar import BackendConfig, Schema, SpecStar
 from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
@@ -77,6 +78,17 @@ def _reindex_only(record: Any) -> Any:
     The reindex is the migrate's write-back side effect; the transform is
     identity."""
     return record
+
+
+def _backfill_token_count(record: Any) -> Any:
+    """#88 migration step (v3 → v4): recompute ``SourceDoc.token_count`` from the
+    already-stored extracted ``text`` so pre-#88 rows get a chunk-based token
+    estimate on the next ``POST /source-doc/migrate/execute`` — no re-parse /
+    re-embed. Unlike ``_reindex_only`` this DOES transform the record."""
+    from ..kb.tokens import count_tokens
+
+    assert isinstance(record, SourceDoc)
+    return msgspec.structs.replace(record, token_count=count_tokens(record.text or ""))
 
 
 def make_spec(
@@ -181,14 +193,34 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # v2 rows (migrate is a no-op when a row is already at the target version),
     # so the new `path` index would silently miss them. v3 forces every row to
     # re-extract on the next `POST /source-doc/migrate/execute`.
+    #
+    # #88: `token_count` indexed so the collection grid can SUM a chunk-based
+    # "≈ N tokens" estimate per collection (replacing the FE's raw-blob bytes/4
+    # guess). Bumped v3 → v4 with a DATA step (`_backfill_token_count`, NOT a
+    # no-op reindex) so the same migrate route recomputes token_count from each
+    # pre-#88 row's already-stored `text` — no re-parse / re-embed. New rows get
+    # it at index time (see kb.ingest / kb.index_coordinator).
+    #
+    # #105: `quality_score` indexed so the document list can sort by quality
+    # ("show me the worst docs") and the retriever can batch-load candidate doc
+    # scores to down-weight bad docs. Bumped v4 → v5 with a no-op reindex step
+    # (the score is computed by the judge at index time, NOT by migrate — there
+    # is no LLM in a migration). Pre-#105 rows stay un-scored (`quality_score`
+    # decodes to `None`, the neutral default) and only become countable in the
+    # new index after `POST /source-doc/migrate/execute` re-extracts them; they
+    # are never penalised in search while un-scored.
     spec.add_model(
-        Schema(SourceDoc, "v3")
+        Schema(SourceDoc, "v5")
         .step(None, _reindex_only, to="v3", source_type=SourceDoc)
-        .step("v2", _reindex_only, to="v3", source_type=SourceDoc),
+        .step("v2", _reindex_only, to="v3", source_type=SourceDoc)
+        .step("v3", _backfill_token_count, to="v4", source_type=SourceDoc)
+        .step("v4", _reindex_only, to="v5", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
             IndexableField("content.size", index_key="content_size"),
             IndexableField("path", str),
+            IndexableField("token_count", int),
+            IndexableField("quality_score", int),
         ],
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the

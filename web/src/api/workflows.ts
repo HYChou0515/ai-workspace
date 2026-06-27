@@ -65,6 +65,20 @@ export type PendingDecision = {
 
 export type Failure = { key: string; error: string; phase: string };
 
+/** One input-file rewrite in a steer plan (#288): the full new `content` for `path`. */
+export type SteerInputEdit = { path: string; content: string };
+
+/** A proposed steer awaiting confirm (#288, manual §10): rewrite `input_edits` +
+ * `invalidate` steps (force re-run). `instruction` is the operator's free-text ask;
+ * `rationale` is the steerer's one-line summary. The FE renders the confirm card. */
+export type SteerPlan = {
+  instruction: string;
+  rationale: string;
+  input_edits: SteerInputEdit[];
+  invalidate: string[];
+  decided_by: string;
+};
+
 /** One step's status on the board (#178). Bounded by collapse: loop elements
  * (`key !== ""`) appear only while running; distinct-named steps persist with their
  * final status + duration. `started`/`ended` are server epoch ms (reload-safe). */
@@ -96,6 +110,33 @@ export type WorkflowRunDTO = {
   ended: number | null;
   result: Record<string, unknown> | null;
   pending_decision: PendingDecision | null;
+  /** #288: a steer plan awaiting confirm (the FE renders the steer card vs. the gate
+   * card by which pending field is set). Absent on runs written before #288. */
+  pending_steer?: SteerPlan | null;
+};
+
+/** One pre-flight checklist line in the launch dialog (#283). `severity` is
+ * "required" (a failing one blocks 'Run') or "advisory" (a warning you can proceed past). */
+export type PreflightCheckDTO = {
+  label: string;
+  ok: boolean;
+  severity: "required" | "advisory";
+  reason: string;
+};
+
+/** What the launch dialog shows BEFORE a run starts (#283): the workflow's identity +
+ * phases, plus (when the author wrote a `preflight`) a human summary of what the run
+ * will do and a checklist of its preconditions. `can_run` is false when a required
+ * check fails; `has_preflight` is false when the author wrote none (phases-only preview). */
+export type PreflightPreviewDTO = {
+  workflow_id: string;
+  title: string;
+  description: string;
+  phases: PhaseDef[];
+  summary: string;
+  checks: PreflightCheckDTO[];
+  can_run: boolean;
+  has_preflight: boolean;
 };
 
 export const RUN_TERMINAL: RunStatus[] = ["done", "error", "cancelled"];
@@ -243,6 +284,20 @@ export const workflowApi = {
     ) as Promise<{ run_id: string; item_id: string; chat_id: string }>;
   },
 
+  async previewRun(
+    slug: string,
+    itemId: string,
+    workflowId = "",
+  ): Promise<PreflightPreviewDTO> {
+    // #283: the launch dialog's pre-flight — what this workflow will do + whether its
+    // preconditions are met, WITHOUT starting a run.
+    const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : "";
+    return jsonOrThrow(
+      await apiFetch(`${base(slug, itemId)}/runs/preview${qs}`),
+      "preview run",
+    ) as Promise<PreflightPreviewDTO>;
+  },
+
   async getRun(slug: string, itemId: string, runId: string): Promise<WorkflowRunDTO> {
     return jsonOrThrow(
       await apiFetch(`${base(slug, itemId)}/runs/${encodeURIComponent(runId)}`),
@@ -276,5 +331,34 @@ export const workflowApi = {
       body: JSON.stringify(body),
     });
     if (!r.ok) throw new Error(`decision failed: ${r.status}`);
+  },
+
+  async steer(slug: string, itemId: string, runId: string, instruction: string): Promise<void> {
+    // #288 (manual §10): redirect a run in words. Stops it first if it is still going,
+    // then the read-only steerer proposes a plan the human confirms.
+    const r = await apiFetch(`${base(slug, itemId)}/runs/${encodeURIComponent(runId)}/steer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instruction }),
+    });
+    if (!r.ok) throw new Error(`steer failed: ${r.status}`);
+  },
+
+  async confirmSteer(
+    slug: string,
+    itemId: string,
+    runId: string,
+    approve: boolean,
+  ): Promise<void> {
+    // #288: apply the proposed plan + resume the run (approve), or discard it (reject).
+    const r = await apiFetch(
+      `${base(slug, itemId)}/runs/${encodeURIComponent(runId)}/steer/confirm`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ approve }),
+      },
+    );
+    if (!r.ok) throw new Error(`steer confirm failed: ${r.status}`);
   },
 };

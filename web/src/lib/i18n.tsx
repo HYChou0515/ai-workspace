@@ -191,6 +191,28 @@ export const messages = {
   "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
   "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
 
+  // #105: document quality (badge + status-bar verdict + rubric editor).
+  "kb.quality.good": { "zh-TW": "品質良好", en: "Good quality" },
+  "kb.quality.ok": { "zh-TW": "品質普通", en: "Fair quality" },
+  "kb.quality.bad": { "zh-TW": "品質偏低", en: "Low quality" },
+  "kb.quality.badge": {
+    "zh-TW": "品質 {score}/100 · {label}",
+    en: "Quality {score}/100 · {label}",
+  },
+  "kb.quality.heading": { "zh-TW": "品質", en: "Quality" },
+  "kb.quality.unscored": { "zh-TW": "尚未評分", en: "Not yet scored" },
+  "kb.quality.rubric.title": { "zh-TW": "品質評分標準", en: "Quality rubric" },
+  "kb.quality.rubric.hint": {
+    "zh-TW": "用一段文字說明：什麼樣的文件算好/壞的知識來源、要從哪些面向評。留空＝不評分，搜尋排序不受影響。",
+    en: "Describe what makes a document a good/bad knowledge source here, and which dimensions to assess. Leave blank to turn scoring off (search ranking is unaffected).",
+  },
+  "kb.quality.rubric.placeholder": {
+    "zh-TW": "例如：評這份缺陷報告作為知識來源的品質，面向：清晰度、完整度、雜訊。",
+    en: "e.g. Judge this defect report as a knowledge source. Dimensions: clarity, completeness, noise.",
+  },
+  "kb.quality.rubric.save": { "zh-TW": "儲存評分標準", en: "Save rubric" },
+  "kb.quality.rubric.saved": { "zh-TW": "已儲存", en: "Saved" },
+
   // Retrieval toggles (RetrievalToggles, used by the new-collection modal +
   // collection settings) — #171.
   "kb.retrieval.docSearch": { "zh-TW": "文件搜尋", en: "Document search" },
@@ -366,6 +388,35 @@ export const messages = {
     "zh-TW": "空間不足，未能上傳:{names}",
     en: "Out of space, not uploaded: {names}",
   },
+
+  // #283: workflow launch pre-flight dialog + progress views.
+  "wf.launch.title": { "zh-TW": "執行前確認", en: "Before you run" },
+  "wf.launch.steps": { "zh-TW": "步驟", en: "Steps" },
+  "wf.launch.checklist": { "zh-TW": "開始前檢查", en: "Pre-flight checks" },
+  "wf.launch.loading": { "zh-TW": "檢查中…", en: "Checking…" },
+  "wf.launch.error": { "zh-TW": "無法載入預覽，請稍後再試。", en: "Couldn’t load the preview — try again." },
+  "wf.launch.run": { "zh-TW": "開始執行", en: "Run" },
+  "wf.launch.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "wf.launch.blocked": {
+    "zh-TW": "尚未具備執行條件——請先處理上方標示的項目。",
+    en: "Not ready to run — resolve the flagged items above first.",
+  },
+  "wf.launch.required": { "zh-TW": "必要", en: "Required" },
+  "wf.launch.advisory": { "zh-TW": "提醒", en: "Heads-up" },
+  "wf.view.steps": { "zh-TW": "步驟清單", en: "Steps" },
+  "wf.view.timeline": { "zh-TW": "時間軸", en: "Timeline" },
+  "wf.timeline.now": { "zh-TW": "回到現在", en: "Jump to now" },
+  "wf.timeline.zoomIn": { "zh-TW": "放大", en: "Zoom in" },
+  "wf.timeline.zoomOut": { "zh-TW": "縮小", en: "Zoom out" },
+  "wf.timeline.waited": { "zh-TW": "等待 {mins} 分", en: "waited {mins}m" },
+  "wf.timeline.empty": {
+    "zh-TW": "尚無已計時的步驟。",
+    en: "No timed steps yet.",
+  },
+  "wf.metrics.elapsed": { "zh-TW": "經過", en: "Elapsed" },
+  "wf.metrics.steps": { "zh-TW": "步驟", en: "Steps" },
+  "wf.metrics.retries": { "zh-TW": "重試 {n}", en: "{n} retries" },
+  "wf.runs.title": { "zh-TW": "執行紀錄", en: "Runs" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

@@ -5,6 +5,9 @@
 > behaviour matches the rules here. Written before the plan, on purpose ("以終為始").
 > Decisions were locked through a `/grill-me` session; rejected alternatives are
 > recorded inline so we don't relitigate them.
+>
+> **Authoring a workflow?** This is the *spec*; the practical how-to (block catalog,
+> conventions, the `new`/`check` CLI) is [`workflows-authoring.md`](workflows-authoring.md) (#287).
 
 A **workflow** turns the agentic workspace from interactive-only into something an
 external system can **trigger over an API** to run **headlessly** to a useful
@@ -360,8 +363,34 @@ run leaves a full transcript + files.
     a `human_gate` lets a human approve, and only then does a deterministic node
     commit the side-effect. Because the gate sits *before* the commit, a `reject`
     leaves nothing committed.
-- **Steer-and-resume (deferred).** Mid-run interjection (queue a note, injected into
-  the next node) is a later add, not needed by the two use cases.
+- **Steer-and-resume (#288).** Past a run's active window — at a gate, or once it is
+  terminal (`done` / `error` / `cancelled`) — a human can **redirect the run in words**
+  instead of hand-editing files (§9). They type a free-text instruction in the run's
+  chat (e.g. *"use the a, b collections and redo the upload"*); a read-only **steerer**
+  turn reads the current inputs + journal + transcript and proposes a **steer plan**:
+  which input files to rewrite and which steps to **invalidate** (delete the artifact →
+  force re-run). The plan is **reviewed before it applies** (produce → review → commit,
+  the same shape as a gate): a confirm card shows the file diffs + which steps will
+  re-run vs. be kept (the blast radius), and the human **approves / rejects / re-instructs**.
+  On approve a deterministic step applies the edits + deletes the invalidated artifacts,
+  and the **same run resumes** (§9 re-run: completed steps whose input-hash still matches
+  **skip** — *incremental*, the expensive prefix is not redone). A mid-run instruction
+  first **Stops** the run (the in-flight node would re-run on resume anyway), then steers.
+  - **Vocabulary = edit inputs + invalidate steps** — the two generic moves; downstream
+    re-runs cascade through input-hash (§9). It is platform-level and needs **no author
+    code**: the steerer may rewrite any workspace file *outside* the journal
+    (`/.workflow/`) and invalidate any step. The LLM only *proposes* (decision); the
+    deterministic apply *acts* (action) — the decision/action split (§8) again. Steering
+    **coexists** with a gate's `approve` / `reject` / `revise`: those are the author's
+    in-body outcomes; the steerer is the always-available free-text path on top.
+  - **Endpoints:** `POST .../runs/{id}/steer {instruction}` (Stops the run if running →
+    runs the steerer → sets `pending_steer`, run goes `awaiting_human`);
+    `POST .../runs/{id}/steer/confirm {approve}` (approve → apply + resume; reject →
+    discard the plan; re-instruct → call `steer` again with a new instruction). The
+    proposed plan + the human's answer are journaled under `/.workflow/<workflow_id>/steer/`
+    for audit.
+  - **Still deferred:** true *live* injection (a note delivered into an already-running
+    node, without Stopping) — not needed; Stop-then-steer covers the cases.
 
 ---
 
@@ -414,7 +443,9 @@ holds *status*, not the step results:
 - `status`: `pending | running | awaiting_human | done | error` (+ `cancelled`)
 - `current_phase`, per-phase status / progress, `failures` (collected per-element)
 - `item_id`, `captured_user`, `started`/`ended`, `result` (the `run()` return value)
-- `pending_decision` (+ who decided) — set while `awaiting_human`
+- `pending_decision` (+ who decided) — set while `awaiting_human` at a gate
+- `pending_steer` — set while `awaiting_human` for a steer plan awaiting confirm (#288);
+  the FE renders the steer confirm card vs. the gate card by which pending field is set
 
 ---
 
@@ -619,7 +650,9 @@ notify; `ingest_to_collection`.
 (Build order: the gate lands late in the sequence since it depends on the engine +
 `WorkflowRun`, but it is in scope — the v1 gate is not "done" without it.)
 
-**Deferred / non-goals:** steer-and-resume (mid-run interjection); declarative-DAG
+**Deferred / non-goals:** conversational steer-and-resume **landed in #288** (§10) —
+only *true live* mid-run injection (a note into an already-running node, without
+Stopping) stays deferred; declarative-DAG
 authoring; node-level visual editing; control-flow branching primitives (use data);
 outbound webhook callbacks; true module-level version pinning (use the new-profile
 convention); real SSO authz; LLM-judge checks as anything more than an occasional

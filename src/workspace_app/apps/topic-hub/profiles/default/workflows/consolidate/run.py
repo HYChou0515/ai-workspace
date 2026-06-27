@@ -18,6 +18,29 @@ from typing import Any
 
 from workspace_app.workflow import agent_step, file_nonempty
 from workspace_app.workflow.handle import WorkflowHandle
+from workspace_app.workflow.preflight import PreflightItem, PreflightReport
+
+
+async def preflight(wf: WorkflowHandle, inputs: dict[str, Any]) -> PreflightReport:
+    """#283 pre-flight: there must be existing memory to consolidate — block when the
+    Hub has neither ``MEMORY.md`` nor any ``memory/*.md`` note (the run would do nothing)."""
+    notes = await wf.glob(["memory/*.md"])
+    has_memory = bool(notes) or await wf.exists("MEMORY.md")
+    n = len(notes)
+    return PreflightReport(
+        summary=(
+            f"重讀 MEMORY.md 與 {n} 則記憶筆記，再改寫它們——去重、合併、刪除過時內容。"
+            if has_memory
+            else "目前沒有任何記憶可整理。"
+        ),
+        checks=[
+            PreflightItem(
+                label="Hub 已有可整理的記憶",
+                ok=has_memory,
+                reason="" if has_memory else "先建立記憶（執行「消化上傳成記憶」）再來整理。",
+            )
+        ],
+    )
 
 
 async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:

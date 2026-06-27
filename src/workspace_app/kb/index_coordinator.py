@@ -39,11 +39,13 @@ from ..resources import DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
 from .index_run import IndexRunStore
 from .job_audit import preserve_job_creator
+from .tokens import count_tokens
 
 if TYPE_CHECKING:
     from specstar.events import EventContext
 
     from .ingest import Ingestor
+    from .quality_coordinator import QualityCoordinator
     from .wiki.coordinator import WikiMaintenanceCoordinator
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,6 +69,7 @@ class IndexCoordinator:
         ingestor: Ingestor,
         *,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
+        quality_coordinator: QualityCoordinator | None = None,
         message_queue_factory: object | None = None,
         unit_batch_sizes: dict[str, int] | None = None,
         default_unit_batch: int = 8,
@@ -76,6 +79,9 @@ class IndexCoordinator:
         self._spec = spec
         self._ingestor = ingestor
         self._wiki = wiki_coordinator
+        # #105: scores a doc's quality once it's ready (off the request path, like
+        # the wiki hook). None ⇒ scoring off (no judge configured).
+        self._quality = quality_coordinator
         # #249: how many times specstar re-delivers a single-job split before it
         # dead-letters. Stamped on the split job so the handler can tell a
         # mid-retry "retrying" from the terminal "error" (see `_index_whole`).
@@ -375,6 +381,7 @@ class IndexCoordinator:
             )
             return
         self._wiki_hook(doc_id, requester)
+        self._quality_hook(doc_id, updater)
 
     def _set_doc_status(self, doc_id: str, updater: str, *, status: str, detail: str) -> None:
         """Stamp a SourceDoc's terminal/interim status (#249), AS its real
@@ -468,7 +475,11 @@ class IndexCoordinator:
             doc_rm.update(
                 doc_id,
                 msgspec.structs.replace(
-                    doc, status=status, status_detail=detail, text=text or None
+                    doc,
+                    status=status,
+                    status_detail=detail,
+                    text=text or None,
+                    token_count=count_tokens(text or ""),  # #88: chunk-based token estimate
                 ),
             )
         self._clear_staged_text(doc_id)
@@ -477,6 +488,7 @@ class IndexCoordinator:
         self._runs.finish(doc_id, status="error" if run.failed else "done")
         if status == "ready":
             self._wiki_hook(doc_id, requester)
+            self._quality_hook(doc_id, updater)
 
     # ── safety sweep (#227): recover the fan-out failure branch ──────
     def sweep_stuck_runs(self, *, stuck_after_seconds: float = 3600.0) -> list[str]:
@@ -540,6 +552,18 @@ class IndexCoordinator:
             asyncio.run(self._wiki.on_doc_indexed(doc_id, requested_by=requester))
         except Exception:  # noqa: BLE001 — a wiki-hook failure must not fail the index job
             _LOGGER.exception("IndexCoordinator: wiki hook failed for %s", doc_id)
+
+    def _quality_hook(self, doc_id: str, acting_user: str) -> None:
+        # #105: score the doc's quality now that it's ready. Like the wiki hook,
+        # this is best-effort — a judge failure leaves the doc un-scored (neutral)
+        # and must NEVER fail the index job. ``acting_user`` is the doc's owner so
+        # the score write doesn't erase ``updated_by`` (#83).
+        if self._quality is None:
+            return
+        try:
+            self._quality.score_doc(doc_id, acting_user)
+        except Exception:  # noqa: BLE001 — a scoring failure must not fail the index job
+            _LOGGER.exception("IndexCoordinator: quality hook failed for %s", doc_id)
 
     # ── fan-out text staging (#227) ──────────────────────────────────
     def _stage_text(self, doc_id: str, batch_index: int, text: str) -> None:

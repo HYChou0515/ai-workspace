@@ -26,6 +26,22 @@ export function useWorkflowManifest(slug: string | undefined, profile: string | 
   return { ...q, manifest: entry?.workflow ?? null, hasWorkflow: !!entry?.has_workflow };
 }
 
+/** #283: the launch dialog's pre-flight — fetched on demand (the dialog mounts), so the
+ * checklist reflects the workspace AT launch time. `enabled` gates it on an open dialog. */
+export function usePreviewRun(
+  slug: string,
+  itemId: string,
+  workflowId: string,
+  enabled: boolean,
+) {
+  return useQuery({
+    queryKey: qk.workflowPreview(slug, itemId, workflowId),
+    queryFn: () => workflowApi.previewRun(slug, itemId, workflowId),
+    enabled,
+    staleTime: 0, // always re-check preconditions when the dialog (re)opens
+  });
+}
+
 export function useItemRuns(slug: string | undefined, itemId: string | undefined) {
   return useQuery({
     queryKey: qk.workflowRuns(slug ?? "", itemId ?? ""),
@@ -74,6 +90,29 @@ export function useDecide(slug: string, itemId: string, runId: string) {
   return useMutation({
     mutationFn: (body: { choice: string; input?: string }) =>
       workflowApi.decide(slug, itemId, runId, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+    },
+  });
+}
+
+/** #288: steer a run in words. The proposed plan arrives on the run record
+ * (`pending_steer`), so invalidate the run query to pick it up. */
+export function useSteerRun(slug: string, itemId: string, runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (instruction: string) => workflowApi.steer(slug, itemId, runId, instruction),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
+    },
+  });
+}
+
+/** #288: confirm (apply + resume) or reject (discard) a pending steer plan. */
+export function useConfirmSteer(slug: string, itemId: string, runId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (approve: boolean) => workflowApi.confirmSteer(slug, itemId, runId, approve),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: qk.workflowRun(slug, itemId, runId) });
     },
