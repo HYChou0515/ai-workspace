@@ -26,6 +26,7 @@ Backend (Python 3.12, uv-managed):
 - Lint + format: `uv run ruff check && uv run ruff format --check`
 - Type check: `uv run ty check`
 - Run the app: `uv run python -m workspace_app` (serves API + SPA on 127.0.0.1:8000)
+- Author a workflow: `uv run python -m workspace_app.workflow new <app> <profile> <id> [--recipe minimal|review-commit|batch]` scaffolds a runnable `run.py` + manifest stub; `uv run python -m workspace_app.workflow check [app]` statically catches drift/typos/missing `run()` before startup. **Writing or modifying a workflow → read [`docs/workflows-authoring.md`](docs/workflows-authoring.md)** (the block catalog + conventions); the spec is [`docs/workflows.md`](docs/workflows.md) (#287).
 
 Frontend (React + Vite, lives in `web/`):
 

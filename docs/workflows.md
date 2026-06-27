@@ -5,6 +5,9 @@
 > behaviour matches the rules here. Written before the plan, on purpose ("以終為始").
 > Decisions were locked through a `/grill-me` session; rejected alternatives are
 > recorded inline so we don't relitigate them.
+>
+> **Authoring a workflow?** This is the *spec*; the practical how-to (block catalog,
+> conventions, the `new`/`check` CLI) is [`workflows-authoring.md`](workflows-authoring.md) (#287).
 
 A **workflow** turns the agentic workspace from interactive-only into something an
 external system can **trigger over an API** to run **headlessly** to a useful

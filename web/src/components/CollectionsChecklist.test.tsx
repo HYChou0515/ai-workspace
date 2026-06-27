@@ -16,6 +16,7 @@ const coll = (over: Partial<KbCollection>): KbCollection => ({
   cited: 0,
   doc_count: 0,
   size: 0,
+  tokens: 0,
   updated_at: 0,
   owner: "u",
   use_rag: true,
