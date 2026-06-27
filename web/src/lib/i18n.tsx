@@ -366,6 +366,35 @@ export const messages = {
     "zh-TW": "空間不足，未能上傳:{names}",
     en: "Out of space, not uploaded: {names}",
   },
+
+  // #283: workflow launch pre-flight dialog + progress views.
+  "wf.launch.title": { "zh-TW": "執行前確認", en: "Before you run" },
+  "wf.launch.steps": { "zh-TW": "步驟", en: "Steps" },
+  "wf.launch.checklist": { "zh-TW": "開始前檢查", en: "Pre-flight checks" },
+  "wf.launch.loading": { "zh-TW": "檢查中…", en: "Checking…" },
+  "wf.launch.error": { "zh-TW": "無法載入預覽，請稍後再試。", en: "Couldn’t load the preview — try again." },
+  "wf.launch.run": { "zh-TW": "開始執行", en: "Run" },
+  "wf.launch.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "wf.launch.blocked": {
+    "zh-TW": "尚未具備執行條件——請先處理上方標示的項目。",
+    en: "Not ready to run — resolve the flagged items above first.",
+  },
+  "wf.launch.required": { "zh-TW": "必要", en: "Required" },
+  "wf.launch.advisory": { "zh-TW": "提醒", en: "Heads-up" },
+  "wf.view.steps": { "zh-TW": "步驟清單", en: "Steps" },
+  "wf.view.timeline": { "zh-TW": "時間軸", en: "Timeline" },
+  "wf.timeline.now": { "zh-TW": "回到現在", en: "Jump to now" },
+  "wf.timeline.zoomIn": { "zh-TW": "放大", en: "Zoom in" },
+  "wf.timeline.zoomOut": { "zh-TW": "縮小", en: "Zoom out" },
+  "wf.timeline.waited": { "zh-TW": "等待 {mins} 分", en: "waited {mins}m" },
+  "wf.timeline.empty": {
+    "zh-TW": "尚無已計時的步驟。",
+    en: "No timed steps yet.",
+  },
+  "wf.metrics.elapsed": { "zh-TW": "經過", en: "Elapsed" },
+  "wf.metrics.steps": { "zh-TW": "步驟", en: "Steps" },
+  "wf.metrics.retries": { "zh-TW": "重試 {n}", en: "{n} retries" },
+  "wf.runs.title": { "zh-TW": "執行紀錄", en: "Runs" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

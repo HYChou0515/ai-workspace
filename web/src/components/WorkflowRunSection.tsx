@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 
 import { isRunTerminal, type WorkflowRunDTO } from "../api/workflows";
 import { useItemRuns, useStartRun, useWorkflowManifest } from "../hooks/useWorkflow";
+import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 import { pxToRem } from "../lib/pxToRem";
 
@@ -31,6 +32,8 @@ export function WorkflowRunSection({
   const runs = useItemRuns(hasWorkflow ? slug : undefined, hasWorkflow ? itemId : undefined);
   const start = useStartRun(slug, itemId);
   const [selected, setSelected] = useState<string | null>(null);
+  // #283: "Run" opens the pre-flight dialog first; the real start happens on confirm.
+  const [launching, setLaunching] = useState(false);
 
   // Default the selection to the newest run (the list is newest-first).
   const newest = runs.data?.[0]?.run_id ?? null;
@@ -42,7 +45,8 @@ export function WorkflowRunSection({
 
   const active = runs.data?.find((r) => !isRunTerminal(r.status));
 
-  const onRun = async () => {
+  const onConfirm = async () => {
+    setLaunching(false);
     const res = await start.mutateAsync();
     setSelected(res.run_id);
   };
@@ -58,7 +62,7 @@ export function WorkflowRunSection({
           type="button"
           data-testid="wf-run-button"
           disabled={start.isPending || !!active}
-          onClick={onRun}
+          onClick={() => setLaunching(true)}
           title={active ? "A run is already in progress" : "Run this workflow"}
           style={{
             marginLeft: "auto",
@@ -75,6 +79,16 @@ export function WorkflowRunSection({
           {start.isPending ? "Starting…" : "Run workflow"}
         </button>
       </header>
+
+      {launching && (
+        <WorkflowLaunchDialog
+          slug={slug}
+          itemId={itemId}
+          workflowId={manifest.id}
+          onConfirm={onConfirm}
+          onClose={() => setLaunching(false)}
+        />
+      )}
 
       {selected && (
         <WorkflowRunPanel
