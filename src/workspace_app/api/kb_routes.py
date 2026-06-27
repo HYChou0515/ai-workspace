@@ -75,6 +75,10 @@ class CollectionOut(BaseModel):
     cited: int
     doc_count: int
     size: int  # total bytes across the collection's documents
+    # #88: chunk-based token estimate — SUM of each ready doc's token_count (a
+    # CJK-aware estimate of the EXTRACTED text). Replaces the FE's old raw-blob
+    # bytes/4 guess, which was wildly wrong for binary formats.
+    tokens: int
     updated_at: int  # epoch ms — the most recently updated doc (or the collection)
     owner: str  # created_by
     # P3.0 code-repo metadata (None for non-code Collections). `git_token` is
@@ -288,6 +292,7 @@ def register_kb_routes(
             cited=cited.get(rid, 0),
             doc_count=row.doc_count,
             size=row.size_total or 0,
+            tokens=row.token_total or 0,
             updated_at=updated,
             owner=res.meta.created_by,  # resource-level creator (the original owner)
             git_url=data.git_url,
@@ -327,6 +332,7 @@ def register_kb_routes(
             cited=0,
             doc_count=0,
             size=0,
+            tokens=0,
             updated_at=_ms(rev.updated_time),
             owner=rev.created_by,
             git_url=body.git_url,
@@ -354,6 +360,8 @@ def register_kb_routes(
             aggregates={
                 "doc_count": ForeignAggregate(doc_rm, by_coll, Count()),
                 "size_total": ForeignAggregate(doc_rm, by_coll, Sum(QB["content_size"])),
+                # #88: chunk-based token estimate summed in the SAME pass as size.
+                "token_total": ForeignAggregate(doc_rm, by_coll, Sum(QB["token_count"])),
                 "latest_doc": ForeignAggregate(doc_rm, by_coll, Max(QB.updated_time())),
             },
         )

@@ -24,6 +24,10 @@ export type KbCollection = {
   /** Card aggregates derived from the collection's documents. */
   doc_count: number;
   size: number; // total bytes
+  /** #88: chunk-based token estimate — SUM of each ready doc's CJK-aware
+   * token_count of the EXTRACTED text. The grid's "≈ N tokens" sums this,
+   * instead of the old raw-blob `bytes / 4` guess. */
+  tokens: number;
   updated_at: number; // epoch ms
   owner: string; // created_by
   /** Issue #50: which retrieval pipeline(s) this collection uses. `use_rag`
