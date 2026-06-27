@@ -227,9 +227,13 @@ def test_build_tools_includes_read_skill_when_profile_has_skills(isolated_apps: 
     assert "read_skill" in {t.name for t in tools}
 
 
-def test_build_tools_omits_read_skill_when_profile_has_no_skills(isolated_apps: Path):
+def test_build_tools_omits_read_skill_when_profile_has_no_skills(isolated_apps: Path, monkeypatch):
+    import workspace_app.apps.shared_skills as shared
+
     from workspace_app.agent.tools import build_tools
 
+    # No package skills AND no shared skills (empty registry) → no read_skill.
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {})
     (isolated_apps / "rca" / "profiles" / "default").mkdir(parents=True)
     tools = build_tools(app_slug="rca", profile="default")
     assert "read_skill" not in {t.name for t in tools}

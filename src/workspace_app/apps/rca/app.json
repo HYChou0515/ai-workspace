@@ -20,8 +20,9 @@
     "tools": [
       "exec", "read_file", "read_image", "write_file", "edit_file", "list_files", "exists",
       "delete_file", "ask_knowledge_base", "lookup_user", "make_deck", "data-fetch",
-      "csv-column-summary", "sci-plot", "rca-tools", "python-stack"
+      "csv-column-summary", "sci-plot", "rca-tools", "python-stack", "save_skill"
     ],
+    "skills": ["author-skill"],
     "picker": [
       { "preset": "qwen3-local", "name": "RCA · Qwen3 (local)" },
       { "preset": "claude-opus", "name": "RCA · Claude Opus" },
