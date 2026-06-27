@@ -10,6 +10,7 @@ from typing import Literal
 from ..workflow.events import (
     AwaitingHumanEvent,
     PhaseEntered,
+    SteerProposed,
     StepFailed,
     StepOutput,
     StepPassed,
@@ -190,6 +191,7 @@ AgentEvent = (
     | StepSkipped
     | StepRetrying
     | AwaitingHumanEvent
+    | SteerProposed  # #288: a steer plan is ready for review
 )
 
 

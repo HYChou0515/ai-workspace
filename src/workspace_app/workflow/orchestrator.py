@@ -39,6 +39,7 @@ from .driver import _now_ms, run_workflow
 from .events import (
     AwaitingHumanEvent,
     PhaseEntered,
+    SteerProposed,
     StepFailed,
     StepOutput,
     StepPassed,
@@ -51,6 +52,7 @@ from .handle import WorkflowHandle
 from .inputs import resolve_inputs
 from .manifest import WorkflowManifest
 from .run import PhaseState, RunStatus, StepState, WorkflowRun
+from .steer import SteerProposalFailed, apply_steer, propose_steer
 
 # A run is "active" (blocks a second start, manual §14) while pending / running /
 # paused at a gate. The rest are terminal.
@@ -75,6 +77,10 @@ class ActiveRunExists(Exception):
 
 class NotAwaitingDecision(Exception):
     """A decision was posted to a run that is not paused at a gate (§10)."""
+
+
+class NotAwaitingSteer(Exception):
+    """A steer confirm was posted to a run with no steer plan pending (#288, §10)."""
 
 
 class StepBudgetExceeded(Exception):
@@ -232,13 +238,27 @@ class WorkflowOrchestrator:
         workflow_id: str,
         chat_id: str,
     ) -> None:
-        task = asyncio.create_task(
-            self._drive(
-                run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id
-            )
+        self._track(
+            run_id,
+            asyncio.create_task(
+                self._drive(
+                    run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id
+                )
+            ),
         )
+
+    def _track(self, run_id: str, task: asyncio.Task[None]) -> None:
+        """Register a run's in-flight task, replacing any prior one (a resume / steer
+        re-spawns under the same ``run_id``). The done-callback removes the task only if
+        it is STILL the registered one — so a finished task's late callback can't evict
+        the successor that a resume/steer just installed (the cause of a lost handle)."""
         self._tasks[run_id] = task
-        task.add_done_callback(lambda _t, rid=run_id: self._tasks.pop(rid, None))
+
+        def _untrack(t: asyncio.Task[None], rid: str = run_id) -> None:
+            if self._tasks.get(rid) is t:
+                del self._tasks[rid]
+
+        task.add_done_callback(_untrack)
 
     async def _drive(
         self,
@@ -430,6 +450,115 @@ class WorkflowOrchestrator:
         await record_decision(wf, phase=phase, choice=choice, input=input, decided_by=decided_by)
         assert manifest is not None
         self._patch(run_id, status=RunStatus.RUNNING, pending_decision=None)
+        self._spawn(
+            run_id,
+            slug,
+            item_id,
+            profile,
+            data.captured_user,
+            manifest,
+            data.workflow_id,
+            data.chat_id,
+        )
+
+    # ── steer-and-resume (#288, §10) ──────────────────────────────────
+    async def steer(
+        self, *, slug: str, item_id: str, profile: str, run_id: str, instruction: str
+    ) -> None:
+        """Begin a conversational steer (#288): if the run is still going, **Stop** it
+        first (the in-flight node re-runs on resume anyway), then run the read-only
+        steerer in the background. It streams into the run's chat and, when it has a
+        plan, suspends the run ``awaiting_human`` with ``pending_steer`` set for the
+        human to confirm. A failed proposal leaves the run ``cancelled``."""
+        data = self._get(run_id)
+        if data.status in (RunStatus.RUNNING, RunStatus.PENDING):
+            await self.cancel(run_id, item_id)
+        self._patch(run_id, status=RunStatus.RUNNING)  # the steerer is working
+        self._track(
+            run_id,
+            asyncio.create_task(self._propose(run_id, slug, item_id, profile, instruction, data)),
+        )
+
+    async def _propose(
+        self,
+        run_id: str,
+        slug: str,
+        item_id: str,
+        profile: str,
+        instruction: str,
+        data: WorkflowRun,
+    ) -> None:
+        key = data.chat_id or item_id
+        manifest = self.load_manifest(slug, profile, data.workflow_id)
+        wf = self._build_handle(
+            run_id,
+            item_id,
+            data.captured_user,
+            manifest,
+            key,
+            data.workflow_id,
+            self.load_upload_dir(slug, profile),
+        )
+        try:
+            plan = await propose_steer(wf, instruction=instruction)
+        except SteerProposalFailed as exc:
+            # Couldn't form a usable plan — leave the run stopped with the reason so the
+            # operator can re-instruct or take over.
+            self._patch(
+                run_id,
+                status=RunStatus.CANCELLED,
+                pending_steer=None,
+                result={"steer_error": str(exc)},
+            )
+            return
+        except asyncio.CancelledError:
+            # Stopped mid-proposal (the operator hit Stop while the steerer ran) — settle
+            # the run as cancelled instead of leaving it wedged `running` (no driver owns
+            # this task to record the terminal status).
+            self._patch(run_id, status=RunStatus.CANCELLED, pending_steer=None)
+            raise
+        self._patch(run_id, status=RunStatus.AWAITING_HUMAN, pending_steer=plan)
+        self.publish(key, SteerProposed(instruction=plan.instruction, rationale=plan.rationale))
+
+    async def confirm_steer(
+        self,
+        *,
+        slug: str,
+        item_id: str,
+        profile: str,
+        run_id: str,
+        approve: bool,
+        decided_by: str = "",
+    ) -> None:
+        """Resolve a pending steer (#288). **Approve** → apply the edits + invalidate
+        the steps (deterministically), then **resume the same run** (§9 re-run skips the
+        valid prefix). **Reject** → discard the plan; the run returns to its gate (if it
+        was paused at one) or to a stopped state. Rejects a confirm with no plan pending."""
+        data = self._get(run_id)
+        if data.pending_steer is None:
+            raise NotAwaitingSteer(run_id)
+        key = data.chat_id or item_id
+        manifest = self.load_manifest(slug, profile, data.workflow_id)
+        if not approve:
+            restored = (
+                RunStatus.AWAITING_HUMAN
+                if data.pending_decision is not None
+                else RunStatus.CANCELLED
+            )
+            self._patch(run_id, status=restored, pending_steer=None)
+            return
+        wf = self._build_handle(
+            run_id,
+            item_id,
+            data.captured_user,
+            manifest,
+            key,
+            data.workflow_id,
+            self.load_upload_dir(slug, profile),
+        )
+        await apply_steer(wf, data.pending_steer, decided_by=decided_by)
+        assert manifest is not None
+        self._patch(run_id, status=RunStatus.RUNNING, pending_steer=None, pending_decision=None)
         self._spawn(
             run_id,
             slug,

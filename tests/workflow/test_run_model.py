@@ -1,7 +1,14 @@
 import msgspec
 from specstar import QB, SpecStar
 
-from workspace_app.workflow.run import Failure, PhaseState, RunStatus, WorkflowRun
+from workspace_app.workflow.run import (
+    Failure,
+    PhaseState,
+    RunStatus,
+    SteerInputEdit,
+    SteerPlan,
+    WorkflowRun,
+)
 
 
 def test_workflow_run_round_trips_with_defaults(spec_instance: SpecStar):
@@ -74,6 +81,35 @@ def test_run_status_transitions_to_terminal_with_result(spec_instance: SpecStar)
     assert done.result == {"processed": 2}
     assert done.phases[0].phase == "classify"
     assert done.phases[0].done == 2
+
+
+def test_workflow_run_round_trips_pending_steer(spec_instance: SpecStar):
+    """A run suspended for a steer plan (#288) persists `pending_steer` (the proposed
+    input rewrites + steps to invalidate) and leaves `pending_decision` unset — the FE
+    picks the steer card vs. the gate card by which pending field is set."""
+    rm = spec_instance.get_resource_manager(WorkflowRun)
+    plan = SteerPlan(
+        instruction="use the a, b collections and redo the upload",
+        rationale="switch ingest targets and re-run only the upload",
+        input_edits=[SteerInputEdit(path="collections.json", content='[{"id": "a"}, {"id": "b"}]')],
+        invalidate=["ingest"],
+    )
+    rid = rm.create(
+        WorkflowRun(
+            item_id="i/x",
+            captured_user="a",
+            status=RunStatus.AWAITING_HUMAN,
+            pending_steer=plan,
+        )
+    ).resource_id
+
+    got = rm.get(rid).data
+    assert got.status is RunStatus.AWAITING_HUMAN
+    assert got.pending_decision is None
+    assert got.pending_steer is not None
+    assert got.pending_steer.instruction.startswith("use the a, b")
+    assert got.pending_steer.invalidate == ["ingest"]
+    assert got.pending_steer.input_edits[0].path == "collections.json"
 
 
 def test_run_collects_per_element_failures(spec_instance: SpecStar):

@@ -50,6 +50,7 @@ export function AgentPanel({
   appIcon,
   appColor,
   onNewChat,
+  onSteer,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -83,6 +84,11 @@ export function AgentPanel({
    * is the lone, low-key place to escape a wedged chat. Absent → no header button
    * (the shell bar already carries a creator, or this is a bare RCA chat). */
   onNewChat?: () => void;
+  /** #288: when set, this is a workflow RUN chat — the composer STEERS the run (the
+   * text becomes a free-text instruction the read-only steerer turns into a reviewable
+   * plan) instead of starting a normal interactive turn. Absent → ordinary chat (RCA,
+   * KB, free chats). */
+  onSteer?: (text: string) => void;
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -191,6 +197,15 @@ export function AgentPanel({
   const submit = () => {
     const text = draft.trim();
     if (log.streaming) return;
+    // #288: in a workflow run chat the composer steers the run — the text is a
+    // free-text instruction, not an interactive turn. (Stop a still-streaming run
+    // first via the run header; the composer is inert while a turn streams.)
+    if (onSteer) {
+      if (!text) return;
+      setDraft("");
+      onSteer(text);
+      return;
+    }
     // A message that @-mentions people is a summon — it notifies them and does
     // NOT run the agent (the draft becomes the note).
     if (mentions.length > 0) {
@@ -453,7 +468,13 @@ export function AgentPanel({
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onComposerKeyDown}
-          placeholder={mentions.length > 0 ? "Add a note (optional)…" : "Ask the agent…"}
+          placeholder={
+            onSteer
+              ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
+              : mentions.length > 0
+                ? "Add a note (optional)…"
+                : "Ask the agent…"
+          }
           rows={3}
           style={{
             border: "1px solid var(--paper-3)",

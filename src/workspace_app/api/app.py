@@ -68,6 +68,7 @@ from ..workflow.handle import WorkflowHandle
 from ..workflow.inputs import resolve_inputs
 from ..workflow.orchestrator import (
     NotAwaitingDecision,
+    NotAwaitingSteer,
     WorkflowOrchestrator,
 )
 from ..workflow.preflight import can_run as _preflight_can_run
@@ -425,6 +426,30 @@ class _DecisionBody(BaseModel):
     # the gate's `allow` (e.g. approve/reject); `input` is an optional revision.
     choice: str
     input: str = ""
+
+
+class _SteerBody(BaseModel):
+    # #288 (manual §10): a free-text instruction to redirect a run. The read-only
+    # steerer turns it into a reviewable plan (edit inputs + invalidate steps).
+    instruction: str
+
+
+class _SteerConfirmBody(BaseModel):
+    # #288: the human's verdict on the proposed steer plan — apply + resume, or discard.
+    approve: bool
+
+
+class _SteerAck(BaseModel):
+    # #288: the steer was accepted; the steerer runs in the background and, once it has a
+    # plan, the run goes `awaiting_human` with `pending_steer` set (the FE refetches).
+    run_id: str
+    steering: bool = True
+
+
+class _SteerConfirmOut(BaseModel):
+    # #288: the plan was applied + the run resumed (approve=True), or discarded (False).
+    run_id: str
+    applied: bool
 
 
 class _IngestBody(BaseModel):
@@ -2094,6 +2119,54 @@ def create_app(
         except NotAwaitingDecision as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"run_id": run_id, "resumed": True}
+
+    @api.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/steer",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def steer_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _SteerBody
+    ) -> _SteerAck:
+        """#288 (manual §10): steer a run in words. Stops it first if it is still going,
+        then runs the read-only steerer in the background — it streams into the run's
+        chat and, when it has a plan, suspends the run `awaiting_human` with
+        `pending_steer` set for the human to confirm (the FE refetches the run)."""
+        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        try:
+            await workflow_orchestrator.steer(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                instruction=body.instruction,
+            )
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        return _SteerAck(run_id=run_id)
+
+    @api.post(
+        "/a/{slug}/items/{item_id}/runs/{run_id}/steer/confirm",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def confirm_steer_workflow_run(
+        slug: str, item_id: str, run_id: str, body: _SteerConfirmBody
+    ) -> _SteerConfirmOut:
+        """#288 (manual §10): resolve a pending steer plan — approve to apply the edits +
+        invalidate the steps and resume the same run (the valid prefix skips, §9), or
+        reject to discard it (the run returns to its gate or to a stopped state)."""
+        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        try:
+            await workflow_orchestrator.confirm_steer(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                run_id=run_id,
+                approve=body.approve,
+                decided_by=get_user_id(),
+            )
+        except NotAwaitingSteer as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _SteerConfirmOut(run_id=run_id, applied=body.approve)
 
     @api.post("/a/{slug}/items/{item_id}/capabilities/ingest")
     async def capability_ingest(

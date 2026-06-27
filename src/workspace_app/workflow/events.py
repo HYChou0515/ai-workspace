@@ -101,6 +101,19 @@ class AwaitingHumanEvent:
     type: Literal["awaiting_human"] = "awaiting_human"
 
 
+@dataclass(frozen=True)
+class SteerProposed:
+    """A steer plan is ready for review (#288, manual §10) — the FE renders the steer
+    confirm card. Carries the operator's ``instruction`` + the steerer's one-line
+    ``rationale`` for an immediate headline; the FE refetches the run for the full plan
+    (the edits + invalidations), as it does for citations. Serialized as
+    ``type: "steer_proposed"``."""
+
+    instruction: str
+    rationale: str = ""
+    type: Literal["steer_proposed"] = "steer_proposed"
+
+
 WorkflowEvent = (
     PhaseEntered
     | StepStarted
@@ -110,4 +123,5 @@ WorkflowEvent = (
     | StepSkipped
     | StepRetrying
     | AwaitingHumanEvent
+    | SteerProposed
 )
