@@ -1360,6 +1360,49 @@
   margin: 4px 0;
 }
 
+/* #105 document quality — the coloured grade chip (tree row + status bar) and
+   the status-bar verdict (label + chip + truncated rationale). */
+.kb-quality {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6em;
+  padding: 0 5px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  line-height: 1.5;
+}
+.kb-quality--good {
+  background: color-mix(in srgb, var(--ok, #2e7d32) 16%, transparent);
+  color: var(--ok, #2e7d32);
+}
+.kb-quality--ok {
+  background: color-mix(in srgb, var(--warn, #b07d00) 18%, transparent);
+  color: var(--warn, #b07d00);
+}
+.kb-quality--bad {
+  background: color-mix(in srgb, var(--err, #c0392b) 16%, transparent);
+  color: var(--err, #c0392b);
+}
+.kb-ide__status-quality {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.kb-ide__status-quality-label {
+  color: var(--text-paper-d2);
+}
+.kb-ide__status-quality-why {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 22ch;
+  color: var(--text-paper-d);
+}
+
 /* aligned document table (design handoff) */
 .kb-doctable {
   margin-top: 12px;

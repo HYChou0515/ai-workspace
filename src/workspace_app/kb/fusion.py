@@ -11,14 +11,23 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 
 
-def reciprocal_rank_fusion(ranked_lists: Sequence[Sequence[str]], *, k: int = 60) -> list[str]:
-    """Fuse ranked lists of keys. Each key scores ``sum(1 / (k + rank))`` over
-    the lists it appears in (rank is 1-based). Returns keys by descending score;
-    ties broken by key for determinism."""
+def rrf_scores(ranked_lists: Sequence[Sequence[str]], *, k: int = 60) -> dict[str, float]:
+    """The raw RRF fusion *scores*: each key scores ``sum(1 / (k + rank))`` over the
+    lists it appears in (rank is 1-based). The magnitude carries information the
+    rank order discards — a key ranked high in BOTH dense and BM25 outscores one
+    ranked high in only one — which #105's quality prior combines with (a
+    magnitude-bearing relevance, not just a rank position)."""
     scores: dict[str, float] = {}
     for lst in ranked_lists:
         for rank, key in enumerate(lst, start=1):
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + rank)
+    return scores
+
+
+def reciprocal_rank_fusion(ranked_lists: Sequence[Sequence[str]], *, k: int = 60) -> list[str]:
+    """Fuse ranked lists of keys. Returns keys by descending RRF score; ties broken
+    by key for determinism."""
+    scores = rrf_scores(ranked_lists, k=k)
     return sorted(scores, key=lambda key: (-scores[key], key))
 
 

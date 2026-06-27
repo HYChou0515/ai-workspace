@@ -121,6 +121,35 @@ describe("KbDocIde", () => {
     expect(screen.getByTitle("處理中…")).toBeInTheDocument();
   });
 
+  it("badges a scored doc's quality in the tree (#105)", async () => {
+    renderWithQuery(
+      <KbDocIde
+        collectionId="c1"
+        client={stubClient([doc({ path: "/bad.md", quality_score: 22 })])}
+      />,
+    );
+    expect(await screen.findByText("bad.md")).toBeInTheDocument();
+    const badge = screen.getByTestId("kb-quality-badge");
+    expect(badge).toHaveTextContent("22");
+    expect(badge.className).toContain("kb-quality--bad");
+  });
+
+  it("shows the quality verdict (score + rationale) in the status bar (#105)", async () => {
+    const user = userEvent.setup();
+    renderWithQuery(
+      <KbDocIde
+        collectionId="c1"
+        client={stubClient([
+          doc({ path: "/bad.md", quality_score: 22, quality_rationale: "OCR soup, no structure." }),
+        ])}
+      />,
+    );
+    await user.click(await screen.findByText("bad.md"));
+    const verdict = await screen.findByTestId("kb-ide-quality");
+    expect(within(verdict).getByTestId("kb-quality-badge")).toHaveTextContent("22");
+    expect(verdict).toHaveTextContent("OCR soup, no structure.");
+  });
+
   it("shows the active doc's path + status + chunks/cited in the bottom status bar", async () => {
     const user = userEvent.setup();
     renderWithQuery(

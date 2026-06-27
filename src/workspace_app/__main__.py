@@ -37,6 +37,7 @@ from workspace_app.factories import (
     get_infer_modules_run_config,
     get_kb_describer,
     get_kb_llm,
+    get_kb_quality_judge_llm,
     get_parser_registry,
     get_replay_service,
     get_runner,
@@ -179,6 +180,8 @@ def main() -> None:
         kb_llm = get_kb_llm(settings)
     with boot_step("init card-drafter LLM"):
         card_drafter_llm = get_card_drafter_llm(settings)
+    with boot_step("init KB quality judge LLM"):
+        quality_judge_llm = get_kb_quality_judge_llm(settings)
     with boot_step("init sanity judge LLM"):
         sanity_judge_llm = get_sanity_judge_llm(settings)
     # #56: the wiki agents' model/endpoint resolve from kb.wiki.llm (the
@@ -235,11 +238,14 @@ def main() -> None:
             kb_chat_pipeline=get_chat_pipeline(settings, embedder, kb_llm),
             kb_llm=kb_llm,
             card_drafter_llm=card_drafter_llm,
+            quality_judge_llm=quality_judge_llm,
             # #112: the VLM describer the read_image agent tool uses (shared with
             # the VLM-backed ingestion parsers); None when kb.vlm_llm is unset.
             vlm_describer=get_kb_describer(settings),
             deck_vlm=get_designed_pptx_vlm(settings),
             kb_retrieval_enhancements=settings.kb.retrieval.enhancements,
+            kb_quality_weight=settings.kb.retrieval.quality_weight,
+            kb_quality_floor=settings.kb.retrieval.quality_floor,
             # #195: per-turn kb_search cap for the KB chat turn + ask_knowledge_base
             # bridge (null in config ⇒ unlimited).
             kb_max_searches_per_turn=settings.kb.max_searches_per_turn,

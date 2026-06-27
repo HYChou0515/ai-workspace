@@ -25,7 +25,7 @@ from ..config.schema import EnhancementSettings
 from ..resources.kb import DocChunk, RetrievedPassage, SourceDoc
 from .bm25 import bm25_rank
 from .embedder import Embedder
-from .fusion import mmr, reciprocal_rank_fusion
+from .fusion import mmr, rrf_scores
 from .ingest import normalize_text
 from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
@@ -148,6 +148,16 @@ def _scoped(base: ConditionBuilder, location: LocationFilter | None) -> Conditio
     return out
 
 
+def _saturate(x: float) -> float:
+    """Smoothstep on [0, 1] — ``3x² − 2x³``. A parameter-free saturating curve
+    (flat near 0 and 1) so #105's quality prior compresses the tails: a 0.95-vs-1.0
+    quality gap barely moves the score while a 0.1-vs-0.5 gap does. The IR
+    document-prior literature (Craswell et al. SIGIR'05) fits a sigmoid for exactly
+    this reason; smoothstep is the dependency-free stand-in."""
+    x = max(0.0, min(1.0, x))
+    return x * x * (3.0 - 2.0 * x)
+
+
 def _chunk_vec(chunk: DocChunk) -> list[float]:
     """Read whichever vector field the chunk's collection populated. P3.0
     chunks use exactly one of `embedding` (default text model) or
@@ -167,6 +177,8 @@ class Retriever:
         top_k: int = 5,
         code_embedder: Embedder | None = None,
         enhancement_defaults: EnhancementSettings | None = None,
+        quality_weight: float = 0.10,
+        quality_floor: int | None = None,
     ) -> None:
         self._spec = spec
         self._embedder = embedder
@@ -183,6 +195,14 @@ class Retriever:
         # Each `search` call's caller / LLM tool args resolve against
         # these via `_resolve_enhancements`.
         self._enhancement_defaults = enhancement_defaults or EnhancementSettings()
+        # #105: the second-phase document-quality prior. `quality_weight` (w) is the
+        # prior's strength — kept SMALL relative to the normalized relevance so a
+        # real relevance gap always wins (the literature's warning: an over-strong
+        # prior nukes recall). `quality_floor` is an OPTIONAL absolute hard cutoff
+        # (docs scored below it are dropped); None (the default) = soft only, never
+        # exclude. Both are operator config (config.example.yaml).
+        self._quality_weight = quality_weight
+        self._quality_floor = quality_floor
 
     def search(
         self,
@@ -274,7 +294,8 @@ class Retriever:
                         )
                     )
 
-        fused = reciprocal_rank_fusion(ranked_lists)[: self._candidates]
+        fused_score = rrf_scores(ranked_lists)
+        fused = sorted(fused_score, key=lambda key: (-fused_score[key], key))[: self._candidates]
 
         # RRF order → descending relevance scores; MMR for diversity (cosine of
         # the stored chunk vectors as the similarity).
@@ -292,6 +313,10 @@ class Retriever:
             k=self._top_k * 3,
         )
 
+        # #105: second-phase document-quality prior. Recall (RRF + MMR above) is
+        # unchanged; this only re-scores the surviving candidates.
+        order, score_of = self._apply_quality_prior(order, chunks, relevance, fused_score)
+
         # The display filename is the basename of the SourceDoc's stored path —
         # the id is opaque and must not be parsed for it.
         scored = [
@@ -303,7 +328,7 @@ class Retriever:
                 seq=chunks[cid].seq,
                 start=chunks[cid].start,
                 end=chunks[cid].end,
-                score=relevance[cid],
+                score=score_of[cid],
                 provenance=chunks[cid].provenance,
             )
             for cid in order
@@ -315,6 +340,71 @@ class Retriever:
             step("\n↻ rerank\n")
             passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
         return passages[: self._top_k]
+
+    def _apply_quality_prior(
+        self,
+        order: list[str],
+        chunks: dict[str, DocChunk],
+        relevance: dict[str, float],
+        fused_score: dict[str, float],
+    ) -> tuple[list[str], dict[str, float]]:
+        """#105 — fold each candidate's document-quality score into its final score
+        as a **second-phase additive document prior**, the form the IR
+        document-prior literature supports (Craswell, Robertson, Zaragoza & Taylor,
+        *Relevance Weighting for Query-Independent Evidence*, SIGIR 2005; Kraaij,
+        Westerveld & Hiemstra, *The Importance of Prior Probabilities for Entry Page
+        Search*, SIGIR 2002; Zhou & Croft, *Document Quality Models for Web Ad Hoc
+        Retrieval*, CIKM 2005; Vespa/Azure phased ranking):
+
+            final = R + w · (saturate(quality/100) − 0.5)
+
+        - ``R`` is the **normalized RRF fused score** — a magnitude-bearing relevance
+          (it keeps both the dense and the BM25 evidence, unlike a raw cosine which
+          would discard the sparse signal, and unlike the bare ``1/(rank+1)`` which
+          discards magnitude). Quality combines with *how relevant* a doc is, not
+          just its rank position.
+        - The prior is **additive** (theory's preferred form — a naive multiply lets
+          a skewed feature swamp relevance), **centered** at 0.5 so an *un-scored*
+          doc contributes exactly ``+0`` (the neutral midpoint, never "worst"),
+          **saturating** so a 95-vs-100 gap barely matters while a 10-vs-50 gap does,
+          and weighted by a **small** ``w`` so a real relevance gap always wins.
+        - It is **soft**: a low-quality doc is demoted, never dropped — unless an
+          operator sets an absolute ``quality_floor`` (off by default).
+        - It is **scoped**: when no candidate doc carries a score, ranking is left
+          byte-for-byte as before (the existing rank-based ``relevance``), so
+          collections without a rubric are unaffected.
+        """
+        cache: dict[str, int | None] = {}
+
+        def q_of(cid: str) -> int | None:
+            doc_id = chunks[cid].source_doc_id
+            if doc_id not in cache:
+                cache[doc_id] = self._doc_quality(doc_id)
+            return cache[doc_id]
+
+        if not any(q_of(cid) is not None for cid in order):
+            return order, {cid: relevance[cid] for cid in order}
+        if self._quality_floor is not None:
+            floor = self._quality_floor
+            order = [cid for cid in order if (q := q_of(cid)) is None or q >= floor]
+        norm = max((fused_score[cid] for cid in order), default=1.0) or 1.0
+        score_of: dict[str, float] = {}
+        for cid in order:
+            q = q_of(cid)
+            prior = 0.0 if q is None else self._quality_weight * (_saturate(q / 100.0) - 0.5)
+            score_of[cid] = fused_score[cid] / norm + prior
+        return order, score_of
+
+    def _doc_quality(self, doc_id: str) -> int | None:
+        """The doc's stored ``quality_score`` (``None`` = un-scored = neutral). A
+        deleted doc reads as un-scored."""
+        rm = self._spec.get_resource_manager(SourceDoc)
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError:  # pragma: no cover — a candidate chunk's
+            return None  # doc was deleted mid-query (cascade keeps them in sync, so defensive)
+        assert isinstance(doc, SourceDoc)
+        return doc.quality_score
 
     def _dense_order(
         self,

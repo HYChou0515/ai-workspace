@@ -150,6 +150,14 @@ class Collection(Struct):  # → resource "collection"
     # with the empty default). See kb/wiki/guidance.with_collection_guidance.
     wiki_maintainer_guidance: str = ""
     wiki_reader_guidance: str = ""
+    # Issue #105: the user-authored quality rubric — what makes a doc a good/bad
+    # knowledge source for THIS collection, and which named dimensions to assess.
+    # The judge composes it with a system-fixed output format (overall 0–100 +
+    # per-dimension breakdown + rationale) at index time. Blank ⇒ the collection
+    # is NOT scored (opt-in) and its search ranking is unaffected. Non-indexed
+    # (never filtered/sorted on), like the wiki guidance above — adding it needs
+    # no migration (old rows decode with the empty default).
+    quality_rubric: str = ""
 
 
 class WikiPage(Struct):  # → resource "wiki-page"
@@ -227,6 +235,21 @@ class SourceDoc(Struct):  # → resource "source-doc"
     # estimate that was wildly wrong for binary formats (a 10 MB PDF whose
     # extracted text is 50 KB). 0 while indexing / on error (no text yet).
     token_count: int = 0
+    # Issue #105: the AI's quality assessment of this doc as a knowledge source,
+    # judged against the collection's `quality_rubric`. `quality_score` is a
+    # holistic 0–100 grade — INDEXED so the document list can sort by quality
+    # and the retriever can batch-load candidate doc scores to down-weight bad
+    # docs. `None` = UN-SCORED (the neutral default: a collection with no rubric,
+    # a doc indexed before a rubric existed, or one still being judged) — it is
+    # never penalised in search. `quality_breakdown` is the per-dimension scores
+    # whose keys are named BY the user's rubric (so the schema varies per
+    # collection → a free-form dict, non-indexed); `quality_rationale` is the
+    # AI's short justification shown in the UI. Both are display-only. Scoring
+    # runs async after `status="ready"` (see kb.quality / kb.index_coordinator),
+    # so a judge failure leaves the doc un-scored, never un-indexed.
+    quality_score: int | None = None
+    quality_breakdown: dict[str, Any] = {}
+    quality_rationale: str = ""
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"

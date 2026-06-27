@@ -191,6 +191,28 @@ export const messages = {
   "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
   "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
 
+  // #105: document quality (badge + status-bar verdict + rubric editor).
+  "kb.quality.good": { "zh-TW": "品質良好", en: "Good quality" },
+  "kb.quality.ok": { "zh-TW": "品質普通", en: "Fair quality" },
+  "kb.quality.bad": { "zh-TW": "品質偏低", en: "Low quality" },
+  "kb.quality.badge": {
+    "zh-TW": "品質 {score}/100 · {label}",
+    en: "Quality {score}/100 · {label}",
+  },
+  "kb.quality.heading": { "zh-TW": "品質", en: "Quality" },
+  "kb.quality.unscored": { "zh-TW": "尚未評分", en: "Not yet scored" },
+  "kb.quality.rubric.title": { "zh-TW": "品質評分標準", en: "Quality rubric" },
+  "kb.quality.rubric.hint": {
+    "zh-TW": "用一段文字說明：什麼樣的文件算好/壞的知識來源、要從哪些面向評。留空＝不評分，搜尋排序不受影響。",
+    en: "Describe what makes a document a good/bad knowledge source here, and which dimensions to assess. Leave blank to turn scoring off (search ranking is unaffected).",
+  },
+  "kb.quality.rubric.placeholder": {
+    "zh-TW": "例如：評這份缺陷報告作為知識來源的品質，面向：清晰度、完整度、雜訊。",
+    en: "e.g. Judge this defect report as a knowledge source. Dimensions: clarity, completeness, noise.",
+  },
+  "kb.quality.rubric.save": { "zh-TW": "儲存評分標準", en: "Save rubric" },
+  "kb.quality.rubric.saved": { "zh-TW": "已儲存", en: "Saved" },
+
   // Retrieval toggles (RetrievalToggles, used by the new-collection modal +
   // collection settings) — #171.
   "kb.retrieval.docSearch": { "zh-TW": "文件搜尋", en: "Document search" },

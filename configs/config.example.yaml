@@ -263,6 +263,14 @@
 #       expand: { default: 1, max: 3 }      # int — alt query phrasings; 0 = off
 #       hyde:   { default: 0, max: 1 }      # int — hypothetical-doc probes; 0 = off
 #       rerank: { default: true, max: true } # bool — max=false forces off
+#     quality_weight: 0.10                  # #105: strength of the doc-quality prior
+#                                           #   (additive, second-phase). SMALL by design
+#                                           #   ("0.1 or less") so a real relevance gap wins;
+#                                           #   0 disables it. Only affects collections that
+#                                           #   have a quality_rubric (others rank unchanged).
+#     # quality_floor: 20                   #   optional ABSOLUTE hard cutoff: drop docs scored
+#                                           #   below this. null (default) = soft only, never
+#                                           #   exclude (un-scored docs are never dropped).
 # # Resolution: LLM tool args > caller (context) > default; clamped to max.
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
 # # when recall trumps latency. Setting max below default is fine — `min(...)`
@@ -303,6 +311,12 @@
 #   #                                       #   reports it's unavailable (fail-loud, like read_image).
 #   #                                       #   Needs the deck sandbox image (docker/Dockerfile.workspace-deck:
 #   #                                       #   node + pptxgenjs + libreoffice + poppler + Noto CJK).
+#   # quality_judge:                        # issue #105: LLM-as-judge that scores a doc's quality as a
+#   #   preset: kb-retrieval                #   knowledge source at index time, against each collection's
+#   #   # reasoning_effort: low             #   `quality_rubric`. Same usage-entry shape as the others.
+#   #                                       #   OMIT / null (default) = scoring off → docs stay un-scored
+#   #                                       #   (neutral) and search ranking is unaffected. A judge
+#   #                                       #   failure leaves a doc un-scored, never un-indexed.
 #   wiki:                                   # issue #56: the LLM wiki (maintainer / reader / merge)
 #     llm:                                  # ← which model drives the wiki agents. SAME preset-ref
 #       preset: wiki-default                #   shape as retrieval_llm / vlm_llm. The agents own
