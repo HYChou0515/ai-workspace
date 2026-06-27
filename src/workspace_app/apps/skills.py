@@ -210,6 +210,21 @@ async def build_workspace_skills_block(files: WorkspaceFiles, workspace_id: str)
     return workspace_skills_block(await workspace_skill_metas(files, workspace_id))
 
 
+def merged_profile_skills(
+    app_slug: str, profile: str, declared_shared: list[str]
+) -> list[SkillMeta]:
+    """The static skill index for a turn's system prompt: the App's declared
+    shared skills (#298 Q7) + the profile's own package ``.skill/`` skills, deduped
+    by name (package wins a clash), sorted. The user's *workspace* skills are added
+    separately per turn (they need the live FileStore)."""
+    from .shared_skills import shared_skill_metas
+
+    metas: dict[str, SkillMeta] = {m.name: m for m in shared_skill_metas(declared_shared)}
+    for m in list_skills(app_slug, profile):
+        metas[m.name] = m
+    return [metas[k] for k in sorted(metas)]
+
+
 def slugify_skill_name(name: str) -> str:
     """A skill name → kebab-case slug (lowercase; non-alphanumeric runs become a
     single ``-``; trimmed). ``save_skill`` uses this so the frontmatter ``name``

@@ -841,9 +841,9 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     wakes the sandbox (skills are pure host markdown)."""
     from ..apps.skills import (
         SkillError,
-        list_skills,
         load_skill,
         load_workspace_skill,
+        merged_profile_skills,
         workspace_skill_metas,
     )
 
@@ -858,6 +858,15 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
             return f"error: {e}"
         if body is not None:
             return body
+
+    # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
+    from ..apps.shared_skills import SHARED_SKILLS, load_shared_skill
+
+    if name in SHARED_SKILLS:
+        try:
+            return load_shared_skill(name)
+        except SkillError as e:
+            return f"error: {e}"
 
     slug = ctx.context.app_slug
     profile = ctx.context.template_profile
@@ -874,8 +883,8 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     try:
         return load_skill(slug, profile, name)
     except SkillError as e:
-        avail_metas = list(list_skills(slug, profile))
-        names = [m.name for m in avail_metas]
+        declared = _declared_shared_skills(slug)
+        names = [m.name for m in merged_profile_skills(slug, profile, declared)]
         if files is not None and inv is not None:
             names += [m.name for m in await workspace_skill_metas(files, inv)]
         avail = ", ".join(sorted(set(names))) or "(none)"
@@ -1148,8 +1157,24 @@ def build_tools(
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     tools = [function_tool(_IMPLS[n], name_override=n) for n in names if n in _IMPLS]
     if app_slug is not None and profile is not None:
-        from ..apps.skills import list_skills
+        from ..apps.skills import merged_profile_skills
 
-        if list_skills(app_slug, profile):
+        # #298: read_skill is wired when the App ships ANY skill the agent might
+        # load — the profile's own package `.skill/` OR a declared shared skill
+        # (e.g. author-skill). Workspace skills also need it, and a workspace app
+        # that opts into author-skill always has at least that, so this covers
+        # the authoring entry point too.
+        if merged_profile_skills(app_slug, profile, _declared_shared_skills(app_slug)):
             tools.append(function_tool(_IMPLS["read_skill"], name_override="read_skill"))
     return tools
+
+
+def _declared_shared_skills(app_slug: str) -> list[str]:
+    """The App's opted-in shared skills (``app.json`` ``agent.skills``), or ``[]``
+    when the manifest is missing/unreadable (test-synthetic slugs)."""
+    from ..apps.manifest import load_app_manifest
+
+    try:
+        return list(load_app_manifest(app_slug).agent.skills)
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return []

@@ -186,6 +186,36 @@ async def test_read_skill_miss_lists_workspace_skills_too(isolated_apps: Path):
     assert "my-ws" in out
 
 
+async def test_read_skill_loads_a_shared_skill(monkeypatch, tmp_path: Path):
+    """A built-in (shared) skill from the registry loads via read_skill, after
+    the workspace shadow check (#298 Q7)."""
+    import workspace_app.apps.shared_skills as shared
+    from workspace_app.agent.tools import read_skill_impl
+
+    d = tmp_path / "author-skill"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: author-skill\ndescription: meta\n---\n\nSHARED-body")
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {"author-skill": d})
+    ctx = _ws_ctx(slug="rca", profile="default")
+    assert await read_skill_impl(ctx, "author-skill") == "SHARED-body"
+
+
+def test_build_tools_wires_read_skill_via_declared_shared_skill(monkeypatch, tmp_path: Path):
+    """An App with no package skills but a declared shared skill still gets
+    read_skill — so the author-skill entry point is reachable."""
+    import workspace_app.apps.shared_skills as shared
+    from workspace_app.agent import tools as tools_mod
+    from workspace_app.agent.tools import build_tools
+
+    d = tmp_path / "author-skill"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: author-skill\ndescription: meta\n---\n\nbody")
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {"author-skill": d})
+    monkeypatch.setattr(tools_mod, "_declared_shared_skills", lambda slug: ["author-skill"])
+    names = {t.name for t in build_tools(app_slug="playground", profile="default")}
+    assert "read_skill" in names
+
+
 # ─── build_tools conditional injection ────────────────────────────────
 
 

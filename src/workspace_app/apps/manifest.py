@@ -54,6 +54,12 @@ class AgentManifest(Struct):
     """Topic Hub §6 — workspace files (e.g. ``MEMORY.md``, ``collections.json``)
     whose live content is prepended to the agent's content each turn (deterministic
     injection; never persisted). Empty ⇒ no injection (the default for most Apps)."""
+    skills: list[str] = field(default_factory=list)
+    """#298 Q7 — built-in (shared) skills this App opts into, by name, from the
+    ``workspace_app.apps.shared_skills.SHARED_SKILLS`` registry (introduced like a
+    tool-package: list the name to include it). They're advertised in the skill
+    index alongside the profile's own ``.skill/`` skills + the user's workspace
+    skills. ``author-skill`` (the co-authoring meta-skill) is the one v1 ships."""
 
 
 class Layout(Struct):

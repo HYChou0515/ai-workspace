@@ -26,7 +26,7 @@ from msgspec import UNSET
 from ..resources import AgentConfig
 from .manifest import AppManifest, load_app_manifest
 from .profiles import load_profile, load_profile_appendix
-from .skills import SkillMeta, list_skills
+from .skills import SkillMeta, merged_profile_skills
 
 if TYPE_CHECKING:
     from ..config.schema import Preset
@@ -75,6 +75,16 @@ def validate_function_coherence(manifest: AppManifest) -> None:
         raise ValueError(
             f"app {manifest.slug!r}: layout.primary_surface 'ide' requires "
             f"function.workspace but it is false"
+        )
+    # #298 Q7: a declared shared skill must exist in the registry — a typo should
+    # fail the boot loud, not silently drop the skill from the index.
+    from .shared_skills import SHARED_SKILLS
+
+    unknown = [s for s in manifest.agent.skills if s not in SHARED_SKILLS]
+    if unknown:
+        raise ValueError(
+            f"app {manifest.slug!r}: agent.skills {unknown} not in the shared-skill "
+            f"registry {sorted(SHARED_SKILLS)}"
         )
 
 
@@ -182,7 +192,7 @@ class AppCatalog:
         system_prompt = _compose_prompt(
             _read_app_text(app_slug, manifest.agent.prompt_file),
             load_profile_appendix(app_slug, profile),
-            list_skills(app_slug, profile),
+            merged_profile_skills(app_slug, profile, manifest.agent.skills),
             preamble=_read_base_preamble() if manifest.function.workspace else "",
         )
         suggestions = list(prof.suggestions or manifest.agent.suggestions)
