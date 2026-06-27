@@ -21,8 +21,10 @@ from workspace_app.sandbox.mock import MockSandbox
 from ._client import TestClient
 
 
-def _client_and_spec(holder: dict[str, str]) -> tuple[TestClient, SpecStar]:
-    spec = make_spec(default_user=lambda: holder["id"])
+def _client_and_spec(
+    holder: dict[str, str], *, superusers: frozenset[str] = frozenset()
+) -> tuple[TestClient, SpecStar]:
+    spec = make_spec(default_user=lambda: holder["id"], superusers=superusers)
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
@@ -73,3 +75,16 @@ def test_single_collection_get_is_hidden_from_a_non_owner():
     assert client.get(f"/collection/{secret}").status_code == 200  # the owner reads it
     holder["id"] = "alice"
     assert client.get(f"/collection/{secret}").status_code == 404  # hidden from others
+
+
+def test_superuser_sees_every_collection():
+    """A configured superuser's access scope is UNRESTRICTED — they read a
+    private collection a normal user is 404'd from."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder, superusers=frozenset({"root"}))
+    secret = client.post("/kb/collections", json={"name": "secret"}).json()["resource_id"]
+    _set_permission(spec, secret, Permission(visibility="private"))
+    holder["id"] = "alice"
+    assert client.get(f"/collection/{secret}").status_code == 404  # ordinary non-owner
+    holder["id"] = "root"
+    assert client.get(f"/collection/{secret}").status_code == 200  # superuser
