@@ -31,15 +31,24 @@ _EPS = 1e-9
 class WafermapOptions(BaseModel):
     color_mode: Literal["uni", "bi"] = Field(
         "uni",
-        description="uni: sequential, value>=0 (defect count). bi: diverging about `center` (measurement).",
+        description="uni: sequential, value>=0 (defect count); bi: diverging (measurement).",
     )
-    colormap: str | None = Field(None, description="Override the colormap name (else viridis/RdBu_r).")
+    colormap: str | None = Field(
+        None, description="Override the colormap name (else viridis/RdBu_r)."
+    )
     vmin: float | None = Field(None, description="Color scale minimum (uni defaults to 0).")
     vmax: float | None = Field(None, description="Color scale maximum (defaults to the data max).")
     center: float | None = Field(None, description="bi mode center value (defaults to 0).")
     wafer_diameter: float | None = Field(
-        None, description="Wafer circle diameter in die units; None auto-fits to the die."
+        None, description="Wafer circle diameter (in die_w units); None auto-fits to the die."
     )
+    die_w: float = Field(1.0, gt=0, description="Die width (die may be rectangular, not square).")
+    die_h: float = Field(1.0, gt=0, description="Die height.")
+    center_x: float | None = Field(
+        None,
+        description="Wafer-centre die column (the centre die need not sit on the grid midpoint).",
+    )
+    center_y: float | None = Field(None, description="Wafer-centre die row.")
     notch: Literal["bottom", "top", "left", "right", "none"] = Field(
         "bottom", description="Orientation notch position on the wafer edge."
     )
@@ -91,16 +100,35 @@ class Wafermap(IChart):
         if xs_a.size == 0:
             raise ValueError("no die positions to plot (die_x/die_y all missing)")
 
+        # Scale die grid indices to physical coordinates so rectangular die
+        # (die_w ≠ die_h) tile correctly under equal aspect.
+        dw, dh = options.die_w, options.die_h
+        px, py = xs_a * dw, ys_a * dh
         fig, ax = plt.subplots()
         norm, cmap = _norm_and_cmap(options.color_mode, vals_a, options)
-        for x, y, v in zip(xs_a, ys_a, vals_a):
+        for x, y, v in zip(px, py, vals_a):
             color = "0.85" if not np.isfinite(v) else cmap(norm(v))
             ax.add_patch(
-                Rectangle((x - 0.5, y - 0.5), 1, 1, facecolor=color, edgecolor="white", lw=0.3, zorder=3)
+                Rectangle(
+                    (x - dw / 2, y - dh / 2),
+                    dw,
+                    dh,
+                    facecolor=color,
+                    edgecolor="white",
+                    lw=0.3,
+                    zorder=3,
+                )
             )
-        center, radius = grid_geometry(xs_a, ys_a, options.wafer_diameter)
+        ctr = (
+            (options.center_x * dw, options.center_y * dh)
+            if options.center_x is not None and options.center_y is not None
+            else None
+        )
+        center, radius = grid_geometry(
+            px, py, options.wafer_diameter, center=ctr, half_w=dw / 2, half_h=dh / 2
+        )
         draw_outline(ax, center, radius, options.notch)
-        apply_view(ax, center, radius, xs_a, ys_a)
+        apply_view(ax, center, radius, px, py, half_w=dw / 2, half_h=dh / 2)
         if options.title:
             ax.set_title(options.title)
         if options.show_colorbar:
