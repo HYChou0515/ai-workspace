@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from specstar import SpecStar
 
     from ..kb.retriever import Enhancements, Retriever
-    from ..kb.vlm import VlmDescriber
+    from ..kb.vlm import IVlm, VlmDescriber
     from ..kb.wiki.sources import IWikiSources
     from ..resources import AgentConfig
     from ..resources.conversation import Citation
@@ -122,6 +122,12 @@ class AgentToolContext:
     # KB ingestion). None when the deployment configured no VLM (`kb.vlm_llm`
     # unset) — `read_image` then reports it's unavailable instead of failing.
     describer: VlmDescriber | None = None
+
+    # #284: the multimodal model the `make_deck` tool drives — it both *sees*
+    # rendered slides and *writes* the pptxgenjs fix. Set by the API layer from
+    # `get_designed_pptx_vlm` (falls back to the read_image VLM). None when no
+    # vision model is configured — `make_deck` then reports it's unavailable.
+    deck_vlm: IVlm | None = None
 
     # KB agent (kb_search tool).
     retriever: Retriever | None = None
