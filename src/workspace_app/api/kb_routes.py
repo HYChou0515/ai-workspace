@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
-from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +26,7 @@ from ..files.zip_download import (
     safe_zip_filename,
     stream_prepared_zip,
 )
+from ..kb.chunk_counts import doc_chunks_for_ids
 from ..kb.cited import chunk_cited, collection_cited, doc_cited_count, doc_cited_for_ids
 from ..kb.code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..kb.collection_export import (
@@ -705,7 +705,6 @@ def register_kb_routes(
         `feedback_specstar_indexed_queries`). `total` is computed via the
         same filter — counts only, no row materialisation."""
         rm = spec.get_resource_manager(SourceDoc)
-        chrm = spec.get_resource_manager(DocChunk)
         q = QB["collection_id"] == collection_id
         total = rm.count_resources(q.build())
         # Sort by IMMUTABLE keys BEFORE paging — `created_time` (the resource's
@@ -725,29 +724,19 @@ def register_kb_routes(
                 .build()
             )
         )
-        # Batched chunk-per-doc count: one query against DocChunk filtered
-        # by `source_doc_id IN (this page's resource_ids)`, then bucket
-        # locally. Replaces N per-doc `count_resources` calls (d530644).
-        # `r.info.resource_id` (NOT `r.meta.*`) is the resource_id stored
-        # on `DocChunk.source_doc_id` at ingest — the IN filter and the
-        # bucket lookup must use the SAME attribute.
+        # `r.info.resource_id` (NOT `r.meta.*`) is the resource_id stored on
+        # `DocChunk.source_doc_id` / on a `CitationEvent.document_id` at ingest —
+        # the IN filters keyed below must use the SAME attribute, and the lookups
+        # further down read back by it.
         ids = [r.info.resource_id for r in data_page]  # ty: ignore[unresolved-attribute]
-        # Cited counts for just THIS page's docs (an indexed `document_id IN`
-        # push-down), not a global group-by over the whole citation log.
+        # Per-page counts for THIS page's docs only. Both are scoped, indexed
+        # `... IN (ids)` `Count` GROUP BY push-downs returning {doc_id: n}: no
+        # global group-by over the whole log, and — crucially for #103 — no
+        # chunk-body materialisation just to tally (the old per-page
+        # `DocChunk.search_resources` loop streamed every chunk's text + two
+        # embedding vectors into Python only to add 1).
         cited = doc_cited_for_ids(spec, ids)
-        chunk_counts: defaultdict[str, int] = defaultdict(int)
-        if ids:
-            for ch in chrm.search_resources(QB["source_doc_id"].in_(ids).build()):
-                # `indexed_data` is `dict | UnsetType` to ty — assert-narrow
-                # (the IN query only returns rows with indexed fields).
-                indexed = ch.indexed_data
-                assert isinstance(indexed, dict)
-                sid = indexed.get("source_doc_id")
-                # `source_doc_id` is a required `str` field, so its indexed value
-                # is always a str when the IN query returns the row; the guard is
-                # belt-and-suspenders narrowing for ty and can't be False here.
-                if isinstance(sid, str):  # pragma: no branch
-                    chunk_counts[sid] += 1
+        chunk_counts = doc_chunks_for_ids(spec, ids)
 
         # #248: unit progress for the docs still fanning out on this page. The run
         # is keyed by doc id and only exists for an in-flight (or just-finished)
@@ -757,7 +746,7 @@ def register_kb_routes(
             data = r.data
             assert isinstance(data, SourceDoc)
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            chunks = chunk_counts[rid]
+            chunks = chunk_counts.get(rid, 0)
             run = runs.get(rid) if data.status == "indexing" else None
             units_done = run.units_done if run is not None else 0
             units_total = run.units_total if run is not None else 0
