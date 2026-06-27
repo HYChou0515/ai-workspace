@@ -265,6 +265,15 @@ class _FileEntry(BaseModel):
     read_only: bool
 
 
+class _SkillEntry(BaseModel):
+    """One co-created skill in a workspace (#298) — `.skill/<name>/SKILL.md`. The
+    FE Skills panel lists these (the IDE tree hides the dot-folder) so the user can
+    see, download, and reuse what they built with the agent."""
+
+    name: str
+    description: str
+
+
 class _WorkspaceUsage(BaseModel):
     """A workspace's total storage usage vs its quota (#245), for the upload
     usage bar. ``used`` is the durable logical byte total; ``quota`` of 0 means
@@ -2755,6 +2764,17 @@ def create_app(
         )
 
     # ---- Files API (plan-backend §3.8) ----
+
+    @api.get("/a/{slug}/items/{item_id}/skills")
+    async def list_workspace_skills(slug: str, item_id: str) -> list[_SkillEntry]:
+        """#298: the skills the user co-created in this workspace (`.skill/`), for
+        the Skills panel. Parsed live from each `SKILL.md`'s frontmatter; malformed
+        ones are skipped (same tolerance as the loader)."""
+        from ..apps.skills import workspace_skill_metas
+
+        investigation_id = _require_item(slug, item_id)
+        metas = await workspace_skill_metas(files, investigation_id)
+        return [_SkillEntry(name=m.name, description=m.description) for m in metas]
 
     @api.get("/a/{slug}/items/{item_id}/files")
     async def list_files(slug: str, item_id: str, prefix: str = "") -> list[_FileEntry]:

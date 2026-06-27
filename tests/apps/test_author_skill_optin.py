@@ -74,3 +74,21 @@ def test_workspace_skill_is_advertised_to_the_agent_each_turn():
     assert "my-skill" in cap.prompt
     assert "SKILLDESC-token" in cap.prompt
     assert "hello" in cap.prompt
+
+
+def test_skills_endpoint_lists_workspace_skills():
+    """GET .../skills returns the workspace's co-created skills (name+description),
+    skipping a malformed one — the Skills panel's data source (#298 P5)."""
+    app, _spec = _app(_Capture())
+    client = TestClient(app)
+    iid = client.post("/a/playground/items", json={"title": "scratch"}).json()["resource_id"]
+    base = f"/a/playground/items/{iid}/files/.skill"
+    client.put(f"{base}/alpha/SKILL.md", content=b"---\nname: alpha\ndescription: a\n---\n\nbody")
+    client.put(f"{base}/zeta/SKILL.md", content=b"---\nname: zeta\ndescription: z\n---\n\nbody")
+    # name/dir mismatch → skipped (the loader is lenient; this never lists)
+    client.put(f"{base}/bad/SKILL.md", content=b"---\nname: other\ndescription: x\n---\n\nbody")
+    out = client.get(f"/a/playground/items/{iid}/skills").json()
+    assert out == [
+        {"name": "alpha", "description": "a"},
+        {"name": "zeta", "description": "z"},
+    ]
