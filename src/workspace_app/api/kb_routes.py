@@ -40,6 +40,7 @@ from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
 from ..kb.preview import preview_markdown
+from ..perm import Actor, authorize
 from ..resources.kb import Collection, DocChunk, SourceDoc
 
 if TYPE_CHECKING:
@@ -339,6 +340,18 @@ def register_kb_routes(
             use_wiki=body.use_wiki,
         )
 
+    def _can_read_meta(row) -> bool:
+        """#262 — a collection stays in the list only if the caller may see it
+        (`read_meta`). `permission is None` ≡ public (back-compat)."""
+        data = row.resource.data
+        assert isinstance(data, Collection)
+        return authorize(
+            Actor.human(get_user_id()),
+            "read_meta",
+            data.permission,
+            created_by=row.resource.meta.created_by,
+        )
+
     @app.get("/kb/collections")
     async def list_collections() -> list[CollectionOut]:
         coll_rm = spec.get_resource_manager(Collection)
@@ -357,6 +370,7 @@ def register_kb_routes(
                 "latest_doc": ForeignAggregate(doc_rm, by_coll, Max(QB.updated_time())),
             },
         )
+        rows = [r for r in rows if _can_read_meta(r)]
         return [_collection_out(r, cited) for r in rows]
 
     @app.post("/kb/collections/{collection_id}/documents")
