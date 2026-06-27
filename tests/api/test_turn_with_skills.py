@@ -53,10 +53,13 @@ def test_agent_for_with_profile_having_skills_exposes_read_skill(isolated_apps: 
     assert "read_skill" in {t.name for t in agent.tools}
 
 
-def test_agent_for_with_profile_without_skills_omits_read_skill(isolated_apps: Path):
+def test_agent_for_with_profile_without_skills_omits_read_skill(isolated_apps: Path, monkeypatch):
+    import workspace_app.apps.shared_skills as shared
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 
+    # No package skills AND no shared skills (empty registry) → no read_skill.
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {})
     _profile_without_skill(isolated_apps, "rca", "default")
     agent = _agent_for(AgentConfig(name="a"), app_slug="rca", template_profile="default")
     assert "read_skill" not in {t.name for t in agent.tools}

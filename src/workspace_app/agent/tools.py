@@ -839,17 +839,99 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     from — unknown name lists the available skills, body-cap exceeded
     explains the deployer should split the skill. Host-side only: never
     wakes the sandbox (skills are pure host markdown)."""
-    from ..apps.skills import SkillError, list_skills, load_skill
+    from ..apps.skills import (
+        SkillError,
+        load_skill,
+        load_workspace_skill,
+        merged_profile_skills,
+        workspace_skill_metas,
+    )
+
+    # #298: a user+AI co-created skill in this workspace shadows any package
+    # skill of the same name. Read live (uncached) — it may have just been saved.
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is not None and inv is not None:
+        try:
+            body = await load_workspace_skill(files, inv, name)
+        except SkillError as e:
+            return f"error: {e}"
+        if body is not None:
+            return body
+
+    # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
+    from ..apps.shared_skills import SHARED_SKILLS, load_shared_skill
+
+    if name in SHARED_SKILLS:
+        try:
+            return load_shared_skill(name)
+        except SkillError as e:
+            return f"error: {e}"
 
     slug = ctx.context.app_slug
     profile = ctx.context.template_profile
     if slug is None or profile is None:
+        # No package profile, but a workspace might still hold skills to list.
+        ws = (
+            [m.name for m in await workspace_skill_metas(files, inv)]
+            if files is not None and inv is not None
+            else []
+        )
+        if ws:
+            return f"error: unknown skill {name!r}. available skills: {', '.join(ws)}"
         return "error: read_skill is only available in an App workspace turn"
     try:
         return load_skill(slug, profile, name)
     except SkillError as e:
-        avail = ", ".join(m.name for m in list_skills(slug, profile)) or "(none)"
+        declared = _declared_shared_skills(slug)
+        names = [m.name for m in merged_profile_skills(slug, profile, declared)]
+        if files is not None and inv is not None:
+            names += [m.name for m in await workspace_skill_metas(files, inv)]
+        avail = ", ".join(sorted(set(names))) or "(none)"
         return f"error: {e}. available skills: {avail}"
+
+
+async def save_skill_impl(
+    ctx: RunContextWrapper[AgentToolContext], name: str, description: str, body: str
+) -> str:
+    """Save a reusable skill into THIS workspace so you (and the user) can load it
+    later with `read_skill`. Use this once the user has approved a skill you drafted
+    together — it captures a repeatable procedure, the terminology, and the preferred
+    output style for a kind of task.
+
+    `name` is a short title (it's slugified to kebab-case — e.g. "SMT Reflow Triage"
+    → `smt-reflow-triage`); `description` is a one-line "when to use this" shown in the
+    skill index; `body` is the methodology in markdown. This owns the file format, so
+    you only supply these three fields — it can't be silently dropped by a bad
+    frontmatter. Re-saving the same name overwrites (refine freely). For a skill that
+    needs reference docs or scripts, write them with `write_file` into the same
+    `.skill/<name>/` folder (e.g. `.skill/<name>/references/…`, `.skill/<name>/scripts/…`)
+    and point to them from the body. Returns a confirmation or an `error:` note."""
+    from ..apps.skills import (
+        SKILL_BODY_CAP,
+        WORKSPACE_SKILL_DIR,
+        render_skill_md,
+        slugify_skill_name,
+    )
+
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is None or inv is None:
+        return "error: save_skill needs a workspace (none on this turn)"
+    slug = slugify_skill_name(name)
+    if not slug:
+        return f"error: {name!r} has no letters or digits to make a skill name from"
+    if len(body) > SKILL_BODY_CAP:
+        return (
+            f"error: skill body is {len(body)} chars, over the {SKILL_BODY_CAP} cap — "
+            "split it into smaller skills"
+        )
+    path = f"/{WORKSPACE_SKILL_DIR}/{slug}/SKILL.md"
+    await files.write(inv, path, render_skill_md(slug, description, body).encode("utf-8"))
+    return (
+        f"saved skill '{slug}' to {path}. Load it any time with read_skill('{slug}'). "
+        "To reuse it elsewhere, download the .skill folder from the Skills panel."
+    )
 
 
 def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) -> str:
@@ -1023,6 +1105,10 @@ _IMPLS = {
     # template profile has any skills. `build_tools(profile=)` handles
     # the conditional injection — never present in `_WORKSPACE_TOOLS`.
     "read_skill": read_skill_impl,
+    # `save_skill` (#298) is a normal opt-in tool — listed in an App's
+    # `agent.tools` like any other (the workspace apps that ship the
+    # `author-skill` meta-skill grant it). Deterministic SKILL.md write.
+    "save_skill": save_skill_impl,
 }
 
 # The RCA workspace toolset — what `build_tools(None)` hands out. It includes
@@ -1071,8 +1157,24 @@ def build_tools(
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
     tools = [function_tool(_IMPLS[n], name_override=n) for n in names if n in _IMPLS]
     if app_slug is not None and profile is not None:
-        from ..apps.skills import list_skills
+        from ..apps.skills import merged_profile_skills
 
-        if list_skills(app_slug, profile):
+        # #298: read_skill is wired when the App ships ANY skill the agent might
+        # load — the profile's own package `.skill/` OR a declared shared skill
+        # (e.g. author-skill). Workspace skills also need it, and a workspace app
+        # that opts into author-skill always has at least that, so this covers
+        # the authoring entry point too.
+        if merged_profile_skills(app_slug, profile, _declared_shared_skills(app_slug)):
             tools.append(function_tool(_IMPLS["read_skill"], name_override="read_skill"))
     return tools
+
+
+def _declared_shared_skills(app_slug: str) -> list[str]:
+    """The App's opted-in shared skills (``app.json`` ``agent.skills``), or ``[]``
+    when the manifest is missing/unreadable (test-synthetic slugs)."""
+    from ..apps.manifest import load_app_manifest
+
+    try:
+        return list(load_app_manifest(app_slug).agent.skills)
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return []

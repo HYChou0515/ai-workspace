@@ -305,6 +305,28 @@ export const messages = {
     en: "No collections match “{q}”.",
   },
   "collections.none": { "zh-TW": "目前沒有任何知識庫可選。", en: "No collections to choose from." },
+  // #298 — the Skills panel (co-created skills in a workspace).
+  "skills.button": { "zh-TW": "技能", en: "Skills" },
+  "skills.tip": {
+    "zh-TW": "查看與重用你和助理一起做的技能",
+    en: "See and reuse the skills you built with the assistant",
+  },
+  "skills.title": { "zh-TW": "這個工作區的技能", en: "Skills in this workspace" },
+  "skills.intro": {
+    "zh-TW": "技能是你和助理一起定下的做事方法；下次助理會照著做。",
+    en: "A skill captures how you want a task done, so the assistant follows your way next time.",
+  },
+  "skills.empty": {
+    "zh-TW": "還沒有技能。在對話中請助理「幫我做一個技能」就能一起做一個。",
+    en: 'No skills yet. Ask the assistant "help me make a skill" to build one together.',
+  },
+  "skills.download": { "zh-TW": "下載", en: "Download" },
+  "skills.import": { "zh-TW": "匯入", en: "Import" },
+  "skills.importHint": {
+    "zh-TW": "選擇一個技能資料夾以加入這個工作區",
+    en: "Pick a skill folder to add it to this workspace",
+  },
+  "skills.close": { "zh-TW": "關閉", en: "Close" },
   // KB chat collection modal (KbCollectionsModal) — #271.
   "collections.more": { "zh-TW": "更多 · {n}", en: "More · {n}" },
   "collections.kbTitle": { "zh-TW": "在哪些知識庫裡搜尋", en: "Which collections to search" },
