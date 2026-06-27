@@ -5,9 +5,10 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { api } from "../../api";
+import { investigationFileService } from "../../api/fileService";
 import { kbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { downloadChatExport } from "../../api/workflows";
@@ -15,6 +16,7 @@ import { EntryView } from "../../components/AgentEntryView";
 import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
+import { SkillsModal } from "../../components/SkillsModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
@@ -657,7 +659,13 @@ export function AgentHeader({
    * leave a wedged one behind. Absent → no button. */
   onNewChat?: () => void;
 }) {
+  const t = useT();
   const [exportError, setExportError] = useState<string | null>(null);
+  const [showSkills, setShowSkills] = useState(false);
+  const fileService = useMemo(
+    () => investigationFileService(slug, investigationId),
+    [slug, investigationId],
+  );
   return (
     <header
       style={{
@@ -668,6 +676,14 @@ export function AgentHeader({
         gap: 10,
       }}
     >
+      {showSkills && (
+        <SkillsModal
+          slug={slug}
+          itemId={investigationId}
+          fileService={fileService}
+          onClose={() => setShowSkills(false)}
+        />
+      )}
       {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>{appTitle}</div>
@@ -702,6 +718,27 @@ export function AgentHeader({
           <Icon name="plus" size={13} /> New chat
         </button>
       )}
+      <button
+        type="button"
+        // #298: open the Skills panel — see / download / import the skills the user
+        // co-created here (the IDE tree hides the `.skill/` dot-folder).
+        data-testid="skills-button"
+        onClick={() => setShowSkills(true)}
+        title={t("skills.tip")}
+        aria-label={t("skills.button")}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          color: "var(--text-paper-d)",
+          fontSize: pxToRem(11),
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name="sparkle" size={13} /> {t("skills.button")}
+      </button>
       <button
         type="button"
         // Downloads the `.chat.json` round-trip format (issue #39): re-uploadable

@@ -10,6 +10,11 @@ import { AgentHeader } from "./AgentPanel";
 const downloadChatExport = vi.hoisted(() => vi.fn());
 vi.mock("../../api/workflows", () => ({ downloadChatExport }));
 
+vi.mock("../../api/workspaceSkills", async (orig) => {
+  const actual = await orig<typeof import("../../api/workspaceSkills")>();
+  return { ...actual, workspaceSkillsApi: { list: vi.fn(async () => []) } };
+});
+
 describe("AgentHeader export", () => {
   afterEach(() => {
     cleanup();
@@ -63,6 +68,20 @@ describe("AgentHeader new-chat escape hatch (#200)", () => {
       </MemoryRouter>,
     );
     expect(screen.queryByRole("button", { name: /new chat/i })).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentHeader skills (#298)", () => {
+  afterEach(cleanup);
+
+  it("opens the Skills panel — the surface for the hidden `.skill/` folder", async () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByTestId("skills-button"));
+    expect(await screen.findByTestId("skills-modal")).toBeInTheDocument();
   });
 });
 

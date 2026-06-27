@@ -33,6 +33,11 @@ export const qk = {
   // this AND `qk.file(id, "/collections.json")` (so an open Monaco tab refreshes).
   itemCollections: (scopeId: string) => ["itemCollections", scopeId] as const,
 
+  // #298: a workspace's co-created skills (`.skill/`). The Skills panel reads this;
+  // importing a skill invalidates it (a new `.skill/<name>/` appears).
+  workspaceSkills: (slug: string, itemId: string) =>
+    ["workspaceSkills", slug, itemId] as const,
+
   // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
   itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
   itemChat: (slug: string, itemId: string, chatId: string) =>
