@@ -17,6 +17,7 @@
   "function": { "workspace": true, "sandbox": true, "terminal": true },
   "agent": {
     "prompt_file": "prompts/system.md",
+    "context_files": ["collections.json"],
     "tools": [
       "exec", "read_file", "read_image", "write_file", "edit_file", "list_files", "exists",
       "delete_file", "ask_knowledge_base", "lookup_user", "make_deck", "data-fetch",

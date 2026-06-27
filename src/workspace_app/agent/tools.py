@@ -580,7 +580,9 @@ def kb_search_impl(
     return body
 
 
-async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], question: str) -> str:
+async def ask_knowledge_base_impl(
+    ctx: RunContextWrapper[AgentToolContext], question: str, rank: int = 0
+) -> str:
     """Ask the knowledge-base agent a question about the in-house documents.
 
     Use this ONLY when answering needs facts, procedures, or history that live
@@ -588,23 +590,66 @@ async def ask_knowledge_base_impl(ctx: RunContextWrapper[AgentToolContext], ques
     synthesized answer with a Sources list. Phrase a focused question, not just
     keywords.
 
+    `rank` (#280) picks which **priority tier** of collections to search, when
+    the knowledge base is organised into tiers. Always start at `rank=0` (the
+    highest-priority tier). If that answer doesn't fully resolve your question
+    and the result says more tiers exist, call this tool AGAIN with the same
+    question and the next `rank` (1, 2, …). Each tier is searched on its own, so
+    compare the answers you get and use the best — a higher tier is a fallback,
+    not automatically better. The result tells you the tier count and when there
+    are no more tiers to widen to.
+
     Do NOT use for: greetings, small-talk, the agent's own name or identity,
     meta-questions about this assistant, or general knowledge you already know.
     For any of those, answer directly without calling this tool.
     """
     run = ctx.context.run_subagent
     assert run is not None  # the API layer wires this for RCA runs
+
+    # Citations are bucketed by TOOL NAME (the surface that produced them), not by
+    # sub-agent purpose; persist() pairs the Nth bucket entry with the Nth tool
+    # message of that name. So EVERY call must append exactly one bucket entry —
+    # including the early returns below — or the pairing drifts.
+    bucket = ctx.context.subagent_citations.setdefault("ask_knowledge_base", [])
+
+    tiers = ctx.context.collection_tiers
+    n = len(tiers)
+    if n == 0:
+        # No priority tiers configured ⇒ search the whole KB (today's behaviour).
+        if rank > 0:
+            bucket.append([])
+            return (
+                f"There is no priority tier {rank} — this knowledge base isn't "
+                "organised into tiers. Call ask_knowledge_base without a rank."
+            )
+        scope: list[str] | None = None
+        banner = ""
+    elif rank < 0 or rank >= n:
+        bucket.append([])
+        return (
+            f"There is no priority tier {rank}; the lowest-priority tier is rank "
+            f"{n - 1}. Answer from what you already found across the tiers."
+        )
+    else:
+        scope = tiers[rank]
+        if rank < n - 1:
+            banner = (
+                f"[Searched priority tier {rank} of {n}. If this doesn't fully "
+                f"answer the question, call ask_knowledge_base again with "
+                f"rank={rank + 1} to widen to the next tier, then compare.]\n\n"
+            )
+        else:
+            banner = f"[Searched the lowest-priority tier (rank {rank} of {n}); no more tiers.]\n\n"
+
     answer, citations = await run(
         "kb_chat",
         question,
         ctx.context.on_exec_output,
         ctx.context.investigation_id,
+        scope,
     )
-    # Citations are bucketed by TOOL NAME (the surface that produced
-    # them), not by sub-agent purpose. persist() pairs the Nth bucket
-    # entry with the Nth tool message of that name.
-    ctx.context.subagent_citations.setdefault("ask_knowledge_base", []).append(citations)
-    return answer
+    bucket.append(citations)
+    return banner + answer
 
 
 def _read_step_names(text: str, column: str) -> list[str]:

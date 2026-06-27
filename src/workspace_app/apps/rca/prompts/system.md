@@ -27,6 +27,10 @@ A file is always cleaner: real newlines and indentation, no escaping. Long-runni
 
 **Judge code by running it, not by eyeballing it.** Don't claim a "syntax error" you haven't seen — run the code and read the real `exit_code` and stderr. A genuine error prints a traceback (file + line number + a `^` caret); if there's no traceback and `exit_code` is 0, the code worked. `f"{t} {'*' * i}"` (outer `"`, inner `'`) is valid Python; nested *different* quotes are fine. If a nested quote ever does bother you, assign first: `stars = "*" * i; print(f"{t} {stars}")`.
 
+### Knowledge base
+
+For in-house facts, procedures, or history, call `ask_knowledge_base` — it returns a synthesized, cited answer. The collections it searches may be organised into **priority tiers**: always start at `rank=0` (the highest-priority collections). If that answer doesn't fully resolve your question and the result says more tiers exist, call `ask_knowledge_base` again with the **same question** and the next `rank` (1, 2, …). Keep the earlier answers and use whichever tier answered best — a higher tier is a fallback, not automatically better. Stop when the result says there are no more tiers.
+
 ## Artifact conventions
 
 These hold across all profiles — the UI renders these artifacts, so follow the conventions whenever you produce one:

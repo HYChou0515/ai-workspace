@@ -4,7 +4,12 @@ the agent records there (resolve only, no write)."""
 
 from __future__ import annotations
 
-from workspace_app.kb.collections import collection_ids_from_json, resolve_collection
+from workspace_app.kb.collections import (
+    collection_ids_from_json,
+    collection_tiers_from_json,
+    resolve_collection,
+    resolve_profile_collections,
+)
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection
 
@@ -23,6 +28,61 @@ def test_collection_ids_from_json_skips_malformed_entries():
     data = [{"id": "c1", "name": "A"}, {"name": "no id"}, {"id": "", "name": "blank"}, "garbage"]
     assert collection_ids_from_json(data) == ["c1"]
     assert collection_ids_from_json("not a list") == []
+
+
+def test_collection_tiers_from_json_groups_by_tier_ranked_ascending():
+    # Sparse tier ints (0, 10, 20 — room to insert later) collapse to ranks 0,1,2.
+    data = [
+        {"id": "a", "name": "A", "tier": 0},
+        {"id": "b", "name": "B", "tier": 0},
+        {"id": "d", "name": "D", "tier": 20},
+        {"id": "c", "name": "C", "tier": 10},
+    ]
+    # rank 0 = smallest tier (0) → [a, b] in file order; rank 1 = tier 10 → [c];
+    # rank 2 = tier 20 → [d].
+    assert collection_tiers_from_json(data) == [["a", "b"], ["c"], ["d"]]
+
+
+def test_collection_tiers_from_json_defaults_missing_tier_to_zero():
+    # A flat hand-edited / legacy file (no `tier`) is one tier — backward compatible.
+    data = [{"id": "c1", "name": "A"}, {"id": "c2", "name": "B"}]
+    assert collection_tiers_from_json(data) == [["c1", "c2"]]
+
+
+def test_collection_tiers_from_json_is_tolerant():
+    # Malformed entries dropped; a non-int tier falls back to tier 0; non-list → [].
+    data = [
+        {"id": "a", "name": "A", "tier": "oops"},
+        {"name": "no id"},
+        "garbage",
+        {"id": "b", "name": "B", "tier": 10},
+    ]
+    assert collection_tiers_from_json(data) == [["a"], ["b"]]
+    assert collection_tiers_from_json("not a list") == []
+    assert collection_tiers_from_json([]) == []
+
+
+def test_resolve_profile_collections_resolves_names_and_keeps_tiers():
+    # #280: a profile declares its default collection set by NAME + tier; seeding
+    # resolves names → live ids, building the `collections.json` rows.
+    spec = make_spec(default_user="u")
+    a = _coll(spec, "Fab Docs")
+    b = _coll(spec, "Archive")
+    rows = resolve_profile_collections(spec, [("Fab Docs", 0), ("Archive", 10)])
+    assert rows == [
+        {"id": a, "name": "Fab Docs", "tier": 0},
+        {"id": b, "name": "Archive", "tier": 10},
+    ]
+
+
+def test_resolve_profile_collections_skips_unresolvable_names(caplog):
+    # Q9: a name matching no live collection is skipped + logged, never a hard fail
+    # (a stale profile default must not block item creation).
+    spec = make_spec(default_user="u")
+    a = _coll(spec, "Fab Docs")
+    rows = resolve_profile_collections(spec, [("Fab Docs", 0), ("ghost", 0)])
+    assert rows == [{"id": a, "name": "Fab Docs", "tier": 0}]
+    assert "ghost" in caplog.text
 
 
 def test_resolve_collection_by_name_is_case_insensitive():

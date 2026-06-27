@@ -25,9 +25,25 @@ _PROMPT_FILE = "_prompt.md"
 _NON_PROFILE = {"__pycache__"}
 
 
+class ProfileCollection(Struct):
+    """#280: one entry in a profile's default collection set, declared by collection
+    NAME (resilient across deployments — ids are specstar-generated and differ per
+    deployment) plus an optional priority ``tier`` (sparse ints, e.g. 0/10/20, leave
+    room to insert later). Resolved to a live id + seeded into the item's
+    ``collections.json`` at creation; an unresolvable name is skipped (see
+    ``kb.collections.resolve_profile_collections``)."""
+
+    name: str
+    tier: int = 0
+
+
 class ProfileManifest(Struct):
     title: str = ""
     description: str = ""
+    collections: list[ProfileCollection] = field(default_factory=list)
+    """#280: the profile's DEFAULT collection set (by name + tier). Seeded into a new
+    item's ``collections.json`` at creation, then editable in the web picker / Monaco.
+    Empty (the default) ⇒ no default — the item starts with no scope (searches all)."""
     upload_dir: str = "uploads"
     """#198: the staging folder a chat attach lands in — ``{upload_dir}/<name>`` —
     and the default the profile's workflows glob (``wf.upload_dir``) / where their
