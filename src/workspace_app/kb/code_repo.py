@@ -81,12 +81,18 @@ class CodeRepoIngestor:
                 # block rmtree on some filesystems.
                 shutil.rmtree(checkout, ignore_errors=True)
         # Stamp both the cloned HEAD and the wall-clock pull time so the
-        # background sweeper can decide whether the Collection is due next.
+        # background sweeper can decide whether the Collection is due next. This
+        # is the collection's own sync bookkeeping, not a user edit, so write it
+        # AS THE OWNER: #262's write ACL (perm.checker) gates every Collection
+        # update on `write_meta`, and the syncer (a non-owner editor, or the
+        # sweeper running as the default user) need not hold it.
         stamp = now_ms if now_ms is not None else int(time.time() * 1000)
-        crm.update(
-            collection_id,
-            msgspec.structs.replace(coll, git_last_sha=sha, git_last_pulled_at=stamp),
-        )
+        owner = crm.get_meta(collection_id).created_by
+        with crm.using(owner):
+            crm.update(
+                collection_id,
+                msgspec.structs.replace(coll, git_last_sha=sha, git_last_pulled_at=stamp),
+            )
 
     # ─────────────────────── git wrappers ───────────────────────
 

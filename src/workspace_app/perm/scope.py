@@ -9,11 +9,16 @@ delete) ride a `permission_checker` on top (403). See docs/plan-permissions.md.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from specstar import QB, UNRESTRICTED
+from specstar.permission import AccessScope
 
 from .model import ALL, Subject, user_subject
+
+if TYPE_CHECKING:
+    from specstar.permission.access_scope import _Unrestricted
+    from specstar.query import ConditionBuilder
 
 
 def subjects_of(user: str) -> list[Subject]:
@@ -23,13 +28,13 @@ def subjects_of(user: str) -> list[Subject]:
 
 def collection_access_scope(
     superusers: frozenset[str] = frozenset(),
-) -> Callable[[str], object]:
+) -> AccessScope:
     """Build the `user -> predicate` access scope for collections. Mirrors
     `authorize(..., "read_meta", ...)`: a row is visible iff it is public,
     owned by the caller, or restricted-and-granted. No `permission` object ≡
     public (legacy rows, no migration). Superusers see everything."""
 
-    def scope(user: str) -> object:
+    def scope(user: str) -> ConditionBuilder | _Unrestricted:
         if user in superusers:
             return UNRESTRICTED  # the single greppable "see everything" path
         granted = QB["permission.read_meta"].contains_any(subjects_of(user))
