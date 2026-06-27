@@ -365,6 +365,10 @@ export interface ApiClient {
    * an exec side-effect, slow flush). */
   refreshFiles(slug: string, investigationId: string): Promise<void>;
   readFile(slug: string, investigationId: string, path: string): Promise<FileContent>;
+  /** Absolute URL to a workspace file's raw bytes — for inline `<img src>` /
+   * `<a href>` in the chat (#285 inline charts). Same endpoint as `readFile`,
+   * but a plain URL the browser loads directly (with content-type), not bytes. */
+  fileContentUrl(slug: string, investigationId: string, path: string): string;
   /** Raw write. `body` may be a string (UTF-8) or a binary Blob/ArrayBuffer
    * — the FE uploads notebook JSON as string, attachments as Blob. */
   writeFile(slug: string,

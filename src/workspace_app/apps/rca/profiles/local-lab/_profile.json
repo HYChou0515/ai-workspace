@@ -6,7 +6,7 @@
   "tools": [
     "exec", "read_file", "write_file", "edit_file", "list_files", "exists",
     "delete_file", "ask_knowledge_base", "data-fetch", "csv-column-summary",
-    "rca-tools", "python-stack"
+    "sci-plot", "rca-tools", "python-stack"
   ],
   "suggestions": [
     { "label": "Pull wafer history + rank factors",

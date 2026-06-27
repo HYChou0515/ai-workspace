@@ -34,7 +34,7 @@ def test_packages_dict_exists_with_expected_entries():
     """The demo packages are registered. Sentinel: a real deploy swaps
     this dict for its own packages; here we lock the demo shape.
 
-    - data-fetch / csv-column-summary: reusable CLI sample packages
+    - data-fetch / csv-column-summary / sci-plot: reusable CLI sample packages
     - python-stack: venv carrier (no CLI; provisions pandas/numpy/scipy/
       matplotlib into the sandbox via the jail's `python` shim)
     - rca-tools: in-house multi-command package (source gitignored —
@@ -46,6 +46,7 @@ def test_packages_dict_exists_with_expected_entries():
     assert set(PACKAGES) == {
         "data-fetch",
         "csv-column-summary",
+        "sci-plot",
         "python-stack",
         "rca-tools",
     }

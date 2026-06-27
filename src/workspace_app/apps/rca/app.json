@@ -20,7 +20,7 @@
     "tools": [
       "exec", "read_file", "read_image", "write_file", "edit_file", "list_files", "exists",
       "delete_file", "ask_knowledge_base", "make_deck", "data-fetch", "csv-column-summary",
-      "rca-tools", "python-stack"
+      "sci-plot", "rca-tools", "python-stack"
     ],
     "picker": [
       { "preset": "qwen3-local", "name": "RCA · Qwen3 (local)" },

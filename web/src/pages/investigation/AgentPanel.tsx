@@ -295,6 +295,9 @@ export function AgentPanel({
                 ? () => void onUndoFromEntry(i)
                 : undefined
             }
+            // #285: resolve workspace paths so a tool card renders the charts it
+            // wrote inline (this item's files endpoint).
+            fileUrl={(p) => api.fileContentUrl(slug, investigationId, p)}
           />
         ))}
         <TurnStatus log={log} />

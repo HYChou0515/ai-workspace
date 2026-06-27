@@ -1,0 +1,50 @@
+[project]
+name = "sci-plot"
+version = "0.1.0"
+description = "Extensible scientific-plotting catalog — one `chart` command, many domain renderers, provisioned into the RCA/Playground sandbox."
+requires-python = ">=3.10"
+# Self-contained data + plotting stack. Bundled into a relocatable package at
+# prebuild time, so it never pollutes the host app's dependencies. Pure
+# matplotlib (no seaborn) — the framework owns styling and every chart is custom
+# enough that seaborn would not pull its weight.
+dependencies = [
+    "pydantic>=2",
+    "pandas>=2.0",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "openpyxl>=3.1",  # .xlsx input
+    "pyarrow>=15",    # .parquet input
+]
+
+[project.scripts]
+# The package name (key in workspace_app.tooling.packages.PACKAGES) MUST equal
+# this console_script key — the launch wrapper invokes `.venv/bin/sci-plot`.
+sci-plot = "sci_plot.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sci_plot"]
+
+[dependency-groups]
+dev = [
+    "coverage>=7.14.3",
+    "pytest>=8",
+]
+
+# Self-contained rootdir so `pytest` doesn't walk up into the parent repo's config.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# Absolute imports only (`sci_plot.framework.*`) — tool-package code is copied
+# around too much for `..` forms (ruff TID252, same rule as csv-column-summary).
+select = ["E", "F", "I", "TID252"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"

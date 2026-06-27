@@ -707,6 +707,10 @@ export const mockApi: ApiClient = {
     return { kind: "text", path, size: f.bytes, text: f.text, encoding: "utf-8" };
   },
 
+  fileContentUrl(_slug, investigationId, path) {
+    return `/files/${encodeURIComponent(investigationId)}/${path}`;
+  },
+
   async writeFile(_slug: string, investigationId, path, body) {
     await delay(20);
     if (typeof body === "string") {

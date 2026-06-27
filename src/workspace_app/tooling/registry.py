@@ -32,7 +32,9 @@ from agents import FunctionTool
 from agents.tool_context import ToolContext
 
 from ..agent.context import AgentToolContext
+from ..agent.plot_review import run_review
 from ..agent.tools import _exec_result_text
+from ..sandbox.protocol import ExecResult, SandboxHandle
 
 
 @dataclass(frozen=True)
@@ -204,6 +206,85 @@ def _check_collisions(selected: list[tuple[PackageInfo, CommandInfo]]) -> None:
         raise ValueError(f"cross-package tool name collision: {msg}")
 
 
+def _accepts_style(schema: dict[str, Any]) -> bool:
+    """True if the command's params schema exposes a ``style`` override (so a
+    re-render can adjust layout) — the gate for the #285 VLM review loop."""
+    if "style" in schema.get("properties", {}):
+        return True
+    return any(
+        isinstance(d, dict) and "style" in d.get("properties", {})
+        for d in schema.get("$defs", {}).values()
+    )
+
+
+def _images_from_stdout(stdout: bytes) -> list[str]:
+    """Image paths a command reported on stdout: ``{"images": [...]}`` (sci-plot)
+    or ``{"plots": [...]}`` (csv-column-summary). ``[]`` if stdout isn't that shape."""
+    try:
+        obj = json.loads(stdout.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return []
+    if not isinstance(obj, dict):
+        return []
+    for key in ("images", "plots"):
+        v = obj.get(key)
+        if isinstance(v, list):
+            return [p for p in v if isinstance(p, str)]
+    return []
+
+
+async def _review_chart(
+    actx: AgentToolContext,
+    pkg: PackageInfo,
+    cmd: CommandInfo,
+    handle: SandboxHandle,
+    args_json: str,
+    result: ExecResult,
+    text: str,
+) -> str:
+    """Run the VLM self-review loop over a chart command's output and fold its
+    outcome into the tool result text (best image path + a one-line summary)."""
+    images = _images_from_stdout(result.stdout)
+    if not images:
+        return text
+    first = images[0]
+    sandbox = actx.sandbox
+    assert sandbox is not None  # provisioned tools imply a sandbox
+    try:
+        first_png = await sandbox.download(handle, "/" + first.lstrip("/"))
+    except Exception:  # noqa: BLE001 — can't read the render back → skip review
+        return text
+    try:
+        base_args: dict[str, Any] = json.loads(args_json or "{}")
+    except ValueError:
+        base_args = {}
+
+    async def render(style: dict[str, Any]) -> tuple[bytes, str]:
+        merged = {**base_args, "style": style}
+        r = await sandbox.exec(
+            handle,
+            [f"{pkg.install_dir}/launch", cmd.name, json.dumps(merged)],
+            on_output=actx.on_exec_output,
+        )
+        imgs = _images_from_stdout(r.stdout)
+        path = imgs[0] if imgs else first
+        png = await sandbox.download(handle, "/" + path.lstrip("/"))
+        return png, path
+
+    sink = actx.on_exec_output
+    on_chunk = (lambda t, _r: sink(t.encode("utf-8"))) if sink is not None else None
+    outcome = await run_review(
+        initial_png=first_png,
+        initial_path=first,
+        render=render,
+        describer=actx.describer,
+        on_chunk=on_chunk,
+    )
+    if outcome.image_path != first:
+        text = text.replace(first, outcome.image_path)
+    return f"{text}\n\n{outcome.summary()}"
+
+
 def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
     """Wrap ``cmd`` as a FunctionTool whose on_invoke execs
     ``[pkg.install_dir/launch, cmd.name, args_json]`` in the sandbox.
@@ -231,7 +312,14 @@ def _to_function_tool(pkg: PackageInfo, cmd: CommandInfo) -> FunctionTool:
             [f"{pkg.install_dir}/launch", cmd.name, args_json or "{}"],
             on_output=actx.on_exec_output,
         )
-        return _exec_result_text(actx, cmd.name, result)
+        text = _exec_result_text(actx, cmd.name, result)
+        # #285: a chart command that emits image(s) gets a VLM visual self-review
+        # (detect layout issues → restyle → re-render, ≤2 passes) when a vision
+        # model is wired. Gated on the command accepting a `style` override so a
+        # re-render can actually adjust the layout.
+        if actx.describer is not None and _accepts_style(cmd.params_json_schema):
+            text = await _review_chart(actx, pkg, cmd, handle, args_json, result, text)
+        return text
 
     return FunctionTool(
         name=cmd.name,
