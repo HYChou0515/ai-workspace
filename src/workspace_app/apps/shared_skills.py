@@ -10,13 +10,21 @@ dict, same as ``PACKAGES``.
 ``author-skill`` is the one v1 ships: the meta-skill that teaches the agent to
 co-author a skill with the user (the heart of #298). Source lives under
 ``sample-skills/`` at the repo root, mirroring ``sample-tools/``.
+
+Everything is referenced through the live ``skills`` module (``skills.SkillError``
+etc.) rather than imported by name, so a test that reloads ``skills`` (to reset its
+``@cache``) doesn't leave us catching/raising a stale exception class.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .skills import SKILL_BODY_CAP, SkillError, SkillMeta, _parse_frontmatter
+from . import skills
+
+if TYPE_CHECKING:
+    from .skills import SkillMeta
 
 _REPO = Path(__file__).resolve().parents[3]
 SHARED_SKILLS_DIR = _REPO / "sample-skills"
@@ -41,16 +49,19 @@ def shared_skill_metas(names: list[str]) -> list[SkillMeta]:
 
 
 def load_shared_skill(name: str) -> str:
-    """A shared skill's body markdown (frontmatter stripped). Raises ``SkillError``
-    on an unregistered name, a missing SKILL.md, or a body over the cap."""
+    """A shared skill's body markdown (frontmatter stripped). Raises
+    ``skills.SkillError`` on an unregistered name, a missing SKILL.md, or a body
+    over the cap."""
     src = SHARED_SKILLS.get(name)
     skill_md = None if src is None else src / "SKILL.md"
     if skill_md is None or not skill_md.is_file():
         avail = ", ".join(sorted(SHARED_SKILLS)) or "(none)"
-        raise SkillError(f"unknown shared skill {name!r}. available: {avail}")
-    _front, body = _parse_frontmatter(skill_md.read_bytes())
-    if len(body) > SKILL_BODY_CAP:
-        raise SkillError(f"shared skill {name!r} body exceeds {SKILL_BODY_CAP} chars ({len(body)})")
+        raise skills.SkillError(f"unknown shared skill {name!r}. available: {avail}")
+    _front, body = skills._parse_frontmatter(skill_md.read_bytes())
+    if len(body) > skills.SKILL_BODY_CAP:
+        raise skills.SkillError(
+            f"shared skill {name!r} body exceeds {skills.SKILL_BODY_CAP} chars ({len(body)})"
+        )
     return body
 
 
@@ -62,11 +73,11 @@ def _meta(name: str) -> SkillMeta | None:
     if not skill_md.is_file():
         return None
     try:
-        front, _body = _parse_frontmatter(skill_md.read_bytes())
-    except SkillError:
+        front, _body = skills._parse_frontmatter(skill_md.read_bytes())
+    except skills.SkillError:
         return None
     n = str(front.get("name", "")).strip()
     description = str(front.get("description", "")).strip()
     if not n or n != name:
         return None
-    return SkillMeta(name=n, description=description)
+    return skills.SkillMeta(name=n, description=description)

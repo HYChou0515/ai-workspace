@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import workspace_app.apps.shared_skills as shared
+from workspace_app.apps import skills as skills_mod
 
 
 @pytest.fixture
@@ -36,7 +37,7 @@ def test_metas_reads_registered_skills(tmp_registry):
 def test_metas_skips_unregistered_name(tmp_registry):
     """A name not in the registry is dropped (the manifest coherence check is the
     loud guard; the loader itself is lenient)."""
-    assert shared.shared_skill_metas(["demo", "ghost"]) == [shared.SkillMeta("demo", "a demo")]
+    assert shared.shared_skill_metas(["demo", "ghost"]) == [skills_mod.SkillMeta("demo", "a demo")]
 
 
 def test_metas_empty_for_no_names(tmp_registry):
@@ -48,8 +49,39 @@ def test_load_returns_body(tmp_registry):
 
 
 def test_load_unknown_raises(tmp_registry):
-    with pytest.raises(shared.SkillError):
+    with pytest.raises(skills_mod.SkillError):
         shared.load_shared_skill("ghost")
+
+
+def test_load_body_over_cap_raises(tmp_registry, monkeypatch):
+    monkeypatch.setattr(skills_mod, "SKILL_BODY_CAP", 10)
+    tmp_registry("huge", "d", "x" * 11)
+    monkeypatch.setitem(shared.SHARED_SKILLS, "huge", shared.SHARED_SKILLS["demo"].parent / "huge")
+    with pytest.raises(skills_mod.SkillError, match="exceeds"):
+        shared.load_shared_skill("huge")
+
+
+def test_metas_skips_registered_name_with_no_skill_md(tmp_path, monkeypatch):
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {"empty": empty})
+    assert shared.shared_skill_metas(["empty"]) == []
+
+
+def test_metas_skips_frontmatter_name_mismatch(tmp_path, monkeypatch):
+    d = tmp_path / "demo"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: other\ndescription: d\n---\n\nbody")
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {"demo": d})
+    assert shared.shared_skill_metas(["demo"]) == []
+
+
+def test_metas_skips_malformed_frontmatter(tmp_path, monkeypatch):
+    d = tmp_path / "demo"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\ndescription: [unbalanced\n---\n\nbody")
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {"demo": d})
+    assert shared.shared_skill_metas(["demo"]) == []
 
 
 def test_author_skill_is_registered():

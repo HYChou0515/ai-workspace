@@ -67,6 +67,25 @@ async def test_metas_skips_missing_name():
     assert await workspace_skill_metas(files, inv) == []
 
 
+async def test_metas_ignores_nested_skill_files():
+    """Only `.skill/<name>/SKILL.md` is a skill — a deeper reference/script file
+    under a skill folder isn't a second skill."""
+    files, inv = _files()
+    await _put(files, inv, "foo", "f", "body")
+    await files.write(inv, "/.skill/foo/references/x.md", b"# ref")
+    assert [m.name for m in await workspace_skill_metas(files, inv)] == ["foo"]
+
+
+async def test_metas_skips_malformed_frontmatter():
+    """An unparseable frontmatter is skipped (logged), not fatal — one bad
+    hand-edit can't break the whole index."""
+    files, inv = _files()
+    bad = "---\ndescription: [unbalanced\n---\n\nbody"
+    await files.write(inv, "/.skill/broken/SKILL.md", bad.encode("utf-8"))
+    await _put(files, inv, "ok", "fine", "body")
+    assert [m.name for m in await workspace_skill_metas(files, inv)] == ["ok"]
+
+
 async def test_metas_is_live_not_cached():
     """A skill written after a first read shows up on the next read (Q3a)."""
     files, inv = _files()

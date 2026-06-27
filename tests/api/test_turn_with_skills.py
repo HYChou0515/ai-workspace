@@ -55,7 +55,6 @@ def test_agent_for_with_profile_having_skills_exposes_read_skill(isolated_apps: 
 
 def test_agent_for_with_profile_without_skills_omits_read_skill(isolated_apps: Path, monkeypatch):
     import workspace_app.apps.shared_skills as shared
-
     from workspace_app.api.litellm_runner import _agent_for
     from workspace_app.resources.agent_config import AgentConfig
 

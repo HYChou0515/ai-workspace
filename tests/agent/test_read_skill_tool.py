@@ -200,6 +200,52 @@ async def test_read_skill_loads_a_shared_skill(monkeypatch, tmp_path: Path):
     assert await read_skill_impl(ctx, "author-skill") == "SHARED-body"
 
 
+async def test_read_skill_miss_lists_workspace_skills_when_no_profile():
+    """No App/profile (e.g. a context that only has a workspace), unknown name →
+    the error still lists the workspace skills so the agent can recover."""
+    from workspace_app.agent.tools import read_skill_impl
+
+    ctx = _ws_ctx(slug=None, profile=None)
+    await _write(ctx, "/.skill/only-ws/SKILL.md", "---\nname: only-ws\ndescription: d\n---\n\nbody")
+    out = await read_skill_impl(ctx, "ghost")
+    assert "error" in out
+    assert "only-ws" in out
+
+
+async def test_read_skill_workspace_body_over_cap_returns_error(monkeypatch):
+    import workspace_app.apps.skills as skills
+    from workspace_app.agent.tools import read_skill_impl
+
+    monkeypatch.setattr(skills, "SKILL_BODY_CAP", 5)
+    ctx = _ws_ctx()
+    await _write(ctx, "/.skill/big/SKILL.md", "---\nname: big\ndescription: d\n---\n\n" + "x" * 20)
+    out = await read_skill_impl(ctx, "big")
+    assert "error" in out
+
+
+async def test_read_skill_shared_body_over_cap_returns_error(monkeypatch, tmp_path: Path):
+    import workspace_app.apps.shared_skills as shared
+    import workspace_app.apps.skills as skills
+    from workspace_app.agent.tools import read_skill_impl
+
+    d = tmp_path / "huge-shared"
+    d.mkdir()
+    (d / "SKILL.md").write_text("---\nname: huge-shared\ndescription: d\n---\n\n" + "x" * 20)
+    monkeypatch.setattr(shared, "SHARED_SKILLS", {"huge-shared": d})
+    monkeypatch.setattr(skills, "SKILL_BODY_CAP", 5)
+    out = await read_skill_impl(_ws_ctx(), "huge-shared")
+    assert "error" in out
+
+
+def test_build_tools_tolerates_unknown_app_manifest():
+    """`build_tools` for a slug with no app.json (e.g. a synthetic test slug) must
+    not crash resolving its shared skills — it just exposes no read_skill."""
+    from workspace_app.agent.tools import build_tools
+
+    names = {t.name for t in build_tools(app_slug="no-such-app-xyz", profile="default")}
+    assert "read_skill" not in names
+
+
 def test_build_tools_wires_read_skill_via_declared_shared_skill(monkeypatch, tmp_path: Path):
     """An App with no package skills but a declared shared skill still gets
     read_skill — so the author-skill entry point is reachable."""
@@ -229,7 +275,6 @@ def test_build_tools_includes_read_skill_when_profile_has_skills(isolated_apps: 
 
 def test_build_tools_omits_read_skill_when_profile_has_no_skills(isolated_apps: Path, monkeypatch):
     import workspace_app.apps.shared_skills as shared
-
     from workspace_app.agent.tools import build_tools
 
     # No package skills AND no shared skills (empty registry) → no read_skill.
