@@ -290,6 +290,12 @@ export const realApi: ApiClient = {
     return { kind: "text", path, text, size: bytes.length, encoding };
   },
 
+  fileContentUrl(slug, investigationId, path) {
+    // #285: a plain URL the browser fetches directly (image/png content-type),
+    // for inline <img>/<a> in the chat — not buffered bytes like readFile.
+    return `${API_PREFIX}/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`;
+  },
+
   async writeFile(slug: string, investigationId, path, body) {
     const resp = await apiFetch(
       `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(investigationId)}/files/${encodePath(path)}`,

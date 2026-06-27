@@ -530,3 +530,36 @@ describe("EntryView — clickable inline [n] in an ask_knowledge_base tool card 
     expect(container.querySelector("pre")?.textContent).toBe("answer with [1] end");
   });
 });
+
+describe("EntryView — inline chart images (#285)", () => {
+  const chartCall = (output: string, status: "done" | "running" = "done") => ({
+    kind: "tool_call" as const,
+    call: { call_id: "c1", name: "chart", args: { chart: "box_scatter" }, status, output },
+  });
+  const body = 'Tool `chart` returned (exit_code=0):\n{\n  "images": [\n    "charts/box_scatter_1.png"\n  ]\n}';
+
+  it("renders the chart inline via fileUrl when the tool finished", () => {
+    const { container } = render(
+      <EntryView entry={chartCall(body)} fileUrl={(p) => `/files/${p}`} />,
+    );
+    const img = container.querySelector("img");
+    expect(img?.getAttribute("src")).toBe("/files/charts/box_scatter_1.png");
+    expect(img?.getAttribute("alt")).toBe("box_scatter_1.png");
+    // clickable to open full size
+    expect(container.querySelector("a")?.getAttribute("href")).toBe(
+      "/files/charts/box_scatter_1.png",
+    );
+  });
+
+  it("renders no image when the surface gave no fileUrl (e.g. KB chat)", () => {
+    const { container } = render(<EntryView entry={chartCall(body)} />);
+    expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("renders no image while the tool is still streaming", () => {
+    const { container } = render(
+      <EntryView entry={chartCall(body, "running")} fileUrl={(p) => `/files/${p}`} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+  });
+});

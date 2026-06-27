@@ -38,6 +38,13 @@ PREBUILT_DIR = Path(os.environ.get("WORKSPACE_TOOLS_DIR", _REPO / ".workspace-to
 PACKAGES: dict[str, Path] = {
     "data-fetch": SOURCE_DIR / "data-fetch",
     "csv-column-summary": SOURCE_DIR / "csv-column-summary",
+    # sci-plot is an extensible scientific-plotting catalog: one `chart`
+    # command whose JSON schema is a registry-built discriminated union of
+    # domain charts (box_scatter, wafermap, defectmap, grouped_line). Like
+    # csv-column-summary it brings its own data + matplotlib stack. The command
+    # is named `chart` (not `plot`) so it doesn't collide with
+    # csv-column-summary's `plot` when both are in one agent's allowed_tools.
+    "sci-plot": SOURCE_DIR / "sci-plot",
     # python-stack is a *venv carrier*: no CLI commands of its own, just
     # a uv-locked bundle of pandas / numpy / scipy / matplotlib. The
     # sandbox's jail bootstrap routes raw `python` calls to its launcher

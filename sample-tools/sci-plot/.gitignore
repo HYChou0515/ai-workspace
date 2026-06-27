@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+# Runtime chart output written next to the package during local demos. Anchored
+# to the package root so it does NOT match the `src/sci_plot/charts/` source
+# package (an un-anchored `charts/` would exclude it from the wheel + git).
+/charts/

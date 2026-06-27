@@ -21,6 +21,7 @@ import {
   renderCitedText,
 } from "../renderers/kbCite";
 import { remarkKbCitation } from "../renderers/report/remarkKbCitation";
+import { extractToolImages } from "../renderers/toolImages";
 import { useStickToBottom } from "../hooks/useStickToBottom";
 import { useT, type MsgKey } from "../lib/i18n";
 import { formatProvenance } from "../lib/provenance";
@@ -113,6 +114,7 @@ export function EntryView({
   onOpenCitation,
   onReplay,
   onUndo,
+  fileUrl,
 }: {
   entry: AgentEntry;
   onOpenCitation?: (c: MessageCitation) => void;
@@ -123,6 +125,10 @@ export function EntryView({
   /** #38: undo this user turn and everything after it — provided only
    * for user messages by surfaces that support undo; absent → none. */
   onUndo?: () => void;
+  /** #285: resolve a workspace-relative path to a content URL so a tool card
+   * can render the charts it wrote inline. Provided by item-scoped surfaces
+   * (RCA / Playground AgentPanel); absent on KB chat → no inline images. */
+  fileUrl?: (path: string) => string;
 }) {
   if (entry.kind === "banner") {
     return (
@@ -140,7 +146,14 @@ export function EntryView({
     );
   }
   if (entry.kind === "tool_call") {
-    return <ToolCallCard call={entry.call} onOpenCitation={onOpenCitation} onReplay={onReplay} />;
+    return (
+      <ToolCallCard
+        call={entry.call}
+        onOpenCitation={onOpenCitation}
+        onReplay={onReplay}
+        fileUrl={fileUrl}
+      />
+    );
   }
   if (entry.kind === "mention") {
     return <MentionLine by={entry.by} users={entry.users} note={entry.note} />;
@@ -586,16 +599,25 @@ function ToolCallCard({
   call,
   onOpenCitation,
   onReplay,
+  fileUrl,
 }: {
   call: ToolCallView;
   onOpenCitation?: (c: MessageCitation) => void;
   onReplay?: () => void;
+  fileUrl?: (path: string) => string;
 }) {
   const t = useT();
   // While running, show whatever stdout has streamed so far; once done, the
   // final formatted output supersedes it. Auto-expand a streaming tool.
   const body = call.status === "done" ? call.output : (call.liveOutput ?? call.output);
   const streamingLive = call.status === "running" && !!call.liveOutput;
+  // #285: charts the tool wrote, rendered inline (when an item-scoped surface
+  // gave us a way to resolve the path). Only after the tool finishes — a
+  // half-streamed result has no complete path yet.
+  const images = useMemo(
+    () => (call.status === "done" && fileUrl ? extractToolImages(body) : []),
+    [call.status, fileUrl, body],
+  );
   // #221: resolve the body's `[n]` markers (ask_knowledge_base attaches its KB
   // citations here) so each becomes a restrained clickable. Empty while
   // streaming / for tools with no citations ⇒ the body stays plain text.
@@ -684,6 +706,26 @@ function ToolCallCard({
         >
           {renderCitedText(body, byMarker, onOpenCitation)}
         </pre>
+      )}
+      {images.length > 0 && fileUrl && (
+        // #285: charts the tool wrote, rendered inline. Click to open full size.
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }}>
+          {images.map((src) => (
+            <a key={src} href={fileUrl(src)} target="_blank" rel="noreferrer">
+              <img
+                src={fileUrl(src)}
+                alt={src.split("/").pop() ?? "chart"}
+                style={{
+                  maxWidth: "100%",
+                  maxHeight: 360,
+                  borderRadius: 4,
+                  border: "1px solid var(--paper-3)",
+                  display: "block",
+                }}
+              />
+            </a>
+          ))}
+        </div>
       )}
       {call.citations && call.citations.length > 0 && (
         // Reference cards under an ask_knowledge_base tool card — same
