@@ -124,6 +124,7 @@ def get_spec(
     return make_spec(
         default_user=get_user_id or settings.server.default_user,
         backend=_backend_for(settings),
+        superusers=frozenset(settings.server.superusers),
     )
 
 

@@ -10,7 +10,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
@@ -40,8 +40,9 @@ from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
 from ..kb.preview import preview_markdown
-from ..perm import Actor, authorize
+from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
 from ..resources.kb import Collection, DocChunk, SourceDoc
+from .notifications import notify
 
 if TYPE_CHECKING:
     from ..kb.index_coordinator import IndexCoordinator
@@ -63,6 +64,35 @@ class _CollectionBody(BaseModel):
     # Issue #50: retrieval pipeline toggles (chunk-RAG / LLM wiki).
     use_rag: bool = True
     use_wiki: bool = False
+
+
+class _PermissionBody(BaseModel):
+    """#262 — body of `PUT /kb/collections/{id}/permission`: the full desired
+    access state (PUT = replace). `visibility` decides whether the grant lists are
+    enforced; the lists always persist, so toggling public↔restricted↔private never
+    loses settings. Each grant entry is a subject token (`user:<id>` / `group:<id>`
+    / `all`)."""
+
+    visibility: str  # public | restricted | private (validated against Permission)
+    read_meta: list[str] = []
+    write_meta: list[str] = []
+    read_content: list[str] = []
+    add_content: list[str] = []
+    edit_content: list[str] = []
+    read_chat: list[str] = []
+    converse: list[str] = []
+    execute: list[str] = []
+    use_terminal: list[str] = []
+    change_permission: list[str] = []
+
+
+class PermissionOut(BaseModel):
+    """The persisted permission after a set — the FE refreshes the collection
+    card from it (and re-reads the list, since visibility may now hide it)."""
+
+    resource_id: str
+    visibility: str
+    notified: list[str]  # users newly granted access who got a `share` notification
 
 
 class CollectionOut(BaseModel):
@@ -253,6 +283,21 @@ def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
 
+def _granted_user_ids(perm: Permission | None) -> set[str]:
+    """The set of concrete user ids that appear in ANY of a permission's grant
+    lists (the `group:` namespace + the `all` wildcard are not addressable
+    recipients, so they're skipped). Used to diff old→new for share notifications."""
+    if perm is None:
+        return set()
+    prefix = "user:"
+    return {
+        subj[len(prefix) :]
+        for verb in VERBS
+        for subj in perm.grants(verb)
+        if subj.startswith(prefix)
+    }
+
+
 def register_kb_routes(
     app: FastAPI | APIRouter,
     spec: SpecStar,
@@ -261,6 +306,7 @@ def register_kb_routes(
     *,
     index_coordinator: IndexCoordinator,
     get_user_id: Callable[[], str],
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     # The current user (owner), supplied by create_app — stamped as `created_by`
     # on upload. The doc id is keyed on collection + path only (a path is one
@@ -350,7 +396,33 @@ def register_kb_routes(
             "read_meta",
             data.permission,
             created_by=row.resource.meta.created_by,
+            superusers=superusers,
         )
+
+    def _authorize_collection(collection_id: str, verb: Verb) -> tuple[Collection, str]:
+        """#262 — gate a hand-written collection route. Loads the collection
+        (these routes use `rm.get`, which is NOT access-scoped), then sequences
+        the two checks the auto-CRUD layer composes: `read_meta` first — an actor
+        who can't even see the collection gets a uniform 404 (no existence leak) —
+        then `verb` itself → 403. Returns the collection + its owner for the
+        handler. `permission is None` ≡ public (back-compat)."""
+        rm = spec.get_resource_manager(Collection)
+        try:
+            coll = rm.get(collection_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="collection not found") from exc
+        assert isinstance(coll, Collection)
+        created_by = rm.get_meta(collection_id).created_by
+        actor = Actor.human(get_user_id())
+        if not authorize(
+            actor, "read_meta", coll.permission, created_by=created_by, superusers=superusers
+        ):
+            raise HTTPException(status_code=404, detail="collection not found")
+        if not authorize(
+            actor, verb, coll.permission, created_by=created_by, superusers=superusers
+        ):
+            raise HTTPException(status_code=403, detail=f"not authorized to {verb}")
+        return coll, created_by
 
     @app.get("/kb/collections")
     async def list_collections() -> list[CollectionOut]:
@@ -373,11 +445,60 @@ def register_kb_routes(
         rows = [r for r in rows if _can_read_meta(r)]
         return [_collection_out(r, cited) for r in rows]
 
+    @app.put("/kb/collections/{collection_id}/permission")
+    async def set_collection_permission(collection_id: str, body: _PermissionBody) -> PermissionOut:
+        """#262 — set a collection's access control (the FE share UI's backend).
+        Only the owner / a superuser / a `change_permission` grantee may call it
+        (404 if you can't see it, 403 if you can't change it). This is the ONLY
+        path that may rewire access control — the generic update/PATCH checker
+        rejects a `permission` change without `change_permission`. Newly-granted
+        users get a `share` notification (mirrors the chat share)."""
+        if body.visibility not in ("public", "restricted", "private"):
+            raise HTTPException(status_code=400, detail=f"invalid visibility {body.visibility!r}")
+        visibility = cast(Visibility, body.visibility)  # narrowed by the guard above
+        rm = spec.get_resource_manager(Collection)
+        coll, created_by = _authorize_collection(collection_id, "change_permission")
+        new_perm = Permission(
+            visibility=visibility,
+            read_meta=body.read_meta,
+            write_meta=body.write_meta,
+            read_content=body.read_content,
+            add_content=body.add_content,
+            edit_content=body.edit_content,
+            read_chat=body.read_chat,
+            converse=body.converse,
+            execute=body.execute,
+            use_terminal=body.use_terminal,
+            change_permission=body.change_permission,
+        )
+        # Persist AS THE OWNER: the per-verb write checker (perm.checker) also
+        # gates Collection updates on `write_meta`, which a change_permission-only
+        # delegate need not hold — and `change_permission` was just verified here.
+        with rm.using(created_by):
+            rm.update(collection_id, msgspec.structs.replace(coll, permission=new_perm))
+        # Notify users NEWLY granted any access (the actor + already-granted users
+        # are not re-notified). Mirrors kb_chat_routes.share_chat.
+        me = get_user_id()
+        notified = sorted(_granted_user_ids(new_perm) - _granted_user_ids(coll.permission) - {me})
+        for uid in notified:
+            notify(
+                spec,
+                recipient=uid,
+                kind="share",
+                title=f'Shared a collection: "{coll.name}"',
+                link=f"/kb/collections/{collection_id}",
+                actor=me,
+            )
+        return PermissionOut(
+            resource_id=collection_id, visibility=new_perm.visibility, notified=notified
+        )
+
     @app.post("/kb/collections/{collection_id}/documents")
     async def upload_document(
         collection_id: str,
         file: UploadFile = File(...),  # noqa: B008
     ) -> dict:
+        _authorize_collection(collection_id, "add_content")  # #262
         data = await file.read()
         # store is synchronous (libmagic sniff, specstar I/O) — never run it
         # inline on the event loop or one upload stalls every other request, so
@@ -507,11 +628,7 @@ def register_kb_routes(
         collection, 400 bad mode."""
         if mode not in ("overwrite", "skip"):
             raise HTTPException(status_code=400, detail="mode must be 'overwrite' or 'skip'")
-        rm = spec.get_resource_manager(Collection)
-        try:
-            rm.get(collection_id)
-        except ResourceIDNotFoundError as e:
-            raise HTTPException(status_code=404, detail="collection not found") from e
+        _authorize_collection(collection_id, "add_content")  # #262 (404 unknown / hidden)
         data = await file.read()
         result = await asyncio.to_thread(
             import_collection,
@@ -539,11 +656,7 @@ def register_kb_routes(
         The clone + ingest runs in a worker thread so the event loop keeps
         serving other requests during the (potentially multi-second) sync."""
         rm = spec.get_resource_manager(Collection)
-        try:
-            coll = rm.get(collection_id).data
-        except ResourceIDNotFoundError as e:
-            raise HTTPException(status_code=404, detail="collection not found") from e
-        assert isinstance(coll, Collection)
+        coll, _ = _authorize_collection(collection_id, "edit_content")  # #262
         if not coll.git_url:
             raise HTTPException(
                 status_code=400, detail="collection has no git_url; not a code collection"
@@ -572,6 +685,7 @@ def register_kb_routes(
         # rather than a silent fall-through to "re-index everything".
         if only is not None and only != "failed":
             raise HTTPException(status_code=400, detail=f"unknown only={only!r}")
+        _authorize_collection(collection_id, "edit_content")  # #262
         rm = spec.get_resource_manager(SourceDoc)
         count = 0
         for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
@@ -615,6 +729,7 @@ def register_kb_routes(
     ) -> WikiPageOut:
         from ..kb.wiki.store import WikiFileStore
 
+        _authorize_collection(collection_id, "edit_content")  # #262
         data = await request.body()
         store = WikiFileStore(spec)
         with store.acting_as(get_user_id()):

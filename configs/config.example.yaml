@@ -28,6 +28,9 @@
 #   host: 127.0.0.1
 #   port: 8000
 #   root_path: ""              # external sub-path behind a stripping proxy
+#   superusers: []             # #262: user ids with UNRESTRICTED collection
+#                              # access (read every collection, manage any).
+#                              # e.g. ["alice@example.com"]. Empty = none.
 
 # ─── sandbox (agent execution environment) ──────────────────────────
 # sandbox:
