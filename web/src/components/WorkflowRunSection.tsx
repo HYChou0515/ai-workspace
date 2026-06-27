@@ -8,8 +8,9 @@
 
 import { useEffect, useState } from "react";
 
-import { isRunTerminal, type WorkflowRunDTO } from "../api/workflows";
+import { fmtElapsed, isRunTerminal, type WorkflowRunDTO } from "../api/workflows";
 import { useItemRuns, useStartRun, useWorkflowManifest } from "../hooks/useWorkflow";
+import { useT } from "../lib/i18n";
 import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
 import { WorkflowRunPanel } from "./WorkflowRunPanel";
 import { pxToRem } from "../lib/pxToRem";
@@ -17,6 +18,11 @@ import { pxToRem } from "../lib/pxToRem";
 function when(ms: number | null): string {
   if (!ms) return "";
   return new Date(ms).toLocaleString();
+}
+
+function duration(r: WorkflowRunDTO): string {
+  if (r.started == null) return "";
+  return fmtElapsed(Math.max(0, (r.ended ?? Date.now()) - r.started));
 }
 
 export function WorkflowRunSection({
@@ -28,6 +34,7 @@ export function WorkflowRunSection({
   itemId: string;
   profile: string;
 }) {
+  const t = useT();
   const { manifest, hasWorkflow } = useWorkflowManifest(slug, profile);
   const runs = useItemRuns(hasWorkflow ? slug : undefined, hasWorkflow ? itemId : undefined);
   const start = useStartRun(slug, itemId);
@@ -99,34 +106,52 @@ export function WorkflowRunSection({
         />
       )}
 
+      {/* #283 (Design D): runs are first-class — a persistent, browsable list (not a
+          collapsed dropdown), so a finished run is easy to find and reopen. Each row is
+          its own run with a status + when + how-long; clicking selects its panel. */}
       {runs.data && runs.data.length > 0 && (
-        <details data-testid="wf-run-history">
-          <summary style={{ cursor: "pointer", fontSize: pxToRem(12) }}>
-            Run history ({runs.data.length})
-          </summary>
-          <ul style={{ listStyle: "none", margin: "6px 0 0", padding: 0, fontSize: pxToRem(12) }}>
+        <section data-testid="wf-run-list" style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
+            {t("wf.runs.title")} ({runs.data.length})
+          </span>
+          <ul style={{ listStyle: "none", margin: 0, padding: 0, fontSize: pxToRem(12) }}>
             {runs.data.map((r: WorkflowRunDTO) => (
               <li key={r.run_id}>
                 <button
                   type="button"
                   data-run={r.run_id}
+                  data-testid="wf-run-list-item"
                   onClick={() => setSelected(r.run_id)}
                   style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
                     background: r.run_id === selected ? "var(--paper-2)" : "transparent",
                     border: "none",
+                    borderLeft:
+                      r.run_id === selected
+                        ? "2px solid var(--accent, var(--info))"
+                        : "2px solid transparent",
                     width: "100%",
                     textAlign: "left",
-                    padding: "4px 6px",
+                    padding: "5px 8px",
+                    borderRadius: 4,
                     cursor: "pointer",
-                    fontFamily: "var(--font-mono)",
                   }}
                 >
-                  <span>{r.status}</span> · <span>{when(r.started)}</span>
+                  <span style={{ fontWeight: r.run_id === selected ? 600 : 400 }}>{r.status}</span>
+                  <span style={{ color: "var(--text-paper-d2)" }}>·</span>
+                  <span style={{ color: "var(--text-paper-d)" }}>{when(r.started)}</span>
+                  {duration(r) && (
+                    <span style={{ marginLeft: "auto", color: "var(--text-paper-d2)", fontFamily: "var(--font-mono)" }}>
+                      {duration(r)}
+                    </span>
+                  )}
                 </button>
               </li>
             ))}
           </ul>
-        </details>
+        </section>
       )}
     </section>
   );

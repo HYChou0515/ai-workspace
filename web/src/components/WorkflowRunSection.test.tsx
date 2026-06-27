@@ -88,6 +88,22 @@ describe("WorkflowRunSection", () => {
     await waitFor(() => expect(screen.getByTestId("wf-run-panel")).toBeInTheDocument());
   });
 
+  it("lists past runs as a first-class, always-visible list and opens one on click", async () => {
+    vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
+    vi.spyOn(workflowApi, "listRuns").mockResolvedValue([
+      run({ run_id: "r2", status: "done", started: 200, ended: 260 }),
+      run({ run_id: "r1", status: "error", started: 100, ended: 130 }),
+    ]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run({ run_id: "r2" }));
+    renderWithQuery(<WorkflowRunSection slug="playground" itemId="i1" profile="echo" />);
+    // the runs list is visible without expanding anything (not a <details>)
+    const items = await screen.findAllByTestId("wf-run-list-item");
+    expect(items).toHaveLength(2);
+    // newest-first; selecting an older run opens its panel
+    fireEvent.click(items[1]);
+    await waitFor(() => expect(screen.getByTestId("wf-run-panel")).toBeInTheDocument());
+  });
+
   it("disables Run while a run is already active", async () => {
     vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
     vi.spyOn(workflowApi, "listRuns").mockResolvedValue([run({ status: "running" })]);
