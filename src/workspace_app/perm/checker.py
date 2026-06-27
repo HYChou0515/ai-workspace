@@ -1,0 +1,172 @@
+"""#262 — per-verb WRITE authorization on a Collection (the 403 layer that rides
+on top of ``access_scope``'s 404 visibility layer).
+
+``access_scope`` (perm.scope) already turns a row the caller can't ``read_meta``
+into a uniform 404, so this checker only runs for rows the caller can already see.
+Its job is the finer "may I do THIS action?" decision:
+
+* ``update`` / ``modify`` / ``patch`` → ``write_meta``. A write that also changes
+  the embedded ``permission`` additionally requires ``change_permission`` — so the
+  generic ``PUT`` / ``PATCH /collection/{id}`` can't be used to rewire access
+  control (the dedicated ``PUT …/permission`` endpoint is the only metadata path
+  that carries ``change_permission``).
+* ``delete`` / ``permanently_delete`` / ``switch`` / ``restore`` → owner or
+  superuser only (a read/write member can't destroy the collection — the FE's
+  delete button hits ``DELETE /collection/{id}/permanently``).
+
+Reads (``get`` / ``search``) and ``create`` return ``allow`` (no opinion) — reads
+are governed by ``access_scope``, and create has no existing row to authorize
+against. This is why we DON'T use ``ActionBasedPermissionChecker``: it returns
+``not_applicable`` for unmapped actions, and specstar's ``PermissionEventHandler``
+treats anything other than ``allow`` as a denial — which would 403 every read and
+create on the collection.
+
+WIRING (specstar 0.11.11 caveat): ``add_model(permission_checker=…)`` does NOT
+work — ``ResourceManager`` is built with ``self.permission_checker or
+permission_checker`` and the spec-level default is a truthy ``AllowAll()``, so the
+per-model checker is always shadowed (only ``access_scope`` is threaded straight
+through). We therefore attach the checker via the per-model ``event_handlers`` slot
+(``self.event_handlers`` defaults to ``None`` ⇒ falsy ⇒ the per-model list wins),
+wrapping it in specstar's ``PermissionEventHandler`` so its
+``required_resource_parts`` are aggregated and ``current_resource`` (META + DATA)
+is loaded for the write check. See ``collection_permission_event_handler``.
+
+Unlike the intended (shadowed) ``permission_checker`` — which specstar would fire
+ONLY on request-originated auto-CRUD routes — an event handler fires on EVERY
+``ResourceManager`` write, including programmatic ones. The only programmatic
+non-create Collection write is the code-repo sync's git-metadata stamp, which acts
+as the collection owner (see ``kb.code_repo``) so it passes ``write_meta``.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from msgspec import UNSET
+from specstar.permission import IPermissionChecker, PermissionResult, ResourcePart
+from specstar.resource_manager.core import PermissionEventHandler
+from specstar.types import ResourceAction
+
+from .authorize import Actor, authorize
+from .model import Permission
+
+# Write actions gated by ``write_meta`` (a permission rewrite escalates to
+# ``change_permission``); they carry the would-be new data + the stored snapshot.
+_WRITE_META_ACTIONS: frozenset[ResourceAction] = frozenset(
+    {ResourceAction.update, ResourceAction.modify, ResourceAction.patch}
+)
+# Lifecycle actions only the owner (or a superuser) may take.
+_OWNER_ACTIONS: frozenset[ResourceAction] = frozenset(
+    {
+        ResourceAction.delete,
+        ResourceAction.permanently_delete,
+        ResourceAction.switch,
+        ResourceAction.restore,
+    }
+)
+
+
+def _current(context: Any) -> Any | None:
+    """The pre-write resource snapshot specstar loads (``META`` + ``DATA``), or
+    ``None`` when absent (no row → nothing to authorize against → deny)."""
+    cur = getattr(context, "current_resource", UNSET)
+    if cur is UNSET or cur is None:
+        return None
+    return cur
+
+
+def _stored_permission(snapshot: Any) -> Permission | None:
+    perm = getattr(snapshot.data, "permission", None)
+    return perm if isinstance(perm, Permission) else None
+
+
+def _context_user(context: Any) -> str:
+    user = getattr(context, "user", "")
+    return user if isinstance(user, str) else ""
+
+
+def _patch_touches_permission(patch: Any) -> bool:
+    """True when a PATCH body names the ``permission`` field, across both patch
+    flavors: RFC 7386 merge (``MergePatch``, a ``dict`` subclass → key membership)
+    and RFC 6902 JSON-patch (``.patch`` = a list of ops with a ``/permission…``
+    path)."""
+    if isinstance(patch, dict):
+        return "permission" in patch
+    ops = getattr(patch, "patch", None)
+    if isinstance(ops, list):
+        return any(
+            isinstance(op, dict) and str(op.get("path", "")).startswith("/permission") for op in ops
+        )
+    return False
+
+
+class CollectionPermissionChecker(IPermissionChecker):
+    """Allow-by-default checker enforcing the per-verb write/lifecycle ACL on a
+    Collection. See the module docstring for the verb mapping + wiring rationale."""
+
+    def __init__(self, superusers: frozenset[str] = frozenset()) -> None:
+        self._superusers = superusers
+
+    def check_permission(self, context: Any) -> PermissionResult:
+        action = getattr(context, "action", None)
+        if action in _WRITE_META_ACTIONS:
+            return self._check_write(context)
+        if action in _OWNER_ACTIONS:
+            return self._check_owner(context)
+        # reads / create / everything else — access_scope governs reads, and
+        # create has no current row; voice no opinion (allow).
+        return PermissionResult.allow
+
+    def required_resource_parts(self, action: ResourceAction) -> frozenset[ResourcePart]:
+        if action in _WRITE_META_ACTIONS:
+            return frozenset({ResourcePart.META, ResourcePart.DATA})
+        if action in _OWNER_ACTIONS:
+            return frozenset({ResourcePart.META})
+        return frozenset()
+
+    def _rewrites_permission(self, context: Any, stored: Permission | None) -> bool:
+        """Whether this write would change the access-control object — a full-body
+        write (update/modify) whose ``permission`` differs, or a patch that names
+        ``permission`` at all (we can't cheaply diff a patch, so any mention is
+        treated as a rewire)."""
+        if getattr(context, "action", None) == ResourceAction.patch:
+            return _patch_touches_permission(getattr(context, "patch_data", UNSET))
+        new = getattr(context, "data", UNSET)
+        if new is UNSET or new is None:
+            return False
+        new_perm = getattr(new, "permission", UNSET)
+        return new_perm is not UNSET and new_perm != stored
+
+    def _check_write(self, context: Any) -> PermissionResult:
+        snap = _current(context)
+        if snap is None:
+            return PermissionResult.deny
+        created_by = snap.meta.created_by
+        stored = _stored_permission(snap)
+        actor = Actor.human(_context_user(context))
+        if self._rewrites_permission(context, stored) and not authorize(
+            actor, "change_permission", stored, created_by=created_by, superusers=self._superusers
+        ):
+            return PermissionResult.deny
+        ok = authorize(
+            actor, "write_meta", stored, created_by=created_by, superusers=self._superusers
+        )
+        return PermissionResult.allow if ok else PermissionResult.deny
+
+    def _check_owner(self, context: Any) -> PermissionResult:
+        snap = _current(context)
+        if snap is None:
+            return PermissionResult.deny
+        user = _context_user(context)
+        if user == snap.meta.created_by or user in self._superusers:
+            return PermissionResult.allow
+        return PermissionResult.deny
+
+
+def collection_permission_event_handler(
+    superusers: frozenset[str] = frozenset(),
+) -> PermissionEventHandler:
+    """Wrap the Collection write ACL in specstar's ``PermissionEventHandler`` for
+    the per-model ``event_handlers`` slot (the ``permission_checker`` slot is
+    shadowed — see module docstring)."""
+    return PermissionEventHandler(CollectionPermissionChecker(superusers))

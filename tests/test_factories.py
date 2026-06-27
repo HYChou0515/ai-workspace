@@ -200,6 +200,34 @@ def test_get_filestore_dispatch():
         get_filestore(bogus, spec)
 
 
+def test_get_spec_threads_superusers_from_settings():
+    """#262: `settings.server.superusers` must reach `make_spec(superusers=…)` so a
+    configured superuser's access_scope is UNRESTRICTED — they read a private
+    collection a normal user is hidden from (404)."""
+    from specstar.types import ResourceIDNotFoundError
+
+    from workspace_app.config.schema import ServerSettings
+    from workspace_app.perm import Permission
+    from workspace_app.resources import Collection
+
+    s = replace(Settings(), server=replace(ServerSettings(), superusers=["root"]))
+    spec = get_spec(s)
+    rm = spec.get_resource_manager(Collection)
+    with rm.using("bob"):
+        cid = rm.create(
+            Collection(name="secret", permission=Permission(visibility="private"))
+        ).resource_id
+    # `apply_access_scope` is a real ResourceManager.using kwarg (it's how the
+    # auto-CRUD routes scope a request) but specstar's stub omits it → ty:ignore.
+    with (
+        rm.using("alice", apply_access_scope=True),  # ty: ignore[unknown-argument]
+        pytest.raises(ResourceIDNotFoundError),
+    ):
+        rm.get(cid)  # an ordinary non-owner is hidden
+    with rm.using("root", apply_access_scope=True):  # ty: ignore[unknown-argument]
+        assert rm.get(cid).data.name == "secret"  # the configured superuser sees it
+
+
 def test_get_spec_with_a_disk_backend_round_trips(tmp_path):
     """#58: multipod rides on a real shared backend (postgres/disk). `get_spec`
     threads the filestore's connection into `make_spec`; a disk-backed spec

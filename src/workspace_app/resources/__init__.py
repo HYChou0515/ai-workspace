@@ -20,6 +20,8 @@ from specstar import BackendConfig, Schema, SpecStar
 from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
+from ..perm.checker import collection_permission_event_handler
+from ..perm.scope import collection_access_scope
 from ..workflow.run import WorkflowRun
 from .agent_config import AgentConfig
 from .check_run import CheckRun
@@ -94,6 +96,7 @@ def make_spec(
     default_user: str | Callable[[], str] = "default-user",
     default_now: Callable[[], datetime] | None = None,
     backend: BackendConfig | None = None,
+    superusers: frozenset[str] = frozenset(),
 ) -> SpecStar:
     """Build a fully-ready SpecStar — every resource the API references
     is already registered when this returns.
@@ -117,11 +120,11 @@ def make_spec(
     if backend is not None:
         cfg["backend"] = backend
     spec.configure(**cfg)
-    _register_all(spec)
+    _register_all(spec, superusers)
     return spec
 
 
-def _register_all(spec: SpecStar) -> None:
+def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> None:
     """Register every workspace_app resource on ``spec``. Internal to
     ``make_spec`` — callers don't (and shouldn't) call this directly.
 
@@ -150,7 +153,20 @@ def _register_all(spec: SpecStar) -> None:
     # scan. (#89: was investigation_id + a typed Ref; now an opaque key so one
     # Conversation table serves every App's items.)
     spec.add_model(Conversation, indexed_fields=["item_id"])
-    spec.add_model(Collection)
+    # #262: `permission.read_meta` / `.visibility` drive the access_scope (row-
+    # level visibility) — see perm.scope. Indexed so the scope filters at storage.
+    # #262: `permission_checker=` is SHADOWED by specstar's spec-level AllowAll
+    # default (`self.permission_checker or permission_checker`), so the per-verb
+    # write ACL is attached via the per-model `event_handlers` slot instead — see
+    # perm.checker.collection_permission_event_handler. `access_scope` (row-level
+    # read/list visibility → 404) IS threaded straight through and composes: scope
+    # decides "does this row exist for me?", the checker decides "may I write it?".
+    spec.add_model(
+        Collection,
+        indexed_fields=[("permission.visibility", str), ("permission.read_meta", list)],
+        access_scope=collection_access_scope(superusers),
+        event_handlers=[collection_permission_event_handler(superusers)],
+    )
     # A newly-added index only covers rows written AFTER it exists — specstar
     # extracts indexed_data at write time and does NOT auto-backfill pre-existing
     # rows (they group under `None`; specstar discussion #359). The backfill is

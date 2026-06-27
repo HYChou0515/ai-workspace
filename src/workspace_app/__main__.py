@@ -196,6 +196,9 @@ def main() -> None:
         app = create_app(
             spec=spec,
             get_user_id=get_user_id,
+            # #262: same superuser set threaded into get_spec(...) above, so the
+            # route-level authorize() guards agree with the storage access_scope.
+            superusers=frozenset(settings.server.superusers),
             sandbox=sandbox,
             filestore=get_filestore(settings, spec),
             # #219: single-file upload cap (streaming keeps RAM flat regardless).

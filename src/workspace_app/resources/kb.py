@@ -23,6 +23,7 @@ from msgspec import Struct, field
 from specstar import OnDelete, Ref, Vector
 from specstar.types import Binary
 
+from ..perm import Permission
 from .conversation import Citation as Citation  # re-export — see conversation.Citation
 from .conversation import MessageMetrics
 
@@ -150,6 +151,10 @@ class Collection(Struct):  # → resource "collection"
     # with the empty default). See kb/wiki/guidance.with_collection_guidance.
     wiki_maintainer_guidance: str = ""
     wiki_reader_guidance: str = ""
+    # #262: per-resource access control. None ≡ public (back-compat; no
+    # migration). `permission.read_meta` + `permission.visibility` are indexed so
+    # the collection list can be filtered to what the caller may see.
+    permission: Permission | None = None
     # Issue #105: the user-authored quality rubric — what makes a doc a good/bad
     # knowledge source for THIS collection, and which named dimensions to assess.
     # The judge composes it with a system-fixed output format (overall 0–100 +

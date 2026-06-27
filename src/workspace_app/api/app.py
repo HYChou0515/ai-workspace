@@ -648,6 +648,12 @@ def create_app(
     # __main__ passes factories.get_designed_pptx_vlm(settings).
     deck_vlm: IVlm | None = None,
     get_user_id: Callable[[], str] | None = None,
+    # #262: user ids with UNRESTRICTED collection access — threaded into the
+    # route-level `authorize(...)` guards (the dedicated permission endpoint +
+    # content-route guards). MUST match the set passed to `make_spec(superusers=…)`
+    # (which feeds the storage-layer access_scope + write checker) — both come from
+    # `settings.server.superusers`.
+    superusers: frozenset[str] = frozenset(),
     users: UserDirectory | None = None,
     monitor: IMonitor | None = None,
     spa_dist: Path | None = None,
@@ -1329,6 +1335,7 @@ def create_app(
         wiki_coordinator,
         index_coordinator=index_coordinator,
         get_user_id=get_user_id,
+        superusers=superusers,
     )
     # #106: the exposed deterministic context-card lookup (read route, post-apply).
     register_context_card_routes(api, spec)

@@ -38,6 +38,11 @@ class ServerSettings:
     # Only affects generated URLs (OpenAPI/docs); the SPA's own base path is a
     # build-time setting (VITE_BASE_PATH). Default "" = served at root.
     root_path: str = ""
+    # #262: user ids with UNRESTRICTED access — they bypass collection access
+    # control (read every collection, manage any). Threaded into the spec's
+    # access_scope + write checker (`make_spec(superusers=…)`) AND the route-level
+    # `authorize(...)` guards. Empty (default) ⇒ no superusers, as in prod today.
+    superusers: list[str] = field(default_factory=list)
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────
