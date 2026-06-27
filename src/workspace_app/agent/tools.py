@@ -801,6 +801,34 @@ async def mention_user_impl(
     return f"Notified {user_id} to come look at this investigation."
 
 
+async def lookup_user_impl(ctx: RunContextWrapper[AgentToolContext], handle: str) -> str:
+    """Look up a teammate in this shared workspace by their handle.
+
+    Each earlier user message is prefixed with `[Name (handle)]:`. Pass the
+    `handle` (the part in parentheses) of someone you need to act on — this
+    resolves them to their canonical id plus section / email, e.g. so you can
+    `mention_user` them. Returns a single line; an unrecognised handle returns
+    a short note instead.
+    """
+    from ..users.labels import display_handle
+
+    users = ctx.context.users
+    if users is None:
+        return "error: lookup_user is only available in a shared workspace turn"
+    user = users.find_by_handle(handle)
+    if user is None:
+        return (
+            f"No teammate with handle '{handle}'. Use the handle shown in "
+            "parentheses after a name in the [Name (handle)]: message prefixes."
+        )
+    parts = [f"handle {display_handle(user)}", f"id {user.id}"]
+    if user.section:
+        parts.append(f"section {user.section}")
+    if user.email:
+        parts.append(f"email {user.email}")
+    return f"{user.name} — " + ", ".join(parts)
+
+
 async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -> str:
     """Load a skill's body markdown by name. Progressive disclosure: the
     system prompt's "Available skills" index already lists `(name,
@@ -976,6 +1004,7 @@ _IMPLS = {
     "exists": exists_impl,
     "delete_file": delete_file_impl,
     "mention_user": mention_user_impl,
+    "lookup_user": lookup_user_impl,
     "ask_knowledge_base": ask_knowledge_base_impl,
     "infer_modules": infer_modules_impl,
     "kb_search": kb_search_impl,
@@ -1011,6 +1040,7 @@ _WORKSPACE_TOOLS = [
     "ask_knowledge_base",
     "infer_modules",
     "mention_user",
+    "lookup_user",
 ]
 
 # Legacy tool names in a *stored* `allowed_tools` list, mapped to their current

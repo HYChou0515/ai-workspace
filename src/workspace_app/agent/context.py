@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from ..resources.conversation import Citation
     from ..resources.kb import RetrievedPassage
     from ..tooling.registry import PackageInfo
-    from ..users.protocol import User
+    from ..users.protocol import User, UserDirectory
 
 
 @dataclass
@@ -209,6 +209,13 @@ class AgentToolContext:
     # RCA agent's `mention_user` tool reaches this to summon a human to the
     # investigation. Args: (investigation_id, user_ids, note). Wired by the API.
     mention: Callable[[str, list[str], str], None] | None = None
+    # #275: the company directory the `lookup_user` tool resolves a teammate's
+    # handle → {name, id, section, email} through. The agent only reads the
+    # `[Name (handle)]:` prefixes (#242), so this is how it turns a visible
+    # handle into the canonical id it needs to act on them (e.g. mention_user).
+    # Set per-turn where `speaker` is set (RCA); None when unwired (the tool
+    # then reports it's unavailable instead of raising).
+    users: UserDirectory | None = None
 
     # Wiki agents (#50). A maintainer/reader run sets `filestore` to a
     # WikiFileStore + `investigation_id` to the wiki workspace id, `sandbox`

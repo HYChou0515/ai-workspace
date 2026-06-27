@@ -268,6 +268,7 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "ask_knowledge_base",
         "infer_modules",
         "mention_user",
+        "lookup_user",
     }
     assert "kb_search" not in names
     assert all(isinstance(t, FunctionTool) for t in tools)
@@ -479,6 +480,55 @@ async def test_mention_user_delegates_to_the_context_hook():
     out = await mention_user_impl(ctx, "alice", "please review the SPC")
     assert "alice" in out
     assert calls == [("inv-1", ["alice"], "please review the SPC")]
+
+
+async def test_lookup_user_resolves_a_handle_to_name_id_section_and_email():
+    """#275 — the agent only sees `[Name (handle)]:`, never the canonical id.
+    lookup_user resolves the handle it CAN see back to the full record,
+    surfacing the id so it can feed `mention_user` (id != handle here proves
+    the bridge isn't relying on id==handle)."""
+    from workspace_app.agent import AgentToolContext, lookup_user_impl
+    from workspace_app.users import MockUserDirectory, User
+
+    users = MockUserDirectory(
+        [User(id="e123", name="Alice Chen", section="Reflow", email="alice.chen@acme.test")]
+    )
+    ctx = RunContextWrapper(AgentToolContext(users=users))
+    out = await lookup_user_impl(ctx, "alice.chen")
+    assert (
+        out == "Alice Chen — handle alice.chen, id e123, section Reflow, email alice.chen@acme.test"
+    )
+
+
+async def test_lookup_user_omits_section_and_email_when_the_record_lacks_them():
+    from workspace_app.agent import AgentToolContext, lookup_user_impl
+    from workspace_app.users import MockUserDirectory, User
+
+    # No email → the handle falls back to the id; no section either. The line
+    # still carries name + handle + id and simply drops the empty fields.
+    users = MockUserDirectory([User(id="contractor-1", name="Dana")])
+    ctx = RunContextWrapper(AgentToolContext(users=users))
+    out = await lookup_user_impl(ctx, "contractor-1")
+    assert out == "Dana — handle contractor-1, id contractor-1"
+
+
+async def test_lookup_user_returns_a_graceful_note_for_an_unknown_handle():
+    from workspace_app.agent import AgentToolContext, lookup_user_impl
+    from workspace_app.users import MockUserDirectory, User
+
+    users = MockUserDirectory([User(id="e123", name="Alice Chen", email="alice.chen@acme.test")])
+    ctx = RunContextWrapper(AgentToolContext(users=users))
+    out = await lookup_user_impl(ctx, "ghost")
+    assert "ghost" in out
+    assert "id " not in out  # no record → no canonical id leaked
+
+
+async def test_lookup_user_reports_unavailable_when_no_directory_is_wired():
+    from workspace_app.agent import AgentToolContext, lookup_user_impl
+
+    ctx = RunContextWrapper(AgentToolContext())  # users left None (e.g. a non-shared turn)
+    out = await lookup_user_impl(ctx, "alice.chen")
+    assert out.startswith("error:")
 
 
 async def test_exec_output_is_capped_by_the_context_budget(

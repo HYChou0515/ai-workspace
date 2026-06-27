@@ -8,6 +8,7 @@ company system and injecting it via `create_app(users=...)`.
 
 from __future__ import annotations
 
+from .labels import display_handle
 from .protocol import User
 
 # Seed includes "default-user" so single-user dev (no auth) still resolves.
@@ -27,6 +28,12 @@ class MockUserDirectory:
     def get(self, user_id: str) -> User:
         # Unknown id → a graceful placeholder so stale ids never break rendering.
         return self._users.get(user_id) or User(id=user_id, name=user_id)
+
+    def find_by_handle(self, handle: str) -> User | None:
+        # Match on `display_handle` so the lookup is symmetric with the handle
+        # the agent reads in the `[Name (handle)]:` prefix. First match wins —
+        # the directory keeps handles unique; a stale duplicate is unlikely.
+        return next((u for u in self._users.values() if display_handle(u) == handle), None)
 
     def all_users(self) -> list[User]:
         return list(self._users.values())
