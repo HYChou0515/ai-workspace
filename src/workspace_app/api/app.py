@@ -2325,6 +2325,9 @@ def create_app(
             # #242: the resolved speaker for the per-turn "who am I replying to"
             # system note in this shared, multi-collaborator workspace.
             speaker=users.get(author),
+            # #275: the directory the `lookup_user` tool resolves a teammate's
+            # handle → id/section/email through (handle is all the agent sees).
+            users=users,
         )
 
         def persist(produced: list[TurnMessage]) -> None:
