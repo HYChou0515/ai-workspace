@@ -54,41 +54,54 @@ published **v0.11.11**. The mechanism is now:
 - Tests `tests/api/test_collection_perm.py`: private hidden from list; auto-CRUD
   `GET /collection/{id}` → 404 for non-owner; superuser sees all.
 
-## What REMAINS (to finish PR 2 / "全部做完")
+## What's now DONE (items 1, 2, 3, 5 — completed this session)
 
-1. **Permission-set endpoint** `PUT /kb/collection/{id}/permission` (the FE/UI
-   backend) — body = visibility + grant lists; gate with `authorize(...,
-   "change_permission", ...)` (owner / superuser / granted); persist; emit a
-   `Notification(kind="share", actor=get_user_id())` (audit, mirror
-   `kb_chat_routes.share_chat`). **Without this nothing can be set to
-   restricted/private via the API — the access_scope is currently dormant.**
-2. **Per-verb write checker** (so a restricted collection's read-only members
-   can't update/delete it; access_scope only blocks outsiders):
-   `add_model(Collection, permission_checker=ActionBasedPermissionChecker.from_dict({...}))`.
-   Each handler is a `CheckFunc(context) -> PermissionResult` decorated
-   `@requires_resource_parts(ResourcePart.DATA, ResourcePart.META)` to read
-   `context.current_resource.data` (`.permission`) + `.meta.created_by`. Mapping:
-   - `update` / `patch` → `write_meta`, **but** if `context.data.permission !=
-     current_resource.data.permission` → require `change_permission` (so the
-     generic PUT can't rewire access control; the dedicated endpoint passes
-     because its caller has `change_permission`).
-   - `delete` / `permanently_delete` / `switch` / `restore` → owner **or**
-     superuser only.
-   - deny → 403. Build `Actor.human(context.user)`; thread superusers.
-   - Imports: `from specstar.permission import ActionBasedPermissionChecker,
-     PermissionResult, requires_resource_parts, ResourcePart`.
-3. **Content-route guards** (hand-written in `kb_routes.py`): `POST
-   .../documents` → `add_content`; `sync` → `edit_content`; `reindex` →
-   `edit_content`; `PUT .../wiki/page` → `edit_content`. Load the collection's
-   `permission` + `created_by`, `authorize`, 403/404. (Pattern like
-   `_can_read_meta`.)
-4. **SourceDoc inheritance** (deferred): a SourceDoc's access = its parent
-   collection's `Permission` (no per-doc perms in v1). Likely its own
-   `access_scope` joining on `collection_id`, or enforce at the doc routes.
-5. **`Settings.server.superusers` wiring**: thread the configured superuser set
-   into `make_spec(superusers=...)` from `factories.get_spec` / `create_app`
-   (today only the test passes it; prod has none configured yet). Note prod has
-   no `config.yaml` — see the `ai-workspace-prod-deployment` memory.
+1. **Permission-set endpoint** `PUT /kb/collections/{id}/permission` — body =
+   visibility + grant lists (full replace); gated with `authorize(...,
+   "change_permission", ...)` (404 if you can't `read_meta` it, 403 if you can't
+   change it); persists **as the owner** (`rm.using(created_by)`) so the write
+   checker's `write_meta` gate doesn't block a `change_permission`-only delegate;
+   emits a `Notification(kind="share")` to newly-granted users. `kb_routes.py`.
+2. **Per-verb write checker** — `perm/checker.py::CollectionPermissionChecker`.
+   `update`/`modify`/`patch` → `write_meta` (a `permission` change additionally
+   needs `change_permission`); `delete`/`permanently_delete`/`switch`/`restore`
+   → owner/superuser only. The FE edits via **PATCH** and deletes via
+   **`DELETE …/permanently`** — both now gated.
+   - **specstar 0.11.11 gotcha (important):** `add_model(permission_checker=…)`
+     is SILENTLY SHADOWED — `ResourceManager` is built with
+     `self.permission_checker or permission_checker` and the spec default is a
+     truthy `AllowAll()`, so the per-model checker never runs (only `access_scope`
+     is threaded straight through). We attach the checker via the per-model
+     `event_handlers` slot instead (wrapping it in `PermissionEventHandler`). One
+     consequence: it fires on EVERY `ResourceManager` write, not just
+     request-routes — the lone programmatic Collection write (`code_repo` sync's
+     git-metadata stamp) now writes **as the owner** to pass `write_meta`.
+   - We do NOT use `ActionBasedPermissionChecker` (its `not_applicable` for
+     unmapped actions is treated as a denial → would 403 reads/creates); the
+     custom checker returns `allow` for everything outside the gated verbs.
+3. **Content-route guards** (`kb_routes.py::_authorize_collection`): `POST
+   .../documents` + `.../import` → `add_content`; `sync` / `reindex` →
+   `edit_content`; `PUT .../wiki/page` → `edit_content`. `read_meta`-first (404,
+   no existence leak) then the verb (403).
+5. **`superusers` wiring**: `ServerSettings.superusers` →
+   `factories.get_spec(make_spec(superusers=…))` AND `create_app(superusers=…)`
+   → `register_kb_routes` (route-level `authorize`). Documented in
+   `config.example.yaml`. Prod has no `config.yaml` (see
+   `ai-workspace-prod-deployment` memory) so the set is empty until configured.
+
+## What REMAINS (deferred to a follow-up)
+
+4. **SourceDoc access inheritance** (deferred — design-uncertain, the handoff
+   flagged it). A SourceDoc's access should = its parent collection's
+   `Permission` (no per-doc perms in v1). **Residual gap until done:** the
+   auto-CRUD `GET /source-doc/{id}` and the hand-written doc READ routes
+   (`GET /kb/documents`, `list_documents`, chunks, export/download) do NOT yet
+   inherit the collection's visibility — a non-member who knows/guesses a doc id
+   could read a restricted collection's document. Collection-level visibility +
+   all WRITE/content-mutation paths ARE enforced. Likely fix: a SourceDoc
+   `access_scope` joining on `collection_id`, or guard the doc read routes the
+   same way `_authorize_collection` guards the mutation routes (verb =
+   `read_content`).
 
 ## Out of scope (later PRs / issues)
 App-item enforcement (PR), KbChat migration to `Permission` (PR), background
