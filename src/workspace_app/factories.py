@@ -66,6 +66,7 @@ __all__ = [
     "get_chat_pipeline",
     "get_kb_llm",
     "get_kb_vlm",
+    "get_designed_pptx_vlm",
     "get_kb_describer",
     "get_wiki_endpoint",
     "get_infer_modules_run_config",
@@ -710,15 +711,32 @@ def get_kb_vlm(settings: Settings):  # -> IVlm | None
     image-only uploads store with zero chunks until an operator wires
     a VLM and reindexes). When the vlm preset declares `fallbacks`, the chain
     becomes a busy-aware `FallbackVlm` (#131 / #196)."""
+    return _vlm_from_chain(resolve_llm_chain(settings, settings.kb.vlm_llm))
+
+
+def _vlm_from_chain(chain: list[LlmEndpoint]):  # -> IVlm | None
+    """An `IVlm` for a resolved chain — the vision-side mirror of
+    `_llm_from_chain`: `[]` → None (role off); one endpoint → a plain
+    `LitellmVlm`; ≥2 → a busy-aware `FallbackVlm`."""
     from .kb.vlm import LitellmVlm
 
-    chain = resolve_llm_chain(settings, settings.kb.vlm_llm)
     if not chain:
         return None
     if len(chain) == 1:
         e = chain[0]
         return LitellmVlm(e.model, base_url=e.base_url, api_key=e.api_key)
     return FallbackVlm(chain, make_vlm=_litellm_vlm_for, on_switch=make_switch_logger("vlm"))
+
+
+def get_designed_pptx_vlm(settings: Settings):  # -> IVlm | None
+    """The multimodal model that drives the `make_deck` build loop (#284) — it
+    both *sees* rendered slides and *writes* the pptxgenjs fix, so it must be a
+    multimodal (vision) model. Resolved like every other role: `kb.deck_vlm`
+    when set, otherwise it reuses `kb.vlm_llm` (the read_image / ingest VLM) so a
+    deploy that already wired a vision model gets `make_deck` for free. `None`
+    (both unset) ⇒ the tool reports no model configured (fail-loud)."""
+    ref = settings.kb.deck_vlm or settings.kb.vlm_llm
+    return _vlm_from_chain(resolve_llm_chain(settings, ref))
 
 
 def get_kb_describer(settings: Settings):  # -> VlmDescriber | None

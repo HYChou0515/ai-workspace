@@ -1,0 +1,39 @@
+# make_deck sandbox image (issue #284) — the agent SANDBOX where the
+# `make_deck` tool runs its generated pptxgenjs + renders slides. Packaged
+# SEPARATELY from the API image: node/LibreOffice/poppler live HERE, never in
+# the API (which only orchestrates the multimodal loop). Point the sandbox-host
+# (sandbox.kind: http) at this image for deployments that enable make_deck.
+#
+# Build:  docker build -t workspace-app/sandbox:py312-deck \
+#                      -f docker/Dockerfile.workspace-deck .
+#
+# Extends the default RCA sandbox (python + data stack) with:
+#   - nodejs + npm + pptxgenjs   → run the model's `node build.js`
+#   - libreoffice-impress        → `soffice --convert-to pdf` (deck → PDF)
+#   - poppler-utils (pdftoppm)   → PDF → per-slide JPGs for the review loop
+#   - fonts-noto-cjk             → CJK renders as glyphs, not tofu (so the
+#                                   review model sees what the user will export)
+FROM python:3.12-slim
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        nodejs \
+        npm \
+        libreoffice-impress \
+        poppler-utils \
+        fonts-noto-cjk \
+        fonts-liberation \
+    && rm -rf /var/lib/apt/lists/*
+
+# pptxgenjs available to a bare `require('pptxgenjs')` from any cwd. Debian's
+# npm global prefix is /usr/local; NODE_PATH lets requires resolve it.
+RUN npm install -g pptxgenjs@^3.12
+ENV NODE_PATH=/usr/local/lib/node_modules
+
+# The same data stack the default sandbox carries, so seeded notebooks +
+# matplotlib charts the agent may embed into a deck work without an extra install.
+RUN pip install --no-cache-dir \
+    ipykernel jupyter_client \
+    numpy pandas matplotlib scipy
+
+WORKDIR /workspace

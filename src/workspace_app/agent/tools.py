@@ -194,6 +194,72 @@ async def read_image_impl(
     return _truncate_middle(out, ctx.context.read_file_max_chars)
 
 
+async def make_deck_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    goal: str,
+    audience: str | None = None,
+    source: list[str] | None = None,
+    notes: str | None = None,
+    style: str | None = None,
+    length: str | None = None,
+    out_path: str = "./deck.pptx",
+) -> str:
+    """Build a visually designed PowerPoint deck (`.pptx`) and write it to the
+    workspace. Hand off the high-level intent — a specialist sub-agent plans the
+    slides, writes the layout code, renders it, looks at the result, and fixes
+    any visual problems before returning. Use this for any "make slides / a deck
+    / a presentation / a one-pager" request; do NOT hand-write pptx code yourself.
+
+    - `goal`: what the deck must convey and what it's for (be specific).
+    - `audience`: who it's for (e.g. "process engineers", "executives") — optional.
+    - `source`: workspace file paths to base the deck on (a report `.md`, a CSV,
+      chart `.png`s). Their text is read in; images are used as figures. Optional.
+    - `notes` / `style` / `length`: extra guidance — key points, brand/tone,
+      "one-pager" vs "full deck". All optional.
+    - `out_path`: where to write it (default `./deck.pptx`).
+
+    Returns the path written plus a short note, or an `error:` line if the deck
+    tool isn't configured. Building runs several render+review passes, so it
+    takes a while; its progress streams as it works.
+    """
+    from .deck.tool import run_make_deck
+
+    fs, inv = _workspace(ctx)
+    sink = ctx.context.on_exec_output
+
+    async def write_text(path: str, content: str) -> None:
+        await fs.write(inv, path, content.encode("utf-8"))
+
+    async def read_bytes(path: str) -> bytes:
+        return await fs.read(inv, path)
+
+    async def list_dir(prefix: str) -> list[str]:
+        return await fs.ls(inv, prefix)
+
+    async def exec_run(cmd: list[str]) -> tuple[int, str]:
+        handle = await ctx.context.ensure_sandbox()
+        assert ctx.context.sandbox is not None
+        result = await ctx.context.sandbox.exec(handle, cmd, on_output=sink)
+        return result.exit_code, (result.stdout + result.stderr).decode("utf-8", errors="replace")
+
+    progress = (lambda text: sink(text.encode("utf-8"))) if sink is not None else None
+    return await run_make_deck(
+        vlm=ctx.context.deck_vlm,
+        write_text=write_text,
+        read_bytes=read_bytes,
+        list_dir=list_dir,
+        exec_run=exec_run,
+        progress=progress,
+        goal=goal,
+        audience=audience,
+        source=source,
+        notes=notes,
+        style=style,
+        length=length,
+        out_path=out_path,
+    )
+
+
 async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, content: str) -> str:
     """Create a NEW file. This never overwrites: if the file already exists it
     is rejected and the current content is returned — use `edit_file` to change
@@ -903,6 +969,7 @@ _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
     "read_image": read_image_impl,
+    "make_deck": make_deck_impl,
     "write_file": write_file_impl,
     "edit_file": edit_file_impl,
     "list_files": list_files_impl,

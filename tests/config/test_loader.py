@@ -772,6 +772,47 @@ def test_parsers_disabled_round_trips(tmp_path: Path):
     assert s.kb.parsers_disabled == ["PdfParser", "DocxParser"]
 
 
+# ─── issue #284: kb.deck_vlm (make_deck multimodal model) ─────────────
+
+
+def test_deck_vlm_defaults_to_none_reusing_vlm_llm():
+    """`kb.deck_vlm` is unset by default — the factory then reuses `kb.vlm_llm`,
+    so a deploy with a VLM wired gets `make_deck` for free."""
+    s = load(config_path=None, env={})
+    assert s.kb.deck_vlm is None
+
+
+def test_deck_vlm_round_trips(tmp_path: Path):
+    """An operator points `make_deck` at a dedicated (stronger) multimodal
+    preset via `kb.deck_vlm`."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            kb:
+              deck_vlm:
+                preset: "kb-vlm"
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.kb.deck_vlm is not None
+    assert s.kb.deck_vlm.preset == "kb-vlm"
+
+
+def test_deck_vlm_referencing_unknown_preset_raises(tmp_path: Path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            kb:
+              deck_vlm:
+                preset: "made-up-deck-vlm"
+        """),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="made-up-deck-vlm"):
+        load(config_path=cfg, env={})
+
+
 def test_observability_llm_log_defaults_enabled():
     """The LLM call log ships enabled by default (the operator wants it on);
     dir + keep_days carry sensible defaults."""
