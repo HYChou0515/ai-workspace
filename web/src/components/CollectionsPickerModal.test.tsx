@@ -211,4 +211,57 @@ describe("CollectionsPickerModal", () => {
     fireEvent.click(screen.getByTestId("collections-cancel"));
     expect(onClose).toHaveBeenCalled();
   });
+
+  // #280: priority tiers — move selected collections into ordered priority groups
+  // the RCA agent walks by rank. A single tier stays the flat file it always was.
+  it("moves a collection into a lower priority tier and saves it with a tier int", async () => {
+    const { svc, writes } = fakeFileService("[]");
+    render(svc);
+    await screen.findByTestId("collection-row-a");
+    fireEvent.click(screen.getByTestId("collection-check-a"));
+    fireEvent.click(screen.getByTestId("collection-check-b"));
+    // Both start in the top tier; push Beta down into a second tier.
+    fireEvent.click(screen.getByTestId("tier-down-b"));
+    fireEvent.click(screen.getByTestId("collections-save"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(JSON.parse(writes[0])).toEqual([
+      { id: "a", name: "Alpha" }, // top tier ⇒ tier 0 omitted (stays flat)
+      { id: "b", name: "Beta", tier: 10 },
+    ]);
+  });
+
+  it("pre-fills the priority tiers from an existing tiered collections.json", async () => {
+    const { svc } = fakeFileService(
+      '[{"id":"a","name":"Alpha","tier":0},{"id":"b","name":"Beta","tier":10}]',
+    );
+    render(svc);
+    await screen.findByTestId("collection-row-a");
+    // Alpha in the first priority group, Beta in the second.
+    expect(screen.getByTestId("tier-group-0")).toHaveTextContent("Alpha");
+    expect(screen.getByTestId("tier-group-1")).toHaveTextContent("Beta");
+  });
+
+  it("raising a collection back to the top tier saves a flat file again", async () => {
+    const { svc, writes } = fakeFileService(
+      '[{"id":"a","name":"Alpha"},{"id":"b","name":"Beta","tier":10}]',
+    );
+    render(svc);
+    await screen.findByTestId("collection-row-a");
+    fireEvent.click(screen.getByTestId("tier-up-b")); // Beta: second tier → top tier
+    fireEvent.click(screen.getByTestId("collections-save"));
+    await waitFor(() => expect(writes).toHaveLength(1));
+    expect(JSON.parse(writes[0])).toEqual([
+      { id: "a", name: "Alpha" },
+      { id: "b", name: "Beta" },
+    ]);
+  });
+
+  it("changing only a tier (no selection change) enables save", async () => {
+    const { svc } = fakeFileService('[{"id":"a","name":"Alpha"},{"id":"b","name":"Beta"}]');
+    render(svc);
+    await screen.findByTestId("collection-row-a");
+    expect(screen.getByTestId("collections-save")).toBeDisabled();
+    fireEvent.click(screen.getByTestId("tier-down-b"));
+    expect(screen.getByTestId("collections-save")).toBeEnabled();
+  });
 });

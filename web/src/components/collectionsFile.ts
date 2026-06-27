@@ -10,7 +10,10 @@
 
 import type { KbCollection } from "../api/kb";
 
-export type CollectionEntry = { id: string; name: string };
+/** A selected collection. `tier` (#280) is an optional priority tier (sparse ints
+ * — 0, 10, 20 — so groups can be inserted between later); absent ⇒ tier 0. The agent
+ * walks tiers by rank (ascending), so the integer values only matter for ordering. */
+export type CollectionEntry = { id: string; name: string; tier?: number };
 
 export type CollectionsFileParse = {
   /** `missing` = no/blank file (empty selection, no warning); `invalid` = whole
@@ -49,7 +52,14 @@ export function parseCollectionsFile(content: string | null): CollectionsFilePar
       if (typeof id === "string" && id) {
         if (!seen.has(id)) {
           seen.add(id);
-          entries.push({ id, name: typeof rec.name === "string" ? rec.name : "" });
+          const name = typeof rec.name === "string" ? rec.name : "";
+          // Tolerant like the backend: only a real integer tier is kept (a
+          // hand-typed "10" / junk is dropped, leaving tier 0). `Number.isInteger`
+          // rejects booleans + floats; absent ⇒ no `tier` key ⇒ treated as 0.
+          const entry: CollectionEntry = Number.isInteger(rec.tier)
+            ? { id, name, tier: rec.tier as number }
+            : { id, name };
+          entries.push(entry);
         }
         continue; // a duplicate id is redundant, not junk
       }
@@ -59,14 +69,49 @@ export function parseCollectionsFile(content: string | null): CollectionsFilePar
   return { status: "ok", entries, selectedIds: entries.map((e) => e.id), ignored };
 }
 
-/** Serialize the chosen collections to the on-disk JSON — 2-space pretty-print,
- * only `id` + `name`, in the given order (git-friendly + matches hand edits). */
+/** Serialize the chosen collections to the on-disk JSON — 2-space pretty-print, in
+ * the given order (git-friendly + matches hand edits). Emits `id` + `name`, plus
+ * `tier` only when it is a non-zero integer — so a single-tier (flat) selection stays
+ * the flat `[{id,name}]` file it always was, and only real tiering adds the key. */
 export function serializeCollectionsFile(selected: CollectionEntry[]): string {
   return JSON.stringify(
-    selected.map((c) => ({ id: c.id, name: c.name })),
+    selected.map((c) =>
+      Number.isInteger(c.tier) && c.tier !== 0
+        ? { id: c.id, name: c.name, tier: c.tier }
+        : { id: c.id, name: c.name },
+    ),
     null,
     2,
   );
+}
+
+/** Group entries into ordered priority tiers for the picker UI (#280): distinct tier
+ * values (absent ⇒ 0) sorted ascending, each group's entries kept in file order. The
+ * group's index is its **rank** (rank 0 = highest priority). */
+export function groupEntriesByTier(entries: CollectionEntry[]): CollectionEntry[][] {
+  const byTier = new Map<number, CollectionEntry[]>();
+  for (const e of entries) {
+    const tier = Number.isInteger(e.tier) ? (e.tier as number) : 0;
+    const group = byTier.get(tier);
+    if (group) group.push(e);
+    else byTier.set(tier, [e]);
+  }
+  return [...byTier.keys()].sort((a, b) => a - b).map((t) => byTier.get(t)!);
+}
+
+/** Flatten the picker's ordered groups back into entries, stamping each with a sparse
+ * tier int (group 0 → 0, group 1 → 10, …) so an operator can later hand-insert a tier
+ * between them. Empty groups are dropped so emptying a tier doesn't leave a rank gap. */
+export function entriesFromGroups(groups: CollectionEntry[][]): CollectionEntry[] {
+  const out: CollectionEntry[] = [];
+  let rank = 0;
+  for (const group of groups) {
+    if (group.length === 0) continue; // a dropped group must not shift ranks
+    const tier = rank * 10;
+    for (const e of group) out.push({ id: e.id, name: e.name, tier });
+    rank += 1;
+  }
+  return out;
 }
 
 /** Split selected ids into ones present in the live collection list vs orphans

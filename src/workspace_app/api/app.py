@@ -1047,6 +1047,20 @@ def create_app(
         seeded = await seed_item(
             filestore, rev.resource_id, slug, item.profile, case_from_item(item)
         )
+        # #280: seed the item's collections.json from the profile's DEFAULT collection
+        # set (declared by name + tier), resolving names → live ids. The picker / Monaco
+        # then edit it. Unresolvable names are skipped; an empty/undeclared default
+        # leaves whatever seed_item wrote (e.g. topic-hub's collections.json.tpl) alone.
+        from ..apps.profiles import load_profile
+        from ..kb.collections import resolve_profile_collections
+
+        declared = [(c.name, c.tier) for c in load_profile(slug, item.profile).collections]
+        rows = resolve_profile_collections(spec, declared)
+        if rows:
+            await filestore.write(
+                rev.resource_id, "/collections.json", json.dumps(rows, indent=2).encode()
+            )
+            seeded = sorted({*seeded, "/collections.json"})
         activity.record(
             "item_created",
             f"Created “{item.title}”",
@@ -1579,20 +1593,21 @@ def create_app(
             raise HTTPException(status_code=404, detail=f"unknown chat: {chat_id!r}")
         return chat_id, conv
 
-    async def _hub_collection_ids(item_id: str) -> list[str]:
-        """The item's collection set (topic-hub §5): the ids in its ``collections.json``
-        workspace file, or ``[]`` when it has none. Scopes ``lookup_glossary`` /
-        ``ask_knowledge_base`` for the turn. Tolerant of a hand-edited / malformed file."""
-        from ..kb.collections import collection_ids_from_json
-
+    async def _hub_collections_data(item_id: str) -> Any:
+        """Parse the item's ``collections.json`` workspace file ONCE (topic-hub §5)
+        → its raw JSON (a list of ``{id, name, tier?}``), or ``None`` when the file
+        is absent or unparseable. The two derivations below
+        (``collection_ids_from_json`` = the flat union scope for ``lookup_glossary`` /
+        ``resolve_collection``; ``collection_tiers_from_json`` = #280's rank-ordered
+        tiers for ``ask_knowledge_base``) each tolerate a hand-edited / malformed file."""
         try:
             raw = await filestore.read(item_id, "/collections.json")
         except FileNotFound:
-            return []
+            return None
         try:
-            return collection_ids_from_json(json.loads(raw))
+            return json.loads(raw)
         except (ValueError, TypeError):
-            return []
+            return None
 
     def _app_context_files(item_id: str) -> list[str]:
         """The App's declared per-turn context files (manual §6) — the workspace files
@@ -2293,9 +2308,15 @@ def create_app(
         conv_rm.update(rid, conv)
 
         session = await registry.session(investigation_id)
-        # Topic Hub §5/§7: the Hub's collection set (collections.json) scopes the
-        # turn's deterministic glossary + KB tools. [] for Apps without the file.
-        hub_collection_ids = await _hub_collection_ids(investigation_id)
+        # Topic Hub §5/§7 + #280: the item's collection set (collections.json),
+        # read ONCE — the flat union scopes the turn's deterministic glossary /
+        # resolve_collection; the rank-ordered tiers drive ask_knowledge_base's
+        # priority fallback. Both empty for Apps without the file.
+        from ..kb.collections import collection_ids_from_json, collection_tiers_from_json
+
+        hub_data = await _hub_collections_data(investigation_id)
+        hub_collection_ids = collection_ids_from_json(hub_data)
+        hub_collection_tiers = collection_tiers_from_json(hub_data)
         # Composer knowledge-search depth: applies to this turn's KB
         # lookups. The bridge wrapper forwards it to the kb_chat
         # sub-agent only — infer_modules' focused classification probe
@@ -2316,12 +2337,20 @@ def create_app(
             payload: str,
             emit: OutputSink | None = None,
             origin_id: str | None = None,
+            collection_ids: list[str] | None = None,
         ) -> tuple[str, list[Citation]]:
             # kb_chat uses the COMPOSER's live depth + effort (#65); infer_modules
             # uses its OWN configured depth + effort + a single configured
             # collection (#66, a focused classifier).
+            #
+            # #280: for kb_chat, the caller (ask_knowledge_base, after resolving
+            # its `rank` → a priority tier) passes the tier's `collection_ids`;
+            # `None` ⇒ no tier scoping ⇒ search the whole KB (today's behaviour).
             if purpose == "kb_chat":
-                enh, reff, wiki, colls = caller_enh, body.reasoning_effort, caller_wiki, None
+                enh = caller_enh
+                reff = body.reasoning_effort
+                wiki = caller_wiki
+                colls = collection_ids
             elif purpose == "infer_modules":
                 enh, reff, wiki = infer_modules_enhancements, infer_modules_reasoning_effort, False
                 colls = infer_coll_ids
@@ -2393,6 +2422,9 @@ def create_app(
             # `lookup_glossary` / `resolve_collection` tools query context cards.
             spec=spec,
             collection_ids=hub_collection_ids,
+            # #280: rank-ordered priority tiers (collections.json `tier`) the RCA
+            # agent walks via ask_knowledge_base(rank). Empty ⇒ no tier fallback.
+            collection_tiers=hub_collection_tiers,
             # #111: card create/update agent tools stamp this user on the write.
             acting_user=author,
             # #242: the resolved speaker for the per-turn "who am I replying to"

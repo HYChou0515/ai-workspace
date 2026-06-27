@@ -406,7 +406,7 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
     )
 
     async def fake_run(
-        purpose: str, payload: str, emit: object, origin_id: object
+        purpose: str, payload: str, emit: object, origin_id: object, collection_ids: object = None
     ) -> tuple[str, list[Citation]]:
         # The bridge returns BOTH the synthesized answer AND its resolved
         # citations so the impl can stash them on ctx for the turn engine
@@ -414,6 +414,8 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
         assert purpose == "kb_chat"
         received["emit"] = emit
         received["origin_id"] = origin_id
+        # No tiers configured ⇒ the impl passes None (search the whole KB).
+        received["collection_ids"] = collection_ids
         return f"KB answer to: {payload}", [cite]
 
     def sink(b: bytes) -> None: ...
@@ -425,6 +427,9 @@ async def test_ask_knowledge_base_delegates_to_the_context_bridge():
     # citations are persisted via ctx, not echoed in the function tool's
     # output (which would burn tokens + show as raw JSON in the tool card).
     assert out == "KB answer to: why did zone three drift?"
+    # With no priority tiers, the impl searches the whole KB (today's behaviour)
+    # and adds no tier banner.
+    assert received["collection_ids"] is None
     # The run's output sink is handed to the bridge so KB progress can stream.
     assert received["emit"] is sink
     # Citations are stashed in CALL ORDER on the context, bucketed by
@@ -454,7 +459,7 @@ async def test_ask_knowledge_base_two_calls_stash_per_call_citations():
 
     calls: list[str] = []
 
-    async def fake_run(purpose, payload, emit, origin_id):
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
         assert purpose == "kb_chat"
         calls.append(payload)
         return f"a:{payload}", [_cite(len(calls))]
@@ -464,6 +469,69 @@ async def test_ask_knowledge_base_two_calls_stash_per_call_citations():
     await ask_knowledge_base_impl(ctx, "q1")
     await ask_knowledge_base_impl(ctx, "q2")
     assert [cs[0].marker for cs in actx.subagent_citations["ask_knowledge_base"]] == [1, 2]
+
+
+async def test_ask_knowledge_base_scopes_the_subagent_to_the_requested_rank():
+    """#280: with priority tiers configured, rank picks the tier's collection
+    subset (exclusive — rank 1 searches ONLY tier 1) and the answer carries a
+    banner telling the agent how to widen."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
+
+    seen: dict[str, object] = {}
+
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
+        seen["scope"] = collection_ids
+        return "ans", []
+
+    actx = AgentToolContext(
+        run_subagent=fake_run, collection_tiers=[["a", "b"], ["c"], ["d"]]
+    )
+    ctx = RunContextWrapper(actx)
+
+    out0 = await ask_knowledge_base_impl(ctx, "q", rank=0)
+    assert seen["scope"] == ["a", "b"]  # rank 0 = top-priority tier only
+    assert "rank=1" in out0 and "tier 0 of 3" in out0  # widen hint
+
+    out1 = await ask_knowledge_base_impl(ctx, "q", rank=1)
+    assert seen["scope"] == ["c"]  # exclusive: rank 1 is ONLY tier 1
+    assert "rank=2" in out1
+
+
+async def test_ask_knowledge_base_last_tier_says_no_more_tiers():
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
+
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
+        return "ans", []
+
+    actx = AgentToolContext(run_subagent=fake_run, collection_tiers=[["a"], ["b"]])
+    out = await ask_knowledge_base_impl(RunContextWrapper(actx), "q", rank=1)
+    assert "no more tiers" in out.lower()
+    assert "rank=2" not in out  # nothing to widen to
+
+
+async def test_ask_knowledge_base_rank_past_last_tier_stops_without_searching():
+    """A rank beyond the lowest tier doesn't run the sub-agent — it tells the
+    agent to stop. The citation pool still gets an entry so the persist step's
+    Nth-message↔Nth-bucket pairing stays aligned."""
+    from agents import RunContextWrapper
+
+    from workspace_app.agent import AgentToolContext, ask_knowledge_base_impl
+
+    ran = {"n": 0}
+
+    async def fake_run(purpose, payload, emit, origin_id, collection_ids=None):
+        ran["n"] += 1
+        return "ans", []
+
+    actx = AgentToolContext(run_subagent=fake_run, collection_tiers=[["a"], ["b"]])
+    out = await ask_knowledge_base_impl(RunContextWrapper(actx), "q", rank=2)
+    assert ran["n"] == 0  # never searched
+    assert "no priority tier 2" in out.lower() or "no priority tier" in out.lower()
+    assert actx.subagent_citations["ask_knowledge_base"] == [[]]  # alignment preserved
 
 
 async def test_mention_user_delegates_to_the_context_hook():

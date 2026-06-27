@@ -6,7 +6,12 @@ import { kbApi, type KbApi } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { useItemCollections, COLLECTIONS_PATH } from "../hooks/useItemCollections";
 import { CollectionsChecklist } from "./CollectionsChecklist";
-import { serializeCollectionsFile, type CollectionEntry } from "./collectionsFile";
+import {
+  entriesFromGroups,
+  groupEntriesByTier,
+  serializeCollectionsFile,
+  type CollectionEntry,
+} from "./collectionsFile";
 import { pxToRem } from "../lib/pxToRem";
 
 /**
@@ -36,38 +41,86 @@ export function CollectionsPickerModal({
 
   const [checked, setChecked] = useState<Set<string> | null>(null);
   const [initial, setInitial] = useState<Set<string> | null>(null);
+  // #280: per-collection priority RANK (0 = top tier). Parallel to `checked`; only
+  // checked ids are present. `tierOf` mirrors the live edit, `initialTierOf` the file.
+  const [tierOf, setTierOf] = useState<Map<string, number> | null>(null);
+  const [initialTierOf, setInitialTierOf] = useState<Map<string, number> | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
 
-  // Seed the editable selection once the file has been read fresh on open.
+  // Seed the editable selection + tier ranks once the file has been read on open.
   useEffect(() => {
     if (checked === null && fileQ.data) {
       setChecked(new Set(fileQ.data.selectedIds));
       setInitial(new Set(fileQ.data.selectedIds));
+      const ranks = new Map<string, number>();
+      groupEntriesByTier(fileQ.data.entries).forEach((group, rank) =>
+        group.forEach((e) => ranks.set(e.id, rank)),
+      );
+      setTierOf(new Map(ranks));
+      setInitialTierOf(new Map(ranks));
     }
   }, [checked, fileQ.data]);
 
   const available = collQ.data ?? [];
   const fileEntries = fileQ.data?.entries ?? [];
-  const ready = checked !== null && initial !== null && fileQ.data !== undefined && collQ.data !== undefined;
+  const ready =
+    checked !== null &&
+    initial !== null &&
+    tierOf !== null &&
+    fileQ.data !== undefined &&
+    collQ.data !== undefined;
 
-  const dirty =
+  const selectionDirty =
     !!checked &&
     !!initial &&
     (checked.size !== initial.size || [...checked].some((id) => !initial.has(id)));
+  const tiersDirty =
+    !!checked &&
+    !!tierOf &&
+    !!initialTierOf &&
+    [...checked].some((id) => (tierOf.get(id) ?? 0) !== (initialTierOf.get(id) ?? 0));
+  const dirty = selectionDirty || tiersDirty;
 
-  const toggle = (id: string) =>
-    setChecked((prev) => {
-      const next = new Set(prev ?? []);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+  // Apply a new selection, keeping the tier map in lock-step: a newly-checked
+  // collection starts in the top tier (rank 0); an unchecked one drops its rank.
+  const applySelection = (next: Set<string>) => {
+    setTierOf((prev) => {
+      const nt = new Map(prev ?? []);
+      for (const id of next) if (!nt.has(id)) nt.set(id, 0);
+      for (const id of [...nt.keys()]) if (!next.has(id)) nt.delete(id);
+      return nt;
+    });
+    setChecked(next);
+  };
+
+  const toggle = (id: string) => {
+    const next = new Set(checked ?? []);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    applySelection(next);
+  };
+
+  // Move a collection one tier up (raise priority) / down (lower it). Moving past
+  // the last tier opens a new one; ranks compact on save so gaps never persist.
+  const bumpTier = (id: string, delta: number) =>
+    setTierOf((prev) => {
+      const nt = new Map(prev ?? []);
+      nt.set(id, Math.max(0, (nt.get(id) ?? 0) + delta));
+      return nt;
     });
 
   const orphans = checked
     ? fileEntries.filter((e) => checked.has(e.id) && !available.some((c) => c.resource_id === e.id))
     : [];
+
+  // Live (non-orphan) checked collections grouped by rank, for the tier editor.
+  const liveChecked = available.filter((c) => checked?.has(c.resource_id));
+  const maxRank = Math.max(0, ...liveChecked.map((c) => tierOf?.get(c.resource_id) ?? 0));
+  const tierGroups = Array.from({ length: maxRank + 1 }, (_, r) =>
+    liveChecked.filter((c) => (tierOf?.get(c.resource_id) ?? 0) === r),
+  ).filter((g) => g.length > 0);
 
   const attemptClose = () => {
     if (dirty) setConfirming(true);
@@ -76,12 +129,19 @@ export function CollectionsPickerModal({
 
   const onSave = async () => {
     if (!checked) return;
-    const out: CollectionEntry[] = [];
-    for (const c of available) if (checked.has(c.resource_id)) out.push({ id: c.resource_id, name: c.name });
-    // Orphans the user left in place are preserved verbatim (never auto-dropped).
-    for (const e of fileEntries) {
-      if (checked.has(e.id) && !available.some((c) => c.resource_id === e.id)) out.push(e);
-    }
+    // Bucket the checked collections by rank — live ones first (LIVE names so a
+    // rename self-heals), then any un-removed orphan verbatim — then flatten:
+    // `entriesFromGroups` drops empty tiers and re-stamps sparse ints, and the
+    // serializer omits tier 0, so a single-tier selection stays the flat file it
+    // always was (backward compatible).
+    const rankOf = (id: string) => tierOf?.get(id) ?? 0;
+    const span = Math.max(0, ...[...checked].map(rankOf));
+    const groups: CollectionEntry[][] = Array.from({ length: span + 1 }, () => []);
+    for (const c of available)
+      if (checked.has(c.resource_id)) groups[rankOf(c.resource_id)].push({ id: c.resource_id, name: c.name });
+    for (const e of fileEntries)
+      if (checked.has(e.id) && !available.some((c) => c.resource_id === e.id)) groups[rankOf(e.id)].push(e);
+    const out = entriesFromGroups(groups);
     setSaving(true);
     setSaveError(null);
     try {
@@ -172,7 +232,65 @@ export function CollectionsPickerModal({
             )}
           </div>
         ) : (
-          <CollectionsChecklist collections={available} selected={checked!} onChange={setChecked} />
+          <CollectionsChecklist collections={available} selected={checked!} onChange={applySelection} />
+        )}
+
+        {ready && liveChecked.length >= 2 && (
+          <div
+            data-testid="collections-tiers"
+            style={{
+              borderTop: "1px solid var(--paper-3)",
+              paddingTop: 8,
+              display: "flex",
+              flexDirection: "column",
+              gap: 6,
+            }}
+          >
+            <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+              搜尋優先順序（先查上層；找不到答案 AI 才往下層擴大）
+            </span>
+            {tierGroups.map((group, displayRank) => (
+              <div
+                key={displayRank}
+                data-testid={`tier-group-${displayRank}`}
+                style={{ display: "flex", flexDirection: "column", gap: 2 }}
+              >
+                <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", fontWeight: 600 }}>
+                  優先層 {displayRank + 1}
+                </span>
+                {group.map((c) => (
+                  <div
+                    key={c.resource_id}
+                    data-testid={`tier-row-${c.resource_id}`}
+                    style={{ display: "flex", alignItems: "center", gap: 6, fontSize: pxToRem(12) }}
+                  >
+                    <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {c.name}
+                    </span>
+                    <button
+                      type="button"
+                      data-testid={`tier-up-${c.resource_id}`}
+                      aria-label={`Raise ${c.name} a tier`}
+                      onClick={() => bumpTier(c.resource_id, -1)}
+                      disabled={(tierOf?.get(c.resource_id) ?? 0) === 0}
+                      style={tierBtn()}
+                    >
+                      ▲
+                    </button>
+                    <button
+                      type="button"
+                      data-testid={`tier-down-${c.resource_id}`}
+                      aria-label={`Lower ${c.name} a tier`}
+                      onClick={() => bumpTier(c.resource_id, 1)}
+                      style={tierBtn()}
+                    >
+                      ▼
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
         )}
 
         {ready && (fileQ.data?.ignored ?? 0) > 0 && (
@@ -257,6 +375,20 @@ export function CollectionsPickerModal({
       </div>
     </div>
   );
+}
+
+function tierBtn(): React.CSSProperties {
+  return {
+    width: 22,
+    height: 22,
+    lineHeight: 1,
+    fontSize: pxToRem(10),
+    borderRadius: "var(--radius-btn)",
+    border: "1px solid var(--paper-3)",
+    background: "var(--white)",
+    color: "var(--text-paper)",
+    cursor: "pointer",
+  };
 }
 
 function btn(variant?: "primary" | "danger"): React.CSSProperties {

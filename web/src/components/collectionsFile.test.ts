@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import type { KbCollection } from "../api/kb";
 import {
+  entriesFromGroups,
+  groupEntriesByTier,
   parseCollectionsFile,
   serializeCollectionsFile,
   splitSelection,
@@ -69,7 +71,81 @@ describe("parseCollectionsFile", () => {
   });
 });
 
+describe("parseCollectionsFile — priority tiers (#280)", () => {
+  it("keeps a valid integer tier on the entry", () => {
+    const p = parseCollectionsFile('[{"id":"a","name":"A","tier":0},{"id":"b","name":"B","tier":10}]');
+    expect(p.entries).toEqual([
+      { id: "a", name: "A", tier: 0 },
+      { id: "b", name: "B", tier: 10 },
+    ]);
+  });
+
+  it("ignores a non-integer tier (entry kept, no tier — tolerant like the backend)", () => {
+    const p = parseCollectionsFile('[{"id":"a","name":"A","tier":"oops"}]');
+    expect(p.entries).toEqual([{ id: "a", name: "A" }]);
+  });
+});
+
+describe("groupEntriesByTier (#280)", () => {
+  it("groups entries by tier, ranked ascending; absent tier counts as 0", () => {
+    const groups = groupEntriesByTier([
+      { id: "a", name: "A", tier: 0 },
+      { id: "b", name: "B" }, // absent ⇒ tier 0
+      { id: "d", name: "D", tier: 20 },
+      { id: "c", name: "C", tier: 10 },
+    ]);
+    expect(groups).toEqual([
+      [
+        { id: "a", name: "A", tier: 0 },
+        { id: "b", name: "B" },
+      ],
+      [{ id: "c", name: "C", tier: 10 }],
+      [{ id: "d", name: "D", tier: 20 }],
+    ]);
+  });
+
+  it("returns an empty list for no entries", () => {
+    expect(groupEntriesByTier([])).toEqual([]);
+  });
+});
+
+describe("entriesFromGroups (#280)", () => {
+  it("flattens ordered groups into entries with sparse tier ints (0, 10, 20)", () => {
+    const entries = entriesFromGroups([
+      [
+        { id: "a", name: "A" },
+        { id: "b", name: "B" },
+      ],
+      [{ id: "c", name: "C" }],
+    ]);
+    expect(entries).toEqual([
+      { id: "a", name: "A", tier: 0 },
+      { id: "b", name: "B", tier: 0 },
+      { id: "c", name: "C", tier: 10 },
+    ]);
+  });
+
+  it("drops empty groups so an emptied tier doesn't shift ranks", () => {
+    const entries = entriesFromGroups([[{ id: "a", name: "A" }], [], [{ id: "b", name: "B" }]]);
+    expect(entries).toEqual([
+      { id: "a", name: "A", tier: 0 },
+      { id: "b", name: "B", tier: 10 },
+    ]);
+  });
+});
+
 describe("serializeCollectionsFile", () => {
+  it("emits a non-zero tier but omits tier 0 (keeps a flat file flat, git-friendly)", () => {
+    const out = serializeCollectionsFile([
+      { id: "a", name: "A", tier: 0 },
+      { id: "c", name: "C", tier: 10 },
+    ]);
+    expect(JSON.parse(out)).toEqual([
+      { id: "a", name: "A" },
+      { id: "c", name: "C", tier: 10 },
+    ]);
+  });
+
   it("emits 2-space pretty JSON with only id + name, in order", () => {
     const out = serializeCollectionsFile([
       { id: "a", name: "Alpha" },

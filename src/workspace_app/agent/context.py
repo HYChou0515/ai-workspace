@@ -132,6 +132,14 @@ class AgentToolContext:
     # KB agent (kb_search tool).
     retriever: Retriever | None = None
     collection_ids: list[str] = field(default_factory=list)
+    # #280: the item's collection set grouped into priority tiers, ordered by
+    # rank (rank 0 = highest-priority tier). Read from `collections.json`'s
+    # optional per-entry `tier` (sparse ints collapse to ranks). Empty when the
+    # item configures no tiers ⇒ `ask_knowledge_base` searches the whole KB
+    # (today's behaviour). `collection_ids` above stays the flat union (the
+    # glossary / resolve_collection scope); this drives the agent-rankable
+    # `ask_knowledge_base` fallback only.
+    collection_tiers: list[list[str]] = field(default_factory=list)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
     # #195: per-turn cap on how many times `kb_search` may actually run. `None`
     # = unlimited (Topic Hub and other flavours leave it unset). When set, the
@@ -182,13 +190,13 @@ class AgentToolContext:
     # the answer text + the resolved citations — the tool impl stashes
     # the citations into `subagent_citations` so the turn engine can
     # attach them to the persisted tool message.
-    run_subagent: (
-        Callable[
-            [str, str, OutputSink | None, str | None],
-            Awaitable[tuple[str, list[Citation]]],
-        ]
-        | None
-    ) = None
+    #
+    # #280: an optional 5th arg `collection_ids: list[str] | None` lets the
+    # caller (ask_knowledge_base, after resolving its `rank` → a priority tier)
+    # scope the kb_chat sub-agent to that tier's collections; `None` ⇒ the whole
+    # KB. The type is `Callable[..., …]` because that override is keyword-default
+    # (not expressible in a positional `Callable[[...], …]` signature).
+    run_subagent: Callable[..., Awaitable[tuple[str, list[Citation]]]] | None = None
     # Per-call citation lists from this turn's sub-agent invocations,
     # keyed by purpose. Per purpose, lists are in CALL ORDER — the
     # persist step pairs the Nth list with the Nth tool message of
