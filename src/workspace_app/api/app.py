@@ -2448,11 +2448,18 @@ def create_app(
         # message + the broadcast UserMessage stay clean (block never enters history),
         # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
         from ..apps.context_files import build_context_block
+        from ..apps.skills import build_workspace_skills_block
 
         block = await build_context_block(
             filestore, investigation_id, _app_context_files(investigation_id)
         )
-        turn_content = f"{block}\n\n{body.content}" if block else body.content
+        # #298: advertise the skills the user co-created in THIS workspace, read
+        # live each turn (through the same file facade the agent writes with, so a
+        # skill saved last turn shows up now). Injected like context_files —
+        # never persisted into history.
+        skills_block = await build_workspace_skills_block(files, investigation_id)
+        prefix = "\n\n".join(p for p in (block, skills_block) if p)
+        turn_content = f"{prefix}\n\n{body.content}" if prefix else body.content
 
         # #43: broadcast the human's message to every live viewer, then queue the
         # turn and await ITS completion. The queue serializes concurrent users on

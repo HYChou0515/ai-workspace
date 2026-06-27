@@ -125,6 +125,67 @@ async def test_read_skill_without_app_or_profile_returns_error():
     assert "App workspace" in out
 
 
+# ─── workspace skills (#298) ──────────────────────────────────────────
+
+
+def _ws_ctx(slug: str | None = "rca", profile: str | None = "default"):
+    from workspace_app.files import WorkspaceFiles
+    from workspace_app.filestore.memory import MemoryFileStore
+
+    files = WorkspaceFiles(MemoryFileStore())
+    return RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1", files=files, app_slug=slug, template_profile=profile
+        )
+    )
+
+
+async def _write(ctx, path: str, content: str) -> None:
+    from workspace_app.agent.tools import write_file_impl
+
+    await write_file_impl(ctx, path, content)
+
+
+async def test_read_skill_reads_a_workspace_skill():
+    """A skill written into the workspace `.skill/<name>/SKILL.md` loads via
+    `read_skill`, independent of any package/profile skill (#298 Q1/Q3a)."""
+    from workspace_app.agent.tools import read_skill_impl
+
+    ctx = _ws_ctx()
+    await _write(
+        ctx,
+        "/.skill/my-skill/SKILL.md",
+        "---\nname: my-skill\ndescription: do X\n---\n\n# Body\n\nstep 1",
+    )
+    out = await read_skill_impl(ctx, "my-skill")
+    assert out.startswith("# Body")
+
+
+async def test_workspace_skill_shadows_package_skill_of_same_name(isolated_apps: Path):
+    """When a workspace and a package skill share a name, the workspace one
+    (the user's own) wins — it's read first."""
+    from workspace_app.agent.tools import read_skill_impl
+
+    _profile_with_skill(isolated_apps, "rca", "default", "fmt", "x", "PACKAGE-body")
+    ctx = _ws_ctx()
+    md = "---\nname: fmt\ndescription: d\n---\n\nWORKSPACE-body"
+    await _write(ctx, "/.skill/fmt/SKILL.md", md)
+    assert await read_skill_impl(ctx, "fmt") == "WORKSPACE-body"
+
+
+async def test_read_skill_miss_lists_workspace_skills_too(isolated_apps: Path):
+    """An unknown name lists the available skills including the workspace ones,
+    so the agent can recover by picking a real one."""
+    from workspace_app.agent.tools import read_skill_impl
+
+    (isolated_apps / "rca" / "profiles" / "default").mkdir(parents=True)
+    ctx = _ws_ctx()
+    await _write(ctx, "/.skill/my-ws/SKILL.md", "---\nname: my-ws\ndescription: d\n---\n\nbody")
+    out = await read_skill_impl(ctx, "ghost")
+    assert "error:" in out
+    assert "my-ws" in out
+
+
 # ─── build_tools conditional injection ────────────────────────────────
 
 

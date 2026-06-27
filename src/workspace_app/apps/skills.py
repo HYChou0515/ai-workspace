@@ -22,13 +22,22 @@ import logging
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
+from typing import TYPE_CHECKING
 
 import msgspec
+
+if TYPE_CHECKING:
+    from ..files import WorkspaceFiles
 
 logger = logging.getLogger(__name__)
 
 _APPS_PKG = "workspace_app.apps"
 _PROFILES_DIR = "profiles"
+
+# Where a user+AI co-created skill lives in a workspace (#298). A folder under
+# the workspace root, mirroring the package `.skill/` layout; the body is read
+# live every turn (NOT @cache — the workspace is hand-editable + just-written).
+WORKSPACE_SKILL_DIR = ".skill"
 
 # Per-skill body hard cap. A methodology over this size should be split into
 # multiple skills; truncating would silently drop steps — worse than failing.
@@ -107,6 +116,97 @@ def load_skill(app_slug: str, profile: str, name: str) -> str:
             f"({len(body)}); please split it into smaller skills"
         )
     return body
+
+
+# ─── workspace skills (#298) ─────────────────────────────────────────
+
+
+def _enforce_cap(name: str, body: str) -> str:
+    if len(body) > SKILL_BODY_CAP:
+        raise SkillError(
+            f"skill {name!r} body exceeds {SKILL_BODY_CAP} chars "
+            f"({len(body)}); please split it into smaller skills"
+        )
+    return body
+
+
+async def load_workspace_skill(files: WorkspaceFiles, workspace_id: str, name: str) -> str | None:
+    """Body markdown of a co-created skill at ``<workspace>/.skill/<name>/SKILL.md``
+    (frontmatter stripped), or ``None`` when it doesn't exist. Read live (never
+    cached) since the workspace is hand-editable + may have just been written this
+    turn (#298 Q3a). Raises ``SkillError`` only on body-cap exceeded."""
+    from ..filestore.protocol import FileNotFound
+
+    path = f"/{WORKSPACE_SKILL_DIR}/{name}/SKILL.md"
+    try:
+        raw = await files.read(workspace_id, path)
+    except FileNotFound:
+        return None
+    _front, body = _parse_frontmatter(raw)
+    return _enforce_cap(name, body)
+
+
+async def workspace_skill_metas(files: WorkspaceFiles, workspace_id: str) -> list[SkillMeta]:
+    """``(name, description)`` for every well-formed skill under the workspace's
+    ``.skill/`` dir, sorted by name. Unparseable / name-mismatched / nameless
+    skills are skipped (logged) — same tolerance as the package loader, so one
+    bad hand-edit can't break the whole index. Empty when there's no ``.skill/``."""
+    prefix = f"/{WORKSPACE_SKILL_DIR}/"
+    paths = await files.ls(workspace_id, prefix)
+    out: list[SkillMeta] = []
+    for path in sorted(paths):
+        rel = path[len(prefix) :]
+        if rel.count("/") != 1 or not rel.endswith("/SKILL.md"):
+            continue
+        dir_name = rel[: -len("/SKILL.md")]
+        meta = await _workspace_skill_meta(files, workspace_id, path, dir_name)
+        if meta is not None:
+            out.append(meta)
+    return out
+
+
+async def _workspace_skill_meta(
+    files: WorkspaceFiles, workspace_id: str, path: str, dir_name: str
+) -> SkillMeta | None:
+    raw = await files.read(workspace_id, path)
+    try:
+        front, _body = _parse_frontmatter(raw)
+    except SkillError as e:
+        logger.warning("workspace skill %r: %s — skipping", dir_name, e)
+        return None
+    name = str(front.get("name", "")).strip()
+    description = str(front.get("description", "")).strip()
+    if not name:
+        logger.warning("workspace skill %r: missing `name` — skipping", dir_name)
+        return None
+    if name != dir_name:
+        logger.warning(
+            "workspace skill %r: frontmatter name=%r mismatches dir — skipping", dir_name, name
+        )
+        return None
+    return SkillMeta(name=name, description=description)
+
+
+def workspace_skills_block(metas: list[SkillMeta]) -> str:
+    """Render the per-turn "skills you created in this workspace" index, or ``""``
+    when there are none. Injected fresh each turn (like context_files) so a skill
+    the agent just saved is advertised next turn (#298 Q3a)."""
+    if not metas:
+        return ""
+    lines = [
+        "## Skills in this workspace",
+        "",
+        "You (with the user) created these. Call `read_skill(name)` to load one "
+        "before applying it.",
+        "",
+    ]
+    lines += [f"- `{m.name}`: {m.description}" for m in metas]
+    return "\n".join(lines)
+
+
+async def build_workspace_skills_block(files: WorkspaceFiles, workspace_id: str) -> str:
+    """Read the workspace's `.skill/` live and render the index block (or ``""``)."""
+    return workspace_skills_block(await workspace_skill_metas(files, workspace_id))
 
 
 # ─── internals ───────────────────────────────────────────────────────

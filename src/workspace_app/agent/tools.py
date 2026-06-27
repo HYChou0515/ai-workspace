@@ -839,16 +839,46 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
     from — unknown name lists the available skills, body-cap exceeded
     explains the deployer should split the skill. Host-side only: never
     wakes the sandbox (skills are pure host markdown)."""
-    from ..apps.skills import SkillError, list_skills, load_skill
+    from ..apps.skills import (
+        SkillError,
+        list_skills,
+        load_skill,
+        load_workspace_skill,
+        workspace_skill_metas,
+    )
+
+    # #298: a user+AI co-created skill in this workspace shadows any package
+    # skill of the same name. Read live (uncached) — it may have just been saved.
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is not None and inv is not None:
+        try:
+            body = await load_workspace_skill(files, inv, name)
+        except SkillError as e:
+            return f"error: {e}"
+        if body is not None:
+            return body
 
     slug = ctx.context.app_slug
     profile = ctx.context.template_profile
     if slug is None or profile is None:
+        # No package profile, but a workspace might still hold skills to list.
+        ws = (
+            [m.name for m in await workspace_skill_metas(files, inv)]
+            if files is not None and inv is not None
+            else []
+        )
+        if ws:
+            return f"error: unknown skill {name!r}. available skills: {', '.join(ws)}"
         return "error: read_skill is only available in an App workspace turn"
     try:
         return load_skill(slug, profile, name)
     except SkillError as e:
-        avail = ", ".join(m.name for m in list_skills(slug, profile)) or "(none)"
+        avail_metas = list(list_skills(slug, profile))
+        names = [m.name for m in avail_metas]
+        if files is not None and inv is not None:
+            names += [m.name for m in await workspace_skill_metas(files, inv)]
+        avail = ", ".join(sorted(set(names))) or "(none)"
         return f"error: {e}. available skills: {avail}"
 
 
