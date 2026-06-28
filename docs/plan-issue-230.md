@@ -88,10 +88,10 @@ repo curated 內容(CHANGELOG.md + user-guide.md)
 - Launcher 加一張 Help 入口卡。
 - **測試(vitest)**:Help 入口可點到 `/help`、onboarding 彈窗內連結存在且導向正確、Launcher 卡渲染。
 
-### Phase 6 — help 人格 prompt + 收尾(後端 + 文件)
-- 在 help chat 的 KB system prompt 後 append 輕量人格(「你是這個平台的使用助手,依使用說明/release note 回答 how-to,附引用」)——沿用既有 per-collection guidance append 模式,不新增 preset。
-- 文件:`docs/` 補一段說明此機制(seed 來源、如何更新 release note = 改 `CHANGELOG.md`)、`CONTEXT.md`/`docs/README.md` 視需要補連結。
-- **Live check**(LLM 功能 DoD):用 Ollama 本地小模型實測 `/help` 問答能正確引用使用說明/release note(replay 不足以證明)。
+### Phase 6 — 收尾(文件)
+- 文件:`docs/development.md` §10 補一段說明此機制(seed 來源、如何更新 release note = 改 `help_content/CHANGELOG.md`、權限、前向相容 #281)。
+- **help 人格 prompt — DEFERRED**:原想在 help chat 的 KB system prompt 後 append 輕量人格,但**現況沒有 per-collection 的 chat-prompt 追加掛點**(KB agent prompt 來自 AgentConfig;`*_guidance` 只作用於 wiki)。硬加會違反「不新增 preset / 輕量」決策,屬 scope creep。預設 KB agent prompt 對「知識庫即 help 內容」已足以帶引用回答 how-to,故本期沿用預設,人格列為後續 follow-up。
+- **Live check**(LLM 功能 DoD):用 Ollama 本地小模型實測 `/help` 問答能正確引用使用說明/release note(replay 不足以證明)。**AFK 環境無保證的 Ollama,列為合併後的人工 follow-up**;CI(unit-only)不涵蓋 live LLM。
 
 ---
 

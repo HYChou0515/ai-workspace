@@ -10,7 +10,7 @@ add source-code-derived wiki to the same collection.
 
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 
@@ -46,7 +46,7 @@ def _title(path: str) -> str:
     return humanised[:1].upper() + humanised[1:] if humanised else path
 
 
-def register_help_routes(app: FastAPI, spec: SpecStar) -> None:
+def register_help_routes(app: FastAPI | APIRouter, spec: SpecStar) -> None:
     @app.get("/help")
     async def help_info() -> HelpInfo:
         cid = ensure_help_collection(spec)

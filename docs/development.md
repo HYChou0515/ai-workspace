@@ -184,7 +184,28 @@ KB 的可抽換點都在 `src/workspace_app/kb/`，皆為小 Protocol：
 
 ---
 
-## 10. 測試備註
+## 10. 平台說明頁（Help，#230）的內容怎麼更新
+
+`/help` 頁的「使用說明 + 更新紀錄（release note）」就是一個系統 KB collection
+「Platform Help」的內容，AI 問答直接 `kb_search` 它。
+
+- **改內容 = 改 repo**：編輯 `src/workspace_app/kb/help_content/*.md`
+  （`getting-started.md` = 使用說明、`CHANGELOG.md` = 更新紀錄；檔名 `CHANGELOG.md`
+  會被標成 `release_notes`，其餘為 `guide`）。內容隨 wheel 出貨,**每次開機
+  idempotent upsert**（相同 bytes 為 no-op）——repo 是唯一真相,UI 上手改的會被下次
+  開機覆蓋。新增一份指南只要丟一個 `.md` 進去即可。
+- **權限**：collection 公開可讀可搜,但寫入鎖給 owner（`system`）+ superuser
+  （`settings.server.superusers`),用既有 #262 `Permission`,**沒有新權限碼**。
+  機制見 `kb/help_collection.py`,端點見 `api/help_routes.py`。
+- **前向相容 #281**：之後讓 AI 讀原始碼生成 wiki 會餵進**同一個** collection,
+  屆時 source doc 是完整 codebase 而非單一 `CHANGELOG.md`。
+- **尚未做（deferred）**：help 專屬「人格」system prompt——目前無 per-collection
+  的 chat-prompt 追加掛點,故沿用預設 KB agent prompt（知識庫即 help 內容,問答+引用
+  已足夠）；要加人格時再評估注入機制,別為此硬塞新 preset。
+
+---
+
+## 11. 測試備註
 
 - Docker sandbox 測試在本機有 daemon 時跑、否則自動 skip。
 - Ollama live 測試（`test_live_run_against_ollama_*`）在 daemon/模型不在時自動 skip；
