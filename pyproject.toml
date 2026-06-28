@@ -51,6 +51,11 @@ dev = [
     "asgi-lifespan>=2.1.0",
     "pytest-xdist>=3.8.0",
 ]
+# Documentation site (mkdocs + Material). Build: `uv run --group docs mkdocs build`;
+# serve locally: `uv run --group docs mkdocs serve`. Not needed by the app or the CI gate.
+docs = [
+    "mkdocs-material>=9.5",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

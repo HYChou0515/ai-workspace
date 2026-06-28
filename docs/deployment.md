@@ -472,8 +472,8 @@ RCA 的 system prompt 是純 markdown，存在
     後端（必要時 `message_queue.kind: rabbitmq`）。
   - 非 queue 的背景 sweeper（sandbox 閒置回收 / 鏡像 / 索引卡住回收 / blob-GC /
     code 同步）**一律留在 API**，不受 `run_consumers` 影響。
-  - k8s 範例見 [`kubernetes/base/workers.yaml`](../kubernetes/base/workers.yaml)
-    與 [`kubernetes/README.md`](../kubernetes/README.md)（每 JobType 一個
+  - k8s 範例見 [`kubernetes/base/workers.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/base/workers.yaml)
+    與 [`kubernetes/README.md`](https://github.com/HYChou0515/ai-workspace/blob/master/kubernetes/README.md)（每 JobType 一個
     Deployment + CPU HPA，sanity 固定 1 replica；不使用 KEDA）。
 - **索引回填（#263，升級後一次性）**：本版替 `DocChunk` 加了 `provenance`
   位置索引（page / sheet / …，供「分析某檔第 N 頁」這類定位過濾），並替

@@ -3,8 +3,8 @@
 給要在這個 codebase 上開發的人:環境、開發流程、品質 gate、**必須遵守的規則**,以及幾個最
 常見的「怎麼加一個 X」的步驟。這是規則與慣例的單一來源。
 
-> 對照閱讀:[`../CLAUDE.md`](../CLAUDE.md)(架構圖 + 指令,權威來源)、
-> [`../CONTEXT.md`](../CONTEXT.md)(領域詞彙,用語請完全照它)、
+> 對照閱讀:[`CLAUDE.md`](https://github.com/HYChou0515/ai-workspace/blob/master/CLAUDE.md)(架構圖 + 指令,權威來源)、
+> [`CONTEXT.md`](https://github.com/HYChou0515/ai-workspace/blob/master/CONTEXT.md)(領域詞彙,用語請完全照它)、
 > [architecture.md](architecture.md)、[contract.md](contract.md)、[deployment.md](deployment.md)、
 > [adding-an-app.md](adding-an-app.md)、[workflows-authoring.md](workflows-authoring.md)。
 
@@ -279,7 +279,7 @@ web/src/
 ## 9. 怎麼新增一個 App 或 profile
 
 App 是多 App 平台的一級單位。完整步驟見 [adding-an-app.md](adding-an-app.md),詞彙定義見
-[`../CONTEXT.md`](../CONTEXT.md)「Apps & work items」。要點:
+[`CONTEXT.md`](https://github.com/HYChou0515/ai-workspace/blob/master/CONTEXT.md)「Apps & work items」。要點:
 
 - **App** = 一個 in-code 目錄 `src/workspace_app/apps/<slug>/` = `app.json`(identity + function +
   agent + layout)+ `model.py`(它的 `WorkItemBase` 子類 Struct)+ `prompts/` + `profiles/`。
@@ -380,4 +380,4 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 - [ ] 有文獻背書的選擇,引用放進程式 + PR 內文。
 - [ ] 使用者可見字串去術語化 + 走 i18n;不露內部細節。
 - [ ] 新 config key 寫進 `config.example.yaml` + 加進 loader schema。
-- [ ] 用語對齊 [`../CONTEXT.md`](../CONTEXT.md)。
+- [ ] 用語對齊 [`CONTEXT.md`](https://github.com/HYChou0515/ai-workspace/blob/master/CONTEXT.md)。

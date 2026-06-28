@@ -136,7 +136,7 @@ class UserDirectory(Protocol):
 
 **新端點**
 - `GET /me` → 目前 User 物件。
-- `GET /users` → User[](目錄;FE 快取、前端過濾)。
+- `GET /users` → `User[]`（目錄；FE 快取、前端過濾）。
 - `GET /notifications` → 目前使用者的通知(最近 N,未讀優先)。
 - `POST /notifications/read-all` → 全部標記已讀;`POST /notifications/{id}/read` → 單筆已讀。
 - `POST /kb/chats/{id}/share { user_ids }`(owner-only)、`DELETE /kb/chats/{id}/share/{user_id}`。

@@ -1,0 +1,58 @@
+name: Docs
+
+# Build the mkdocs (Material) site and publish it to GitHub Pages.
+# The docs only need mkdocs-material (they never import the app), so this is
+# deliberately decoupled from the uv project: it installs via pip and does NOT
+# sync the backend deps. Repo Settings → Pages → "Build and deployment" source
+# must be set to "GitHub Actions" (done once; this workflow then owns deploys).
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+# Least-privilege token scoped for Pages deployment via OIDC.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One publish at a time; never cancel an in-flight deploy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install mkdocs-material
+        run: pip install mkdocs-material
+
+      # --strict fails the build on broken internal links / missing anchors,
+      # so a typo can never silently ship a broken docs site.
+      - name: Build site
+        run: mkdocs build --strict
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
