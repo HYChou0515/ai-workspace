@@ -1,31 +1,29 @@
-# Authoring a workflow
+# 撰寫 workflow
 
-A practical guide for *writing* a workflow — the block catalog, the conventions,
-and the tooling that keeps you out of the startup-crash loop. For the *why* (the
-design, the decision/action split, the filesystem journal) read the spec,
-[`workflows.md`](workflows.md); this is the how-to.
+撰寫 workflow 的實用指南——block catalog、各種慣例,以及讓你不會掉進「開機就 crash」迴圈的
+工具。想了解背後的*為什麼*（設計、decision/action 拆分、filesystem journal），請讀規格文件
+[`workflows.md`](workflows.md);這篇是 how-to。
 
-> TL;DR — `python -m workspace_app.workflow new <app> <profile> <id>` scaffolds a
-> runnable workflow; edit its `run.py`; `python -m workspace_app.workflow check`
-> tells you what's wrong before you boot the app.
+> TL;DR — `python -m workspace_app.workflow new <app> <profile> <id>` 會 scaffold 出一個
+> 可執行的 workflow;接著編輯它的 `run.py`;`python -m workspace_app.workflow check`
+> 會在你啟動 app 之前告訴你哪裡有問題。
 
-## What a workflow is
+## workflow 是什麼
 
-A workflow is **one `async def run(wf, inputs)`** (the orchestration) plus a small
-**data manifest** in the profile's `_profile.json` (its id, title, and the phase
-skeleton the UI draws). The control flow is ordinary Python — `for` / `if` / `await`
-— over a library of *steps*. There is no DSL.
+一個 workflow 就是**一個 `async def run(wf, inputs)`**（orchestration）加上 profile 的
+`_profile.json` 裡一小段**資料 manifest**(它的 id、title,以及 UI 用來繪製的 phase 骨架)。
+控制流就是普通的 Python——`for` / `if` / `await`——跑在一個 *step* 函式庫之上。沒有 DSL。
 
-It lives at the **profile** level:
+它落在 **profile** 層級:
 
 ```
 apps/<app>/profiles/<profile>/
-  _profile.json                       # declares the workflow (id, title, phases, …)
-  workflows/<id>/run.py               # async def run(wf, inputs) — the orchestration
+  _profile.json                       # 宣告這個 workflow(id、title、phases…)
+  workflows/<id>/run.py               # async def run(wf, inputs) — orchestration
 ```
 
-`run.py` is loaded by file path (so a hyphenated dir works) — use **absolute
-imports** (`from workspace_app.workflow import ...`), never relative ones.
+`run.py` 是以檔案路徑載入的（所以帶連字號的目錄也能用）——請用**絕對 import**
+(`from workspace_app.workflow import ...`),絕不要用相對 import。
 
 ```python
 from __future__ import annotations
@@ -41,74 +39,70 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     return {"status": "done"}
 ```
 
-`run()` returns a JSON-able summary (becomes the run's result). `inputs` is the
-parsed `input.json` (see [Inputs](#inputs)).
+`run()` 回傳一個可 JSON 化的摘要（成為這次 run 的結果）。`inputs` 是解析後的
+`input.json`(見 [Inputs](#inputs))。
 
-## Quickstart
+## 快速上手
 
-1. **Scaffold** a starting point — pick the recipe closest to what you want:
+1. **Scaffold** 一個起點——挑最接近你需求的 recipe:
 
    ```bash
    uv run python -m workspace_app.workflow new myapp default ingest-logs --recipe review-commit
    ```
 
-   Recipes: `minimal` (one agent step, runs to *done*), `review-commit` (produce →
-   human gate → commit, runs to *awaiting_human*), `batch` (`wf.map` over uploads).
-   It writes an annotated `run.py` and registers it in `_profile.json` with phases
-   that already match the code.
+   Recipe:`minimal`（一個 agent step,跑到 *done*）、`review-commit`（produce →
+   human gate → commit,跑到 *awaiting_human*）、`batch`（`wf.map` 跑過上傳檔）。
+   它會寫出一份有註解的 `run.py`,並在 `_profile.json` 裡註冊好與程式碼相符的 phases。
 
-2. **Edit** `run.py` — change prompts, add steps, wire your commit.
+2. **編輯** `run.py`——改 prompt、加 step、接上你的 commit。
 
-3. **Check** before you boot:
+3. 啟動前先 **Check**:
 
    ```bash
-   uv run python -m workspace_app.workflow check        # all apps
-   uv run python -m workspace_app.workflow check myapp  # one app
+   uv run python -m workspace_app.workflow check        # 所有 app
+   uv run python -m workspace_app.workflow check myapp  # 單一 app
    ```
 
-   `check` statically reports a missing/`run()`-less/unparseable `run.py`, empty or
-   duplicate ids, empty phase ids (**errors**), and a `phase="…"` literal in your
-   code that you forgot to declare in `_profile.json` (**warning** — the drift/typo
-   case). It exits non-zero on any error, so it's a good pre-commit hook.
+   `check` 會靜態回報:`run.py` 缺檔／沒有 `run()`／無法解析、id 為空或重複、phase id 為空
+   (**錯誤**),以及你程式碼裡有 `phase="…"` 字面值卻忘了在 `_profile.json` 宣告
+   (**警告**——也就是 drift／typo 的情況)。只要有任何錯誤它就會以非零碼結束,所以很適合
+   當 pre-commit hook。
 
-4. **Restart** the app — workflows are discovered at boot.
+4. **重啟** app——workflow 在開機時被探索。
 
-## The block catalog
+## block catalog
 
-Everything below is imported from `workspace_app.workflow` unless noted. `wf` is the
-[`WorkflowHandle`](#the-wf-handle).
+以下所有東西若無特別註明,都是從 `workspace_app.workflow` import 的。`wf` 是
+[`WorkflowHandle`](#the-wf-handle)。
 
-### Agent nodes (LLM)
+### Agent node(LLM)
 
-An agent node runs **one gated LLM turn** on the item — it streams into the chat
-like an interactive turn. A gate is mandatory: an ungated agent node is not
-expressible.
+一個 agent node 會在 item 上跑**一個有 gate 的 LLM turn**——它會像互動 turn 一樣 stream 進
+chat。gate 是必要的:沒有 gate 的 agent node 無法表達。
 
 ```python
 await agent_step(wf, *, prompt, phase, check, name=None, key="",
                  tools=None, retries=0, cache=True) -> Any
 ```
-The general form. `check` is a required postcondition (see [Gates](#gates));
-`retries` re-runs with the failure reason fed back into the prompt. `tools` is the
-agent's allowed tool subset (⊆ the profile ceiling).
+這是通用形式。`check` 是必填的 postcondition(見 [Gates](#gates));`retries` 會把失敗原因
+回灌進 prompt 後重跑。`tools` 是這個 agent 被允許的 tool 子集(⊆ profile 上限)。
 
 ```python
 await agent_write_step(wf, *, prompt, phase, out, name=None, key="",
                        tools=None, retries=0, cache=True, check=None) -> Any
 ```
-The common shorthand: the model **produces the file's content as its reply** (it
-does *not* call `write_file` — small *and* large models emit long tool args
-unreliably), and the step writes it to `out`, gated on `file_nonempty(out)` by
-default. Give it **read-only** tools.
+常用的簡寫:模型**把檔案內容當成它的回覆產出**(它*不會*呼叫 `write_file`——不管小模型*還是*
+大模型,產長 tool 參數都不可靠),然後這個 step 把它寫到 `out`,預設以 `file_nonempty(out)`
+做 gate。給它**唯讀**的 tool。
 
-### Deterministic nodes (no LLM)
+### Deterministic node(無 LLM)
 
 ```python
 await sandbox_node(wf, *, run, phase, check=None, name=None, key="", cache=True)
     -> {"exit_code": int, "stdout": str}
 ```
-Runs a command in the sandbox. No LLM; this is plain author code. Use it for
-reliable, scriptable work; gate it if its success isn't self-evident.
+在 sandbox(沙箱)裡跑一個指令。無 LLM;這就是純粹的作者程式碼。拿它做可靠、可腳本化的工作;
+如果它的成功與否不是一目了然,就加 gate。
 
 ### Human gate
 
@@ -116,112 +110,100 @@ reliable, scriptable work; gate it if its success isn't self-evident.
 decision = await human_gate(wf, *, phase, title, summary="",
                             allow=("approve", "reject")) -> Decision  # .choice, .input
 ```
-Pause for a person. On first reach the run suspends as `awaiting_human`; once a
-decision is recorded, a re-run replays the completed steps, reaches the gate, finds
-the decision, and continues. `summary` is what the human reviews (a string or any
-JSON-able value). This is the canonical **produce → review → commit** seam.
+為人停下來。第一次抵達時 run 會以 `awaiting_human` 暫停;一旦記錄了一個決定,重跑會 replay
+已完成的 step、抵達這個 gate、找到那個決定,然後繼續。`summary` 是給人審閱的內容(一個字串或
+任何可 JSON 化的值)。這就是標準的 **produce → review → commit** 接縫。
 
-### Capabilities (deterministic side effects on `wf`)
+### Capabilities(`wf` 上的 deterministic 副作用)
 
-These are the reliable, journaled, idempotent side effects — the *action* half of
-the decision/action split. The agent never holds these; your `run()` calls them
-after a gate.
+這些是可靠、有 journal、idempotent 的副作用——decision/action 拆分裡的 *action* 那一半。
+agent 從不持有這些;是你的 `run()` 在 gate 之後呼叫它們。
 
 ```python
 await wf.ingest_to_collection(collection, path, *, phase="ingest", cache=True) -> doc_id
 await wf.upsert_context_card(collection, keys, *, title="", body="",
                              phase="commit", cache=True) -> card_id
-await wf.find_overwrite_card(collection, keys, *, title="") -> {...} | None  # read-only
+await wf.find_overwrite_card(collection, keys, *, title="") -> {...} | None  # 唯讀
 ```
 
 ### Gates
 
-A gate is a postcondition `async (wf, result) -> CheckResult`. Built-ins:
+一個 gate 是一個 postcondition `async (wf, result) -> CheckResult`。內建的:
 
 ```python
-file_nonempty(path)                       # the agent actually wrote a non-empty file
-choice_in(path, *, key, allowed)          # path[key] ∈ allowed (clamp an agent's pick)
-collection_has(collection, path)          # the ingest really landed the doc as ready
+file_nonempty(path)                       # agent 確實寫了一個非空檔案
+choice_in(path, *, key, allowed)          # path[key] ∈ allowed(把 agent 的選擇夾在範圍內)
+collection_has(collection, path)          # ingest 確實把 doc 落地為 ready
 ```
-Write your own when needed — return `CheckResult(True)` or
-`CheckResult(False, "why")`; the reason is fed back into the agent's retry.
-`fail("reason")` aborts the current step/element (`StepFailed`).
+需要時自己寫——回傳 `CheckResult(True)` 或 `CheckResult(False, "why")`;那個原因會回灌進
+agent 的 retry。`fail("reason")` 會中止當前的 step／element(`StepFailed`)。
 
 ### The `wf` handle
 
-File IO (workspace-relative paths; leading `/` optional):
+檔案 IO（路徑相對於 workspace;開頭的 `/` 可有可無）:
 
 ```python
 await wf.read(path) / read_text(path) / read_json(path)
 await wf.write(path, data) / write_json(path, obj)
 await wf.exists(path) / delete(path)
-await wf.glob(patterns, exclude=None) -> [paths]      # sorted, deterministic
+await wf.glob(patterns, exclude=None) -> [paths]      # 已排序、deterministic
 ```
 
-Parallel for-each (manual §11):
+平行 for-each(手冊 §11):
 
 ```python
-failures = await wf.map(fn, items, *, concurrency=8)  # skip+collect; returns [{item, error}]
+failures = await wf.map(fn, items, *, concurrency=8)  # 跳過+收集;回傳 [{item, error}]
 ```
 
-Context: `wf.config` (the manifest's `config`), `wf.user` (captured actor),
-`wf.upload_dir` (the profile's staging folder, default `uploads`), `wf.workflow_id`,
-`wf.journal_dir`.
+Context:`wf.config`（manifest 的 `config`)、`wf.user`(捕捉到的 actor)、
+`wf.upload_dir`（profile 的暫存資料夾,預設 `uploads`)、`wf.workflow_id`、
+`wf.journal_dir`。
 
 ### Engine primitive
 
 `run_step(wf, *, name, key="", phase="", args, execute, check=None, retries=0,
-cache=True)` is what the adapters above are built on. Reach for it directly only for
-a custom deterministic node you want journaled + phase-emitting (e.g. a commit that
-isn't one of the capabilities).
+cache=True)` 是上面那些 adapter 的底層。只有當你想要一個自訂、有 journal、會發 phase 的
+deterministic node(例如一個不屬於 capabilities 的 commit)時,才直接動用它。
 
-## Conventions that matter
+## 重要慣例
 
-- **Pass a step's inputs as its arguments.** The step's cache key is
-  `hash(args)` — so editing an upstream artifact changes a downstream arg and
-  re-runs it automatically. Don't read ambient state inside a step.
-- **Keep `phase=` a literal.** It must match a phase declared in `_profile.json`
-  (that's what `check` cross-checks). Put the dynamic part of a step's identity in
-  `name=` / `key=`, not `phase=`. Phases should be coarse and mostly linear — they
-  are the progress diagram, not every step.
-- **The filesystem is the journal.** Each step writes
-  `/.workflow/<id>/step_<name>/<key>.json`. A re-run skips a step whose artifact
-  exists with a matching input-hash. To force a re-run, edit/delete the artifact and
-  press Run; `cache=False` always re-runs. There is no rewind API — editing files
-  *is* the intervention.
-- **Decision/action split.** The LLM only *decides* and writes its decision as data;
-  the reliable side effect (`ingest_to_collection`, `upsert_context_card`, your
-  `sandbox_node`) is a deterministic node the agent never holds a tool for. Stronger
-  than a post-hoc gate.
-- **Tools an agent node may hold.** When you list `tools=` for an `agent_step`, give
-  an app/workflow agent **`ask_knowledge_base`** to consult the KB (it delegates to a
-  KB sub-agent and keeps the noisy retrieval out of your context). **Never** list
-  `kb_search` / `search_wiki` in an app workflow — those are the KB/wiki agents' own
-  retrieval leaves and need a retriever the app doesn't have (they'll fail). The one
-  exception is `lookup_glossary` — a cheap, deterministic, exact-key card lookup you
-  may grant directly (#270).
+- **把一個 step 的輸入當成它的參數傳進去。** step 的 cache key 是 `hash(args)`——所以
+  編輯某個上游 artifact 會改變下游的 arg,並自動重跑它。不要在 step 內部讀環境狀態。
+- **讓 `phase=` 維持字面值。** 它必須對上 `_profile.json` 宣告的某個 phase(那正是
+  `check` 交叉比對的對象)。把 step 身分的動態部分放在 `name=` / `key=`,別放在 `phase=`。
+  Phase 應該粗顆粒、大致線性——它們是進度圖,不是每一個 step。
+- **filesystem 就是 journal。** 每個 step 寫出 `/.workflow/<id>/step_<name>/<key>.json`。
+  重跑會跳過那些 artifact 已存在且 input-hash 相符的 step。要強制重跑,就編輯／刪除那個
+  artifact 再按 Run;`cache=False` 永遠重跑。沒有 rewind API——編輯檔案*就是*介入手段。
+- **decision/action 拆分。** LLM 只負責*決定*並把它的決定寫成資料;可靠的副作用
+  (`ingest_to_collection`、`upsert_context_card`、你的 `sandbox_node`)是 agent 從不持有
+  tool 的 deterministic node。這比事後的 gate 更強。
+- **一個 agent node 可以持有的 tool。** 當你為 `agent_step` 列出 `tools=` 時,給 app/workflow
+  agent **`ask_knowledge_base`** 來諮詢 KB(它會委派給一個 KB sub-agent,把吵雜的 retrieval
+  擋在你的 context 之外)。在 app workflow 裡**絕不要**列 `kb_search` / `search_wiki`——
+  那些是 KB/wiki agent 自己的 retrieval 葉節點,需要 app 沒有的 retriever(會失敗)。唯一的
+  例外是 `lookup_glossary`——一個便宜、deterministic、exact-key 的 card 查詢,你可以直接
+  授予(#270)。
 
 ## Inputs
 
-The platform surfaces exactly one input file to `run()`: `input.json`, at
-`{upload_dir}/input.json` by default (override with the manifest's `input_json`).
-Its *shape* is your workflow's business — the platform doesn't validate it. Read it
-with `await wf.read_json("uploads/input.json")` (or whatever your manifest points
-at), or rely on `inputs` if the driver passed it in. A profile seeds a starter
-`input.json` like any other starter file.
+平台只把一個 input 檔案露出給 `run()`:`input.json`,預設在 `{upload_dir}/input.json`
+(用 manifest 的 `input_json` 覆寫)。它的*形狀*是你 workflow 自己的事——平台不驗證它。用
+`await wf.read_json("uploads/input.json")`(或你 manifest 指向的任何路徑)來讀它,或者
+靠 driver 傳進來的 `inputs`。profile 會像其他 starter 檔案一樣 seed 一份起始的 `input.json`。
 
-## The manifest
+## manifest
 
 ```jsonc
 {
   "workflows": [
     {
-      "id": "ingest-logs",                 // stable, unique; addresses run.py + the picker
-      "title": "Ingest logs",              // shown in the Run picker
-      "tag": "batch",                      // a small kind pill (batch | single | …)
-      "description": "…",                  // one line on the launcher card
-      "hint": "Drop files into uploads/.", // one-line inputs hint
-      "phases": [                          // the read-only progress skeleton (manual §12)
+      "id": "ingest-logs",                 // 穩定、唯一;定址 run.py + picker
+      "title": "Ingest logs",              // 在 Run picker 顯示
+      "tag": "batch",                      // 一個小小的種類標籤(batch | single | …)
+      "description": "…",                  // launcher 卡片上的一行
+      "hint": "Drop files into uploads/.", // 一行的 inputs 提示
+      "phases": [                          // 唯讀的進度骨架(手冊 §12)
         { "id": "classify", "title": "Classify" },
         { "id": "commit", "title": "Commit" }
       ]
@@ -230,30 +212,28 @@ at), or rely on `inputs` if the driver passed it in. A profile seeds a starter
 }
 ```
 
-Every `phase="…"` literal your `run.py` emits should appear in `phases`. The
-scaffold keeps them in sync for you; `check` warns when they drift.
+你 `run.py` 發出的每一個 `phase="…"` 字面值都應該出現在 `phases` 裡。scaffold 會幫你讓它們
+保持同步;`check` 會在它們 drift 時警告。
 
-## Recipe gallery
+## Recipe 範例集
 
-The scaffold's three starting shapes — all `check`-clean out of the box:
+scaffold 的三種起始形狀——開箱即 `check`-乾淨:
 
-| Recipe | Shape | Runs to |
+| Recipe | 形狀 | 跑到 |
 | --- | --- | --- |
-| `minimal` | one `agent_write_step` | `done` |
-| `review-commit` | produce → `human_gate` → deterministic commit | `awaiting_human` (approve to finish) |
-| `batch` | `wf.map` over `uploads/*`, one agent node per file | `done` |
+| `minimal` | 一個 `agent_write_step` | `done` |
+| `review-commit` | produce → `human_gate` → deterministic commit | `awaiting_human`(approve 後完成) |
+| `batch` | `wf.map` 跑過 `uploads/*`,每個檔案一個 agent node | `done` |
 
-Read the generated `run.py` — it is annotated and is the fastest way to see a block
-in context. The bundled `apps/topic-hub/profiles/default/workflows/` (memory,
-collections, consolidate) are fuller real examples.
+讀生成出來的 `run.py`——它有註解,是看一個 block 落在情境中最快的方法。內建的
+`apps/topic-hub/profiles/default/workflows/`(memory、collections、consolidate)是更完整的
+真實範例。
 
-## Troubleshooting
+## 疑難排解
 
-- **It crashed at startup.** Run `check` — it names the file and the fix. (Boot also
-  `exec`s `run.py`, so it additionally catches import / `NameError` failures a static
-  `check` can't — read the traceback for those.)
-- **The progress diagram is wrong / a phase never lights up.** A `phase=` literal in
-  your code isn't declared (or vice versa). `check` warns on the former.
-- **A step won't re-run after I changed a prompt.** It should — the prompt is in the
-  input-hash. If you changed an *artifact* the step reads, that re-runs it too. To
-  force it, delete the `step_*` artifact or pass `cache=False`.
+- **它在開機時 crash。** 跑 `check`——它會點名檔案和修法。(開機也會 `exec` `run.py`,所以
+  它還會額外抓到靜態 `check` 抓不到的 import / `NameError` 失敗——那些請讀 traceback。)
+- **進度圖不對／某個 phase 永遠不亮。** 你程式碼裡的某個 `phase=` 字面值沒被宣告(或反過來)。
+  `check` 會對前者警告。
+- **改了 prompt 之後某個 step 不重跑。** 它應該要重跑才對——prompt 在 input-hash 裡。如果你改的是
+  step 讀的某個 *artifact*,那也會讓它重跑。要強制的話,刪掉 `step_*` artifact 或傳 `cache=False`。

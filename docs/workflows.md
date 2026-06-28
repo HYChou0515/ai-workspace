@@ -1,613 +1,569 @@
-# Workflows — the manual
+# Workflows — 操作手冊
 
-> **Status:** normative design spec for issue #100. This document is the *target*
-> and the *acceptance criterion*: the implementation is "done" when its observable
-> behaviour matches the rules here. Written before the plan, on purpose ("以終為始").
-> Decisions were locked through a `/grill-me` session; rejected alternatives are
-> recorded inline so we don't relitigate them.
+> **狀態：** issue #100 的規範性設計 spec。本文件就是 *目標*，也是 *驗收標準*：
+> 當實作的可觀察行為符合這裡的規則時，它就算「完成」。刻意在計畫之前先寫
+>（「以終為始」）。決策是透過一次 `/grill-me` session 鎖定的；被否決的替代方案
+> 就地記錄下來，免得我們重新爭論。
 >
-> **Authoring a workflow?** This is the *spec*; the practical how-to (block catalog,
-> conventions, the `new`/`check` CLI) is [`workflows-authoring.md`](workflows-authoring.md) (#287).
+> **要 author 一個 workflow？** 這份是 *spec*；實務上的 how-to（block 目錄、
+> 慣例、`new`/`check` CLI）在 [`workflows-authoring.md`](workflows-authoring.md)（#287）。
 
-A **workflow** turns the agentic workspace from interactive-only into something an
-external system can **trigger over an API** to run **headlessly** to a useful
-**artifact** — while reusing the *existing* workspace machinery (sandbox, file
-tools, the agent loop, KB) instead of reinventing it.
+一個 **workflow** 把這個 agentic workspace 從「只能互動」變成外部系統可以
+**透過 API 觸發**、**headless（無人值守）** 跑出一個有用 **artifact**（產物）的東西
+——而且重用 *既有的* workspace 機制（sandbox、file tool、agent loop、KB），不是重新發明。
 
-Two motivating use cases:
+兩個驅動的使用情境：
 
-1. An external caller periodically hits the API to kick off actions that end in an
-   artifact (e.g. a report).
-2. Someone uploads files; the system classifies and digests each one and files the
-   results into a small, **pre-defined** set of KB collections.
+1. 一個外部呼叫端週期性地打 API，啟動一連串以 artifact 收尾的動作（例如一份 report）。
+2. 有人上傳檔案；系統把每一個分類、消化（digest），再把結果歸檔到一組小而
+   **預先定義好** 的 KB collection。
 
-This manual describes the **platform** (the reusable machinery). *How* any one
-workflow behaves — what "digest" means, how a file is split, the routing rules — is
-**App/profile implementation**, expressed in that profile's code, and out of scope.
+本手冊描述的是 **平台**（可重用的機制）。任何單一 workflow *如何* 表現
+——「digest」是什麼意思、一個檔案怎麼切、routing 規則為何——都是
+**App/profile 的實作**，寫在那個 profile 的程式碼裡，不在本文範圍內。
 
 ---
 
-## 1. Mental model
+## 1. 心智模型
 
-Think **Temporal**, but the **journal is the filesystem**:
+把它想成 **Temporal**，但 **journal 就是檔案系統**：
 
-- **Orchestration** = the workflow's `run()` function. It runs **in the backend**,
-  owns control flow (sequence / loops / gates), and **re-executes from the top** on
-  every (re-)run. It is durable because its progress is recorded as **files**.
-- **Nodes** = the units of work `run()` invokes (agent step, deterministic step,
-  human gate). A node is an **activity**: it writes its result (an **artifact** or a
-  **receipt**) to the workspace under `step_<name>/<key>`, together with an
-  **input-hash**. On a later run, a node whose artifact exists **and** whose
-  input-hash still matches is **skipped** — its artifact is reused, the work is not
-  redone. This is Make-style incremental execution (§9). It is the whole of our
-  resume / retry / rewind / crash-recovery story.
-- **A workflow run and an interactive workspace are two modes over the same item**,
-  sharing the same `ChatTurnEngine` and conversation. An agent node *is* a turn on
-  the item — its thinking, messages and tool calls stream into the item's chat
-  exactly as if a human were driving. So the run leaves a full transcript + files,
-  and a human can take over at essentially zero extra cost (§10).
+- **Orchestration（編排）** = workflow 的 `run()` 函式。它跑 **在後端**，
+  掌管控制流（sequence／loop／gate），而且 **每次（重）執行都從頭重跑一遍**。
+  它之所以 durable（耐久），是因為它的進度被記錄成 **檔案**。
+- **Nodes（節點）** = `run()` 呼叫的工作單位（agent step、deterministic step、
+  human gate）。一個 node 就是一個 **activity**：它把結果（一個 **artifact** 或一張
+  **receipt（收據）**）寫進 workspace 的 `step_<name>/<key>`，連同一個
+  **input-hash**。在後續一次執行中，若某 node 的 artifact 存在 **且** 它的
+  input-hash 仍然吻合，就 **跳過** ——重用它的 artifact，不重做這份工。
+  這是 Make 風格的 incremental 執行（§9）。它就是我們 resume／retry／rewind／
+  crash-recovery 的全部故事。
+- **一次 workflow run 與一個互動式 workspace 是同一個 item 的兩種模式**，
+  共用同一個 `ChatTurnEngine` 和同一個 conversation。一個 agent node *就是* 那個
+  item 上的一次 turn ——它的思考、訊息、tool 呼叫都串流進該 item 的 chat，
+  完全像是有人在驅動。所以一次 run 留下完整的 transcript + 檔案，人類可以
+  幾乎零額外成本地接手（§10）。
 
-Why orchestration is in the backend: only a backend driver can re-execute, hold the
-sandbox lifecycle, and (later) suspend at a human gate. The sandbox is ephemeral
-compute; the **FileStore is the durable record**.
+為什麼 orchestration 要在後端：只有後端 driver 能重跑、能持有 sandbox 生命週期、
+（之後）能在 human gate 暫停。sandbox 是短命的計算資源；**FileStore 才是耐久的紀錄**。
 
 ---
 
-## 2. Where a workflow lives
+## 2. 一個 workflow 住在哪裡
 
-At the **profile** level — **the App level has no orchestration code.**
+在 **profile** 這一層——**App 這一層沒有任何 orchestration 程式碼。**
 
 ```
 apps/<slug>/
-  app.json, model.py, prompts/        # App: the WorkItem type + branding + agent ceiling
+  app.json, model.py, prompts/        # App：WorkItem 型別 + branding + agent 上限
   profiles/
     <profile>/
-      _profile.json                   # profile config + workflow MANIFEST (phases, input.json path)
-      _prompt.md, *.tpl, .skill/      # existing profile assets (prompt, seeded files, skills)
-      run.py                          # the orchestration run(wf, inputs)   [backend, trusted]
-      nodes/                          # custom deterministic node scripts    [run in sandbox]
+      _profile.json                   # profile config + workflow MANIFEST（phases、input.json 路徑）
+      _prompt.md, *.tpl, .skill/      # 既有的 profile 資產（prompt、seed 檔、skill）
+      run.py                          # orchestration run(wf, inputs)         [後端，trusted]
+      nodes/                          # 自訂 deterministic node 腳本           [在 sandbox 中跑]
 ```
 
-- A **profile = one complete behaviour package**: prompt + tool subset + seeded
-  files + skills + (optionally) a workflow.
-- A profile has **0 or 1 workflow**. *With* one → headless-triggerable. *Without* →
-  interactive-only. (This is why *creating an item* and *running a workflow* are
-  decoupled — §14.)
-- `run()` is **trusted backend Python**, discovered by scanning profiles the same
-  way Apps are discovered (drop-in → registered). Custom deterministic node scripts
-  run **in the sandbox** (§7).
-- The profile **seeds** any default files it wants into the workspace using the
-  **existing profile file-seeding mechanism** (the same one that seeds `notes.md`,
-  `SOP.md`, …). `input.json` (§14) is just one such seeded file.
+- 一個 **profile = 一個完整的行為包**：prompt + tool 子集 + seed 檔 + skill +
+  （可選）一個 workflow。
+- 一個 profile 有 **0 或 1 個 workflow**。*有* 一個 → 可 headless 觸發。*沒有* →
+  只能互動。（這就是為什麼 *建立一個 item* 與 *跑一個 workflow* 是解耦的——§14。）
+- `run()` 是 **trusted 後端 Python**，用掃描 profile 的方式被發現，跟 App 被發現的
+  方式一樣（放進去 → 註冊）。自訂的 deterministic node 腳本跑 **在 sandbox 中**（§7）。
+- profile 用 **既有的 profile 檔案 seeding 機制**（就是那個 seed `notes.md`、
+  `SOP.md`…的同一套），把它想要的任何預設檔案 **seed** 進 workspace。
+  `input.json`（§14）只是其中一個被 seed 的檔案。
 
 ---
 
-## 3. The authoring model
+## 3. Authoring 模型
 
-> **A workflow is a Python `async def run(wf, inputs)` over a small step library,
-> plus a small data `MANIFEST`. Control flow is the host language. There is no
-> workflow DSL.**
+> **一個 workflow 是一個 Python `async def run(wf, inputs)`，搭配一個小小的 step
+> 函式庫，再加一份小小的資料 `MANIFEST`。控制流就是 host language。沒有 workflow DSL。**
 
-Workflows feel "hard to define" exactly when control flow (loops / branches /
-retries / value-passing) is crammed into declarative YAML. Using Python:
+當控制流（loop／branch／retry／傳值）被硬塞進宣告式 YAML 時，workflow 就會剛好變得
+「難以定義」。用 Python：
 
-| What you need | How you write it |
+| 你需要什麼 | 你怎麼寫 |
 | --- | --- |
-| iterate over items | a plain `for` loop |
-| run items concurrently | `asyncio.gather` over per-element work (§11) |
-| retry a step with feedback | the step's `retries=` (a `while` under the hood) |
-| pass data between steps | plain variables + workspace files |
-| branch | a plain `if` |
-| "every agent step is gated" | `check=` is a **required** argument of `agent_step` |
+| 對 items 迭代 | 一個普通的 `for` loop |
+| 並行跑 items | 對每個元素的工作做 `asyncio.gather`（§11） |
+| 帶 feedback 重試一個 step | 該 step 的 `retries=`（底層是一個 `while`） |
+| 在 steps 之間傳資料 | 純變數 + workspace 檔案 |
+| branch | 一個普通的 `if` |
+| 「每個 agent step 都被 gate」 | `check=` 是 `agent_step` 的 **必要** 參數 |
 
-**Rejected:** a declarative DAG/DSL. It only wins for visual authoring by
-non-engineers or runtime-editable definitions — neither is required — and it brings
-back the "hard to define" pain. Observability (§12) does **not** need a DSL.
+**否決：** 一個宣告式 DAG/DSL。它只在「給非工程師做視覺化 authoring」或
+「執行期可編輯定義」這兩種需求下才划算——兩者都不是必要的——而且它把
+「難以定義」的痛苦帶回來。Observability（§12）**不** 需要 DSL。
 
-### Two authoring conventions that make everything else cheap
+### 讓其他一切都變便宜的兩個 authoring 慣例
 
-1. **Pass a step's inputs as its arguments.** Read artifacts in `run()` and feed
-   the data into the step; **do not read ambient state inside a step.** This makes a
-   step's **input-hash = `hash(its arguments)`** (§9) — trivial to compute, and it
-   auto-invalidates downstream when an upstream artifact changes.
-2. **Control flow must produce a reproducible *set of step identities*.** Loop
-   iteration sets and branch conditions must read only from `inputs` and step
-   artifacts — never wall-clock / `random` / a fresh un-stepped query. A step's
-   *output* may be fully nondeterministic; only its *identity* (where its artifact
-   lands) must be stable, so a re-run lands artifacts on the same paths (§9).
+1. **把一個 step 的 inputs 當成它的 arguments 傳進去。** 在 `run()` 裡讀 artifact，
+   把資料餵進 step；**不要在 step 內部讀環境狀態（ambient state）。** 這讓一個 step 的
+   **input-hash = `hash(它的 arguments)`**（§9）——計算起來再簡單不過，而且上游
+   artifact 一變，下游就會自動失效。
+2. **控制流必須產生一個可重現的 *step 身分集合*。** Loop 的迭代集合與 branch 的條件
+   只能讀自 `inputs` 與 step artifact ——絕不能讀 wall-clock／`random`／一個全新的、
+   沒走過 step 的 query。一個 step 的 *輸出* 可以完全 nondeterministic；只有它的
+   *身分*（它的 artifact 落在哪裡）必須穩定，這樣重跑時 artifact 才會落在同樣的路徑上（§9）。
 
-### MANIFEST (the only declarative part)
+### MANIFEST（唯一的宣告式部分）
 
-Lives in `_profile.json`:
+住在 `_profile.json`：
 
 ```jsonc
 {
-  // ... existing profile fields ...
+  // ... 既有的 profile 欄位 ...
   "workflow": {
     "title": "Classify & file uploads into collections",
-    "phases": [                                   // the static skeleton for the diagram (§12)
+    "phases": [                                   // diagram 的靜態骨架（§12）
       { "id": "classify", "title": "Classify + digest" },
       { "id": "ingest",   "title": "Ingest to collection" }
     ]
-    // input_json omitted ⇒ derives `{profile.upload_dir}/input.json` (§14); pin only to override
+    // 省略 input_json ⇒ 推導出 `{profile.upload_dir}/input.json`（§14）；只有要覆寫時才釘死
   }
 }
 ```
 
-### Authoring surface (illustrative; exact signatures pinned in the plan)
+### Authoring 介面（示意；確切 signature 在計畫中釘死）
 
 ```python
 async def run(wf, inputs):
-    # wf     — run handle: workspace IO, capability methods, the run-scoped credential
-    # inputs — the parsed input.json (content is the profile's own business)
+    # wf     — run handle：workspace IO、capability 方法、run-scoped credential
+    # inputs — 解析後的 input.json（內容是 profile 自己的事）
     ...
-    return artifact_summary                        # stored on the WorkflowRun (§13)
+    return artifact_summary                        # 存在 WorkflowRun 上（§13）
 ```
 
-- `wf.read(path)`, `wf.read_json(path)`, `wf.glob(spec)`, `wf.files` — workspace IO.
-- `await agent_step(wf, *, prompt, phase, tools=None, check, retries=0, cache=True)` — §5.1.
-- `await sandbox_node(wf, *, phase, run, check=None, cache=True)` — custom deterministic node, §5.2.
-- `check.*` — gate builders, §6.
-- capability methods, e.g. `await wf.ingest_to_collection(collection, path, *, digest=None)` — §8.
-- `fail(reason)` / `StepFailed` — abort the current step/element, §6.
-- `human_gate(...)` — §10.
+- `wf.read(path)`、`wf.read_json(path)`、`wf.glob(spec)`、`wf.files` —— workspace IO。
+- `await agent_step(wf, *, prompt, phase, tools=None, check, retries=0, cache=True)` —— §5.1。
+- `await sandbox_node(wf, *, phase, run, check=None, cache=True)` —— 自訂 deterministic node，§5.2。
+- `check.*` —— gate builder，§6。
+- capability 方法，例如 `await wf.ingest_to_collection(collection, path, *, digest=None)` —— §8。
+- `fail(reason)` / `StepFailed` —— 中止當前的 step/element，§6。
+- `human_gate(...)` —— §10。
 
 ---
 
-## 4. Node types
+## 4. Node 類型
 
-Three kinds, **distinguished by *who invokes them*, not where they run.**
+三種，**靠 *誰呼叫它們* 來區分，不是靠它們在哪裡跑。**
 
-1. **agent node** — an LLM-driven turn (§5.1). The LLM *decides*; it works through
-   its tools against the sandbox.
-2. **deterministic node** — author code with **no LLM** (§5.2). The orchestration
-   *acts*. Runs as a script in the sandbox; reaches platform capabilities over HTTP.
-3. **human gate** — suspends for a human decision (§10).
+1. **agent node** —— 一次 LLM 驅動的 turn（§5.1）。LLM *決定*；它靠自己的 tool
+   對 sandbox 做事。
+2. **deterministic node** —— author 寫的、**沒有 LLM** 的程式碼（§5.2）。是 orchestration
+   *動手*。以腳本形式跑在 sandbox；透過 HTTP 觸及平台 capability。
+3. **human gate** —— 為了一個人類決策而暫停（§10）。
 
-**The decision/action principle (core to reliability):** the LLM only ever
-*decides* and records its decision *as data*; the *action* (any side-effect that
-must be reliable — ingest, export, …) is performed by a **deterministic node**, not
-the agent. The agent never holds the tool that performs the side-effect (§7).
+**decision/action 原則（可靠性的核心）：** LLM 永遠只 *決定*，並把它的決策記錄
+*成資料*；那個 *action*（任何必須可靠的 side-effect ——ingest、export…）是由一個
+**deterministic node** 執行，不是 agent。agent 永遠不持有那個會產生 side-effect 的
+tool（§7）。
 
 ---
 
-## 5. Node details
+## 5. Node 細節
 
 ### 5.1 Agent node
 
-- Runs through the **existing `ChatTurnEngine`** (backend loop; its `exec`/file
-  tools act on the sandbox). It is a normal turn on the item → persisted as
-  `Message`s and streamed over SSE. This is what gives transcript continuity and
-  free human takeover (§10).
-- **`tools=` ⊆ the profile's tool ceiling** (the LLM-safety boundary; coherence
-  enforced like #89's `validate_function_coherence`). Agent tools skew toward
-  **read / explore**; side-effects are deterministic nodes, not tools (§7).
-- **`check=` is mandatory.** An agent node with no gate is a schema error.
-- **Artifact:** the step writes its output to `step_<name>/<key>` and is skipped on
-  re-run if that exists with a matching input-hash (§9). A failed gate (after
-  `retries`) means **no artifact is written**, so a re-run retries it.
+- 透過 **既有的 `ChatTurnEngine`** 跑（後端 loop；它的 `exec`/file tool 作用在
+  sandbox 上）。它就是該 item 上一次正常的 turn → 以 `Message` 持久化、透過 SSE 串流。
+  這就是 transcript 連續性與免費人類接手的來源（§10）。
+- **`tools=` ⊆ profile 的 tool 上限**（LLM 安全邊界；coherence 像 #89 的
+  `validate_function_coherence` 那樣強制）。agent 的 tool 偏向 **讀／探索**；
+  side-effect 是 deterministic node，不是 tool（§7）。
+- **`check=` 是必要的。** 一個沒有 gate 的 agent node 是 schema error。
+- **Artifact：** 該 step 把它的輸出寫到 `step_<name>/<key>`，重跑時若它存在且
+  input-hash 吻合就跳過（§9）。一個失敗的 gate（耗盡 `retries` 後）意味著
+  **不寫 artifact**，所以重跑會重試它。
 
 ### 5.2 Deterministic node
 
-- **No LLM.** Author code (a script under `nodes/`), runs **in the sandbox**. Needs
-  a platform capability (ingest, KB read, …)? It calls the capability's **HTTP
-  endpoint** with the **run-scoped credential** (§8, §15). It does not import
-  backend internals.
-- Not exposed to the LLM; not governed by the tool subset (§7).
-- **Artifact / receipt:** every deterministic node must record a result under
-  `step_<name>/<key>` so it is checkpointable — even when its real effect lives
-  elsewhere (e.g. an ingest writes a `step_ingest/<file>.done` receipt with the doc
-  id), so it can be skipped on re-run.
+- **沒有 LLM。** author 寫的程式碼（`nodes/` 底下的腳本），跑 **在 sandbox 中**。
+  需要一個平台 capability（ingest、KB read…）？它用 **run-scoped credential** 去打那個
+  capability 的 **HTTP endpoint**（§8、§15）。它不 import 後端內部。
+- 不暴露給 LLM；不受 tool 子集管轄（§7）。
+- **Artifact / receipt：** 每個 deterministic node 都必須在 `step_<name>/<key>` 底下
+  記錄一個結果，這樣它才可被 checkpoint ——即使它真正的效果發生在別處（例如一次
+  ingest 寫一張 `step_ingest/<file>.done` receipt，內含 doc id），它在重跑時才能被跳過。
 
 ---
 
-## 6. Gates / checks
+## 6. Gate／check
 
-- **Every agent node has a gate** (§5.1); deterministic nodes are their own check
-  (do, then verify).
-- **Deterministic checks are primary; LLM-judge checks are auxiliary.** Verify
-  mechanically wherever possible (file non-empty; chosen value ∈ allowed set; doc
-  actually landed in a collection). Reserve an LLM-judge check (another agent turn
-  returning pass/fail) for goals only semantically checkable. A deterministic
-  predicate is a hard guarantee; an LLM judging an LLM is one unreliable thing
-  checking another.
-- **On failure: retry-with-feedback `N` times, then abort the step.** The check's
-  failure reason is fed back into the *same step's* re-run (an in-step loop, within
-  one run). After `N` attempts the step aborts; in a loop the per-element policy is
-  **skip + collect** by default (§11). Because a failed step writes no artifact, a
-  *later* run also retries it.
-- Built-in checks (illustrative): `check.file_nonempty(path)`,
-  `check.choice_in(path, key, allowed)`, `check.collection_has(collection, path)`,
-  `check.exec(cmd)`, `check.llm_judge(criteria)`.
+- **每個 agent node 都有一個 gate**（§5.1）；deterministic node 是它自己的 check
+  （做完，然後驗證）。
+- **Deterministic check 是主要的；LLM-judge check 是輔助的。** 能機械化驗證的地方
+  就機械化驗證（檔案非空；選出的值 ∈ 允許集合；doc 確實落進了某個 collection）。
+  把 LLM-judge check（另一次回傳 pass/fail 的 agent turn）保留給只能語意檢查的目標。
+  一個 deterministic predicate 是硬保證；一個 LLM 去評判另一個 LLM，是一個不可靠的
+  東西在檢查另一個不可靠的東西。
+- **失敗時：帶 feedback 重試 `N` 次，然後中止該 step。** check 的失敗原因會被餵回
+  *同一個 step 的* 重跑（一個 in-step loop，在同一次 run 之內）。`N` 次嘗試後該 step
+  中止；在一個 loop 裡，每個元素的預設政策是 **skip + collect**（§11）。因為一個失敗的
+  step 不寫 artifact，*之後* 的一次 run 也會重試它。
+- 內建 check（示意）：`check.file_nonempty(path)`、
+  `check.choice_in(path, key, allowed)`、`check.collection_has(collection, path)`、
+  `check.exec(cmd)`、`check.llm_judge(criteria)`。
 
 ---
 
-## 7. Tools vs deterministic node scripts
+## 7. Tool vs deterministic node 腳本
 
-Both can run in the sandbox; that is **not** what separates them — **the invoker
-is.**
+兩者都能跑在 sandbox 裡；那 **不是** 區分它們的關鍵——**呼叫者才是。**
 
-| | **agent tool** (incl. tool packages) | **deterministic node script** |
+| | **agent tool**（含 tool package） | **deterministic node 腳本** |
 | --- | --- | --- |
-| invoked by | the **LLM** (an agent node) | the **orchestration** (`run()`) |
-| needs an LLM schema | yes | no |
-| visible to the LLM | yes | no |
-| bounded by | the profile's **tool subset** | the **run-scoped credential's capability scope** |
-| why bounded that way | the LLM is unpredictable → safety boundary | author code is fixed → authz over which capabilities it may hit |
+| 由誰呼叫 | **LLM**（一個 agent node） | **orchestration**（`run()`） |
+| 需要 LLM schema | 是 | 否 |
+| 對 LLM 可見 | 是 | 否 |
+| 被什麼界定 | profile 的 **tool 子集** | **run-scoped credential 的 capability scope** |
+| 為什麼這樣界定 | LLM 不可預測 → 安全邊界 | author 程式碼是固定的 → 對它能打哪些 capability 做 authz |
 
-- The **tool subset governs only the LLM.** Deterministic nodes are not in it and
-  not constrained by it.
-- The shared layer is the **sandbox + the capabilities** (§8), not the invocation
-  surface. A tool package can be reached by both paths; a deterministic node need
-  not be a package (it can be a plain command, e.g. a gate's `test -s report.md`).
-- **Consequence:** any reliable side-effect (ingest, export) is a **deterministic
-  node**, never an agent tool. The agent's subset stays read/explore-shaped — so
-  "avoid false completion" is stronger than a post-hoc gate: **the agent doesn't
-  hold the tool that could botch the step.**
+- **tool 子集只管 LLM。** deterministic node 不在其中，也不受它約束。
+- 共用層是 **sandbox + capability**（§8），不是呼叫介面。一個 tool package 可被兩條
+  路徑觸及；一個 deterministic node 不必是一個 package（它可以是一個純指令，
+  例如某個 gate 的 `test -s report.md`）。
+- **結論：** 任何可靠的 side-effect（ingest、export）都是一個 **deterministic node**，
+  絕不是 agent tool。agent 的子集維持讀／探索形狀——所以「避免假性完成」比一個事後
+  gate 還強：**agent 根本不持有那個可能搞砸該 step 的 tool。**
 
 ---
 
-## 8. Capabilities (HTTP) & the decision/action pattern
+## 8. Capabilities（HTTP）與 decision/action 模式
 
-- Platform operations (KB ingest, KB query, …) are **HTTP endpoints**. Sandbox code
-  calls them with the **run-scoped credential** (§15). The same endpoints can serve
-  external callers and, where wanted, be wrapped as agent tools.
-- **`ingest_to_collection(collection, path, *, digest=None)`** — reuses the existing
-  `Ingestor.store` + `index` under `rm.using(user=<captured>)`, awaits `ready`.
-  - **Idempotent**: the SourceDoc id is `encode_doc_id(collection, path)` → re-ingest
-    is an **upsert**, never a duplicate (safe under re-run).
-  - **Requires the collection to exist** (no auto-create).
-  - Writes a `step_ingest/<file>.done` receipt; the matching gate
-    `check.collection_has(collection, path)` reads the doc back and asserts `ready`.
+- 平台操作（KB ingest、KB query…）都是 **HTTP endpoint**。sandbox 程式碼用
+  **run-scoped credential**（§15）去打它們。同一批 endpoint 可以服務外部呼叫端，
+  並在需要的地方被包成 agent tool。
+- **`ingest_to_collection(collection, path, *, digest=None)`** —— 在
+  `rm.using(user=<captured>)` 底下重用既有的 `Ingestor.store` + `index`，等到 `ready`。
+  - **Idempotent（冪等）**：SourceDoc id 是 `encode_doc_id(collection, path)` → 重新
+    ingest 是一次 **upsert**，絕不重複（重跑下安全）。
+  - **要求該 collection 已存在**（不 auto-create）。
+  - 寫一張 `step_ingest/<file>.done` receipt；對應的 gate
+    `check.collection_has(collection, path)` 把該 doc 讀回來並斷言 `ready`。
 
-### Decision/action for parameterised side-effects
+### 帶參數 side-effect 的 decision/action
 
-When the LLM must *influence* a reliable side-effect ("send this file to collection
-X"), it does **not** call the API. It records the parameter as **data**; a
-deterministic node carries it to the capability:
+當 LLM 必須 *影響* 一個可靠的 side-effect（「把這個檔案送到 collection X」）時，
+它 **不** 呼叫 API。它把那個參數記錄成 **資料**；一個 deterministic node 把它帶到
+capability：
 
 ```python
-# agent node: LLM decides; records parameter X as data (write_file is in its subset)
+# agent node：LLM 決定；把參數 X 記錄成資料（write_file 在它的子集裡）
 await agent_step(
     wf, phase="classify",
     prompt=f"Read {f}. Pick its collection from {allowed}. "
            f"Write {{collection, digest}} to plan/{f}.json.",
-    tools=["read_file", "write_file"],                       # NO ingest tool
+    tools=["read_file", "write_file"],                       # 沒有 ingest tool
     check=check.choice_in(f"plan/{f}.json", key="collection", allowed=allowed),
-    retries=2,                                               # invalid X → feedback → re-pick
+    retries=2,                                               # 無效的 X → feedback → 重選
 )
-# deterministic node: orchestration carries X to the capability (LLM not involved)
+# deterministic node：orchestration 把 X 帶到 capability（LLM 不參與）
 plan = wf.read_json(f"plan/{f}.json")
 await wf.ingest_to_collection(plan["collection"], f, digest=plan["digest"], phase="ingest")
 ```
 
-X (`plan["collection"]`) travels **LLM → file → deterministic node → capability**.
-"The LLM carries a parameter" does **not** mean "the LLM calls the API." The gate
-clamps X to the allowed set; the node guarantees exactly-once.
+X（`plan["collection"]`）的旅程是 **LLM → 檔案 → deterministic node → capability**。
+「LLM 帶一個參數」**不** 等於「LLM 呼叫 API」。gate 把 X 夾到允許集合內；
+node 保證 exactly-once。
 
 ---
 
-## 9. Execution model — the filesystem *is* the journal
+## 9. 執行模型 —— 檔案系統 *就是* journal
 
-This is the heart of the design. It replaces any separate journal/replay machinery.
+這是整個設計的核心。它取代任何獨立的 journal/replay 機制。
 
-- **Each step checkpoints to the workspace** under the run's **journal home**
-  `/.workflow/<workflow_id>/` (legacy singular workflows → `/.workflow/_default/`), at
-  `/.workflow/<workflow_id>/step_<name>/<key>` (key = loop element / call identity,
-  e.g. `/.workflow/collections/step_classify/file_7.json`), alongside its
-  **input-hash** (`= hash(the step's arguments)`, per the §3 convention). The journal
-  lives in its own folder so it stops scattering across the workspace root, and each
-  workflow's `step_*` artifacts stay grouped under that workflow's folder (#136). The
-  bare `step_<name>/<key>` shorthand used elsewhere in this doc always means that path
-  *inside* the run's journal home.
-- **On-demand inline skip.** A run re-executes `run()` from the top. **When control
-  flow reaches a step**, the step first checks its own artifact: if it exists **and**
-  the input-hash still matches → **skip** (return the cached artifact, do not redo
-  the work, do not re-call the LLM, do not re-post to chat). Otherwise → **execute**,
-  then write the artifact + input-hash. There is no up-front scan — checks are cheap
-  and inline.
-- **Auto-invalidation.** Because input-hash = `hash(args)`, editing an upstream
-  artifact changes what `run()` passes downstream → the downstream step's hash no
-  longer matches → it re-runs. **Editing upstream automatically re-runs the affected
-  downstream** — no manual bookkeeping.
-- **`cache=False` (never-cache).** A step can opt to always re-run (or it naturally
-  always re-runs because its inputs always change, e.g. "fetch latest"). Its
-  downstream re-runs too, correctly.
-- **Determinism is about *identity*, not output.** Step outputs may be fully
-  nondeterministic (LLM). What must be reproducible is the *set of step identities*
-  — guaranteed by the §3 control-flow convention (iterate stable sets, branch on
-  inputs/artifacts only).
+- **每個 step checkpoint 到 workspace**，落在該 run 的 **journal 家目錄**
+  `/.workflow/<workflow_id>/`（舊的單數 workflow → `/.workflow/_default/`），
+  在 `/.workflow/<workflow_id>/step_<name>/<key>`（key = loop 元素／呼叫身分，
+  例如 `/.workflow/collections/step_classify/file_7.json`），連同它的
+  **input-hash**（`= hash(該 step 的 arguments)`，依 §3 的慣例）。journal 住在它
+  自己的資料夾裡，這樣它就不會再散落在 workspace 根目錄；而每個 workflow 的
+  `step_*` artifact 都歸在那個 workflow 的資料夾底下（#136）。本文件其他地方用的
+  裸 `step_<name>/<key>` 簡寫，永遠指那個 run 的 journal 家目錄 *裡面* 的這條路徑。
+- **On-demand 的就地跳過。** 一次 run 從頭重跑 `run()`。**當控制流抵達某個 step 時**，
+  該 step 先檢查它自己的 artifact：若它存在 **且** input-hash 仍吻合 → **跳過**
+  （回傳快取的 artifact，不重做這份工，不重新呼叫 LLM，不重新貼回 chat）。否則 →
+  **執行**，然後寫 artifact + input-hash。沒有預先掃描——檢查很便宜而且就地進行。
+- **Auto-invalidation（自動失效）。** 因為 input-hash = `hash(args)`，編輯一個上游
+  artifact 會改變 `run()` 往下游傳的東西 → 下游 step 的 hash 不再吻合 → 它重跑。
+  **編輯上游會自動重跑受影響的下游** ——不用手動記帳。
+- **`cache=False`（永不快取）。** 一個 step 可以選擇永遠重跑（或者因為它的 inputs
+  總是在變而自然永遠重跑，例如「抓最新的」）。它的下游也跟著重跑，正確無誤。
+- **Determinism 講的是 *身分*，不是輸出。** step 的輸出可以完全 nondeterministic（LLM）。
+  必須可重現的是那個 *step 身分集合* ——由 §3 的控制流慣例保證（迭代穩定集合、
+  只在 inputs/artifact 上 branch）。
 
-What this single mechanism gives us, for free:
+這一個機制，免費給我們：
 
-- **Resume / crash / restart recovery** — re-run; completed steps skip (artifacts
-  live in the persistent FileStore).
-- **Retry / rewind** — **stop the run, edit or delete artifacts in the normal file
-  UI, press Run again.** Deleting `step_X/<key>` forces step X to re-run; editing an
-  upstream artifact re-runs its downstream via input-hash. No rewind API, no
-  `retry_to` list, no positional-prefix rule. *(All of these earlier mechanisms are
-  removed — superseded by this.)*
-- **Reset "from scratch"** — delete the run's journal folder `/.workflow/<workflow_id>/`
-  (or the `step_*` artifacts within it); keep the inputs. The #52 per-turn-snapshot
-  dependency is no longer required for this.
+- **Resume／crash／restart 恢復** —— 重跑；已完成的 step 跳過（artifact 活在
+  持久的 FileStore 裡）。
+- **Retry／rewind** —— **停掉 run，在正常的 file UI 裡編輯或刪除 artifact，再按 Run。**
+  刪掉 `step_X/<key>` 強迫 step X 重跑；編輯一個上游 artifact 透過 input-hash 重跑它的
+  下游。沒有 rewind API、沒有 `retry_to` 清單、沒有 positional-prefix 規則。
+  *（這些較早的機制全部移除——被這個取代。）*
+- **「從頭來過」的重置** —— 刪掉該 run 的 journal 資料夾 `/.workflow/<workflow_id>/`
+  （或其中的 `step_*` artifact）；保留 inputs。為此而需要的 #52 per-turn-snapshot
+  依賴已不再需要。
 
 ---
 
-## 10. Human interaction & takeover
+## 10. 人類互動與接手
 
-A run and an interactive workspace are **two modes of one item, one
-`ChatTurnEngine`, one conversation**. Each agent node is a turn on that item, so a
-run leaves a full transcript + files.
+一次 run 與一個互動式 workspace 是 **同一個 item、同一個 `ChatTurnEngine`、
+同一個 conversation 的兩種模式**。每個 agent node 是那個 item 上的一次 turn，
+所以一次 run 留下完整的 transcript + 檔案。
 
-- **Stop & take over.** At any time a human can **Stop** the run (a control
-  action, not a chat message; reuses `cancel_current`). The run goes terminal; the
-  item opens to interactive use; the human continues from the current files +
-  transcript. For a parallel batch (§11) in-flight elements are cancelled; completed
-  ones (idempotent, already committed) are kept and reported. This is the escape
-  hatch when an agent goes off the rails: stop, inspect, edit artifacts, re-run.
-- **While `running`, the item is workflow-driven** — a human does not free-chat into
-  the same turn queue. Free chat opens once the run is terminal (or `awaiting_human`).
-- **Human gate (v1).** `await human_gate(wf, phase, title, summary, allow)`
-  suspends the run and records a **pending decision** (its result is just another
-  **artifact**, `step_<gate>/decision.json` inside the run's journal home — i.e.
-  `/.workflow/<workflow_id>/step_<gate>/decision.json`). The run stops; a human responds via
-  `POST .../runs/{id}/decisions` with `{choice, input?}`; re-running finds the decision
-  artifact, the gate reads it, and execution continues. `allow` lists the choices the
-  FE offers; a `revise` choice reveals a free-text `input` the body can act on. Outcomes
-  the body sees: `approve` / `reject` (→ end + interactive takeover) / `revise` (+ input,
-  e.g. `→collections` regenerates its drafts from the note). **"Retry/rewind" is not a
-  gate outcome** — it is the file-based mechanism in §9 (delete artifacts + re-run).
-  - **Why v1:** both use cases end in an irreversible commit (publish a report;
-    write into collections) that **must be confirmed first**. The canonical shape is
-    **produce → review → commit**: the agent produces reviewable artifacts (safe),
-    a `human_gate` lets a human approve, and only then does a deterministic node
-    commit the side-effect. Because the gate sits *before* the commit, a `reject`
-    leaves nothing committed.
-- **Steer-and-resume (#288).** Past a run's active window — at a gate, or once it is
-  terminal (`done` / `error` / `cancelled`) — a human can **redirect the run in words**
-  instead of hand-editing files (§9). They type a free-text instruction in the run's
-  chat (e.g. *"use the a, b collections and redo the upload"*); a read-only **steerer**
-  turn reads the current inputs + journal + transcript and proposes a **steer plan**:
-  which input files to rewrite and which steps to **invalidate** (delete the artifact →
-  force re-run). The plan is **reviewed before it applies** (produce → review → commit,
-  the same shape as a gate): a confirm card shows the file diffs + which steps will
-  re-run vs. be kept (the blast radius), and the human **approves / rejects / re-instructs**.
-  On approve a deterministic step applies the edits + deletes the invalidated artifacts,
-  and the **same run resumes** (§9 re-run: completed steps whose input-hash still matches
-  **skip** — *incremental*, the expensive prefix is not redone). A mid-run instruction
-  first **Stops** the run (the in-flight node would re-run on resume anyway), then steers.
-  - **Vocabulary = edit inputs + invalidate steps** — the two generic moves; downstream
-    re-runs cascade through input-hash (§9). It is platform-level and needs **no author
-    code**: the steerer may rewrite any workspace file *outside* the journal
-    (`/.workflow/`) and invalidate any step. The LLM only *proposes* (decision); the
-    deterministic apply *acts* (action) — the decision/action split (§8) again. Steering
-    **coexists** with a gate's `approve` / `reject` / `revise`: those are the author's
-    in-body outcomes; the steerer is the always-available free-text path on top.
-  - **Endpoints:** `POST .../runs/{id}/steer {instruction}` (Stops the run if running →
-    runs the steerer → sets `pending_steer`, run goes `awaiting_human`);
-    `POST .../runs/{id}/steer/confirm {approve}` (approve → apply + resume; reject →
-    discard the plan; re-instruct → call `steer` again with a new instruction). The
-    proposed plan + the human's answer are journaled under `/.workflow/<workflow_id>/steer/`
-    for audit.
-  - **Still deferred:** true *live* injection (a note delivered into an already-running
-    node, without Stopping) — not needed; Stop-then-steer covers the cases.
+- **Stop 然後接手。** 任何時候人類都可以 **Stop** 這次 run（一個控制動作，
+  不是 chat 訊息；重用 `cancel_current`）。run 進入終態；item 開放給互動使用；
+  人類從當下的檔案 + transcript 繼續。對一個平行 batch（§11），在途的元素被取消；
+  已完成的（idempotent、已 commit）保留並回報。這是 agent 失控時的逃生口：
+  停下、檢查、編輯 artifact、重跑。
+- **當 `running` 時，item 是 workflow 驅動的** ——人類不能自由 chat 進同一個 turn
+  佇列。一旦 run 進入終態（或 `awaiting_human`），自由 chat 才開放。
+- **Human gate（v1）。** `await human_gate(wf, phase, title, summary, allow)`
+  暫停 run 並記錄一個 **pending decision**（它的結果只是另一個 **artifact**，
+  在 run 的 journal 家目錄裡的 `step_<gate>/decision.json` ——即
+  `/.workflow/<workflow_id>/step_<gate>/decision.json`）。run 停下；人類透過
+  `POST .../runs/{id}/decisions` 帶 `{choice, input?}` 回應；重跑時找到那個 decision
+  artifact，gate 讀它，執行繼續。`allow` 列出 FE 提供的選項；一個 `revise` 選項會
+  揭露一個自由文字 `input` 讓 body 可以據以行動。body 看到的 outcome：
+  `approve` / `reject`（→ 結束 + 互動接手）/ `revise`（+ input，例如 `→collections`
+  從那則 note 重新產生它的草稿）。**「Retry/rewind」不是一個 gate outcome** ——
+  它是 §9 那個基於檔案的機制（刪 artifact + 重跑）。
+  - **為什麼是 v1：** 兩個使用情境都以一個不可逆的 commit（發佈一份 report；
+    寫進 collection）收尾，那 **必須先被確認**。標準形狀是 **produce → review → commit**：
+    agent 產出可審閱的 artifact（安全），一個 `human_gate` 讓人類核准，唯有此後一個
+    deterministic node 才 commit 那個 side-effect。因為 gate 坐落在 commit *之前*，
+    一個 `reject` 不會留下任何已 commit 的東西。
+- **Steer-and-resume（#288）。** 在一次 run 的活躍窗口之外——在一個 gate，或者它已進入
+  終態（`done` / `error` / `cancelled`）——人類可以 **用文字重新導向 run**，而不是
+  手動編輯檔案（§9）。他們在 run 的 chat 裡打一段自由文字指令（例如
+  *"use the a, b collections and redo the upload"*）；一次唯讀的 **steerer** turn
+  讀目前的 inputs + journal + transcript，提出一個 **steer plan**：要重寫哪些 input
+  檔案、要 **invalidate** 哪些 step（刪掉 artifact → 強迫重跑）。這個 plan **在套用之前
+  先被審閱**（produce → review → commit，跟 gate 同樣的形狀）：一張 confirm card 顯示
+  檔案 diff + 哪些 step 會重跑 vs. 被保留（blast radius，影響範圍），人類
+  **approve／reject／re-instruct（重下指令）**。一旦 approve，一個 deterministic step
+  套用編輯 + 刪掉被 invalidate 的 artifact，然後 **同一個 run 繼續**（§9 重跑：
+  input-hash 仍吻合的已完成 step **跳過** ——*incremental*，昂貴的前綴不重做）。
+  一條 run 進行中的指令會先 **Stop** 這次 run（在途的 node 反正在 resume 時就會重跑），
+  然後 steer。
+  - **詞彙 = 編輯 inputs + invalidate step** —— 這兩個通用動作；下游重跑透過
+    input-hash 串聯（§9）。它是平台層級的，不需要 **任何 author 程式碼**：steerer 可以
+    重寫 journal（`/.workflow/`）*之外* 的任何 workspace 檔案，並 invalidate 任何 step。
+    LLM 只 *提出*（decision）；deterministic 的 apply *動手*（action）——又是 decision/action
+    切分（§8）。Steering 與一個 gate 的 `approve` / `reject` / `revise` **並存**：
+    那些是 author 的 in-body outcome；steerer 是疊在其上、永遠可用的自由文字路徑。
+  - **Endpoints：** `POST .../runs/{id}/steer {instruction}`（若 run 在跑就先 Stop →
+    跑 steerer → 設 `pending_steer`，run 進入 `awaiting_human`）；
+    `POST .../runs/{id}/steer/confirm {approve}`（approve → 套用 + 繼續；reject →
+    丟棄該 plan；re-instruct → 帶一個新指令再呼叫 `steer`）。提出的 plan + 人類的回答
+    會 journal 到 `/.workflow/<workflow_id>/steer/` 供稽核。
+  - **仍然延後：** 真正的 *live* 注入（一則 note 被送進一個 *已在執行* 的 node，
+    而不 Stop）——不需要；Stop-then-steer 已涵蓋這些情況。
 
 ---
 
-## 11. Control flow
+## 11. 控制流
 
-- Primitives: **sequence**, **`for`-each** (plain Python), in-step **retry**
-  (`retries=`), and cross-run resume (§9).
-- **Parallel for-each is in v1.** `async`/`gather` makes the *orchestration*
-  concurrent for free — but it does **not** parallelise agent turns by itself,
-  because the reused machinery is **serial-per-item**: `ChatTurnEngine` is
-  FIFO-per-key, one sandbox per item, one chat per item. True parallelism therefore
-  fans each element out to its **own turn-key + ephemeral sandbox** (and its own
-  chat sub-stream), bounded by the **global concurrency cap** (§16); the parent
-  `gather`s and aggregates.
-  - **Consequence (accepted):** a batch run produces **per-element sub-logs**, not
-    one merged conversation — the right shape for batch (per-file status + an
-    aggregate, not an N-way interleaved chat). The "one readable chat" model is for
-    interactive / single-track runs.
-  - Deterministic / pure-I/O nodes (e.g. an ingest HTTP call) don't touch the engine
-    and can be `gather`ed cheaply.
-- **No branching primitive.** Branch with a plain `if` on inputs/artifacts; route
-  with data (a step writes a plan, a loop consumes it) rather than control-flow
-  branches.
+- 基本元素：**sequence**、**`for`-each**（純 Python）、in-step **retry**
+  （`retries=`），與跨 run 的 resume（§9）。
+- **平行 for-each 在 v1 裡。** `async`/`gather` 讓 *orchestration* 免費並行——但它
+  本身 **不會** 並行化 agent turn，因為被重用的機制是 **serial-per-item（每 item 串行）**：
+  `ChatTurnEngine` 是 FIFO-per-key、每 item 一個 sandbox、每 item 一個 chat。
+  因此真正的並行會把每個元素 fan out 到它 **自己的 turn-key + 短命 sandbox**
+  （以及它自己的 chat 子串流），受 **全域 concurrency cap**（§16）約束；
+  parent `gather` 並彙總。
+  - **結論（已接受）：** 一次 batch run 產出 **每個元素的子 log**，不是一個合併的
+    conversation ——這正是 batch 該有的形狀（每個檔案的狀態 + 一個彙總，不是一個
+    N 路交錯的 chat）。「一個可讀 chat」的模型是給互動／單軌 run 的。
+  - Deterministic／純 I/O 的 node（例如一次 ingest HTTP 呼叫）不碰引擎，可以便宜地
+    `gather`。
+- **沒有 branching 基本元素。** 用一個對 inputs/artifact 的普通 `if` 來 branch；
+  用資料 route（一個 step 寫一份 plan，一個 loop 消費它）而不是控制流 branch。
 
 ---
 
-## 12. Observability (phase-level)
+## 12. Observability（phase 層級）
 
-- We support **phase-level observation** ("where is the run / which phase broke"),
-  **not** node-level visual authoring.
-- The diagram = a **static phase skeleton** (`MANIFEST.workflow.phases`, known
-  before running) **+ live step events** overlaid. Each step carries `phase=`;
-  dynamic detail (loop progress, retries, skips) shows up *under* a phase node
-  ("12/20, 1 failed"), not as pre-drawn per-element nodes.
-- **Live** = SSE (extend `api/events.py`, mirror in `web/src/events.ts`:
+- 我們支援 **phase 層級的觀察**（「run 到哪了／哪個 phase 壞了」），**不是** node 層級的
+  視覺化 authoring。
+- diagram = 一個 **靜態 phase 骨架**（`MANIFEST.workflow.phases`，跑之前就已知）
+  **+ 即時 step events** 疊上去。每個 step 帶 `phase=`；動態細節（loop 進度、retry、skip）
+  顯示在一個 phase node *底下*（「12/20，1 failed」），不是預先畫好的 per-element node。
+- **Live** = SSE（擴充 `api/events.py`，鏡射到 `web/src/events.ts`：
   `PhaseEntered` / `StepStarted` / `StepPassed` / `StepFailed` / `StepSkipped` /
-  `StepRetrying` / `AwaitingHuman`). **Historical** = query the `WorkflowRun`.
-- **Caveat (don't oversell):** the skeleton is the *declared* set of phases; if the
-  code skips/reorders phases for some input, the diagram can drift. Keep phases
-  coarse and mostly-linear; mark phases that didn't run as skipped.
+  `StepRetrying` / `AwaitingHuman`）。**Historical** = 查 `WorkflowRun`。
+- **Caveat（別誇大）：** 這個骨架是 *宣告* 的 phase 集合；若程式碼對某個 input 跳過/
+  重排 phase，diagram 可能漂移。把 phase 維持得粗、大致線性；把沒跑到的 phase
+  標成 skipped。
 
 ---
 
-## 13. WorkflowRun (persisted resource)
+## 13. WorkflowRun（持久化 resource）
 
-A new specstar resource makes "where / what broke" answerable live and after the
-fact, and runs listable. The **filesystem is the journal** (§9), so `WorkflowRun`
-holds *status*, not the step results:
+一個新的 specstar resource 讓「在哪／什麼壞了」既能即時也能事後回答，而且讓 run 可列出。
+**檔案系統就是 journal**（§9），所以 `WorkflowRun` 持有 *狀態*，不持有 step 結果：
 
-- `status`: `pending | running | awaiting_human | done | error` (+ `cancelled`)
-- `current_phase`, per-phase status / progress, `failures` (collected per-element)
-- `item_id`, `captured_user`, `started`/`ended`, `result` (the `run()` return value)
-- `pending_decision` (+ who decided) — set while `awaiting_human` at a gate
-- `pending_steer` — set while `awaiting_human` for a steer plan awaiting confirm (#288);
-  the FE renders the steer confirm card vs. the gate card by which pending field is set
-
----
-
-## 14. Trigger & API
-
-**The platform's input surface is exactly two things.** Everything else (the input
-folder, the `input.json` content, how files are laid out) is the **profile's**
-business, using the existing free workspace.
-
-1. **Config: where `input.json` is** (`MANIFEST.workflow.input_json`). The platform
-   surfaces this file's parsed content to `run()` as `inputs`; it does not validate
-   it or mandate its shape. **Omit it** (#198) and the platform derives
-   `{profile.upload_dir}/input.json` — the same staging folder a chat attach lands in
-   (`upload_dir` defaults to `uploads`), so attach and the workflow that consumes the
-   files never drift; pin an explicit path only to override. The profile **seeds** a
-   default `input.json` (e.g. `{"files":["uploads/*"],"except":["uploads/input.json"]}`);
-   a human may freely edit it like any file before pressing Run — **the pre-run
-   workspace behaves exactly like a non-workflow item.**
-2. **Run** — `POST /a/{slug}/items/{item_id}/run` (async; API-triggerable). Starts
-   the orchestrator on the item; the run reads `inputs` + the workspace as the
-   profile dictates. The body is optional:
-   - **empty body** (`?workflow_id=…` query only) — the plain trigger the UI makes;
-     it runs against whatever already sits in the workspace.
-   - **`multipart/form-data`** (#197) — an external trigger uploads the workflow's
-     input **files in the same call**, because we talk to workflows through the
-     workspace, not a JSON body. Each `file` part's **filename IS its workspace path**
-     (sub-dirs allowed, e.g. `inputs/data.csv`); `workflow_id` may ride as a query
-     param **or** a form field (query wins). The files are written (overwrite,
-     last-write-wins) **before** the run starts; a path escaping the workspace root
-     aborts the whole call with **400** (nothing half-written, no run). There is **no
-     `input.json` in the request** — if a workflow wants one, it is simply one of the
-     uploaded files.
-
-**There is no separate "manual vs auto" mode** — both reduce to *prepare the item's
-inputs, then Run*:
-
-- **Human:** open a workflow-profile item, drop files / edit `input.json` via the
-  file UI, press **Run workflow**.
-- **External / periodic:** create an item, then **Run with the input files attached**
-  to the same multipart call (above) — one self-contained trigger. (Uploading files
-  via the existing file routes first and then calling Run with an empty body is
-  equivalent; the multipart form is the convenience.)
-
-After Run, the platform does exactly two things: **the orchestrator updates the
-`WorkflowRun` status**, and **agent nodes stream into the item's chat as if talking
-to a user** (§1, §5.1).
-
-- **Poll:** `GET /a/{slug}/items/{item_id}/runs/{run_id}` → status + result + per-phase progress + failures.
-- **Stream:** `GET .../runs/{run_id}/stream` → SSE (reuses `subscribe_sse`).
-- **Decide:** `POST .../runs/{run_id}/decisions` → `{ choice, input? }`.
-- **Discover:** `GET /a/{slug}/profiles` lists profiles, flags which have a workflow,
-  returns each `MANIFEST` (title / phases) so the FE can render the Run affordance.
-- **An item may host multiple sequential runs** (prepare → run → prepare more →
-  run again); at most **one active run per item** at a time.
-- Artifacts are workspace files, fetched via the item's existing file routes.
+- `status`：`pending | running | awaiting_human | done | error`（+ `cancelled`）
+- `current_phase`、per-phase 狀態／進度、`failures`（per-element 收集）
+- `item_id`、`captured_user`、`started`/`ended`、`result`（`run()` 的回傳值）
+- `pending_decision`（+ 由誰決定）—— 在一個 gate `awaiting_human` 時設定
+- `pending_steer` —— 在等待一個 steer plan 確認而 `awaiting_human` 時設定（#288）；
+  FE 靠哪個 pending 欄位有被設定，來決定渲染 steer confirm card 還是 gate card
 
 ---
 
-## 15. Identity & auth
+## 14. Trigger 與 API
 
-- **Reuse the existing `get_user` seam** at the trigger boundary; production swaps a
-  real implementation behind it (no separate token mechanism is built here).
-- **Capture the acting user at trigger time** on the `WorkflowRun`. Background steps
-  (and any re-run) have no request context, so they act under
-  `rm.using(user=<captured>)` — `created_by`, KB ingestion attribution, and
-  notifications stay correct (same pattern as the index/wiki job pods).
-- **Run-scoped credential:** sandbox code that calls capabilities over HTTP gets an
-  ephemeral credential injected into its env; it maps to the captured user, is scoped
-  to that run's allowed capabilities, and expires when the run ends.
-- **Gate approval:** any authenticated human with access may act; **who acted is
-  recorded.**
+**平台的輸入介面就只有兩樣東西。** 其他一切（input 資料夾、`input.json` 內容、
+檔案怎麼擺）都是 **profile 的** 事，使用既有的自由 workspace。
+
+1. **Config：`input.json` 在哪裡**（`MANIFEST.workflow.input_json`）。平台把這個檔案
+   解析後的內容當作 `inputs` 提供給 `run()`；它不驗證它、也不規定它的形狀。
+   **省略它**（#198），平台就推導出 `{profile.upload_dir}/input.json` ——那正是一次
+   chat attach 落地的同一個 staging 資料夾（`upload_dir` 預設 `uploads`），所以
+   attach 與消費這些檔案的 workflow 永遠不會漂移；只有要覆寫時才釘死一個明確路徑。
+   profile **seed** 一個預設的 `input.json`（例如
+   `{"files":["uploads/*"],"except":["uploads/input.json"]}`）；人類可以像對待任何檔案
+   一樣，在按 Run 之前自由編輯它——**run 之前的 workspace 表現得跟一個非 workflow item
+   一模一樣。**
+2. **Run** —— `POST /a/{slug}/items/{item_id}/run`（非同步；可由 API 觸發）。在該 item 上
+   啟動 orchestrator；run 依 profile 的指示讀 `inputs` + workspace。body 是可選的：
+   - **空 body**（只有 `?workflow_id=…` query）—— UI 做的那種普通 trigger；它對
+     workspace 裡已經有的東西開跑。
+   - **`multipart/form-data`**（#197）—— 一個外部 trigger 在同一次呼叫裡上傳 workflow 的
+     input **檔案**，因為我們是透過 workspace 跟 workflow 對話，不是透過一個 JSON body。
+     每個 `file` part 的 **filename 就是它的 workspace 路徑**（允許子目錄，例如
+     `inputs/data.csv`）；`workflow_id` 可以搭在一個 query param **或** 一個 form field 上
+     （query 優先）。這些檔案在 run 開始 **之前** 被寫入（覆寫，last-write-wins）；一條
+     逃出 workspace 根目錄的路徑會以 **400** 中止整次呼叫（沒有半寫的東西，沒有 run）。
+     請求裡 **沒有 `input.json`** ——若一個 workflow 想要一份，它就只是其中一個被上傳的檔案。
+
+**沒有獨立的「manual vs auto」模式** —— 兩者都化約為 *準備 item 的 inputs，然後 Run*：
+
+- **人類：** 開一個 workflow-profile item，透過 file UI 丟檔案／編輯 `input.json`，
+  按 **Run workflow**。
+- **外部／週期性：** 建一個 item，然後 **把 input 檔案附在同一次 multipart 呼叫裡
+  一起 Run**（如上）——一個自包含的 trigger。（先透過既有的 file 路由上傳檔案、
+  再帶空 body 呼叫 Run，是等價的；multipart form 只是便利。）
+
+按下 Run 後，平台做的就只有兩件事：**orchestrator 更新 `WorkflowRun` 狀態**，
+以及 **agent node 像在跟使用者說話那樣串流進 item 的 chat**（§1、§5.1）。
+
+- **Poll：** `GET /a/{slug}/items/{item_id}/runs/{run_id}` → 狀態 + result +
+  per-phase 進度 + failures。
+- **Stream：** `GET .../runs/{run_id}/stream` → SSE（重用 `subscribe_sse`）。
+- **Decide：** `POST .../runs/{run_id}/decisions` → `{ choice, input? }`。
+- **Discover：** `GET /a/{slug}/profiles` 列出 profile、標出哪些有 workflow、
+  回傳每個 `MANIFEST`（title / phases），讓 FE 能渲染那個 Run 的操作入口。
+- **一個 item 可以承載多次依序的 run**（prepare → run → 再 prepare → 再 run）；
+  同一時間每個 item 至多 **一個活躍 run**。
+- artifact 就是 workspace 檔案，透過 item 既有的 file 路由取得。
 
 ---
 
-## 16. Lifecycle & resources
+## 15. 身分與 auth
 
-- **Sandbox:** lazily created on first `exec`. Released on **terminal** (reusing
-  `registry.close_session` + `turn_engine.forget`) and on **`awaiting_human`** (a
-  pause may last days; the FileStore persists files, so resume recreates the sandbox
-  lazily). Parallel for-each uses **per-element ephemeral sandboxes** (§11).
-- **Items:** a run's terminal **does not auto-close** the item (it stays a workspace
-  for inspection / re-run / takeover). API-created items accumulate → cleaned by a
-  **TTL / keep-last-K** retention setting, or closed by a human.
-- **Concurrency:** a **global cap** on concurrent runs + sandboxes (covers parallel
-  for-each elements too); excess queues (`pending`). The cap is a config setting.
+- **在 trigger 邊界重用既有的 `get_user` 接縫**；production 在它背後抽換一個真正的
+  實作（這裡不另建一套 token 機制）。
+- **在 trigger 時把 acting user 捕捉**到 `WorkflowRun` 上。背景 step（以及任何重跑）
+  沒有 request context，所以它們在 `rm.using(user=<captured>)` 底下行動——`created_by`、
+  KB ingestion 的歸屬、通知都維持正確（跟 index/wiki job pod 同一套模式）。
+- **Run-scoped credential：** 透過 HTTP 打 capability 的 sandbox 程式碼會拿到一個注入
+  進它 env 的短命 credential；它對應到被捕捉的 user、scope 在那次 run 允許的 capability，
+  並在 run 結束時失效。
+- **Gate 核准：** 任何有存取權的、已認證的人類都可以行動；**誰行動了會被記錄。**
 
 ---
 
-## 17. Robustness (headless)
+## 16. 生命週期與資源
 
-- **Timeouts:** per-step (max duration per agent turn) **and** a per-run wall-clock
-  cap; exceeding either aborts to `error`, recorded on the `WorkflowRun`.
-- **Budget:** a per-run **max-steps** hard ceiling (guards infinite loops) and an
-  optional token/cost budget.
-- **Failure notification (v1):** **pull** (poll the `WorkflowRun`: `error` + which
-  phase + why) **+** in-app notification to owner / watchers (existing mechanism). An
-  outbound **webhook** is deferred.
+- **Sandbox：** 第一次 `exec` 時 lazily 建立。在進入 **終態** 時釋放（重用
+  `registry.close_session` + `turn_engine.forget`），以及在 **`awaiting_human`** 時釋放
+  （一次暫停可能持續好幾天；FileStore 持久保存檔案，所以 resume 會 lazily 重建 sandbox）。
+  平行 for-each 用 **per-element 短命 sandbox**（§11）。
+- **Items：** 一次 run 的終態 **不會自動關閉** item（它仍是一個 workspace，供檢查／
+  重跑／接手）。由 API 建立的 item 會累積 → 由一個 **TTL／keep-last-K** 保留設定清掉，
+  或由人類關閉。
+- **Concurrency：** 對並行 run + sandbox 的一個 **全域 cap**（也涵蓋平行 for-each 的
+  元素）；超出的部分排隊（`pending`）。這個 cap 是一個 config 設定。
+
+---
+
+## 17. 健壯性（headless）
+
+- **Timeout：** per-step（每次 agent turn 的最大時長）**以及** 一個 per-run 的
+  wall-clock 上限；超過任一個就中止為 `error`，記在 `WorkflowRun` 上。
+- **Budget：** 一個 per-run 的 **max-steps** 硬上限（防無窮 loop）與一個可選的
+  token/cost budget。
+- **失敗通知（v1）：** **pull**（poll `WorkflowRun`：`error` + 哪個 phase + 為什麼）
+  **+** 對 owner／watcher 的 in-app 通知（既有機制）。一個對外的 **webhook** 延後。
 
 ---
 
 ## 18. Versioning
 
-- **input-hash carries most of the weight.** Because a step's hash includes its
-  arguments (which include the resolved prompt), **editing the workflow re-runs the
-  steps it affected** on the next run, and leaves unaffected steps cached. This is a
-  bonus of §9, not extra machinery.
-- **Breaking changes are made by adding a new profile**, not mutating one in place.
-  A profile is treated as an **immutable behaviour version**: ship `profile-v2`;
-  existing items keep pointing at the untouched old profile. No true module-level
-  version pinning is built.
+- **input-hash 扛了大部分的重量。** 因為一個 step 的 hash 包含它的 arguments
+  （其中包含解析後的 prompt），**編輯 workflow 會在下一次 run 重跑它影響到的 step**，
+  並讓不受影響的 step 維持快取。這是 §9 的紅利，不是額外的機制。
+- **破壞性變更靠加一個新 profile 來做**，不是就地改一個。一個 profile 被當成一個
+  **不可變的行為版本**：出貨 `profile-v2`；既有的 item 繼續指向那個未被動過的舊 profile。
+  不建任何真正的 module 層級版本釘選。
 
 ---
 
-## 19. Platform vs App boundary
+## 19. 平台 vs App 的邊界
 
-- **Platform = bricks + enforcement + two interfaces:** `agent_step`, deterministic
-  nodes, mandatory gates, `for`/parallel/retry, the §9 filesystem-journal +
-  input-hash skip, the `WorkflowRun`, capabilities (`ingest_to_collection`, …), the
-  run-scoped credential, the allowed-set clamp (a deterministic gate), the
-  `input.json` location config, and the Run endpoint.
-- **An App/profile composes those bricks** with its prompts, rules, `input.json`
-  layout, and node scripts. *How* a workflow behaves (split / digest / routing) is
-  App implementation, out of scope here.
+- **平台 = 磚塊 + 強制 + 兩個介面：** `agent_step`、deterministic node、
+  mandatory gate、`for`/parallel/retry、§9 的 filesystem-journal + input-hash skip、
+  `WorkflowRun`、capability（`ingest_to_collection`…）、run-scoped credential、
+  allowed-set clamp（一個 deterministic gate）、`input.json` 位置 config，與 Run endpoint。
+- **一個 App/profile 把這些磚塊組合起來**，配上它的 prompt、規則、`input.json` 佈局、
+  與 node 腳本。一個 workflow *如何* 表現（split / digest / routing）是 App 實作，
+  不在這裡的範圍內。
 
 ---
 
-## 20. Worked example — the "intake" App (illustrative)
+## 20. 範例 —— 「intake」App（示意）
 
-Use case 2 as a profile-level workflow, showing the canonical **produce → review →
-commit** shape. The collection set is **pre-defined in the profile**; the seeded
-`input.json` says "files are in the profile's `upload_dir`" (default `uploads/`, the
-same folder a chat attach lands in, #198); the user drops files and presses Run.
+把使用情境 2 當作一個 profile 層級的 workflow，展示標準的 **produce → review → commit**
+形狀。collection 集合 **預先定義在 profile 裡**；被 seed 的 `input.json` 說「檔案在
+profile 的 `upload_dir`」（預設 `uploads/`，就是一次 chat attach 落地的同一個資料夾，#198）；
+使用者丟檔案、按 Run。
 
 ```python
 async def run(wf, inputs):
-    allowed = wf.config["collections"]              # pre-defined in the profile (not per-run)
-    files = wf.glob(inputs)                          # inputs = parsed input.json (the file spec)
+    allowed = wf.config["collections"]              # 預先定義在 profile 裡（不是 per-run）
+    files = wf.glob(inputs)                          # inputs = 解析後的 input.json（檔案 spec）
 
-    # Phase 1 — PRODUCE: classify+digest every file. Safe — only writes plan/<f>.json. Parallel.
+    # Phase 1 — PRODUCE：對每個檔案 classify+digest。安全——只寫 plan/<f>.json。平行。
     async def classify(f):
-        await agent_step(                            # agent node: DECISION recorded as data
+        await agent_step(                            # agent node：DECISION 記錄成資料
             wf, phase="classify",
             prompt=f"Read {f}. Split per your profile; for each piece pick a collection "
                    f"from {allowed} and write a digest. Record the plan in plan/{f}.json.",
-            tools=["read_file", "write_file"],       # no ingest tool — agent can't commit
+            tools=["read_file", "write_file"],       # 沒有 ingest tool — agent 不能 commit
             check=check.choice_in(f"plan/{f}.json", key="collection", allowed=allowed),
             retries=2,
-        )                                            # → step_classify/<f>.json (skipped on re-run if unchanged)
-    await wf.map(classify, files)                    # parallel for-each, bounded by the concurrency cap (§11)
+        )                                            # → step_classify/<f>.json（未變則重跑時跳過）
+    await wf.map(classify, files)                    # 平行 for-each，受 concurrency cap 約束（§11）
 
-    # Phase 2 — REVIEW: the human confirms BEFORE anything is committed to KB.
+    # Phase 2 — REVIEW：人類在任何東西被 commit 進 KB 之前確認。
     plan = {f: wf.read_json(f"plan/{f}.json") for f in files}
     decision = await human_gate(
         wf, phase="review",
         title="Approve filing these into collections?",
-        summary=plan,                                # the human reviews the whole routing plan
+        summary=plan,                                # 人類審閱整份 routing plan
         allow=["approve", "reject"],
     )
     if decision.choice == "reject":
-        return {"status": "rejected"}                # nothing committed; item stays interactive for takeover
+        return {"status": "rejected"}                # 沒有 commit 任何東西；item 維持互動供接手
 
-    # Phase 3 — COMMIT: deterministic, idempotent. Only runs after approval.
+    # Phase 3 — COMMIT：deterministic、idempotent。只有在核准後才跑。
     failures = []
     async def commit(f):
         try:
@@ -615,45 +571,41 @@ async def run(wf, inputs):
                 await wf.ingest_to_collection(piece["collection"], piece["out_path"],
                                               digest=piece["digest"], phase="ingest")
                 await check.collection_has(piece["collection"], piece["out_path"])
-        except StepFailed as e:                      # per-element policy: skip + collect
+        except StepFailed as e:                      # per-element 政策：skip + collect
             failures.append({"file": f, "error": str(e)})
     await wf.map(commit, files)
     return {"processed": len(files) - len(failures), "failures": failures}
 ```
 
-A human who spots a bad result **stops the run, deletes or edits `step_classify/<f>.json`
-(or `plan/<f>.json`) in the file UI, and presses Run** — only the affected files
-re-run (§9). And nothing reaches a collection until the **review** gate is approved.
+一個發現壞結果的人類，**停掉 run，在 file UI 裡刪除或編輯 `step_classify/<f>.json`
+（或 `plan/<f>.json`），再按 Run** ——只有受影響的檔案重跑（§9）。而且在 **review**
+gate 被核准之前，沒有任何東西會抵達一個 collection。
 
 ---
 
-## 21. Phasing & non-goals
+## 21. Phasing 與非目標
 
-The full manual is the target. The build is sequenced (foundations first), but it is
-**one v1 scope** — **`human_gate` is in v1**, because both use cases end in an
-irreversible commit (publish a report; write into collections) that must be
-confirmed first (§10). The filesystem-journal (§9) makes durability *and* the gate
-cheap, so there is no reason to split them out.
+整本手冊就是目標。建置是有序的（先地基），但它是 **一個 v1 範圍** ——
+**`human_gate` 在 v1 裡**，因為兩個使用情境都以一個不可逆的 commit（發佈一份 report；
+寫進 collection）收尾，那必須先被確認（§10）。filesystem-journal（§9）讓 durability
+*以及* gate 都很便宜，所以沒有理由把它們拆開。
 
-**v1 (everything the two use cases need):**
-agent + deterministic nodes; mandatory gates with in-step retry-with-feedback;
-`for`-each **and parallel for-each** (per-element sandbox + concurrency cap, skip +
-collect); the **filesystem-journal + input-hash** execution model (resume / retry /
-rewind / reset / crash-recovery, `cache=False`); **`human_gate`** (produce → review →
-commit; decision-as-artifact, `awaiting_human`, the **decisions** endpoint, sandbox
-release on pause); **Stop & take over**; phase-level diagram + events; `WorkflowRun`
-status; the **Run** endpoint + Discover + Poll + Stream; `input.json` location config
-+ profile seeding; `get_user` identity + captured-user + run-scoped credential;
-sandbox lifecycle; concurrency cap; timeouts + max-steps; pull + in-app failure
-notify; `ingest_to_collection`.
+**v1（兩個使用情境需要的一切）：**
+agent + deterministic node；帶 in-step retry-with-feedback 的 mandatory gate；
+`for`-each **以及平行 for-each**（per-element sandbox + concurrency cap、skip + collect）；
+**filesystem-journal + input-hash** 執行模型（resume / retry / rewind / reset /
+crash-recovery、`cache=False`）；**`human_gate`**（produce → review → commit；
+decision-as-artifact、`awaiting_human`、**decisions** endpoint、暫停時釋放 sandbox）；
+**Stop 然後接手**；phase 層級的 diagram + events；`WorkflowRun` 狀態；**Run** endpoint
++ Discover + Poll + Stream；`input.json` 位置 config + profile seeding；`get_user`
+身分 + captured-user + run-scoped credential；sandbox 生命週期；concurrency cap；
+timeout + max-steps；pull + in-app 失敗通知；`ingest_to_collection`。
 
-(Build order: the gate lands late in the sequence since it depends on the engine +
-`WorkflowRun`, but it is in scope — the v1 gate is not "done" without it.)
+（建置順序：gate 在序列中較晚落地，因為它依賴引擎 + `WorkflowRun`，但它在範圍內——
+v1 的 gate 沒有它就不算「完成」。）
 
-**Deferred / non-goals:** conversational steer-and-resume **landed in #288** (§10) —
-only *true live* mid-run injection (a note into an already-running node, without
-Stopping) stays deferred; declarative-DAG
-authoring; node-level visual editing; control-flow branching primitives (use data);
-outbound webhook callbacks; true module-level version pinning (use the new-profile
-convention); real SSO authz; LLM-judge checks as anything more than an occasional
-escape hatch.
+**延後／非目標：** 對話式的 steer-and-resume **已在 #288 落地**（§10）——只有 *真正
+live* 的 run 進行中注入（一則 note 進一個已在執行的 node，而不 Stop）仍延後；
+宣告式 DAG authoring；node 層級的視覺化編輯；控制流 branching 基本元素（用資料）；
+對外的 webhook callback；真正的 module 層級版本釘選（用新 profile 慣例）；
+真正的 SSO authz；把 LLM-judge check 當成超過偶一為之的逃生口之外的任何東西。
