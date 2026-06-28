@@ -30,14 +30,29 @@ RUN uv sync --frozen --no-dev \
 
 # ---- stage 2: the lean host runtime ----
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS host
-# util-linux: setpriv + unshare (privilege drop / namespaces).
-# acl: setfacl (default ACL so root-written files stay writable by the uid).
+# Isolation tooling — util-linux: setpriv + unshare (privilege drop /
+# namespaces); acl: setfacl (default ACL so root-written files stay writable by
+# the uid).
+# PLUS the make_deck (#284) toolchain: the host jails processes INSIDE this
+# image and ignores SandboxSpec.image, so the deck deps must live here — they
+# can't ride the python-only /.tools bundle the way sci-plot does. node runs the
+# model's pptxgenjs program; libreoffice-impress + poppler render the .pptx to
+# per-slide images for the review pass; fonts-noto-cjk makes CJK render as glyphs
+# (what the review model sees == what the user exports), not tofu.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends util-linux acl \
+    && apt-get install -y --no-install-recommends \
+        util-linux acl \
+        nodejs npm libreoffice-impress poppler-utils fonts-noto-cjk fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+# pptxgenjs resolvable from a bare `require('pptxgenjs')`. Debian's npm global
+# prefix is /usr/local; NODE_PATH (below) lets the jailed `node build.js` find
+# it — the host passes os.environ through `setpriv` (no --reset-env), so the env
+# survives into the jail (see isolated_process._exec_argv).
+RUN npm install -g pptxgenjs@^3.12
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PATH="/host/.venv/bin:$PATH" \
+    NODE_PATH=/usr/local/lib/node_modules \
     SANDBOX_HOST_BIND=0.0.0.0:8000 \
     SANDBOX_HOST_TOOLS_DIR=/opt/tools
 WORKDIR /host

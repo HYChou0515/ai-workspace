@@ -21,7 +21,27 @@ MAX_SOURCE_CHARS = 20_000
 # Default build-loop budget (generate + up to N-1 review/fix rounds).
 MAX_ROUNDS = 4
 
+# Runtime tools the build loop needs IN THE SANDBOX (not the API): `node` runs
+# the model's pptxgenjs program; `soffice`/`pdftoppm` render slides → images for
+# the review pass. On the prod HTTP sandbox-host these live in the host image
+# (see `sandbox-host/Dockerfile`); a host without them can't build decks, so we
+# preflight rather than burn rounds + LLM calls on a guaranteed failure.
+_PREFLIGHT_CMD = [
+    "sh",
+    "-lc",
+    "command -v node >/dev/null 2>&1 "
+    "&& command -v soffice >/dev/null 2>&1 "
+    "&& command -v pdftoppm >/dev/null 2>&1",
+]
+
 ReadBytes = Callable[[str], Awaitable[bytes]]
+
+
+async def toolchain_ready(exec_run: Callable[[list[str]], Awaitable[tuple[int, str]]]) -> bool:
+    """True iff the sandbox has node + libreoffice + poppler — the deck loop's
+    irreducible runtime tools."""
+    code, _ = await exec_run(_PREFLIGHT_CMD)
+    return code == 0
 
 
 async def gather_sources(
@@ -72,6 +92,12 @@ async def run_make_deck(
         return (
             "error: make_deck is unavailable — this deployment has no multimodal "
             "model configured for it (set kb.deck_vlm / kb.vlm_llm). Do not retry."
+        )
+    if not await toolchain_ready(exec_run):
+        return (
+            "error: make_deck is unavailable — this deployment's sandbox is missing "
+            "the deck toolchain (node / libreoffice / poppler). Install it in the "
+            "sandbox image (docker: see sandbox-host/Dockerfile). Do not retry."
         )
     source_texts, source_images = await gather_sources(read_bytes, source or [])
     io = DeckIO(

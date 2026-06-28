@@ -312,8 +312,9 @@
 #   #                                       #   both (a bigger Qwen-VL, not the tiny ingest VLM, pays
 #   #                                       #   off here). OMIT = reuse vlm_llm; both off = make_deck
 #   #                                       #   reports it's unavailable (fail-loud, like read_image).
-#   #                                       #   Needs the deck sandbox image (docker/Dockerfile.workspace-deck:
-#   #                                       #   node + pptxgenjs + libreoffice + poppler + Noto CJK).
+#   #                                       #   Needs node + pptxgenjs + libreoffice + poppler + Noto CJK
+#   #                                       #   in the sandbox; on the HTTP host they're baked into
+#   #                                       #   sandbox-host/Dockerfile (the host ignores SandboxSpec.image).
 #   # quality_judge:                        # issue #105: LLM-as-judge that scores a doc's quality as a
 #   #   preset: kb-retrieval                #   knowledge source at index time, against each collection's
 #   #   # reasoning_effort: low             #   `quality_rubric`. Same usage-entry shape as the others.
