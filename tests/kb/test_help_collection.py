@@ -21,19 +21,16 @@ from workspace_app.kb.help_collection import (
 )
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.perm.authorize import Actor, authorize
-from workspace_app.resources.kb import EMBED_DIM, Collection, SourceDoc
+from workspace_app.resources.kb import Collection, SourceDoc
 
 
-class _FailingEmbedder:
-    """An embedder that mimics a dead backend — raises on every embed."""
+class _RaisingIngestor:
+    """An ingestor that blows up on every ingest — stands in for any boot-time
+    seed failure (unreadable content, a store/parser crash, etc.) so we can
+    prove the best-effort seed swallows it instead of blocking boot."""
 
-    dim: int = EMBED_DIM
-
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        raise RuntimeError("embedder down")
-
-    def embed_query(self, text: str) -> list[float]:
-        raise RuntimeError("embedder down")
+    def ingest(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
+        raise RuntimeError("ingest exploded")
 
 
 def _docs_in(spec: SpecStar, cid: str) -> list[SourceDoc]:
@@ -136,12 +133,10 @@ def test_best_effort_seed_ingests_on_happy_path(
     assert _docs_in(spec, cid)  # docs got ingested
 
 
-def test_best_effort_seed_survives_a_dead_embedder(spec: SpecStar, chunker: FixedTokenChunker):
-    # A dead embedder must NOT block boot: the collection is still created
-    # (readable), the failure is swallowed, and an id is returned.
-    ingestor = Ingestor(spec, chunker=chunker, embedder=_FailingEmbedder())
-
-    cid = seed_help_collection_best_effort(spec, ingestor)
+def test_best_effort_seed_swallows_an_ingest_failure(spec: SpecStar):
+    # A seed failure must NOT block boot: the collection is still created
+    # (readable), the error is swallowed, and an id is returned.
+    cid = seed_help_collection_best_effort(spec, _RaisingIngestor())  # ty: ignore[invalid-argument-type]
 
     coll = spec.get_resource_manager(Collection).get(cid).data
     assert isinstance(coll, Collection)
