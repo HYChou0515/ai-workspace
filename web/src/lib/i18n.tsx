@@ -166,6 +166,11 @@ export const messages = {
     "zh-TW": "共用文件、知識百科與知識庫對話。",
     en: "Shared docs, wikis, and the KB chat.",
   },
+  "launcher.help.title": { "zh-TW": "說明", en: "Help" },
+  "launcher.help.desc": {
+    "zh-TW": "使用說明、更新紀錄,以及問 AI 怎麼用。",
+    en: "Usage guides, release notes, and ask the AI how to use it.",
+  },
 
   // KB shell (KbHome)
   "kb.brand": { "zh-TW": "知識庫", en: "Knowledge base" },
@@ -439,6 +444,24 @@ export const messages = {
   "wf.metrics.steps": { "zh-TW": "步驟", en: "Steps" },
   "wf.metrics.retries": { "zh-TW": "重試 {n}", en: "{n} retries" },
   "wf.runs.title": { "zh-TW": "執行紀錄", en: "Runs" },
+
+  // #230: the platform Help page.
+  "help.title": { "zh-TW": "說明", en: "Help" },
+  "help.intro": {
+    "zh-TW": "使用說明、更新紀錄,以及一個能回答你「怎麼用」的 AI 助手。",
+    en: "Usage guides, release notes, and an AI that answers your how-to questions.",
+  },
+  "help.guides": { "zh-TW": "使用說明", en: "Guides" },
+  "help.releaseNotes": { "zh-TW": "更新紀錄", en: "Release notes" },
+  "help.ask": { "zh-TW": "問 AI", en: "Ask the AI" },
+  "help.ask.note": {
+    "zh-TW": "依使用說明與更新紀錄回答,並附上引用。",
+    en: "Answers from the guides and release notes, with citations.",
+  },
+  "help.empty": {
+    "zh-TW": "尚無說明文件。",
+    en: "No help documents yet.",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

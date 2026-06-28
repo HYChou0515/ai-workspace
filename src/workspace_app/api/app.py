@@ -920,6 +920,21 @@ def create_app(
             # #175: context-card generation consumer.
             with boot_step("start context-card generation consumer"):
                 app.state.card_gen_coordinator.start_consuming()
+        # #230: seed the platform Help collection from packaged content (repo =
+        # source of truth; identical bytes are a no-op). Ingestion needs the
+        # embedder, so it runs here (off the loop) and is best-effort — a dead
+        # embedder leaves the collection readable-but-unindexed, never blocking
+        # boot. The id is stashed for the /help route. #281 will later feed
+        # source-code-derived wiki into this same collection.
+        from ..kb.help_collection import HELP_SYSTEM_USER, seed_help_collection_best_effort
+
+        with boot_step("seed help collection"):
+            app.state.help_collection_id = await asyncio.to_thread(
+                seed_help_collection_best_effort,
+                spec,
+                ingestor,
+                user=HELP_SYSTEM_USER,
+            )
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
         bg.append(asyncio.create_task(_index_sweeper()))  # #227 fan-out stuck-run recovery
         # NOTE: the full capability round is deliberately NOT scheduled here
@@ -1300,6 +1315,12 @@ def create_app(
     )
     # #106: the exposed deterministic context-card lookup (read route, post-apply).
     register_context_card_routes(api, spec)
+    # #230: the /help endpoint — the Help collection id + its documents for the
+    # platform help page (its KB chat scopes to that id; the doc list links to
+    # the KB document viewer).
+    from .help_routes import register_help_routes
+
+    register_help_routes(api, spec)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
     # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.

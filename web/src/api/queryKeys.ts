@@ -62,6 +62,9 @@ export const qk = {
     custom: ["sanity", "custom"] as const,
   },
 
+  // #230: the platform Help page payload (Help collection id + its documents).
+  help: ["help"] as const,
+
   kb: {
     all: ["kb"] as const,
     collections: ["kb", "collections"] as const,

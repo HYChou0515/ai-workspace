@@ -313,7 +313,28 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 11. Git 與 PR 慣例
+## 11. 平台說明頁（Help，#230）的內容怎麼更新
+
+`/help` 頁的「使用說明 + 更新紀錄（release note）」就是一個系統 KB collection
+「Platform Help」的內容，AI 問答直接 `kb_search` 它。
+
+- **改內容 = 改 repo**：編輯 `src/workspace_app/kb/help_content/*.md`
+  （`getting-started.md` = 使用說明、`CHANGELOG.md` = 更新紀錄；檔名 `CHANGELOG.md`
+  會被標成 `release_notes`，其餘為 `guide`）。內容隨 wheel 出貨,**每次開機
+  idempotent upsert**（相同 bytes 為 no-op）——repo 是唯一真相,UI 上手改的會被下次
+  開機覆蓋。新增一份指南只要丟一個 `.md` 進去即可。
+- **權限**：collection 公開可讀可搜,但寫入鎖給 owner（`system`）+ superuser
+  （`settings.server.superusers`),用既有 #262 `Permission`,**沒有新權限碼**。
+  機制見 `kb/help_collection.py`,端點見 `api/help_routes.py`。
+- **前向相容 #281**：之後讓 AI 讀原始碼生成 wiki 會餵進**同一個** collection,
+  屆時 source doc 是完整 codebase 而非單一 `CHANGELOG.md`。
+- **尚未做（deferred）**：help 專屬「人格」system prompt——目前無 per-collection
+  的 chat-prompt 追加掛點,故沿用預設 KB agent prompt（知識庫即 help 內容,問答+引用
+  已足夠）；要加人格時再評估注入機制,別為此硬塞新 preset。
+
+---
+
+## 12. Git 與 PR 慣例
 
 - **本機 commit 是常態節奏**。**不要主動提議/詢問** push 或開 PR——但使用者明確要求時就照做。在預設分支
   (`master`)上要先開 branch。
@@ -327,7 +348,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 12. 禁區與地雷
+## 13. 禁區與地雷
 
 - **`configs/config.yaml` 是禁區**——live、gitignore、含明文 secret。只讀/改 `configs/config.example.yaml`。
   key 有變動時,把替換片段交給 operator 自己改 `config.yaml`(loader 的 strict-unknown-key 會對舊 config 報錯);
@@ -338,7 +359,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 13. 測試備註
+## 14. 測試備註
 
 - integration 測試(`@pytest.mark.integration`)在本機缺 daemon/工具時自動 skip;它們不在 CI 跑(見 §3)。
 - Ollama live 測試在 daemon/模型不在時自動 skip;它是唯一會真的打模型的測試(`# pragma: no cover` 圈住 live 路徑)。
@@ -349,7 +370,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 14. Definition of Done
+## 15. Definition of Done
 
 - [ ] 行為由 `/tdd` 驅動;目標測試綠 + `ruff check` + `ruff format --check` + 整專案 `ty check`。
 - [ ] 收尾跑一次全套 + **100% 覆蓋率** gate(`coverage run … && combine && report --fail-under=100`),

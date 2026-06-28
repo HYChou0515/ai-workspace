@@ -7,6 +7,7 @@ import { AppDashboard } from "./pages/AppDashboard";
 import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
 import { Launcher } from "./pages/Launcher";
@@ -40,6 +41,9 @@ export function AppRoutes() {
         {kbRoutes()}
         <Route path="/kb/doc/*" element={<KbDocPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
+        {/* #230: the platform help / intro page (usage guides + release notes +
+            an AI that answers how-to questions over the Help collection). */}
+        <Route path="/help" element={<HelpPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

@@ -15,10 +15,15 @@ export function OnboardingModal({
   content,
   onGotIt,
   onDontShowAgain,
+  onSeeFull,
 }: {
   content: Onboarding;
   onGotIt: () => void;
   onDontShowAgain: () => void;
+  /** #230: when provided, show a "See the full guide →" link to the help page
+   * (the caller navigates + soft-closes). Omitted ⇒ no link (e.g. on surfaces
+   * with no richer help target). */
+  onSeeFull?: () => void;
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -107,22 +112,43 @@ export function OnboardingModal({
         )}
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginTop: 4 }}>
-          <button
-            type="button"
-            onClick={onDontShowAgain}
-            style={{
-              height: 32,
-              padding: "0 12px",
-              borderRadius: "var(--radius-btn)",
-              fontSize: pxToRem(13),
-              cursor: "pointer",
-              border: "none",
-              background: "transparent",
-              color: "var(--text-paper-d)",
-            }}
-          >
-            Don't show again
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button
+              type="button"
+              onClick={onDontShowAgain}
+              style={{
+                height: 32,
+                padding: "0 12px",
+                borderRadius: "var(--radius-btn)",
+                fontSize: pxToRem(13),
+                cursor: "pointer",
+                border: "none",
+                background: "transparent",
+                color: "var(--text-paper-d)",
+              }}
+            >
+              Don't show again
+            </button>
+            {onSeeFull && (
+              <button
+                type="button"
+                onClick={onSeeFull}
+                style={{
+                  height: 32,
+                  padding: "0 8px",
+                  borderRadius: "var(--radius-btn)",
+                  fontSize: pxToRem(13),
+                  cursor: "pointer",
+                  border: "none",
+                  background: "transparent",
+                  color: "var(--accent)",
+                  fontWeight: 600,
+                }}
+              >
+                See the full guide →
+              </button>
+            )}
+          </div>
           <button
             type="button"
             autoFocus

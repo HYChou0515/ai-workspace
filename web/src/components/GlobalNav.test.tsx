@@ -61,6 +61,11 @@ describe("GlobalNav", () => {
     expect(screen.getByRole("link", { name: /Workspace/ })).toHaveAttribute("href", "/");
   });
 
+  it("has a persistent Help link to /help (#230)", () => {
+    renderNav("/a/rca");
+    expect(screen.getByRole("link", { name: "說明" })).toHaveAttribute("href", "/help");
+  });
+
   it("brand cues it returns home — a tooltip — while still linking / (#172)", () => {
     renderNav("/a/rca");
     const brand = screen.getByRole("link", { name: /Workspace/ });

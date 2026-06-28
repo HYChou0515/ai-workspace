@@ -23,7 +23,7 @@
 
 import type { CSSProperties, ReactNode } from "react";
 import { useState } from "react";
-import { Link, Outlet, useParams, useSearchParams } from "react-router-dom";
+import { Link, Outlet, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import type { AppItem, FieldSpec } from "../api/types";
 import { summarize } from "../api/types";
@@ -73,6 +73,7 @@ export function AppDashboard() {
   const me = useCurrentUser();
   const meUser = useUser(me);
   const ob = useOnboarding(me, slug, manifest?.onboarding);
+  const navigate = useNavigate();
   const [view, setView] = useState("all");
   const [sev, setSev] = useState("any");
   const [owner, setOwner] = useState("any");
@@ -456,6 +457,10 @@ export function AppDashboard() {
           content={ob.content}
           onGotIt={ob.gotIt}
           onDontShowAgain={ob.dontShowAgain}
+          onSeeFull={() => {
+            ob.gotIt();
+            navigate("/help");
+          }}
         />
       )}
 
