@@ -917,6 +917,21 @@ def create_app(
             # #175: context-card generation consumer.
             with boot_step("start context-card generation consumer"):
                 app.state.card_gen_coordinator.start_consuming()
+        # #230: seed the platform Help collection from packaged content (repo =
+        # source of truth; identical bytes are a no-op). Ingestion needs the
+        # embedder, so it runs here (off the loop) and is best-effort — a dead
+        # embedder leaves the collection readable-but-unindexed, never blocking
+        # boot. The id is stashed for the /help route. #281 will later feed
+        # source-code-derived wiki into this same collection.
+        from ..kb.help_collection import HELP_SYSTEM_USER, seed_help_collection_best_effort
+
+        with boot_step("seed help collection"):
+            app.state.help_collection_id = await asyncio.to_thread(
+                seed_help_collection_best_effort,
+                spec,
+                ingestor,
+                user=HELP_SYSTEM_USER,
+            )
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
         bg.append(asyncio.create_task(_index_sweeper()))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(health_service.run_round()))
