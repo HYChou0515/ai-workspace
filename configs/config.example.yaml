@@ -317,9 +317,11 @@
 #   # quality_judge:                        # issue #105: LLM-as-judge that scores a doc's quality as a
 #   #   preset: kb-retrieval                #   knowledge source at index time, against each collection's
 #   #   # reasoning_effort: low             #   `quality_rubric`. Same usage-entry shape as the others.
-#   #                                       #   OMIT / null (default) = scoring off → docs stay un-scored
-#   #                                       #   (neutral) and search ranking is unaffected. A judge
-#   #                                       #   failure leaves a doc un-scored, never un-indexed.
+#   #                                       #   OMIT = reuse retrieval_llm (scoring turns on once a
+#   #                                       #   collection sets a rubric — the rubric is the opt-in); set
+#   #                                       #   null to force it off even with a rubric. Both off → docs
+#   #                                       #   stay un-scored (neutral), search ranking unaffected. A
+#   #                                       #   judge failure leaves a doc un-scored, never un-indexed.
 #   wiki:                                   # issue #56: the LLM wiki (maintainer / reader / merge)
 #     llm:                                  # ← which model drives the wiki agents. SAME preset-ref
 #       preset: wiki-default                #   shape as retrieval_llm / vlm_llm. The agents own
