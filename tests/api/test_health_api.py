@@ -43,8 +43,8 @@ class _Static(ISanityCheck):
 
 def _wait_until_settled(client: TestClient, timeout: float = 5.0) -> dict:
     """Poll GET /health/checks until no round is running and every
-    check has a result — startup kicks an async full round, so tests
-    must wait for it like the FE does."""
+    check has a result — a manually-triggered round runs off the loop,
+    so tests wait for it like the FE does."""
     import time
 
     deadline = time.monotonic() + timeout
@@ -85,30 +85,41 @@ def test_get_checks_lists_registered_checks_even_before_any_run():
     assert rows["capability"]["checked_at"] is None
 
 
-def test_startup_runs_fast_sync_then_full_round():
+def test_startup_runs_fast_sync_only_not_full_round():
     reg = (
         CheckRegistry()
         .register(_Static("conn", fast=True))
         .register(_Static("capability", status="fail"))
     )
     with _client(reg) as client:
-        # Lifespan ran the fast set synchronously and kicked the async
-        # full round — poll until it settles (as the FE does).
-        body = _wait_until_settled(client)
+        # Boot runs ONLY the fast (connectivity-grade) set synchronously.
+        # The heavy capability round is no longer auto-run at startup — it
+        # stays registered but on-demand (FE re-run / POST /health/checks/run).
+        body = client.get("/health/checks").json()
+        assert body["running"] is False
         rows = {r["check_id"]: r for r in body["checks"]}
         assert rows["conn"]["status"] == "pass"
-        assert rows["capability"]["status"] == "fail"
-        assert rows["capability"]["detail"] == "probed"
-        assert rows["capability"]["checked_at"] > 0
+        assert rows["conn"]["checked_at"] > 0
+        # Full check registered but NOT run at boot.
+        assert rows["capability"]["status"] is None
+        assert rows["capability"]["checked_at"] is None
 
 
 def test_post_run_triggers_a_round_and_single_check_mode():
     reg = CheckRegistry().register(_Static("conn", fast=True)).register(_Static("capability"))
     with _client(reg) as client:
-        _wait_until_settled(client)  # let the startup round finish first
+        # No auto round at boot — the heavy capability check is unrun until
+        # we trigger it; POST runs the full round on demand.
+        assert client.get("/health/checks").json()["running"] is False
         resp = client.post("/health/checks/run", json={})
         assert resp.status_code == 202
         assert resp.json()["started"] is True
+
+        # The manually-triggered round runs every check, including the heavy one.
+        body = _wait_until_settled(client)
+        rows = {r["check_id"]: r for r in body["checks"]}
+        assert rows["capability"]["status"] == "pass"
+        assert rows["capability"]["checked_at"] > 0
 
         resp = client.post("/health/checks/run", json={"check_id": "capability"})
         assert resp.status_code == 202
@@ -138,7 +149,7 @@ def test_check_runs_persist_for_history():
     with TestClient(app):
         rm = spec.get_resource_manager(CheckRun)
         rows = [r.data for r in rm.list_resources((QB["check_id"] == "conn").build())]
-        # startup fast-sync + the async full round each ran it once.
+        # startup fast-sync ran it once (the full round is no longer auto-run at boot).
         assert len(rows) >= 1
         assert all(r.status == "pass" for r in rows)  # ty: ignore[unresolved-attribute]
 
