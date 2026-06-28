@@ -1310,6 +1310,12 @@ def create_app(
     )
     # #106: the exposed deterministic context-card lookup (read route, post-apply).
     register_context_card_routes(api, spec)
+    # #230: the /help endpoint — the Help collection id + its documents for the
+    # platform help page (its KB chat scopes to that id; the doc list links to
+    # the KB document viewer).
+    from .help_routes import register_help_routes
+
+    register_help_routes(api, spec)
     # The chat agent shares the injected runner; its retriever uses the same
     # embedder as ingestion so query and document vectors are comparable.
     # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
