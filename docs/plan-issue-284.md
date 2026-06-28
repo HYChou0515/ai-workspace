@@ -54,6 +54,11 @@ main agent ──calls──▶ make_deck  (FunctionTool, API side / TRUSTED)
    what soffice renders == what the user exports == what the model sees).
 9. **Runtime packaging** — a dedicated **sandbox image** `docker/Dockerfile.workspace-deck`;
    the API image never gets node.
+   > **Superseded (see `docs/plan-make-deck-runtime-craft.md`).** Prod runs the
+   > HTTP sandbox-host, which jails processes inside its OWN image and ignores
+   > `SandboxSpec.image` — so `Dockerfile.workspace-deck` was a no-op there and
+   > has been deleted. The deck toolchain now lives in `sandbox-host/Dockerfile`,
+   > with a `make_deck` preflight that fails loud when a host lacks it.
 10. **Mounting** — `rca` + `playground` `agent.tools`. Shipped as a committed asset
     (under the 100% gate), not in-house/gitignored.
 11. **v1 creates only** (no edit-existing-deck).

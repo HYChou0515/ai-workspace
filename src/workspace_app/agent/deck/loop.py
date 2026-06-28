@@ -28,7 +28,7 @@ from ...kb.vlm import IVlm
 BUILD_JS = "build.js"
 RENDER_SH = "render_deck.sh"
 THEME_JS = "theme.js"
-STARTER_JS = "starter.js"
+RECIPES_JS = "recipes.js"
 # Per-slide render prefix — `render_deck.sh` emits `<dir>/slide-<n>.jpg`.
 SLIDE_PREFIX = "slide-"
 SLIDE_SUFFIX = ".jpg"
@@ -48,7 +48,7 @@ class CraftAssets:
     system_prompt: str
     render_script: str
     theme_js: str
-    starter_js: str
+    recipes_js: str
 
     @classmethod
     def load(cls) -> CraftAssets:
@@ -60,7 +60,7 @@ class CraftAssets:
             system_prompt=(base / "system.md").read_text(encoding="utf-8"),
             render_script=(base / "render_deck.sh").read_text(encoding="utf-8"),
             theme_js=(base / "theme.js").read_text(encoding="utf-8"),
-            starter_js=(base / "starter.js").read_text(encoding="utf-8"),
+            recipes_js=(base / "recipes.js").read_text(encoding="utf-8"),
         )
 
 
@@ -124,7 +124,7 @@ async def build_deck(
     # Fixed craft assets the model's program may `require`. Written once.
     await io.write_text(RENDER_SH, assets.render_script)
     await io.write_text(THEME_JS, assets.theme_js)
-    await io.write_text(STARTER_JS, assets.starter_js)
+    await io.write_text(RECIPES_JS, assets.recipes_js)
 
     # The render script drops slides next to the .pptx. List that dir — "" for a
     # root-level deck (`./deck.pptx`), so the workspace facade lists the root.
