@@ -239,6 +239,13 @@ class IndexCoordinator:
     def start_consuming(self) -> None:
         self._ensure_consuming()
 
+    @property
+    def consuming(self) -> bool:
+        """Whether this coordinator's background consumer is running (#312) — so
+        the API's ``run_consumers`` gate is observable and a worker pod can report
+        that it is draining its JobType."""
+        return self._consuming
+
     def wait_idle(self, timeout: float = 10.0) -> None:
         """Block (synchronously) until the index queue drains — WITHOUT stopping
         the consumer. A sync drain point for tests and graceful operations

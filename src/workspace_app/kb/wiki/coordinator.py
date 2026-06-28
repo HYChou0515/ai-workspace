@@ -298,6 +298,13 @@ class WikiMaintenanceCoordinator:
     def start_consuming(self) -> None:
         self._ensure_consuming()
 
+    @property
+    def consuming(self) -> bool:
+        """Whether the background consumer is running (#312) — observable so the
+        API's ``run_consumers`` gate can be asserted and a worker can report it
+        is draining its JobType."""
+        return self._consuming
+
     def _stop_consuming(self) -> None:
         """Tear down the background consumer thread (it's a daemon, but we stop
         it explicitly so a process that builds many coordinators — the test

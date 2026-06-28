@@ -65,6 +65,7 @@ source = ["src/workspace_app"]
 omit = [
     "src/workspace_app/__main__.py",
     "src/workspace_app/workflow/__main__.py",
+    "src/workspace_app/worker/__main__.py",  # #312: settings-driven composition + CLI glue
 ]
 # parallel + sitecustomize's process_startup() let each pytest-xdist worker
 # subprocess record its own .coverage.* file; `coverage combine` merges them.

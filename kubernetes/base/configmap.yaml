@@ -10,6 +10,13 @@ data:
   # Only affects generated URLs (OpenAPI/docs). Overlays set this; "" = root.
   APP_ROOT_PATH: ""
   DEFAULT_USER: "default-user"
+  # #312: pod-split deploy — the API is a pure PRODUCER (it enqueues but does
+  # not drain the job queues); dedicated worker Deployments (workers.yaml)
+  # consume each JobType under their own HPA. Map this in your config.yaml as
+  #   server: { run_consumers: ${RUN_CONSUMERS} }
+  # (the env-interpolation convention every setting here uses). Set "true" for a
+  # single all-in-one Deployment with no separate workers.
+  RUN_CONSUMERS: "false"
 
   # Sandbox: in-pod subprocess. Pods usually lack unprivileged userns, so
   # disable isolation (falls back to direct exec). Workspace files live on the

@@ -263,6 +263,10 @@ def main() -> None:
             wiki_llm_base_url=wiki_llm_base_url or "",
             wiki_llm_api_key=wiki_llm_api_key or "",
             message_queue_factory=build_message_queue_factory(settings),
+            # #312: all-in-one by default; a pod-split deploy sets
+            # server.run_consumers: false on the API so it's a pure producer and
+            # dedicated worker pods drain each JobType.
+            run_consumers=settings.server.run_consumers,
             infer_modules_enhancements=infer_cfg.enhancements,
             infer_modules_reasoning_effort=infer_cfg.reasoning_effort,
             infer_modules_parallelism=infer_cfg.parallelism,
