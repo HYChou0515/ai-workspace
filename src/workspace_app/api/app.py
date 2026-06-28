@@ -893,7 +893,10 @@ def create_app(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Issue #51 / Q2: the fast (connectivity-grade) probes block
         # boot — an operator sees a dead embedder before the first
-        # request; the full capability round runs in the background.
+        # request. The heavy capability round (LLM/VLM/agent probes) is
+        # NOT auto-run at boot; it stays on-demand (FE re-run /
+        # POST /health/checks/run) so startup only verifies basic
+        # connectivity instead of hammering the local model every boot.
         # #208: each step narrates (→/✓) so a stall in the lifespan names itself
         # instead of looking like a silent hang.
         with boot_step("health: connectivity checks"):
@@ -919,7 +922,9 @@ def create_app(
                 app.state.card_gen_coordinator.start_consuming()
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
         bg.append(asyncio.create_task(_index_sweeper()))  # #227 fan-out stuck-run recovery
-        bg.append(asyncio.create_task(health_service.run_round()))
+        # NOTE: the full capability round is deliberately NOT scheduled here
+        # — boot stays connectivity-only (see the health step above); operators
+        # trigger the heavy round on demand via the FE / POST /health/checks/run.
         if code_sync_check_interval is not None:
             bg.append(asyncio.create_task(_code_sync_sweeper()))
         if gc_interval is not None:
