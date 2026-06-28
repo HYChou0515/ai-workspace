@@ -40,7 +40,7 @@ from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..health import CheckRegistry, CheckResult
 from ..health.replay import ReplayService
 from ..health.service import HealthService
-from ..kb.chunker import Chunker, FixedTokenChunker
+from ..kb.chunker import Chunker
 from ..kb.cited import record_citations
 from ..kb.embedder import Embedder, HashEmbedder
 from ..kb.ingest import Ingestor
@@ -658,6 +658,13 @@ def create_app(
     monitor: IMonitor | None = None,
     spa_dist: Path | None = None,
     root_path: str = "",
+    # #312: whether THIS process drains the job queues in-process. Default True
+    # keeps the all-in-one behaviour (local dev / tests / single-pod deploys).
+    # A pod-split deploy sets it False on the API Deployment so the API is a pure
+    # producer (it still enqueues), and dedicated worker pods consume each
+    # JobType under their own HPA. Sweepers (idle/mirror/index/blob-gc/code-sync)
+    # are NOT gated — they always run on the API (the always-on control plane).
+    run_consumers: bool = True,
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
@@ -891,22 +898,25 @@ def create_app(
         # instead of looking like a silent hang.
         with boot_step("health: connectivity checks"):
             await asyncio.to_thread(health_service.run_fast_sync)
-        # #59: every pod runs a wiki-maintenance consumer so the shared,
-        # partitioned job queue drains regardless of which pod enqueued (and
-        # even on pods that received no uploads). Idempotent + non-blocking.
-        with boot_step("start wiki-maintenance consumer"):
-            app.state.wiki_coordinator.start_consuming()
-        # #82: same — every pod runs an indexing consumer draining the shared,
-        # partitioned IndexJob queue (so a slow embed never starves the request path).
-        with boot_step("start indexing consumer"):
-            app.state.index_coordinator.start_consuming()
-        # Model-sanity battery consumer (when wired) — drains SanityRun jobs.
-        if app.state.sanity_coordinator is not None:
-            with boot_step("start model-sanity consumer"):
-                app.state.sanity_coordinator.start_consuming()
-        # #175: every pod drains the shared context-card generation queue too.
-        with boot_step("start context-card generation consumer"):
-            app.state.card_gen_coordinator.start_consuming()
+        # #312: in-process consumers run only when `run_consumers` is on. Default
+        # True keeps the all-in-one behaviour; a pod-split deploy sets it False so
+        # the API is a pure producer and dedicated worker pods drain each JobType.
+        # The shared, partitioned queues drain regardless of which process
+        # enqueued, so a worker pod (or another all-in-one pod) picks the jobs up.
+        if run_consumers:
+            # #59: wiki-maintenance consumer. Idempotent + non-blocking.
+            with boot_step("start wiki-maintenance consumer"):
+                app.state.wiki_coordinator.start_consuming()
+            # #82: indexing consumer (so a slow embed never starves the request path).
+            with boot_step("start indexing consumer"):
+                app.state.index_coordinator.start_consuming()
+            # Model-sanity battery consumer (when wired) — drains SanityRun jobs.
+            if app.state.sanity_coordinator is not None:
+                with boot_step("start model-sanity consumer"):
+                    app.state.sanity_coordinator.start_consuming()
+            # #175: context-card generation consumer.
+            with boot_step("start context-card generation consumer"):
+                app.state.card_gen_coordinator.start_consuming()
         bg = [asyncio.create_task(_idle_killer()), asyncio.create_task(_mirror_sweeper())]
         bg.append(asyncio.create_task(_index_sweeper()))  # #227 fan-out stuck-run recovery
         bg.append(asyncio.create_task(health_service.run_round()))
@@ -1213,119 +1223,65 @@ def create_app(
     # KB chatbot subsystem: ingestion + collection/document/render routes.
     # Embedder/Chunker are swappable; defaults are offline-friendly (production
     # injects a LiteLLM embedder for real semantic search).
+    from ..coordinators import build_ingestor
+
     embedder = kb_embedder or HashEmbedder(dim=EMBED_DIM)
-    # Pipeline mode (P1) takes precedence; legacy chunker stays for tests +
-    # offline runs that don't construct an LI pipeline.
-    if kb_pipeline is not None:
-        ingestor = Ingestor(
-            spec,
-            pipeline=kb_pipeline,  # ty: ignore[invalid-argument-type]
-            chat_pipeline=kb_chat_pipeline,  # ty: ignore[invalid-argument-type]
-            embedder=embedder,
-            code_embedder=kb_code_embedder,
-            parser_registry=kb_parser_registry,  # ty: ignore[invalid-argument-type]
-        )
-    else:
-        ingestor = Ingestor(
-            spec,
-            chunker=kb_chunker or FixedTokenChunker(),
-            chat_pipeline=kb_chat_pipeline,  # ty: ignore[invalid-argument-type]
-            embedder=embedder,
-            code_embedder=kb_code_embedder,
-            parser_registry=kb_parser_registry,  # ty: ignore[invalid-argument-type]
-        )
+    # #312: the ingestor is built by the shared `build_ingestor` so the worker
+    # entrypoint constructs it identically. Pipeline mode (P1) takes precedence;
+    # the legacy chunker stays for tests + offline runs (handled inside).
+    ingestor = build_ingestor(
+        spec,
+        embedder=embedder,
+        pipeline=kb_pipeline,
+        chunker=kb_chunker,
+        chat_pipeline=kb_chat_pipeline,
+        code_embedder=kb_code_embedder,
+        parser_registry=kb_parser_registry,
+    )
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
     # collection with the same name).
     insights_collection_id = _ensure_insights_collection(spec, insights_collection_name)
-    # Issue #50 P3: after a doc indexes, fold it into its collection's LLM wiki
-    # (when use_wiki is on). The coordinator serialises maintainer runs per
-    # collection so bursty uploads coalesce instead of racing the wiki pages.
-    from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
-    from ..kb.wiki.maintainer import default_wiki_maintainer_config
+    # #312: the background job coordinators are built by the shared
+    # `build_coordinators` composition root — the SAME one the standalone worker
+    # entrypoint uses — so the API can run as a pure producer (its consumers
+    # gated off via `run_consumers`) while dedicated worker pods each consume one
+    # JobType. The API layer still owns the request-stack wiring below: route
+    # registration, the reindex-on-edit trigger, and `app.state` exposure.
+    from ..coordinators import build_coordinators, resolve_wiki_config
     from ..kb.wiki.orchestrator import default_wiki_merge_config
     from ..kb.wiki.reader import default_wiki_reader_config
 
-    def _wiki_cfg(purpose: str, fallback: Callable[[], AgentConfig]) -> AgentConfig:
-        """The wiki agent's config (catalog purpose, else bundled default) with
-        the operator's optional model/endpoint override applied — so a stronger
-        tool-calling model can drive the wiki agents without re-stating their
-        prompts/tools."""
-        cfg = catalog.default_for(purpose) or fallback()
-        if wiki_model or wiki_llm_base_url or wiki_llm_api_key:
-            cfg = msgspec.structs.replace(
-                cfg,
-                model=wiki_model or cfg.model,
-                llm_base_url=wiki_llm_base_url or cfg.llm_base_url,
-                llm_api_key=wiki_llm_api_key or cfg.llm_api_key,
-            )
-        return cfg
-
-    wiki_coordinator = WikiMaintenanceCoordinator(
+    coordinators = build_coordinators(
         spec,
-        runner,
-        agent_config=_wiki_cfg("wiki_maintainer", default_wiki_maintainer_config),
-        maintainer_max_turns=wiki_maintainer_max_turns,
+        ingestor=ingestor,
+        runner=runner,
+        catalog=catalog,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
+        quality_judge_llm=quality_judge_llm,
+        card_drafter_llm=card_drafter_llm,
+        sanity_llm_factory=sanity_llm_factory,  # ty: ignore[invalid-argument-type]
+        sanity_judge_llm=sanity_judge_llm,
+        wiki_maintainer_max_turns=wiki_maintainer_max_turns,
+        wiki_model=wiki_model,
+        wiki_llm_base_url=wiki_llm_base_url,
+        wiki_llm_api_key=wiki_llm_api_key,
     )
+    wiki_coordinator = coordinators.wiki
+    index_coordinator = coordinators.index
     app.state.wiki_coordinator = wiki_coordinator
-    # #82: indexing runs off the request path on a durable, cross-pod job queue
-    # (mirrors the wiki coordinator). It chains the index→wiki hook, so the wiki
-    # coordinator is handed in here rather than called from the routes.
-    from ..kb.index_coordinator import IndexCoordinator
-
-    # #105: the doc-quality judge. Built only when a `kb.quality_judge` model is
-    # configured; otherwise None ⇒ the index coordinator skips scoring entirely
-    # (docs stay un-scored = neutral).
-    quality_coordinator = None
-    if quality_judge_llm is not None:
-        from ..kb.quality import QualityScorer
-        from ..kb.quality_coordinator import QualityCoordinator
-
-        quality_coordinator = QualityCoordinator(spec, QualityScorer(quality_judge_llm))
-    index_coordinator = IndexCoordinator(
-        spec,
-        ingestor,
-        wiki_coordinator=wiki_coordinator,
-        quality_coordinator=quality_coordinator,
-        message_queue_factory=message_queue_factory,
-        get_user_id=get_user_id,
-    )
     # #87: a content edit (the FE's blob-upload + CAS PATCH /source-doc/{id})
-    # auto-enqueues a reindex via a SourceDoc patch event_handler — wired here,
-    # after the coordinator exists (the handler needs it).
+    # auto-enqueues a reindex via a SourceDoc patch event_handler — wired here
+    # (API-side: edits only happen through the API), after the coordinator exists.
     index_coordinator.install_reindex_on_edit()
     app.state.index_coordinator = index_coordinator
-    # #175: 自動 context card — a background job drafts cards from a collection's
-    # selected documents for human review (mirrors the wiki/index coordinators).
-    from ..kb.card_drafter import LlmCardDrafter, NullCardDrafter
-    from ..kb.card_gen_coordinator import CardGenCoordinator
-
-    card_drafter = (
-        LlmCardDrafter(card_drafter_llm) if card_drafter_llm is not None else NullCardDrafter()
-    )
-    card_gen_coordinator = CardGenCoordinator(
-        spec,
-        card_drafter,
-        message_queue_factory=message_queue_factory,
-        get_user_id=get_user_id,
-    )
+    card_gen_coordinator = coordinators.card_gen
     app.state.card_gen_coordinator = card_gen_coordinator
     register_card_gen_routes(api, card_gen_coordinator)
-    # Model-sanity battery: a background consumer runs matrix cells (heavy live
-    # LLM) off the request path, like the index/wiki coordinators. Only mounted
-    # when an LLM factory is wired (it's a live probe).
-    sanity_coordinator = None
-    if sanity_llm_factory is not None:
-        from ..health.sanity.coordinator import SanityBatteryCoordinator
-
-        sanity_coordinator = SanityBatteryCoordinator(
-            spec,
-            sanity_llm_factory,  # ty: ignore[invalid-argument-type]
-            judge=sanity_judge_llm,
-            message_queue_factory=message_queue_factory,
-        )
+    # Model-sanity battery routes mount only when the live-LLM factory is wired.
+    sanity_coordinator = coordinators.sanity
+    if sanity_coordinator is not None:
         register_sanity_routes(api, sanity_models or [], sanity_coordinator)
     app.state.sanity_coordinator = sanity_coordinator
     register_kb_routes(
@@ -1367,8 +1323,22 @@ def create_app(
     kb_runner = WikiAwareRunner(
         runner,
         spec,
-        reader_config=_wiki_cfg("wiki_reader", default_wiki_reader_config),
-        merge_config=_wiki_cfg("wiki_merge", default_wiki_merge_config),
+        reader_config=resolve_wiki_config(
+            catalog,
+            "wiki_reader",
+            default_wiki_reader_config,
+            wiki_model=wiki_model,
+            wiki_llm_base_url=wiki_llm_base_url,
+            wiki_llm_api_key=wiki_llm_api_key,
+        ),
+        merge_config=resolve_wiki_config(
+            catalog,
+            "wiki_merge",
+            default_wiki_merge_config,
+            wiki_model=wiki_model,
+            wiki_llm_base_url=wiki_llm_base_url,
+            wiki_llm_api_key=wiki_llm_api_key,
+        ),
         reader_max_turns=wiki_reader_max_turns,
     )
     kb_turn_engine = ChatTurnEngine(kb_runner)

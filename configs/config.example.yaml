@@ -31,6 +31,13 @@
 #   superusers: []             # #262: user ids with UNRESTRICTED collection
 #                              # access (read every collection, manage any).
 #                              # e.g. ["alice@example.com"]. Empty = none.
+#   run_consumers: true        # #312: whether THIS process drains the job queues
+#                              # in-process. true (default) = all-in-one (local
+#                              # dev / single pod). Set false on the API in a
+#                              # pod-split deploy so it's a pure producer and
+#                              # dedicated worker pods (`python -m
+#                              # workspace_app.worker <jobtype>`) consume each
+#                              # JobType under their own HPA. e.g. ${RUN_CONSUMERS}
 
 # ─── sandbox (agent execution environment) ──────────────────────────
 # sandbox:

@@ -346,6 +346,13 @@ class SanityBatteryCoordinator:
     def start_consuming(self) -> None:
         self._ensure_consuming()
 
+    @property
+    def consuming(self) -> bool:
+        """Whether the background consumer is running (#312) — observable so the
+        API's ``run_consumers`` gate can be asserted and a worker can report it
+        is draining its JobType."""
+        return self._consuming
+
     def wait_idle(self, timeout: float = 30.0) -> None:
         """Block until the queue drains, without stopping the consumer (a sync
         drain point for tests + graceful ops)."""

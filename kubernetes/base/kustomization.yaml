@@ -8,4 +8,5 @@ resources:
   - pvc.yaml
   - service.yaml
   - deployment.yaml
+  - workers.yaml # #312: per-JobType job-worker Deployments + HPAs
   - ingress.yaml

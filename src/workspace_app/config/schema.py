@@ -43,6 +43,12 @@ class ServerSettings:
     # access_scope + write checker (`make_spec(superusers=…)`) AND the route-level
     # `authorize(...)` guards. Empty (default) ⇒ no superusers, as in prod today.
     superusers: list[str] = field(default_factory=list)
+    # #312: whether this API process also drains the job queues in-process.
+    # True (default) = all-in-one (local dev / single-pod). A pod-split deploy
+    # sets it False on the API Deployment so the API is a pure producer and
+    # dedicated worker pods (`python -m workspace_app.worker <jobtype>`) consume
+    # each JobType under their own HPA.
+    run_consumers: bool = True
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────
