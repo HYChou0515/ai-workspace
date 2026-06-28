@@ -1,117 +1,116 @@
-# Adding an App
+# 新增一個 App
 
-The platform is **multi-App** (#89). An **App** is an in-code directory under
-`src/workspace_app/apps/<slug>/`. Dropping a new dir there produces a parallel,
-separately-branded dashboard — launcher card, item list, create flow, workspace
-shell, agent — all driven by the App's `app.json` + model. RCA (`apps/rca/`) is
-just one App; the scaffold `apps/_template/` is a copy-me starting point.
+這個平台是 **multi-App(多 App)**(#89)。一個 **App** 就是程式碼裡
+`src/workspace_app/apps/<slug>/` 底下的一個目錄。在那裡丟進一個新目錄,就會產生一個平行、
+獨立品牌的 dashboard——launcher 卡片、item 清單、create 流程、workspace
+shell、agent——全部由該 App 的 `app.json` + model 驅動。RCA(`apps/rca/`)只是
+其中一個 App;scaffold(腳手架)`apps/_template/` 則是一份「複製我」的起點。
 
-Registration is a **scan** of `apps/` at boot (`apps/registry.py`): any dir with
-an `app.json` + a `model.py` is discovered, registered, and shown on the
-launcher. **No central list to edit.** (`_`-prefixed dirs like `_template` are
-skipped — internal, not user-facing.)
+註冊是開機時對 `apps/` 的一次**掃描**(`apps/registry.py`):任何含有
+`app.json` + `model.py` 的目錄都會被探索、註冊,並顯示在
+launcher 上。**沒有需要編輯的中央清單。**(像 `_template` 這種 `_` 開頭的目錄會被
+略過——它們是內部用的,不對使用者公開。)
 
-## Quick start
+## 快速開始
 
-1. Copy the scaffold:
+1. 複製 scaffold:
    ```
    cp -r src/workspace_app/apps/_template src/workspace_app/apps/<your-slug>
    ```
-   The dir name **is** the slug, so it must be a valid Python package name
-   (lowercase, no hyphens): `tickets`, `audits`, `incidents`.
-2. Edit `<your-slug>/app.json` — set `slug` to match the dir, then fill in the
-   identity / agent / item / layout / lifecycle (reference below).
-3. Edit `<your-slug>/model.py` — rename `TemplateItem` + its enums to your
-   domain; set `INDEXED_FIELDS` to the fields you filter / sort / colour on.
-4. Edit `<your-slug>/prompts/system.md` — the agent's base prompt.
-5. Edit `<your-slug>/profiles/default/` — the starter-content the create flow
-   seeds (add more profiles for a pickable variety).
-6. Boot (`uv run python -m workspace_app`). The App appears on the launcher; no
-   other file needs touching.
+   目錄名稱**就是** slug,所以它必須是合法的 Python package 名稱
+   (小寫、不能有連字號):`tickets`、`audits`、`incidents`。
+2. 編輯 `<your-slug>/app.json`——把 `slug` 設成與目錄相符,然後填入
+   identity / agent / item / layout / lifecycle(參考下方)。
+3. 編輯 `<your-slug>/model.py`——把 `TemplateItem` 及其 enum 改名成你的
+   領域;把 `INDEXED_FIELDS` 設成你用來 filter / sort / 上色的欄位。
+4. 編輯 `<your-slug>/prompts/system.md`——agent 的 base prompt。
+5. 編輯 `<your-slug>/profiles/default/`——create 流程會 seed 的起始內容
+   (再多加幾個 profile 就能提供可挑選的多樣選項)。
+6. 開機(`uv run python -m workspace_app`)。App 會出現在 launcher 上;不需要動
+   任何其他檔案。
 
-## The files
+## 各個檔案
 
 ```
 apps/<slug>/
-├── app.json                     # identity, agent ceiling, layout, lifecycle, toggles
-├── model.py                     # the WorkItem Struct (MODEL + INDEXED_FIELDS)
+├── app.json                     # identity、agent 上限、layout、lifecycle、各種開關
+├── model.py                     # WorkItem Struct（MODEL + INDEXED_FIELDS）
 ├── prompts/
-│   └── system.md                # the agent's base system prompt
+│   └── system.md                # agent 的 base system prompt
 └── profiles/
-    └── default/                 # a starter-content bundle (the create flow's default)
-        ├── _prompt.md           # appended to the system prompt for this profile
-        ├── _profile.json        # (optional) narrows tools/presets, suggestions
-        ├── .skill/<name>/SKILL.md  # (optional) read_skill-loadable skills
-        └── *.tpl                # files seeded into the item ($title/$owner/… substituted)
+    └── default/                 # 一份起始內容 bundle（create 流程的預設）
+        ├── _prompt.md           # 附加在這個 profile 的 system prompt 之後
+        ├── _profile.json        # （選用）收窄 tools/presets、suggestions
+        ├── .skill/<name>/SKILL.md  # （選用）可被 read_skill 載入的 skill
+        └── *.tpl                # seed 進 item 的檔案（$title/$owner/… 會被代入）
 ```
 
-## `app.json` reference
+## `app.json` 參考
 
-| field | meaning |
+| 欄位 | 意義 |
 |---|---|
-| `slug` | the App id — **must equal the dir name** |
-| `title` / `description` | launcher card text |
-| `icon` | `flame` (named), an emoji, or `icon.svg` (a sibling file, inlined) |
-| `color` | one hex → the App's `--accent` trio (full re-theme inside the App) |
-| `function.workspace` | file IDE (tree + editor + file tools). `false` → chat-only shell |
-| `function.sandbox` | exec + package tools. Needs no terminal; gates exec affordances |
-| `function.terminal` | human shell tab. **Requires `sandbox: true`** |
-| `agent.prompt_file` | path (relative to the App dir) of the base system prompt |
-| `agent.tools` | the App's tool **ceiling**; a profile may narrow to a subset |
-| `agent.picker` | `[{preset, name}]` — the model picker; `preset` ∈ `config.yaml` `agents.presets` |
-| `agent.suggestions` | App-level quick-prompt chips (a profile may override) |
-| `item.{noun,noun_plural,create_label}` | the human strings ("Start Investigation") |
-| `layout.{breadcrumb,statusbar,list,form}` | which domain fields show on each surface |
-| `layout.default_tabs` | files the workspace opens on entry (filtered to those seeded) |
-| `lifecycle` | `{status_field, closing_states}` — drives the Close affordance |
-| `labels` | per-field display labels |
-| `field_styles` | enum option → tone token (`err`/`warn`/`ok`/`info`/`muted`) — chip colours as data |
-| `default_profile` | the profile the create flow seeds when the user doesn't pick |
+| `slug` | App id——**必須等於目錄名稱** |
+| `title` / `description` | launcher 卡片文字 |
+| `icon` | `flame`(具名)、一個 emoji,或 `icon.svg`(同層檔案,內嵌) |
+| `color` | 一個 hex → App 的 `--accent` 三色組(App 內整套重新配色) |
+| `function.workspace` | file IDE(tree + editor + file tools)。`false` → 只有 chat 的 shell |
+| `function.sandbox` | exec + package tools。不需要 terminal;控制 exec 相關功能的開啟 |
+| `function.terminal` | 人用的 shell 分頁。**需要 `sandbox: true`** |
+| `agent.prompt_file` | base system prompt 的路徑(相對於 App 目錄) |
+| `agent.tools` | App 的 tool **上限**;profile 可以收窄成其子集 |
+| `agent.picker` | `[{preset, name}]`——model picker;`preset` ∈ `config.yaml` 的 `agents.presets` |
+| `agent.suggestions` | App 層級的 quick-prompt chips(profile 可覆寫) |
+| `item.{noun,noun_plural,create_label}` | 給人看的字串(「Start Investigation」) |
+| `layout.{breadcrumb,statusbar,list,form}` | 每個 surface 上顯示哪些領域欄位 |
+| `layout.default_tabs` | workspace 進場時開啟的檔案(只篩出有 seed 的那些) |
+| `lifecycle` | `{status_field, closing_states}`——驅動 Close 功能 |
+| `labels` | 各欄位的顯示 label |
+| `field_styles` | enum option → tone token(`err`/`warn`/`ok`/`info`/`muted`)——把 chip 顏色當作資料 |
+| `default_profile` | 使用者沒挑選時,create 流程 seed 的 profile |
 
-**Toggle coherence is enforced at boot** (`validate_function_coherence`): e.g. an
-`exec` in `agent.tools` with `sandbox: false`, or `terminal: true` with
-`sandbox: false`, fails the boot loud. The `_template` App ships
-`sandbox: false` + file-only tools to show a workspace-only (no-sandbox) App.
+**開關的一致性在開機時強制檢查**(`validate_function_coherence`):例如
+`agent.tools` 裡有 `exec` 卻 `sandbox: false`,或 `terminal: true` 卻
+`sandbox: false`,都會讓開機大聲失敗。`_template` App 出貨時帶
+`sandbox: false` + 只有 file 的 tools,用來示範一個 workspace-only(無 sandbox)的 App。
 
-## `model.py` contract
+## `model.py` 合約
 
-Export `MODEL` (a `WorkItemBase` subclass) + `INDEXED_FIELDS`:
+匯出 `MODEL`(一個 `WorkItemBase` 子類)+ `INDEXED_FIELDS`:
 
-- **Tier 1** (free from `WorkItemBase`): `title`, `owner`, `description`,
-  `profile`, `attached_preset`.
-- **Tier 2** (opt-in): `members`, `topics` — redeclare as concrete `list[str]`
-  if your App uses them.
-- **Tier 3**: your typed domain fields (enums / scalars). Type them so they
-  index natively — list `INDEXED_FIELDS` for the ones you filter / sort / colour.
+- **Tier 1**(從 `WorkItemBase` 免費取得):`title`、`owner`、`description`、
+  `profile`、`attached_preset`。
+- **Tier 2**(opt-in):`members`、`topics`——如果你的 App 有用到,就重新宣告成具體的 `list[str]`。
+- **Tier 3**:你自己的型別化領域欄位(enum / scalar)。把它們標好型別讓它們
+  原生建索引——把你用來 filter / sort / 上色的那些列進 `INDEXED_FIELDS`。
 
-The field **kinds + enum options** are projected from the model into the manifest
-(`GET /apps/{slug}.fields`), so the FE renders + inline-edits them without
-restating types — `enum → select`, `str → text`.
+欄位的 **kind + enum options** 會從 model 投射進 manifest
+(`GET /apps/{slug}.fields`),所以 FE 不需要重述型別就能 render + inline-edit 它們——
+`enum → select`、`str → text`。
 
 ## Profiles
 
-A profile is a starter-content bundle. `default` is required; ship more to give
-the create flow a **profile picker** (it appears when there's >1). Each profile:
+一個 profile 就是一份起始內容 bundle。`default` 是必要的;多出貨幾個就能給 create
+流程一個 **profile picker**(當數量 >1 時才會出現)。每個 profile:
 
-- `*.tpl` files → seeded into the item on create, with `$title` / `$owner` /
-  your Tier-3 fields substituted (the `.tpl` suffix is stripped).
-- `_prompt.md` → appended to the system prompt for this profile.
-- `_profile.json` (optional, `apps.profiles.ProfileManifest`): `title`,
-  `description`, `suggestions`, `tools` (⊆ `agent.tools`), `presets`
-  (⊆ `agent.picker`), `default_preset`. Omit to inherit the App's full ceiling.
-- `.skill/<name>/SKILL.md` (optional): `read_skill`-loadable skills with
-  `name` + `description` frontmatter; the agent gets a "## Available skills"
-  index + the `read_skill` tool when the profile ships any.
+- `*.tpl` 檔 → 在 create 時 seed 進 item,並把 `$title` / `$owner` /
+  你的 Tier-3 欄位代入(`.tpl` 後綴會被去掉)。
+- `_prompt.md` → 附加在這個 profile 的 system prompt 之後。
+- `_profile.json`(選用,`apps.profiles.ProfileManifest`):`title`、
+  `description`、`suggestions`、`tools`(⊆ `agent.tools`)、`presets`
+  (⊆ `agent.picker`)、`default_preset`。省略則繼承 App 的完整上限。
+- `.skill/<name>/SKILL.md`(選用):可被 `read_skill` 載入的 skill,帶
+  `name` + `description` frontmatter;當 profile 有出貨任何 skill 時,agent 會拿到一份
+  「## Available skills」索引 + `read_skill` tool。
 
 ## Presets
 
-`agent.picker` references **presets** by name; presets live in `config.yaml`
-under `agents.presets` (model + creds + sandbox image + idle timeout). Reuse the
-bundled `qwen3-local` / `claude-opus` / `openai-mini`, or add your own.
+`agent.picker` 用名稱參照 **presets**;presets 住在 `config.yaml` 的
+`agents.presets` 底下(model + creds + sandbox image + idle timeout)。沿用
+bundled 的 `qwen3-local` / `claude-opus` / `openai-mini`,或自己加。
 
-## Constraints
+## 限制
 
-- The dir name is the slug — a valid Python package name (the registry imports
-  `apps.<slug>.model`). No hyphens.
-- `_`-prefixed dirs are not discovered (use for scaffolds / internal helpers).
-- Data is **not** shared across Apps — each App has its own resource table.
+- 目錄名稱就是 slug——一個合法的 Python package 名稱(registry 會 import
+  `apps.<slug>.model`)。不能有連字號。
+- `_` 開頭的目錄不會被探索(拿來放 scaffold / 內部 helper)。
+- 資料**不會**跨 App 共用——每個 App 有自己的 resource table。
