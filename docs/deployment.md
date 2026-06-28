@@ -449,6 +449,32 @@ RCA 的 system prompt 是純 markdown，存在
   RCA 預設較長（8 小時閒置）以支援「開著、晚點再回來」的調查流程。
 - **LLM 連線**：用本機 Ollama 時確認 `ollama serve` 已啟動、模型已 `ollama pull`；
   用 hosted 時設好對應的 API key 環境變數。
+- **Job runner ⊥ API（pod 切分，#312）**：背景 job（index 索引 / wiki 維護 /
+  context-card 生成 / model-sanity）由 coordinator 在 specstar job queue 上消費。
+  預設 `server.run_consumers: true` ⇒ **all-in-one**：API 進程自己也在進程內把全部
+  consumer 起起來（本地開發 / 單 pod 最省事）。要讓 job runner 獨立 scale：
+
+  - **API 設 `server.run_consumers: false`** ⇒ API 變**純 producer**：照常服務 HTTP
+    + `enqueue`，但不消費任何 queue。
+  - 每個 JobType 各跑一個 **worker 進程**，block-consume 自己那一種:
+
+    ```bash
+    python -m workspace_app.worker index      # 索引(chunk+embed,最吃資源)
+    python -m workspace_app.worker wiki        # wiki 維護
+    python -m workspace_app.worker card-gen    # context-card 生成
+    python -m workspace_app.worker sanity      # model-sanity battery
+    ```
+
+    一個 JobType 一個 Deployment ⇒ 各自掛 k8s HPA 獨立 autoscale，API 維持小。
+    worker 收到 SIGTERM 會 drain 在途工作再退出（job 是 durable,硬殺也會被重投）。
+  - **前提:共享後端**。in-memory 預設會讓每個 pod 各自一份 queue，worker 抓不到
+    API 入列的 job — 真正切 pod 必須讓所有進程指向同一個 **Postgres** specstar
+    後端（必要時 `message_queue.kind: rabbitmq`）。
+  - 非 queue 的背景 sweeper（sandbox 閒置回收 / 鏡像 / 索引卡住回收 / blob-GC /
+    code 同步）**一律留在 API**，不受 `run_consumers` 影響。
+  - k8s 範例見 [`kubernetes/base/workers.yaml`](../kubernetes/base/workers.yaml)
+    與 [`kubernetes/README.md`](../kubernetes/README.md)（每 JobType 一個
+    Deployment + CPU HPA，sanity 固定 1 replica；不使用 KEDA）。
 - **索引回填（#263，升級後一次性）**：本版替 `DocChunk` 加了 `provenance`
   位置索引（page / sheet / …，供「分析某檔第 N 頁」這類定位過濾），並替
   `SourceDoc` 加了 `path` 索引（檔名→文件解析），兩個 model 都升到 schema
