@@ -29,3 +29,6 @@ build/
 # faithful LLM call log. Both are local runtime artifacts, never committed.
 config.resolved.yaml
 /logs/
+
+# mkdocs build output
+/site/

@@ -158,9 +158,10 @@ class Collection(Struct):                 # → resource "collection"
     description: str = ""
 
 class SourceDoc(Struct):                  # → resource "source-doc"
-    # id = encode_doc_id(collection_id, created_by, path): the natural key
-    # percent-encoded slash-free (specstar ids can't hold '/'). OPAQUE — never
-    # parsed; read path/collection/user from the record + created_by meta.
+    # id = encode_doc_id(collection_id, path): the natural key with every '/'
+    # swapped for '∕' (U+2215) — slash-free (specstar ids can't hold ASCII '/'),
+    # path-keyed (NOT per-user), NOT percent-encoded. OPAQUE — never parsed;
+    # read path/collection_id from the record + created_by meta.
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
     path: str                             # relative path within the upload
     content: Binary                       # original bytes; content.file_id = xxh3 (dedup);
@@ -350,10 +351,12 @@ filename (one SourceDoc per file, same as unpacking an archive). Citations are
 **not** in the SSE stream — refetch `GET /kb/chats/{id}` on `done` to get the
 persisted assistant `KbMessage` with its resolved `[n]` `Citation`s.
 
-A SourceDoc `resource_id` is its natural key `{collection}/{user}/{path}`
-percent-encoded into one slash-free token (specstar ids can't contain `/`). It
-is **opaque** — the FE/backend never parse it; `path`/`collection`/`user` come
-from the record + `created_by` meta. The KB chat reuses the **same turn engine**
+A SourceDoc `resource_id` is its natural key `{collection_id}/{path}`
+(**path-keyed, not per-user**) with every `/` swapped for `∕` (U+2215) into one
+slash-free token (specstar ids can't contain ASCII `/`) — **not** percent-encoded,
+since the id surfaces in user-visible `kb://doc/{id}` links. It is **opaque** —
+the FE/backend never parse it; `path`/`collection_id` come from the record +
+`created_by` meta. The KB chat reuses the **same turn engine**
 as the RCA workspace (one cancellable in-flight turn per conversation), so its
 streaming + interrupt contract is identical.
 
