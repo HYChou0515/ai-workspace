@@ -1,0 +1,224 @@
+# #312: standalone job workers. Each Deployment block-consumes ONE JobType via
+# `python -m workspace_app.worker <jobtype>`, so it scales under its own HPA
+# while the API (deployment.yaml, RUN_CONSUMERS="false") stays a pure producer.
+#
+# Requirements for a real split (see kubernetes/README.md):
+#   - a SHARED specstar backend (Postgres) so producer + workers see one queue;
+#     the in-memory FILESTORE/backend default isolates each pod and won't work.
+#   - workers share the same configmap (envFrom rca-config) for embedder / LLM /
+#     Ollama endpoints — they run the SAME image, only the command differs.
+#
+# Graceful shutdown: the worker traps SIGTERM, drains in-flight work, then exits.
+# Pending jobs are durable (redelivered if a pod dies), so termination is safe.
+---
+# ── index: chunk + embed (CPU/GPU-heavy) — the prime reason to scale out ──────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-index
+spec:
+  replicas: 1 # HPA owns the count
+  selector:
+    matchLabels:
+      app: rca-worker-index
+  template:
+    metadata:
+      labels:
+        app: rca-worker-index
+    spec:
+      terminationGracePeriodSeconds: 60 # let the worker drain in-flight indexing
+      containers:
+        - name: worker
+          image: rca-app:latest # overlays pin a tag via `images:`
+          command: ["python", "-m", "workspace_app.worker", "index"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rca-worker-index
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rca-worker-index
+  minReplicas: 1
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+# ── wiki maintenance (LLM-bound; serial per collection) ───────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-wiki
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-wiki
+  template:
+    metadata:
+      labels:
+        app: rca-worker-wiki
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "wiki"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rca-worker-wiki
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rca-worker-wiki
+  minReplicas: 1
+  maxReplicas: 4
+  # NOTE: wiki/card-gen are IO-bound (waiting on the LLM), so CPU utilisation
+  # under-reports load — tune min/maxReplicas to your throughput rather than
+  # relying on the CPU target alone (#312; KEDA queue-depth scaling out of scope).
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+# ── context-card generation (LLM-bound; serial per collection) ────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-card-gen
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-card-gen
+  template:
+    metadata:
+      labels:
+        app: rca-worker-card-gen
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "card-gen"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rca-worker-card-gen
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: rca-worker-card-gen
+  minReplicas: 1
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+# ── model-sanity battery (manual, infrequent) — fixed 1 replica, no HPA ───────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rca-worker-sanity
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rca-worker-sanity
+  template:
+    metadata:
+      labels:
+        app: rca-worker-sanity
+    spec:
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: worker
+          image: rca-app:latest
+          command: ["python", "-m", "workspace_app.worker", "sanity"]
+          envFrom:
+            - configMapRef:
+                name: rca-config
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: rca-data

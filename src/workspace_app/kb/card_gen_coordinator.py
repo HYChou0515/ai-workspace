@@ -222,6 +222,13 @@ class CardGenCoordinator:
         create_app calls it at startup so idle pods help drain the queue."""
         self._ensure_consuming()
 
+    @property
+    def consuming(self) -> bool:
+        """Whether the background consumer is running (#312) — observable so the
+        API's ``run_consumers`` gate can be asserted and a worker can report it
+        is draining its JobType."""
+        return self._consuming
+
     def _stop_consuming(self) -> None:
         self._consuming = False
         self._job_rm.message_queue.stop_consuming()  # ty: ignore[unresolved-attribute]

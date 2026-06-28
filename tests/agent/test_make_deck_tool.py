@@ -107,12 +107,30 @@ async def test_run_make_deck_happy_returns_summary():
 
 async def test_run_make_deck_unbuildable_returns_error():
     async def run(cmd, ws):
-        return 1, "node: not found"
+        if cmd[0] == "sh":  # preflight passes — node exists
+            return 0, ""
+        return 1, "SyntaxError: boom"  # but every build.js fails
 
     vlm = ScriptedVlm(["x", "x"])
     seams = _fake_seams(vlm, run)
     out = await run_make_deck(**seams, progress=None, goal="G", max_rounds=2)
     assert out.startswith("error:") and "Could not build" in out
+
+
+async def test_run_make_deck_missing_toolchain_fails_loud():
+    """No node/soffice/poppler in the sandbox ⇒ a clear, actionable error
+    returned BEFORE the loop — not silent failed rounds, and the model is never
+    called."""
+
+    async def run(cmd, ws):
+        return 127, "sh: node: not found"  # preflight (and anything) fails
+
+    vlm = ScriptedVlm(["x", "x", "x", "x"])
+    seams = _fake_seams(vlm, run)
+    out = await run_make_deck(**seams, progress=None, goal="G")
+    assert out.startswith("error:")
+    assert "toolchain" in out and "Do not retry" in out
+    assert vlm.calls == []  # failed preflight ⇒ the model was never reached
 
 
 # ─── make_deck_impl (ctx wrapper, real facade) ─────────────────────────
@@ -123,6 +141,8 @@ class _RenderSandbox(MockSandbox):
     seams run; everything else falls back to MockSandbox."""
 
     async def exec(self, handle, cmd, on_output=None):  # type: ignore[override]
+        if cmd and cmd[0] == "sh":  # preflight: toolchain present
+            return ExecResult(exit_code=0, stdout=b"")
         if cmd and cmd[0] == "node":
             return ExecResult(exit_code=0, stdout=b"built\n")
         if cmd and cmd[0] == "bash":

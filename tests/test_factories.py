@@ -390,17 +390,26 @@ def test_get_sanity_judge_llm_off_by_default_and_enabled_via_ref():
     assert isinstance(get_sanity_judge_llm(enabled), LitellmLlm)
 
 
-def test_get_kb_quality_judge_llm_off_by_default_and_enabled_via_ref():
-    """#105: `kb.quality_judge` defaults to None (doc scoring off → factory None);
-    a preset reference resolves through the same cascade → a real ILlm."""
+def test_get_kb_quality_judge_llm_falls_back_to_retrieval_llm():
+    """#105: `kb.quality_judge` reuses `kb.retrieval_llm` when omitted (mirrors
+    `vlm_format_llm`), so a deploy that already wired retrieval gets doc scoring
+    the moment a collection sets a rubric — no separate config key. An explicit
+    ref overrides the fallback; both unset → scoring off (factory None)."""
     from workspace_app.config.schema import RetrievalLlmRef
     from workspace_app.factories import get_kb_quality_judge_llm
 
-    assert get_kb_quality_judge_llm(Settings()) is None
-    enabled = replace(
+    # Omitted quality_judge + the default retrieval_llm (kb-retrieval) → reuse it.
+    assert isinstance(get_kb_quality_judge_llm(Settings()), LitellmLlm)
+    # An explicit quality_judge ref overrides the fallback.
+    explicit = replace(
         Settings(), kb=replace(Settings().kb, quality_judge=RetrievalLlmRef(preset="card-drafter"))
     )
-    assert isinstance(get_kb_quality_judge_llm(enabled), LitellmLlm)
+    assert isinstance(get_kb_quality_judge_llm(explicit), LitellmLlm)
+    # Both unset (quality_judge AND retrieval_llm) → scoring off.
+    both_off = replace(
+        Settings(), kb=replace(Settings().kb, quality_judge=None, retrieval_llm=None)
+    )
+    assert get_kb_quality_judge_llm(both_off) is None
 
 
 def test_get_kb_llm_threads_the_configured_reasoning_effort():

@@ -75,3 +75,28 @@ per the specstar backend you use; staging uses the volatile `memory` store.
 
 Because state is per-pod on a ReadWriteOnce volume, the Deployment runs **one
 replica** with the `Recreate` strategy — it does not horizontally scale as-is.
+
+## Job workers (#312)
+
+The base splits the job runner out of the API. `deployment.yaml` (`rca-app`)
+serves HTTP and **enqueues** jobs but, with `RUN_CONSUMERS="false"` (configmap),
+does NOT drain the queues. `workers.yaml` adds one Deployment per JobType —
+`rca-worker-{index,wiki,card-gen,sanity}`, each running
+`python -m workspace_app.worker <jobtype>` — so a heavy embed backlog scales the
+**index** workers (HPA, CPU-target) without touching the API. `wiki`/`card-gen`
+also get HPAs (but are IO-bound on the LLM, so tune min/max replicas rather than
+trusting the CPU target — KEDA queue-depth scaling is out of scope); `sanity` is
+a fixed 1-replica Deployment (manual, infrequent). Workers trap SIGTERM and
+drain in-flight work (`terminationGracePeriodSeconds: 60`); pending jobs are
+durable, so a killed pod's work is redelivered.
+
+**A split needs a SHARED backend.** The base configmap defaults to
+`FILESTORE_KIND=memory` + the in-memory specstar backend, which isolates each
+pod — the API's queue and a worker's queue would be different objects and the
+worker would drain nothing. For a real split, point every pod at one **Postgres**
+specstar backend (and optionally `message_queue.kind: rabbitmq`) via your
+config.yaml, so producer + workers share one queue.
+
+**All-in-one instead?** Drop `workers.yaml` from `base/kustomization.yaml` and set
+`RUN_CONSUMERS="true"` — `rca-app` then both serves HTTP and consumes in-process
+(the pre-#312 behaviour), which is fine for a single-pod / low-volume deploy.

@@ -1,3 +1,9 @@
+# #312: the API Deployment. With RUN_CONSUMERS="false" (configmap) it runs as a
+# pure PRODUCER — it serves HTTP + enqueues jobs but does NOT drain the queues.
+# The job consumers run in dedicated worker Deployments (workers.yaml), each
+# scaling under its own HPA, so the API can stay small while a heavy embed
+# backlog scales the index workers independently. A pod-split deploy needs a
+# SHARED backend (Postgres + a shared/RabbitMQ queue), not the in-memory default.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

@@ -20,7 +20,7 @@ from workspace_app.kb.vlm import IVlm
 
 CODE = "```js\nconsole.log('deck');\n```"
 ASSETS = CraftAssets(
-    system_prompt="SYS", render_script="RENDER", theme_js="THEME", starter_js="START"
+    system_prompt="SYS", render_script="RENDER", theme_js="THEME", recipes_js="RECIPES"
 )
 
 
@@ -94,6 +94,7 @@ async def test_happy_review_pass():
     assert io.vlm.calls[1]["images"] == [(b"jpg1", "image/jpeg"), (b"jpg2", "image/jpeg")]  # type: ignore[index]
     assert ws["build.js"] == "console.log('deck');\n"  # fence stripped, newline added
     assert ws["render_deck.sh"] == "RENDER" and ws["theme.js"] == "THEME"
+    assert ws["recipes.js"] == "RECIPES"  # the craft library is written for build.js to require
     assert "thinking " in seen  # reasoning relayed to progress
 
 
@@ -281,4 +282,4 @@ def test_craft_assets_load():
     assert "pptxgenjs" in a.system_prompt
     assert "soffice" in a.render_script
     assert "module.exports" in a.theme_js
-    assert "pptxgenjs" in a.starter_js
+    assert "module.exports" in a.recipes_js  # the require-able craft library

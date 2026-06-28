@@ -530,11 +530,15 @@ def get_card_drafter_llm(settings: Settings) -> ILlm | None:
 
 def get_kb_quality_judge_llm(settings: Settings) -> ILlm | None:
     """The LLM-as-judge that scores a document's quality as a knowledge source at
-    index time (#105). `kb.quality_judge` is a usage-entry reference resolved
-    through the same cascade + failover chain as every other role. `None` (the
-    default) ⇒ quality scoring off (docs stay un-scored = neutral; search ranking
-    unaffected)."""
-    return _llm_from_chain(resolve_llm_chain(settings, settings.kb.quality_judge))
+    index time (#105). Resolution: `kb.quality_judge` if set, else reuse
+    `kb.retrieval_llm` (a deploy that already wired retrieval gets doc scoring for
+    free the moment a collection sets a `quality_rubric` — the rubric is the
+    opt-in, not a second config key), else `None` (both unset ⇒ scoring off; docs
+    stay un-scored = neutral, search ranking unaffected). Mirrors
+    `get_kb_vlm_formatter`'s fallback; inherits the referenced preset's failover
+    chain like every other role."""
+    ref = settings.kb.quality_judge or settings.kb.retrieval_llm
+    return _llm_from_chain(resolve_llm_chain(settings, ref))
 
 
 def get_sanity_judge_llm(settings: Settings) -> ILlm | None:

@@ -43,6 +43,12 @@ class ServerSettings:
     # access_scope + write checker (`make_spec(superusers=…)`) AND the route-level
     # `authorize(...)` guards. Empty (default) ⇒ no superusers, as in prod today.
     superusers: list[str] = field(default_factory=list)
+    # #312: whether this API process also drains the job queues in-process.
+    # True (default) = all-in-one (local dev / single-pod). A pod-split deploy
+    # sets it False on the API Deployment so the API is a pure producer and
+    # dedicated worker pods (`python -m workspace_app.worker <jobtype>`) consume
+    # each JobType under their own HPA.
+    run_consumers: bool = True
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────
@@ -373,9 +379,11 @@ class KbSettings:
     # Issue #105: the LLM-as-judge that scores a document's quality as a knowledge
     # source at index time (a chunk-based windowed map-reduce against the
     # collection's `quality_rubric`). Same usage-entry shape + preset cascade as
-    # `retrieval_llm`. `None` (the default) ⇒ quality scoring off (docs stay
-    # un-scored = neutral; search ranking unaffected). A judge failure leaves a
-    # doc un-scored, never un-indexed.
+    # `retrieval_llm`. `None` (the default) ⇒ reuse `retrieval_llm` (so scoring
+    # turns on the moment a collection sets a rubric — the rubric is the opt-in,
+    # like `vlm_format_llm` reusing retrieval); both unset ⇒ scoring off (docs stay
+    # un-scored = neutral; search ranking unaffected). A judge failure leaves a doc
+    # un-scored, never un-indexed.
     quality_judge: RetrievalLlmRef | None = None
     # Issue #56: wiki-agent LLM (preset ref) + step budgets. `wiki.llm:
     # null` disables the wiki subsystem.
