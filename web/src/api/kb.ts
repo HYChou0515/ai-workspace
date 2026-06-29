@@ -8,10 +8,30 @@
  */
 
 import type { AgentEvent } from "../events";
+import type { UploadCheckHint } from "../kb/uploadChecks";
 import { API_PREFIX, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
 import type { Provenance, ReasoningEffort } from "./types";
+
+export type { UploadCheckHint } from "../kb/uploadChecks";
+
+/**
+ * Thrown by `uploadDocument` when an upload check refuses the file (#325):
+ * the server returns a 422 with `{check_id, reason_code, message_key}`. The
+ * UI catches it to show the localised `messageKey` ("decrypt and re-upload")
+ * in the "can't accept" list rather than treating it as a generic failure.
+ */
+export class UploadBlockedError extends Error {
+  constructor(
+    readonly messageKey: string,
+    readonly checkId?: string,
+    readonly reasonCode?: string,
+  ) {
+    super(`upload blocked: ${checkId ?? "unknown"}`);
+    this.name = "UploadBlockedError";
+  }
+}
 
 export type KbCollection = {
   resource_id: string;
@@ -350,6 +370,10 @@ export interface KbApi {
    * member). `path` overrides the stored filename — used for folder uploads to
    * preserve each file's relative path. */
   uploadDocument(collectionId: string, file: File, path?: string): Promise<string[]>;
+  /** #325: the browser-runnable upload-check descriptors. The FE screens
+   * picked files against these before upload, pre-blocking the common case
+   * (an encrypted Office file) without a round-trip. */
+  listUploadChecks(): Promise<UploadCheckHint[]>;
   /** Issue #101: build the collection's export zip and return its handle. The
    * zip is held server-side until streamed (or reaped); two-step so a large
    * export's build latency hides behind a loading state, not a stalled click. */
@@ -510,14 +534,26 @@ export const realKbApi: KbApi = {
   async uploadDocument(collectionId, file, path) {
     const form = new FormData();
     form.append("file", file, path ?? file.name);
-    const resp = await ok(
-      await apiFetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`, {
-        method: "POST",
-        body: form,
-      }),
-      "upload document",
-    );
-    return (await resp.json()).document_ids;
+    const resp = await apiFetch(`/kb/collections/${encodeURIComponent(collectionId)}/documents`, {
+      method: "POST",
+      body: form,
+    });
+    // #325: a refused file comes back as a structured 422 — surface it as a
+    // typed error the UI can route to its "can't accept" list, distinct from
+    // a generic upload failure.
+    if (resp.status === 422) {
+      const detail = await resp
+        .json()
+        .then((b) => b?.detail as { check_id?: string; reason_code?: string; message_key?: string })
+        .catch(() => null);
+      if (detail?.message_key) {
+        throw new UploadBlockedError(detail.message_key, detail.check_id, detail.reason_code);
+      }
+    }
+    return (await ok(resp, "upload document")).json().then((b) => b.document_ids);
+  },
+  async listUploadChecks() {
+    return (await ok(await apiFetch("/kb/upload-checks"), "list upload checks")).json();
   },
   async prepareCollectionDownload(collectionId) {
     const resp = await ok(

@@ -26,7 +26,7 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..resources import Conversation
 from ..sandbox.protocol import OutputSink, Sandbox
-from ..workflow.capabilities import ingest_to_collection, upsert_context_card
+from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
 from .notifications import notify
@@ -177,6 +177,19 @@ class WorkflowExecutor:
             journal_dir=journal_dir,
         )
 
+    async def convert(self, item_id: str, src: str, dest: str) -> tuple[str | None, str]:
+        """The convert capability (#324) bound to this run's workspace: turn the staged
+        upload at ``src`` into text (the same KB parsers, no chunk/embed) and stage it at a
+        content-coherent path derived from ``dest``, so topic-hub files only the converted
+        artifact — never the raw binary."""
+        return await convert_upload(
+            self._ingestor,
+            self._files,
+            workspace_id=item_id,
+            src=src,
+            dest=dest,
+        )
+
     async def upsert_card(
         self, captured_user: str, collection: str, keys: list[str], title: str, body: str
     ) -> str:
@@ -231,6 +244,7 @@ class WorkflowExecutor:
         wf._ingest = lambda collection, path: self.ingest(
             item_id, captured_user, collection, path, wf.journal_dir
         )
+        wf._convert = lambda src, dest: self.convert(item_id, src, dest)
         wf._collection_has = self.collection_has
         wf._upsert_card = lambda collection, keys, title, body: self.upsert_card(
             captured_user, collection, keys, title, body

@@ -243,6 +243,18 @@ export const messages = {
   "kb.status.allReady": { "zh-TW": "✓ 全部就緒", en: "✓ All set" },
   "kb.status.openFailed": { "zh-TW": "查看 {name} 的失敗原因", en: "View why {name} failed" },
   "kb.status.retryFailed": { "zh-TW": "重試", en: "Retry" },
+  // #325: files refused at upload (encrypted/unreadable) — distinct from a
+  // background processing failure: there's no doc to open, just a reason +
+  // what to do about it.
+  "kb.status.cantAccept": {
+    "zh-TW": "{n} 份無法接受",
+    en: "{n} couldn’t be accepted",
+  },
+  "kb.status.cantAcceptDismiss": { "zh-TW": "知道了", en: "Dismiss" },
+  "kb.upload.blocked.unreadable": {
+    "zh-TW": "這個檔案打不開，可能已加密或損壞。若有設密碼，請先解密再上傳。",
+    en: "We couldn’t open this file — it may be encrypted or damaged. If it’s password-protected, remove the password and upload again.",
+  },
 
   // Workflow review gate (WorkflowDecisionCard) — make "it's your turn" loud (#170)
   "wf.decision.cue": { "zh-TW": "需要你的決定", en: "Your decision needed" },
@@ -514,6 +526,13 @@ export type MsgKey = keyof typeof messages;
 export type Vars = Record<string, string | number>;
 
 /** Look up a message in `locale`, substituting any `{name}` placeholders. */
+/** Narrow an arbitrary string (e.g. a server-supplied message key) to a known
+ * `MsgKey` so callers can guard before translating — `translate` would throw on
+ * an unknown key. */
+export function isMsgKey(key: string): key is MsgKey {
+  return key in messages;
+}
+
 export function translate(locale: Locale, key: MsgKey, vars?: Vars): string {
   let out = messages[key][locale];
   if (vars) {

@@ -74,6 +74,12 @@ _MSG_MALFORMED_COLLECTIONS = (
     '每一項應為物件，例如 [{"id": "…", "name": "…"}]。請修正後再重新執行。'
 )
 _MSG_NO_FILES = "沒有找到要歸檔的檔案，已跳過。請把要歸檔的檔案放進 uploads/ 後再執行。"
+# #324: with ``convert`` on, every staged file was an unreadable binary (or archive) no
+# parser could turn into text — so there is nothing to file (we never store raw bytes).
+_MSG_ALL_UNCONVERTIBLE = (
+    "uploads/ 裡的檔案都無法轉換成文字（可能是不支援的格式或壓縮檔），沒有可歸檔的內容。"
+    "請改放可轉換的檔案，或關閉 input.json 的 convert 以直接歸檔原始檔。"
+)
 
 
 async def _no_collections_result(wf: WorkflowHandle) -> dict[str, Any]:
@@ -96,6 +102,34 @@ async def _no_collections_result(wf: WorkflowHandle) -> dict[str, Any]:
 
 def _safe(f: str) -> str:
     return f.lstrip("/").replace("/", "_")
+
+
+def _with_skipped(result: dict[str, Any], skipped: list[str]) -> dict[str, Any]:
+    """Attach the #324 list of files skipped because they couldn't be converted, but only
+    when there were any — so the default (``convert`` off) result shape is untouched."""
+    return {**result, "skipped": skipped} if skipped else result
+
+
+async def _convert_uploads(
+    wf: WorkflowHandle, files: list[str], uploads_prefix: str
+) -> tuple[list[str], list[str]]:
+    """#324 front step: convert each staged upload to text BEFORE it is filed, so the
+    collection stores only the converted artifact — never the raw binary. Runs at the FRONT
+    so classify reads the converted markdown (a binary upload is gibberish to a text read).
+    Each file is staged at a content-coherent bare path (``deck.pptx`` → ``deck.pptx.md``);
+    a binary no parser can read is dropped to ``skipped`` rather than filed raw (Q6). Each
+    ``wf.convert`` is journaled, so a re-run replays the (VLM) conversion from cache.
+    Returns ``(converted_paths, skipped_dests)``."""
+    converted: list[str] = []
+    skipped: list[str] = []
+    for f in files:
+        dest = f.removeprefix("/").removeprefix(uploads_prefix)
+        out_path, _kind = await wf.convert(f, dest, phase="convert")
+        if out_path is None:
+            skipped.append(dest)
+        else:
+            converted.append(f"/{out_path}")
+    return converted, skipped
 
 
 def _plan_path(f: str, round: int) -> str:
@@ -394,10 +428,14 @@ async def preflight(wf: WorkflowHandle, inputs: dict[str, Any]) -> PreflightRepo
     collections = await _read_collections(wf)
     files = await _staged_files(wf, inputs)
     n = len(files)
+    # #324: tell the human up-front whether the run will convert first (and not keep raw).
+    convert_note = (
+        "（本次會先把每個檔案轉換成文字後再歸檔，不保留原始檔。）" if inputs.get("convert") else ""
+    )
     return PreflightReport(
         summary=(
             f"把 uploads/ 裡的 {n} 個檔案分類、草擬詞彙定義，經你審核後歸檔到："
-            f"{'、'.join(collections)}。"
+            f"{'、'.join(collections)}。{convert_note}"
             if collections and n
             else "依下方檢查清單，這次執行會空轉。"
         ),
@@ -425,6 +463,20 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     files = await _staged_files(wf, inputs)
     if not files:
         return {"status": "empty", "files": 0, "message": _MSG_NO_FILES}
+
+    # #324: opt-in (default off) — convert each upload to text first and file only the
+    # converted artifact, so the collection never stores the raw binary. ``files`` becomes
+    # the converted bare paths; the rest of the flow is unchanged (it just sees text files).
+    skipped: list[str] = []
+    if inputs.get("convert"):
+        files, skipped = await _convert_uploads(wf, files, uploads_prefix)
+        if not files:
+            return {
+                "status": "empty",
+                "files": 0,
+                "skipped": skipped,
+                "message": _MSG_ALL_UNCONVERTIBLE,
+            }
 
     # PRODUCE → REVIEW, looping on `revise` so each round regenerates the drafts.
     feedback = ""
@@ -454,7 +506,7 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
             allow=["approve", "reject", "revise"],
         )
         if decision.choice == "reject":
-            return {"status": "rejected", "files": len(files)}
+            return _with_skipped({"status": "rejected", "files": len(files)}, skipped)
         if decision.choice == "approve":
             break
         feedback = decision.input
@@ -489,4 +541,4 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
         )
         cards += 1
 
-    return {"status": "approved", "ingested": ingested, "cards": cards}
+    return _with_skipped({"status": "approved", "ingested": ingested, "cards": cards}, skipped)
