@@ -124,6 +124,27 @@ def test_kb_max_searches_per_turn_zero_raises(tmp_path: Path):
         load(config_path=cfg, env={})
 
 
+def test_kb_max_searches_ceiling_defaults_to_ten():
+    """#334: the per-message FE picker can request up to this many searches."""
+    s = load(config_path=None, env={})
+    assert s.kb.max_searches_ceiling == 10
+
+
+def test_kb_max_searches_ceiling_operator_override(tmp_path: Path):
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("kb:\n  max_searches_ceiling: 6\n", encoding="utf-8")
+    s = load(config_path=cfg, env={})
+    assert s.kb.max_searches_ceiling == 6
+
+
+def test_kb_max_searches_ceiling_zero_raises(tmp_path: Path):
+    """#334: the ceiling bounds a per-message pick — it must be a positive int."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("kb:\n  max_searches_ceiling: 0\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="kb.max_searches_ceiling"):
+        load(config_path=cfg, env={})
+
+
 def test_tools_mode_defaults_to_prebuilt_and_parses_uv_run(tmp_path: Path):
     """#63: `tools.mode` selects how packages are provisioned. Default is
     `prebuilt`; an operator opts into the uv-run debug mode by writing it."""

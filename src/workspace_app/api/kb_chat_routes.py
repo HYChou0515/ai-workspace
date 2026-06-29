@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.types import ResourceIDNotFoundError
 
-from ..agent.context import AgentToolContext
+from ..agent.context import AgentToolContext, KbSearchBudget
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
 from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections
@@ -70,6 +70,7 @@ async def answer_question(
     on_event: Callable[[AgentEvent], None] | None = None,
     on_citations: Callable[[list[Citation]], None] | None = None,
     max_searches: int | None = None,
+    budget: KbSearchBudget | None = None,
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
@@ -106,8 +107,11 @@ async def answer_question(
         # Route through the wiki/both path when the caller (a wiki-aware runner)
         # opted in. Harmless when the runner isn't wiki-aware.
         wiki_query=wiki,
-        # #195: cap the bridge's kb_search calls too (same KB agent).
-        kb_search_max_calls=max_searches,
+        # #195/#334: cap the bridge's kb_search calls (same KB agent). A caller
+        # that passes a shared `budget` (an app turn spanning several
+        # ask_knowledge_base calls, #334 Q6) wins — all its sub-agents then draw
+        # from the one budget; otherwise seed a fresh one from `max_searches`.
+        kb_search_budget=budget if budget is not None else KbSearchBudget(max_calls=max_searches),
     )
     parts: list[str] = []
     # (tool_name, error_text) pairs captured from ToolEnd events whose
@@ -202,6 +206,19 @@ def to_caller_enhancements(body_enh: EnhancementsInput | None):
     return Enhancements(expand=body_enh.expand, hyde=body_enh.hyde, rerank=body_enh.rerank)
 
 
+def resolve_max_searches(requested: int | None, *, default: int | None, ceiling: int) -> int | None:
+    """#334: the composer's per-message kb_search-count pick → the budget cap.
+
+    `None` (the composer sent nothing) inherits the operator `default` (which may
+    itself be `None` = unlimited, the pre-#334 behaviour). A concrete pick is
+    clamped to ``[0, ceiling]`` — 0 means "don't search this reply" (#334 Q4),
+    and the operator's ceiling guards against a runaway request. Shared by the KB
+    chat turn and the RCA turn's per-message budget."""
+    if requested is None:
+        return default
+    return max(0, min(requested, ceiling))
+
+
 class _MsgBody(BaseModel):
     content: str
     # Per-message reasoning effort from the UI selector; None → model default.
@@ -218,6 +235,10 @@ class _MsgBody(BaseModel):
     # 404 the operator's request rather than silently falling back so
     # a typo at the FE picker is loud.
     agent_name: str | None = None
+    # Issue #334: per-message kb_search-count pick from the composer. None →
+    # operator default (`kb.max_searches_per_turn`); a concrete value is clamped
+    # to [0, kb.max_searches_ceiling] (0 = don't search this reply).
+    max_kb_searches: int | None = None
 
 
 class _ShareBody(BaseModel):
@@ -239,8 +260,12 @@ def register_kb_chat_routes(
     kb_agent_configs: list[AgentConfig],
     history_max_messages: int = 40,
     history_max_context_tokens: int = 24_000,
-    # #195: per-turn cap on kb_search calls (None ⇒ unlimited).
+    # #195: per-turn cap on kb_search calls (None ⇒ unlimited). The operator
+    # default applied when the composer sends no per-message pick (#334).
     max_searches_per_turn: int | None = None,
+    # #334: upper bound a per-message pick (`_MsgBody.max_kb_searches`) may
+    # request — the composer's value is clamped to [0, this].
+    max_searches_ceiling: int = 10,
 ) -> None:
     """Register the KB chat surface.
 
@@ -436,8 +461,16 @@ def register_kb_chat_routes(
             # Per-query opt-in to the wiki path (depth picker). The
             # WikiAwareRunner gates it on the collections' use_wiki/use_rag.
             wiki_query=bool(body.enhancements and body.enhancements.wiki),
-            # #195: cap how many times this reply may run kb_search.
-            kb_search_max_calls=max_searches_per_turn,
+            # #195/#334: cap how many times this reply may run kb_search — the
+            # composer's per-message pick (clamped to [0, ceiling]) or, absent
+            # one, the operator default.
+            kb_search_budget=KbSearchBudget(
+                max_calls=resolve_max_searches(
+                    body.max_kb_searches,
+                    default=max_searches_per_turn,
+                    ceiling=max_searches_ceiling,
+                )
+            ),
         )
 
         def persist(produced: list[TurnMessage]) -> None:

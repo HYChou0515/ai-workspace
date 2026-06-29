@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from ..agent.context import KbSearchBudget
 from ..kb.collections import (
     collection_ids_from_json,
     collection_tiers_from_json,
@@ -27,7 +28,7 @@ from ..kb.collections import (
 from ..resources import Conversation, Message
 from ..sandbox.protocol import OutputSink
 from .events import UserMessage
-from .kb_chat_routes import to_caller_enhancements
+from .kb_chat_routes import resolve_max_searches, to_caller_enhancements
 from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 
@@ -70,6 +71,8 @@ class ChatSendService:
         infer_modules_collection: str,
         infer_modules_enhancements: Enhancements | None,
         infer_modules_reasoning_effort: str | None,
+        kb_max_searches_per_turn: int | None = None,
+        kb_max_searches_ceiling: int = 10,
     ) -> None:
         self._spec = spec
         self._locator = locator
@@ -84,6 +87,8 @@ class ChatSendService:
         self._infer_modules_collection = infer_modules_collection
         self._infer_modules_enhancements = infer_modules_enhancements
         self._infer_modules_reasoning_effort = infer_modules_reasoning_effort
+        self._kb_max_searches_per_turn = kb_max_searches_per_turn
+        self._kb_max_searches_ceiling = kb_max_searches_ceiling
         self._conv_rm = spec.get_resource_manager(Conversation)
 
     async def send(
@@ -128,6 +133,17 @@ class ChatSendService:
         # collections (backward-compatible). A configured-but-missing name → []
         # ⇒ kb_search finds nothing and the classifier falls back to taxonomy.
         infer_coll_ids = resolve_named_collection_ids(self._spec, self._infer_modules_collection)
+        # #334 Q6: ONE kb_search budget for the WHOLE turn, shared by every
+        # ask_knowledge_base call below — the composer's per-message pick (clamped
+        # to [0, ceiling]) or, absent one, the operator default. infer_modules is
+        # NOT scoped by it (it keeps the operator default, a focused classifier).
+        kb_budget = KbSearchBudget(
+            max_calls=resolve_max_searches(
+                body.max_kb_searches,
+                default=self._kb_max_searches_per_turn,
+                ceiling=self._kb_max_searches_ceiling,
+            )
+        )
 
         async def _run_subagent_with_depth(
             purpose: str,
@@ -143,11 +159,15 @@ class ChatSendService:
             # #280: for kb_chat, the caller (ask_knowledge_base, after resolving
             # its `rank` → a priority tier) passes the tier's `collection_ids`;
             # `None` ⇒ no tier scoping ⇒ search the whole KB (today's behaviour).
+            # #334 Q6: only kb_chat (ask_knowledge_base) draws from the turn's
+            # shared budget; infer_modules keeps the operator default (bud=None ⇒
+            # the bridge seeds a fresh budget from its own max_searches).
             if purpose == "kb_chat":
                 enh = caller_enh
                 reff = body.reasoning_effort
                 wiki = caller_wiki
                 colls = collection_ids
+                bud = kb_budget
             elif purpose == "infer_modules":
                 enh, reff, wiki = (
                     self._infer_modules_enhancements,
@@ -155,8 +175,9 @@ class ChatSendService:
                     False,
                 )
                 colls = infer_coll_ids
+                bud = None
             else:  # pragma: no cover
-                enh, reff, wiki, colls = None, None, False, None
+                enh, reff, wiki, colls, bud = None, None, False, None, None
             return await self._subagent_bridge.run(
                 purpose,
                 payload,
@@ -166,6 +187,7 @@ class ChatSendService:
                 reasoning_effort=reff,
                 wiki_query=wiki,
                 collection_ids=colls,
+                budget=bud,
             )
 
         # ONE bridge for every sub-agent the RCA tools may invoke

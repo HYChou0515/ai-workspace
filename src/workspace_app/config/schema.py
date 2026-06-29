@@ -353,6 +353,12 @@ class KbSettings:
     # the model to answer from what it already retrieved. `null` ⇒ no cap (also
     # the behaviour for other surfaces like Topic Hub, which never set it).
     max_searches_per_turn: int | None = 3
+    # Issue #334: the upper bound a per-message FE picker may request for that
+    # one reply's kb_search budget. `max_searches_per_turn` is the default used
+    # when the composer sends nothing; a concrete pick is clamped to [0, this]
+    # (0 = "don't search this reply"). Independent of the default so an operator
+    # can keep a low default while still allowing the user to dial searches up.
+    max_searches_ceiling: int = 10
     code_embedder: CodeEmbedderSettings = field(default_factory=CodeEmbedderSettings)
     git: GitSettings = field(default_factory=GitSettings)
     # Issue #39: the VLM the vision-backed parsers (image / PDF visual

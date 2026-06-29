@@ -72,7 +72,7 @@ def test_kb_search_page_without_document_is_a_recoverable_error(
 
     assert "document" in out.lower()
     assert ctx.context.kb_passages == []  # no search ran
-    assert ctx.context.kb_search_calls == 0  # and no budget spent
+    assert ctx.context.kb_search_budget.used == 0  # and no budget spent
 
 
 def test_kb_search_unknown_document_is_a_recoverable_error(spec: SpecStar, embedder: HashEmbedder):
@@ -82,7 +82,7 @@ def test_kb_search_unknown_document_is_a_recoverable_error(spec: SpecStar, embed
     out = kb_search_impl(ctx, "alpha", document="ghost.pdf", page_from=1)
 
     assert "ghost.pdf" in out
-    assert ctx.context.kb_search_calls == 0
+    assert ctx.context.kb_search_budget.used == 0
 
 
 def test_kb_search_ambiguous_document_lists_candidates(
@@ -97,4 +97,4 @@ def test_kb_search_ambiguous_document_lists_candidates(
     out = kb_search_impl(ctx, "alpha", document="report.pdf", page_from=1)
 
     assert "2023/report.pdf" in out and "2024/report.pdf" in out
-    assert ctx.context.kb_search_calls == 0
+    assert ctx.context.kb_search_budget.used == 0

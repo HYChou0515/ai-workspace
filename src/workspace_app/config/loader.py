@@ -302,12 +302,21 @@ def _check_max_searches(merged: dict[str, Any], *, source: str) -> None:
     what `null`… is NOT for — use `null` to lift the cap. Reject it loudly so
     an operator typo doesn't silently mute the knowledge base."""
     value = merged.get("kb", {}).get("max_searches_per_turn")
-    if value is None:
-        return
-    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+    if value is not None and (not isinstance(value, int) or isinstance(value, bool) or value < 1):
         raise ValueError(
             f"config {source}: kb.max_searches_per_turn must be null or a positive "
             f"integer, got {value!r}"
+        )
+    # Issue #334: the ceiling bounds a per-message pick. When the operator sets
+    # it, it must be a positive int (a 0/negative/non-int would break clamping).
+    # Absent ⇒ the bundled default (10) applies, so only validate a present value
+    # — same leniency as `max_searches_per_turn` above.
+    ceiling = merged.get("kb", {}).get("max_searches_ceiling")
+    if ceiling is not None and (
+        not isinstance(ceiling, int) or isinstance(ceiling, bool) or ceiling < 1
+    ):
+        raise ValueError(
+            f"config {source}: kb.max_searches_ceiling must be a positive integer, got {ceiling!r}"
         )
 
 
@@ -396,6 +405,8 @@ _TOP_SCHEMA: dict[str, Any] = {
         # Issue #195: scalar leaf (int or null). The shape walk skips its
         # non-dict value; the value range is checked by `_check_max_searches`.
         "max_searches_per_turn": set(),
+        # Issue #334: scalar leaf (positive int). Range checked by `_check_max_searches`.
+        "max_searches_ceiling": set(),
         "code_embedder": _dataclass_keys(CodeEmbedderSettings),
         "git": _dataclass_keys(GitSettings),
         # Issue #39: `kb.parsers` / `kb.parsers_disabled` are
@@ -669,6 +680,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
             card_drafter=_build_retrieval_llm(d["kb"].get("card_drafter")),
             retrieval=_build_retrieval(d["kb"]["retrieval"]),
             max_searches_per_turn=d["kb"]["max_searches_per_turn"],
+            max_searches_ceiling=d["kb"]["max_searches_ceiling"],
             code_embedder=_build(CodeEmbedderSettings, d["kb"]["code_embedder"]),
             git=_build(GitSettings, d["kb"]["git"]),
             vlm_llm=_build_retrieval_llm(d["kb"]["vlm_llm"]),

@@ -223,6 +223,10 @@ def create_app(
     # (default 3); the default here stays None so tests that don't pass it keep
     # the unlimited pre-#195 behaviour.
     kb_max_searches_per_turn: int | None = None,
+    # #334: upper bound a per-message kb_search-count pick may request (the
+    # composer's value is clamped to [0, this]). __main__ threads
+    # `settings.kb.max_searches_ceiling` (default 10).
+    kb_max_searches_ceiling: int = 10,
     packages: list[PackageInfo] | None = None,
     prebuilt_dir: Path | None = None,
     # #100: workflow run limits (manual §16/§17). Global concurrency cap (runs
@@ -511,6 +515,7 @@ def create_app(
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
         max_searches_per_turn=kb_max_searches_per_turn,
+        max_searches_ceiling=kb_max_searches_ceiling,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
@@ -657,6 +662,10 @@ def create_app(
         infer_modules_collection=infer_modules_collection,
         infer_modules_enhancements=infer_modules_enhancements,
         infer_modules_reasoning_effort=infer_modules_reasoning_effort,
+        # #334: the composer's per-message kb_search-count pick (one budget shared
+        # across the turn's ask_knowledge_base calls); default + ceiling from config.
+        kb_max_searches_per_turn=kb_max_searches_per_turn,
+        kb_max_searches_ceiling=kb_max_searches_ceiling,
     )
 
     register_chat_routes(

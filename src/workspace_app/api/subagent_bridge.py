@@ -15,6 +15,7 @@ from collections.abc import Callable
 from specstar import QB, SpecStar
 
 from ..agent.config_catalog import AgentConfigCatalog
+from ..agent.context import KbSearchBudget
 from ..kb.cited import record_citations
 from ..kb.retriever import Enhancements, Retriever
 from ..resources import AgentConfig
@@ -60,6 +61,7 @@ class SubagentBridge:
         reasoning_effort: str | None = None,
         wiki_query: bool = False,
         collection_ids: list[str] | None = None,
+        budget: KbSearchBudget | None = None,
     ) -> tuple[str, list[Citation]]:
         """Generic sub-agent bridge — runs the sub-agent for `purpose`
         over every collection and returns its synthesized answer + the
@@ -132,5 +134,9 @@ class SubagentBridge:
             # #195: the RCA → KB bridge is the same KB agent — cap its searches
             # too (None ⇒ unlimited when the operator lifts the cap).
             max_searches=self._max_searches,
+            # #334 Q6: when the caller hands over a shared per-turn budget, every
+            # ask_knowledge_base call in the turn draws from it; absent one, the
+            # bridge falls back to a fresh budget from `max_searches`.
+            budget=budget,
         )
         return answer, captured

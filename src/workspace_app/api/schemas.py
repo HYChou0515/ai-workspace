@@ -22,6 +22,11 @@ class _MessageBody(BaseModel):
     # turn's ask_knowledge_base lookups (the bridge forwards it to the
     # KB sub-agent); None → operator default.
     enhancements: EnhancementsInput | None = None
+    # Issue #334: per-message cap on how many kb_search calls this turn's
+    # ask_knowledge_base lookups may run IN TOTAL (one budget shared across every
+    # ask_knowledge_base call in the turn — #334 Q6). None → operator default;
+    # a concrete value is clamped to [0, kb.max_searches_ceiling] (0 = don't search).
+    max_kb_searches: int | None = None
 
 
 class _UndoOut(BaseModel):

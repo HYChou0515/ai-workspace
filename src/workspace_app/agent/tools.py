@@ -476,8 +476,18 @@ def kb_search_impl(
     # retriever and tell it to answer from what it already retrieved — far
     # cheaper than letting a small model re-search the same thing up to
     # max_turns, and it keeps the reply focused. `None` ⇒ unlimited.
-    cap = ctx.context.kb_search_max_calls
-    if cap is not None and ctx.context.kb_search_calls >= cap:
+    budget = ctx.context.kb_search_budget
+    if budget.exhausted:
+        cap = budget.max_calls
+        if cap == 0:
+            # #334 Q4: the user picked "0 searches" for this reply — never run the
+            # retriever, just steer the model to answer from what it already has.
+            _LOGGER.info("kb_search disabled for this reply (cap=0) for query=%r", query)
+            return (
+                "No knowledge-base searches are allowed for this reply. Answer the "
+                "user now from the conversation and any context you already have; "
+                "do not call kb_search."
+            )
         _LOGGER.info("kb_search budget exhausted (%d/%d) for query=%r", cap, cap, query)
         return (
             f"Search budget exhausted for this reply ({cap} of {cap} used). "
@@ -537,7 +547,7 @@ def kb_search_impl(
     # Consume one unit of the budget for this run. We count BEFORE searching so
     # an empty-handed or erroring search still costs a unit — otherwise a model
     # that keeps matching nothing could loop forever re-searching.
-    ctx.context.kb_search_calls += 1
+    budget.used += 1
 
     lines: list[str] = []
     try:
@@ -571,11 +581,11 @@ def kb_search_impl(
         raise
 
     body = "\n\n".join(lines) if lines else "No matching passages in the knowledge base."
-    if cap is not None:
-        used = ctx.context.kb_search_calls
+    if budget.max_calls is not None:
         body += (
-            f"\n\n(Search budget: {used} of {cap} used, {cap - used} left. "
-            "Only search again for genuinely different information.)"
+            f"\n\n(Search budget: {budget.used} of {budget.max_calls} used, "
+            f"{budget.remaining} left. Only search again for genuinely different "
+            "information.)"
         )
     return body
 

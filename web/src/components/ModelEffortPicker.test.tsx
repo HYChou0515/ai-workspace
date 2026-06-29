@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import { getStored } from "../lib/kbEnhancementMode";
+import { getKbSearchMax } from "../lib/kbSearchMax";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ModelEffortPicker } from "./ModelEffortPicker";
 
@@ -143,5 +144,35 @@ describe("ModelEffortPicker", () => {
     expect(stored.mode).toBe("custom");
     expect(stored.custom?.expand).toBe(3);
     expect(screen.getByRole("checkbox", { name: /重新排序/ })).toBeInTheDocument();
+  });
+
+  it("#334: max-searches stepper only on the KB surface", async () => {
+    renderWithQuery(
+      <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+    expect(screen.queryByLabelText("最多搜尋次數")).not.toBeInTheDocument();
+  });
+
+  it("#334: stepper adjusts the sticky max-searches and clamps at 0", async () => {
+    renderWithQuery(
+      <ModelEffortPicker models={MODELS} selectedName={null} onSelectModel={() => {}} retrieval />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /模型與思考深度/ }));
+
+    const value = screen.getByLabelText("最多搜尋次數");
+    expect(value).toHaveTextContent("3"); // default
+
+    await userEvent.click(screen.getByRole("button", { name: "增加搜尋次數" }));
+    expect(value).toHaveTextContent("4");
+    expect(getKbSearchMax()).toBe(4);
+
+    // Down to the floor: 4→3→2→1→0, then the − button is disabled (0 = no search).
+    for (let i = 0; i < 5; i++) {
+      await userEvent.click(screen.getByRole("button", { name: "減少搜尋次數" }));
+    }
+    expect(value).toHaveTextContent("0");
+    expect(getKbSearchMax()).toBe(0);
+    expect(screen.getByRole("button", { name: "減少搜尋次數" })).toBeDisabled();
   });
 });

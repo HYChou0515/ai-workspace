@@ -457,6 +457,7 @@ export const realApi: ApiClient = {
           content: args.content,
           reasoning_effort: args.reasoningEffort,
           enhancements: args.enhancements,
+          max_kb_searches: args.maxKbSearches,
         }),
         signal: args.signal,
       },

@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from agents import RunContextWrapper
 from specstar import SpecStar
 
-from workspace_app.agent import AgentToolContext, kb_search_impl
+from workspace_app.agent import AgentToolContext, KbSearchBudget, kb_search_impl
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
@@ -90,7 +90,7 @@ def _capped_ctx(spec: SpecStar, embedder: HashEmbedder, collection_ids: list[str
         AgentToolContext(
             retriever=Retriever(spec, embedder=embedder),
             collection_ids=collection_ids,
-            kb_search_max_calls=cap,
+            kb_search_budget=KbSearchBudget(max_calls=cap),
         )
     )
 
@@ -153,6 +153,26 @@ async def test_kb_search_sentinel_when_budget_exhausted(
     assert "budget" in out.lower() and "answer" in out.lower()
     assert "[" not in out  # no passages returned
     assert len(ctx.context.kb_passages) == registry_len_at_cap  # nothing new registered
+
+
+async def test_kb_search_cap_zero_never_searches_and_steers_to_answer(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #334 Q4: a per-message cap of 0 means "don't search this reply". The very
+    # first call must NOT run the retriever and must steer the model to answer
+    # from context — and it reads as a deliberate "disabled", not "exhausted".
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid, user="u", filename="reflow.md", data=b"reflow oven temperature"
+    )
+    ctx = _capped_ctx(spec, embedder, [cid], cap=0)
+
+    out = kb_search_impl(ctx, "reflow temperature")
+
+    assert "[" not in out  # no passages — the retriever never ran
+    assert ctx.context.kb_passages == []
+    assert "no knowledge-base searches are allowed" in out.lower()
+    assert "exhausted" not in out.lower()  # disabled, not used-up
 
 
 async def test_kb_search_empty_result_still_consumes_budget(spec: SpecStar, embedder: HashEmbedder):

@@ -11,6 +11,7 @@ import {
   withWikiFlag,
 } from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
+import { getKbSearchMax } from "../lib/kbSearchMax";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -113,6 +114,8 @@ export function useKbChat({
           reasoningEffort: getReasoningEffort() ?? undefined,
           enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
           agentName: getKbAgentName() ?? undefined,
+          // #334: per-message cap on this reply's kb_search calls (0 = no search).
+          maxKbSearches: getKbSearchMax(),
         })) {
           setLog((prev) => reduceAgent(prev, ev));
         }

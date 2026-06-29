@@ -30,6 +30,7 @@ import {
   type EnhancementSelection,
 } from "../lib/kbEnhancementMode";
 import { useReasoningEffort } from "../lib/reasoningEffort";
+import { KB_SEARCH_MAX_UI_MAX, useKbSearchMax } from "../lib/kbSearchMax";
 import { Icon } from "./Icon";
 import { pxToRem } from "../lib/pxToRem";
 
@@ -171,6 +172,75 @@ function DepthSliders({
   );
 }
 
+/** #334: per-message cap on how many times this reply searches the KB. A plain
+ * stepper (independent of the quick/standard/thorough depth dial — those govern
+ * how hard EACH search digs; this governs HOW MANY searches). 0 = don't search. */
+function SearchMaxStepper({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  const t = useT();
+  const btn: React.CSSProperties = {
+    border: "none",
+    background: "transparent",
+    color: "var(--text-paper)",
+    cursor: "pointer",
+    fontSize: pxToRem(14),
+    lineHeight: 1,
+    padding: "3px 9px",
+  };
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+      <span style={{ fontSize: pxToRem(12), color: "var(--text-paper)" }} title={t("searchmax.title")}>
+        {t("searchmax.label")}
+      </span>
+      <span style={{ flex: 1 }} />
+      <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{t("searchmax.zero")}</span>
+      <div
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          border: "1px solid var(--paper-3)",
+          borderRadius: 6,
+          background: "var(--white)",
+        }}
+      >
+        <button
+          type="button"
+          aria-label={t("searchmax.dec")}
+          disabled={value <= 0}
+          onClick={() => onChange(value - 1)}
+          style={{ ...btn, opacity: value <= 0 ? 0.4 : 1, cursor: value <= 0 ? "default" : "pointer" }}
+        >
+          −
+        </button>
+        <span
+          aria-label={t("searchmax.label")}
+          style={{ minWidth: 22, textAlign: "center", fontSize: pxToRem(12), color: "var(--text-paper)" }}
+        >
+          {value}
+        </span>
+        <button
+          type="button"
+          aria-label={t("searchmax.inc")}
+          disabled={value >= KB_SEARCH_MAX_UI_MAX}
+          onClick={() => onChange(value + 1)}
+          style={{
+            ...btn,
+            opacity: value >= KB_SEARCH_MAX_UI_MAX ? 0.4 : 1,
+            cursor: value >= KB_SEARCH_MAX_UI_MAX ? "default" : "pointer",
+          }}
+        >
+          ＋
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export function ModelEffortPicker({
   models,
   selectedName,
@@ -195,6 +265,7 @@ export function ModelEffortPicker({
   const [effort, setEffort] = useReasoningEffort();
   const [depthSel, setDepthMode, setDepthSlider] = useKbEnhancementMode();
   const [searchWiki, setSearchWiki] = useKbWikiToggle();
+  const [maxSearches, setMaxSearches] = useKbSearchMax();
 
   if (models.length === 0) return null;
   const active = models.find((m) => m.name === selectedName) ?? models[0]!;
@@ -388,6 +459,7 @@ export function ModelEffortPicker({
                     {t("depth.custom.note")}
                   </div>
                 )}
+                <SearchMaxStepper value={maxSearches} onChange={setMaxSearches} />
                 {advanced && <DepthSliders sel={depthSel} onSlider={setDepthSlider} />}
                 {wikiAvailable && (
                   <label

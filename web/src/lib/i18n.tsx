@@ -98,6 +98,15 @@ export const messages = {
     "zh-TW": "同時參考 AI 維護的知識百科",
     en: "Also consult the AI-maintained wiki for this question",
   },
+  // #334: per-message cap on how many times this reply searches the KB.
+  "searchmax.label": { "zh-TW": "最多搜尋次數", en: "Max searches" },
+  "searchmax.title": {
+    "zh-TW": "這則回覆最多搜尋知識庫幾次（0＝不搜尋，直接作答）",
+    en: "How many times this reply may search the KB (0 = don't search, answer directly)",
+  },
+  "searchmax.zero": { "zh-TW": "0＝不搜尋", en: "0 = no search" },
+  "searchmax.dec": { "zh-TW": "減少搜尋次數", en: "Fewer searches" },
+  "searchmax.inc": { "zh-TW": "增加搜尋次數", en: "More searches" },
 
   // Agent activity entries (AgentEntryView): tool cards, reasoning, notices
   "tool.exec": { "zh-TW": "執行指令", en: "Run command" },
