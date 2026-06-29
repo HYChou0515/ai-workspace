@@ -5,9 +5,9 @@
  * the author's pre-flight checklist (`runs/preview`), and blocks "Run" while a REQUIRED
  * precondition fails — so an empty-uploads no-op is caught before it wastes a run.
  *
- * Shared by both launch sites (WorkflowRunSection + the topic-hub NewItemPicker): they
- * render this with the chosen `workflowId` and only `onConfirm` (the real startRun) once
- * the operator confirms a runnable preview.
+ * Opened from the topic-hub `NewItemPicker` (every App runs through the multi-chat
+ * `ItemChatShell` now, #200): it renders this with the chosen `workflowId` and fires
+ * `onConfirm` (the real startRun) only once the operator confirms a runnable preview.
  */
 
 import { useEffect } from "react";

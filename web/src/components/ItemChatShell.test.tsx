@@ -351,4 +351,37 @@ describe("ItemChatShell", () => {
     fireEvent.click(screen.getByTestId("wf-steer-approve"));
     await waitFor(() => expect(confirm).toHaveBeenCalledWith("topic-hub", "it", "r1", true));
   });
+
+  it("mounts the run progress panel on a workflow chat and stops the run (#331)", async () => {
+    stubChatApi([summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" })]);
+    const run: WorkflowRunDTO = {
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "running",
+      current_phase: "classify",
+      workflow_id: "collections",
+      phases: [{ phase: "classify", status: "running", done: 0, total: 0, failed: 0 }],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: null,
+      result: null,
+      pending_decision: null,
+    };
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue(run);
+    const cancel = vi.spyOn(workflowApi, "cancelRun").mockResolvedValue();
+    render();
+    await waitFor(() => expect(screen.getByTestId("wf-progress")).toBeInTheDocument());
+    // Run-level Stop lives on the progress bar (topic-hub had no way to stop a run).
+    fireEvent.click(screen.getByTestId("wf-stop"));
+    await waitFor(() => expect(cancel).toHaveBeenCalledWith("topic-hub", "it", "r1"));
+  });
+
+  it("shows no run progress panel on a free chat (#331)", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", run_id: null, is_default: true })]);
+    render();
+    await waitFor(() => expect(screen.getByTestId("agent-panel-stub")).toBeInTheDocument());
+    expect(screen.queryByTestId("wf-progress")).toBeNull();
+  });
 });
