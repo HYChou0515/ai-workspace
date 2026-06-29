@@ -11,7 +11,8 @@ import io
 import logging
 import tarfile
 import zipfile
-from typing import TYPE_CHECKING, Any, NamedTuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import magic
 import msgspec
@@ -68,6 +69,21 @@ class _IndexOutput(NamedTuple):
 
     text: str | None
     preview: Binary | None
+
+
+# What ``Ingestor.convert`` produces (#324). ``kind`` tells the caller how to file the
+# converted artifact so the collection stays self-consistent (extension ⟺ content):
+#   - ``"markdown"`` — a parser turned a binary/structured upload into markdown text;
+#     the caller stores it under a ``.md`` name (e.g. ``deck.pptx`` → ``deck.pptx.md``).
+#   - ``"passthrough"`` — already plain text/code no parser claims; the caller files the
+#     ORIGINAL upload unchanged (its extension already matches its content).
+#   - ``"none"`` — a binary no parser could read; nothing to store (caller skips it).
+ConvertKind = Literal["markdown", "passthrough", "none"]
+
+
+class ConvertResult(NamedTuple):
+    text: str | None
+    kind: ConvertKind
 
 
 # md sniffs as text/plain on libmagic; both accepted.
@@ -302,6 +318,39 @@ class Ingestor:
         (zip-slip-safe — escaping paths raise). Returns the doc id, or ``None``
         when the bytes already match (no-op re-upload)."""
         return self._store_file(collection_id, user, path, data)
+
+    def convert(
+        self,
+        *,
+        path: str,
+        data: bytes,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> ConvertResult:
+        """Parse-only (#324): produce the joined text the SAME parsers would extract at
+        index time, but WITHOUT chunking/embedding and WITHOUT touching any SourceDoc —
+        ``convert`` has no ``collection_id``/``doc_id``, so it structurally cannot persist.
+
+        Topic-hub's ``→collections`` workflow calls this to turn an upload into text BEFORE
+        filing it into a collection, so only the converted artifact is stored (never the raw
+        binary). The branching mirrors ``_index_via_pipeline`` so a file converts here exactly
+        as the index step would extract its ``text`` — see ``ConvertKind`` for what each
+        result tells the caller to file. ``on_progress`` forwards a long parser's (VLM) status
+        to the caller (no SourceDoc to write it onto here)."""
+        mime = magic.from_buffer(data, mime=True)
+        is_code = any(path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
+        texts: list[str] = []
+        with MaterialisedParserInput(data, filename=path) as source:
+            parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
+            for parser in parsers:
+                for d in parser.parse(source, filename=path, mime=mime, on_progress=on_progress):
+                    texts.append(d.text)
+        if parsers:
+            return ConvertResult("\n\n".join(texts).strip() or None, "markdown")
+        if mime in _TEXT_MIMES or is_code:
+            return ConvertResult(
+                normalize_text(data.decode("utf-8", errors="replace")), "passthrough"
+            )
+        return ConvertResult(None, "none")
 
     def index(
         self,
