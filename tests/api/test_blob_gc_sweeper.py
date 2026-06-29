@@ -32,7 +32,7 @@ async def test_sweeper_ticks_run_blob_gc_when_interval_set(monkeypatch):
     ticked = threading.Event()
     # Spy on the reclaim call (runs in a worker thread via asyncio.to_thread).
     monkeypatch.setattr(
-        "workspace_app.api.app.run_blob_gc",
+        "workspace_app.api.lifecycle.run_blob_gc",
         lambda spec, **kw: ticked.set(),
     )
     app = _app(gc_interval=timedelta(seconds=0.05))
@@ -47,7 +47,7 @@ async def test_sweeper_ticks_run_blob_gc_when_interval_set(monkeypatch):
 async def test_no_sweeper_when_interval_none(monkeypatch):
     called = threading.Event()
     monkeypatch.setattr(
-        "workspace_app.api.app.run_blob_gc",
+        "workspace_app.api.lifecycle.run_blob_gc",
         lambda spec, **kw: called.set(),
     )
     app = _app(gc_interval=None)

@@ -54,7 +54,7 @@ def _cit(marker: int, doc: str = "d1", start: int = 0) -> Citation:
 def test_bubble_kb_citations_implicit_synthesis_with_no_subagent_returns_empty():
     """line 163: content has no [N] markers (implicit synthesis) but no
     sub-agent ran → nothing to bubble."""
-    from workspace_app.api.app import _bubble_kb_citations
+    from workspace_app.api.rca_messages import bubble_kb_citations as _bubble_kb_citations
 
     assert _bubble_kb_citations("a plain answer, no markers", []) == []
 
@@ -62,7 +62,7 @@ def test_bubble_kb_citations_implicit_synthesis_with_no_subagent_returns_empty()
 def test_bubble_kb_citations_implicit_synthesis_dedupes_by_chunk():
     """line 169: implicit synthesis returns the latest call's citations deduped
     by (document_id, start) — a repeated key hits the `continue`."""
-    from workspace_app.api.app import _bubble_kb_citations
+    from workspace_app.api.rca_messages import bubble_kb_citations as _bubble_kb_citations
 
     latest = [
         _cit(1, doc="d1", start=0),

@@ -94,7 +94,7 @@ def test_a_stray_marker_with_no_assistant_answer_is_a_harmless_noop():
 
 
 def test_rca_mapper_persists_stopped_reason_so_a_reload_shows_the_notice():
-    from workspace_app.api.app import _to_rca_message
+    from workspace_app.api.rca_messages import to_rca_message as _to_rca_message
 
     msg = _to_rca_message(
         TurnMessage(role="assistant", content="partial", stopped_reason="repetition")

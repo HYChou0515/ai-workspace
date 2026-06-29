@@ -9,15 +9,19 @@ canonical ``{id, name}`` the agent then writes into the file (resolve only, no w
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import TYPE_CHECKING, Any
 
 from specstar import QB
 
+from ..filestore.protocol import FileNotFound
 from ..resources.kb import Collection
 
 if TYPE_CHECKING:
     from specstar import SpecStar
+
+    from ..filestore.protocol import FileStore
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -122,3 +126,46 @@ def resolve_profile_collections(
                 res.get("status"),
             )
     return rows
+
+
+def resolve_named_collection_ids(spec: SpecStar, name: str) -> list[str] | None:
+    """#66: the KB collection ids infer_modules' per-step classifier
+    searches. "" ⇒ None (search ALL collections, backward-compatible). A
+    configured NAME resolves to its collection's ids; a name that matches
+    no collection is a loud misconfig — raise rather than silently fall
+    back to taxonomy-only (a typo would otherwise disable KB lookups for
+    every step). Resolved once per turn, not per step."""
+    if not name:
+        return None
+
+    coll_rm = spec.get_resource_manager(Collection)
+    ids = [
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in coll_rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Collection) and r.data.name == name
+    ]
+    if not ids:
+        raise ValueError(
+            f"infer_modules is configured to search collection {name!r} "
+            f"(agents.infer_modules[].collection) but no collection with that "
+            f"name exists — create it, fix the name, or remove the setting to "
+            f"search all collections."
+        )
+    return ids
+
+
+async def read_hub_collections(filestore: FileStore, item_id: str) -> Any:
+    """Parse the item's ``collections.json`` workspace file ONCE (topic-hub §5)
+    → its raw JSON (a list of ``{id, name, tier?}``), or ``None`` when the file
+    is absent or unparseable. The two derivations below
+    (``collection_ids_from_json`` = the flat union scope for ``lookup_glossary`` /
+    ``resolve_collection``; ``collection_tiers_from_json`` = #280's rank-ordered
+    tiers for ``ask_knowledge_base``) each tolerate a hand-edited / malformed file."""
+    try:
+        raw = await filestore.read(item_id, "/collections.json")
+    except FileNotFound:
+        return None
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return None
