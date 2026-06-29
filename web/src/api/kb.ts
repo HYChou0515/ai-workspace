@@ -55,6 +55,11 @@ export type KbCollection = {
    * maintainer builds on ingest + the reader navigates at query. */
   use_rag: boolean;
   use_wiki: boolean;
+  /** P3.0 / #281: the git remote this collection syncs from, if any. A non-empty
+   * `git_url` marks a CODE collection (its wiki is built from source by the
+   * hierarchical builder, and refreshes only on sync / rebuild). Absent ⇒ a
+   * plain document collection. */
+  git_url?: string | null;
   /** Issue #90: per-collection wiki guidance, appended onto the bundled wiki
    * prompts. `maintainer` shapes how pages are written; `reader` shapes how the
    * wiki answers. Blank ⇒ the bundled prompt is used as-is. */

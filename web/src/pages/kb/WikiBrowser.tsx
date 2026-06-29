@@ -23,7 +23,18 @@ const WIKI_PHASES: [string, string][] = [
   ["identifying", "Identifying entities & concepts"],
   ["writing", "Writing pages"],
 ];
-const PHASE_LABEL: Record<string, string> = Object.fromEntries(WIKI_PHASES);
+// #281: a code wiki builds via a different pipeline (summarise each source file,
+// then assemble the directory + architecture pages), so it reports its own
+// phases — not the prose reading/identifying/writing steps.
+const CODE_WIKI_PHASES: [string, string][] = [
+  ["cards", "Summarising source files"],
+  ["finalizing", "Assembling directory & architecture pages"],
+];
+const PHASE_LABEL: Record<string, string> = Object.fromEntries([
+  ...WIKI_PHASES,
+  ...CODE_WIKI_PHASES,
+]);
+const _CODE_PHASE_KEYS = new Set(CODE_WIKI_PHASES.map(([k]) => k));
 
 /**
  * Issue #90: edit the collection's per-wiki guidance — text APPENDED onto the
@@ -150,6 +161,7 @@ export function WikiBrowser({
   client = kbApi,
   maintainerGuidance = "",
   readerGuidance = "",
+  isCodeWiki = false,
 }: {
   collectionId: string;
   collectionName?: string;
@@ -158,6 +170,10 @@ export function WikiBrowser({
   client?: KbApi;
   maintainerGuidance?: string;
   readerGuidance?: string;
+  /** #281: a code wiki (git-backed). Its pages refresh only on rebuild — edits
+   * and deletions appear after the next build, not immediately — so the header
+   * carries a hint to that effect. */
+  isCodeWiki?: boolean;
 }) {
   const qc = useQueryClient();
   const t = useT();
@@ -236,6 +252,13 @@ export function WikiBrowser({
       >
         <Icon name="sparkle" size={11} color="var(--accent-h)" /> {t("kb.wiki.badge")}
       </span>
+      {isCodeWiki ? (
+        // #281 (Q4): a code wiki is rebuilt from source on sync / Rebuild — a
+        // file edit or deletion shows up only after the next build, not live.
+        <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
+          Edits & deletions appear after the next rebuild
+        </span>
+      ) : null}
       <span style={{ flex: 1 }} />
       {building ? (
         <span
@@ -342,7 +365,10 @@ export function WikiBrowser({
   // stay browsable; the build then shows only as the slim header "Updating…"
   // pill, not a full-screen takeover.
   if (building && pages.length === 0) {
-    const STEPS = WIKI_PHASES;
+    // #281: show the code-wiki step list when the live phase is a code phase
+    // (a code build never reports a prose phase, and vice versa).
+    const STEPS =
+      status?.phase && _CODE_PHASE_KEYS.has(status.phase) ? CODE_WIKI_PHASES : WIKI_PHASES;
     const activeIdx = STEPS.findIndex(([k]) => k === status?.phase);
     return (
       <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: 10, overflow: "hidden" }}>

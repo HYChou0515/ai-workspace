@@ -188,4 +188,48 @@ describe("WikiBrowser (#50 P7)", () => {
     await userEvent.click(screen.getByRole("button", { name: "重建" }));
     expect(rebuild).toHaveBeenCalledWith("col-rbc");
   });
+
+  // ── #281: code-wiki build phases + a stale-after-edit hint ──────────────
+
+  it("shows the code-wiki build's own phases during a first build (#281)", async () => {
+    // A code wiki builds via summarise-files → assemble pages, not the prose
+    // reading/identifying/writing pipeline; its phase label must be meaningful.
+    _setWikiStatusMock("col-code", { building: true, total: 2, done: 1, phase: "cards" });
+    render(<WikiBrowser collectionId="col-code" client={mockKbApi} />);
+
+    expect(await screen.findByText(/Updating the wiki/i)).toBeInTheDocument();
+    // shown in the step list (and the header pill) — at least once
+    expect(screen.getAllByText(/Summarising source files/i).length).toBeGreaterThan(0);
+    // the prose-only first step must NOT be shown for a code build
+    expect(screen.queryByText("Reading documents")).not.toBeInTheDocument();
+  });
+
+  it("labels the compact pill with the code-wiki phase during a rebuild (#281)", async () => {
+    _seedWikiMock("col-codepill", { "/index.md": "# Wiki\n" });
+    _setWikiStatusMock("col-codepill", {
+      building: true,
+      total: 3,
+      done: 2,
+      phase: "finalizing",
+    });
+    render(<WikiBrowser collectionId="col-codepill" client={mockKbApi} />);
+
+    const pill = await screen.findByTestId("wiki-building");
+    expect(pill).toHaveTextContent(/Assembling/i);
+  });
+
+  it("hints that a code wiki refreshes only on rebuild (#281 Q4)", async () => {
+    _seedWikiMock("col-codehint", { "/index.md": "# Wiki\n" });
+    render(<WikiBrowser collectionId="col-codehint" client={mockKbApi} isCodeWiki />);
+
+    expect(await screen.findByText(/appear after the next rebuild/i)).toBeInTheDocument();
+  });
+
+  it("shows no rebuild hint for a prose wiki (#281 Q4)", async () => {
+    _seedWikiMock("col-prose", { "/index.md": "# Wiki\n" });
+    render(<WikiBrowser collectionId="col-prose" client={mockKbApi} />);
+
+    await screen.findByText(/AI 撰寫/);
+    expect(screen.queryByText(/appear after the next rebuild/i)).not.toBeInTheDocument();
+  });
 });
