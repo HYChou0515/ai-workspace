@@ -30,15 +30,24 @@ const PILL_COUNT = 6;
 
 export function KbChatPanel({
   chatId = null,
+  collectionIds: fixedCollectionIds,
+  hideCollectionPicker = false,
   onOpenCitation,
   onChatCreated,
   client = kbApi,
 }: {
   chatId?: string | null;
+  /** #230: when provided, the chat is permanently scoped to these collections
+   * (the internal picker + ranked auto-selection are bypassed). Used by the
+   * /help page to lock the chat to the Platform Help collection. */
+  collectionIds?: string[];
+  /** #230: hide the collection-picker UI (implied when `collectionIds` is set). */
+  hideCollectionPicker?: boolean;
   onOpenCitation?: (c: KbCitation) => void;
   onChatCreated?: (chatId: string) => void;
   client?: KbApi;
 }) {
+  const locked = fixedCollectionIds !== undefined;
   const t = useT();
   const me = useCurrentUser();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -87,7 +96,10 @@ export function KbChatPanel({
     }
   }, [collectionsQ.isSuccess, chatsQ.isFetched, collections.length, ranked]);
 
-  const collectionIds = useMemo(() => [...selected], [selected]);
+  const collectionIds = useMemo(
+    () => (locked ? fixedCollectionIds! : [...selected]),
+    [locked, fixedCollectionIds, selected],
+  );
   const { log, send, cancel } = useKbChat({ collectionIds, chatId, client, onChatCreated });
   // Follow the conversation as it streams; back off when the user scrolls up.
   const bodyRef = useStickToBottom<HTMLDivElement>(log);
@@ -100,7 +112,8 @@ export function KbChatPanel({
   };
 
   const empty = log.entries.length === 0;
-  const showPicker = chatId == null && empty && collections.length > 0;
+  const showPicker =
+    !locked && !hideCollectionPicker && chatId == null && empty && collections.length > 0;
 
   const toggle = (id: string) =>
     setSelected((prev) => {

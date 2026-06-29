@@ -1,0 +1,136 @@
+site_name: workspace-app — 開發者文件
+site_description: >-
+  團隊內部的 AI workspace：在 per-workspace sandbox 裡跑 OpenAI Agents、可插拔的
+  Sandbox / FileStore / AgentRunner Protocol，外加一套混合檢索的知識庫（KB）子系統。
+site_author: HYChou0515
+site_url: https://hychou0515.github.io/ai-workspace/
+repo_url: https://github.com/HYChou0515/ai-workspace
+repo_name: HYChou0515/ai-workspace
+edit_uri: edit/master/docs/
+docs_dir: docs
+# docs/README.md is a GitHub-repo-browse index; index.md is the site home, so
+# exclude the README from the build to avoid the README↔index URL collision.
+exclude_docs: |
+  README.md
+# 文件站只描述目前的架構與開發/部署流程；config / 私密檔不收進站。
+copyright: Copyright &copy; HYChou0515
+
+theme:
+  name: material
+  language: zh-TW
+  features:
+    - navigation.sections      # 側欄分區展開
+    - navigation.top           # 回到頂部按鈕
+    - navigation.tracking      # URL 隨捲動更新到目前章節
+    - navigation.indexes       # 區段可掛一個 index 頁
+    - toc.follow
+    - content.code.copy        # 程式碼區塊一鍵複製
+    - content.code.annotate
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: 切換到深色模式
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: 切換到淺色模式
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - def_list
+  - toc:
+      permalink: true
+      toc_depth: 3
+      # unicode-aware slugs so 中文標題的錨點就是中文（可讀、可 link-by-text），
+      # 而非預設 ascii slugify 產生的 #_1 / #_2…
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search:
+      lang:
+        - en
+
+# nav 只列「目前有效」的精選文件；plan-*/handoff-*/q-*/fe-* 是設計演進紀錄，
+# 收進「設計計畫與歷史」索引頁，並用 not_in_nav 讓它們可被搜尋/連結但不塞滿側欄。
+nav:
+  - 開發者導覽: index.md
+  - 架構總覽: architecture.md
+  - 子系統深入:
+      - 總覽（如何串接）: subsystems/index.md
+      - 啟動與組裝根: subsystems/boot-and-config.md
+      - API 與回合引擎: subsystems/api-and-turns.md
+      - Agent 執行時: subsystems/agent-runtime.md
+      - Sandbox、FileStore 與同步: subsystems/sandbox-and-filestore.md
+      - 知識庫：攝取與索引: subsystems/kb-ingest-index.md
+      - 知識庫：檢索與 Agent: subsystems/kb-retrieval-agent.md
+      - App 平台: subsystems/apps-platform.md
+      - Workflow 引擎: subsystems/workflow-engine.md
+      - 背景工作與擴展: subsystems/jobs-and-scaling.md
+      - 資料層（specstar）: subsystems/data-layer.md
+      - 前端（web/）: subsystems/frontend.md
+      - 工具套件與 Sandbox Host: subsystems/tooling-and-sandbox-host.md
+      - 平台服務（健康/觀測/權限/使用者）: subsystems/platform-services.md
+  - 參考:
+      - 詞彙表: glossary.md
+      - 設計決策: decisions.md
+      - 線上契約（Wire Contract）: contract.md
+  - 開發:
+      - 開發者指南: development.md
+      - 新增一個 App: adding-an-app.md
+      - 撰寫 Workflow: workflows-authoring.md
+      - 共創 Skills: skills-authoring.md
+  - 功能手冊:
+      - Workflows 規格: workflows.md
+      - Topic Hub: topic-hub.md
+      - Sandbox Host: sandbox-host.md
+      - Sandbox Host 線上契約: sandbox-host-wire.md
+      - sci-plot 科學繪圖: sci-plot.md
+  - 部署與運維:
+      - 部署與客製化: deployment.md
+  - 使用者手冊: user-guide.md
+  - 設計計畫與歷史: design-history.md
+
+not_in_nav: |
+  /plan-*.md
+  /handoff-*.md
+  /q-*.md
+  /fe-*.md
+  /workflows-frontend-brief.md
+  /README.md
+
+# 不要因為文件互連到尚未收錄的歷史頁就讓 build 失敗；缺連結降級為警告。
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  nav:
+    omitted_files: info

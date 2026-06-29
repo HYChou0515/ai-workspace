@@ -137,7 +137,10 @@ def build_lifespan(
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Issue #51 / Q2: the fast (connectivity-grade) probes block
         # boot — an operator sees a dead embedder before the first
-        # request; the full capability round runs in the background.
+        # request. The heavy capability round (LLM/VLM/agent probes) is
+        # NOT auto-run at boot; it stays on-demand (FE re-run /
+        # POST /health/checks/run) so startup only verifies basic
+        # connectivity instead of hammering the local model every boot.
         # #208: each step narrates (→/✓) so a stall in the lifespan names itself
         # instead of looking like a silent hang.
         with boot_step("health: connectivity checks"):
@@ -161,9 +164,27 @@ def build_lifespan(
             # #175: context-card generation consumer.
             with boot_step("start context-card generation consumer"):
                 app.state.card_gen_coordinator.start_consuming()
+        # #230: seed the platform Help collection from packaged content (repo =
+        # source of truth; identical bytes are a no-op). Ingestion needs the
+        # embedder, so it runs here (off the loop) and is best-effort — a dead
+        # embedder leaves the collection readable-but-unindexed, never blocking
+        # boot. The id is stashed for the /help route. #281 will later feed
+        # source-code-derived wiki into this same collection. The ingestor is
+        # read off app.state (built after the FastAPI app, like the coordinators).
+        from ..kb.help_collection import HELP_SYSTEM_USER, seed_help_collection_best_effort
+
+        with boot_step("seed help collection"):
+            app.state.help_collection_id = await asyncio.to_thread(
+                seed_help_collection_best_effort,
+                spec,
+                app.state.ingestor,
+                user=HELP_SYSTEM_USER,
+            )
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
-        bg.append(asyncio.create_task(health_service.run_round()))
+        # NOTE: the full capability round is deliberately NOT scheduled here
+        # — boot stays connectivity-only (see the health step above); operators
+        # trigger the heavy round on demand via the FE / POST /health/checks/run.
         if code_sync_check_interval is not None:
             bg.append(asyncio.create_task(code_sync_sweeper(app)))
         if gc_interval is not None:

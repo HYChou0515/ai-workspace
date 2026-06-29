@@ -8,7 +8,7 @@
  * happens after you enter an App, not here.
  */
 
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { AppIcon } from "../components/AppIcon";
 import { HelpButton } from "../components/HelpButton";
@@ -116,11 +116,61 @@ function KbCard() {
   );
 }
 
+/** #230: a fixed Help card alongside the KB card — the platform's intro / help
+ * surface (usage guides + release notes + an AI that answers how-to questions). */
+function HelpCard() {
+  const t = useT();
+  return (
+    <Link
+      to="/help"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 12,
+        padding: 16,
+        background: "transparent",
+        border: "1px dashed var(--paper-3)",
+        borderRadius: "var(--radius-card)",
+        textDecoration: "none",
+        color: "inherit",
+      }}
+    >
+      <span
+        style={{
+          width: 54,
+          height: 54,
+          borderRadius: 13,
+          background: "var(--paper-2)",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+          fontSize: pxToRem(24),
+          fontWeight: 700,
+          color: "var(--text-paper-d)",
+        }}
+      >
+        ?
+      </span>
+      <span style={{ flex: 1 }}>
+        <span style={{ display: "block", fontWeight: 700, fontSize: pxToRem(18) }}>
+          {t("launcher.help.title")}
+        </span>
+        <span style={{ display: "block", fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
+          {t("launcher.help.desc")}
+        </span>
+      </span>
+      <Icon name="external" size={16} color="var(--text-paper-d2)" />
+    </Link>
+  );
+}
+
 export function Launcher() {
   const apps = useApps();
   const t = useT();
   const me = useCurrentUser();
   const ob = useOnboarding(me, PLATFORM_SCOPE, PLATFORM_ONBOARDING);
+  const navigate = useNavigate();
   // The launcher is "home" — its own title bar is now redundant with the global
   // bar's brand (#158); publish a single Home crumb instead.
   useBreadcrumbs([{ label: "Home" }]);
@@ -131,6 +181,10 @@ export function Launcher() {
           content={ob.content}
           onGotIt={ob.gotIt}
           onDontShowAgain={ob.dontShowAgain}
+          onSeeFull={() => {
+            ob.gotIt();
+            navigate("/help");
+          }}
         />
       )}
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
@@ -172,6 +226,7 @@ export function Launcher() {
             <AppCard key={a.slug} app={a} />
           ))}
           <KbCard />
+          <HelpCard />
         </div>
       </main>
     </div>

@@ -204,6 +204,39 @@ function Brand() {
   );
 }
 
+/** #230: a persistent Help entry (a round "?" link) that always returns to the
+ * platform help page — usage guides, release notes, and the AI help chat. */
+function HelpLink() {
+  const t = useT();
+  const { pathname } = useLocation();
+  const active = isActive(pathname, "/help");
+  return (
+    <Link
+      to="/help"
+      aria-label={t("help.title")}
+      title={t("help.title")}
+      style={{
+        width: 26,
+        height: 26,
+        borderRadius: 999,
+        border: "1px solid var(--paper-3)",
+        background: active ? "var(--paper-2)" : "var(--white)",
+        color: "var(--text-paper-d)",
+        fontSize: "var(--text-body-sm)",
+        fontWeight: 700,
+        lineHeight: 1,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        textDecoration: "none",
+      }}
+    >
+      ?
+    </Link>
+  );
+}
+
 export function GlobalNav({ healthClient }: { healthClient?: HealthApi }) {
   return (
     <header
@@ -223,6 +256,7 @@ export function GlobalNav({ healthClient }: { healthClient?: HealthApi }) {
       <span style={{ width: 1, height: 20, background: "var(--paper-3)" }} />
       <Breadcrumbs />
       <span style={{ flex: 1 }} />
+      <HelpLink />
       <HealthDot {...(healthClient ? { client: healthClient } : {})} />
       <GlobalSettings />
     </header>

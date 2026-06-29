@@ -91,6 +91,58 @@ describe("KbChatPanel collection picker (#271)", () => {
     expect(screen.getByTestId("collection-check-c7")).toBeChecked();
   });
 
+  it("hides the collection picker when locked to a fixed collection set (#230)", async () => {
+    const client = panelClient(EIGHT);
+    // Control render proves the pills DO appear once collections load…
+    const { rerender } = render(<KbChatPanel chatId={null} client={client} />);
+    await screen.findByText("Coll 1");
+    expect(screen.getByText("Search in")).toBeInTheDocument();
+    // …so when we lock to a fixed set, their absence is meaningful, not a race.
+    rerender(
+      <KbChatPanel chatId={null} collectionIds={["help-1"]} hideCollectionPicker client={client} />,
+    );
+    await waitFor(() => expect(screen.queryByText("Search in")).not.toBeInTheDocument());
+    expect(screen.queryByText("Coll 1")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("kb-collections-more")).not.toBeInTheDocument();
+  });
+
+  it("creates the chat scoped to the fixed collection set on the first message (#230)", async () => {
+    const createChat = vi.fn(async (_title: string, ids: string[]) => ({
+      resource_id: "c-new",
+      title: "",
+      collection_ids: ids,
+      message_count: 0,
+      owner: "default-user",
+      shared_with: [],
+    }));
+    const client = panelClient(EIGHT, [], {
+      createChat,
+      streamMessage: async function* () {},
+      getChat: async () => ({
+        resource_id: "c-new",
+        title: "",
+        collection_ids: [],
+        owner: "default-user",
+        shared_with: [],
+        messages: [],
+      }),
+    });
+    render(
+      <KbChatPanel
+        chatId={null}
+        collectionIds={["help-1"]}
+        hideCollectionPicker
+        client={client}
+      />,
+    );
+    fireEvent.change(screen.getByPlaceholderText("Ask the knowledge base…"), {
+      target: { value: "hello" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Send/ }));
+    await waitFor(() => expect(createChat).toHaveBeenCalled());
+    expect(createChat.mock.calls[0][1]).toEqual(["help-1"]);
+  });
+
   it("creates the chat with the selected collection set on the first message", async () => {
     const createChat = vi.fn(async (_title: string, ids: string[]) => ({
       resource_id: "c-new",

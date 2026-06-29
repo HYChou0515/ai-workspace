@@ -68,4 +68,16 @@ describe("OnboardingModal", () => {
     expect(onGotIt).toHaveBeenCalledTimes(1);
     expect(onDontShowAgain).not.toHaveBeenCalled();
   });
+
+  it("offers a link to the full help page when onSeeFull is provided (#230)", () => {
+    const onSeeFull = vi.fn();
+    setup({ onSeeFull });
+    fireEvent.click(screen.getByText(/See the full guide/));
+    expect(onSeeFull).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the full-guide link when onSeeFull is not provided (#230)", () => {
+    setup();
+    expect(screen.queryByText(/See the full guide/)).not.toBeInTheDocument();
+  });
 });
