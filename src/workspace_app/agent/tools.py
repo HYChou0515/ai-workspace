@@ -373,9 +373,25 @@ async def list_sources_impl(ctx: RunContextWrapper[AgentToolContext]) -> list[st
 _WIKI_SNIPPET_MAX = 1200  # citation snippet cap (the FE reference card excerpt)
 
 
+def _coerce_source_path(path: str) -> str:
+    """Recover a SOURCE path from a code-wiki CARD path (#281 P7). A small reader
+    model often hands ``read_source`` the wiki page path (``/files/<src>.md``)
+    instead of the source path it documents; ``/files/app/queue.py.md`` →
+    ``app/queue.py``. Leading ``/files/`` is unambiguous (source paths are
+    repo-relative, never start with it), so this only ever fires on the card
+    form. Used as a fallback, so a real source is always tried first."""
+    if path.startswith("/files/"):
+        path = path[len("/files/") :]
+        if path.endswith(".md"):
+            path = path[: -len(".md")]
+    return path
+
+
 async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> str:
-    """Read one raw source document's text by its path (read-only). Use it to
-    verify a fact before writing it into a wiki page, to record a page's
+    """Read one raw source document's text by its path (read-only). Pass the
+    SOURCE path (e.g. ``app/queue.py``); a code-wiki card path
+    (``/files/app/queue.py.md``) is also accepted and resolved to its source. Use
+    it to verify a fact before writing it into a wiki page, to record a page's
     ``Sources:`` provenance, and (as the reader) to ground an answer in the
     real document — cite the returned [n].
 
@@ -391,6 +407,8 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
     if not ctx.context.wiki_cite_sources:
         # Maintainer path: plain text for cross-referencing.
         text = sources.read(path)
+        if text is None and (coerced := _coerce_source_path(path)) != path:
+            text = sources.read(coerced)  # #281 P7: tolerate a /files/<src>.md card path
         if text is None:
             return f"error: source not found: {path}"
         cap = ctx.context.exec_output_max_chars
@@ -400,6 +418,8 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
     # whole-document granularity) and hand it back numbered so [n] resolves to
     # the underlying SourceDoc via parse_citations.
     ref = sources.ref(path)
+    if ref is None and (coerced := _coerce_source_path(path)) != path:
+        ref = sources.ref(coerced)  # #281 P7: tolerate a /files/<src>.md card path
     if ref is None:
         return f"error: source not found: {path}"
     registry = ctx.context.kb_passages

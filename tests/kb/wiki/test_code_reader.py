@@ -106,3 +106,35 @@ async def test_reader_searches_and_cites_a_built_code_wiki():
     assert len(cites) == 1
     assert cites[0].document_id == doc_id
     assert cites[0].filename == "queue.py"
+
+
+async def test_read_source_accepts_the_wiki_card_path_form():
+    """#281 P7 (P2 live finding): a small reader model often hands read_source the
+    wiki CARD path (``/files/<src>.md``) instead of the source path, so the
+    citation never linked. read_source now recovers the source path from that form
+    so the answer still cites the underlying .py SourceDoc."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="repo", git_url="https://git.example/r.git", use_wiki=True))
+        .resource_id
+    )
+    doc_id = await _build_code_wiki(spec, cid)
+
+    class _CardPathRunner:
+        async def run(self, question, ctx):
+            wrapped = RunContextWrapper(ctx)
+            # The WRONG form a small model tends to use — the wiki page path.
+            await read_source_impl(wrapped, "/files/app/queue.py.md")
+            yield MessageDelta(text="TaskQueue lives in app/queue.py [1].")
+
+    answer, cites = await answer_from_wiki(
+        _CardPathRunner(),  # ty: ignore[invalid-argument-type]
+        wiki_store=WikiFileStore(spec),
+        wiki_sources=SpecstarWikiSources(spec, cid),
+        collection_id=cid,
+        question="Where is TaskQueue?",
+        agent_config=default_wiki_reader_config(),
+    )
+    assert len(cites) == 1
+    assert cites[0].document_id == doc_id  # recovered + cited despite the card-path form

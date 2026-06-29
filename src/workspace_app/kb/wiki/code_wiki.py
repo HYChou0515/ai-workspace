@@ -408,13 +408,19 @@ _MAX_TOPICS = 6
 
 
 def _unfence(text: str) -> str:
-    """Strip a single wrapping ```` ```lang … ``` ```` fence some models put
-    around their whole answer — otherwise a page's prose renders as one big code
-    block in the markdown view. Leaves fences that are part of the content alone."""
-    lines = text.strip().splitlines()
-    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
-        return "\n".join(lines[1:-1]).strip()
-    return text.strip()
+    """Strip the wrapping ```` ```lang … ``` ```` fence some models put around
+    their whole answer — otherwise a page's prose renders as one big code block.
+    Only acts when the FIRST line is a fence (so content that merely contains code
+    blocks is left alone): then drops that opener and its matching closing fence,
+    or — for the common small-model slip of opening a fence and never closing it —
+    just the stray opener."""
+    s = text.strip()
+    lines = s.splitlines()
+    if not lines or not lines[0].startswith("```"):
+        return s  # not fence-wrapped — leave any internal code fences intact
+    close = next((i for i in range(len(lines) - 1, 0, -1) if lines[i].strip() == "```"), None)
+    inner = lines[1:close] if close is not None else lines[1:]  # no close ⇒ drop opener only
+    return "\n".join(inner).strip()
 
 
 def _slugify(title: str) -> str:
