@@ -73,6 +73,54 @@ def test_resolve_ignores_attached_preset_outside_the_allowed_subset():
     assert cfg.model == "ollama_chat/qwen3:14b"
 
 
+def test_resolve_applies_tool_prefs_force_off():
+    """#322: a per-item tool pref of ``{tool: False}`` removes that tool from the
+    resolved set; untouched tools follow the (here: full ceiling) default."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca",
+        profile="default",
+        attached_preset="qwen3-local",
+        tool_prefs={"rca-tools": False},
+    )
+    assert "rca-tools" not in (cfg.allowed_tools or [])  # forced off
+    assert "exec" in (cfg.allowed_tools or [])  # untouched → follows default (on)
+
+
+def test_tool_prefs_force_on_overrides_profile_narrowing_within_ceiling():
+    """#322: the override ceiling is the App's tools, NOT the profile. tool-demo
+    narrows away ``rca-tools``; a per-item force-ON re-adds it because it is in
+    the App ceiling."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="tool-demo", tool_prefs={"rca-tools": True}
+    )
+    assert "rca-tools" in (cfg.allowed_tools or [])
+
+
+def test_tool_prefs_ignores_keys_outside_the_app_ceiling():
+    """#322: a stale/bogus pref key (not an App tool) is a no-op — it never
+    appears in the resolved set."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca",
+        profile="default",
+        attached_preset="qwen3-local",
+        tool_prefs={"totally-made-up": True},
+    )
+    assert "totally-made-up" not in (cfg.allowed_tools or [])
+
+
+def test_tool_prefs_all_off_yields_empty_toolset():
+    """#322: forcing every default tool OFF resolves to an explicit empty set —
+    a valid 'plain chat agent' state."""
+    rca_default = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    prefs = {t: False for t in (rca_default.allowed_tools or [])}
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local", tool_prefs=prefs
+    )
+    assert cfg.allowed_tools == []
+
+
 def test_resolve_raises_when_chosen_preset_not_declared():
     cat = AppCatalog(presets={"openai-mini": Preset(model="x")})
     with pytest.raises(ValueError, match="not declared"):

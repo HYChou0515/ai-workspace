@@ -597,6 +597,49 @@ export const mockApi: ApiClient = {
     };
   },
 
+  async getToolsCatalog() {
+    await delay(10);
+    return [
+      { name: "exec", label: "Exec", description: "Run a shell command inside the workspace sandbox." },
+      {
+        name: "ask_knowledge_base",
+        label: "Ask Knowledge Base",
+        description: "Ask the knowledge-base agent a question about the in-house documents.",
+      },
+      { name: "read_file", label: "Read File", description: "Read a file from the workspace." },
+    ];
+  },
+
+  async getItemTools(_slug: string, _itemId: string) {
+    await delay(10);
+    return [
+      {
+        key: "exec",
+        label: "Exec",
+        description: "Run a shell command inside the workspace sandbox.",
+        default_on: true,
+        pref: "follow" as const,
+        effective: true,
+      },
+      {
+        key: "read_file",
+        label: "Read File",
+        description: "Read a file from the workspace.",
+        default_on: true,
+        pref: "on" as const,
+        effective: true,
+      },
+      {
+        key: "rca-tools",
+        label: "Rca Tools",
+        description: "Bundled tools: Spc, Pareto.",
+        default_on: true,
+        pref: "off" as const,
+        effective: false,
+      },
+    ];
+  },
+
   async listAppItems(_resourceRoute: string): Promise<AppItem[]> {
     await delay(10);
     return _mockAppItems;

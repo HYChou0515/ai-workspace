@@ -27,6 +27,7 @@ import { useT, type MsgKey } from "../lib/i18n";
 import { formatProvenance } from "../lib/provenance";
 import { Icon } from "./Icon";
 import { RcaMark } from "./RcaMark";
+import { useToolLabel } from "./toolCatalog";
 import { UserChip } from "./UserChip";
 import { pxToRem } from "../lib/pxToRem";
 
@@ -625,9 +626,14 @@ function ToolCallCard({
   // Follow streaming stdout to the bottom unless the user scrolls up.
   const preRef = useStickToBottom<HTMLPreElement>(body);
   const labelKey = TOOL_LABEL[call.name];
-  // An unmapped tool has no known primary arg, so surface its raw name in the
-  // hint slot — the generic "使用工具" label alone hides which tool ran (#206).
-  const hint = labelKey ? toolArgHint(call.name, call.args) : call.name;
+  // #322: the backend tool catalog gives a clean label for tools the FE i18n map
+  // doesn't cover (e.g. package commands), so the raw name no longer leaks. Label
+  // precedence: curated i18n > backend catalog > the generic "使用工具" fallback.
+  const catalogLabel = useToolLabel()(call.name);
+  const label = labelKey ? t(labelKey) : (catalogLabel ?? t("tool.fallback"));
+  // We know the tool when either source names it → show its primary arg. Only a
+  // truly-unknown tool falls back to surfacing its raw name in the hint slot (#206).
+  const hint = labelKey || catalogLabel ? toolArgHint(call.name, call.args) : call.name;
   return (
     <details
       open={streamingLive}
@@ -656,7 +662,7 @@ function ToolCallCard({
         ) : (
           <Icon name="play" size={11} color="var(--accent)" />
         )}
-        <span>{labelKey ? t(labelKey) : t("tool.fallback")}</span>
+        <span>{label}</span>
         {hint && (
           <span style={{ color: "var(--text-paper-d)" }}>
             {t("tool.argSep")}

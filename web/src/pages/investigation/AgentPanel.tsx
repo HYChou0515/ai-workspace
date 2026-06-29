@@ -17,6 +17,7 @@ import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { SkillsModal } from "../../components/SkillsModal";
+import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
 import { ReplayDialog, type ReplayRequest } from "../../components/ReplayDialog";
@@ -53,6 +54,7 @@ export function AgentPanel({
   appColor,
   onNewChat,
   onSteer,
+  onSaveToolPrefs,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -91,6 +93,9 @@ export function AgentPanel({
    * plan) instead of starting a normal interactive turn. Absent → ordinary chat (RCA,
    * KB, free chats). */
   onSteer?: (text: string) => void;
+  /** #322: persist this item's per-tool override (`attached_tool_prefs`). Threaded
+   * to the header's Tools picker; absent → no picker button. */
+  onSaveToolPrefs?: (prefs: Record<string, boolean>) => void;
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -267,6 +272,7 @@ export function AgentPanel({
         appIcon={appIcon}
         appColor={appColor}
         onNewChat={onNewChat}
+        onSaveToolPrefs={onSaveToolPrefs}
       />
       <ProgressBar phases={phases} />
 
@@ -644,6 +650,7 @@ export function AgentHeader({
   appIcon,
   appColor,
   onNewChat,
+  onSaveToolPrefs,
 }: {
   streaming: boolean;
   investigationId: string;
@@ -658,10 +665,15 @@ export function AgentHeader({
    * is hidden, so this header is the lone, low-key way to start a fresh chat and
    * leave a wedged one behind. Absent → no button. */
   onNewChat?: () => void;
+  /** #322: persist this item's per-tool override (`attached_tool_prefs`) via the
+   * parent's read-modify-PUT. Present → the Tools picker button shows; absent →
+   * no picker (e.g. surfaces with no item to persist onto). */
+  onSaveToolPrefs?: (prefs: Record<string, boolean>) => void;
 }) {
   const t = useT();
   const [exportError, setExportError] = useState<string | null>(null);
   const [showSkills, setShowSkills] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const fileService = useMemo(
     () => investigationFileService(slug, investigationId),
     [slug, investigationId],
@@ -682,6 +694,14 @@ export function AgentHeader({
           itemId={investigationId}
           fileService={fileService}
           onClose={() => setShowSkills(false)}
+        />
+      )}
+      {showTools && onSaveToolPrefs && (
+        <ToolsPickerModal
+          slug={slug}
+          itemId={investigationId}
+          onSave={onSaveToolPrefs}
+          onClose={() => setShowTools(false)}
         />
       )}
       {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
@@ -716,6 +736,30 @@ export function AgentHeader({
           }}
         >
           <Icon name="plus" size={13} /> New chat
+        </button>
+      )}
+      {onSaveToolPrefs && (
+        <button
+          type="button"
+          // #322: open the per-item tool picker — choose (tri-state) which App tools
+          // the assistant can use in this workspace. Only shown when the parent can
+          // persist the override.
+          data-testid="tools-button"
+          onClick={() => setShowTools(true)}
+          title={t("tools.button.tip")}
+          aria-label={t("tools.button")}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            color: "var(--text-paper-d)",
+            fontSize: pxToRem(11),
+            background: "transparent",
+            border: "none",
+            cursor: "pointer",
+          }}
+        >
+          <Icon name="settings" size={13} /> {t("tools.button")}
         </button>
       )}
       <button
