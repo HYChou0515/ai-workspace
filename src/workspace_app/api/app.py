@@ -594,6 +594,16 @@ def create_app(
     # A run drives its own WORKFLOW CHAT (§3): agent nodes stream into that chat and
     # the orchestrator overlays phase/step events on the same per-chat stream.
     from ..apps.profiles import load_profile_workflow
+    from ..workflow.dsl import build_run
+    from ..workflow.workspace_store import load_workspace_workflow
+
+    async def _load_workspace(item_id: str, workflow_id: str):
+        """#323 P4 (manual §22, Q5): resolve a WORKSPACE-authored ``.workflows/<id>.json``
+        in this item to its ``(run, manifest)`` — the interpreter + its manifest from the
+        one parsed DSL — or ``None`` (absent / malformed), so the orchestrator falls back
+        to a package workflow."""
+        res = await load_workspace_workflow(files, item_id, workflow_id)
+        return (build_run(res[0]), res[1]) if res is not None else None
 
     # #54: the workflow execution callbacks (agent turn / sandbox / ingest / card
     # upsert+find / landed-check) plus the orchestrator's upload-dir / wire-handle /
@@ -618,6 +628,7 @@ def create_app(
         store=files,  # WorkspaceFiles is FileStore-shaped (read/write by workspace id)
         load_run=load_run_callable,
         load_manifest=load_profile_workflow,
+        load_workspace=_load_workspace,
         load_upload_dir=workflow_executor.upload_dir,
         wire_handle=workflow_executor.wire_handle,
         publish=turn_engine.publish,

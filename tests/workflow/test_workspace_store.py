@@ -9,6 +9,7 @@ from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.dsl import parse_def
 from workspace_app.workflow.workspace_store import (
+    load_workspace_workflow,
     save_workspace_workflow,
     slugify_workflow_id,
     validate_workflow_json,
@@ -85,3 +86,17 @@ async def test_metas_lists_sorted_skips_malformed_and_nested():
     metas = await workspace_workflow_metas(files, ws)
     assert [m.id for m in metas] == ["alpha", "zeta"]  # filename is the id; broken + nested gone
     assert metas[0].title == "T"
+
+
+async def test_load_workspace_workflow_resolves_or_none():
+    files, ws = _files()
+    assert await load_workspace_workflow(files, ws, "") is None  # empty id
+    assert await load_workspace_workflow(files, ws, "missing") is None  # absent file
+    await files.write(ws, "/.workflows/broken.json", b"{not json")
+    assert await load_workspace_workflow(files, ws, "broken") is None  # malformed → None
+    await files.write(ws, "/.workflows/good.json", _VALID.encode())
+    res = await load_workspace_workflow(files, ws, "good")
+    assert res is not None
+    _d, manifest = res
+    assert manifest.id == "good"  # forced to the addressing id (filename authoritative)
+    assert manifest.title == "T"

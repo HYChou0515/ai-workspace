@@ -599,3 +599,60 @@ def test_reject_steer_discards_the_plan():
         stopped = _poll(client, item_id, run_id, "cancelled")
     assert stopped["pending_steer"] is None
     assert stopped["result"]["n"] == 7  # the input edit was NOT applied
+
+
+# ── #323 P4: workspace-authored workflows run in their own item ──────────────
+
+_WS_WORKFLOW = (
+    '{"id":"myflow","title":"My Flow","phases":[{"id":"note"}],'
+    '"steps":[{"type":"agent","prompt":"write a note","phase":"note","out":"note.md"}]}'
+)
+
+
+def _put_ws_workflow(client: TestClient, item_id: str, name: str, body: str) -> None:
+    r = client.put(f"{_base(item_id)}/files/.workflows/{name}.json", content=body)
+    assert r.status_code == 204
+
+
+def test_item_workflows_endpoint_lists_workspace_workflows():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_ws_workflow(client, item_id, "myflow", _WS_WORKFLOW)
+        _put_ws_workflow(client, item_id, "broken", "{not json")  # malformed → skipped
+        out = client.get(f"{_base(item_id)}/workflows").json()
+    assert [w["id"] for w in out] == ["myflow"]
+    assert out[0]["title"] == "My Flow"
+    assert [p["id"] for p in out[0]["phases"]] == ["note"]
+
+
+def test_preview_resolves_a_workspace_workflow():
+    """The launch dialog's pre-flight resolves a workspace workflow (the 404 guard's
+    fallback) and previews its phases; it has no author preflight, so it's runnable."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_ws_workflow(client, item_id, "myflow", _WS_WORKFLOW)
+        body = client.get(f"{_base(item_id)}/runs/preview?workflow_id=myflow").json()
+    assert body["workflow_id"] == "myflow"
+    assert [p["id"] for p in body["phases"]] == ["note"]
+    assert body["has_preflight"] is False and body["can_run"] is True
+
+
+def test_unknown_workflow_id_still_422():
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        r = client.get(f"{_base(item_id)}/runs/preview?workflow_id=nope")
+    assert r.status_code == 422
+
+
+def test_run_a_workspace_authored_workflow_end_to_end():
+    """The whole P4 path: a user saves a workflow.json into the item, presses Run, and the
+    interpreter executes it via the existing orchestrator — the agent step's reply is
+    written to note.md, the file gate passes, the run reaches done."""
+    app, _spec, item_id = _app(reply="a drafted note")
+    with TestClient(app) as client:
+        _put_ws_workflow(client, item_id, "myflow", _WS_WORKFLOW)
+        run_id = client.post(f"{_base(item_id)}/run?workflow_id=myflow").json()["run_id"]
+        data = _poll(client, item_id, run_id, "done")
+        assert data["status"] == "done"
+        note = client.get(f"{_base(item_id)}/files/note.md").content
+    assert b"a drafted note" in note

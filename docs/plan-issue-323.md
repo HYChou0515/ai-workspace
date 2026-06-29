@@ -2,8 +2,8 @@
 
 > Status: grill-locked design (Q1–Q9 in the conversation; mirrors the #298 skill
 > model). This is the build plan; the spec lives in
-> [`workflows.md` §22](workflows.md). Flat integer phases (CLAUDE.md). **This PR
-> lands P1–P3**; **P4–P5 are the immediate follow-up** (documented below).
+> [`workflows.md` §22](workflows.md). Flat integer phases (CLAUDE.md). **P1–P3
+> shipped (PR #332); P4–P5 shipped (the second PR)** — full v1 is now in.
 
 ## Why
 
@@ -100,15 +100,25 @@ interpolation is deterministic, so each step's identity is stable across re-runs
   + export (generic folder download) + dev-promote — the #298 skill flow, for
   workflows. (The Workflows-panel **route** + FE land with P5.)
 
-### Follow-up (next PR)
+### P4 / P5 (shipped — second PR)
 
-- **P4 — workspace self-serve run**. Thread item context into
-  `load_run`/`load_manifest` so a `<ws>/.workflows/<id>.json` is triggerable in
-  its own item via the existing Run endpoint (it shadows a package id). This is
-  the one place workflows go beyond skills; isolated to the orchestrator
-  injection seam.
-- **P5 — FE Workflows panel** (vitest TDD) — list + download, mirroring the
-  Skills panel; surface workspace workflows in the item Run picker.
+- **P4 — workspace self-serve run** ✅. An injected `load_workspace(item_id,
+  workflow_id) → (run, manifest) | None` on the orchestrator resolves a
+  `<ws>/.workflows/<id>.json` (the interpreter + its manifest), shadowing a
+  package workflow of the same id (Q5); `_resolve_run` / `_resolve_manifest` try
+  it first on every reach (start + each resume) and fall back to the package
+  `load_run` / `load_manifest` (default `None` ⇒ existing behaviour unchanged, so
+  no existing test moved). The Run-route `_workflow_manifest_or_404` gains the
+  same workspace fallback (no 422 for a workspace id), and a new item-scoped
+  `GET /a/{slug}/items/{item_id}/workflows` lists them. `workspace_store.load_workspace_workflow`
+  is the one read both share. So a user saves a `workflow.json` and presses Run —
+  the existing Run endpoint / orchestrator / journal / gate machinery runs it.
+- **P5 — FE Workflows panel** ✅. `WorkflowsModal` (mirrors `SkillsModal`):
+  lists the workspace workflows with a per-row **Run** button (the self-serve
+  trigger via `workflowApi.startRun`), a **Download all** (`.workflows/` folder
+  zip) and **Import** (`.json` → `.workflows/`). `useWorkspaceWorkflows` +
+  `api/workspaceWorkflows` + a `workspaceWorkflows` query key + `workflows.*`
+  i18n; opened from a header button in `AgentPanel` next to Skills.
 
 ### Deferred / non-goals (v2)
 

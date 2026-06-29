@@ -848,3 +848,53 @@ async def test_stop_during_a_steer_proposal_settles_the_run_cancelled(spec_insta
     got = spec_instance.get_resource_manager(WorkflowRun).get(run_id).data
     assert got.status is RunStatus.CANCELLED
     assert got.pending_steer is None
+
+
+# ── #323 P4: a workspace-authored workflow shadows the package one ───────────
+
+
+async def test_workspace_workflow_resolution_shadows_package_and_falls_back(
+    spec_instance: SpecStar,
+):
+    """When ``load_workspace`` resolves a ``.workflows/<id>.json`` for the item, the run
+    uses THAT interpreter + manifest (shadowing a same-id package workflow, §22 Q5); when
+    it returns None, resolution falls back to the package ``load_run`` / ``load_manifest``."""
+    calls: list[str] = []
+
+    async def package_run(_wf, _inputs):
+        calls.append("package")
+        return {"who": "package"}
+
+    async def workspace_run(_wf, _inputs):
+        calls.append("workspace")
+        return {"who": "workspace"}
+
+    ws_manifest = WorkflowManifest(phases=[WorkflowPhase(id="ws-phase")])
+
+    async def load_workspace(_item_id, workflow_id):
+        return (workspace_run, ws_manifest) if workflow_id == "myflow" else None
+
+    store = MemoryFileStore()
+    await store.write("rca/i1", "/uploads/input.json", b"{}")
+    await store.write("rca/i2", "/uploads/input.json", b"{}")
+    rm = spec_instance.get_resource_manager(WorkflowRun)
+
+    # 1) workspace def present → it wins (run + manifest both from the workspace def)
+    orch, _f = _orch(spec_instance, package_run, store=store, load_workspace=load_workspace)
+    ws_id = await orch.start(
+        slug="rca", item_id="rca/i1", profile="echo", captured_user="alice", workflow_id="myflow"
+    )
+    await asyncio.sleep(0)
+    ws_run = rm.get(ws_id).data
+    assert ws_run.status is RunStatus.DONE and ws_run.result == {"who": "workspace"}
+    assert [p.phase for p in ws_run.phases] == ["ws-phase"]  # manifest from the workspace def
+
+    # 2) no workspace def for this id → fall back to the package workflow
+    pkg_id = await orch.start(
+        slug="rca", item_id="rca/i2", profile="echo", captured_user="bob", workflow_id="other"
+    )
+    await asyncio.sleep(0)
+    pkg_run = rm.get(pkg_id).data
+    assert pkg_run.status is RunStatus.DONE and pkg_run.result == {"who": "package"}
+    assert [p.phase for p in pkg_run.phases] == ["think", "review"]  # the package MANIFEST
+    assert calls == ["workspace", "package"]

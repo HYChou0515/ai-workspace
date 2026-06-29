@@ -111,6 +111,16 @@ class WorkflowOrchestrator:
     # Injected from ``load_profile(...).upload_dir``; the handle carries it (``wf.upload_dir``)
     # and the run's ``input.json`` location derives from it. Default ⇒ ``uploads``.
     load_upload_dir: Callable[[str, str], str] = _default_upload_dir
+    # #323 P4: resolve a WORKSPACE-authored workflow — a ``.workflows/<id>.json`` in the
+    # item's FileStore — to its ``(run, manifest)``, shadowing a package workflow of the
+    # same id (manual §22, Q5). ``(item_id, workflow_id) → (run, manifest) | None``; async
+    # because the FileStore read is. Returns generic types so the orchestrator stays
+    # decoupled from the DSL (the API injects the dsl-aware closure). None ⇒ package-only
+    # (the default — existing callers/tests are unchanged; resolution falls back to
+    # ``load_run`` / ``load_manifest``).
+    load_workspace: (
+        Callable[[str, str], Awaitable[tuple[ProfileRun, WorkflowManifest] | None]] | None
+    ) = None
     # Release the run's resources (manual §16): ``release(item_id, terminal, chat_key)``.
     # ``terminal`` is True on done/error/cancelled (tear down sandbox + the run's turn
     # session), False on an ``awaiting_human`` pause (free the sandbox but keep the
@@ -154,6 +164,30 @@ class WorkflowOrchestrator:
     def _patch(self, run_id: str, **changes: Any) -> None:
         self._rm().update(run_id, msgspec.structs.replace(self._get(run_id), **changes))
 
+    async def _resolve_manifest(
+        self, slug: str, profile: str, workflow_id: str, item_id: str
+    ) -> WorkflowManifest | None:
+        """The run's manifest — a workspace ``.workflows/<id>.json`` (shadowing a package
+        workflow of the same id, §22/Q5) if one is wired + present, else the package
+        manifest. Re-resolved on every reach (start + each resume) so an edited def is
+        picked up, like the §9 file-as-journal model."""
+        if self.load_workspace is not None:
+            ws = await self.load_workspace(item_id, workflow_id)
+            if ws is not None:
+                return ws[1]
+        return self.load_manifest(slug, profile, workflow_id)
+
+    async def _resolve_run(
+        self, slug: str, profile: str, workflow_id: str, item_id: str
+    ) -> ProfileRun:
+        """The run's ``run()`` — the interpreter over a workspace ``.workflows/<id>.json``
+        if wired + present, else the package ``run.py`` / package DSL (§22/Q5)."""
+        if self.load_workspace is not None:
+            ws = await self.load_workspace(item_id, workflow_id)
+            if ws is not None:
+                return ws[0]
+        return self.load_run(slug, profile, workflow_id)
+
     def active_run(self, item_id: str) -> str | None:
         """The item's active run id, or None. Scoped to the item via the indexed
         ``item_id`` query (never a global scan, per the specstar indexing rule)."""
@@ -183,7 +217,7 @@ class WorkflowOrchestrator:
             existing = self.active_run(item_id)
             if existing is not None:
                 raise ActiveRunExists(item_id, existing)
-        manifest = self.load_manifest(slug, profile, workflow_id)
+        manifest = await self._resolve_manifest(slug, profile, workflow_id, item_id)
         assert manifest is not None  # the route validated this is a workflow profile
         phases = [PhaseState(phase=p.id) for p in manifest.phases]
         run_id = (
@@ -293,7 +327,7 @@ class WorkflowOrchestrator:
         wf = self._build_handle(
             run_id, item_id, captured_user, manifest, key, workflow_id, upload_dir
         )
-        profile_run = self.load_run(slug, profile, workflow_id)
+        profile_run = await self._resolve_run(slug, profile, workflow_id, item_id)
         inputs = await resolve_inputs(wf, manifest)
         self._step_counts[run_id] = 0
         coro = run_workflow(
@@ -437,7 +471,7 @@ class WorkflowOrchestrator:
             raise NotAwaitingDecision(run_id)
         phase = data.pending_decision.phase
         key = data.chat_id or item_id
-        manifest = self.load_manifest(slug, profile, data.workflow_id)
+        manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
         wf = self._build_handle(
             run_id,
             item_id,
@@ -489,7 +523,7 @@ class WorkflowOrchestrator:
         data: WorkflowRun,
     ) -> None:
         key = data.chat_id or item_id
-        manifest = self.load_manifest(slug, profile, data.workflow_id)
+        manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
         wf = self._build_handle(
             run_id,
             item_id,
@@ -538,7 +572,7 @@ class WorkflowOrchestrator:
         if data.pending_steer is None:
             raise NotAwaitingSteer(run_id)
         key = data.chat_id or item_id
-        manifest = self.load_manifest(slug, profile, data.workflow_id)
+        manifest = await self._resolve_manifest(slug, profile, data.workflow_id, item_id)
         if not approve:
             restored = (
                 RunStatus.AWAITING_HUMAN
