@@ -475,6 +475,7 @@ function ShellBody({
               appColor={manifest.color}
               attachedPreset={String(item.attached_preset ?? "")}
               onAttachPreset={(preset) => setField("attached_preset", preset)}
+              onSaveToolPrefs={(prefs) => setField("attached_tool_prefs", prefs)}
             />
           </div>
         </div>

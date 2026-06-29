@@ -64,6 +64,7 @@ from .replay_loaders import ReplayLoaders
 from .runner import AgentRunner
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
+from .tools_routes import register_tools_routes
 from .turn_context import TurnContextBuilder
 from .turns import ChatTurnEngine
 from .workflow_exec import WorkflowExecutor
@@ -687,6 +688,14 @@ def create_app(
         ingestor=ingestor,
         insights_collection_id=insights_collection_id,
         kb_chat_pipeline=kb_chat_pipeline,
+    )
+
+    register_tools_routes(
+        api,
+        spec=spec,
+        app_catalog=app_catalog,
+        packages=packages,
+        locator=locator,
     )
 
     register_capability_routes(
