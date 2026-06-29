@@ -14,7 +14,7 @@ Field tiers (see ``CONTEXT.md`` → "Apps & work items"):
 
 from __future__ import annotations
 
-from msgspec import UNSET, Struct, UnsetType
+from msgspec import UNSET, Struct, UnsetType, field
 from specstar.types import IndexableField
 
 # The type each App's `model.py` annotates its `INDEXED_FIELDS` with — matches
@@ -39,6 +39,15 @@ class WorkItemBase(Struct):
     attached_preset: str = ""
     """Which picker preset drives this item's turns (#89 decision 23). "" → the
     AppCatalog falls back to the profile's default / first allowed preset."""
+
+    attached_tool_prefs: dict[str, bool] = field(default_factory=dict)
+    """Tier 1 — per-item tri-state tool override (#322), sibling of
+    ``attached_preset``. Each entry pins one App-ceiling tool ON (``True``) or OFF
+    (``False``); an absent key follows the profile/App default (so future
+    default changes still flow through). Empty (the default) → every tool follows
+    the default. The override ceiling is the App's ``tools``, not the profile.
+    Resolved by ``AppCatalog.resolve(tool_prefs=...)``; edited in the web tool
+    picker."""
 
     members: list[str] | UnsetType = UNSET
     """Tier 2 (opt-in) — collaborators. Redeclare as ``list[str]`` in the App's

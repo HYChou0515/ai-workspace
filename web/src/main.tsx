@@ -3,6 +3,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App.tsx";
 import { queryClient } from "./api/queryClient";
+import { ToolCatalogProvider } from "./components/toolCatalog";
 import { FontScaleProvider, initFontScale } from "./hooks/fontScale";
 import { initTheme } from "./hooks/theme";
 import { LocaleProvider } from "./lib/i18n";
@@ -34,7 +35,9 @@ createRoot(root).render(
     <QueryClientProvider client={queryClient}>
       <LocaleProvider>
         <FontScaleProvider>
-          <App />
+          <ToolCatalogProvider>
+            <App />
+          </ToolCatalogProvider>
         </FontScaleProvider>
       </LocaleProvider>
     </QueryClientProvider>

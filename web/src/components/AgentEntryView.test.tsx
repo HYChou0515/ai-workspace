@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { MessageCitation } from "../api/types";
 import { EntryView } from "./AgentEntryView";
+import { ToolCatalogContext } from "./toolCatalog";
 
 // UserChip pulls /users/{id} — stub so happy-dom doesn't hit the network.
 vi.mock("./UserChip", () => ({
@@ -208,6 +209,21 @@ describe("EntryView — de-jargoned tool cards (#160)", () => {
     render(<EntryView entry={toolEntry("", { x: 1 })} />);
     expect(screen.getByText("使用工具")).toBeInTheDocument();
     expect(screen.queryByText(/：/)).not.toBeInTheDocument();
+  });
+
+  it("labels a tool from the backend catalog instead of its raw name (#322)", () => {
+    // A tool with no FE i18n entry (e.g. a package command) still gets a clean
+    // label from the backend catalog — the raw snake_case / generic-fallback
+    // never reaches the UI.
+    render(
+      <ToolCatalogContext.Provider
+        value={new Map([["spc", { name: "spc", label: "SPC Chart", description: "Run an SPC chart." }]])}
+      >
+        <EntryView entry={toolEntry("spc", { column: "temp" })} />
+      </ToolCatalogContext.Provider>,
+    );
+    expect(screen.getByText("SPC Chart")).toBeInTheDocument();
+    expect(screen.queryByText("使用工具")).not.toBeInTheDocument();
   });
 
   it("labels the output as 結果 (done) / 執行中… (running)", () => {

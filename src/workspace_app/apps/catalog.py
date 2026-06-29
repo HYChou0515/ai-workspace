@@ -54,6 +54,30 @@ def _subset_or_raise(
         )
 
 
+def _apply_tool_prefs(
+    default_tools: Iterable[str],
+    ceiling: Iterable[str],
+    prefs: Mapping[str, bool] | None,
+) -> list[str]:
+    """Resolve the per-item tri-state tool override (#322) onto the default set.
+
+    ``default_tools`` is the profile/App default; ``ceiling`` is the App's full
+    ``tools`` (the override's hard upper bound). For each ceiling tool: a pref of
+    ``True`` forces it ON, ``False`` forces it OFF, and an absent key follows the
+    default. The result is emitted in ceiling order (deterministic); when there
+    are no prefs the default set is returned verbatim (order preserved)."""
+    if not prefs:
+        return list(default_tools)
+    default_set = set(default_tools)
+    out: list[str] = []
+    for name in ceiling:
+        pinned = prefs.get(name)
+        include = pinned if pinned is not None else name in default_set
+        if include:
+            out.append(name)
+    return out
+
+
 def validate_function_coherence(manifest: AppManifest) -> None:
     """Raise if the App's ``tools`` contradict its ``function`` toggles
     (decision 11). Called at catalog build / startup."""
@@ -153,7 +177,12 @@ class AppCatalog:
         self._presets = dict(presets)
 
     def resolve(
-        self, *, app_slug: str, profile: str, attached_preset: str | None = None
+        self,
+        *,
+        app_slug: str,
+        profile: str,
+        attached_preset: str | None = None,
+        tool_prefs: Mapping[str, bool] | None = None,
     ) -> AgentConfig:
         manifest = load_app_manifest(app_slug)
         prof = load_profile(app_slug, profile)
@@ -163,9 +192,15 @@ class AppCatalog:
             _subset_or_raise(
                 prof.tools, manifest.agent.tools, kind="tools", app=app_slug, profile=profile
             )
-            tools = list(prof.tools)
+            default_tools = list(prof.tools)
         else:
-            tools = list(manifest.agent.tools)
+            default_tools = list(manifest.agent.tools)
+        # #322: a per-item tri-state override sits on top of that default. Each
+        # entry pins one App-ceiling tool ON (True) or OFF (False); absent keys
+        # follow the default (so future profile-default changes still flow). The
+        # override ceiling is the App's `tools`, NOT the profile — a force-ON can
+        # re-add a tool the profile narrowed away. Keys outside the ceiling no-op.
+        tools = _apply_tool_prefs(default_tools, manifest.agent.tools, tool_prefs)
 
         # allowed presets — profile subset of the App picker, else the whole picker.
         picker_presets = [p.preset for p in manifest.agent.picker]
