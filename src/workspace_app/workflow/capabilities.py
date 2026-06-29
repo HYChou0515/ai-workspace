@@ -129,6 +129,40 @@ async def ingest_to_collection(
     return doc_id
 
 
+async def convert_upload(
+    ingestor: Ingestor,
+    store: FileStore,
+    *,
+    workspace_id: str,
+    src: str,
+    dest: str,
+    on_progress: Callable[[str], None] | None = None,
+) -> tuple[str | None, str]:
+    """Convert a staged upload to text BEFORE it is filed (#324). Reads ``src`` from the
+    workspace, runs the SAME KB parsers (``Ingestor.convert`` — parse only, no chunk/embed,
+    no SourceDoc), and stages the converted artifact at a path whose extension matches its
+    actual content so the collection stays self-consistent (no ``.pptx`` name on markdown):
+
+      - ``markdown`` (a parser read a binary/structured upload) → text written to ``dest.md``;
+      - ``passthrough`` (already plain text/code) → the normalized text written to ``dest``;
+      - ``none`` (no parser could read it) → nothing written; ``(None, "none")`` so the
+        caller skips it rather than filing raw bytes.
+
+    Returns ``(out_path, kind)`` — the bare workspace path the caller files next (so the doc
+    lands at its coherent name), or ``(None, "none")`` to skip. ``dest`` carries the original
+    extension so the parsers route on it. Blocking parse/VLM is offloaded off the loop;
+    ``on_progress`` forwards a long parser's status to the caller."""
+    data = await store.read(workspace_id, _abs(src))
+    text, kind = await asyncio.to_thread(
+        ingestor.convert, path=dest, data=data, on_progress=on_progress
+    )
+    if text is None:
+        return None, "none"
+    out_path = f"{dest}.md" if kind == "markdown" else dest
+    await store.write(workspace_id, _abs(out_path), text.encode())
+    return out_path, kind
+
+
 def create_context_card(
     spec: SpecStar,
     *,

@@ -68,3 +68,24 @@ async def test_drive_turn_bogus_chat_key_falls_back_tools_none_and_empty_produce
     # nothing onto it (the `if produced:` branch was skipped).
     _rid, conv = executor._locator.conversation_for(item_id)
     assert all(m.role != "assistant" for m in conv.messages)
+
+
+async def test_convert_capability_stages_text_and_is_wired_onto_the_handle(monkeypatch):
+    """#324: the executor's ``convert`` reads a staged upload, runs the KB parsers to text,
+    and stages it at a content-coherent path — and ``wire_handle`` binds it onto ``wf`` so a
+    workflow can call ``wf.convert``."""
+    from workspace_app.workflow.handle import WorkflowHandle
+
+    _spec, executor, item_id = _build(monkeypatch)
+    await executor._files.write(item_id, "/uploads/notes.md", b"# Title\r\n\r\nBody.\n")
+
+    # Direct call: a plain-text upload passes through, staged at its bare coherent name.
+    out_path, kind = await executor.convert(item_id, "uploads/notes.md", "notes.md")
+    assert (out_path, kind) == ("notes.md", "passthrough")
+    assert await executor._files.read(item_id, "/notes.md") == b"# Title\n\nBody.\n"
+
+    # Wired onto the handle: wire_handle binds wf._convert → executor.convert, so the
+    # journaled wf.convert (which calls through that lambda) returns the staged path.
+    wf = WorkflowHandle(store=executor._files, workspace_id=item_id)
+    executor.wire_handle(wf, "run-1", item_id, "u", "chat-1")
+    assert await wf.convert("uploads/notes.md", "notes.md") == ("notes.md", "passthrough")

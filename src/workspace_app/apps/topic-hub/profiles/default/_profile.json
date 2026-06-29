@@ -15,9 +15,10 @@
       "id": "collections",
       "title": "File uploads into collections",
       "tag": "batch",
-      "description": "Classify & digest each dropped file, draft glossary definitions for its unknown terms, then file it into a KB collection — you review the drafts first.",
-      "hint": "Drop files into uploads/ · scope them in uploads/input.json.",
+      "description": "Classify & digest each dropped file, draft glossary definitions for its unknown terms, then file it into a KB collection — you review the drafts first. Set \"convert\": true in input.json to store only the converted text, not the original files.",
+      "hint": "Drop files into uploads/ · scope them in uploads/input.json (\"convert\": true stores converted text only).",
       "phases": [
+        { "id": "convert", "title": "Convert uploads" },
         { "id": "classify", "title": "Classify + draft definitions" },
         { "id": "glossary", "title": "Assemble glossary draft" },
         { "id": "review", "title": "Review" },

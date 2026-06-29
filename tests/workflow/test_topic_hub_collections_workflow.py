@@ -223,6 +223,90 @@ async def test_approve_commits_the_drafted_card_and_ingests():
     assert cards == [("Defects", ["M4"], "M4", "The fourth metal layer.")]
 
 
+def _record_convert(wf, mapping):
+    """Stub ``wf._convert`` (#324): map each (src, dest) to an ``(out_path, kind)`` via
+    ``mapping[dest]``, recording the calls so a test can assert conversion ran (once) and
+    BEFORE filing. ``mapping[dest] is None`` ⇒ an unreadable binary the run must skip."""
+    calls: list[tuple[str, str]] = []
+
+    async def convert(src, dest):
+        calls.append((src, dest))
+        out = mapping[dest]
+        return (None, "none") if out is None else (out, "markdown")
+
+    wf._convert = convert
+    return calls
+
+
+async def test_convert_true_files_the_converted_artifact_not_the_raw_upload():
+    """#324: with ``convert`` on, a binary upload is converted to text FIRST and the
+    collection receives only the converted ``.md`` (never the raw ``.pptx``)."""
+    run = _run()
+    wf, ingested, cards, _calls = _handle()
+    converted = _record_convert(wf, {"deck.pptx": "deck.pptx.md"})
+    await wf.write("uploads/deck.pptx", b"PK\x03\x04rawpptx")
+    await wf.write("uploads/input.json", b'{"convert": true}')
+    await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
+
+    with pytest.raises(AwaitingHuman):
+        await run(wf, {"convert": True})
+    await record_decision(wf, phase="review", choice="approve")
+    result = await run(wf, {"convert": True})
+
+    assert result == {"status": "approved", "ingested": 1, "cards": 1}
+    assert ingested == [("Defects", "deck.pptx.md")]  # the CONVERTED artifact, bare name
+    # converted once, BEFORE filing, and journaled (the second run() replays the cache)
+    assert converted == [("/uploads/deck.pptx", "deck.pptx")]
+
+
+async def test_convert_off_by_default_files_the_raw_upload_unchanged():
+    """The switch is opt-in: absent ``convert`` files the originals exactly as before and
+    never calls the convert capability (regression guard for the default path)."""
+    run = _run()
+    wf, ingested, _cards, _calls = _handle()
+    converted = _record_convert(wf, {})  # would KeyError if ever called
+    await _seed(wf)  # uploads/a.txt, input.json={}, Defects
+
+    with pytest.raises(AwaitingHuman):
+        await run(wf, {})
+    await record_decision(wf, phase="review", choice="approve")
+    result = await run(wf, {})
+
+    assert result == {"status": "approved", "ingested": 1, "cards": 1}
+    assert ingested == [("Defects", "a.txt")]  # the raw upload, unchanged
+    assert converted == []  # convert capability never invoked
+
+
+async def test_convert_true_skips_unconvertible_files_and_reports_them():
+    """#324 Q6: a binary no parser can read is skipped (never filed raw); when every
+    staged file is unconvertible the run no-ops with the skips surfaced."""
+    run = _run()
+    wf, ingested, _cards, _calls = _handle()
+    _record_convert(wf, {"mystery.bin": None})
+    await wf.write("uploads/mystery.bin", b"\x00\x01\x02\xff")
+    await wf.write("uploads/input.json", b'{"convert": true}')
+    await wf.write("collections.json", b'[{"id": "col-1", "name": "Defects"}]')
+
+    result = await run(wf, {"convert": True})
+
+    assert ingested == []  # raw bytes never reach the collection
+    assert result["status"] == "empty"
+    assert result["skipped"] == ["mystery.bin"]
+
+
+async def test_preflight_announces_conversion_when_convert_is_on():
+    """#324 observability: the pre-flight tells the human the run will convert first and
+    not keep the originals, so the storage change is never a surprise."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", user="u")
+    await _seed(wf)
+
+    plain = (await _preflight()(wf, {})).summary
+    converting = (await _preflight()(wf, {"convert": True})).summary
+
+    assert "轉換成文字" not in plain  # default run says nothing about conversion
+    assert "轉換成文字" in converting and "不保留原始檔" in converting
+
+
 async def test_uncertain_draft_is_flagged_and_skipped_until_resolved():
     run = _run()
     wf, _ingested, cards, _calls = _handle(

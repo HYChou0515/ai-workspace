@@ -346,6 +346,13 @@ Hub 經整理的 memory 核心(與當前的 collection 集合)必須**每個 tur
      `upsert_context_card`(§8,#111)—— `collection` 直接從區塊讀(所以人類改 title 不會誤導路由),
      未知的 collection 會大聲拒絕。一個仍只是一行 `⚠️` 的區塊被跳過(未解決),所以重新 classify 一個
      詞彙會更新它的 card,而非產生重複。
+  - **先轉換再歸檔(opt-in,#324)**:在 `uploads/input.json` 設 `"convert": true`,則在
+     **classify 之前**先把每個上傳檔用 KB parser 轉成文字,**只把轉換後的產物**歸檔進 collection——
+     `deck.pptx` → `deck.pptx.md`(副檔名隨實際內容,collection 自洽,不會有「ppt 名字配 md 內容」);
+     本來就是純文字 / 程式碼的檔維持原副檔名;轉不出文字的二進位 / 壓縮檔被**略過**並在結果的 `skipped`
+     列出(絕不存原始 bytes)。**預設關**(維持歸檔原始檔,行為不變)。轉換重用 `Ingestor.convert`
+     (只解析、不切 chunk),在 workflow 內同步跑且 journaled(VLM 不重跑);**collection 端完全不變**,
+     它只是收到一份已轉好的文件。前置轉換也讓 classify 讀得到內容(二進位檔對文字讀取是亂碼)。
 - **`→consolidate`** —— 讀取當前 memory + 近期 chat,**重寫** memory 檔案(去重 / 合併 / 摘要 / 丟棄
   過時)。自我參照;`memory/` 上 last-write-wins。**透過 Run 觸發**(由人類或外部排程器打 Run 端點)
   —— **沒有平台排程器**(workflows.md §14 早已把週期性委派給呼叫者)。有了多 workflow(§4),這只是
