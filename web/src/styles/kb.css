@@ -1018,6 +1018,44 @@
   white-space: nowrap;
   color: var(--text-paper-d);
 }
+/* #325: refused-upload ("can't accept") section. Like the failure list but
+   with no doc to open, and the actionable reason wraps in full (it's guidance,
+   not a truncated status line). */
+.kb-index-status__blocked {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-index-status__blocked-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--err);
+  font-size: var(--text-body-sm);
+}
+.kb-index-status__blocked-dismiss {
+  margin-left: auto;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: var(--text-paper-d);
+  font: inherit;
+  font-size: var(--text-body-sm);
+  text-decoration: underline;
+}
+.kb-index-status__blocked-dismiss:hover {
+  color: var(--text-paper);
+}
+.kb-index-status__blocked-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 6px;
+}
+.kb-index-status__blocked-item .kb-index-status__fail-reason {
+  white-space: normal;
+  overflow: visible;
+}
 .kb-docsearch--inline {
   flex: 0 1 280px;
   margin: 0;

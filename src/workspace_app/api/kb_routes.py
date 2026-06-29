@@ -40,6 +40,7 @@ from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
 from ..kb.preview import preview_markdown
+from ..kb.upload_checks import UploadRejected
 from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
 from ..resources.kb import Collection, DocChunk, SourceDoc
 from .notifications import notify
@@ -301,6 +302,28 @@ class DocumentsPage(BaseModel):
     has_more: bool
 
 
+class UploadAccepted(BaseModel):
+    """The upload endpoint's success shape: the SourceDoc ids that now
+    need indexing (new or changed bytes) and the doc status. Indexing runs
+    in the background, so ``status`` is always ``"indexing"`` here."""
+
+    document_ids: list[str]
+    status: str
+
+
+class UploadCheckHintOut(BaseModel):
+    """One browser-runnable upload-check descriptor (#325). The FE reads a
+    picked file's leading bytes and pre-blocks it when its extension is in
+    ``extensions`` AND those bytes match any prefix in ``forbid_magic_hex``,
+    showing ``message_key``'s localised copy — the same check the server
+    re-runs authoritatively, so the two never disagree."""
+
+    id: str
+    extensions: list[str]
+    forbid_magic_hex: list[str]
+    message_key: str
+
+
 def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
@@ -520,11 +543,26 @@ def register_kb_routes(
             resource_id=collection_id, visibility=new_perm.visibility, notified=notified
         )
 
+    @app.get("/kb/upload-checks")
+    async def list_upload_checks() -> list[UploadCheckHintOut]:
+        """#325: the browser-runnable upload-check descriptors. The FE
+        fetches these and pre-blocks the common case (an encrypted Office
+        file) before upload — server-only checks (PDF) aren't listed."""
+        return [
+            UploadCheckHintOut(
+                id=hint.id,
+                extensions=list(hint.extensions),
+                forbid_magic_hex=list(hint.forbid_magic_hex),
+                message_key=hint.message_key,
+            )
+            for hint in ingestor.upload_check_hints()
+        ]
+
     @app.post("/kb/collections/{collection_id}/documents")
     async def upload_document(
         collection_id: str,
         file: UploadFile = File(...),  # noqa: B008
-    ) -> dict:
+    ) -> UploadAccepted:
         _authorize_collection(collection_id, "add_content")  # #262
         data = await file.read()
         # store is synchronous (libmagic sniff, specstar I/O) — never run it
@@ -532,16 +570,29 @@ def register_kb_routes(
         # offload to a worker thread and await it (the response needs the ids).
         # Indexing (chunk+embed) is enqueued to the durable IndexJob queue and
         # drained by the background consumer — off the request path entirely.
-        ids = await asyncio.to_thread(
-            ingestor.store,
-            collection_id=collection_id,
-            user=get_user_id(),
-            filename=file.filename or "upload",
-            data=data,
-        )
+        try:
+            ids = await asyncio.to_thread(
+                ingestor.store,
+                collection_id=collection_id,
+                user=get_user_id(),
+                filename=file.filename or "upload",
+                data=data,
+            )
+        except UploadRejected as rej:
+            # #325: a custom check refused this file (encrypted/unreadable).
+            # 422 with the structured verdict so the FE shows actionable copy
+            # ("decrypt and re-upload"); nothing was stored.
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "check_id": rej.rejection.check_id,
+                    "reason_code": rej.rejection.reason_code,
+                    "message_key": rej.rejection.message_key,
+                },
+            ) from rej
         for doc_id in ids:
             index_coordinator.enqueue(doc_id, collection_id)
-        return {"document_ids": ids, "status": "indexing"}
+        return UploadAccepted(document_ids=ids, status="indexing")
 
     # ── Issue #101: collection export (two-step prepare → stream) ──────────
     @app.post("/kb/collections/{collection_id}/download/prepare")
