@@ -52,6 +52,48 @@ def test_hybrid_search_surfaces_the_keyword_matching_document(
     assert "reflow" in passages[0].text
 
 
+def test_overlay_swaps_a_docs_chunks_for_virtual_ones(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#328: search(overlay=...) ranks as if the shadowed doc held the supplied
+    virtual chunks instead of its real ones — the virtual chunk competes through
+    the SAME hybrid pipeline (so a dry-run prompt preview needs no reindex), and
+    the shadowed doc's real chunks drop out of the candidate set."""
+    from workspace_app.kb.retriever import Overlay
+    from workspace_app.resources.kb import DocChunk
+
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="a.md",
+        data=b"reflow oven temperature drifted in zone three",
+    )
+    ing.ingest(collection_id=cid, user="u", filename="b.md", data=b"unrelated cat nap content")
+    a_id = encode_doc_id(cid, "a.md")
+
+    vtext = "hydraulic actuator pressure loss"
+    virtual = DocChunk(
+        collection_id=cid,
+        source_doc_id=a_id,
+        seq=0,
+        start=0,
+        end=len(vtext),
+        text=vtext,
+        embedding=embedder.embed_documents([vtext])[0],
+    )
+    overlay = Overlay(virtual_chunks=[virtual], shadow_doc_id=a_id, virtual_text=vtext)
+    r = Retriever(spec, embedder=embedder)
+
+    # the virtual chunk flows through the real pipeline and is retrievable
+    found = r.search(vtext, [cid], overlay=overlay)
+    assert any("hydraulic" in p.text for p in found)
+    # the shadowed doc's REAL chunk no longer competes
+    on_old = r.search("reflow temperature", [cid], overlay=overlay)
+    assert not any("reflow" in p.text for p in on_old)
+
+
 def test_image_doc_passage_uses_parsed_text_not_raw_bytes(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
