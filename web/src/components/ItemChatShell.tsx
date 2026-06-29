@@ -5,11 +5,12 @@ import { investigationFileService } from "../api/fileService";
 import { type ItemChatSummary } from "../api/itemChats";
 import { qk } from "../api/queryKeys";
 import type { Suggestion } from "../api/types";
-import { phaseView, workflowApi, type WorkflowManifestDTO } from "../api/workflows";
+import { workflowApi, type WorkflowManifestDTO } from "../api/workflows";
 import { useItemChat } from "../hooks/useItemChat";
 import { useItemChats } from "../hooks/useItemChats";
 import { useItemCollections } from "../hooks/useItemCollections";
 import {
+  useCancelRun,
   useConfirmSteer,
   useDecide,
   useRun,
@@ -26,6 +27,7 @@ import { ManageChatsModal } from "./ManageChatsModal";
 import { NewItemPicker } from "./NewItemPicker";
 import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
 import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
+import { WorkflowProgress } from "./WorkflowProgress";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
  * App-manifest-derived chat chrome (mirrors the props WorkspaceShell passes the
@@ -269,14 +271,15 @@ function ItemChatPanel({
   const decide = useDecide(slug, itemId, chat.run_id ?? "");
   const steer = useSteerRun(slug, itemId, chat.run_id ?? "");
   const confirmSteer = useConfirmSteer(slug, itemId, chat.run_id ?? "");
+  const cancel = useCancelRun(slug, itemId);
   const gate = run.data?.status === "awaiting_human" ? run.data.pending_decision : null;
   // #288: a steer plan awaiting confirm — pinned like the gate. The steer card and the
   // gate card are mutually exclusive (the backend sets one pending field, not both).
   const steerPlan = run.data?.pending_steer ?? null;
-  // The real linear step bar: the run's workflow declares the phase skeleton,
-  // merged with its live per-phase progress. A free chat (no run_id) → no bar.
+  // #331: the run's declared phase skeleton — WorkflowProgress merges it with the live
+  // per-phase progress for the collapsible bar / detail. A free chat (no run_id) → no
+  // panel (run.data is undefined, the panel renders nothing).
   const declared = workflows.find((w) => w.id === run.data?.workflow_id)?.phases ?? [];
-  const phases = chat.run_id ? phaseView(declared, run.data) : undefined;
 
   return (
     <div
@@ -284,6 +287,19 @@ function ItemChatPanel({
       data-testid="item-chat-panel"
       style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
     >
+      {/* #331: the run's progress (collapsible bar → #283 detail) sits above the
+          decision/steer cards and the feed (I1 甲) — the structural overview the
+          retired WorkflowRunPanel used to give, restored for the multi-chat shell. */}
+      {chat.run_id && (
+        <WorkflowProgress
+          run={run.data}
+          declaredPhases={declared}
+          disconnected={(run.failureCount ?? 0) > 0}
+          onStop={() => cancel.mutate(chat.run_id!)}
+          stopping={cancel.isPending}
+        />
+      )}
+
       {gate && (
         <div
           className="item-chat-panel__gate"
@@ -334,7 +350,6 @@ function ItemChatPanel({
         investigationId={itemId}
         agent={agent}
         fill
-        phases={phases}
         onNewChat={onNewChat}
         onSteer={chat.run_id ? (text) => steer.mutate(text) : undefined}
         picker={picker}

@@ -456,6 +456,21 @@ export const messages = {
   "wf.metrics.steps": { "zh-TW": "步驟", en: "Steps" },
   "wf.metrics.retries": { "zh-TW": "重試 {n}", en: "{n} retries" },
   "wf.runs.title": { "zh-TW": "執行紀錄", en: "Runs" },
+  "wf.progress.expand": { "zh-TW": "展開細節", en: "Show details" },
+  "wf.progress.collapse": { "zh-TW": "收合細節", en: "Hide details" },
+  "wf.progress.step": { "zh-TW": "第 {n} 步 · {title}", en: "step {n} · {title}" },
+  "wf.progress.noop": { "zh-TW": "已完成，但未執行任何步驟", en: "Finished without running any steps" },
+  "wf.stop": { "zh-TW": "停止", en: "Stop" },
+  "wf.disconnected": {
+    "zh-TW": "連線中斷，可能已停止。正在嘗試重新連線…",
+    en: "Connection lost — it may have stopped. Reconnecting…",
+  },
+  "wf.status.pending": { "zh-TW": "排隊中", en: "queued" },
+  "wf.status.running": { "zh-TW": "進行中", en: "running" },
+  "wf.status.awaiting_human": { "zh-TW": "等待你的決定", en: "awaiting you" },
+  "wf.status.done": { "zh-TW": "已完成", en: "done" },
+  "wf.status.error": { "zh-TW": "失敗", en: "failed" },
+  "wf.status.cancelled": { "zh-TW": "已取消", en: "cancelled" },
 
   // #230: the platform Help page.
   "help.title": { "zh-TW": "說明", en: "Help" },
