@@ -134,6 +134,22 @@ async def test_code_build_failure_is_recorded_not_fatal():
     assert not status.building  # …and the partition is freed (job completed)
 
 
+async def test_code_collection_delete_does_not_enqueue_prose_unfold():
+    """A1: deleting a source from a CODE collection must NOT run the prose
+    unfolder — it would garble the hierarchical code wiki (the unfolder is built
+    for prose pages). Deletion does not auto-build either (per the grill: a
+    rebuild per deleted file is wasteful); the orphaned /files page is pruned by
+    the next rebuild's reconcile instead."""
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)
+    doc = _add_code(spec, cid, "a.py", "def a():\n    pass\n")
+
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+    await coord.on_doc_deleted(doc)
+
+    assert not _jobs(spec)  # no unfold job (and no build) enqueued for a code collection
+
+
 async def test_non_code_collection_still_folds_per_source():
     spec = make_spec(default_user="u")
     cid = (

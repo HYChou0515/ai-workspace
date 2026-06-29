@@ -743,6 +743,14 @@ def register_kb_routes(
             await asyncio.to_thread(code_repo.sync, collection_id=collection_id, user=get_user_id())
         except CodeRepoSyncError as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
+        # #281 A0: code_repo.sync stores + indexes each file synchronously, which
+        # BYPASSES the IndexCoordinator — so on_doc_indexed never fires and the
+        # code-wiki would never build on the main flow. Trigger the build
+        # explicitly now that sync has returned (all docs are indexed by then, so
+        # one build covers them all — no batch-join needed). No-op for non-wiki /
+        # non-code collections.
+        if wiki_coordinator is not None:
+            await wiki_coordinator.trigger_code_build(collection_id, requested_by=get_user_id())
         # Re-read so we return the freshly-recorded sha.
         refreshed = rm.get(collection_id).data
         assert isinstance(refreshed, Collection)
@@ -875,6 +883,14 @@ def register_kb_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         if wiki_coordinator is None or not (isinstance(coll, Collection) and coll.use_wiki):
             return WikiRebuildOut(queued=0, status="disabled")
+        # #281: a code collection (git_url) rebuilds its whole wiki hierarchically
+        # in ONE coalesced build — not a per-source fold loop, which builds nothing
+        # when there are no docs yet and is wasteful when there are (the code build
+        # reads every source regardless). This same endpoint backs the FE's
+        # use_wiki toggle-on for a code collection.
+        if coll.git_url:
+            await wiki_coordinator.trigger_code_build(collection_id, requested_by=get_user_id())
+            return WikiRebuildOut(queued=1)
         rm = spec.get_resource_manager(SourceDoc)
         queued = 0
         for r in rm.list_resources((QB["collection_id"] == collection_id).build()):

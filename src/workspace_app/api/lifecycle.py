@@ -84,7 +84,16 @@ def build_lifespan(
         try:
             while True:
                 await asyncio.sleep(code_sync_check_interval.total_seconds())
-                await asyncio.to_thread(sweeper.tick)
+                synced = await asyncio.to_thread(sweeper.tick)
+                # #281 A0: sweeper.tick re-syncs via code_repo.sync, whose
+                # synchronous ingest bypasses the IndexCoordinator (so
+                # on_doc_indexed never fires). Trigger each re-synced code
+                # collection's wiki build explicitly — wired here in the lifespan
+                # closure (which holds app.state.wiki_coordinator) so code_repo
+                # stays a pure clone+ingest with no wiki dependency. No-op for
+                # collections without git_url + use_wiki.
+                for cid in synced:
+                    await app.state.wiki_coordinator.trigger_code_build(cid)
         except asyncio.CancelledError:
             return
 

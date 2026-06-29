@@ -113,6 +113,25 @@ def test_sync_endpoint_clones_and_ingests(app, remote: str):
     assert "README.md" in paths
 
 
+def test_sync_endpoint_triggers_a_code_wiki_build(app, remote: str):
+    """A0 regression: syncing a code collection with the wiki path on must
+    trigger a code-wiki build through the REAL endpoint seam. The old wiring
+    relied on ``on_doc_indexed``, which ``code_repo.sync``'s synchronous ingest
+    bypasses — so the wiki never built on the main flow. This app wires no wiki
+    LLM, so the observable proof the trigger reached the builder is the build
+    status recording the not-configured attempt; before the fix sync recorded
+    nothing at all (status default, ``last_error`` None)."""
+    client = TestClient(app)
+    cid = client.post(
+        "/kb/collections",
+        json={"name": "repo", "git_url": remote, "use_wiki": True, "embedder_id": 1},
+    ).json()["resource_id"]
+    resp = client.post(f"/kb/collections/{cid}/sync")
+    assert resp.status_code == 200, resp.text
+    status = client.get(f"/kb/collections/{cid}/wiki/status").json()
+    assert "not configured" in (status["last_error"] or "")
+
+
 def test_sync_endpoint_404s_on_unknown_collection(app):
     client = TestClient(app)
     resp = client.post("/kb/collections/does-not-exist/sync")
@@ -163,6 +182,63 @@ def test_lifespan_runs_code_sync_sweeper(remote: str):
 
         sha = asyncio.run(_wait())
     assert sha and len(sha) == 40
+
+
+def test_rebuild_endpoint_triggers_code_build_even_with_no_docs(app):
+    """Manual rebuild on a code collection triggers ONE code-wiki build via the
+    coordinator's code path — not the per-source ``on_doc_indexed`` loop, which
+    builds nothing when the collection has no docs yet (and is wasteful when it
+    does, since a code build rebuilds the whole wiki regardless of which source
+    changed). This same endpoint backs the FE's use_wiki toggle-on. No wiki LLM
+    is wired, so the observable is the build status recording the attempt."""
+    client = TestClient(app)
+    cid = client.post(
+        "/kb/collections",
+        json={"name": "repo", "git_url": "https://git.example/r.git", "use_wiki": True},
+    ).json()["resource_id"]
+    # No sync / no docs yet — the per-source loop would queue 0 and build nothing.
+    resp = client.post(f"/kb/collections/{cid}/wiki/rebuild")
+    assert resp.status_code == 200, resp.text
+    status = client.get(f"/kb/collections/{cid}/wiki/status").json()
+    assert "not configured" in (status["last_error"] or "")
+
+
+def test_lifespan_sweeper_triggers_code_wiki_build(remote: str):
+    """A0 (sweeper site): the background code-sync sweeper must also trigger a
+    code-wiki build after it re-syncs a code collection — same synchronous-ingest
+    bypass as the sync endpoint. No wiki LLM is wired, so the observable proof the
+    trigger fired is the build status recording the not-configured attempt."""
+    import asyncio
+    from datetime import timedelta
+
+    spec = make_spec(default_user="u")
+    text = HashEmbedder(dim=EMBED_DIM)
+    application = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=ScriptedAgentRunner([]),
+        kb_embedder=text,
+        kb_pipeline=build_doc_pipeline(embedder=text),
+        code_sync_check_interval=timedelta(milliseconds=50),
+    )
+    client = TestClient(application)
+    cid = client.post(
+        "/kb/collections",
+        json={"name": "r", "git_url": remote, "use_wiki": True, "sync_interval_hours": 1},
+    ).json()["resource_id"]
+    with client:  # enter lifespan → starts the sweeper
+
+        async def _wait() -> str | None:
+            for _ in range(60):  # ~3s budget
+                st = client.get(f"/kb/collections/{cid}/wiki/status").json()
+                if st["last_error"]:
+                    return st["last_error"]
+                await asyncio.sleep(0.05)
+            return None
+
+        err = asyncio.run(_wait())
+    assert err and "not configured" in err
 
 
 def test_sync_endpoint_502s_on_clone_failure(app, tmp_path: Path):

@@ -257,6 +257,26 @@ class WikiMaintenanceCoordinator:
                 )
             )
 
+    async def trigger_code_build(
+        self, collection_id: str, *, requested_by: str | None = None
+    ) -> None:
+        """Enqueue (or coalesce onto) a single code-wiki build for a code
+        collection. This is the EXPLICIT trigger the sync endpoint / code-sync
+        sweeper / use_wiki toggle / manual rebuild call after a code collection's
+        sources change — ``code_repo.sync`` ingests synchronously and bypasses
+        the IndexCoordinator, so ``on_doc_indexed`` never fires on those paths
+        (#281 A0). No-op unless the collection is a code-wiki collection (has a
+        ``git_url`` AND ``use_wiki`` on); mirrors ``on_doc_indexed``'s code branch
+        without a per-doc lookup."""
+        try:
+            coll = self._coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError:
+            return
+        if not (isinstance(coll, Collection) and coll.use_wiki and coll.git_url):
+            return  # not a code-wiki collection — nothing to build
+        actor = requested_by if requested_by is not None else self._get_user_id()
+        self._enqueue_code_build(collection_id, actor)
+
     def _enqueue_code_build(self, cid: str, actor: str) -> None:
         """Queue one ``code_build`` for the collection, coalescing onto any build
         already in flight (a sync ingests many files; we want ONE rebuild, not one
@@ -308,6 +328,14 @@ class WikiMaintenanceCoordinator:
             return
         if not (isinstance(coll, Collection) and coll.use_wiki):
             return  # wiki path not enabled — nothing to un-fold
+        if coll.git_url:
+            # #281 A1: a code collection's wiki is built hierarchically by
+            # CodeWikiBuilder, not by per-source prose folds — so the prose
+            # unfolder must NOT run on a delete (it would garble the code wiki).
+            # Deletion deliberately does not auto-rebuild either (a rebuild per
+            # deleted file is wasteful); the orphaned /files page is pruned by the
+            # next rebuild's reconcile step.
+            return
         ref = SpecstarWikiSources(self._spec, cid).ref_by_id(doc_id)
         if ref is None:  # pragma: no cover — race: doc deleted between the get above and here
             return
