@@ -37,9 +37,12 @@ from .parsers.pdf import PdfParser
 from .parsers.slides import PptxParser
 from .parsers.tabular import CsvParser, ExcelParser
 from .tokens import count_tokens
+from .upload_checks import UploadCheckRegistry, bundled_upload_checks
 
 if TYPE_CHECKING:
     from specstar.types import IResourceManager
+
+    from .upload_checks import UploadCheckHint
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,7 @@ class Ingestor:
         chat_pipeline: IngestionPipeline | None = None,
         code_embedder: Embedder | None = None,
         parser_registry: ParserRegistry | None = None,
+        upload_checks: UploadCheckRegistry | None = None,
     ) -> None:
         """Doc-ingest mode (P1):
         - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
@@ -150,6 +154,16 @@ class Ingestor:
                 .register(ExcelParser())
                 .register(PptxParser())
             )
+        # #325: pluggable synchronous upload gate. The default bundle
+        # refuses encrypted/unreadable Office + PDF uploads; an operator
+        # can inject a custom registry to add their own checks.
+        self._upload_checks = upload_checks or bundled_upload_checks()
+
+    def upload_check_hints(self) -> list[UploadCheckHint]:
+        """The browser-runnable upload-check descriptors (#325) — served
+        by ``GET /kb/upload-checks`` so the FE pre-blocks the common case
+        (an encrypted Office file) before upload."""
+        return self._upload_checks.hints()
 
     def ingest(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
         """Store + index synchronously; returns the SourceDoc ids touched.
@@ -252,6 +266,11 @@ class Ingestor:
         XML members. An upload ANY registered parser claims is stored
         whole; only unclaimed archives expand."""
         mime = magic.from_buffer(data, mime=True)
+        # #325: gate BEFORE creating any SourceDoc or expanding an archive —
+        # a refused upload (encrypted/unreadable) leaves nothing behind and
+        # raises UploadRejected, which the API maps to a 422 with an
+        # actionable message instead of a cryptic background-index error.
+        self._upload_checks.run(filename=filename, mime=mime, data=data)
         unpack = mime in _ARCHIVE_MIMES
         if unpack and self._pipeline is not None:
             with MaterialisedParserInput(data, filename=filename) as source:

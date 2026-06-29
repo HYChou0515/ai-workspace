@@ -89,5 +89,8 @@ export const qk = {
     contextCards: (collectionId: string) => ["kb", "context-cards", collectionId] as const,
     // #175: a 自動 context card generation run (status + proposals, polled).
     cardGen: (jobId: string) => ["kb", "card-gen", jobId] as const,
+    // #325: browser-runnable upload-check descriptors (platform-wide, rarely
+    // changes — fetched once and reused to pre-block encrypted uploads).
+    uploadChecks: ["kb", "upload-checks"] as const,
   },
 } as const;

@@ -21,8 +21,17 @@ import {
 } from "react-router-dom";
 
 import { mapWithConcurrency } from "../../api/concurrency";
-import { kbApi, type KbApi, type KbCitation, type KbCollection, type KbDocument } from "../../api/kb";
+import {
+  kbApi,
+  UploadBlockedError,
+  type KbApi,
+  type KbCitation,
+  type KbCollection,
+  type KbDocument,
+} from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { mergeBlocked, screenFiles, type BlockedUpload } from "../../kb/uploadChecks";
+import { UploadBlockedList } from "./UploadBlockedList";
 import { Icon, type IconName } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
@@ -129,6 +138,17 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const erroredDocs = statusDocs.filter((d) => d.status === "error");
   const erroredCount = erroredDocs.length;
 
+  // #325: browser-runnable upload checks (fetched once; rarely changes). Used to
+  // pre-block encrypted/unreadable files before upload. `blocked` accumulates
+  // both pre-blocked files and any the server refuses with a 422; it persists
+  // until the user dismisses it (there's no doc to open).
+  const uploadHints = useQuery({
+    queryKey: qk.kb.uploadChecks,
+    queryFn: () => client.listUploadChecks(),
+    staleTime: Number.POSITIVE_INFINITY,
+  }).data ?? [];
+  const [blocked, setBlocked] = useState<BlockedUpload[]>([]);
+
   // Reset the transient UI when switching to a different collection. (The doc
   // tree + editor own their own state inside KbDocIde.)
   useEffect(() => {
@@ -139,6 +159,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     setShowRetrieval(false);
     setFailsOpen(false);
     setImportFile(null);
+    setBlocked([]);
   }, [cid]);
 
   const updateMut = useMutation({
@@ -227,14 +248,35 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     // all at once froze the tab and flushed nothing. A small pool keeps the UI
     // alive while still uploading everything.
     mutationFn: async (vars: { files: File[]; asFolder: boolean }) => {
-      setUpProg({ done: 0, total: vars.files.length });
+      // #325: pre-block encrypted/unreadable files in the browser (no upload).
+      // The retried-now names drop out of the existing blocked list.
+      const { allowed, blocked: pre } = await screenFiles(vars.files, uploadHints);
+      const retried = new Set(allowed.map((f) => f.name));
+      const extra: BlockedUpload[] = pre.map((b) => ({ name: b.file.name, messageKey: b.messageKey }));
+      setBlocked((prev) => mergeBlocked(prev.filter((b) => !retried.has(b.name)), extra));
+
+      setUpProg({ done: 0, total: allowed.length });
       let done = 0;
-      return mapWithConcurrency(vars.files, 4, async (file) => {
-        const r = await client.uploadDocument(cid as string, file, uploadDocPath(file, vars.asFolder));
-        done += 1;
-        setUpProg({ done, total: vars.files.length });
-        return r;
+      const beBlocked: BlockedUpload[] = [];
+      const ids = await mapWithConcurrency(allowed, 4, async (file) => {
+        try {
+          const r = await client.uploadDocument(cid as string, file, uploadDocPath(file, vars.asFolder));
+          return r;
+        } catch (e) {
+          // The server refused it (a check the browser couldn't run, e.g. an
+          // encrypted PDF) — list it instead of failing the whole batch.
+          if (e instanceof UploadBlockedError) {
+            beBlocked.push({ name: file.name, messageKey: e.messageKey });
+            return [] as string[];
+          }
+          throw e;
+        } finally {
+          done += 1;
+          setUpProg({ done, total: allowed.length });
+        }
       });
+      if (beBlocked.length) setBlocked((prev) => mergeBlocked(prev, beBlocked));
+      return ids;
     },
     onSuccess: () => {
       if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
@@ -554,12 +596,15 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           indexing → ready/error transition is never invisible. Shows live
           progress, then either a transient "all set" ✓ or a persistent failure
           list. Hidden only when idle with nothing to report. */}
-      {(pending || erroredCount > 0 || justReady) && (
+      {(pending || erroredCount > 0 || justReady || blocked.length > 0) && (
         <div
-          className={`kb-index-status${erroredCount > 0 && !pending ? " is-error" : ""}`}
+          className={`kb-index-status${(erroredCount > 0 && !pending) || blocked.length > 0 ? " is-error" : ""}`}
           data-testid="kb-index-status"
           role="status"
         >
+          {/* #325: files refused at upload (encrypted/unreadable). No doc to
+              open — just the reason + "decrypt and re-upload", dismissible. */}
+          <UploadBlockedList items={blocked} onDismiss={() => setBlocked([])} />
           {/* Live progress while work is in flight (#170). De-jargoned wording
               follows #171 (processing, not indexing). */}
           {pending && (
