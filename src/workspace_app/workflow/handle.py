@@ -49,6 +49,11 @@ UpsertCardCapability = Callable[[str, list[str], str, str], Awaitable[str]]
 # a new card. Read-only — backs the review "before" snapshot. Wired by the driver; faked
 # in tests.
 FindCardCapability = Callable[[str, list[str], str], Awaitable[dict[str, Any] | None]]
+# The convert capability (#324): (src, dest) -> (out_path, kind). Reads the staged upload at
+# ``src``, runs the KB parsers to text, stages the converted artifact at a content-coherent
+# path, and returns where the caller files it (``None`` for an unreadable binary → skip).
+# Wired by the driver; faked in tests.
+ConvertCapability = Callable[[str, str], Awaitable[tuple[str | None, str]]]
 
 
 def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
@@ -84,6 +89,7 @@ class WorkflowHandle:
         run_sandbox: RunSandbox | None = None,
         emit: Callable[[object], None] | None = None,
         ingest: IngestCapability | None = None,
+        convert: ConvertCapability | None = None,
         collection_checker: CollectionChecker | None = None,
         upsert_card: UpsertCardCapability | None = None,
         find_card: FindCardCapability | None = None,
@@ -115,6 +121,9 @@ class WorkflowHandle:
         self._ingest = ingest
         """Wired by the orchestration driver — the ``ingest_to_collection`` capability
         bound to this run's workspace + captured user (manual §8)."""
+        self._convert = convert
+        """Wired by the orchestration driver — the ``convert_upload`` capability (#324)
+        bound to this run's workspace; converts a staged upload to text before filing."""
         self._collection_has = collection_checker
         """Wired by the orchestration driver — backs ``check.collection_has`` (§8)."""
         self._upsert_card = upsert_card
@@ -203,6 +212,34 @@ class WorkflowHandle:
             cache=cache,
         )
         return result["doc_id"]
+
+    async def convert(
+        self, src: str, dest: str, *, phase: str = "convert", cache: bool = True
+    ) -> tuple[str | None, str]:
+        """Deterministic node (#324): convert a staged upload at ``src`` to text and stage
+        it at a content-coherent path derived from ``dest``, BEFORE it is filed into a
+        collection — so only the converted artifact is stored, never the raw binary.
+        Journaled + skipped on re-run (§9) so a (VLM) conversion never re-runs. Returns
+        ``(out_path, kind)`` — the bare workspace path the caller files next, or
+        ``(None, "none")`` when no parser could read the upload (caller skips it)."""
+        if self._convert is None:
+            raise RuntimeError("convert needs a capability (wired by the run driver)")
+        convert = self._convert
+
+        async def execute(_feedback: str | None) -> dict[str, Any]:
+            out_path, kind = await convert(src, dest)
+            return {"out_path": out_path, "kind": kind}
+
+        result = await run_step(
+            self,
+            name="convert",
+            key=src.lstrip("/").replace("/", "_"),
+            phase=phase,
+            args={"src": src, "dest": dest},
+            execute=execute,
+            cache=cache,
+        )
+        return result["out_path"], result["kind"]
 
     async def upsert_context_card(
         self,

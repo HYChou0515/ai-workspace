@@ -164,6 +164,37 @@ def _drain(client: TestClient) -> None:
     client.app.state.index_coordinator.wait_idle()  # ty: ignore[unresolved-attribute]
 
 
+def test_upload_encrypted_office_is_rejected_with_422_and_stores_nothing():
+    """#325: an encrypted .pptx (OLE2 container, not ZIP) is refused at
+    upload with a structured 422 — no doc is created, so the FE can show
+    'decrypt and re-upload' instead of a cryptic background-index error."""
+    client = _client()
+    cid = _new_collection(client)
+    ole2 = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"the encrypted blob"
+    files = {"file": ("deck.pptx", ole2, "application/octet-stream")}
+    r = client.post(f"/kb/collections/{cid}/documents", files=files)
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert detail["check_id"] == "office_encryption"
+    assert detail["reason_code"] == "encrypted_office"
+    assert detail["message_key"] == "kb.upload.blocked.unreadable"
+    # Nothing persisted.
+    assert client.get(f"/kb/collections/{cid}/documents").json()["items"] == []
+
+
+def test_upload_checks_endpoint_lists_browser_runnable_hints():
+    """#325: the FE fetches these to pre-block encrypted Office files in the
+    browser. Server-only checks (PDF) are not listed."""
+    client = _client()
+    hints = client.get("/kb/upload-checks").json()
+    by_id = {h["id"]: h for h in hints}
+    assert "pdf_encryption" not in by_id  # server-only, no browser rule
+    office = by_id["office_encryption"]
+    assert set(office["extensions"]) == {".pptx", ".xlsx", ".docx"}
+    assert office["forbid_magic_hex"] == ["d0cf11e0a1b11ae1"]
+    assert office["message_key"] == "kb.upload.blocked.unreadable"
+
+
 def test_upload_document_and_list():
     client = _client()
     cid = _new_collection(client)

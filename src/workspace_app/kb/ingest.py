@@ -11,7 +11,8 @@ import io
 import logging
 import tarfile
 import zipfile
-from typing import TYPE_CHECKING, Any, NamedTuple
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple
 
 import magic
 import msgspec
@@ -37,9 +38,12 @@ from .parsers.pdf import PdfParser
 from .parsers.slides import PptxParser
 from .parsers.tabular import CsvParser, ExcelParser
 from .tokens import count_tokens
+from .upload_checks import UploadCheckRegistry, bundled_upload_checks
 
 if TYPE_CHECKING:
     from specstar.types import IResourceManager
+
+    from .upload_checks import UploadCheckHint
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +69,21 @@ class _IndexOutput(NamedTuple):
 
     text: str | None
     preview: Binary | None
+
+
+# What ``Ingestor.convert`` produces (#324). ``kind`` tells the caller how to file the
+# converted artifact so the collection stays self-consistent (extension ⟺ content):
+#   - ``"markdown"`` — a parser turned a binary/structured upload into markdown text;
+#     the caller stores it under a ``.md`` name (e.g. ``deck.pptx`` → ``deck.pptx.md``).
+#   - ``"passthrough"`` — already plain text/code no parser claims; the caller files the
+#     ORIGINAL upload unchanged (its extension already matches its content).
+#   - ``"none"`` — a binary no parser could read; nothing to store (caller skips it).
+ConvertKind = Literal["markdown", "passthrough", "none"]
+
+
+class ConvertResult(NamedTuple):
+    text: str | None
+    kind: ConvertKind
 
 
 # md sniffs as text/plain on libmagic; both accepted.
@@ -107,6 +126,7 @@ class Ingestor:
         chat_pipeline: IngestionPipeline | None = None,
         code_embedder: Embedder | None = None,
         parser_registry: ParserRegistry | None = None,
+        upload_checks: UploadCheckRegistry | None = None,
     ) -> None:
         """Doc-ingest mode (P1):
         - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
@@ -150,6 +170,16 @@ class Ingestor:
                 .register(ExcelParser())
                 .register(PptxParser())
             )
+        # #325: pluggable synchronous upload gate. The default bundle
+        # refuses encrypted/unreadable Office + PDF uploads; an operator
+        # can inject a custom registry to add their own checks.
+        self._upload_checks = upload_checks or bundled_upload_checks()
+
+    def upload_check_hints(self) -> list[UploadCheckHint]:
+        """The browser-runnable upload-check descriptors (#325) — served
+        by ``GET /kb/upload-checks`` so the FE pre-blocks the common case
+        (an encrypted Office file) before upload."""
+        return self._upload_checks.hints()
 
     def ingest(self, *, collection_id: str, user: str, filename: str, data: bytes) -> list[str]:
         """Store + index synchronously; returns the SourceDoc ids touched.
@@ -252,6 +282,11 @@ class Ingestor:
         XML members. An upload ANY registered parser claims is stored
         whole; only unclaimed archives expand."""
         mime = magic.from_buffer(data, mime=True)
+        # #325: gate BEFORE creating any SourceDoc or expanding an archive —
+        # a refused upload (encrypted/unreadable) leaves nothing behind and
+        # raises UploadRejected, which the API maps to a 422 with an
+        # actionable message instead of a cryptic background-index error.
+        self._upload_checks.run(filename=filename, mime=mime, data=data)
         unpack = mime in _ARCHIVE_MIMES
         if unpack and self._pipeline is not None:
             with MaterialisedParserInput(data, filename=filename) as source:
@@ -283,6 +318,39 @@ class Ingestor:
         (zip-slip-safe — escaping paths raise). Returns the doc id, or ``None``
         when the bytes already match (no-op re-upload)."""
         return self._store_file(collection_id, user, path, data)
+
+    def convert(
+        self,
+        *,
+        path: str,
+        data: bytes,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> ConvertResult:
+        """Parse-only (#324): produce the joined text the SAME parsers would extract at
+        index time, but WITHOUT chunking/embedding and WITHOUT touching any SourceDoc —
+        ``convert`` has no ``collection_id``/``doc_id``, so it structurally cannot persist.
+
+        Topic-hub's ``→collections`` workflow calls this to turn an upload into text BEFORE
+        filing it into a collection, so only the converted artifact is stored (never the raw
+        binary). The branching mirrors ``_index_via_pipeline`` so a file converts here exactly
+        as the index step would extract its ``text`` — see ``ConvertKind`` for what each
+        result tells the caller to file. ``on_progress`` forwards a long parser's (VLM) status
+        to the caller (no SourceDoc to write it onto here)."""
+        mime = magic.from_buffer(data, mime=True)
+        is_code = any(path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
+        texts: list[str] = []
+        with MaterialisedParserInput(data, filename=path) as source:
+            parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
+            for parser in parsers:
+                for d in parser.parse(source, filename=path, mime=mime, on_progress=on_progress):
+                    texts.append(d.text)
+        if parsers:
+            return ConvertResult("\n\n".join(texts).strip() or None, "markdown")
+        if mime in _TEXT_MIMES or is_code:
+            return ConvertResult(
+                normalize_text(data.decode("utf-8", errors="replace")), "passthrough"
+            )
+        return ConvertResult(None, "none")
 
     def index(
         self,

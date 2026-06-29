@@ -197,6 +197,17 @@ export const mockKbApi: KbApi = {
     documents.set(collectionId, list);
     return [id];
   },
+  async listUploadChecks() {
+    // #325: mirror the bundled Office hint so mock-mode pre-blocks too.
+    return [
+      {
+        id: "office_encryption",
+        extensions: [".pptx", ".xlsx", ".docx"],
+        forbid_magic_hex: ["d0cf11e0a1b11ae1"],
+        message_key: "kb.upload.blocked.unreadable",
+      },
+    ];
+  },
   async prepareCollectionDownload(collectionId) {
     const c = collections.get(collectionId);
     const base = (c?.name ?? "collection").replace(/[^\w.\- ]+/g, "_") || "collection";

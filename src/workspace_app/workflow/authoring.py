@@ -30,9 +30,29 @@ from importlib import resources
 import msgspec
 
 from ..apps.profiles import ProfileManifest, workflow_profiles
+from .dsl import DslError, parse_def, validate_def
 from .manifest import WorkflowManifest
 
 _APPS_PKG = "workspace_app.apps"
+
+
+def _check_dsl(dsl_path, where: str) -> list[Diagnostic]:
+    """Static checks for a DSL workflow (#323, manual §22): the ``workflow.json`` parses
+    and ``validate_def`` finds no problems (a bad step type / undeclared phase / a check
+    or capability the platform doesn't know / an out-of-scope interpolation)."""
+    try:
+        d = parse_def(dsl_path.read_bytes())
+    except DslError as exc:
+        return [
+            Diagnostic(
+                "error", where, f"workflow.json won't parse: {exc}", "fix the JSON or step types"
+            )
+        ]
+    return [
+        Diagnostic("error", where, f"workflow.json: {msg}", "fix the workflow definition")
+        for msg in validate_def(d)
+    ]
+
 
 # A profile dir we can read ``_profile.json`` + ``run.py`` from. Both ``pathlib.Path``
 # (tests, the scaffold's target tree) and an ``importlib.resources`` traversable (the
@@ -96,6 +116,13 @@ def _check_workflow(run_dir, manifest: WorkflowManifest, where: str) -> list[Dia
                     "every phase in _profile.json needs a stable, non-empty id",
                 )
             )
+
+    # #323: a workflow authored as DATA — a ``workflow.json`` (manual §22) — is validated
+    # against the DSL schema + rules instead of parsing a ``run.py``. The interpreter runs
+    # it (discovery.load_run_callable), so its loud guard is here, not a Python parse.
+    dsl_path = run_dir / "workflow.json"
+    if dsl_path.is_file():
+        return [*diags, *_check_dsl(dsl_path, where)]
 
     try:
         text = (run_dir / "run.py").read_text(encoding="utf-8")

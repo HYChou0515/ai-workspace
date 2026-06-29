@@ -1,0 +1,18 @@
+{
+  "title": "DSL example (#323)",
+  "description": "A workflow authored as data, not Python — see workflows/file-uploads/workflow.json.",
+  "workflows": [
+    {
+      "id": "file-uploads",
+      "title": "File uploads into a collection",
+      "tag": "batch",
+      "description": "Classify each upload, review the plan, then file it.",
+      "hint": "Drop files into uploads/.",
+      "phases": [
+        { "id": "classify", "title": "Classify" },
+        { "id": "review", "title": "Review" },
+        { "id": "commit", "title": "Commit" }
+      ]
+    }
+  ]
+}
