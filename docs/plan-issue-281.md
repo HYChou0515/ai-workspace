@@ -15,7 +15,7 @@
 |---|---|---|
 | **P1** | L0 檔卡片：`code_outline`（tree-sitter 抽 symbol/import 骨架）+ `CodeWikiBuilder._file_cards`（骨架 + LLM 一句白話）→ WikiPage `/files/<path>.md`；以 source hash 增量跳過 | ✅ |
 | **P2** | L1 資料夾頁：沿目錄樹遞迴 roll-up（每資料夾餵子檔卡片 + 子資料夾摘要 → 寫頁）；**L0 有任何檔變動才整批重建上層**（單一 changed 閘門，比逐 dir hash 簡單且足夠）| ✅ |
-| **P3** | L2 架構/索引/主題頁：餵全部資料夾摘要 → 寫 `/architecture.md` + `/index.md` + `/topics/<slug>.md`；摘要變才重合成 | ⬜ |
+| **P3** | L2 架構/索引/主題頁：餵全部資料夾摘要 → 寫 `/architecture.md` + `/index.md` + `/topics/<slug>.md`；摘要變才重合成 | ✅ |
 | **P4** | 觸發接線：`on_doc_indexed` 對 code collection（有 `git_url`）改 enqueue 單一 coalesced `code_build` job（跳過逐 source fold）；handler dispatch；coordinator + `build_coordinators` + `create_app` 注入 wiki `ILlm`；`WikiBuildState` 粗進度 | ⬜ |
 | **P5** | DoD：真 LLM live check（本專案慣例 #51）+ docs/development.md + 全 gate（ruff/ty/format/coverage 100%）| ⬜ |
 

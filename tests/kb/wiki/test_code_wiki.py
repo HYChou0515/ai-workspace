@@ -33,6 +33,24 @@ class _ScriptedLlm(ILlm):
         yield (self._responses.pop(0) if self._responses else "a one-line summary.", False)
 
 
+class _RoutedLlm(ILlm):
+    """Returns a response chosen by a substring of the prompt (so a multi-stage
+    build needn't depend on exact call order); ``default`` otherwise."""
+
+    def __init__(self, routes: dict[str, str], default: str = "x") -> None:
+        self._routes = routes
+        self._default = default
+        self.prompts: list[str] = []
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        self.prompts.append(prompt)
+        for key, val in self._routes.items():
+            if key in prompt:
+                yield (val, False)
+                return
+        yield (self._default, False)
+
+
 def _add_code(spec, cid: str, path: str, src: str) -> None:
     spec.get_resource_manager(SourceDoc).create(
         SourceDoc(collection_id=cid, path=path, content=Binary(data=src.encode()), text=src),
@@ -61,21 +79,25 @@ def test_build_writes_a_file_card_per_source():
     assert "mod.py defines foo." in card  # the LLM one-liner
 
 
+def _card_calls(llm: _RoutedLlm, path: str) -> list[str]:
+    """The L0 card-summary calls issued for a specific source file."""
+    return [p for p in llm.prompts if "documenting a source file" in p and f"File: {path}" in p]
+
+
 def test_incremental_skips_unchanged_files_and_resummarises_changed_ones():
     spec, cid = _mk()
     _add_code(spec, cid, "a.py", "def a():\n    pass\n")
     store = WikiFileStore(spec)
-    llm = _ScriptedLlm(["A summary", "A summary v2"])
+    llm = _RoutedLlm({"documenting a source file": "the card summary."})
     builder = CodeWikiBuilder(spec, llm, wiki_store=store)
 
     asyncio.run(builder.build(cid))
-    assert len(llm.prompts) == 1  # one card written
+    assert len(_card_calls(llm, "a.py")) == 1  # card built once
 
-    # nothing changed → re-build makes NO LLM call (skips the unchanged file)
-    asyncio.run(builder.build(cid))
-    assert len(llm.prompts) == 1
+    asyncio.run(builder.build(cid))  # nothing changed
+    assert len(_card_calls(llm, "a.py")) == 1  # NOT re-summarised — skipped
 
-    # the file's bytes change → its card is re-summarised
+    # the file's bytes change → its card IS re-summarised
     spec.get_resource_manager(SourceDoc).update(
         encode_doc_id(cid, "a.py"),
         SourceDoc(
@@ -86,8 +108,7 @@ def test_incremental_skips_unchanged_files_and_resummarises_changed_ones():
         ),
     )
     asyncio.run(builder.build(cid))
-    assert len(llm.prompts) == 2
-    assert "A summary v2" in asyncio.run(store.read(cid, "/files/a.py.md")).decode()
+    assert len(_card_calls(llm, "a.py")) == 2
 
 
 def test_non_code_file_gets_a_card_without_an_outline_fence():
@@ -149,20 +170,22 @@ def test_nested_directories_roll_up_into_parents():
     assert "main.py" in app_page  # lists its own files
 
 
-def test_unchanged_rebuild_skips_directory_pages_too():
+def test_unchanged_rebuild_skips_all_upper_levels():
     # When no file changed, the (more expensive than needed) directory roll-up
-    # is skipped entirely — a routine re-pull that moved nothing costs no LLM.
+    # AND the architecture/topics synthesis are skipped entirely — a routine
+    # re-pull that moved nothing costs no LLM at any level.
     spec, cid = _mk()
     _add_code(spec, cid, "pkg/a.py", "def a():\n    pass\n")
     store = WikiFileStore(spec)
-    llm = _ScriptedLlm(["a does A.", "pkg roll-up."])
+    llm = _RoutedLlm({})
     builder = CodeWikiBuilder(spec, llm, wiki_store=store)
 
     asyncio.run(builder.build(cid))
-    assert len(llm.prompts) == 2  # 1 file card + 1 directory page
+    n1 = len(llm.prompts)
+    assert n1 > 0  # the first build did real work (L0 + L1 + L2)
 
     asyncio.run(builder.build(cid))  # nothing changed
-    assert len(llm.prompts) == 2  # neither L0 nor L1 made a call
+    assert len(llm.prompts) == n1  # no new calls at any level
 
 
 def test_directory_with_only_subpackages_lists_no_files():
@@ -177,6 +200,51 @@ def test_directory_with_only_subpackages_lists_no_files():
     app_page = asyncio.run(store.read(cid, "/dirs/app.md")).decode()
     assert "## Files" not in app_page  # app has no direct files of its own
     assert "## Sub-packages" in app_page  # only its api sub-package
+
+
+def test_build_writes_architecture_and_index():
+    spec, cid = _mk("My Service")
+    _add_code(spec, cid, "app/main.py", "def main():\n    pass\n")
+    store = WikiFileStore(spec)
+    llm = _RoutedLlm(
+        {
+            "architecture overview": "A layered service.",
+            "cross-cutting topics": "",  # propose no topics
+        }
+    )
+
+    asyncio.run(CodeWikiBuilder(spec, llm, wiki_store=store).build(cid))
+
+    arch = asyncio.run(store.read(cid, "/architecture.md")).decode()
+    assert "A layered service." in arch
+    index = asyncio.run(store.read(cid, "/index.md")).decode()
+    assert "My Service" in index  # titled by the collection name
+    assert "architecture.md" in index  # links the overview
+    assert "app" in index  # links the top-level package
+
+
+def test_build_writes_topic_pages_and_links_them_from_index():
+    spec, cid = _mk()
+    _add_code(spec, cid, "auth/login.py", "def login():\n    pass\n")
+    store = WikiFileStore(spec)
+    llm = _RoutedLlm(
+        {
+            "architecture overview": "arch",
+            # blank line + a duplicate exercise the tolerant, de-duplicating parse
+            "cross-cutting topics": "Authentication\n\nData Flow\n- Authentication",
+            "wiki page for the topic": "the topic body.",
+        }
+    )
+
+    asyncio.run(CodeWikiBuilder(spec, llm, wiki_store=store).build(cid))
+
+    auth_topic = asyncio.run(store.read(cid, "/topics/authentication.md")).decode()
+    assert "the topic body." in auth_topic
+    assert "# Authentication" in auth_topic
+    asyncio.run(store.read(cid, "/topics/data-flow.md"))  # slugified, exists
+    index = asyncio.run(store.read(cid, "/index.md")).decode()
+    assert "Authentication" in index and "topics/authentication.md" in index
+    assert index.count("](/topics/") == 2  # de-duplicated to two distinct topics
 
 
 def test_first_paragraph_after_h1_edge_cases():

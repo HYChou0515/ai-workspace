@@ -27,10 +27,12 @@ moved.
 from __future__ import annotations
 
 import posixpath
+import re
 from collections import defaultdict
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from ...resources import SourceDoc
+from ...resources import Collection, SourceDoc
 from ..doc_id import encode_doc_id
 from .code_outline import outline
 from .sources import SpecstarWikiSources
@@ -63,6 +65,57 @@ _DIR_PROMPT = (
     "{material}\n"
 )
 
+_ARCH_PROMPT = (
+    "You are writing the architecture overview for a code wiki, given the one-line "
+    "summary of each top-level package below. Explain the system's shape: its main "
+    "layers/components, how they relate, and the overall flow. A few short paragraphs, "
+    "markdown, no preamble.\n\n"
+    "Top-level packages:\n{material}\n"
+)
+
+_TOPICS_PROMPT = (
+    "Given the top-level packages of a codebase below, propose a short list of the "
+    "most useful cross-cutting topics a reader would want explained (e.g. a subsystem, "
+    "a key flow, a concern that spans packages). Reply with ONE topic title per line, "
+    "at most six, no numbering, no other text. If nothing stands out, reply with "
+    "nothing.\n\n"
+    "Top-level packages:\n{material}\n"
+)
+
+_TOPIC_PAGE_PROMPT = (
+    "Write the wiki page for the topic below, using the codebase's package summaries "
+    "as context. A few short paragraphs of markdown explaining the topic and where it "
+    "lives in the code. No preamble.\n\n"
+    "Topic: {title}\n\n"
+    "Package summaries:\n{material}\n"
+)
+
+
+@dataclass(frozen=True)
+class _Tree:
+    """The directory structure derived from the source paths. ``child_files`` /
+    ``child_dirs`` map a directory (``""`` = repo root) to its DIRECT children;
+    ``all_dirs`` is every non-root directory."""
+
+    child_files: dict[str, list[str]] = field(default_factory=dict)
+    child_dirs: dict[str, set[str]] = field(default_factory=dict)
+    all_dirs: set[str] = field(default_factory=set)
+
+
+def _build_tree(paths: list[str]) -> _Tree:
+    child_files: dict[str, list[str]] = defaultdict(list)
+    child_dirs: dict[str, set[str]] = defaultdict(set)
+    all_dirs: set[str] = set()
+    for p in paths:
+        d = posixpath.dirname(p)
+        child_files[d].append(p)
+        while d:  # register every ancestor directory + the parent→child edge
+            parent = posixpath.dirname(d)
+            child_dirs[parent].add(d)
+            all_dirs.add(d)
+            d = parent
+    return _Tree(child_files, child_dirs, all_dirs)
+
 
 class CodeWikiBuilder:
     """Builds (and incrementally refreshes) one code collection's wiki."""
@@ -74,16 +127,20 @@ class CodeWikiBuilder:
         self._llm = llm
         self._store = wiki_store or WikiFileStore(spec)
         self._doc_rm = spec.get_resource_manager(SourceDoc)
+        self._coll_rm = spec.get_resource_manager(Collection)
 
     async def build(self, collection_id: str) -> None:
         """Bring the collection's code wiki up to date with its SourceDocs."""
         sources = SpecstarWikiSources(self._spec, collection_id)
         paths = sources.list()
         changed = await self._file_cards(collection_id, sources, paths)
-        # The directory roll-up reads ALL file cards, so it's only worth redoing
-        # when at least one card moved; a re-pull that changed nothing is a no-op.
+        # The directory roll-up + architecture read ALL the lower-level pages, so
+        # they're only worth redoing when at least one card moved; a re-pull that
+        # changed nothing is a no-op.
         if changed:
-            await self._dir_pages(collection_id, paths)
+            tree = _build_tree(paths)
+            await self._dir_pages(collection_id, tree)
+            await self._arch_pages(collection_id, tree)
 
     # ── L0: per-file cards ───────────────────────────────────────────
     async def _file_cards(
@@ -108,24 +165,16 @@ class CodeWikiBuilder:
         return changed
 
     # ── L1: directory roll-up pages ──────────────────────────────────
-    async def _dir_pages(self, collection_id: str, paths: list[str]) -> None:
+    async def _dir_pages(self, collection_id: str, tree: _Tree) -> None:
         """Walk the directory tree bottom-up: each directory gets a page rolled
         up from its direct child file cards + child sub-directory pages. Deepest
         first, so a parent reads summaries its children just wrote."""
-        child_files: dict[str, list[str]] = defaultdict(list)
-        child_dirs: dict[str, set[str]] = defaultdict(set)
-        all_dirs: set[str] = set()
-        for p in paths:
-            d = posixpath.dirname(p)
-            child_files[d].append(p)
-            while d:  # register every ancestor directory + the parent→child edge
-                parent = posixpath.dirname(d)
-                child_dirs[parent].add(d)
-                all_dirs.add(d)
-                d = parent
-        for d in sorted(all_dirs, key=lambda x: x.count("/"), reverse=True):
+        for d in sorted(tree.all_dirs, key=lambda x: x.count("/"), reverse=True):
             page = await self._render_dir(
-                collection_id, d, sorted(child_files.get(d, [])), sorted(child_dirs.get(d, []))
+                collection_id,
+                d,
+                sorted(tree.child_files.get(d, [])),
+                sorted(tree.child_dirs.get(d, [])),
             )
             await self._store.write(collection_id, f"/dirs/{d}.md", page.encode("utf-8"))
 
@@ -172,6 +221,56 @@ class CodeWikiBuilder:
         marker = _SRC_MARKER.replace("{file_id}", file_id)
         return prev[0].decode("utf-8", errors="replace").startswith(marker)
 
+    # ── L2: architecture / index / topics ────────────────────────────
+    async def _arch_pages(self, collection_id: str, tree: _Tree) -> None:
+        """Synthesise the top-down pages from the top-level summaries. Each
+        top-level directory page already recursively rolls up its whole subtree,
+        so the top-level summaries are a bounded, full-repo picture — no matter
+        how big the repo is."""
+        top_dirs = sorted(tree.child_dirs.get("", set()))
+        top_files = sorted(tree.child_files.get("", []))
+        dir_summaries = [
+            (d, await self._summary_of(collection_id, f"/dirs/{d}.md")) for d in top_dirs
+        ]
+        material = "\n".join(f"- {d}/: {s}" for d, s in dir_summaries)
+        for p in top_files:
+            sep = "\n" if material else ""
+            material += f"{sep}- {p}: " + await self._summary_of(collection_id, f"/files/{p}.md")
+        material = material or "(empty repository)"
+
+        arch = self._llm.collect(_ARCH_PROMPT.replace("{material}", material)).strip()
+        await self._store.write(
+            collection_id, "/architecture.md", f"# Architecture\n\n{arch}\n".encode()
+        )
+
+        topics = self._plan_topics(material)
+        for title in topics:
+            body = self._llm.collect(
+                _TOPIC_PAGE_PROMPT.replace("{title}", title).replace("{material}", material)
+            ).strip()
+            await self._store.write(
+                collection_id, f"/topics/{_slugify(title)}.md", f"# {title}\n\n{body}\n".encode()
+            )
+
+        coll = self._coll_rm.get(collection_id).data
+        assert isinstance(coll, Collection)
+        index = _render_index(coll.name, dir_summaries, top_files, topics)
+        await self._store.write(collection_id, "/index.md", index.encode("utf-8"))
+
+    def _plan_topics(self, material: str) -> list[str]:
+        """Ask the model for a few cross-cutting topic titles; tolerant of
+        bullets / numbering / blank lines, de-duplicated by slug, capped."""
+        raw = self._llm.collect(_TOPICS_PROMPT.replace("{material}", material))
+        titles: list[str] = []
+        seen: set[str] = set()
+        for line in raw.splitlines():
+            title = re.sub(r"^\s*(?:[-*]|\d+[.)])?\s*", "", line).strip()
+            slug = _slugify(title)
+            if slug and slug not in seen:
+                seen.add(slug)
+                titles.append(title)
+        return titles[:_MAX_TOPICS]
+
     def _render_card(self, path: str, text: str, file_id: str) -> str:
         skeleton = outline(path, text)
         summary = self._llm.collect(
@@ -184,6 +283,39 @@ class CodeWikiBuilder:
         if skeleton:
             body += f"\n```\n{skeleton}\n```\n"
         return body
+
+
+# At most this many cross-cutting topic pages — keep the wiki focused, bound cost.
+_MAX_TOPICS = 6
+
+
+def _slugify(title: str) -> str:
+    """A filename-safe slug for a topic title (``"Data Flow"`` → ``"data-flow"``)."""
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+
+
+def _render_index(
+    name: str,
+    dir_summaries: list[tuple[str, str]],
+    top_files: list[str],
+    topics: list[str],
+) -> str:
+    """Assemble the wiki home page deterministically: title + links to the
+    architecture overview, each top-level package, top-level files, and topics."""
+    lines = [f"# {name}", "", "[Architecture overview](/architecture.md)", ""]
+    if dir_summaries:
+        lines.append("## Packages")
+        lines += [f"- [{d}/](/dirs/{d}.md) — {summary}" for d, summary in dir_summaries]
+        lines.append("")
+    if top_files:
+        lines.append("## Files")
+        lines += [f"- [{p}](/files/{p}.md)" for p in top_files]
+        lines.append("")
+    if topics:
+        lines.append("## Topics")
+        lines += [f"- [{t}](/topics/{_slugify(t)}.md)" for t in topics]
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _first_paragraph_after_h1(text: str) -> str:
