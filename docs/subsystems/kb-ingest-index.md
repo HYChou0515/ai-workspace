@@ -17,7 +17,8 @@
 
 | 路徑 | 角色 |
 | --- | --- |
-| `src/workspace_app/kb/ingest.py` | `Ingestor` — 核心。`store()`（快：magic 嗅探、zip/tar 展開 vs parser claim、xxh3 去重、`encode_doc_id`、`status="indexing"`）與 `index()`（慢：parse→chunk→embed→`DocChunk`、翻 ready/error）。內含兩條索引引擎（legacy `_index` 走 `Chunker`、生產 `_index_via_pipeline` 走 LlamaIndex）、parser packet 路由、provenance 蒐集、alt-embedder 路由，以及 #227 fan-out 原語（`fanout_units` / `prepare_fanout` / `index_units` / `_emit_packet`）。 |
+| `src/workspace_app/kb/ingest.py` | `Ingestor` — 核心。`store()`（快：magic 嗅探、`upload_checks` 閘門、zip/tar 展開 vs parser claim、xxh3 去重、`encode_doc_id`、`status="indexing"`）與 `index()`（慢：parse→chunk→embed→`DocChunk`、翻 ready/error）。`convert()`（#324）是 parse-only 手足：跑與 `_index_via_pipeline` 同一套 parser registry + VLM describer，但**不** chunk/embed、**不**碰 `SourceDoc`（沒有 collection_id/doc_id 故結構上無法持久化），回 `ConvertResult(text, kind∈{markdown,passthrough,none})` 讓呼叫端決定如何歸檔（markdown→`.md` 名、passthrough→原始正規化文字、none→跳過）；同步（caller 以 `asyncio.to_thread` offload），是 topic-hub 入庫前把上傳轉成文字的入口。內含兩條索引引擎（legacy `_index` 走 `Chunker`、生產 `_index_via_pipeline` 走 LlamaIndex）、parser packet 路由、provenance 蒐集、alt-embedder 路由，以及 #227 fan-out 原語（`fanout_units` / `prepare_fanout` / `index_units` / `_emit_packet`）。 |
+| `src/workspace_app/kb/upload_checks/` | 上傳閘門（#325）：`IUploadCheck` ABC（`protocol.py`，介面/實作分離）+ `UploadCheckRegistry`（`registry.py`，`run()` 依註冊序跑每個 `applies` 的 check、首個拒收即 raise `UploadRejected`；`hints()` 收集瀏覽器可跑的 `client_prefilter`）+ bundled `OfficeEncryptionCheck`（`office.py`，OLE2 magic）/`PdfEncryptionCheck`（`pdf.py`，pypdf `is_encrypted` + 空密碼探測）+ `bundled_upload_checks()`。`UploadRejection`/`UploadCheckHint`/`UNREADABLE_MESSAGE_KEY` 為值物件。 |
 | `src/workspace_app/kb/doc_id.py` | 不透明 doc id 機制：`canonical_path()`（去前導斜線、解析 `.` / `..`，zip-slip 安全）+ `encode_doc_id()`（自然鍵 `{collection_id}/{path}`，每個 ASCII `/` 換成 U+2215 `∕`）。id 只**組合**、永不**拆解**。 |
 | `src/workspace_app/kb/chunker.py` | `Chunker` Protocol + `Chunk` struct（verbatim `start`/`end` span + 要 embed 的 `text`）+ `FixedTokenChunker`（滑動空白-token 視窗、含 overlap）。legacy／offline／測試用切分器；生產改用 LlamaIndex pipeline。 |
 | `src/workspace_app/kb/embedder.py` | `Embedder` Protocol + 非對稱 query/doc 前綴基底 `_PrefixedEmbedder` + `HashEmbedder`（確定性，offline/測試）+ `LitellmEmbedder`（生產，經 LiteLLM/Ollama，分批、同模型副本 failover + 暫態重試）。我們自行 embed，原始向量存在 `DocChunk` 上。 |
@@ -28,7 +29,7 @@
 | `src/workspace_app/kb/card_gen_coordinator.py` | `CardGenCoordinator`（#175）— 從選定文件背景草擬 glossary `ContextCard`。`enqueue`（`partition_key=collection_id`）、handler 走 draft→`merge_drafts`→`classify_against_existing` 寫到 job artifact；`save_review` / `commit` 把 accepted proposal 變成真正的 `ContextCard`。 |
 | `src/workspace_app/kb/quality_coordinator.py` | `QualityCoordinator`（#105）— 文件評分的 specstar 耦合半邊。`score_doc` 拿就緒文件的 chunk 文字對其 collection 的 `quality_rubric` 評判，寫回 `quality_score`/`breakdown`/`rationale`；opt-in（無 rubric → 不評分）、failure-safe、以文件 owner 身分寫入。 |
 | `src/workspace_app/kb/tokens.py` | `count_tokens`（#88）— CJK 感知 token 估算（`cjk_chars + non_cjk/4`），於 index/finalize 時存到 `SourceDoc.token_count`，供 collection 的「≈ N tokens」顯示。 |
-| `src/workspace_app/resources/kb.py` | specstar resource Struct + embed-dim 解析。`SourceDoc`、`DocChunk`、`IndexRun`、`IndexUnitText`、`Collection`、`ContextCard`、`KbChat`、`RetrievedPassage`。`EMBED_DIM`/`CODE_EMBED_DIM` 於 import 時由 env 解析。 |
+| `src/workspace_app/resources/kb.py` | specstar resource Struct + embed-dim 解析。`SourceDoc`、`DocChunk`、`IndexRun`、`IndexUnitText`、`Collection`、`ContextCard`、`KbChat`、`RetrievedPassage`、`CodeWikiBuildRun`（#281 code-wiki fan-out join，鏡射 `IndexRun`）。`EMBED_DIM`/`CODE_EMBED_DIM` 於 import 時由 env 解析。 |
 | `src/workspace_app/coordinators.py` | FastAPI-free 組裝根（#312）：`build_ingestor` + `build_coordinators` 把 `Ingestor` + `IndexCoordinator` + `CardGenCoordinator` + `QualityCoordinator` + wiki coordinator 兜成 `CoordinatorBundle`，由 `create_app` 與獨立 worker 共用。 |
 
 ## 介面與接縫
@@ -39,17 +40,22 @@
 | `Embedder` | Protocol | `src/workspace_app/kb/embedder.py` | `HashEmbedder`（offline/測試）、`LitellmEmbedder`（生產，LiteLLM/Ollama） |
 | 索引引擎（chunker vs pipeline） | constructor 分支 | `src/workspace_app/kb/ingest.py` | `Ingestor._index`（legacy Chunker）vs `Ingestor._index_via_pipeline`（LlamaIndex）。建構時恰好一條被接上。 |
 | `IParser` / `ParserRegistry` | 可插拔 parser 註冊表 | `src/workspace_app/kb/parsers/protocol.py`（`IParser`）+ `src/workspace_app/kb/parsers/registry.py`（`ParserRegistry`） | bundled fallback：`PdfParser`、`HtmlParser`、`DocxParser`、`ChatExportParser`、`JsonParser`、`CsvParser`、`ExcelParser`、`PptxParser`（見 `Ingestor.__init__`）；自訂 parser 經 `parser_registry` 注入。 |
+| `IUploadCheck` / `UploadCheckRegistry` | 可插拔上傳閘門（#325） | `src/workspace_app/kb/upload_checks/protocol.py`（`IUploadCheck`）+ `registry.py`（`UploadCheckRegistry`） | 介面/實作分離鏡射 `IParser`/`ParserRegistry`；bundled `OfficeEncryptionCheck`（OLE2 magic）+ `PdfEncryptionCheck`（pypdf `is_encrypted` + 空密碼探測），預設 `bundled_upload_checks()`，經 `Ingestor(upload_checks=...)` 注入。 |
 | `message_queue_factory` | 注入的佇列後端 | `src/workspace_app/kb/index_coordinator.py` | 預設 `SimpleMessageQueueFactory`（specstar Simple 佇列，靠共用後端做多 pod）；RabbitMQ／其他經 config 選定的 factory，**必須 per-model 傳給 `add_model`**（全域 `configure()` 不會傳到真實 pg/disk 後端）。 |
 | `CoordinatorBundle` 組裝根 | FastAPI-free factory | `src/workspace_app/coordinators.py` | `build_ingestor` + `build_coordinators` — `create_app`（API）與 `python -m workspace_app.worker`（worker pod）共用。 |
 
 `IParser` ABC（`parsers/protocol.py`）的契約：`matches(filename, mime, source)` 判斷是否歸它管；`count_units(...)` 回報可獨立 parse 的「單位」數（頁/列/JSON 頂層元素，預設 `1` = 不可分，永不 fan-out）；`parse(source, *, filename, mime, on_progress, on_preview, unit_range)` 把來源轉成 LI `Document`（可回 iterator 或 list）。`IParserInput` 提供 `as_bytes()`/`as_path()`/`as_stream()` 三種惰性、會快取的輸入形式（`MaterialisedParserInput` 是具體實作）。
+
+**parser 設定接縫（#328，僅基礎建設、生產為 dormant）**：opt-in 的 `IParser.config_fields() -> list[ParamSpec]`（預設 `[]`）讓 prompt/參數驅動的 parser 宣告可調旋鈕；它**刻意不**放在 `parse()` ABC 上，既有 parser 維持 Liskov-clean — config-aware parser 自行替它的 `parse()` 加一個 optional `config` kwarg。`ParamSpec(key, kind∈{text,number,bool}, label, default)` 描述一個旋鈕。`kb.parser_config.effective_config` 是唯一的優先序解析器：parser 預設 < `Collection.parser_configs` < `SourceDoc.parser_config_overrides`，逐旋鈕 merge、只保留**已宣告**的 key。`Ingestor._parse_config_for` 在單檔與 fan-out 兩處把它穿進 `parse()`，對無旋鈕 parser 回 `None`（不傳 config，與接縫前 byte-identical）；`Ingestor.store` 在重傳時保留 `parser_config_overrides`。**目前 bundled parser 都還沒 override `config_fields()`，此路徑在生產為 dormant。**
 
 ## 運作方式 / 資料流
 
 ```mermaid
 flowchart TD
   U[Upload bytes+filename] -->|to_thread| S[Ingestor.store]
-  S -->|magic sniff| AR{archive 且無 parser claim?}
+  S -->|magic sniff| CK[upload_checks.run]
+  CK -->|UploadRejected| RJ[(422 — 不留任何東西)]
+  CK -->|pass| AR{archive 且無 parser claim?}
   AR -->|yes| EX[unpack zip/tar members]
   AR -->|no| ONE[lone file]
   EX --> SF[_store_file]
@@ -76,7 +82,7 @@ flowchart TD
   EDIT[SourceDoc CAS PATCH] -->|_on_doc_patched| EQ
 ```
 
-**上傳路徑（API，快）**：一個 POST 把 bytes+filename 交給 `Ingestor.store`（經 `asyncio.to_thread` 離開事件迴圈）。`store()` 用 libmagic 嗅探內容類型；若是 zip/tar/gzip **且沒有任何已註冊 parser claim 它**，就展開每個成員，否則把整個檔案當單一成員（pptx/xlsx/docx 是 zip 容器，所以 parser claim 勝過盲目展開）。每個成員流經 `_store_file`：`canonical_path()` 正規化路徑、`encode_doc_id()` 鑄造不透明的無斜線 id（鍵在 collection+path，**不含 user**）；若位元組的 xxh3-128 已與既存 blob 相同就 no-op，否則就地建立或更新一筆 `SourceDoc(status="indexing")`。`store()` 回傳被觸碰的 doc id，route 再對每個 `IndexCoordinator.enqueue(doc_id, collection_id)` — 立即返回。
+**上傳路徑（API，快）**：一個 POST 把 bytes+filename 交給 `Ingestor.store`（經 `asyncio.to_thread` 離開事件迴圈）。`store()` 用 libmagic 嗅探內容類型；緊接著（在展開壓縮檔或建立任何 `SourceDoc`／`_store_file` 之前）跑 `upload_checks.run()` 閘門 — 任一 check 拒收（加密／無法讀取的上傳）就 raise `UploadRejected`（route 轉成 HTTP 422），被拒上傳不留下任何東西。通過後，若是 zip/tar/gzip **且沒有任何已註冊 parser claim 它**，就展開每個成員，否則把整個檔案當單一成員（pptx/xlsx/docx 是 zip 容器，所以 parser claim 勝過盲目展開）。每個成員流經 `_store_file`：`canonical_path()` 正規化路徑、`encode_doc_id()` 鑄造不透明的無斜線 id（鍵在 collection+path，**不含 user**）；若位元組的 xxh3-128 已與既存 blob 相同就 no-op，否則就地建立或更新一筆 `SourceDoc(status="indexing")`。`store()` 回傳被觸碰的 doc id，route 再對每個 `IndexCoordinator.enqueue(doc_id, collection_id)` — 立即返回。
 
 **索引路徑（job worker 執行緒，離開請求迴圈）**：`enqueue` 建立一筆 `IndexJob`（`partition_key=doc_id`），除非已有 pending job 指向該文件或有活躍的 `IndexRun`（合併）。消費者的 `_handle` 依 `kind` 分派。預設的 `split` job 呼叫 `Ingestor.fanout_units`：若恰好一個 parser claim 且回報 `>1` 單位，索引就 fan-out 成多個 per-unit-range 的 `process` job（先 `prepare_fanout` 清一次 chunk，再 `IndexRunStore.start` 種下含 CAS finalize gate 的 join 狀態）；否則整檔走單一 job 的 `Ingestor.index`。
 
@@ -109,9 +115,24 @@ flowchart TD
 !!! note "其他眉角"
     - `_PROVENANCE_KEYS` 是封閉白名單（`page`/`section`/`slide`/`sheet`/`jsonl_line`/`row`）— 加新 parser 的定位鍵要同步加這裡。
     - parser claim 勝過壓縮檔展開：zip/tar 只在**沒有**任何 parser match 時才展開（office zip 容器才不會被炸成內部 XML）。
+    - upload checks（#325）跑在 magic 嗅探**後**、展開／`_store_file`**前**，所以被拒上傳不留任何痕跡：Office check 以**副檔名**判定（加密 OOXML 是 OLE2/CFB 容器、非 ZIP，已失去 OOXML 嗅探 mime，副檔名才可靠）；PDF check 為 server-only（無 `client_prefilter`）且放行「僅權限保護」（owner 密碼、空 user 密碼）的 PDF；共用一個 `UNREADABLE_MESSAGE_KEY`，文案只說「無法讀取」、刻意不過度宣稱「加密」。
     - 恰好一條 `chunker` / `pipeline` 被接上：legacy chunker 是 text-only（binary 成員在 `store` 時就跳過）；pipeline 模式存所有東西（未認領的 binary → `status=ready`、`chunks=0`、留在磁碟等未來 parser）。
     - wiki + quality 鉤子只在 `status="ready"` 後觸發，且 best-effort — 失敗只 log 並吞掉，**永不**讓索引 job 失敗。
     - `Collection.quality_rubric`／`wiki_*_guidance` 是**非索引**欄位：加這類欄位**無需** specstar migration（舊 row 以空預設解碼）；`SourceDoc.token_count` 與 `quality_score` **是**索引欄位（collection token SUM／quality 排序）。
+
+## code-wiki 建構管線（#281）
+
+`git_url`（程式碼）collection 的 wiki 不靠逐來源 prose fold，而是由 `CodeWikiBuilder`（`kb/wiki/code_wiki.py`）**讀原始碼**分三層建出。整條管線長在 **wiki coordinator**（`kb/wiki/coordinator.py`），**不是** [#100 workflow](../workflows.md)：
+
+- **L0 檔案卡** `/files/<path>.md` = `outline()`（`kb/wiki/code_outline.py`，tree-sitter 確定性頂層符號骨架，`_LANG_BY_EXT` 涵蓋 `.py/.ts/.tsx/.js/.jsx`；不支援的副檔名或 parse 失敗退化成空字串、永不 raise）＋ 一句 `ILlm.collect` LLM 摘要。
+- **L1 資料夾頁** `/dirs/<d>.md` = 由子項摘要 bottom-up roll-up。
+- **L2** `/architecture.md` + `/topics/<slug>.md`（≤ `_MAX_TOPICS`＝6）+ 確定性 `/index.md`，只由頂層摘要（資料夾頁 ＋ 頂層散檔卡片）合成。
+
+每一頁是對固定材料的**單次 `ILlm.collect`**（**非 agent loop**，由程式寫檔，避開 #50「敘述而不寫」失敗），且**只讀下一層摘要**，所以大 repo 的 context 維持有界、不爆也不漏。**per-page input-hash 增量**：檔案卡帶 `_SRC_MARKER`（來源內容 hash）、roll-up 頁帶 `_IN_MARKER`（子摘要 hash 的 sha256），未變更的頁直接跳過 — **無變更 rebuild = 0 次 LLM 呼叫**。
+
+fan-out 重用既有 wiki JobType（`WikiJobPayload.op` 擴成 `code_split`/`code_card`/`code_finalize`，`code_card` 另帶 `batch_index`/`batch_paths`），靠 `CodeWikiBuildRun`（`kb/wiki/code_wiki_run.py` 的 `CodeWikiBuildRunStore`，etag-CAS join，鏡射 #227 的 `IndexRun`）收斂：`_handle_code_split` 規劃批次（`plan_card_batches`，目錄聚合、source-size 上限）+ `start(total=N)` + 散出 N 個 `partition_key=None` 的 card job；每個 `_handle_code_card` 建一批 L0 卡 + CAS `mark_done`/`mark_failed` + `claim_finalize`；`_handle_code_finalize` 由 CAS 恰好一個贏家認領，roll-up L1/L2 並 `_prune_orphans`（清掉來源已消失的 `/files`、`/dirs` 頁）。
+
+觸發點是 `WikiMaintenanceCoordinator.trigger_code_build`（gated on `use_wiki` **AND** `git_url`），由 sync route／`code_sync_sweeper`／`wiki/rebuild` route 顯式呼叫 — 因為（A0）`code_repo.sync` 同步 ingest 會繞過 `IndexCoordinator`，`on_doc_indexed` 不會在 sync 路徑觸發；`git_url` collection 的 `on_doc_indexed` 一律改走 `_enqueue_code_build`，而 `on_doc_deleted` 在 `git_url` 上是 no-op（A1：prose unfolder 不能跑在 code wiki 上，刪檔不自動 rebuild，孤兒頁留給下次 build 的 `_prune_orphans` 收）。`code_wiki_llm` 由 `build_coordinators` 從 `kb.wiki.llm` preset（與 maintainer agent 同一個）接出：空 `wiki_model` ⇒ `None` ⇒ code-wiki 關閉。
 
 ## 設計決策與出處
 
@@ -128,6 +149,7 @@ flowchart TD
 | 大 Markdown 表格 row-explode 成各自橫跨整表的 `col:value` chunk | `SentenceSplitter` 會截斷／孤立寬表；逐列爆開讓欄名隨每個值走，而整表字元 span 讓結構 parent-doc merge 能重建表格、citation 仍能解析。小表保持整塊（`table_max_rows` 可調）。 | `li_pipeline.DispatchSplitter` + `markdown_table.py`（#115/#116） |
 | 跨 worker 寫入保留真實 acting user（`rm.using(user=...)`） | job pod 沒有請求 user；不綁就會蓋成 worker 預設並洗掉 `updated_by`。`SourceDoc` 記給自己 owner（內容未被改寫），衍生 chunk/job 記給 run 發起人。 | `index_coordinator`／`ingest.index` docstring（#83/#186） |
 | Job runner ⊥ API：一個 FastAPI-free `build_coordinators` 給 API 與 worker 共用 | worker 在自己 pod block-consume 一個 JobType 以利各自 k8s HPA 擴展；API 以 `run_consumers` gate 控制 in-process 消費，可當純 producer。 | `coordinators.py`；CLAUDE.md「Job runner ⊥ API (#312)」 |
+| 可插拔上傳檢查在 `store()` 邊界擋下加密／無法讀取的上傳 | 加密檔在背景索引才爆會給使用者費解的錯誤；在邊界同步擋下並回可行動的 422，被拒上傳不留任何 `SourceDoc`／blob。介面/實作分離鏡射 `IParser`/`ParserRegistry`，預設 `bundled_upload_checks()`、可注入。 | `upload_checks/protocol.py` 模組 docstring（#325）；[決策紀錄](../decisions.md) |
 
 ## 與其他子系統的關係
 
@@ -144,7 +166,7 @@ flowchart TD
 
 接手者建議先讀的真實檔案：
 
-- `src/workspace_app/kb/ingest.py` — `Ingestor.store` / `index` / `_store_file` / `_index_via_pipeline` / `_emit_packet` / `fanout_units` / `index_units`，以及 `_PROVENANCE_KEYS`、`_ARCHIVE_MIMES`、`_TEXT_MIMES`、`_CODE_EXTENSIONS`、`chunk_id`。
+- `src/workspace_app/kb/ingest.py` — `Ingestor.store` / `index` / `convert`（parse-only，#324）/ `_store_file` / `_index_via_pipeline` / `_emit_packet` / `fanout_units` / `index_units` / `_parse_config_for`（#328），以及 `_PROVENANCE_KEYS`、`_ARCHIVE_MIMES`、`_TEXT_MIMES`、`_CODE_EXTENSIONS`、`ConvertResult`、`chunk_id`。
 - `src/workspace_app/kb/doc_id.py` — `canonical_path`、`encode_doc_id`、`_SLASH='∕'`（id 機制的全貌）。
 - `src/workspace_app/kb/index_coordinator.py` — `enqueue`／`_handle`／`_handle_split`／`_handle_process`／`_handle_finalize`／`sweep_stuck_runs`／`install_reindex_on_edit`、`_SEQ_STRIDE`。
 - `src/workspace_app/kb/index_run.py` — `IndexRunStore` 的 CAS join（`claim_finalize`／`mark_done`／`is_active`）。
@@ -152,4 +174,7 @@ flowchart TD
 - `src/workspace_app/kb/embedder.py` 與 `chunker.py` — 兩個可插拔接縫的 Protocol + 實作。
 - `src/workspace_app/resources/kb.py` — `SourceDoc`/`DocChunk`/`IndexRun`/`IndexUnitText`/`Collection` struct + `EMBED_DIM`/`CODE_EMBED_DIM` 解析。
 - `src/workspace_app/coordinators.py` — `build_ingestor`、`build_coordinators`、`CoordinatorBundle`。
-- `src/workspace_app/kb/parsers/protocol.py` — `IParser` / `IParserInput` ABC（`matches`／`count_units`／`parse` 契約）。
+- `src/workspace_app/kb/parsers/protocol.py` — `IParser` / `IParserInput` ABC（`matches`／`count_units`／`parse` 契約）+ `config_fields`／`ParamSpec`（#328 parser 設定接縫）。
+- `src/workspace_app/kb/parser_config.py` — `effective_config`／`parser_id`（#328 三層優先序解析；已由 `Ingestor._parse_config_for` 接上，但無 bundled parser override `config_fields()`，故生產 dormant）。
+- `src/workspace_app/kb/upload_checks/protocol.py` — `IUploadCheck`／`UploadCheckRegistry`／`UploadRejected`／`UploadRejection`／`UploadCheckHint`／`UNREADABLE_MESSAGE_KEY`（#325 上傳閘門）。
+- `src/workspace_app/kb/wiki/code_wiki.py`／`code_outline.py`／`code_wiki_run.py` — code-wiki 三層 builder（`CodeWikiBuilder`／`plan_card_batches`／`_unfence`）、tree-sitter `outline`、`CodeWikiBuildRunStore` 的 CAS join（#281）。

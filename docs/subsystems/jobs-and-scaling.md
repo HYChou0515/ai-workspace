@@ -8,7 +8,7 @@
 
 這個子系統負責「把長時間、可批次、可平行的後台工作從同步請求路徑搬走」這件事:
 
-- **四種 JobType**:`index`（切塊 + 嵌入）、`wiki`（LLM wiki 維護）、`card-gen`（context-card 生成）、`sanity`（model-sanity battery）。
+- **四種 JobType**:`index`（切塊 + 嵌入）、`wiki`（LLM wiki 維護;code collection 的 code-wiki 也沿用這個 JobType,不另開,見下）、`card-gen`（context-card 生成）、`sanity`（model-sanity battery）。
 - **單一組裝點**:`coordinators.build_coordinators` 建出 `CoordinatorBundle`,把 `index → wiki → quality` 串起來。這個組裝是 FastAPI-free 的,**同時**被 API 的 `create_app` 與獨立 worker `python -m workspace_app.worker` 使用,避免兩處 drift。
 - **兩種消費拓樸**:all-in-one（API 進程內 `start_consuming`)與 pod-split（API 純 producer + 各 worker pod 各 block-consume 一個 JobType,各掛 k8s HPA）。
 - **大 index 工作的 fan-out / join**:一個大索引工作切成 N 個小 process job,靠 `IndexRun` 的 CAS 集合 join,而不是調高 broker ack timeout（#227）。
@@ -26,7 +26,8 @@
 | `src/workspace_app/coordinators.py` | FastAPI-free 單一組裝點。`build_coordinators` 建 `CoordinatorBundle(wiki/index/card_gen/quality/sanity)` 並接 index→wiki→quality;`build_ingestor`（pipeline 優先,否則 legacy `FixedTokenChunker`）、`resolve_wiki_config`（catalog purpose 或 bundled default + operator 的 model/endpoint override）。回傳的 coordinator 尚未消費。 |
 | `src/workspace_app/worker/__init__.py` | worker 的純單元測試 seam。`_JOBTYPE_ATTR` 把 CLI token 映到 bundle 屬性;`select_coordinator` 取對應 coordinator,未知或未接線即 fail-loud `ValueError`;`consume_until_stopped` = `start_consuming` → `stop_event.wait()` → `finally asyncio.run(coordinator.aclose())` 排空。 |
 | `src/workspace_app/worker/__main__.py` | `python -m workspace_app.worker <jobtype>` 的 settings 驅動 composition root + CLI glue（coverage 排除）。`build_bundle` 用 `factories` 建 embedder/ingestor/runner/catalog/queue,呼叫 `build_coordinators`（無 HTTP app/sandbox/filestore/tool packages）;`main` 載 config、`install_llm_logging`、建 spec、`select_coordinator`、綁 SIGTERM/SIGINT → `threading.Event`、`consume_until_stopped`。 |
-| `src/workspace_app/api/app.py` | API composition + lifespan。`create_app` 呼叫同一個 `build_coordinators`,掛 `app.state`、`index_coordinator.install_reindex_on_edit()`（僅 API 側）。lifespan 在 `run_consumers`（預設 True）為真時才 `start_consuming` 四個 coordinator;非佇列 sweeper 永遠 `create_task`。 |
+| `src/workspace_app/api/app.py` | API composition root（#54 拆分後精簡)。`create_app` 呼叫同一個 `build_coordinators`,掛 `app.state`、`index_coordinator.install_reindex_on_edit()`（僅 API 側）,並把 lifespan 委派給 `build_lifespan(...)`;本身不再定義 lifespan / sweeper / route handler。 |
+| `src/workspace_app/api/lifecycle.py` | `build_lifespan` 工廠(#54 從 app.py 抽出)。回傳 FastAPI lifespan:在 `run_consumers`（預設 True）為真時才 `start_consuming` 四個 coordinator;非佇列 sweeper(`idle_killer` / `mirror_sweeper` / `index_sweeper` / `code_sync_sweeper` / `blob_gc_sweeper`,#54 後已無前導底線)永遠 `create_task`、不受 gate。 |
 | `kubernetes/base/workers.yaml` | 四個 worker Deployment（`rca-worker-{index,wiki,card-gen,sanity}`),`command=python -m workspace_app.worker <jobtype>`,共用 `rca-config` configmap 與同一 image。index/wiki/card-gen 各掛 HPA;sanity 固定 1 replica 無 HPA。`terminationGracePeriodSeconds: 60` 讓 worker 排空。 |
 | `kubernetes/README.md` | 部署文件 §Job workers (#312):`deployment.yaml`(`rca-app`) `RUN_CONSUMERS=false` 當純 producer;split 需要 SHARED backend;all-in-one 替代方案。 |
 
@@ -72,14 +73,16 @@ flowchart TB
   SW -.->|"sweep_stuck_runs"| Q
 ```
 
-**生產者路徑（API）**:上傳/編輯文件經 kb 路由 store-then-enqueue,呼 `index_coordinator.enqueue`(`api/app.py` 約 `enqueue=index_coordinator.enqueue`),把 index job 放進 specstar 的耐久佇列。無論哪個進程 enqueue,佇列是共享的。
+**生產者路徑（API）**:上傳/編輯文件經 kb 路由 store-then-enqueue,呼 `index_coordinator.enqueue`(`api/kb_routes.py` 的 upload/edit/move,約 594/785/1108/1186 行;workflow 路徑則在 `api/workflow_exec.py` 以 `enqueue=index_coordinator.enqueue` 注入),把 index job 放進 specstar 的耐久佇列。無論哪個進程 enqueue,佇列是共享的。
 
 **消費者路徑有兩種拓樸**:
 
 - **All-in-one**:`run_consumers=True`(預設)時,API lifespan 對 wiki / index /(sanity,當有接線時)/ card_gen 各 `start_consuming`,在同一進程內消費。單 pod、本地、測試走這條。
 - **Pod-split**:`RUN_CONSUMERS=false` 讓 API 只 `add_model` 註冊 + `enqueue`、不消費;每個 worker pod 跑 `python -m workspace_app.worker <jobtype>`,`build_bundle` 建出**完整** bundle(其它 coordinator 以 producer-only 同行,讓 index worker 仍能 chain `index→wiki→quality` 的 enqueue),`select_coordinator` 取出自己那一個,`consume_until_stopped` 阻塞消費直到 SIGTERM,然後 `aclose()` 排空。
 
-**Index 重活路徑（#227）**:一個大 index 工作不是單一長 job。split job 先 `_delete_chunks`、`count_units()=N`、建 `IndexRun(total=N)`、fan-out N 個小 process job(每個 parse + chunk + embed 自己的 unit range、寫自己的 `DocChunk`、CAS-add `i` 到 `done`)。當 `len(done ∪ failed) == total` 且 CAS 搶到 `finalized` flag 才 enqueue finalize job,重組 `SourceDoc.text` 並翻 `ready` / `error` → 觸發 wiki hook。API 上永遠在跑的 `_index_sweeper` 週期性 `sweep_stuck_runs` 救回卡住的 fan-out（finalize 觸發遺失或 dead-letter）。實作細節見 `src/workspace_app/kb/index_coordinator.py` 與 `docs/plan-issue-227.md`。
+**Index 重活路徑（#227）**:一個大 index 工作不是單一長 job。split job 先 `_delete_chunks`、`count_units()=N`、建 `IndexRun(total=N)`、fan-out N 個小 process job(每個 parse + chunk + embed 自己的 unit range、寫自己的 `DocChunk`、CAS-add `i` 到 `done`)。當 `len(done ∪ failed) == total` 且 CAS 搶到 `finalized` flag 才 enqueue finalize job,重組 `SourceDoc.text` 並翻 `ready` / `error` → 觸發 wiki hook。API 上永遠在跑的 `index_sweeper`(`api/lifecycle.py`)週期性 `sweep_stuck_runs` 救回卡住的 fan-out（finalize 觸發遺失或 dead-letter）。實作細節見 `src/workspace_app/kb/index_coordinator.py` 與 `docs/plan-issue-227.md`。
+
+**Code-wiki 重活路徑（#281,沿用 wiki JobType）**:一個 code collection 的 wiki 不另開 JobType——它**重用既有的 wiki JobType**(`WikiMaintenanceJob` / `WikiJobPayload`),靠 `WikiJobPayload.op` 區分 `fold` / `unfold`(prose)與 `code_split` / `code_card` / `code_finalize`(code-wiki)。`_enqueue_code_build` 先放一個 `code_split`(`partition_key=cid`、coalesce 在飛行中的 build 上);`_handle_code_split` 規劃 batch、`CodeWikiBuildRunStore.start(total=N)`、fan-out N 個 `code_card`(`partition_key=None` → 跨 consumer 自由平行;`batch_index` / `batch_paths` 只由 `code_card` 攜帶);每個 `_handle_code_card` 蓋一批 L0 file card 後在 `CodeWikiBuildRun` 上 CAS `mark_done` / `mark_failed`,`claim_finalize` 在 `done ∪ failed == total` 時 CAS 搶下唯一一個 `code_finalize`;`_handle_code_finalize` 做 L1/L2 roll-up + `_prune_orphans` 一次。這條與 #227 同形:**split → N 個 process(CAS) → finalize,正確性靠 `CodeWikiBuildRun` 的 etag-CAS 而非 `partition_key`**。觸發點是 coordinator 的 `trigger_code_build`(由 `POST /kb/collections/{id}/sync`、`code_sync_sweeper`、`POST .../wiki/rebuild` 呼叫;A0:`code_repo.sync` 是同步 ingest、繞過 IndexCoordinator,故不能靠 `on_doc_indexed`)。實作細節見 `src/workspace_app/kb/wiki/coordinator.py` 與 `code_wiki.py` / `code_wiki_run.py`。
 
 **Worker 關機**:`consume_until_stopped` 在 `finally` 裡 `asyncio.run(coordinator.aclose())`;`aclose()` 會 poll 到佇列排空再停 consumer thread。`main` 把 SIGTERM / SIGINT 綁到 `threading.Event`,k8s 給 `terminationGracePeriodSeconds: 60` 讓它排空。
 
@@ -95,7 +98,7 @@ flowchart TB
     新 coordinator 必須加進 `build_coordinators` + `CoordinatorBundle` + `_JOBTYPE_ATTR` 三處,否則 worker 拿不到、API/worker 構造會 drift(CLAUDE.md「Job runner ⊥ API (#312)」鐵則)。
 
 !!! note "run_consumers 只 gate 佇列消費者"
-    `run_consumers` 只 gate 四個佇列消費者的 `start_consuming`。非佇列 sweeper(`_idle_killer` / `_mirror_sweeper` / `_index_sweeper` / `_code_sync_sweeper` / `_blob_gc_sweeper`)**永遠**在 API 上 `create_task`、不受 gate 影響——它們是 per-pod 的 sandbox reap / mirror / GC / code-sync / stuck-run 救援,屬於 API 進程責任,不是可被 worker 接走的佇列工作。
+    `run_consumers` 只 gate 四個佇列消費者的 `start_consuming`。非佇列 sweeper(`idle_killer` / `mirror_sweeper` / `index_sweeper` / `code_sync_sweeper` / `blob_gc_sweeper`,#54 後都住在 `api/lifecycle.py` 的 `build_lifespan`)**永遠**在 API 上 `create_task`、不受 gate 影響——它們是 per-pod 的 sandbox reap / mirror / GC / code-sync / stuck-run 救援,屬於 API 進程責任,不是可被 worker 接走的佇列工作。
 
 !!! note "一個 worker = 一個 JobType = 一個 Deployment = 一個 HPA"
     `_JOBTYPE_ATTR` 的 `'card-gen'` 保留連字號(user-facing 名),bundle 屬性是底線 `card_gen`。`select_coordinator` 對未知 jobtype 或未接線的 coordinator(sanity 無 LLM factory → `None`)fail-loud `raise ValueError`,絕不靜默 idle 在沒人餵的佇列上。
@@ -111,10 +114,11 @@ flowchart TB
 | 決策 | 理由 | 出處 |
 | --- | --- | --- |
 | job runner 從 API 進程切出,FastAPI-free 的單一 `build_coordinators` 同時被 `create_app` 與 worker 用 | worker 沒有 HTTP app;讓 API 能純 producer、worker pod 各 block-consume 一 JobType 各掛 HPA;避免兩處 drift | #312;`coordinators.py` / `worker/__init__.py` docstring |
-| `run_consumers` gate 預設 True(all-in-one),false 時 API 純 producer 仍 add_model + enqueue 不 start_consuming | 單 pod / 本地 / 測試走 all-in-one;k8s pod-split 走純 producer。共享耐久佇列不管誰 enqueue 都會被某個消費者排到 | #312;`api/app.py` lifespan;`kubernetes/README.md` |
-| 非佇列 sweeper 永遠在 API,不受 `run_consumers` gate | 它們是 per-pod sandbox reap / mirror / GC / code-sync / stuck-run 救援,屬 API 進程責任,不是可被 worker 接走的佇列工作 | `api/app.py` lifespan;CLAUDE.md #312 |
+| `run_consumers` gate 預設 True(all-in-one),false 時 API 純 producer 仍 add_model + enqueue 不 start_consuming | 單 pod / 本地 / 測試走 all-in-one;k8s pod-split 走純 producer。共享耐久佇列不管誰 enqueue 都會被某個消費者排到 | #312;`api/lifecycle.py` `build_lifespan`;`kubernetes/README.md` |
+| 非佇列 sweeper 永遠在 API,不受 `run_consumers` gate | 它們是 per-pod sandbox reap / mirror / GC / code-sync / stuck-run 救援,屬 API 進程責任,不是可被 worker 接走的佇列工作 | `api/lifecycle.py` `build_lifespan`;CLAUDE.md #312 |
 | 大 index 工作 fan-out 成多個小 job + `IndexRun` CAS join,不調高 ack timeout | RabbitMQ broker-side ack timeout(預設 30 分)會關 channel、unacked 訊息無限 requeue 重跑;調高只搬天花板,每 job 短才根治 | #227;`docs/plan-issue-227.md` |
 | index process job `partition_key=None`;join 靠 CAS 不靠 partition_key | specstar RabbitMQ 後端忽略 `partition_key`(契約違反),序列化/join 不能依賴它;CAS done/failed + finalized flag 對平行或序列都正確 | #227;`docs/plan-issue-227.md` |
+| code-wiki build 沿用 wiki JobType + `CodeWikiBuildRun` etag-CAS join,不新增 JobType | code-wiki 與 prose wiki 是同一個維護面,fan-out 形狀與 #227 index 相同(split→N `code_card`(`partition_key=None`)→finalize);新 JobType 只多一條 worker/HPA/queue 線而無收益 | #281;`kb/wiki/coordinator.py`、`kb/wiki/code_wiki_run.py` |
 | worker 無 request user,`get_user_id` 預設 `settings.server.default_user`;靠 specstar `preserve_job_creator` 保留每個 job 真正建立者 | worker pod 沒有請求使用者;default 只是 worker 自身產物的 fallback | #83 acting-user;`worker/__main__.py` |
 | wiki/card-gen 的 HPA 用 CPU target 但建議用 min/max replicas 調而非信 CPU | 它們 IO-bound(等 LLM),CPU 利用率低報負載;KEDA 佇列深度擴展明確 out of scope | #312;`workers.yaml` HPA NOTE;README |
 
@@ -132,7 +136,11 @@ flowchart TB
 - `src/workspace_app/coordinators.py` — `build_coordinators` / `CoordinatorBundle` / `build_ingestor` / `resolve_wiki_config` / `LlmFactory`。
 - `src/workspace_app/worker/__init__.py` — `_JOBTYPE_ATTR` / `select_coordinator` / `consume_until_stopped`。
 - `src/workspace_app/worker/__main__.py` — `build_bundle` / `main`(SIGTERM/SIGINT → `threading.Event`)。
-- `src/workspace_app/api/app.py` — lifespan 的 `if run_consumers`(start_consuming x4)、`build_coordinators` 呼叫點、`install_reindex_on_edit`、`_index_sweeper` / `_idle_killer` / `_mirror_sweeper` / `_blob_gc_sweeper` / `_code_sync_sweeper`、`enqueue=index_coordinator.enqueue`。
+- `src/workspace_app/api/app.py` — `build_coordinators` 呼叫點、`install_reindex_on_edit`、`build_lifespan(...)` 委派(#54 後 app.py 只剩 composition root)。
+- `src/workspace_app/api/lifecycle.py` — `build_lifespan` 內的 `if run_consumers`(start_consuming x4)gate 與 `index_sweeper` / `idle_killer` / `mirror_sweeper` / `blob_gc_sweeper` / `code_sync_sweeper`(#54 後無前導底線)。
+- `src/workspace_app/api/kb_routes.py` — 生產者 `index_coordinator.enqueue`(upload/edit/move)與 code-wiki 的 `trigger_code_build` 觸發點(sync / wiki rebuild)。
+- `src/workspace_app/kb/wiki/coordinator.py` — `_handle_code_split` / `_handle_code_card` / `_handle_code_finalize` / `trigger_code_build`(code-wiki fan-out,沿用 wiki JobType)。
+- `src/workspace_app/kb/wiki/code_wiki_run.py` — `CodeWikiBuildRunStore`(etag-CAS fan-out join,鏡像 `IndexRun`)。
 - `kubernetes/base/workers.yaml` — `rca-worker-{index,wiki,card-gen,sanity}` + HPAs。
 - `kubernetes/README.md` — §「Job workers (#312)」。
 - `docs/plan-issue-227.md` — `IndexRun` CAS join + partition_key principle(fan-out 實作細節)。

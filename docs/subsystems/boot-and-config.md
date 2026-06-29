@@ -15,7 +15,7 @@
 
 它**不**負責的事：
 
-- 不負責 FastAPI 內部的 route 註冊、回合引擎、sweeper 排程等 —— 那些在 [API 與回合引擎](api-and-turns.md) 與 `src/workspace_app/api/app.py` 內。
+- 不負責 FastAPI 內部的 route 註冊、回合引擎、sweeper 排程等 —— route 註冊散在各 `register_*_routes` 模組（`meta_routes.py`/`item_routes.py`/`chat_routes.py`/…，#54），lifespan 與 sweeper 在 `api/lifecycle.py:build_lifespan`，細節見 [API 與回合引擎](api-and-turns.md)。
 - 不負責背景工作的實際消費邏輯 —— 它只建出 coordinator 物件並（在 `run_consumers` 為真時）啟動消費，細節見 [背景工作與擴展](jobs-and-scaling.md)。
 - 不負責 specstar 的資料模型本身 —— 那是 [資料層（specstar）](data-layer.md)；這裡只組出 `BackendConfig` 並呼叫 `make_spec`。
 - 測試**不**走 `factories.get_*`：測試直接 `Settings(...)` + 注入 mock。factory 只服務 production 組裝。
@@ -33,8 +33,9 @@
 | `src/workspace_app/config/prompt_file.py` | `resolve_prompt_file(value, config_dir)` —— 把 preset 的 `prompt_file`（`pkg:`/絕對/相對）解析成 markdown body;相對路徑以 config_dir 為錨。 |
 | `src/workspace_app/config/dump.py` | 觀測功能 A。`emit_config_dump` 把已解析的樹印成註解 YAML `key: value  # ← <source>`（stdout 上遮罩 secret）並寫一份真值 `config.resolved.yaml`（0600）。best-effort,絕不擋 boot。 |
 | `src/workspace_app/factories.py` | 接縫選擇層:`get_*(settings) -> Protocol impl`。包含 `get_spec`/`_backend_for`、`get_sandbox`、`get_filestore`、`get_runner`，以及所有 LLM 角色 factory（透過 `resolve_llm_chain` + `LlmEndpoint` + `_llm_from_chain`/`_vlm_from_chain`）、parser/check registry、`build_message_queue_factory`。 |
-| `src/workspace_app/api/app.py` | `create_app(*, spec, sandbox, filestore, runner, ...~40 seams, run_consumers=True)` —— FastAPI 組裝。掛 route、用 `coordinators.build_coordinators` 建 coordinator,只在 `run_consumers` 為真時對 wiki/index/sanity/card_gen 呼叫 `start_consuming()`。 |
-| `src/workspace_app/coordinators.py` | FastAPI-free 組裝根 `build_coordinators`（+ `build_ingestor`/`resolve_wiki_config`),被 `create_app` 與 worker entrypoint 共用,讓 API 能當 pure producer 而 worker pod 各消費一個 JobType。 |
+| `src/workspace_app/api/app.py` | `create_app(*, spec, sandbox, filestore, runner, ...~40 seams, run_consumers=True)` —— 精簡組裝根（~767 行,#54）。組服務 → 建 deep module（`ItemLocator`/`TurnContextBuilder`/`ChatSendService`/`SubagentBridge`/`WorkflowExecutor`/`ReplayLoaders`/`MentionService`）→ 逐一呼叫各 `register_*_routes` 掛 route → `build_lifespan` → mount SPA;不再自己定義 route handler。用 `coordinators.build_coordinators` 建 coordinator。 |
+| `src/workspace_app/api/lifecycle.py` | `build_lifespan(...)` —— FastAPI lifespan factory（#54 由 `app.py` 抽出）。`boot_step` 跑 health-check 與 `seed help collection`（`seed_help_collection_best_effort` 經 `asyncio.to_thread` 離開 event loop,best-effort,id 存進 `app.state.help_collection_id`，#230）,只在 `run_consumers` 為真時對 wiki/index/sanity/card_gen 呼叫 `start_consuming()`,並起五個背景 sweeper（idle_killer / mirror_sweeper / index_sweeper #227 / code_sync_sweeper / blob_gc_sweeper #245）。 |
+| `src/workspace_app/coordinators.py` | FastAPI-free 組裝根 `build_coordinators`（+ `build_ingestor`/`resolve_wiki_config`),被 `create_app` 與 worker entrypoint 共用,讓 API 能當 pure producer 而 worker pod 各消費一個 JobType。也從 `kb.wiki.llm` preset 建出可選的 `code_wiki_llm`(wiki_model 為空 → `None` → code-wiki 關閉,build 會在 `WikiBuildState` 記下 misconfig，#281);`code_card_batch_chars` 是 coordinator 建構子預設（24k chars）,非 config key。 |
 | `src/workspace_app/worker/__main__.py` | 獨立 worker entrypoint `python -m workspace_app.worker <jobtype>` —— 用同一個 `build_coordinators` block-consume 一個 JobType,是 `run_consumers` 拆分的另一半。 |
 | `src/workspace_app/observability/boot.py` | `boot_step(label)` context manager —— `→ enter / ✓ done (1.2s) / ✗ failed` 敘事,每行 flush,讓卡住的步驟自己報名（#208）。 |
 | `src/workspace_app/observability/setup.py` | `install_llm_logging(settings)` —— gate（`WORKSPACE_LLM_LOG` env 覆蓋 config `observability.llm_log.enabled`,預設 on）後構造 `LlmCallLogger(LlmLogWriter(dir))` 並 append 到 `litellm.callbacks`。 |
@@ -94,6 +95,8 @@ flowchart TD
 7. **`create_app(spec=, sandbox=, filestore=get_filestore(settings, spec), runner=get_runner(settings), ...~40 seams, run_consumers=settings.server.run_consumers)`** 組出 FastAPI,用 `build_coordinators` 建 coordinator,只在 `run_consumers` 為真時啟動 in-process 消費。
 8. **`uvicorn.run(app, host, port)`**。
 
+FastAPI startup 時 `build_lifespan`（`api/lifecycle.py`，#54 由 `app.py` 抽出）接手非同步的 boot 尾段:`boot_step` 跑 health-check;`run_consumers` 為真時對 wiki/index/sanity/card_gen 啟動 `start_consuming()`;接著 **`seed help collection`** boot_step —— 經 `asyncio.to_thread` 跑 `seed_help_collection_best_effort`（離開 event loop、best-effort,embedder 掛掉只留下可讀但未索引的 collection,絕不擋 boot),把 id 存進 `app.state.help_collection_id`(沿用 `_ensure_insights_collection` 的 by-name 冪等 seed 慣例,#230);最後起五個背景 sweeper。
+
 Worker 路徑(`python -m workspace_app.worker <jobtype>`)重用 `load_with_provenance` + `build_coordinators`,當 API 當 pure producer 時 block-consume 單一 JobType。
 
 ## 關鍵不變式與眉角
@@ -108,7 +111,7 @@ Worker 路徑(`python -m workspace_app.worker <jobtype>`)重用 `load_with_prove
     Provenance 由**插值前的原始 YAML** 推導(operator 實際寫了哪些 leaf),與寫的值是否剛好等於 default 無關。
 
 !!! warning "驗證在啟動時 fail-loud,不是首次使用時"
-    未知 key、壞掉的 preset 引用、自我參照/未知的 fallback、缺 `model`、壞的 retrieval-llm ref、以及 `kb.max_searches_per_turn`(null 或正整數)全都在啟動時 raise,訊息帶上出錯的 dotted path + 來源檔。Registry resolver(`kb.parsers`、`health.checks`)也是零參數構造 dotted-path 類別,未知 id / 壞路徑 / 錯 base class 在啟動 raise,不是首次上傳/執行時。
+    未知 key、壞掉的 preset 引用、自我參照/未知的 fallback、缺 `model`、壞的 retrieval-llm ref、`kb.max_searches_per_turn`(null 或正整數)、以及 `kb.max_searches_ceiling`(有設時須為正整數,`KbSettings` 預設 10 —— composer 每則訊息可挑的 kb_search 次數上限,#334)全都在啟動時 raise（後兩者同由 `loader._check_max_searches` 驗證）,訊息帶上出錯的 dotted path + 來源檔。Registry resolver(`kb.parsers`、`health.checks`)也是零參數構造 dotted-path 類別,未知 id / 壞路徑 / 錯 base class 在啟動 raise,不是首次上傳/執行時。
 
 !!! warning "`get_user_id` 是單一接縫,穿進兩處"
     同一個 callable 必須同時餵 `get_spec` 與 `create_app`;分歧會悄悄破壞非預設使用者的 KB 交叉引用連結(#41)。`superusers`(frozenset)亦同 —— 必須與 `make_spec` 和 route 的 `authorize` 一致(#262)。
@@ -164,5 +167,6 @@ Worker 路徑(`python -m workspace_app.worker <jobtype>`)重用 `load_with_prove
 - `src/workspace_app/factories.py` —— `get_spec`、`_backend_for`、`_with_connect_timeout`、`get_sandbox`、`get_filestore`、`get_runner`、`resolve_llm_chain`、`LlmEndpoint`、`_llm_from_chain`/`_vlm_from_chain`。
 - `src/workspace_app/config/dump.py` —— `emit_config_dump`、`render`、`_is_secret`、`_mask`。
 - `src/workspace_app/observability/boot.py`、`setup.py`、`logger.py`、`record.py`、`writer.py`。
-- `src/workspace_app/api/app.py` —— `create_app` 簽章 + `run_consumers` 消費 gate + `build_coordinators` 區段。
+- `src/workspace_app/api/app.py` —— `create_app` 精簡組裝根（#54):組 deep module → `register_*_routes` 掛 route → `build_lifespan` → mount SPA;route handler 不再住這裡。
+- `src/workspace_app/api/lifecycle.py` —— `build_lifespan`:FastAPI lifespan、`run_consumers` 消費 gate（`start_consuming` ×4）、`seed help collection` boot_step（#230）、五個背景 sweeper。
 - `src/workspace_app/coordinators.py`、`src/workspace_app/worker/__main__.py`。

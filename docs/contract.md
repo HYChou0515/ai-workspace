@@ -154,6 +154,10 @@ class AgentConfig(Struct):
 class Collection(Struct):                 # → resource "collection"
     name: str
     description: str = ""
+    # #328：per-collection 可調 parser 設定，keyed by parser_id
+    # (type(parser).__name__，與 DocChunk.parser_id 同 key) → {knob: value}。
+    # 非索引（不過濾／排序）⇒ 免 migration。
+    parser_configs: dict[str, dict[str, Any]] = {}
 
 class SourceDoc(Struct):                  # → resource "source-doc"
     # id = encode_doc_id(collection_id, path)：natural key，把每個 '/'
@@ -166,6 +170,12 @@ class SourceDoc(Struct):                  # → resource "source-doc"
                                           # content.content_type 透過 magic 自動 sniff
     text: str | None = None               # 衍生／擷取的文字（None ⇒ 解碼 content）
     status: str = "ready"                 # indexing | ready | error（非同步 index 期間設定）
+    # #328：per-doc 覆寫一份 prompt/param 驅動 parser 的設定（同樣
+    # parser_id → {knob: value}），在 precedence merge 裡「勝過」collection
+    # 的 parser_configs。非索引 ⇒ 免 migration；
+    # index 時由 kb.parser_config.effective_config 解析（parser 預設 <
+    # collection.parser_configs < 此 per-doc override）。
+    parser_config_overrides: dict[str, dict[str, Any]] = {}
 
 class DocChunk(Struct):                   # → resource "doc-chunk"（衍生；只保留當前版）
     collection_id: str
@@ -205,6 +215,34 @@ class KbChat(Struct):                     # → resource "kb-chat"
 `EMBED_DIM = int(os.getenv("KB_EMBED_DIM", "1024"))` — 儲存的向量寬度;
 必須與 embedder 的輸出相符。`DocChunk` 是衍生的,且在
 re-index 時**硬刪除**(soft delete 會在向量／關鍵字搜尋裡留下過時的 chunk)。
+
+#### `CodeWikiBuildRun`(#281 code-wiki fan-out 的 join state)
+
+```python
+class CodeWikiBuildRun(Struct):           # → resource "code-wiki-build-run"
+    # resource id == collection id（一個 collection 一個 run）
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    total: int                            # code_split 規劃出的 batch 數
+    done: list[int] = field(default_factory=list)    # 成功的 batch index
+    failed: list[int] = field(default_factory=list)  # 放棄的 batch index
+    finalized: bool = False               # 只跑一次的 finalize gate（CAS 認領）
+    status: str = "running"               # running | done | error
+    phase: str = "cards"                  # cards | finalizing
+```
+
+`add_model(CodeWikiBuildRun, indexed_fields=["status"])`。一個 code(`git_url`)
+collection 的 wiki 由「讀原始碼」分層生成(L0 per-file → L1 目錄 roll-up
+→ L2 architecture/topics/index),重量級的 L0 工作 fan-out 成許多小 job,
+靠這個 row 以 specstar etag CAS 做 join(mirrors `IndexRun`)。
+
+它**沿用既有的 wiki JobType**(`WikiMaintenanceJob` / `WikiJobPayload`,
+不新增 JobType):`WikiJobPayload.op` 詞彙從 `fold | unfold` 擴充為
+`fold | unfold | code_split | code_card | code_finalize`,並新增兩個只由
+`code_card` 攜帶的欄位 `batch_index: int` 與 `batch_paths: list[str]`。
+**不新增 HTTP route** — code build 由既有的 collection sync
+(`POST /kb/collections/{id}/sync`)與 wiki rebuild
+(`POST /kb/collections/{id}/wiki/rebuild`,code 分支)觸發。Config 不新增 key:
+code-wiki summariser 重用 `kb.wiki.llm` preset(空值 ⇒ code-wiki 關閉)。
 
 ---
 
@@ -289,6 +327,8 @@ Binary(非 UTF-8)檔案會被跳過。
 |---|---|---|---|
 | `GET`    | `/templates` | New Investigation picker 的 template profile 名稱 | ✅ |
 | `GET`    | `/activity`  | 近期活動 feed（最新在前）：`[{ts, kind, text, ref}]` | ✅ |
+| `GET`    | `/help`      | Platform Help 頁資訊（掛在 `/api` 之下 → `GET /api/help`）：`HelpInfo`；idempotent，按需 resolve Help collection，永不 404 | ✅ |
+| `GET`    | `/tools`     | 扁平 tool catalog（聊天 tool card 標籤用）：`[ToolCatalogEntry{name, label, description}]` | ✅ |
 
 `POST /investigation` body:
 ```json
@@ -302,6 +342,16 @@ Binary(非 UTF-8)檔案會被跳過。
 `investigation_created | investigation_closed | session_closed |
 file_written | file_moved | file_copied | file_deleted |
 dir_created | dir_deleted | agent_turn_complete`。
+
+`GET /help`(#230)回傳型別:
+```json
+{ "collection_id": "string",
+  "documents": [{ "id": "string", "path": "string",
+                  "title": "string", "kind": "release_notes" | "guide" }] }
+```
+`HelpInfo` 讓 FE 把 KB chat scope 到 Platform Help collection,並把每份
+文件連進 KB 文件檢視器(`id` 是 opaque 的 `SourceDoc` id)。`kind`:
+`CHANGELOG.md` → `release_notes`,其餘 → `guide`。
 
 ### 2.6 Specstar admin（自動產生，藏在 `/docs` 後）
 
@@ -334,8 +384,9 @@ fixture 放在 seed 出來的 template 內(`/data/*.csv`)。
 | `GET`    | `/kb/agent`                              | KB agent 顯示名稱 + quick-prompt 建議：`{name, suggestions}` | ✅ |
 | `POST`   | `/kb/collections`                        | 建立 collection：body `{name, description?}` → `{resource_id, name, description}` | ✅ |
 | `GET`    | `/kb/collections`                        | 列出 collection：`[{resource_id, name, description}]` | ✅ |
-| `POST`   | `/kb/collections/{id}/documents`         | multipart 上傳（`file`）；快速存檔 + 背景 index → `{document_ids, status:"indexing"}` | ✅ |
+| `POST`   | `/kb/collections/{id}/documents`         | multipart 上傳（`file`）；快速存檔 + 背景 index → `{document_ids, status:"indexing"}`。upload check 拒絕（加密／無法讀取的 Office／PDF）時回 **422** `detail: {check_id, reason_code, message_key}`，**不**存任何東西 | ✅ |
 | `GET`    | `/kb/collections/{id}/documents`         | 列出 doc：`[{resource_id, path, content_type, created_by, status}]` | ✅ |
+| `GET`    | `/kb/upload-checks`                       | 瀏覽器可跑的 upload-check 提示描述：`[{id, extensions, forbid_magic_hex, message_key}]`（純 server 端的 check 省略，如 PDF） | ✅ |
 | `GET`    | `/kb/documents?id={doc_id}`              | render 一份文件 → `{filename, collection_id, markdown}`（相對連結改寫為 `kb://doc/{id}`）。`id` 是 opaque 的 SourceDoc id，用 query param 讓這個 slash-free token 能在 URL 裡 round-trip | ✅ |
 | `POST`   | `/kb/chats`                              | 建立 thread：body `{title?, collection_ids}` → `{resource_id, title, collection_ids}` | ✅ |
 | `GET`    | `/kb/chats`                              | 列出 thread：`[{resource_id, title, collection_ids, message_count}]` | ✅ |
@@ -357,6 +408,23 @@ FE/後端絕不解析它;`path`/`collection_id` 來自 record +
 `created_by` meta。KB chat 重用跟 RCA workspace **同一個 turn engine**
 (每個 conversation 一個可取消的進行中 turn),所以它的
 串流 + 中斷契約完全相同。
+
+### 2.10 App 平台 item route(post-RCA-3.0)
+
+> 本文件仍是 RCA-3.0 時代,**尚未**完整追蹤 App 平台的
+> `/a/{slug}/items/{item_id}/…` route 家族(那是 `Investigation` →
+> `WorkItem` 遷移後的後繼路徑)。以下只列近期新增、且本文件需反映的幾條。
+
+| Method | Path | 用途 | 狀態 |
+|---|---|---|---|
+| `GET`    | `/a/{slug}/items/{item_id}/tools`     | per-item tool picker 狀態:`ItemTools{tools:[ItemToolState{key, label, description, default_on, pref:"follow"\|"on"\|"off", effective}]}`;`effective` 由 turn 用的同一條 resolve 在 server 端算出（anti-drift） | ✅ |
+| `GET`    | `/a/{slug}/items/{item_id}/workflows` | 列出此 item `.workflows/` 內使用者自寫的 workflow manifest(id + title + phases) | ✅ |
+
+`pref` 對應 `WorkItemBase.attached_tool_prefs: dict[str, bool]`(#322,Tier-1
+稀疏 tri-state override:有 key 釘 on(`True`)／off(`False`),沒 key 跟著
+profile/App 預設;override 上限是 `app.json` 的 `tools`,**不是** profile)。
+`.workflows/` 的 workflow 由 agent tool **`save_workflow`**(#323)寫入
+`<workspace>/.workflows/<id>.json`。
 
 ---
 

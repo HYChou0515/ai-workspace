@@ -12,7 +12,10 @@
 
 一個 workflow 就是**一個 `async def run(wf, inputs)`**（orchestration）加上 profile 的
 `_profile.json` 裡一小段**資料 manifest**(它的 id、title,以及 UI 用來繪製的 phase 骨架)。
-控制流就是普通的 Python——`for` / `if` / `await`——跑在一個 *step* 函式庫之上。沒有 DSL。
+控制流就是普通的 Python——`for` / `if` / `await`——跑在一個 *step* 函式庫之上。這條開發者
+寫的 `run.py` 路徑沒有 DSL;不過 #323 另外為*使用者*開了一條宣告式的 `workflow.json`(跟 AI
+一起 author、存成資料而非 Python,由 trusted interpreter 跑在同一批 step primitive 之上)——
+細節見 [`workflows.md`](workflows.md) §22,這篇不重複。
 
 它落在 **profile** 層級:
 
@@ -124,7 +127,16 @@ await wf.ingest_to_collection(collection, path, *, phase="ingest", cache=True) -
 await wf.upsert_context_card(collection, keys, *, title="", body="",
                              phase="commit", cache=True) -> card_id
 await wf.find_overwrite_card(collection, keys, *, title="") -> {...} | None  # 唯讀
+await wf.convert(src, dest, *, phase="convert", cache=True) -> (out_path, kind)
 ```
+
+`wf.convert`(#324)把一份上傳**先轉成文字、再 file 進 collection**——只存轉好的 artifact,
+絕不存原始 binary(topic-hub 的 →collections 在 `input.json` 開了 `convert` 時用它)。它跑的是
+跟 index 同一套 KB parser(含 VLM describer),但不 chunk／不 embed,也不碰 `SourceDoc`。
+`kind` 有三種:`markdown`(parser 把 binary／結構化檔轉成 markdown,落在 `.md` 名下,例如
+`deck.pptx` → `deck.pptx.md`)、`passthrough`(本來就是純文字／程式碼,維持原副檔名)、`none`
+(沒有 parser 讀得懂的 binary——此時 `out_path` 是 `None`,呼叫端**跳過**它,絕不把原始 bytes
+落地)。回傳的 `out_path` 就是你接著要 file 的那條 workspace 路徑。
 
 ### Gates
 

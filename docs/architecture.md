@@ -76,7 +76,7 @@ POST /investigations/{id}/messages   { "content": "..." }
         │
         ▼  (api/app.py → ChatTurnEngine.stream(), see api/turns.py)
 1. 把使用者訊息存進 Conversation
-2. 解析該調查綁定的 AgentConfig（_resolve_agent_config，無綁定 → store 第一個）
+2. 解析該調查綁定的 AgentConfig（`ItemLocator.resolve_agent_config`，見 `api/locator.py`；經 `AppCatalog` 三層解析，無 attached preset → profile `default_preset` 否則 picker 第一個）
 3. 建 AgentToolContext：filestore、sandbox、sync、ensure_sandbox_via（registry）
 4. engine.stream(key, content, ctx, on_complete=persist):
      - 取消前一個還在跑的回合（同一 key 一次只有一個 turn，序列化）

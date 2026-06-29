@@ -30,7 +30,7 @@
 | 路徑 | 角色 |
 | --- | --- |
 | `src/workspace_app/agent/context.py` | 定義 `AgentToolContext`——傳進每個 tool 的 per-run dataclass。40 多個欄位橫跨兩 flavour（RCA: `investigation_id`/`sandbox`/`filestore`/`files`/`sync`；KB: `retriever`/`collection_ids`/`kb_passages`）外加 Topic-Hub 的 `spec`/`acting_user`、wiki 欄位、`describer`/`deck_vlm` VLM、`run_subagent` bridge、各種 budget、`history`。擁有 `ensure_sandbox()` 的 lazy-create + 套件 eager provisioning。 |
-| `src/workspace_app/agent/tools.py` | 整個 function-tool 目錄：每個 `*_impl` coroutine、`_IMPLS` 名稱→impl 註冊表、`_WORKSPACE_TOOLS`（RCA 預設集）、`_LEGACY_TOOL_RENAMES`、把 allowed-list 變成 `agents.FunctionTool` 的 `build_tools()`（含條件式 `read_skill` 注入）。也含 exec/read 格式化輔助（`_format_exec`/`_truncate_middle`）與 `infer_modules` 的 fan-out 機制。 |
+| `src/workspace_app/agent/tools.py` | 整個 function-tool 目錄：每個 `*_impl` coroutine（含 #323 opt-in 的 `save_workflow_impl`）、`_IMPLS` 名稱→impl 註冊表、`_WORKSPACE_TOOLS`（RCA 預設集）、`_LEGACY_TOOL_RENAMES`、把 allowed-list 變成 `agents.FunctionTool` 的 `build_tools()`（含條件式 `read_skill` 注入）、`builtin_tool_descriptions()`（內建 tool 名→其 LLM-facing description，餵 #322 tool catalog 的單一來源）。也含 exec/read 格式化輔助（`_format_exec`/`_truncate_middle`）與 `infer_modules` 的 fan-out 機制。 |
 | `src/workspace_app/agent/tool_prompt.py` | `format_tools_for_prompt()`——把 live `FunctionTool` 清單（name、description、JSON args schema）渲染成 Markdown「Tools available」system-prompt 區塊，讓小模型不會把已 provision 的 tool 誤當成 shell binary。由 `_agent_for` 在 template-time prompt 之後於 runtime 接上。 |
 | `src/workspace_app/agent/config_catalog.py` | `AgentConfigCatalog`——（現只剩 KB）依 purpose（`kb_chat`、`infer_modules`）索引的 `AgentConfig` 目錄，外加被 `AppCatalog` 消費的具名 preset 註冊表。`configs_for`/`default_for`/`purposes` + 各 purpose 的薄包裝。 |
 | `src/workspace_app/agent/reasoning.py` | provider-aware 的 reasoning-OFF kwargs。`is_ollama(model)` + `reasoning_off_kwargs(model)`：Ollama → `{"think": False}`；其他（vLLM/openai-compatible）→ `{"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}`。 |
@@ -122,6 +122,9 @@ flowchart TD
 !!! note "read_skill 永不在 _WORKSPACE_TOOLS"
     `read_skill` 從不在 `_WORKSPACE_TOOLS`；只有當 App+profile 真的有 ship skill（`merged_profile_skills`）時，`build_tools` 才注入它。
 
+!!! note "save_workflow 是 opt-in 工具，配 author-workflow meta-skill（#323）"
+    `save_workflow` 在 `_IMPLS` 但**不在** `_WORKSPACE_TOOLS`——它是 opt-in 工具（形同 `save_skill`/`author-skill`），只有 ship `author-workflow` meta-skill 的 App 才在 `agent.tools` 授予（topic-hub 是首個採用者）。它把 `workflow_json` 經 `workspace_store.validate_workflow_json` 驗證（帶 `_profile_tool_ceiling` = App `agent.tools` ∩ profile `tools` override 的 clamp，#323 Q4：workflow 的 agent step 不能超過作者手動能用的工具集），通過才寫進 `<ws>/.workflows/<id>.json`；驗證失敗時把 problems 原樣回給模型自行修正。
+
 !!! note "reasoning-off 是 provider 分支的"
     reasoning-off 只在 `'none'` 這個 OFF 訊號才觸發；Ollama 用 `think=False`、vLLM 需要 `chat_template_kwargs` 路線——送錯邊是無聲 no-op。
 
@@ -132,7 +135,7 @@ flowchart TD
 | 一個 `AgentToolContext` dataclass 服務 RCA 與 KB 兩 flavour，optional 欄位 = 錯 flavour | 讓同一個 `LitellmAgentRunner` 服務兩 surface；KB agent 重用 runner 而非另寫一套 | `context.py` docstring + CLAUDE.md AgentRunner 慣例 |
 | args-recovery 對 malformed/concatenated 是 **raise** 而非回 error string | 回字串會設 `progress_made`（擋 retry）且把污染對話送回 LiteLLM，`json.loads(arguments)` 以 `Extra data` 炸掉；raise 會跳出 `run_streamed`，讓 `diagnose_error` 從乾淨 history retry | `args_recovery.py` docstring，#76 / #69 |
 | 拿掉 `parallel_tool_calls=False`，args-recovery 為唯一防線 | 那 flag 是與可靠的 Replay 路徑唯一的 wire 差異，使部分模型把 tool call 當純文字吐出，且 litellm 在 `ollama_chat` 上拒收 | `args_recovery.py` docstring，#69 |
-| `kb_search` 有 per-turn budget（`kb_search_max_calls`）且**搜尋前**就計數 | 否則小模型會把昂貴的 multi-query/HyDE/rerank 重跑到 `max_turns`；搜尋前計數可擋住空結果 loop | `tools.py` `kb_search_impl`，#195 |
+| `kb_search` 有 per-turn budget（`ctx.kb_search_budget` 的 `KbSearchBudget`：`max_calls`/`used`，取代舊的 scalar `kb_search_max_calls`/`kb_search_calls`）且**搜尋前**就 `used += 1` | 否則小模型會把昂貴的 multi-query/HyDE/rerank 重跑到 `max_turns`；搜尋前計數可擋住空結果 loop。`max_calls=0` ⇒ 本回合不搜尋；budget 物件 by-reference 共享給一個 app turn 的 `ask_knowledge_base` sub-agent，使整回合共用同一份額度 | `tools.py` `kb_search_impl`，`context.py` `KbSearchBudget`，#195/#334 |
 | 把 tool 清單（name+desc+JSON-schema）注入 system prompt | 小型本地 LLM（Qwen3:14b）不可靠地把 provisioned tool 綁到其呼叫慣例，會退化成 `exec(['<tool-name>'])`；顯式清單讓它躲不掉 | `tool_prompt.py` docstring |
 | reasoning-off 採 provider 分支（Ollama `think=False` vs vLLM `chat_template_kwargs`） | OpenAI 風的 `reasoning_effort='none'` 只在 Ollama 經 litellm 關掉 thinking；vLLM 上是 no-op，所以 disable 參數必須不同 | `reasoning.py` docstring，qwen3 本機驗證 |
 | `AgentConfigCatalog` 縮成只剩 KB purpose（`kb_chat` / `infer_modules`） | 每個 App 的 workspace agent 改經 `apps.catalog.AppCatalog`（app◇profile◇preset）解析；舊的 `workspace_chat` picker / `resolve()` / `/agent-configs` route 已移除 | `config_catalog.py` docstring，#89 P8 |
@@ -145,7 +148,7 @@ flowchart TD
 - **[知識庫:檢索與 Agent](kb-retrieval-agent.md)**：`Retriever`、`Enhancements`/`LocationFilter`、`doc_resolve`、provenance、context_cards、collections、`VlmDescriber`；`kb_search`/`lookup_glossary`/`resolve_collection` 伸手進去。
 - **[App 平台](apps-platform.md)**：`read_skill`/`save_skill` 的解析與 `build_tools` 的條件式 `read_skill` 注入（`apps/skills` + `apps/shared_skills` + `apps/manifest`）；`config.catalog_build.build_catalog` + `apps.catalog.AppCatalog` 構造 `AgentConfigCatalog` 並把 preset 解析成 `AgentConfig`。
 - **[工具套件與 Sandbox Host](tooling-and-sandbox-host.md)**：`tooling.registry` 的 provisioned tool-package `FunctionTool` 與內建 tool 並列加上；`provision.py` 把套件裝進 sandbox。
-- **[Workflow 引擎](workflow-engine.md)**：`workflow.capabilities` 的 create/update context card CAS 操作藏在 Topic-Hub 的卡片 tool 後面。
+- **[Workflow 引擎](workflow-engine.md)**：`workflow.capabilities` 的 create/update context card CAS 操作藏在 Topic-Hub 的卡片 tool 後面；`save_workflow` 把使用者與 AI 共同設計的 workflow 經 `workflow.workspace_store.validate_workflow_json` / `save_workspace_workflow` 寫進 `<ws>/.workflows/<id>.json`（DSL schema 與解釋由 `workflow.dsl` 的 `parse_def` / `validate_def` / `build_run` 負責）。
 - make_deck 委派給 `agent/deck/` 的多模態 sub-agent loop（`run_make_deck`）。
 
 ## 原始碼錨點
@@ -153,7 +156,8 @@ flowchart TD
 接手者建議照此順序讀：
 
 - `src/workspace_app/agent/context.py` — `AgentToolContext`（中心接縫）與 `ensure_sandbox()`。
-- `src/workspace_app/agent/tools.py` — `_IMPLS` 註冊表、`_WORKSPACE_TOOLS`、`_LEGACY_TOOL_RENAMES`、`build_tools`，以及 `kb_search_impl` / `ask_knowledge_base_impl` / `infer_modules_impl` / `_format_exec` / `_truncate_middle`。
+- `src/workspace_app/agent/tools.py` — `_IMPLS` 註冊表、`_WORKSPACE_TOOLS`、`_LEGACY_TOOL_RENAMES`、`build_tools`，以及 `kb_search_impl` / `ask_knowledge_base_impl` / `infer_modules_impl` / `save_workflow_impl` + `_profile_tool_ceiling`（#323）/ `builtin_tool_descriptions`（#322）/ `_format_exec` / `_truncate_middle`。
+- `src/workspace_app/tooling/catalog.py` — `ToolMeta` / `humanize_tool_label` / `picker_units` / `flat_catalog`：tool 顯示 metadata 的單一來源（#322），讓 per-item picker 與 chat tool card 不會與 agent 實際跑的 tool 飄移。
 - `src/workspace_app/agent/args_recovery.py` — `peel_first_json`、`wrap_with_args_recovery` / `safer`、`ToolArgsError` 與 Malformed/NonObject/Concatenated 子類。
 - `src/workspace_app/agent/arg_repair.py` — `make_backstop_sentinel` / `malformed_raw`（in-band backstop sentinel）。
 - `src/workspace_app/agent/tool_prompt.py` — `format_tools_for_prompt`。

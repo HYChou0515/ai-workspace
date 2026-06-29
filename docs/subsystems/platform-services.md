@@ -12,8 +12,9 @@
 - **users（使用者）** — 使用者由公司目錄擁有,我們只存 id、在 render 時經 `UserDirectory` 解析成人。`find_by_handle` 讓 agent 反查它只看得到 handle 的人(#275);`speaker_label` / `speaker_note` 餵 LLM 多人協作的署名(#242)。
 - **monitor（即時遙測，#11）** — `IMonitor` 是「活的」遙測 sink:`MonitorProcessor` 訂閱 OpenAI Agents SDK 的 trace 流,把 span 轉成 `MonitorEvent` 灌進 sink;FE 經 `GET /monitor`(近期)與 `GET /monitor/stream`(SSE)看即時跑動。它與 observability 的「檔案式 LLM call log」是兩條互補的線:後者落地每一次 `litellm.completion` 供事後重打,前者是 SDK 層 span 的即時串流。
 - **failover（LLM 韌性，#196/#249）** — `FallbackLlm`/`FallbackVlm` 是包在既有 `ILlm`/`IVlm` seam **之後**的 busy-aware 轉接器:多個端點按優先序試,首 token 逾時(TTFT)或忙就跳下一家,跨家共用一個 cooldown 登記簿。對上游(runner / KB / VLM)完全透明——它們仍只看到一個 `ILlm`。
+- **help（平台說明，#230）** — 一個眾所周知的系統 KB collection(name=`"Platform Help"`),開機從打包進 wheel 的 `help_content/*.md`(`CHANGELOG.md` + `getting-started.md`)seed——**repo 是唯一真相來源,UI 上的編輯下次開機被覆蓋**。collection 由幻影 `system` 使用者擁有,經 #262 `Permission`(`visibility="restricted"` + 把讀類動詞 `read_meta`/`read_content`/`read_chat`/`converse` 全給 `ALL`)做到「人人可讀/搜尋/問答、只有 owner+superuser 能改」——刻意**不是** `public`(那等於全動詞開放)。前端 `/help` 薄頁靠 `GET /help` 拿到 collection 與文件清單,內嵌一個鎖定此 collection 的 KB chat。
 
-何時觸發:health fast 集合在開機阻塞跑、full 集合開機後與 FE 觸發跑;observability logger 在第一個 LLM 呼叫前註冊、config dump 在 `get_spec` 前印;monitor 的 `MonitorProcessor` 在 `create_app` 經 `set_trace_processors` 接上;perm 在每個受保護資源的讀/寫;users 在每次 render 人名與每個 agent 回合的署名;failover 在每一次 LLM/VLM 串流呼叫(端點 ≥2 時)。
+何時觸發:health fast 集合在開機阻塞跑、full 集合開機後與 FE 觸發跑;observability logger 在第一個 LLM 呼叫前註冊、config dump 在 `get_spec` 前印;monitor 的 `MonitorProcessor` 在 `create_app` 經 `set_trace_processors` 接上;perm 在每個受保護資源的讀/寫;users 在每次 render 人名與每個 agent 回合的署名;failover 在每一次 LLM/VLM 串流呼叫(端點 ≥2 時);help collection 在開機 `seed help collection` step 以 best-effort 離 loop seed、`GET /help` 隨每次請求 idempotent 解析(永不 404)。
 
 ## 核心模組
 
@@ -46,6 +47,8 @@
 | `src/workspace_app/failover/llm.py` | `FallbackLlm(ILlm)` / `FallbackVlm(IVlm)`:每個端點包成一個 `Provider`,`stream()` 交給 `failover_stream` |
 | `src/workspace_app/failover/core.py` | `failover_stream`(串流)/ `failover_call`(非串流)+ `Provider`(`ttft_s`/`idle_s`)+ `AllProvidersFailed`/`TtftTimeout`/`StreamStalled`:優先序切換政策 |
 | `src/workspace_app/failover/cooldown.py` / `registry.py` / `observe.py` | `CooldownRegistry`(跨家共用、注入 clock)、`get_cooldown_registry`、`make_switch_logger`(切換時記 `on_degrade`) |
+| `src/workspace_app/kb/help_collection.py` | Platform Help collection 種子:`ensure_help_collection`(idempotent 建/找)、`seed_help_collection_best_effort`(開機 seed,吞 ingest 失敗讓 embedder 掛了仍可讀但未索引)、`_help_permission`(restricted + 讀動詞給 `ALL`)、`HELP_COLLECTION_NAME`(`"Platform Help"`)/`HELP_SYSTEM_USER`(`"system"`)/`help_content_dir`(#230) |
+| `src/workspace_app/api/help_routes.py` | `register_help_routes` 註冊 `GET /help`(掛在 `/api` router ⇒ `GET /api/help`);回 `HelpInfo {collection_id, documents:[{id,path,title,kind}]}`,`_kind` 把 `CHANGELOG.md`→`release_notes` 其餘→`guide`;隨需 `ensure_help_collection` 故永不 404(#230) |
 
 ## 介面與接縫
 
@@ -170,6 +173,7 @@ flowchart TB
 - `src/workspace_app/users/protocol.py` / `labels.py` / `mock.py` — `UserDirectory` / `find_by_handle` / `speaker_label`。
 - `src/workspace_app/kb/job_audit.py` — `preserve_job_creator`(worker updater 保留)。
 - `src/workspace_app/agent/repetition.py` / `api/repetition_guard.py` — 重複退化守門。
-- `src/workspace_app/monitor/base.py` / `processor.py` / `memory.py` — `IMonitor` + `MonitorProcessor`(SDK trace → sink)+ `InMemoryMonitor`;路由 `GET /monitor` + `/monitor/stream`(`api/app.py`)。
+- `src/workspace_app/monitor/base.py` / `processor.py` / `memory.py` — `IMonitor` + `MonitorProcessor`(SDK trace → sink)+ `InMemoryMonitor`;路由 `GET /monitor` + `/monitor/stream`(`api/meta_routes.py:{get_monitor,stream_monitor}`,連同 `/activity` 經 `register_meta_routes` 註冊)。
 - `src/workspace_app/failover/core.py` / `llm.py` / `cooldown.py` — `failover_stream` 政策 + `FallbackLlm`/`FallbackVlm` + `CooldownRegistry`;chain 在 `factories.resolve_llm_chain`。
+- `src/workspace_app/kb/help_collection.py` / `api/help_routes.py` — Platform Help collection seed(`ensure_help_collection` / `seed_help_collection_best_effort` / `_help_permission`)+ `GET /help`(`HelpInfo` / `HelpDocument`);開機 seed 在 `api/lifecycle.py`(`app.state.help_collection_id`)、route 在 `create_app` 經 `register_help_routes(api, spec)` 掛上 `/api`(#230)。
 - `docs/plan-sanity-checks.md` / `docs/plan-permissions.md` / `docs/plan-repetition-guard.md` / `docs/plan-llm-failover.md` — 各自鎖定的設計。

@@ -46,8 +46,12 @@
 | `web/src/App.tsx` | react-router-dom 路由樹（#93 決議：留在 react-router，**不**遷 TanStack Router）。所有路由嵌在 `GlobalLayout` 下（#158 全域導覽 + breadcrumb）。 |
 | `web/src/pages/investigation/WorkspaceShell.tsx` | VSCode 形狀的通用 App workspace 外殼（top bar、activity bar、檔案樹、editor groups、bottom panel、agent panel）。領域 chrome 由 `DomainFields(manifest.layout[surface] × manifest.fields)` 資料驅動。 |
 | `web/src/components/DomainFields.tsx` | 依 `manifest.layout × manifest.fields`（#89 P7b）渲染 App item 的領域欄位——取代寫死的 RCA chips，App 無關；`select` 色調取自 `field_styles` overlay。 |
-| `web/src/pages/kb/` | KB 表面：`KbHome` 外殼、`KbCollectionPage`（Documents/Context Cards/Wiki tabs + 索引狀態列）、`KbChatPanel`/`KbChatView`（用 `useKbChat`）、`KbDocIde`（collection 上的檔案 IDE）、`WikiBrowser`、`ContextCardsTab`、`kbRoutes.tsx`。 |
+| `web/src/pages/kb/` | KB 表面：`KbHome` 外殼、`KbCollectionPage`（Documents/Context Cards/Wiki tabs + 索引狀態列；#325 索引狀態列另含可關閉的「無法接受」區 `UploadBlockedList`，由瀏覽器預擋 `kb/uploadChecks.ts:screenFiles` 與伺服器 422 `UploadBlockedError` 共同餵入）、`KbChatPanel`/`KbChatView`（用 `useKbChat`；可選 `collectionIds`/`hideCollectionPicker` 鎖定並隱藏 collection picker，#230 help 用）、`KbDocIde`（collection 上的檔案 IDE）、`WikiBrowser`（#281 code-wiki 另渲染自身 build phase：cards→「Summarising source files」、finalizing→「Assembling directory & architecture pages」，並在 `isCodeWiki`（由 `collection.git_url` 帶入）時顯示「編輯與刪除要等下次 rebuild 才生效」的標頭提示）、`ContextCardsTab`、`kbRoutes.tsx`。 |
 | `web/src/routes/` | AutoCRUD Web Generator 自動產生的 TanStack-Router-style admin scaffold（`__root.tsx`/`index.tsx`/`autocrud-admin/…`）。**不由 live `main.tsx` 入口掛載**——`main.tsx` 只渲染 `App.tsx` 的 react-router 樹（見下方眉角）。 |
+| `web/src/pages/HelpPage.tsx`、`web/src/api/help.ts` | #230 `/help` 頁（掛在 `GlobalLayout` 下）：列出 guide／release-notes 文件並連入 KB 文件檢視，內嵌一個鎖定 Platform Help collection 的 `KbChatPanel`。client `getHelpInfo`（`GET /api/help`）＋ `qk.help`；入口三處——`GlobalNav` HelpLink、`Launcher` HelpCard、`OnboardingModal`「See the full guide →」。 |
+| `web/src/components/ModelEffortPicker.tsx`、`web/src/lib/kbSearchMax.ts` | composer 的模型／推理力度選擇器；#334 在共用 KB-search 表面（KB chat＋app chat）內嵌 per-message kb_search 次數 stepper（`useKbSearchMax`，sticky localStorage、`KB_SEARCH_MAX_DEFAULT=3`／`KB_SEARCH_MAX_UI_MAX=10`、clamp helper）。`useAgent`／`useKbChat` 每則訊息帶 `maxKbSearches`（→ `max_kb_searches`，後端再 clamp）。 |
+| `web/src/components/WorkflowsModal.tsx`、`api/workspaceWorkflows.ts`、`hooks/useWorkspaceWorkflows.tsx` | #323 使用者自編 workflow 面板（仿 `SkillsModal`：逐列 Run、下載整包 `.workflows/` zip、匯入 `.json`），資料走 `useWorkspaceWorkflows` + `qk.workspaceWorkflows`；由 `AgentPanel`／`AgentHeader` 標頭按鈕（Skills 旁）開啟。 |
+| `web/src/components/ToolsPickerModal.tsx`、`ToolsChecklist.tsx`、`toolCatalog.tsx` | #322 per-App 工具挑選器：`AgentHeader` Tools 按鈕 → `ToolsPickerModal` → `ToolsChecklist`（每列 Default／On／Off 三態、搜尋、reset），經 read-modify-PUT `setField('attached_tool_prefs', …)` 存回（`WorkspaceShell`→`ItemChatShell`→`AgentPanel`→`AgentHeader`）；`toolCatalog.tsx` 讀 `GET /tools` 為未映射工具補標籤（i18n 疊在上層）。query key `qk.itemTools`／`qk.toolsCatalog`。 |
 
 ## 介面與接縫
 
@@ -136,7 +140,7 @@ flowchart TD
     react-markdown 預設 sanitizer 把未知 scheme 丟成 `''`（曾是 ReportRenderer 的潛伏 bug，#221）。所有 `[n]` 渲染都走 `renderers/kbCite`，讓 byMarker/muted/multi-match 規則處處一致。
 
 !!! note "i18n 目錄每個鍵都要兩種語系"
-    缺一個 locale 就是型別錯誤。UI 字串描述動作/結果——不放原始工具名/mime/系統名詞（`TOOL_LABEL` 把原始工具名映到友善標籤；未映射 → 泛用「使用工具」，原始名只放 hint）。
+    缺一個 locale 就是型別錯誤。UI 字串描述動作/結果——不放原始工具名/mime/系統名詞（`TOOL_LABEL` 把原始工具名映到友善標籤；未映射時先退到後端 tool catalog（`toolCatalog.tsx` 讀 `GET /tools`，#322），再退到泛用「使用工具」，原始名只放 hint）。
 
 !!! note "檔案樹 IDE 不 import 具體 api 或 investigation id"
     它從 context 讀 `FileService`（`useFileService`）並尊重 `FileCaps`。同一外殼服務 investigation 檔案與 KB 文件。
