@@ -50,10 +50,32 @@ class _EchoLlm(ILlm):
         yield (f"summary {hashlib.sha256(prompt.encode()).hexdigest()[:8]}.", False)
 
 
+class _CardOkRollupBoomLlm(ILlm):
+    """Summarises files fine but explodes on the directory / architecture roll-up,
+    so a test can drive a finalize-stage failure (cards succeed, finalize fails)."""
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        if "documenting a source file" in prompt:
+            yield ("a summary.", False)
+            return
+        raise RuntimeError("boom on roll-up")
+
+
 class _NoopRunner:
     async def run(self, prompt, ctx):  # the code build path never uses the runner
         if False:  # pragma: no cover
             yield
+
+
+def _jobs(spec) -> list:
+    from specstar import QB
+
+    from workspace_app.kb.wiki.jobs import WikiMaintenanceJob
+
+    return [
+        r.data
+        for r in spec.get_resource_manager(WikiMaintenanceJob).list_resources(QB.all().build())
+    ]
 
 
 def _code_collection(spec) -> str:
@@ -219,8 +241,8 @@ async def test_changing_one_file_rebuilds_only_its_dir_chain():
     await coord.aclose()
 
     store = WikiFileStore(spec)
-    lib_before = (await store.read_with_etag(cid, "/dirs/lib.md"))[1]  # ty: ignore[non-subscriptable]
-    app_before = (await store.read_with_etag(cid, "/dirs/app.md"))[1]  # ty: ignore[non-subscriptable]
+    lib_before = (await store.read_with_etag(cid, "/dirs/lib.md"))[1]  # ty: ignore[not-subscriptable]
+    app_before = (await store.read_with_etag(cid, "/dirs/app.md"))[1]  # ty: ignore[not-subscriptable]
 
     # Edit app/a.py (new bytes → new content hash → its card + summary change).
     spec.get_resource_manager(SourceDoc).create_or_update(
@@ -236,7 +258,122 @@ async def test_changing_one_file_rebuilds_only_its_dir_chain():
     await coord.trigger_code_build(cid)
     await coord.aclose()
 
-    lib_after = (await store.read_with_etag(cid, "/dirs/lib.md"))[1]  # ty: ignore[non-subscriptable]
-    app_after = (await store.read_with_etag(cid, "/dirs/app.md"))[1]  # ty: ignore[non-subscriptable]
+    lib_after = (await store.read_with_etag(cid, "/dirs/lib.md"))[1]  # ty: ignore[not-subscriptable]
+    app_after = (await store.read_with_etag(cid, "/dirs/app.md"))[1]  # ty: ignore[not-subscriptable]
     assert lib_after == lib_before  # unrelated dir page not rewritten
     assert app_after != app_before  # the affected dir chain was rebuilt
+
+
+# ── edge cases (CAS store + coordinator guards) ─────────────────────────────
+
+
+def test_run_store_mark_done_is_idempotent():
+    spec = make_spec(default_user="u")
+    store = CodeWikiBuildRunStore(spec)
+    store.start("c1", total=2)
+    store.mark_done("c1", 0)
+    store.mark_done("c1", 0)  # at-least-once redelivery → recorded once
+    run = store.get("c1")
+    assert run is not None and run.done == [0]
+
+
+def test_run_store_mutations_on_a_missing_run_are_noops():
+    spec = make_spec(default_user="u")
+    store = CodeWikiBuildRunStore(spec)
+    store.mark_done("ghost", 0)  # never started — no crash, no row created
+    assert store.get("ghost") is None
+
+
+def test_run_store_claim_finalize_is_won_exactly_once():
+    spec = make_spec(default_user="u")
+    store = CodeWikiBuildRunStore(spec)
+    store.start("c2", total=1)
+    store.mark_done("c2", 0)
+    assert store.claim_finalize("c2") is True  # gate closed → the one winner
+    assert store.claim_finalize("c2") is False  # already claimed
+
+
+async def test_trigger_code_build_on_a_missing_collection_is_a_noop():
+    spec = make_spec(default_user="u")
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+    await coord.trigger_code_build("does-not-exist")  # collection vanished — no crash
+    assert not _jobs(spec)
+
+
+async def test_empty_code_collection_finalizes_with_no_card_jobs():
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)  # use_wiki + git_url but NO sources yet
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+    await coord.trigger_code_build(cid)
+    await coord.aclose()  # split (0 batches) → enqueues finalize directly → done
+    run = CodeWikiBuildRunStore(spec).get(cid)
+    assert run is not None and run.total == 0 and run.status == "done"
+
+
+def test_status_is_idle_for_a_never_built_collection():
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+    st = coord.status(cid)  # no run, no build state → idle default
+    assert not st.building and st.total == 0 and st.last_error is None
+
+
+async def test_trigger_on_a_non_code_collection_is_a_noop():
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="prose", use_wiki=True))  # use_wiki but no git_url
+        .resource_id
+    )
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+    await coord.trigger_code_build(cid)  # not a code-wiki collection → no build
+    assert not _jobs(spec)
+
+
+async def test_trigger_coalesces_onto_an_in_flight_build():
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)
+    _add(spec, cid, "app/a.py")
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+    CodeWikiBuildRunStore(spec).start(cid, total=3)  # a build is already running
+    await coord.trigger_code_build(cid)  # is_active → coalesce, no fresh split
+    assert not [j for j in _jobs(spec) if j.payload.op == "code_split"]
+
+
+def test_consuming_property_reflects_the_consumer():
+    spec = make_spec(default_user="u")
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+    assert coord.consuming is False
+    coord.start_consuming()
+    assert coord.consuming is True  # the #312 observable gate
+
+
+async def test_split_stage_failure_is_recorded_not_fatal():
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)
+    _add(spec, cid, "app/a.py")
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_Llm())
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("split exploded")
+
+    coord._code_builder.plan_batches = _boom  # ty: ignore[invalid-assignment]  # force split failure
+    await coord.on_doc_indexed(encode_doc_id(cid, "app/a.py"))
+    await coord.aclose()
+    assert coord.status(cid).errors >= 1  # split failure surfaced, not silent
+
+
+async def test_finalize_stage_failure_is_recorded_not_fatal():
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)
+    a = _add(spec, cid, "app/a.py")
+    _add(spec, cid, "app/b.py")
+
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_CardOkRollupBoomLlm())
+    await coord.on_doc_indexed(a)
+    await coord.aclose()  # cards succeed, the dir/arch roll-up explodes in finalize
+
+    run = CodeWikiBuildRunStore(spec).get(cid)
+    assert run is not None and run.status == "error"  # finalize failure stamped terminal
+    assert coord.status(cid).errors >= 1  # surfaced, not silent
+    assert not coord.status(cid).building  # the partition is freed

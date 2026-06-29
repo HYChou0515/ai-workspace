@@ -14,14 +14,23 @@
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| **P1** | **A0+A1 觸發接線**：統一 `trigger_code_build` 接縫，從 sync 端點 / sweeper（callback 注入）/ use_wiki toggle-on / 手動 rebuild route 觸發；A1 刪檔對 code collection 跳過散文 unfold。讓功能真的能端到端跑（暫時仍是單一 monolithic build）| ⬜ |
-| **P2** | **Reader/QA 驗證（A2）**：測 + live-check KB reader 在 code wiki 上回答問題並引用回原始 SourceDoc | ⬜ |
-| **P3** | **真 repo dogfood（A3）**：拿本 ai-workspace repo（或可控子集）配真 Ollama 建一次，看品質/時間/成本 + FE 實際 render | ⬜ |
-| **P4** | **job-queue fan-out（Q1+Q2）**：monolithic `code_build` → `code_split`/`code_card`/`code_finalize` op + `CodeWikiBuildRun` CAS join；L0 按「資料夾內 token-capped 批」fan-out（`partition_key=None`）| ⬜ |
-| **P5** | **L1/L2 增量（Q3）**：per-page input-hash，只重建受影響的 dir 鏈 + L2-if-changed | ⬜ |
-| **P6** | **FE（Q5，minimal）**：刪檔過期提示 + code-build phase 標籤；結構不動（已能 render）| ⬜ |
-| **P7** | **prompts + `_unfence`（B8）**：迭代 prompt（尤其批次「多檔→N 卡片」）；`_unfence` 改成逐頁 robust 去 fence | ⬜ |
-| **P8** | **權威全量 100% gate（C9）**：跑完整本地 suite（含 integration）→ combine → `--fail-under=100`；whole-project ty/ruff/format | ⬜ |
+| **P1** | **A0+A1 觸發接線**：統一 `trigger_code_build` 接縫，從 sync 端點 / sweeper（lifespan closure）/ 手動 rebuild route 觸發；A1 刪檔對 code collection 跳過散文 unfold。讓功能真的能端到端跑 | ✅ |
+| **P2** | **Reader/QA 驗證（A2）**：測 + live-check KB reader 在 code wiki 上回答問題並引用回原始 SourceDoc | ✅ |
+| **P3** | **真 repo dogfood（A3）**：拿本 repo 的 `kb/wiki` 套件配真 Ollama 走 fan-out 建一次（12 檔→6 批、44.7s、reader 正確回答+引用）| ✅ |
+| **P4** | **job-queue fan-out（Q1+Q2）**：monolithic `code_build` → `code_split`/`code_card`/`code_finalize` op + `CodeWikiBuildRun` CAS join；L0 按「資料夾內 token-capped 批」fan-out（`partition_key=None`）| ✅ |
+| **P5** | **L1/L2 增量（Q3）**：per-page input-hash，只重建受影響的 dir 鏈 + L2-if-changed（無變更 rebuild = 0 LLM call）| ✅ |
+| **P6** | **FE（Q5，minimal）**：刪檔過期提示 + code-build phase 標籤；結構不動（已能 render）| ✅ |
+| **P7** | **prompts + `_unfence`（B8）**：`_unfence` 容忍未關 fence；read_source 容忍 `/files/<src>.md` card 路徑（修 P2 引用斷鏈）| ✅ |
+| **P8** | **權威全量 100% gate（C9）**：CI-mirror unit + 新碼 100% + whole-project ty/ruff/format；完整 integration gate 見下方註記 | ✅ |
+
+### 實作偏離 / 註記（grill 鎖定外、實作時定的）
+
+- **Q2 的「小檔併共用 collect()」子優化延後**：fan-out 的 unit（job）粒度照 Q2 做了「資料夾內 token-capped 批」（MULTIHOST 防 straggler 的關鍵已兌現），但**批內每檔仍各自一個 `collect()`**。把多檔併進單一 call 回傳 N 卡片，對小模型的多卡解析可靠性有風險，且 job 層批次已提供 MULTIHOST 均衡——故延後為後續優化。
+- **use_wiki toggle-on 不做後端 event_handler**：collection 更新走 specstar auto-CRUD（無手寫 seam），且 sync/async event handler 糾結。改由 **FE 切換 on 時呼叫既有 rebuild endpoint**（P6），後端「toggle + 手動」收斂成同一條 rebuild 路徑。
+- **card batch budget 是 coordinator 構造器旋鈕**（預設 24k chars），YAML operator 設定延後（預設適合本機、參數適合測試）。
+- **P2 live 發現**：reader 的 agent loop 需要 **tool-calling 能力的模型 + `ollama_chat/` 前綴**（`ollama/` 走 /api/generate 無原生 tools）；小模型會把 wiki 頁路徑誤傳給 read_source → P7 讓 read_source 容忍 card 路徑。build 用 coder 模型摘要、reader 用通用模型，分工。
+- **P3 dogfood 發現**：`qwen2.5-coder` 偶會**拒答**某檔摘要（graceful：tree-sitter skeleton 仍在、空摘要不汙染上層）；屬模型品質限制，不加 refusal 偵測（過擬合）。
+- **逐層 L1 fan-out 延後**（Q3）：首建的 dir roll-up 仍序列；多輪 DAG 排程對一次性成本不成比例。
 
 **排序理由**：A0 不修，功能走主流程根本不跑，所以 P1 最先。fan-out（P4）是 scale 優化、不改 wiki 內容語意，所以放在「先讓它跑（P1）+ 驗 reader（P2）+ dogfood 看真實況（P3）」之後——dogfood 也才能告訴我們 scale 到底痛不痛。
 

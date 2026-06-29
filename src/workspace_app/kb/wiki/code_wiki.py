@@ -154,7 +154,7 @@ def plan_card_batches(paths: list[str], sizes: dict[str, int], budget: int) -> l
                 cur, cur_size = [], 0
             cur.append(p)
             cur_size += s
-        if cur:
+        if cur:  # pragma: no branch — a dir group always has ≥1 file, so cur is non-empty
             batches.append(cur)
     return batches
 

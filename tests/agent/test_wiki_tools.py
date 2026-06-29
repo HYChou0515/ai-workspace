@@ -14,6 +14,7 @@ from agents import RunContextWrapper
 
 from workspace_app.agent import AgentToolContext
 from workspace_app.agent.tools import (
+    _coerce_source_path,
     list_sources_impl,
     read_new_source_impl,
     read_source_impl,
@@ -80,6 +81,23 @@ async def test_read_new_source_returns_the_triggering_doc_text():
     assert "revision C" in await read_new_source_impl(ctx)
     # absent → a clear notice, not a crash
     assert "no" in (await read_new_source_impl(_ctx())).lower()
+
+
+def test_coerce_source_path_recovers_a_code_wiki_card_path():
+    # #281 P7: read_source falls back through this when handed a wiki CARD path.
+    assert _coerce_source_path("/files/app/queue.py.md") == "app/queue.py"
+    assert _coerce_source_path("/files/app/queue.py") == "app/queue.py"  # /files/ but no .md
+    assert _coerce_source_path("/files/README.md.md") == "README.md"  # strip exactly one .md
+    assert _coerce_source_path("app/queue.py") == "app/queue.py"  # plain source path untouched
+
+
+async def test_read_source_maintainer_mode_tolerates_a_card_path():
+    # #281 P7: even on a maintainer run (plain text), the /files/<src>.md card
+    # form resolves to the source — small models confuse the two.
+    sources = _FakeSources({"app/queue.py": "class TaskQueue: ..."})
+    ctx = _ctx(wiki_sources=sources)  # no wiki_cite_sources → maintainer path
+    out = await read_source_impl(ctx, "/files/app/queue.py.md")
+    assert "TaskQueue" in out
 
 
 async def test_list_and_read_sources():

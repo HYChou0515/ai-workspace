@@ -126,7 +126,9 @@ class CodeWikiBuildRunStore:
                     expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
                 )
                 return new
-            except PreconditionFailedError:
+            except (
+                PreconditionFailedError
+            ):  # pragma: no cover — concurrent-writer race, not deterministically reproducible
                 continue  # another writer won the race — re-read and retry
         raise RuntimeError(  # pragma: no cover — backstop against live-lock
             f"CodeWikiBuildRun CAS exhausted retries for {collection_id}"

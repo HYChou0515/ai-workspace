@@ -624,15 +624,19 @@ class WikiMaintenanceCoordinator:
         orphans (#281 P4 / Q4b), exactly once (CAS-claimed by the card that closed
         the gate). Stamps the run terminal so the active-build guard clears."""
         cid = payload.collection_id
+        if (
+            self._code_builder is None
+        ):  # pragma: no cover — finalize is enqueued only by a builder pod
+            self._code_run.finish(cid, status="error")
+            return
         status = "done"
-        if self._code_builder is not None:
-            try:
-                with self._wiki_store.acting_as(triggered_by):
-                    asyncio.run(self._code_builder.finalize(cid))
-            except Exception:
-                _LOGGER.exception("code wiki finalize failed for %s", cid)
-                self._record_code_error(cid, "the code wiki build failed to finalize")
-                status = "error"
+        try:
+            with self._wiki_store.acting_as(triggered_by):
+                asyncio.run(self._code_builder.finalize(cid))
+        except Exception:
+            _LOGGER.exception("code wiki finalize failed for %s", cid)
+            self._record_code_error(cid, "the code wiki build failed to finalize")
+            status = "error"
         self._code_run.finish(cid, status=status)
 
     def _enqueue_code_finalize(self, cid: str, actor: str) -> None:

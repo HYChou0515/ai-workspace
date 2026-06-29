@@ -748,9 +748,10 @@ def register_kb_routes(
         # code-wiki would never build on the main flow. Trigger the build
         # explicitly now that sync has returned (all docs are indexed by then, so
         # one build covers them all — no batch-join needed). No-op for non-wiki /
-        # non-code collections.
-        if wiki_coordinator is not None:
-            await wiki_coordinator.trigger_code_build(collection_id, requested_by=get_user_id())
+        # non-code collections. create_app always wires a coordinator (same as the
+        # delete route's assert), so this never no-ops in practice.
+        assert wiki_coordinator is not None
+        await wiki_coordinator.trigger_code_build(collection_id, requested_by=get_user_id())
         # Re-read so we return the freshly-recorded sha.
         refreshed = rm.get(collection_id).data
         assert isinstance(refreshed, Collection)
