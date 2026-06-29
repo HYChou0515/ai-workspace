@@ -194,9 +194,11 @@ class CodeWikiBuilder:
         material = "Files:\n" + ("\n".join(file_lines) or "(none)")
         if sub_lines:
             material += "\n\nSub-packages:\n" + "\n".join(sub_lines)
-        synthesis = self._llm.collect(
-            _DIR_PROMPT.replace("{dir}", directory).replace("{material}", material)
-        ).strip()
+        synthesis = _unfence(
+            self._llm.collect(
+                _DIR_PROMPT.replace("{dir}", directory).replace("{material}", material)
+            )
+        )
         body = f"# {directory}\n\n{synthesis}\n"
         if file_lines:
             body += "\n## Files\n" + "\n".join(file_lines) + "\n"
@@ -238,16 +240,18 @@ class CodeWikiBuilder:
             material += f"{sep}- {p}: " + await self._summary_of(collection_id, f"/files/{p}.md")
         material = material or "(empty repository)"
 
-        arch = self._llm.collect(_ARCH_PROMPT.replace("{material}", material)).strip()
+        arch = _unfence(self._llm.collect(_ARCH_PROMPT.replace("{material}", material)))
         await self._store.write(
             collection_id, "/architecture.md", f"# Architecture\n\n{arch}\n".encode()
         )
 
         topics = self._plan_topics(material)
         for title in topics:
-            body = self._llm.collect(
-                _TOPIC_PAGE_PROMPT.replace("{title}", title).replace("{material}", material)
-            ).strip()
+            body = _unfence(
+                self._llm.collect(
+                    _TOPIC_PAGE_PROMPT.replace("{title}", title).replace("{material}", material)
+                )
+            )
             await self._store.write(
                 collection_id, f"/topics/{_slugify(title)}.md", f"# {title}\n\n{body}\n".encode()
             )
@@ -287,6 +291,16 @@ class CodeWikiBuilder:
 
 # At most this many cross-cutting topic pages — keep the wiki focused, bound cost.
 _MAX_TOPICS = 6
+
+
+def _unfence(text: str) -> str:
+    """Strip a single wrapping ```` ```lang … ``` ```` fence some models put
+    around their whole answer — otherwise a page's prose renders as one big code
+    block in the markdown view. Leaves fences that are part of the content alone."""
+    lines = text.strip().splitlines()
+    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip()
+    return text.strip()
 
 
 def _slugify(title: str) -> str:

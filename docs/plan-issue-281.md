@@ -17,7 +17,7 @@
 | **P2** | L1 資料夾頁：沿目錄樹遞迴 roll-up（每資料夾餵子檔卡片 + 子資料夾摘要 → 寫頁）；**L0 有任何檔變動才整批重建上層**（單一 changed 閘門，比逐 dir hash 簡單且足夠）| ✅ |
 | **P3** | L2 架構/索引/主題頁：餵全部資料夾摘要 → 寫 `/architecture.md` + `/index.md` + `/topics/<slug>.md`；摘要變才重合成 | ✅ |
 | **P4** | 觸發接線：`on_doc_indexed` 對 code collection（有 `git_url`）改 enqueue 單一 coalesced `code_build` job（跳過逐 source fold）；handler dispatch；coordinator + `build_coordinators` + `create_app` 注入 wiki `ILlm`；`WikiBuildState` 粗進度 | ✅ |
-| **P5** | DoD：真 LLM live check（本專案慣例 #51）+ docs/development.md + 全 gate（ruff/ty/format/coverage 100%）| ⬜ |
+| **P5** | DoD：真 LLM live check（本專案慣例 #51）+ docs/development.md + 全 gate（ruff/ty/format/coverage 100%）| ✅ |
 
 每階段完成定義：`uv run ruff check && ruff format --check && ty check` 全清、改動行
 `coverage report` 100%、走 `/tdd`（red→green→refactor）、commit、本表打勾。
@@ -77,15 +77,14 @@ on_doc_indexed(doc_id)                     [既有 hook，P4 改]
 
 **新增**：
 - `kb/wiki/code_outline.py` — `outline(path, text) -> str`：用 `tree_sitter_languages.get_parser(lang)` 走樹抽頂層 def/class/import 骨架（py/ts/tsx/js/jsx 起步集）；非 code 或 parse 失敗 → `""`（graceful）。
-- `kb/wiki/code_wiki.py` — `CodeWikiBuilder(spec, llm: ILlm, *, wiki_store, concurrency=…)`，`build(cid, *, on_phase=None)`，內部 `_file_cards` / `_dir_pages` / `_arch_pages`，各層 `asyncio.gather` + semaphore fan-out（per-collection 仍序列）。
-- `kb/prompts/code_card.md`、`code_dir.md`、`code_arch.md` — L0/L1/L2 的 prompt。
+- `kb/wiki/code_wiki.py` — `CodeWikiBuilder(spec, llm: ILlm, *, wiki_store=None)`，`build(cid)`，內部 `_file_cards`（L0）/ `_dir_pages`（L1）/ `_arch_pages`（L2）。v1 序列執行（per-collection 本就序列；層內 fan-out 為延後優化）。
+- L0/L1/L2 的 prompt 用 **inline 模組常數**（`_CARD_PROMPT`/`_DIR_PROMPT`/`_ARCH_PROMPT`/`_TOPICS_PROMPT`/`_TOPIC_PAGE_PROMPT`），仿 `kb/quality.py`（最近的「確定性 LLM map-reduce」範本），非 .md 檔。free-text 輸出經 `_unfence` 去掉模型整段包的 ```` ``` ```` fence（live check 抓到的真問題）。
 - `WikiJobPayload.op` 多一個 `"code_build"`；coordinator `_handle` dispatch + `on_doc_indexed` 路由 + coalesce。
-- `build_coordinators` / `create_app`：從 `get_wiki_endpoint(settings)` 建 `LitellmLlm` 注入 coordinator（`code_wiki_llm: ILlm | None`，null → code_build 記錯不 crash）。
+- `build_coordinators`：從既有 `wiki_model/base/key`（`get_wiki_endpoint` 早已串入）建 `LitellmLlm` 注入 coordinator（`code_wiki_llm: ILlm | None`，null → code_build 記錯不 crash）。create_app/worker 簽名不變。
 
-**增量機制（借 input-hash）**：
-- L0：卡片首行寫 `<!-- src: {SourceDoc.content.file_id} -->`；該檔卡片存在且 file_id 吻合 → 跳過。
-- L1：資料夾頁寫 `<!-- inputs: {hash(子卡片 file_id 排序串)} -->`；吻合 → 跳過。
-- L2：`/architecture.md` 寫 `<!-- inputs: {hash(全部資料夾摘要)} -->`；吻合 → 跳過。
+**增量機制**：
+- L0：卡片首行寫 `<!-- src: {SourceDoc.content.file_id} -->`；該檔卡片存在且 file_id 吻合 → 跳過（不呼叫 LLM）。
+- L1/L2：**只在「這次 build 有任何 L0 卡片變動」時整批重建**（單一 changed 閘門，比逐頁 input-hash 簡單且足夠——成本主項是 L0 的 N 個檔，dir/arch 數遠少）。逐頁 input-hash 為延後優化。
 
 ---
 

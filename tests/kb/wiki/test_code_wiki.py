@@ -15,7 +15,11 @@ from specstar.types import Binary
 
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.llm import ILlm
-from workspace_app.kb.wiki.code_wiki import CodeWikiBuilder, _first_paragraph_after_h1
+from workspace_app.kb.wiki.code_wiki import (
+    CodeWikiBuilder,
+    _first_paragraph_after_h1,
+    _unfence,
+)
 from workspace_app.kb.wiki.store import WikiFileStore
 from workspace_app.resources import Collection, SourceDoc, make_spec
 
@@ -245,6 +249,29 @@ def test_build_writes_topic_pages_and_links_them_from_index():
     index = asyncio.run(store.read(cid, "/index.md")).decode()
     assert "Authentication" in index and "topics/authentication.md" in index
     assert index.count("](/topics/") == 2  # de-duplicated to two distinct topics
+
+
+def test_architecture_page_unwraps_a_fenced_model_answer():
+    # Some models wrap their whole answer in a ```markdown fence — left in, the FE
+    # renders the architecture as one big code block. It must be stripped.
+    spec, cid = _mk()
+    _add_code(spec, cid, "app/main.py", "def main():\n    pass\n")
+    store = WikiFileStore(spec)
+    llm = _RoutedLlm(
+        {"architecture overview": "```markdown\nLayered service.\n```", "cross-cutting topics": ""}
+    )
+
+    asyncio.run(CodeWikiBuilder(spec, llm, wiki_store=store).build(cid))
+
+    arch = asyncio.run(store.read(cid, "/architecture.md")).decode()
+    assert "Layered service." in arch
+    assert "```markdown" not in arch  # the wrapping fence was stripped
+
+
+def test_unfence_strips_only_a_whole_output_fence():
+    assert _unfence("```markdown\nhello\nworld\n```") == "hello\nworld"
+    assert _unfence("just prose") == "just prose"  # nothing to strip
+    assert _unfence("```py\nno closing fence") == "```py\nno closing fence"  # not a full wrap
 
 
 def test_first_paragraph_after_h1_edge_cases():
