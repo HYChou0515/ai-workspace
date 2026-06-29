@@ -1246,6 +1246,18 @@ _WORKSPACE_TOOLS = [
 _LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 
 
+def builtin_tool_descriptions() -> dict[str, str]:
+    """Every built-in tool's registered name → its LLM-facing description (the
+    impl's docstring). One source for the tool catalog (#322) so the web picker
+    and chat tool cards label tools off the same text the model sees, instead of
+    a hand-kept FE map that drifts. Package-command descriptions are read
+    separately from the prebuilt bundles (``discover_packages``)."""
+    return {
+        name: (function_tool(impl, name_override=name).description or "")
+        for name, impl in _IMPLS.items()
+    }
+
+
 def build_tools(
     allowed: list[str] | None = None,
     *,

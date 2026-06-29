@@ -29,6 +29,8 @@ import type {
   SearchParams,
   ExecuteCellArgs,
   FileInfo,
+  ItemToolState,
+  ToolCatalogEntry,
   WorkspaceUsage,
   NotebookRef,
   NotificationItem,
@@ -137,6 +139,19 @@ export const realApi: ApiClient = {
 
   async getAppManifest(slug: string) {
     return json<AppManifest>(await apiFetch(`/apps/${encodeURIComponent(slug)}`));
+  },
+
+  async getToolsCatalog() {
+    return json<ToolCatalogEntry[]>(await apiFetch("/tools"));
+  },
+
+  async getItemTools(slug: string, itemId: string) {
+    const r = await json<{ tools: ItemToolState[] }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/tools`,
+      ),
+    );
+    return r.tools;
   },
 
   async listAppItems(resourceRoute: string, params?: SearchParams) {

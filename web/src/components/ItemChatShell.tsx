@@ -38,6 +38,9 @@ type AgentChrome = {
   appColor?: string;
   attachedPreset: string;
   onAttachPreset: (preset: string) => void;
+  /** #322: persist this item's per-tool override (`attached_tool_prefs`). Threaded
+   * to the AgentPanel header's Tools picker; absent → no picker button. */
+  onSaveToolPrefs?: (prefs: Record<string, boolean>) => void;
   /** #198: the folder the composer's attach stages files into (the item's profile's
    * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
   uploadDir: string;
@@ -67,6 +70,7 @@ export function ItemChatShell({
   appColor,
   attachedPreset,
   onAttachPreset,
+  onSaveToolPrefs,
   uploadDir,
 }: {
   slug: string;
@@ -220,6 +224,7 @@ export function ItemChatShell({
           appColor={appColor}
           attachedPreset={attachedPreset}
           onAttachPreset={onAttachPreset}
+          onSaveToolPrefs={onSaveToolPrefs}
           uploadDir={uploadDir}
         />
       ) : (
@@ -244,6 +249,7 @@ function ItemChatPanel({
   appColor,
   attachedPreset,
   onAttachPreset,
+  onSaveToolPrefs,
   uploadDir,
 }: {
   slug: string;
@@ -335,6 +341,7 @@ function ItemChatPanel({
         suggestions={suggestions}
         attachedPreset={attachedPreset}
         onAttachPreset={onAttachPreset}
+        onSaveToolPrefs={onSaveToolPrefs}
         appTitle={appTitle}
         appIcon={appIcon}
         appColor={appColor}

@@ -25,6 +25,27 @@ def test_resolve_new_app_item_uses_the_app_catalog():
     assert "rca-tools" in (cfg.allowed_tools or [])  # the App ceiling (default profile)
 
 
+def test_resolve_item_applies_its_tool_prefs():
+    """#322: a per-item ``attached_tool_prefs`` tri-state override flows from the
+    stored WorkItem into the resolved AgentConfig — here forcing ``rca-tools`` OFF
+    while leaving the rest of the App ceiling intact."""
+    spec = make_spec(default_user="u")
+    rm = spec.get_resource_manager(RcaInvestigation)
+    rid = rm.create(
+        RcaInvestigation(
+            title="t",
+            owner="u",
+            attached_preset="claude-opus",
+            attached_tool_prefs={"rca-tools": False},
+        )
+    ).resource_id
+
+    cfg = resolve_item_agent_config(spec, _app_catalog(), rid)
+    assert cfg is not None
+    assert "rca-tools" not in (cfg.allowed_tools or [])  # forced off per-item
+    assert "exec" in (cfg.allowed_tools or [])  # untouched → still on
+
+
 def test_resolve_composes_the_profile_skill_index_into_the_prompt():
     """#89 T1d: a profile that ships skills (local-lab → report-format) has its
     (name, description) index composed into the resolved system prompt, so the

@@ -46,4 +46,5 @@ def resolve_item_agent_config(
         app_slug=slug,
         profile=item.profile,
         attached_preset=item.attached_preset or None,
+        tool_prefs=item.attached_tool_prefs or None,
     )

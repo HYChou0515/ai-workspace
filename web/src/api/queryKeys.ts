@@ -28,6 +28,11 @@ export const qk = {
   appItems: (slug: string) => ["appItems", slug] as const,
   appItem: (slug: string, id: string) => ["appItem", slug, id] as const,
 
+  // #322: the flat tool catalog (chat tool-card labels) + one item's tool-picker
+  // state. Invalidate `itemTools` after saving the picker (the override changed).
+  toolsCatalog: ["toolsCatalog"] as const,
+  itemTools: (slug: string, itemId: string) => ["itemTools", slug, itemId] as const,
+
   // topic-hub §5 (#142): the parsed `collections.json` of one Hub item — the
   // collection-set picker's badge + modal read it; saving the picker invalidates
   // this AND `qk.file(id, "/collections.json")` (so an open Monaco tab refreshes).
