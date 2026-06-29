@@ -26,6 +26,7 @@ moved.
 
 from __future__ import annotations
 
+import hashlib
 import posixpath
 import re
 from collections import defaultdict
@@ -46,6 +47,19 @@ if TYPE_CHECKING:
 # A file card opens with a hidden marker carrying the source's content hash, so
 # an incremental build can skip a file whose bytes haven't changed.
 _SRC_MARKER = "<!-- src: {file_id} -->"
+
+# A directory / architecture page opens with a hidden marker carrying the hash of
+# its INPUT (the child summaries it was rolled up from), so an incremental
+# finalize can skip a page whose inputs are unchanged (#281 P5 / Q3) — rebuilding
+# only the dir chain affected by a changed card, not every page on every re-pull.
+_IN_MARKER = "<!-- in: {h} -->"
+
+
+def _hash_material(material: str) -> str:
+    """A short stable digest of a page's roll-up input — the skip key for the
+    per-page incremental build (#281 P5)."""
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
 
 _CARD_PROMPT = (
     "You are documenting a source file for a code wiki. In ONE sentence, say what "
@@ -117,6 +131,34 @@ def _build_tree(paths: list[str]) -> _Tree:
     return _Tree(child_files, child_dirs, all_dirs)
 
 
+def plan_card_batches(paths: list[str], sizes: dict[str, int], budget: int) -> list[list[str]]:
+    """Group source paths into card-build batches (#281 P4, Q2). Each batch is
+    the fan-out unit for one ``code_card`` job: kept WITHIN one directory
+    (coherence — neighbouring files in a package share context) AND under
+    ``budget`` total source size (so no single fat directory becomes a straggler
+    that gates the CAS join under parallel consumers). A file larger than the
+    budget gets its own batch. ``sizes`` maps a path → its source size
+    (chars/tokens); a missing path counts as 0. Paths are sorted so the result is
+    deterministic and same-directory files stay adjacent."""
+    by_dir: dict[str, list[str]] = defaultdict(list)
+    for p in sorted(paths):
+        by_dir[posixpath.dirname(p)].append(p)
+    batches: list[list[str]] = []
+    for d in sorted(by_dir):
+        cur: list[str] = []
+        cur_size = 0
+        for p in by_dir[d]:
+            s = sizes.get(p, 0)
+            if cur and cur_size + s > budget:  # flush before exceeding the budget
+                batches.append(cur)
+                cur, cur_size = [], 0
+            cur.append(p)
+            cur_size += s
+        if cur:  # pragma: no branch — a dir group always has ≥1 file, so cur is non-empty
+            batches.append(cur)
+    return batches
+
+
 class CodeWikiBuilder:
     """Builds (and incrementally refreshes) one code collection's wiki."""
 
@@ -130,7 +172,9 @@ class CodeWikiBuilder:
         self._coll_rm = spec.get_resource_manager(Collection)
 
     async def build(self, collection_id: str) -> None:
-        """Bring the collection's code wiki up to date with its SourceDocs."""
+        """Bring the collection's code wiki up to date with its SourceDocs — the
+        monolithic path (live checks / tests / no-fan-out fallback). The fan-out
+        path (#281 P4) instead runs build_cards() per batch + finalize() once."""
         sources = SpecstarWikiSources(self._spec, collection_id)
         paths = sources.list()
         changed = await self._file_cards(collection_id, sources, paths)
@@ -138,9 +182,48 @@ class CodeWikiBuilder:
         # they're only worth redoing when at least one card moved; a re-pull that
         # changed nothing is a no-op.
         if changed:
-            tree = _build_tree(paths)
-            await self._dir_pages(collection_id, tree)
-            await self._arch_pages(collection_id, tree)
+            await self.finalize(collection_id)
+
+    async def build_cards(self, collection_id: str, paths: list[str]) -> None:
+        """Build the L0 file cards for a SUBSET of the collection's sources — one
+        fan-out batch (#281 P4). Same per-file render + content-hash skip as a
+        full build; the upper pages are (re)built once by finalize()."""
+        sources = SpecstarWikiSources(self._spec, collection_id)
+        await self._file_cards(collection_id, sources, paths)
+
+    def plan_batches(self, collection_id: str, budget: int) -> list[list[str]]:
+        """Plan the L0 card batches for the fan-out (#281 P4): directory-coherent,
+        token-capped by source size. Sizes come from the stored source text; the
+        actual packing is :func:`plan_card_batches`."""
+        sources = SpecstarWikiSources(self._spec, collection_id)
+        paths = sources.list()
+        sizes = {p: len(ref.text) for p in paths if (ref := sources.ref(p)) is not None}
+        return plan_card_batches(paths, sizes, budget)
+
+    async def finalize(self, collection_id: str) -> None:
+        """Roll the directory pages + architecture/index/topics up from the file
+        cards, then prune any wiki page whose source is gone (#281 P4 / Q4b).
+        Runs once at the end of a fan-out (the cards are already written by the
+        card jobs); unconditional, so a delete-only change still prunes orphans."""
+        sources = SpecstarWikiSources(self._spec, collection_id)
+        paths = sources.list()
+        tree = _build_tree(paths)
+        await self._dir_pages(collection_id, tree)
+        await self._arch_pages(collection_id, tree)
+        await self._prune_orphans(collection_id, paths, tree)
+
+    async def _prune_orphans(self, collection_id: str, paths: list[str], tree: _Tree) -> None:
+        """Delete wiki pages whose backing source no longer exists (#281 Q4b): a
+        deleted/renamed file's ``/files/<path>.md`` card and a now-empty
+        ``/dirs/<d>.md`` page (stale ``/topics`` pages are pruned by ``_arch_pages``
+        itself, which owns the topic set). Reconciled against the CURRENT sources
+        on every finalize, so deletions converge without a per-delete rebuild
+        (deletes deliberately don't trigger one — see the coordinator)."""
+        keep = {f"/files/{p}.md" for p in paths}
+        keep |= {f"/dirs/{d}.md" for d in tree.all_dirs}
+        for page in await self._store.ls(collection_id):
+            if page.startswith(("/files/", "/dirs/")) and page not in keep:
+                await self._store.delete(collection_id, page)
 
     # ── L0: per-file cards ───────────────────────────────────────────
     async def _file_cards(
@@ -170,17 +253,22 @@ class CodeWikiBuilder:
         up from its direct child file cards + child sub-directory pages. Deepest
         first, so a parent reads summaries its children just wrote."""
         for d in sorted(tree.all_dirs, key=lambda x: x.count("/"), reverse=True):
-            page = await self._render_dir(
+            body = await self._render_dir(
                 collection_id,
                 d,
                 sorted(tree.child_files.get(d, [])),
                 sorted(tree.child_dirs.get(d, [])),
             )
-            await self._store.write(collection_id, f"/dirs/{d}.md", page.encode("utf-8"))
+            if body is not None:  # None ⇒ inputs unchanged, page kept as-is (P5)
+                await self._store.write(collection_id, f"/dirs/{d}.md", body.encode("utf-8"))
 
     async def _render_dir(
         self, collection_id: str, directory: str, files: list[str], subdirs: list[str]
-    ) -> str:
+    ) -> str | None:
+        """Roll a directory page up from its child summaries. Returns ``None`` to
+        SKIP (no rewrite, no LLM call) when the inputs are unchanged since the last
+        build (#281 P5) — so a re-pull only redoes the dir chain a changed card
+        actually moved."""
         file_lines = [
             f"- [{posixpath.basename(p)}](/files/{p}.md) — "
             f"{await self._summary_of(collection_id, f'/files/{p}.md')}"
@@ -194,12 +282,16 @@ class CodeWikiBuilder:
         material = "Files:\n" + ("\n".join(file_lines) or "(none)")
         if sub_lines:
             material += "\n\nSub-packages:\n" + "\n".join(sub_lines)
+        page = f"/dirs/{directory}.md"
+        input_hash = _hash_material(material)
+        if await self._is_input_current(collection_id, page, input_hash):
+            return None  # children's summaries unchanged — keep the existing page
         synthesis = _unfence(
             self._llm.collect(
                 _DIR_PROMPT.replace("{dir}", directory).replace("{material}", material)
             )
         )
-        body = f"# {directory}\n\n{synthesis}\n"
+        body = f"{_IN_MARKER.replace('{h}', input_hash)}\n# {directory}\n\n{synthesis}\n"
         if file_lines:
             body += "\n## Files\n" + "\n".join(file_lines) + "\n"
         if sub_lines:
@@ -223,12 +315,23 @@ class CodeWikiBuilder:
         marker = _SRC_MARKER.replace("{file_id}", file_id)
         return prev[0].decode("utf-8", errors="replace").startswith(marker)
 
+    async def _is_input_current(self, collection_id: str, page: str, input_hash: str) -> bool:
+        """True when ``page`` already exists and its input-hash marker matches —
+        i.e. the child summaries it was rolled up from are unchanged (#281 P5)."""
+        prev = await self._store.read_with_etag(collection_id, page)
+        if prev is None:
+            return False
+        marker = _IN_MARKER.replace("{h}", input_hash)
+        return prev[0].decode("utf-8", errors="replace").startswith(marker)
+
     # ── L2: architecture / index / topics ────────────────────────────
     async def _arch_pages(self, collection_id: str, tree: _Tree) -> None:
-        """Synthesise the top-down pages from the top-level summaries. Each
-        top-level directory page already recursively rolls up its whole subtree,
-        so the top-level summaries are a bounded, full-repo picture — no matter
-        how big the repo is."""
+        """Synthesise the top-down pages (architecture / topics / index) from the
+        top-level summaries. Each top-level directory page already recursively
+        rolls up its whole subtree, so the top-level summaries are a bounded,
+        full-repo picture — no matter how big the repo is. SKIPPED whole (no LLM)
+        when those summaries are unchanged since the last build (#281 P5); owns
+        the pruning of its own stale ``/topics`` pages when it does regenerate."""
         top_dirs = sorted(tree.child_dirs.get("", set()))
         top_files = sorted(tree.child_files.get("", []))
         dir_summaries = [
@@ -240,9 +343,14 @@ class CodeWikiBuilder:
             material += f"{sep}- {p}: " + await self._summary_of(collection_id, f"/files/{p}.md")
         material = material or "(empty repository)"
 
+        input_hash = _hash_material(material)
+        if await self._is_input_current(collection_id, "/architecture.md", input_hash):
+            return  # the top-level picture is unchanged — skip arch + topics + index
+
+        marker = _IN_MARKER.replace("{h}", input_hash)
         arch = _unfence(self._llm.collect(_ARCH_PROMPT.replace("{material}", material)))
         await self._store.write(
-            collection_id, "/architecture.md", f"# Architecture\n\n{arch}\n".encode()
+            collection_id, "/architecture.md", f"{marker}\n# Architecture\n\n{arch}\n".encode()
         )
 
         topics = self._plan_topics(material)
@@ -255,6 +363,12 @@ class CodeWikiBuilder:
             await self._store.write(
                 collection_id, f"/topics/{_slugify(title)}.md", f"# {title}\n\n{body}\n".encode()
             )
+        # Prune topic pages no longer proposed (the set can shift between builds);
+        # _arch_pages owns the topic lifecycle, so it reconciles them here.
+        keep_topics = {f"/topics/{_slugify(t)}.md" for t in topics}
+        for page in await self._store.ls(collection_id):
+            if page.startswith("/topics/") and page not in keep_topics:
+                await self._store.delete(collection_id, page)
 
         coll = self._coll_rm.get(collection_id).data
         assert isinstance(coll, Collection)
@@ -294,13 +408,19 @@ _MAX_TOPICS = 6
 
 
 def _unfence(text: str) -> str:
-    """Strip a single wrapping ```` ```lang … ``` ```` fence some models put
-    around their whole answer — otherwise a page's prose renders as one big code
-    block in the markdown view. Leaves fences that are part of the content alone."""
-    lines = text.strip().splitlines()
-    if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
-        return "\n".join(lines[1:-1]).strip()
-    return text.strip()
+    """Strip the wrapping ```` ```lang … ``` ```` fence some models put around
+    their whole answer — otherwise a page's prose renders as one big code block.
+    Only acts when the FIRST line is a fence (so content that merely contains code
+    blocks is left alone): then drops that opener and its matching closing fence,
+    or — for the common small-model slip of opening a fence and never closing it —
+    just the stray opener."""
+    s = text.strip()
+    lines = s.splitlines()
+    if not lines or not lines[0].startswith("```"):
+        return s  # not fence-wrapped — leave any internal code fences intact
+    close = next((i for i in range(len(lines) - 1, 0, -1) if lines[i].strip() == "```"), None)
+    inner = lines[1:close] if close is not None else lines[1:]  # no close ⇒ drop opener only
+    return "\n".join(inner).strip()
 
 
 def _slugify(title: str) -> str:

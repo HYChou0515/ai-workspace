@@ -356,6 +356,35 @@ class IndexRun(Struct):  # → resource "index-run"
     units_done: int = 0
 
 
+class CodeWikiBuildRun(Struct):  # → resource "code-wiki-build-run"
+    """Issue #281 (P4): the fan-out **join state** for one code-wiki build of a
+    collection. Mirrors :class:`IndexRun`.
+
+    A code-wiki build's heavy L0 work (one card per source file) is fanned out
+    into many small ``code_card`` jobs (one per directory-coherent, token-capped
+    batch — see ``plan_card_batches``). This row is how the independent card jobs
+    agree on "every card is built": the ``code_split`` job seeds ``total`` (number
+    of batches); each card job idempotently records its batch index in ``done``
+    (or ``failed``); the ``code_finalize`` step (directory roll-up + architecture
+    + orphan prune) runs exactly once, gated by the CAS-claimed ``finalized`` flag
+    (set only when ``done ∪ failed`` covers every batch).
+
+    The resource id IS the collection id — one run per collection, so a fresh
+    build overwrites the prior terminal run, and ``status == "running"`` is the
+    queue-agnostic "a build is already in flight" guard (the card jobs are
+    ``partition_key=None`` for free parallelism, so coalescing can't rest on the
+    queue). Correctness rests on compare-and-swap against the etag, never on the
+    queue's partition_key."""
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    total: int
+    done: list[int] = field(default_factory=list)  # batch indices that built OK
+    failed: list[int] = field(default_factory=list)  # batch indices that gave up
+    finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
+    status: str = "running"  # running | done | error
+    phase: str = "cards"  # cards | finalizing — coarse activity for the FE
+
+
 class IndexUnitText(Struct):  # → resource "index-unit-text"
     """Issue #227 fan-out **staging**: one process job's clean pre-chunk text for
     its unit batch, id ``{doc_id}.t{batch_index}``. The finalize step rejoins

@@ -268,10 +268,14 @@ def test_architecture_page_unwraps_a_fenced_model_answer():
     assert "```markdown" not in arch  # the wrapping fence was stripped
 
 
-def test_unfence_strips_only_a_whole_output_fence():
+def test_unfence_strips_a_leading_wrapper_fence():
     assert _unfence("```markdown\nhello\nworld\n```") == "hello\nworld"
     assert _unfence("just prose") == "just prose"  # nothing to strip
-    assert _unfence("```py\nno closing fence") == "```py\nno closing fence"  # not a full wrap
+    # #281 P7: a model that opens a fence and never closes it still produced a
+    # page that renders as one code block — drop the stray opener (was left as-is).
+    assert _unfence("```py\nno closing fence") == "no closing fence"
+    # but content that does NOT start with a fence keeps its internal code blocks
+    assert _unfence("prose\n\n```py\nx = 1\n```") == "prose\n\n```py\nx = 1\n```"
 
 
 def test_first_paragraph_after_h1_edge_cases():

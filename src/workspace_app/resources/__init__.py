@@ -28,6 +28,7 @@ from .check_run import CheckRun
 from .citation_event import CitationEvent
 from .conversation import Conversation, Message
 from .kb import (
+    CodeWikiBuildRun,
     Collection,
     ContextCard,
     DocChunk,
@@ -50,6 +51,7 @@ from .sanity import (
 __all__ = [
     "AgentConfig",
     "CitationEvent",
+    "CodeWikiBuildRun",
     "Collection",
     "ContextCard",
     "Conversation",
@@ -258,6 +260,10 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # so the safety sweep can find runs still "running" with no live jobs; the
     # per-doc active-run guard is a point get by id.
     spec.add_model(IndexRun, indexed_fields=["status"])
+    # #281 P4: code-wiki build fan-out join state, one row per collection (id =
+    # collection id). `status` indexed so a future safety sweep can find runs
+    # still "running"; the active-run coalescing guard is a point get by id.
+    spec.add_model(CodeWikiBuildRun, indexed_fields=["status"])
     # #227: per-batch staged text (doc_id indexed so finalize lists a doc's
     # batches to rejoin into SourceDoc.text). Transient; deleted at finalize.
     spec.add_model(IndexUnitText, indexed_fields=["doc_id"])

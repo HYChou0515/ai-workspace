@@ -887,6 +887,7 @@ export function WikiTab() {
       client={client}
       maintainerGuidance={collection.wiki_maintainer_guidance}
       readerGuidance={collection.wiki_reader_guidance}
+      isCodeWiki={!!collection.git_url}
     />
   );
 }

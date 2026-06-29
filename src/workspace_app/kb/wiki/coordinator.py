@@ -46,9 +46,10 @@ from specstar.types import (
     TaskStatus,
 )
 
-from ...resources import AgentConfig, Collection, SourceDoc, WikiBuildState
+from ...resources import AgentConfig, CodeWikiBuildRun, Collection, SourceDoc, WikiBuildState
 from ..job_audit import preserve_job_creator
 from .code_wiki import CodeWikiBuilder
+from .code_wiki_run import CodeWikiBuildRunStore
 from .guidance import with_collection_guidance
 from .jobs import WikiJobPayload, WikiMaintenanceJob
 from .maintainer import (
@@ -84,6 +85,11 @@ _PHASE_BY_TOOL = {
 
 _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
 _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to drain
+
+# #281 P4 / Q2: default card-batch size budget (source chars per code_card job).
+# A directory's files pack into batches up to this, so no fat directory becomes a
+# single straggler under parallel consumers; ~24k chars ≈ a few files' worth.
+_DEFAULT_CARD_BATCH_CHARS = 24_000
 
 
 def _acting_as(wiki_store: WikiFileStore, user: str | None):
@@ -134,6 +140,7 @@ class WikiMaintenanceCoordinator:
         message_queue_factory: object | None = None,
         get_user_id: Callable[[], str] | None = None,
         code_wiki_llm: ILlm | None = None,
+        code_card_batch_chars: int = _DEFAULT_CARD_BATCH_CHARS,
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -146,6 +153,11 @@ class WikiMaintenanceCoordinator:
             if code_wiki_llm is not None
             else None
         )
+        # #281 P4: the fan-out join state (one row per collection) + the card-batch
+        # size budget (Q2 — the parallel-granularity knob; bigger = fewer/heavier
+        # card jobs, smaller = more/lighter ones).
+        self._code_run = CodeWikiBuildRunStore(spec)
+        self._code_card_batch_chars = code_card_batch_chars
         # #186: who an enqueue is credited to — the real user in a request
         # (resolved off the spec default any non-job manager still carries);
         # production injects the same get_user_id.
@@ -181,14 +193,23 @@ class WikiMaintenanceCoordinator:
 
     # ── status (read) ────────────────────────────────────────────────
     def status(self, collection_id: str) -> WikiBuildStatus:
-        """The collection's current build progress (idle default when none).
-        ``building`` + ``done`` are derived from the live job count so they're
-        correct across retries and multiple consumers."""
+        """The collection's current build progress (idle default when none). For a
+        PROSE collection ``building`` + ``done`` derive from the live job count;
+        for a CODE collection (#281 P4) they come from the ``CodeWikiBuildRun`` CAS
+        join — its card jobs are ``partition_key=None`` so the per-collection job
+        count can't see them. The presence of a run disambiguates code vs prose.
+        ``errors`` / ``last_error`` are read from ``WikiBuildState`` either way
+        (the misconfig + per-build failures are recorded there)."""
         try:
-            state = self._state_rm.get(collection_id).data
+            data = self._state_rm.get(collection_id).data
+            state = data if isinstance(data, WikiBuildState) else None
         except ResourceIDNotFoundError:
+            state = None
+        run = self._code_run.get(collection_id)
+        if run is not None:
+            return self._code_build_status(run, state)
+        if state is None:
             return WikiBuildStatus()
-        assert isinstance(state, WikiBuildState)
         active = self._active_count(collection_id)
         building = active > 0
         return WikiBuildStatus(
@@ -199,6 +220,22 @@ class WikiMaintenanceCoordinator:
             phase=state.phase if building else None,
             errors=state.errors,
             last_error=state.last_error,
+        )
+
+    def _code_build_status(
+        self, run: CodeWikiBuildRun, state: WikiBuildState | None
+    ) -> WikiBuildStatus:
+        """#281 P4: code-build progress from the CAS run (batches done / total);
+        errors + last_error from the WikiBuildState surface."""
+        building = run.status == "running"
+        return WikiBuildStatus(
+            building=building,
+            total=run.total,
+            done=len(run.done),
+            current="the code wiki" if building else None,
+            phase=run.phase if building else None,
+            errors=(state.errors if state else 0) + len(run.failed),
+            last_error=state.last_error if state else None,
         )
 
     def _active_count(self, collection_id: str | None = None) -> int:
@@ -257,8 +294,29 @@ class WikiMaintenanceCoordinator:
                 )
             )
 
+    async def trigger_code_build(
+        self, collection_id: str, *, requested_by: str | None = None
+    ) -> None:
+        """Enqueue (or coalesce onto) a single code-wiki build for a code
+        collection. This is the EXPLICIT trigger the sync endpoint / code-sync
+        sweeper / use_wiki toggle / manual rebuild call after a code collection's
+        sources change — ``code_repo.sync`` ingests synchronously and bypasses
+        the IndexCoordinator, so ``on_doc_indexed`` never fires on those paths
+        (#281 A0). No-op unless the collection is a code-wiki collection (has a
+        ``git_url`` AND ``use_wiki`` on); mirrors ``on_doc_indexed``'s code branch
+        without a per-doc lookup."""
+        try:
+            coll = self._coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError:
+            return
+        if not (isinstance(coll, Collection) and coll.use_wiki and coll.git_url):
+            return  # not a code-wiki collection — nothing to build
+        actor = requested_by if requested_by is not None else self._get_user_id()
+        self._enqueue_code_build(collection_id, actor)
+
     def _enqueue_code_build(self, cid: str, actor: str) -> None:
-        """Queue one ``code_build`` for the collection, coalescing onto any build
+        """Queue one ``code_split`` for the collection (#281 P4 — the head of the
+        fan-out: split → N card jobs → finalize), coalescing onto any build
         already in flight (a sync ingests many files; we want ONE rebuild, not one
         per file). With no code-wiki LLM wired, record the misconfiguration on the
         build state instead of silently doing nothing."""
@@ -276,15 +334,23 @@ class WikiMaintenanceCoordinator:
                 return  # a build is already queued/running for this collection
             self._job_rm.create(
                 WikiMaintenanceJob(
-                    payload=WikiJobPayload(collection_id=cid, source_path="", op="code_build"),
+                    payload=WikiJobPayload(collection_id=cid, source_path="", op="code_split"),
                     partition_key=cid,
                 )
             )
 
     def _has_active_code_build(self, cid: str) -> bool:
+        """Coalescing guard. A build is in flight if its CAS run is still
+        ``running`` (covers the card + finalize phases — card jobs are
+        partition_key=None so the queue can't tell us) OR a cid-keyed
+        ``code_split`` / ``code_finalize`` job is still queued/running (covers the
+        gap before the split has created the run)."""
+        if self._code_run.is_active(cid):
+            return True
         q = (QB["status"].in_(_ACTIVE) & (QB["partition_key"] == cid)).build()
         return any(
-            isinstance(r.data, WikiMaintenanceJob) and r.data.payload.op == "code_build"
+            isinstance(r.data, WikiMaintenanceJob)
+            and r.data.payload.op in ("code_split", "code_finalize")
             for r in self._job_rm.list_resources(q)
         )
 
@@ -308,6 +374,14 @@ class WikiMaintenanceCoordinator:
             return
         if not (isinstance(coll, Collection) and coll.use_wiki):
             return  # wiki path not enabled — nothing to un-fold
+        if coll.git_url:
+            # #281 A1: a code collection's wiki is built hierarchically by
+            # CodeWikiBuilder, not by per-source prose folds — so the prose
+            # unfolder must NOT run on a delete (it would garble the code wiki).
+            # Deletion deliberately does not auto-rebuild either (a rebuild per
+            # deleted file is wasteful); the orphaned /files page is pruned by the
+            # next rebuild's reconcile step.
+            return
         ref = SpecstarWikiSources(self._spec, cid).ref_by_id(doc_id)
         if ref is None:  # pragma: no cover — race: doc deleted between the get above and here
             return
@@ -378,8 +452,12 @@ class WikiMaintenanceCoordinator:
         # unfold — #83.)
         actor = job.info.created_by
         with self._state_rm.using(user=actor):
-            if payload.op == "code_build":
-                self._handle_code_build(payload, triggered_by=actor)
+            if payload.op == "code_split":
+                self._handle_code_split(payload, triggered_by=actor)
+            elif payload.op == "code_card":
+                self._handle_code_card(payload, triggered_by=actor)
+            elif payload.op == "code_finalize":
+                self._handle_code_finalize(payload, triggered_by=actor)
             elif payload.op == "unfold":
                 # #83: the source is gone by now, so there's no updater to
                 # preserve — credit the scrub to whoever triggered it (the job's
@@ -485,38 +563,100 @@ class WikiMaintenanceCoordinator:
             )
         self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
 
-    def _handle_code_build(self, payload, *, triggered_by: str) -> None:
-        """Rebuild a code collection's whole wiki by reading its source
-        hierarchically (#281). Page writes are credited to the build's triggerer;
-        errors are recorded + swallowed so one bad build never wedges the
-        partition."""
+    def _handle_code_split(self, payload, *, triggered_by: str) -> None:
+        """Head of the code-wiki fan-out (#281 P4): plan directory-coherent,
+        token-capped card batches (Q2), seed the ``CodeWikiBuildRun`` CAS join
+        (``total`` = N batches), and enqueue one ``code_card`` job per batch
+        (``partition_key=None`` → free parallelism across consumers). An empty
+        repo (no batches) enqueues the finalize directly, so the index page is
+        still (re)written + orphans pruned. Failure is recorded + swallowed so a
+        bad split never wedges the partition."""
         cid = payload.collection_id
-        if self._code_builder is None:  # pragma: no cover — a code_build is enqueued
-            # only by a pod that HAS a builder; this guards a 2nd pod missing kb.wiki.llm
-            self._update_state(
-                cid,
-                lambda s: msgspec.structs.replace(
-                    s, errors=s.errors + 1, last_error="code-wiki LLM not configured"
-                ),
-            )
+        if self._code_builder is None:  # pragma: no cover — split is enqueued only by
+            self._record_code_error(cid, "code-wiki LLM not configured")  # a pod with a builder
             return
-        self._update_state(
-            cid, lambda s: msgspec.structs.replace(s, current="the code wiki", phase="building")
-        )
+        try:
+            batches = self._code_builder.plan_batches(cid, self._code_card_batch_chars)
+        except Exception:
+            _LOGGER.exception("code wiki split failed for %s", cid)
+            self._record_code_error(cid, "the code wiki build failed to start")
+            return
+        self._code_run.start(cid, total=len(batches))
+        with self._job_rm.using(user=triggered_by):
+            for i, batch in enumerate(batches):
+                self._job_rm.create(
+                    WikiMaintenanceJob(
+                        payload=WikiJobPayload(
+                            collection_id=cid,
+                            source_path="",
+                            op="code_card",
+                            batch_index=i,
+                            batch_paths=batch,
+                        ),
+                        partition_key=None,  # cards parallelise; CAS join guards correctness
+                    )
+                )
+            if not batches:  # empty repo — no card job exists to close the gate
+                self._enqueue_code_finalize(cid, triggered_by)
+
+    def _handle_code_card(self, payload, *, triggered_by: str) -> None:
+        """Build the L0 cards for ONE batch, record it in the CAS run, and — if
+        this batch closes the gate (``done ∪ failed == total``) — claim + enqueue
+        the finalize exactly once. A failed batch is recorded (not retried) so it
+        still counts toward the gate and can't wedge the build."""
+        cid = payload.collection_id
+        if self._code_builder is None:  # pragma: no cover — same guard as split
+            self._code_run.mark_failed(cid, payload.batch_index)
+        else:
+            try:
+                with self._wiki_store.acting_as(triggered_by):
+                    asyncio.run(self._code_builder.build_cards(cid, list(payload.batch_paths)))
+                self._code_run.mark_done(cid, payload.batch_index)
+            except Exception:
+                _LOGGER.exception("code wiki card batch %s failed for %s", payload.batch_index, cid)
+                self._record_code_error(cid, "a code wiki card batch failed")
+                self._code_run.mark_failed(cid, payload.batch_index)
+        if self._code_run.claim_finalize(cid):
+            self._enqueue_code_finalize(cid, triggered_by)
+
+    def _handle_code_finalize(self, payload, *, triggered_by: str) -> None:
+        """Roll the directory + architecture/index/topic pages up and prune
+        orphans (#281 P4 / Q4b), exactly once (CAS-claimed by the card that closed
+        the gate). Stamps the run terminal so the active-build guard clears."""
+        cid = payload.collection_id
+        if (
+            self._code_builder is None
+        ):  # pragma: no cover — finalize is enqueued only by a builder pod
+            self._code_run.finish(cid, status="error")
+            return
+        status = "done"
         try:
             with self._wiki_store.acting_as(triggered_by):
-                asyncio.run(self._code_builder.build(cid))
+                asyncio.run(self._code_builder.finalize(cid))
         except Exception:
-            _LOGGER.exception("code wiki build failed for %s", cid)
-            self._update_state(
-                cid,
-                lambda s: msgspec.structs.replace(
-                    s,
-                    errors=s.errors + 1,
-                    last_error=s.last_error or "the code wiki build failed",
-                ),
+            _LOGGER.exception("code wiki finalize failed for %s", cid)
+            self._record_code_error(cid, "the code wiki build failed to finalize")
+            status = "error"
+        self._code_run.finish(cid, status=status)
+
+    def _enqueue_code_finalize(self, cid: str, actor: str) -> None:
+        with self._job_rm.using(user=actor):
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(collection_id=cid, source_path="", op="code_finalize"),
+                    partition_key=cid,
+                )
             )
-        self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
+
+    def _record_code_error(self, cid: str, message: str) -> None:
+        """Surface a code-build error on the ``WikiBuildState`` (the status
+        surface), mirroring the prose path so a failing build is never silent."""
+        self._update_state(
+            cid,
+            lambda s: msgspec.structs.replace(
+                s, errors=s.errors + 1, last_error=s.last_error or message
+            ),
+        )
 
     def _phase_tracker(self, cid: str) -> Callable[[AgentEvent], None]:
         """Map the maintainer's live tool calls to a coarse build phase, and
