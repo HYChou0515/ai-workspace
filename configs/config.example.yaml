@@ -293,7 +293,13 @@
 #                                           #   the remaining budget on every result and, once
 #                                           #   used up, tells the model to answer from what it
 #                                           #   already has. null = no cap. (Topic Hub etc.
-#                                           #   are never capped.)
+#                                           #   are never capped.) Also the DEFAULT used when
+#                                           #   the composer sends no per-message pick (#334).
+#   max_searches_ceiling: 10                 # issue #334: upper bound the FE per-message
+#                                           #   kb_search-count picker may request. The user's
+#                                           #   value is clamped to [0, this] (0 = don't search
+#                                           #   this reply); one budget is shared across a turn's
+#                                           #   ask_knowledge_base calls. Must be a positive int.
 #   code_embedder:
 #     model: ""                             # "" disables P3.0 code-specialised embed
 #     query_prefix: ""

@@ -50,10 +50,13 @@ describe("sendMessage request body", () => {
       content: "why is zone 3 hot?",
       reasoningEffort: "high",
       enhancements: { expand: 3, hyde: null, rerank: false },
+      maxKbSearches: 2,
     });
     const body = JSON.parse(captured.bodies[0]!);
     expect(body.content).toBe("why is zone 3 hot?");
     expect(body.reasoning_effort).toBe("high");
     expect(body.enhancements).toEqual({ expand: 3, hyde: null, rerank: false });
+    // #334: the per-message kb_search-count pick reaches the wire.
+    expect(body.max_kb_searches).toBe(2);
   });
 });

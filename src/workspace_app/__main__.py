@@ -252,6 +252,8 @@ def main() -> None:
             # #195: per-turn kb_search cap for the KB chat turn + ask_knowledge_base
             # bridge (null in config ⇒ unlimited).
             kb_max_searches_per_turn=settings.kb.max_searches_per_turn,
+            # #334: ceiling for the composer's per-message kb_search-count pick.
+            kb_max_searches_ceiling=settings.kb.max_searches_ceiling,
             monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
             root_path=settings.server.root_path,
             read_file_max_lines=settings.read_file.max_lines,

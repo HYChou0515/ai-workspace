@@ -24,6 +24,33 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class KbSearchBudget:
+    """Per-turn budget for how many times `kb_search` may actually run (#195, #334).
+
+    `max_calls` is the cap: `None` ⇒ unlimited (still counted, so callers can
+    report how many ran); `0` ⇒ no search this turn (answer from context only,
+    #334 Q4). `used` increments on every completed search (incl. empty/erroring
+    ones, so a model that keeps matching nothing can't loop forever).
+
+    The object is mutable and shareable BY REFERENCE: an app turn that spawns
+    several `ask_knowledge_base` sub-agents threads ONE budget through them all
+    (#334 Q6), so the whole turn — not each sub-agent — gets `max_calls` searches.
+    A KB-chat turn just holds its own.
+    """
+
+    max_calls: int | None = None
+    used: int = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self.max_calls is not None and self.used >= self.max_calls
+
+    @property
+    def remaining(self) -> int | None:
+        return None if self.max_calls is None else max(0, self.max_calls - self.used)
+
+
+@dataclass
 class AgentToolContext:
     """Per-run context passed into agent tools.
 
@@ -141,16 +168,14 @@ class AgentToolContext:
     # `ask_knowledge_base` fallback only.
     collection_tiers: list[list[str]] = field(default_factory=list)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
-    # #195: per-turn cap on how many times `kb_search` may actually run. `None`
-    # = unlimited (Topic Hub and other flavours leave it unset). When set, the
-    # KB-chat turn + the ask_knowledge_base bridge populate it from
-    # `kb.max_searches_per_turn`. Each completed search increments
-    # `kb_search_calls`; once it reaches the cap, `kb_search` stops running the
-    # retriever and returns a sentinel telling the model to answer from the
-    # passages it already has. Every capped result also reports the remaining
-    # budget so a small model spends its searches frugally.
-    kb_search_max_calls: int | None = None
-    kb_search_calls: int = 0
+    # #195 / #334: this turn's kb_search budget. Default unlimited-but-counted;
+    # the KB-chat turn and the ask_knowledge_base bridge seed `max_calls` from
+    # `kb.max_searches_per_turn` (or the composer's per-message pick, #334). Once
+    # exhausted, `kb_search` stops running the retriever and returns a sentinel
+    # telling the model to answer from the passages it already has; every capped
+    # result also reports the remaining budget so a small model spends frugally.
+    # An app turn shares ONE instance across its ask_knowledge_base sub-agents.
+    kb_search_budget: KbSearchBudget = field(default_factory=KbSearchBudget)
     # Topic Hub tools (`resolve_collection`, `lookup_glossary`) query specstar
     # resources (Collection / ContextCard) directly. Set by the Topic Hub turn
     # builder; None for RCA/KB-flavour contexts.

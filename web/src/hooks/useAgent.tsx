@@ -18,6 +18,7 @@ import {
   withWikiFlag,
 } from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
+import { getKbSearchMax } from "../lib/kbSearchMax";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -177,6 +178,9 @@ export function useAgentInternal(
           // Knowledge-search depth + the "Search the wiki" toggle → this turn's
           // ask_knowledge_base lookups (the RCA→KB bridge routes chunk/wiki/both).
           enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
+          // #334: per-message kb_search-count cap, shared across this turn's
+          // ask_knowledge_base calls.
+          maxKbSearches: getKbSearchMax(),
         });
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;

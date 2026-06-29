@@ -286,6 +286,9 @@ export type SendMessageArgs = {
   /** Knowledge-search depth for this turn's ask_knowledge_base lookups
    * (composer picker); shape mirrors the KB chat body. */
   enhancements?: BodyEnhancements;
+  /** #334: per-message cap on kb_search calls this turn (shared across the
+   * turn's ask_knowledge_base calls). 0 = don't search; omitted = operator default. */
+  maxKbSearches?: number;
 };
 
 export type ExecuteCellArgs = {

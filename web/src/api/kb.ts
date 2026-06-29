@@ -265,6 +265,10 @@ export type SendKbMessageArgs = {
   /** Issue #32: which kb_chat entry to drive this turn (the picker
    * value). undefined → the first kb_chats[] entry. */
   agentName?: string;
+  /** #334: per-message cap on how many times this reply runs kb_search.
+   * 0 = don't search this reply; omitted = operator default. The BE clamps
+   * to the operator's ceiling. */
+  maxKbSearches?: number;
 };
 
 export type KbAgentConfig = {
@@ -800,6 +804,7 @@ export const realKbApi: KbApi = {
         reasoning_effort: args.reasoningEffort,
         enhancements: args.enhancements,
         agent_name: args.agentName,
+        max_kb_searches: args.maxKbSearches,
       }),
       signal: args.signal,
     });
