@@ -104,3 +104,12 @@ def test_parse_accepts_unit_range_kwarg():
     process job can ask for a sub-range uniformly; ``None`` means whole."""
     p = _NoOverrideParser()
     assert p.parse(None, filename="a.bin", mime="x", unit_range=(0, 1)) == []
+
+
+def test_config_fields_defaults_to_empty():
+    """A parser that doesn't override ``config_fields`` advertises NO
+    tunable knobs (#328) — so the findability modal shows no editor for
+    it and the ingestor never passes it a ``config``. The seam default,
+    like ``count_units`` returning 1."""
+    p = _NoOverrideParser()
+    assert p.config_fields() == []

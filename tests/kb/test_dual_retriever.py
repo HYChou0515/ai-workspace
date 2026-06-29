@@ -47,6 +47,38 @@ def _ingest_code(spec: SpecStar, name: str) -> tuple[str, Ingestor]:
     return cid, ing
 
 
+def test_overlay_in_a_code_collection_ranks_on_embedding_alt(spec: SpecStar):
+    """#328 overlay over a code collection: the in-memory dense order reads the
+    code vector field (``embedding_alt``) for the virtual chunk and skips the
+    empty text field — mirroring the stored-vector fan-out, so a dry-run preview
+    works for code chunks too."""
+    from workspace_app.kb.doc_id import encode_doc_id
+    from workspace_app.kb.retriever import Overlay
+    from workspace_app.resources.kb import DocChunk
+
+    cid, _ = _ingest_code(spec, "code-overlay")
+    code_embedder = HashEmbedder(dim=CODE_EMBED_DIM, doc_prefix="code: ")
+    doc_id = encode_doc_id(cid, "auth.py")
+
+    vtext = "def widget_factory(): return Widget()"
+    virtual = DocChunk(
+        collection_id=cid,
+        source_doc_id=doc_id,
+        seq=0,
+        start=0,
+        end=len(vtext),
+        text=vtext,
+        embedding_alt=code_embedder.embed_documents([vtext])[0],
+    )
+    r = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM), code_embedder=code_embedder)
+    hits = r.search(
+        vtext,
+        [cid],
+        overlay=Overlay(virtual_chunks=[virtual], shadow_doc_id=doc_id, virtual_text=vtext),
+    )
+    assert any("widget" in h.text for h in hits)
+
+
 def test_retriever_returns_code_passages_for_code_only_collection(spec: SpecStar):
     """A query against a code-only collection still returns passages —
     proving the dense pass uses `embedding_alt` (not `embedding`) when

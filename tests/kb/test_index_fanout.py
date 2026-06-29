@@ -18,6 +18,7 @@ from workspace_app.kb.index_coordinator import IndexCoordinator
 from workspace_app.kb.index_jobs import IndexJob
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.li_pipeline import build_doc_pipeline
+from workspace_app.kb.parsers import IParser
 from workspace_app.resources import Collection, DocChunk, IndexUnitText, SourceDoc, make_spec
 from workspace_app.resources.kb import EMBED_DIM, IndexRun
 
@@ -285,7 +286,7 @@ async def test_finalize_is_idempotent_does_not_wipe_text():
 # ── #248: a fan-out batch must NOT clobber the shared status_detail ────
 
 
-class _ProgressParser:
+class _ProgressParser(IParser):
     """A parser that, IF handed an on_progress sink, writes a per-page string —
     exactly the racy write a fan-out must suppress (N parallel batches would each
     overwrite the one status_detail field, making the old bar jump backward)."""
@@ -311,7 +312,7 @@ async def test_fanout_index_units_does_not_write_per_page_status_detail():
     cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
     emb = HashEmbedder(dim=EMBED_DIM)
     reg = ParserRegistry()
-    reg.register(_ProgressParser())  # ty: ignore[invalid-argument-type]
+    reg.register(_ProgressParser())
     ing = Ingestor(
         spec, pipeline=build_doc_pipeline(embedder=emb), embedder=emb, parser_registry=reg
     )

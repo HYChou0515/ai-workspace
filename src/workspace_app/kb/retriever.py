@@ -57,6 +57,32 @@ class Enhancements:
 
 
 @dataclass(frozen=True)
+class Overlay:
+    """#328: a dry-run candidate-set override for ONE document. The retriever
+    runs its NORMAL hybrid pipeline but with ``shadow_doc_id``'s stored chunks
+    REMOVED and ``virtual_chunks`` (freshly re-parsed/re-embedded for a candidate
+    parser config, NOT persisted) ADDED — so the findability modal can preview
+    "if this doc were parsed with a different prompt, would the answer be
+    retrievable?" without touching the index.
+
+    Every ranking stage that already reads the in-memory chunk set (BM25 corpus,
+    MMR similarity, quality prior, parent-merge, rerank) sees the virtual chunks
+    through the SAME code — so a later change to e.g. the rerank algorithm flows
+    into the preview automatically, no parallel implementation to drift. The only
+    preview-specific step is the dense order, recomputed in-memory with the
+    shared cosine metric (identical geometry to the stored-vector query).
+
+    ``virtual_text`` is the re-parsed document's canonical text that the virtual
+    chunks' ``start``/``end`` offsets index into — the merge/citation step slices
+    it (instead of the stale persisted ``SourceDoc.text``) to rebuild verbatim
+    passage text for the shadowed doc."""
+
+    virtual_chunks: list[DocChunk]
+    shadow_doc_id: str
+    virtual_text: str = ""
+
+
+@dataclass(frozen=True)
 class LocationFilter:
     """Issue #263: a deterministic structural scope for retrieval — "this
     document, pages 30-90" / "this sheet". It NARROWS the candidate chunk set
@@ -212,6 +238,7 @@ class Retriever:
         *,
         enhancements: Enhancements | None = None,
         location: LocationFilter | None = None,
+        overlay: Overlay | None = None,
     ) -> list[RetrievedPassage]:
         """`enhancements` is the per-call override: any field set to a
         concrete value wins over the operator default for that knob,
@@ -223,9 +250,21 @@ class Retriever:
         `location` (#263) is a deterministic structural scope (document /
         page range / sheet) pushed into BOTH the dense vector query and the
         BM25/MMR corpus, so ranking happens within the scope. `None` (or an
-        empty filter) ⇒ unscoped, exactly as before."""
+        empty filter) ⇒ unscoped, exactly as before.
+
+        `overlay` (#328) is a dry-run candidate-set override: the shadowed doc's
+        stored chunks are dropped and the supplied virtual chunks added, so a
+        findability preview ranks as if the doc were re-parsed — no reindex. When
+        set, the dense order is recomputed in-memory (same cosine metric);
+        everything else runs unchanged over the overlaid chunk set."""
         loc = location if location is not None and not location.is_empty() else None
         chunks = self._load_chunks(collection_ids, loc)  # {chunk_id: DocChunk}
+        if overlay is not None:
+            chunks = {
+                cid: ch for cid, ch in chunks.items() if ch.source_doc_id != overlay.shadow_doc_id
+            }
+            for i, vc in enumerate(overlay.virtual_chunks):
+                chunks[f"__overlay__{i}"] = vc
         if not chunks:
             return []
 
@@ -254,7 +293,14 @@ class Retriever:
         for q in queries:
             qv = self._embedder.embed_query(q)
             ranked_lists.append(
-                self._dense_order(collection_ids, qv, field="embedding", location=loc)
+                self._dense(
+                    vec=qv,
+                    field="embedding",
+                    chunks=chunks,
+                    cids=collection_ids,
+                    loc=loc,
+                    overlay=overlay,
+                )
             )
             # P3.0 fan-out: a separate dense pass for the code-vector field
             # (when wired). Each field uses its own embedder, so the query
@@ -262,7 +308,14 @@ class Retriever:
             if self._code_embedder is not None:
                 qv_alt = self._code_embedder.embed_query(q)
                 ranked_lists.append(
-                    self._dense_order(collection_ids, qv_alt, field="embedding_alt", location=loc)
+                    self._dense(
+                        vec=qv_alt,
+                        field="embedding_alt",
+                        chunks=chunks,
+                        cids=collection_ids,
+                        loc=loc,
+                        overlay=overlay,
+                    )
                 )
             ranked_lists.append(bm25_rank(q, corpus))
 
@@ -284,13 +337,25 @@ class Retriever:
             for doc in hyde_docs:
                 hv = self._embedder.embed_documents([doc])[0]
                 ranked_lists.append(
-                    self._dense_order(collection_ids, hv, field="embedding", location=loc)
+                    self._dense(
+                        vec=hv,
+                        field="embedding",
+                        chunks=chunks,
+                        cids=collection_ids,
+                        loc=loc,
+                        overlay=overlay,
+                    )
                 )
                 if self._code_embedder is not None:
                     hv_alt = self._code_embedder.embed_documents([doc])[0]
                     ranked_lists.append(
-                        self._dense_order(
-                            collection_ids, hv_alt, field="embedding_alt", location=loc
+                        self._dense(
+                            vec=hv_alt,
+                            field="embedding_alt",
+                            chunks=chunks,
+                            cids=collection_ids,
+                            loc=loc,
+                            overlay=overlay,
                         )
                     )
 
@@ -333,7 +398,17 @@ class Retriever:
             )
             for cid in order
         ]
-        passages = merge_passages(scored, text_of=self._canonical_text)
+        # #328: for the overlay's shadowed doc, slice the re-parsed `virtual_text`
+        # (the offsets index into it) instead of the stale persisted SourceDoc.text.
+        if overlay is not None:
+
+            def text_of(doc_id: str) -> str:
+                if doc_id == overlay.shadow_doc_id:
+                    return overlay.virtual_text
+                return self._canonical_text(doc_id)
+        else:
+            text_of = self._canonical_text
+        passages = merge_passages(scored, text_of=text_of)
         # Final LLM rerank over the merged passages — bool knob.
         if resolved.rerank:
             assert self._llm is not None
@@ -405,6 +480,39 @@ class Retriever:
             return None  # doc was deleted mid-query (cascade keeps them in sync, so defensive)
         assert isinstance(doc, SourceDoc)
         return doc.quality_score
+
+    def _dense(
+        self,
+        *,
+        vec: list[float],
+        field: str,
+        chunks: dict[str, DocChunk],
+        cids: list[str],
+        loc: LocationFilter | None,
+        overlay: Overlay | None,
+    ) -> list[str]:
+        """Dense ranking for one query vector. Normal path pushes the cosine sort
+        into the store (pgvector). The #328 overlay path recomputes it in-memory
+        over the overlaid chunk set — the virtual chunks aren't in the store — with
+        the SAME cosine metric, so only the candidate set differs, not the order's
+        geometry."""
+        if overlay is not None:
+            return self._dense_order_mem(chunks, vec, field=field)
+        return self._dense_order(cids, vec, field=field, location=loc)
+
+    def _dense_order_mem(
+        self, chunks: dict[str, DocChunk], vec: list[float], *, field: str
+    ) -> list[str]:
+        """In-memory dense order for the #328 overlay — nearest-first by cosine
+        over the explicit (overlaid) chunk set, capped at ``candidates``. Cosine
+        is the store's metric too, so this matches the persisted-vector order."""
+        scored: list[tuple[float, str]] = []
+        for cid, ch in chunks.items():
+            v = ch.embedding if field == "embedding" else ch.embedding_alt
+            if v:
+                scored.append((cosine_distance(v, vec), cid))
+        scored.sort()
+        return [cid for _, cid in scored[: self._candidates]]
 
     def _dense_order(
         self,
