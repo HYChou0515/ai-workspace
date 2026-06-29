@@ -100,20 +100,38 @@ def register_workflow_routes(
     """Mount the workflow profile + run routes onto ``app``."""
     conv_rm = spec.get_resource_manager(Conversation)
 
-    def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str = ""):
-        """Validate the item belongs to the slug AND its profile carries the requested
-        workflow (manual §4); return (investigation_id, profile, manifest)."""
+    async def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str = ""):
+        """Validate the item belongs to the slug AND carries the requested workflow —
+        a package workflow on its profile (manual §4) OR a WORKSPACE-authored
+        ``.workflows/<id>.json`` (§22 P4, shadowing same-id package). Returns
+        (investigation_id, profile, manifest)."""
         from ..apps.profiles import load_profile_workflow
+        from ..workflow.workspace_store import load_workspace_workflow
 
         investigation_id = locator.require_item(slug, item_id)
         profile = locator.profile_of(investigation_id)
         manifest = load_profile_workflow(slug, profile, workflow_id)
+        if manifest is None and workflow_id:  # fall through to a workspace-authored one
+            res = await load_workspace_workflow(files, investigation_id, workflow_id)
+            manifest = res[1] if res is not None else None
         if manifest is None:
             raise HTTPException(
                 status_code=422,
                 detail=f"profile {profile!r} of app {slug!r} has no workflow {workflow_id!r}",
             )
         return investigation_id, profile, manifest
+
+    @app.get("/a/{slug}/items/{item_id}/workflows")
+    async def list_item_workflows(slug: str, item_id: str) -> list[dict]:
+        """#323 P4 (manual §22): the workflows a user co-created in THIS item's
+        ``.workflows/`` (id + title + phase skeleton), for the Workflows panel + the Run
+        picker. Each manifest as builtins (matching ``/profiles``); malformed defs are
+        skipped (``save_workflow`` is the loud guard)."""
+        from ..workflow.workspace_store import workspace_workflow_metas
+
+        investigation_id = locator.require_item(slug, item_id)
+        metas = await workspace_workflow_metas(files, investigation_id)
+        return [msgspec.to_builtins(m) for m in metas]
 
     @app.get("/a/{slug}/profiles")
     async def list_app_profiles(slug: str) -> list[dict]:
@@ -160,7 +178,9 @@ def register_workflow_routes(
         nothing is half-written and no run begins. With no body the call is the plain
         trigger the FE makes — the upload path is skipped entirely."""
         workflow_id, staged = await _staged_run_uploads(request, workflow_id)
-        investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
+        investigation_id, profile, manifest = await _workflow_manifest_or_404(
+            slug, item_id, workflow_id
+        )
         for norm, data in staged:
             await files.write(investigation_id, norm, data)
             activity.record(
@@ -226,7 +246,9 @@ def register_workflow_routes(
         Registered before ``/runs/{run_id}`` so ``preview`` isn't read as a run id."""
         from ..workflow.discovery import load_preflight_callable
 
-        investigation_id, profile, manifest = _workflow_manifest_or_404(slug, item_id, workflow_id)
+        investigation_id, profile, manifest = await _workflow_manifest_or_404(
+            slug, item_id, workflow_id
+        )
         wf = WorkflowHandle(
             store=files,
             workspace_id=investigation_id,
@@ -310,7 +332,7 @@ def register_workflow_routes(
     ) -> dict:
         """#100 (manual §10): answer a `human_gate` — records the decision artifact
         and resumes the run (completed steps skip; the gate reads the decision)."""
-        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
         try:
             await workflow_orchestrator.decide(
                 slug=slug,
@@ -336,7 +358,7 @@ def register_workflow_routes(
         then runs the read-only steerer in the background — it streams into the run's
         chat and, when it has a plan, suspends the run `awaiting_human` with
         `pending_steer` set for the human to confirm (the FE refetches the run)."""
-        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
         try:
             await workflow_orchestrator.steer(
                 slug=slug,
@@ -359,7 +381,7 @@ def register_workflow_routes(
         """#288 (manual §10): resolve a pending steer plan — approve to apply the edits +
         invalidate the steps and resume the same run (the valid prefix skips, §9), or
         reject to discard it (the run returns to its gate or to a stopped state)."""
-        investigation_id, profile, _manifest = _workflow_manifest_or_404(slug, item_id)
+        investigation_id, profile, _manifest = await _workflow_manifest_or_404(slug, item_id)
         try:
             await workflow_orchestrator.confirm_steer(
                 slug=slug,

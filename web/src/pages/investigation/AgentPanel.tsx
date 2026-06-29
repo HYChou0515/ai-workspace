@@ -17,6 +17,7 @@ import { HealthDot } from "../../components/HealthDot";
 import { Icon } from "../../components/Icon";
 import { ModelEffortPicker } from "../../components/ModelEffortPicker";
 import { SkillsModal } from "../../components/SkillsModal";
+import { WorkflowsModal } from "../../components/WorkflowsModal";
 import { ToolsPickerModal } from "../../components/ToolsPickerModal";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { UsageBar } from "./UsageBar";
@@ -668,6 +669,7 @@ export function AgentHeader({
   const t = useT();
   const [exportError, setExportError] = useState<string | null>(null);
   const [showSkills, setShowSkills] = useState(false);
+  const [showWorkflows, setShowWorkflows] = useState(false);
   const [showTools, setShowTools] = useState(false);
   const fileService = useMemo(
     () => investigationFileService(slug, investigationId),
@@ -689,6 +691,14 @@ export function AgentHeader({
           itemId={investigationId}
           fileService={fileService}
           onClose={() => setShowSkills(false)}
+        />
+      )}
+      {showWorkflows && (
+        <WorkflowsModal
+          slug={slug}
+          itemId={investigationId}
+          fileService={fileService}
+          onClose={() => setShowWorkflows(false)}
         />
       )}
       {showTools && onSaveToolPrefs && (
@@ -777,6 +787,27 @@ export function AgentHeader({
         }}
       >
         <Icon name="sparkle" size={13} /> {t("skills.button")}
+      </button>
+      <button
+        type="button"
+        // #323: open the Workflows panel — run / download / import the workflows the
+        // user co-created here (the IDE tree hides the `.workflows/` dot-folder).
+        data-testid="workflows-button"
+        onClick={() => setShowWorkflows(true)}
+        title={t("workflows.tip")}
+        aria-label={t("workflows.button")}
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          color: "var(--text-paper-d)",
+          fontSize: pxToRem(11),
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+        }}
+      >
+        <Icon name="layers" size={13} /> {t("workflows.button")}
       </button>
       <button
         type="button"

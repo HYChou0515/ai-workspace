@@ -52,6 +52,22 @@ def validate_workflow_json(
     return d, validate_def(d, tool_ceiling=tool_ceiling)
 
 
+async def load_workspace_workflow(
+    files: WorkspaceFiles, workspace_id: str, workflow_id: str
+) -> tuple[WorkflowDef, WorkflowManifest] | None:
+    """A workspace ``.workflows/<workflow_id>.json`` parsed into ``(def, manifest)`` (the
+    manifest id forced to the addressing ``workflow_id`` — the filename is authoritative),
+    or ``None`` when absent / malformed. The single read backing both the orchestrator's
+    run resolution and the route's manifest 404 guard (#323 P4)."""
+    if not workflow_id:
+        return None
+    try:
+        d = parse_def(await files.read(workspace_id, workspace_workflow_path(workflow_id)))
+    except (FileNotFound, DslError):
+        return None
+    return d, msgspec.structs.replace(build_manifest(d), id=workflow_id)
+
+
 async def save_workspace_workflow(
     files: WorkspaceFiles, workspace_id: str, slug: str, d: WorkflowDef
 ) -> str:

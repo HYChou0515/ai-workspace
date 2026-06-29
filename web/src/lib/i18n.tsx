@@ -344,6 +344,30 @@ export const messages = {
     en: "Pick a skill folder to add it to this workspace",
   },
   "skills.close": { "zh-TW": "關閉", en: "Close" },
+  // #323 — the Workflows panel (co-created workflows in a workspace).
+  "workflows.button": { "zh-TW": "工作流程", en: "Workflows" },
+  "workflows.tip": {
+    "zh-TW": "查看、執行與下載你和助理一起做的工作流程",
+    en: "See, run, and download the workflows you built with the assistant",
+  },
+  "workflows.title": { "zh-TW": "這個工作區的工作流程", en: "Workflows in this workspace" },
+  "workflows.intro": {
+    "zh-TW": "工作流程是你和助理一起定下、可以重複執行的步驟。",
+    en: "A workflow is a repeatable set of steps you built with the assistant.",
+  },
+  "workflows.empty": {
+    "zh-TW": "還沒有工作流程。在對話中請助理「幫我做一個工作流程」就能一起做一個。",
+    en: 'No workflows yet. Ask the assistant "help me make a workflow" to build one together.',
+  },
+  "workflows.run": { "zh-TW": "執行", en: "Run" },
+  "workflows.download": { "zh-TW": "下載全部", en: "Download all" },
+  "workflows.import": { "zh-TW": "匯入", en: "Import" },
+  "workflows.importHint": {
+    "zh-TW": "選擇一個 .json 工作流程檔以加入這個工作區",
+    en: "Pick a .json workflow file to add it to this workspace",
+  },
+  "workflows.close": { "zh-TW": "關閉", en: "Close" },
+  "workflows.steps": { "zh-TW": "{n} 個步驟", en: "{n} steps" },
   // KB chat collection modal (KbCollectionsModal) — #271.
   "collections.more": { "zh-TW": "更多 · {n}", en: "More · {n}" },
   "collections.kbTitle": { "zh-TW": "在哪些知識庫裡搜尋", en: "Which collections to search" },

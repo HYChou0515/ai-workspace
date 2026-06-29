@@ -43,6 +43,11 @@ export const qk = {
   workspaceSkills: (slug: string, itemId: string) =>
     ["workspaceSkills", slug, itemId] as const,
 
+  // #323: a workspace's co-created workflows (`.workflows/<id>.json`). The Workflows
+  // panel reads this; saving / importing one invalidates it.
+  workspaceWorkflows: (slug: string, itemId: string) =>
+    ["workspaceWorkflows", slug, itemId] as const,
+
   // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
   itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
   itemChat: (slug: string, itemId: string, chatId: string) =>

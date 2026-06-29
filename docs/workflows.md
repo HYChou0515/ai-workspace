@@ -655,9 +655,10 @@ step 身分穩定）。詳細的 build 計畫 + 完整 grill 決策見
 - **上限／authz（Q9）：** 與 package workflow **同一組** cap（§16–§17）；能存取該 item
   就能 author + run；captured-user scope。
 
-**v1 範圍（本案）：** DSL 引擎（schema + interpreter + validator）、package 端可
+**v1 範圍（已全數落地）：** DSL 引擎（schema + interpreter + validator）、package 端可
 interpret `workflow.json`（= promote target）、`save_workflow` + `author-workflow`
-+ workspace 列表。**緊接 follow-up：** workspace 就地自助執行（把 item context 接進
-`load_run`，這是 workflow 唯一超出 skill 的地方）、FE Workflows panel。
-**v2 延後：** revise-loop / branch / 巢狀 map；co-design 自動試跑；promote 時
++ workspace 列表（P1–P3，PR #332）；**workspace 就地自助執行**（orchestrator 注入
+`load_workspace`、Run-route fallback、item-scoped `/workflows` 端點 — workflow 唯一
+超出 skill 的地方）+ **FE Workflows panel**（每列 Run + 下載/匯入，掛在 AgentPanel）
+（P4–P5）。**v2 延後：** revise-loop / branch / 巢狀 map；co-design 自動試跑；promote 時
 transpile 成 Python；per-user quota。
