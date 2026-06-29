@@ -26,6 +26,8 @@ moved.
 
 from __future__ import annotations
 
+import posixpath
+from collections import defaultdict
 from typing import TYPE_CHECKING
 
 from ...resources import SourceDoc
@@ -52,6 +54,15 @@ _CARD_PROMPT = (
     "Source:\n{source}\n"
 )
 
+_DIR_PROMPT = (
+    "You are documenting a directory of a codebase for a code wiki. Using ONLY the "
+    "one-line summaries of its files and sub-packages below, write a short paragraph "
+    "(2-4 sentences) explaining what this directory is for and how its pieces fit "
+    "together. No preamble, no bullet list — just the paragraph.\n\n"
+    "Directory: {dir}\n\n"
+    "{material}\n"
+)
+
 
 class CodeWikiBuilder:
     """Builds (and incrementally refreshes) one code collection's wiki."""
@@ -66,11 +77,21 @@ class CodeWikiBuilder:
 
     async def build(self, collection_id: str) -> None:
         """Bring the collection's code wiki up to date with its SourceDocs."""
-        await self._file_cards(collection_id)
-
-    async def _file_cards(self, collection_id: str) -> None:
         sources = SpecstarWikiSources(self._spec, collection_id)
-        for path in sources.list():
+        paths = sources.list()
+        changed = await self._file_cards(collection_id, sources, paths)
+        # The directory roll-up reads ALL file cards, so it's only worth redoing
+        # when at least one card moved; a re-pull that changed nothing is a no-op.
+        if changed:
+            await self._dir_pages(collection_id, paths)
+
+    # ── L0: per-file cards ───────────────────────────────────────────
+    async def _file_cards(
+        self, collection_id: str, sources: SpecstarWikiSources, paths: list[str]
+    ) -> bool:
+        """Write a card for every changed source; return whether any was (re)built."""
+        changed = False
+        for path in paths:
             ref = sources.ref(path)
             if ref is None:  # pragma: no cover — listed-then-deleted race
                 continue
@@ -83,6 +104,64 @@ class CodeWikiBuilder:
                 continue  # bytes unchanged since last build — skip the LLM call
             card = self._render_card(path, ref.text, file_id)
             await self._store.write(collection_id, page, card.encode("utf-8"))
+            changed = True
+        return changed
+
+    # ── L1: directory roll-up pages ──────────────────────────────────
+    async def _dir_pages(self, collection_id: str, paths: list[str]) -> None:
+        """Walk the directory tree bottom-up: each directory gets a page rolled
+        up from its direct child file cards + child sub-directory pages. Deepest
+        first, so a parent reads summaries its children just wrote."""
+        child_files: dict[str, list[str]] = defaultdict(list)
+        child_dirs: dict[str, set[str]] = defaultdict(set)
+        all_dirs: set[str] = set()
+        for p in paths:
+            d = posixpath.dirname(p)
+            child_files[d].append(p)
+            while d:  # register every ancestor directory + the parent→child edge
+                parent = posixpath.dirname(d)
+                child_dirs[parent].add(d)
+                all_dirs.add(d)
+                d = parent
+        for d in sorted(all_dirs, key=lambda x: x.count("/"), reverse=True):
+            page = await self._render_dir(
+                collection_id, d, sorted(child_files.get(d, [])), sorted(child_dirs.get(d, []))
+            )
+            await self._store.write(collection_id, f"/dirs/{d}.md", page.encode("utf-8"))
+
+    async def _render_dir(
+        self, collection_id: str, directory: str, files: list[str], subdirs: list[str]
+    ) -> str:
+        file_lines = [
+            f"- [{posixpath.basename(p)}](/files/{p}.md) — "
+            f"{await self._summary_of(collection_id, f'/files/{p}.md')}"
+            for p in files
+        ]
+        sub_lines = [
+            f"- [{posixpath.basename(sd)}/](/dirs/{sd}.md) — "
+            f"{await self._summary_of(collection_id, f'/dirs/{sd}.md')}"
+            for sd in subdirs
+        ]
+        material = "Files:\n" + ("\n".join(file_lines) or "(none)")
+        if sub_lines:
+            material += "\n\nSub-packages:\n" + "\n".join(sub_lines)
+        synthesis = self._llm.collect(
+            _DIR_PROMPT.replace("{dir}", directory).replace("{material}", material)
+        ).strip()
+        body = f"# {directory}\n\n{synthesis}\n"
+        if file_lines:
+            body += "\n## Files\n" + "\n".join(file_lines) + "\n"
+        if sub_lines:
+            body += "\n## Sub-packages\n" + "\n".join(sub_lines) + "\n"
+        return body
+
+    async def _summary_of(self, collection_id: str, page: str) -> str:
+        """The one-line gist of an already-written card / directory page (the
+        paragraph just under its ``# `` heading)."""
+        prev = await self._store.read_with_etag(collection_id, page)
+        if prev is None:  # pragma: no cover — every child page is written first
+            return ""
+        return _first_paragraph_after_h1(prev[0].decode("utf-8", errors="replace"))
 
     async def _is_current(self, collection_id: str, page: str, file_id: str) -> bool:
         """True when ``page`` already exists and its source-hash marker matches
@@ -105,3 +184,24 @@ class CodeWikiBuilder:
         if skeleton:
             body += f"\n```\n{skeleton}\n```\n"
         return body
+
+
+def _first_paragraph_after_h1(text: str) -> str:
+    """The first prose paragraph beneath a page's ``# `` heading — the file
+    card's one-liner or a directory page's roll-up — stopping at the first code
+    fence / ``## `` section / blank line after content."""
+    out: list[str] = []
+    seen_h1 = False
+    for line in text.splitlines():
+        if line.startswith("# "):
+            seen_h1 = True
+            continue
+        if not seen_h1:
+            continue
+        if line.startswith("```") or line.startswith("## "):
+            break
+        if line.strip():
+            out.append(line.strip())
+        elif out:  # blank line after we've collected content ends the paragraph
+            break
+    return " ".join(out)

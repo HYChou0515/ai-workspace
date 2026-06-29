@@ -15,7 +15,7 @@ from specstar.types import Binary
 
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.llm import ILlm
-from workspace_app.kb.wiki.code_wiki import CodeWikiBuilder
+from workspace_app.kb.wiki.code_wiki import CodeWikiBuilder, _first_paragraph_after_h1
 from workspace_app.kb.wiki.store import WikiFileStore
 from workspace_app.resources import Collection, SourceDoc, make_spec
 
@@ -103,3 +103,89 @@ def test_non_code_file_gets_a_card_without_an_outline_fence():
     card = asyncio.run(store.read(cid, "/files/README.md.md")).decode()
     assert "the project readme." in card
     assert "```" not in card  # no code fence — there's no outline for prose
+
+
+def test_build_writes_a_directory_page_rolled_up_from_child_cards():
+    spec, cid = _mk()
+    _add_code(spec, cid, "pkg/a.py", "def a():\n    pass\n")
+    _add_code(spec, cid, "pkg/b.py", "def b():\n    pass\n")
+    store = WikiFileStore(spec)
+    llm = _ScriptedLlm(
+        [
+            "a does A.",  # L0 card for pkg/a.py (sorted first)
+            "b does B.",  # L0 card for pkg/b.py
+            "pkg bundles A and B.",  # L1 page for the pkg directory
+        ]
+    )
+
+    asyncio.run(CodeWikiBuilder(spec, llm, wiki_store=store).build(cid))
+
+    dirpage = asyncio.run(store.read(cid, "/dirs/pkg.md")).decode()
+    assert "pkg bundles A and B." in dirpage  # the LLM roll-up
+    assert "a.py" in dirpage and "b.py" in dirpage  # deterministically lists its files
+    assert "a does A." in dirpage  # carries the child one-liners
+
+
+def test_nested_directories_roll_up_into_parents():
+    spec, cid = _mk()
+    _add_code(spec, cid, "app/api/routes.py", "def route():\n    pass\n")
+    _add_code(spec, cid, "app/main.py", "def main():\n    pass\n")
+    store = WikiFileStore(spec)
+    llm = _ScriptedLlm(
+        [
+            "routes handles HTTP.",  # L0 app/api/routes.py (sorted first)
+            "main is the entrypoint.",  # L0 app/main.py
+            "the api sub-package.",  # L1 app/api (deepest first)
+            "the app top package.",  # L1 app (parent — rolls up api + main.py)
+        ]
+    )
+
+    asyncio.run(CodeWikiBuilder(spec, llm, wiki_store=store).build(cid))
+
+    app_page = asyncio.run(store.read(cid, "/dirs/app.md")).decode()
+    assert "the app top package." in app_page  # the parent's own roll-up
+    assert "the api sub-package." in app_page  # carries the child directory's summary
+    assert "api/" in app_page  # links the sub-package
+    assert "main.py" in app_page  # lists its own files
+
+
+def test_unchanged_rebuild_skips_directory_pages_too():
+    # When no file changed, the (more expensive than needed) directory roll-up
+    # is skipped entirely — a routine re-pull that moved nothing costs no LLM.
+    spec, cid = _mk()
+    _add_code(spec, cid, "pkg/a.py", "def a():\n    pass\n")
+    store = WikiFileStore(spec)
+    llm = _ScriptedLlm(["a does A.", "pkg roll-up."])
+    builder = CodeWikiBuilder(spec, llm, wiki_store=store)
+
+    asyncio.run(builder.build(cid))
+    assert len(llm.prompts) == 2  # 1 file card + 1 directory page
+
+    asyncio.run(builder.build(cid))  # nothing changed
+    assert len(llm.prompts) == 2  # neither L0 nor L1 made a call
+
+
+def test_directory_with_only_subpackages_lists_no_files():
+    spec, cid = _mk()
+    _add_code(spec, cid, "app/api/x.py", "def x():\n    pass\n")
+    store = WikiFileStore(spec)
+    # L0 x.py; L1 deepest-first: app/api then app (which has no direct files)
+    llm = _ScriptedLlm(["x summary", "api summary", "app summary"])
+
+    asyncio.run(CodeWikiBuilder(spec, llm, wiki_store=store).build(cid))
+
+    app_page = asyncio.run(store.read(cid, "/dirs/app.md")).decode()
+    assert "## Files" not in app_page  # app has no direct files of its own
+    assert "## Sub-packages" in app_page  # only its api sub-package
+
+
+def test_first_paragraph_after_h1_edge_cases():
+    # stops at a ## section / code fence that immediately follows content
+    assert _first_paragraph_after_h1("# h\nthe gist\n## Files\n- x") == "the gist"
+    assert _first_paragraph_after_h1("# h\nthe gist\n```\ncode") == "the gist"
+    # empty content under the heading → the next section never leaks in
+    assert _first_paragraph_after_h1("# h\n\n## Files") == ""
+    # no fence / section / trailing blank → returns the collected paragraph
+    assert _first_paragraph_after_h1("# h\njust this") == "just this"
+    # no heading at all → nothing
+    assert _first_paragraph_after_h1("no heading here\ntext") == ""
