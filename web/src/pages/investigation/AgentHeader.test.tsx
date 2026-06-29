@@ -15,6 +15,11 @@ vi.mock("../../api/workspaceSkills", async (orig) => {
   return { ...actual, workspaceSkillsApi: { list: vi.fn(async () => []) } };
 });
 
+vi.mock("../../api", async (orig) => {
+  const actual = await orig<typeof import("../../api")>();
+  return { ...actual, api: { ...actual.api, getItemTools: vi.fn(async () => []) } };
+});
+
 describe("AgentHeader export", () => {
   afterEach(() => {
     cleanup();
@@ -82,6 +87,34 @@ describe("AgentHeader skills (#298)", () => {
     );
     fireEvent.click(screen.getByTestId("skills-button"));
     expect(await screen.findByTestId("skills-modal")).toBeInTheDocument();
+  });
+});
+
+describe("AgentHeader tool picker (#322)", () => {
+  afterEach(cleanup);
+
+  it("renders a Tools button and opens the picker when onSaveToolPrefs is provided", async () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader
+          streaming={false}
+          investigationId="inv-1"
+          slug="rca"
+          onSaveToolPrefs={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    fireEvent.click(screen.getByTestId("tools-button"));
+    expect(await screen.findByTestId("tools-modal")).toBeInTheDocument();
+  });
+
+  it("omits the Tools button when onSaveToolPrefs is not provided", () => {
+    renderWithQuery(
+      <MemoryRouter>
+        <AgentHeader streaming={false} investigationId="inv-1" slug="rca" />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByTestId("tools-button")).not.toBeInTheDocument();
   });
 });
 

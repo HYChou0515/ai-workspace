@@ -474,6 +474,36 @@ export const messages = {
     "zh-TW": "尚無說明文件。",
     en: "No help documents yet.",
   },
+
+  // #322: per-item tool picker — the AgentHeader button + the picker modal +
+  // the per-tool tri-state control (Default / On / Off).
+  "tools.button": { "zh-TW": "工具", en: "Tools" },
+  "tools.button.tip": {
+    "zh-TW": "選擇這個工作區的助理能用哪些工具",
+    en: "Choose which tools the assistant can use in this workspace",
+  },
+  "tools.title": { "zh-TW": "助理可用的工具", en: "Tools the assistant can use" },
+  "tools.desc": {
+    "zh-TW": "預設沿用範本設定。把任一工具改成「開啟」或「關閉」只會影響這個工作區；其餘維持「預設」會跟著範本變動。",
+    en: "Defaults follow the template. Set a tool to On or Off to override it for this workspace only; the rest stay on Default and follow the template.",
+  },
+  "tools.search": { "zh-TW": "搜尋工具…", en: "Search tools…" },
+  "tools.resetVisible": { "zh-TW": "全部回到預設", en: "Reset to defaults" },
+  "tools.follow": { "zh-TW": "預設", en: "Default" },
+  "tools.on": { "zh-TW": "開啟", en: "On" },
+  "tools.off": { "zh-TW": "關閉", en: "Off" },
+  "tools.state.aria": { "zh-TW": "{tool} 的設定", en: "Setting for {tool}" },
+  "tools.defaultOn": { "zh-TW": "預設開啟", en: "On by default" },
+  "tools.defaultOff": { "zh-TW": "預設關閉", en: "Off by default" },
+  "tools.noMatch": { "zh-TW": "沒有符合「{q}」的工具。", en: "No tools match “{q}”." },
+  "tools.none": { "zh-TW": "這個工作區沒有可選的工具。", en: "No tools to choose from." },
+  "tools.save": { "zh-TW": "儲存", en: "Save" },
+  "tools.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "tools.loading": { "zh-TW": "載入工具中…", en: "Loading tools…" },
+  "tools.discard": {
+    "zh-TW": "尚未儲存的變更會遺失，要關閉嗎？",
+    en: "Discard unsaved changes?",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

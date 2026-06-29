@@ -204,6 +204,31 @@ export type AppItem = {
   [field: string]: unknown;
 };
 
+/** #322: one callable tool's display metadata — the flat catalog (GET /tools)
+ * the chat tool cards label off, so an unmapped tool never shows its raw name. */
+export type ToolCatalogEntry = {
+  name: string;
+  label: string;
+  description: string;
+};
+
+/** #322: a tool's per-item tri-state override. `follow` tracks the profile
+ * default; `on` / `off` pin it on or off regardless of the default. */
+export type ToolPref = "follow" | "on" | "off";
+
+/** #322: one pickable App tool's per-item picker state (GET
+ * /a/{slug}/items/{id}/tools). Resolved server-side so the FE never recomputes
+ * the default set and drifts from a real turn. `key` is the `app.json` tools[]
+ * entry the override is stored under. */
+export type ItemToolState = {
+  key: string;
+  label: string;
+  description: string;
+  default_on: boolean;
+  pref: ToolPref;
+  effective: boolean;
+};
+
 /** Lean subset of the specstar list/count query params the dashboard uses
  * (#95 follow-up). `data_conditions` is a JSON array of
  * `{ field_path, operator, value }`; arrays (created_bys/updated_bys) serialize
@@ -333,6 +358,12 @@ export interface ApiClient {
   listApps(): Promise<AppSummary[]>;
   /** GET /apps/{slug} — the full manifest the dashboard/workspace drive off. */
   getAppManifest(slug: string): Promise<AppManifest>;
+  /** GET /tools — the flat tool catalog (name → human label + one-line desc) the
+   * chat tool cards label off, so an unmapped tool never shows its raw name (#322). */
+  getToolsCatalog(): Promise<ToolCatalogEntry[]>;
+  /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
+   * tri-state, resolved server-side) the tool picker reads (#322). */
+  getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
   /** GET {resource_route} — the App's items (specstar list → flat rows).
    * Optional SearchParams filter/sort server-side (dashboard nav + filters). */
   listAppItems(resourceRoute: string, params?: SearchParams): Promise<AppItem[]>;
