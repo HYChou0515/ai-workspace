@@ -48,6 +48,7 @@ from specstar.types import (
 
 from ...resources import AgentConfig, Collection, SourceDoc, WikiBuildState
 from ..job_audit import preserve_job_creator
+from .code_wiki import CodeWikiBuilder
 from .guidance import with_collection_guidance
 from .jobs import WikiJobPayload, WikiMaintenanceJob
 from .maintainer import (
@@ -61,6 +62,7 @@ from .store import WikiFileStore
 if TYPE_CHECKING:
     from ...api.events import AgentEvent
     from ...api.runner import AgentRunner
+    from ..llm import ILlm
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -131,10 +133,19 @@ class WikiMaintenanceCoordinator:
         maintainer_max_turns: int = 40,
         message_queue_factory: object | None = None,
         get_user_id: Callable[[], str] | None = None,
+        code_wiki_llm: ILlm | None = None,
     ) -> None:
         self._spec = spec
         self._runner = runner
         self._wiki_store = WikiFileStore(spec)
+        # #281: a code collection (one with a git_url) builds its wiki by reading
+        # source hierarchically via CodeWikiBuilder instead of folding one source
+        # at a time. None ⇒ no code-wiki LLM wired ⇒ a code build records an error.
+        self._code_builder = (
+            CodeWikiBuilder(spec, code_wiki_llm, wiki_store=self._wiki_store)
+            if code_wiki_llm is not None
+            else None
+        )
         # #186: who an enqueue is credited to — the real user in a request
         # (resolved off the spec default any non-job manager still carries);
         # production injects the same get_user_id.
@@ -220,6 +231,11 @@ class WikiMaintenanceCoordinator:
             return  # wiki path not enabled for this collection
 
         actor = requested_by if requested_by is not None else self._get_user_id()
+        # #281: a code collection rebuilds its whole wiki hierarchically, so a
+        # per-source fold is wrong — enqueue (or coalesce onto) a single build.
+        if coll.git_url:
+            self._enqueue_code_build(cid, actor)
+            return
         # Start (or grow) the build epoch's source counter. A fresh batch (no
         # active jobs) resets the counter so the FE shows "1/N" not "29/N".
         # #186: the build-state row + the job are both credited to the requester
@@ -240,6 +256,37 @@ class WikiMaintenanceCoordinator:
                     partition_key=cid,
                 )
             )
+
+    def _enqueue_code_build(self, cid: str, actor: str) -> None:
+        """Queue one ``code_build`` for the collection, coalescing onto any build
+        already in flight (a sync ingests many files; we want ONE rebuild, not one
+        per file). With no code-wiki LLM wired, record the misconfiguration on the
+        build state instead of silently doing nothing."""
+        if self._code_builder is None:
+            with self._state_rm.using(user=actor):
+                self._update_state(
+                    cid,
+                    lambda s: msgspec.structs.replace(
+                        s, last_error="code-wiki LLM not configured (set kb.wiki.llm)"
+                    ),
+                )
+            return
+        with self._job_rm.using(user=actor):
+            if self._has_active_code_build(cid):
+                return  # a build is already queued/running for this collection
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(collection_id=cid, source_path="", op="code_build"),
+                    partition_key=cid,
+                )
+            )
+
+    def _has_active_code_build(self, cid: str) -> bool:
+        q = (QB["status"].in_(_ACTIVE) & (QB["partition_key"] == cid)).build()
+        return any(
+            isinstance(r.data, WikiMaintenanceJob) and r.data.payload.op == "code_build"
+            for r in self._job_rm.list_resources(q)
+        )
 
     async def on_doc_deleted(self, doc_id: str) -> None:
         """A source is being deleted — enqueue an un-fold pass to scrub its
@@ -331,7 +378,9 @@ class WikiMaintenanceCoordinator:
         # unfold — #83.)
         actor = job.info.created_by
         with self._state_rm.using(user=actor):
-            if payload.op == "unfold":
+            if payload.op == "code_build":
+                self._handle_code_build(payload, triggered_by=actor)
+            elif payload.op == "unfold":
                 # #83: the source is gone by now, so there's no updater to
                 # preserve — credit the scrub to whoever triggered it (the job's
                 # creator, i.e. the user who deleted the source).
@@ -432,6 +481,39 @@ class WikiMaintenanceCoordinator:
                     s,
                     errors=s.errors + 1,
                     last_error=s.last_error or "the unfold run failed",
+                ),
+            )
+        self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
+
+    def _handle_code_build(self, payload, *, triggered_by: str) -> None:
+        """Rebuild a code collection's whole wiki by reading its source
+        hierarchically (#281). Page writes are credited to the build's triggerer;
+        errors are recorded + swallowed so one bad build never wedges the
+        partition."""
+        cid = payload.collection_id
+        if self._code_builder is None:  # pragma: no cover — a code_build is enqueued
+            # only by a pod that HAS a builder; this guards a 2nd pod missing kb.wiki.llm
+            self._update_state(
+                cid,
+                lambda s: msgspec.structs.replace(
+                    s, errors=s.errors + 1, last_error="code-wiki LLM not configured"
+                ),
+            )
+            return
+        self._update_state(
+            cid, lambda s: msgspec.structs.replace(s, current="the code wiki", phase="building")
+        )
+        try:
+            with self._wiki_store.acting_as(triggered_by):
+                asyncio.run(self._code_builder.build(cid))
+        except Exception:
+            _LOGGER.exception("code wiki build failed for %s", cid)
+            self._update_state(
+                cid,
+                lambda s: msgspec.structs.replace(
+                    s,
+                    errors=s.errors + 1,
+                    last_error=s.last_error or "the code wiki build failed",
                 ),
             )
         self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))

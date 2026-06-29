@@ -96,3 +96,13 @@ def test_quality_and_sanity_coordinators_are_built_when_their_llm_is_wired():
 
     assert bundle.quality is not None  # wired because a judge llm was passed
     assert bundle.sanity is not None  # wired because a sanity factory was passed
+
+
+def test_a_wiki_model_wires_the_code_wiki_builder():
+    # #281: when a wiki model/endpoint is configured, the coordinator gets a
+    # deterministic code-wiki summariser (built from the same endpoint), so a
+    # code collection can rebuild its wiki. No model ⇒ no builder.
+    # a fresh spec per build — registering the job model twice on one spec raises
+    assert _build(make_spec(default_user="u"), _FakeIngestor()).wiki._code_builder is None
+    wired = _build(make_spec(default_user="u"), _FakeIngestor(), wiki_model="ollama/qwen3:8b")
+    assert wired.wiki._code_builder is not None

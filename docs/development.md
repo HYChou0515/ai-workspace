@@ -334,7 +334,40 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 12. Git 與 PR 慣例
+## 12. 讓 wiki 讀程式碼生成（Code wiki，#281）
+
+一個 **code collection**（設了 `git_url`，P3.0 git-clone ingest）若開了 `use_wiki`，
+其 wiki 不走「一次 fold 一個 source」的散文路徑，而是由 `CodeWikiBuilder`
+（`kb/wiki/code_wiki.py`）**分層讀整份原始碼**生成——每層只讀下層的摘要、不讀原始碼，
+所以再大的 repo 每層 context 都有界，覆蓋率由「走完整檔案/目錄清單」強制（不靠 LLM 自律）。
+
+- **L0 檔卡片** `/files/<path>.md` = `code_outline`（tree-sitter 抽的 def/class/import
+  骨架，py/ts/tsx/js/jsx）+ 一句 LLM 白話。卡片首行藏 `<!-- src: <hash> -->`,
+  bytes 沒變就跳過（增量）。
+- **L1 資料夾頁** `/dirs/<dir>.md`：沿目錄樹由深而淺 roll-up，每資料夾只讀直接子檔卡片
+  + 直接子資料夾頁的摘要。
+- **L2** `/architecture.md` + `/index.md` + `/topics/<slug>.md`：從**頂層**資料夾摘要
+  合成（頂層頁已遞迴涵蓋整棵子樹 → 有界的全 repo 視圖）。
+- 每頁都是單次 `ILlm.collect`（固定材料 → 一頁，**程式負責存檔**，非 agent loop），
+  繞開 #50「narrate 而不 write_file」的失敗模式。
+
+**觸發**：`on_doc_indexed` 對有 `git_url` 的 collection enqueue 一個 **coalesced**
+`code_build` job（一次 sync 拉很多檔 → 只重建一次，非每檔一次），跳過逐 source fold；
+沒設 `git_url` 的散文 collection 行為不變。
+
+**模型**：用既有 `kb.wiki.llm`（與 wiki 維護 agent 同一個 endpoint）；`build_coordinators`
+由該 endpoint 建 `LitellmLlm` 注入。`kb.wiki.llm: null` ⇒ code build 在 `WikiBuildState`
+記一筆 error（不 crash partition），不會默默不動。
+
+**讀者端不變**：code wiki 頁就在同一 `WikiFileStore`，wiki reader 照常 navigate + 引用回
+原始碼 `SourceDoc`。
+
+**延後（v1 不做）**：精修 agent 第二趟（挑不清楚的頁回頭翻原始碼寫深）；數字 N/M 進度條
+（目前只給 `phase`/`current` 粗進度）；更多語言的 outline。
+
+---
+
+## 13. Git 與 PR 慣例
 
 - **本機 commit 是常態節奏**。**不要主動提議/詢問** push 或開 PR——但使用者明確要求時就照做。在預設分支
   (`master`)上要先開 branch。
@@ -348,7 +381,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 13. 禁區與地雷
+## 14. 禁區與地雷
 
 - **`configs/config.yaml` 是禁區**——live、gitignore、含明文 secret。只讀/改 `configs/config.example.yaml`。
   key 有變動時,把替換片段交給 operator 自己改 `config.yaml`(loader 的 strict-unknown-key 會對舊 config 報錯);
@@ -359,7 +392,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 14. 測試備註
+## 15. 測試備註
 
 - integration 測試(`@pytest.mark.integration`)在本機缺 daemon/工具時自動 skip;它們不在 CI 跑(見 §3)。
 - Ollama live 測試在 daemon/模型不在時自動 skip;它是唯一會真的打模型的測試(`# pragma: no cover` 圈住 live 路徑)。
@@ -370,7 +403,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 15. Definition of Done
+## 16. Definition of Done
 
 - [ ] 行為由 `/tdd` 驅動;目標測試綠 + `ruff check` + `ruff format --check` + 整專案 `ty check`。
 - [ ] 收尾跑一次全套 + **100% 覆蓋率** gate(`coverage run … && combine && report --fail-under=100`),
