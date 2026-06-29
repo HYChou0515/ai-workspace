@@ -117,6 +117,34 @@ def _build_tree(paths: list[str]) -> _Tree:
     return _Tree(child_files, child_dirs, all_dirs)
 
 
+def plan_card_batches(paths: list[str], sizes: dict[str, int], budget: int) -> list[list[str]]:
+    """Group source paths into card-build batches (#281 P4, Q2). Each batch is
+    the fan-out unit for one ``code_card`` job: kept WITHIN one directory
+    (coherence — neighbouring files in a package share context) AND under
+    ``budget`` total source size (so no single fat directory becomes a straggler
+    that gates the CAS join under parallel consumers). A file larger than the
+    budget gets its own batch. ``sizes`` maps a path → its source size
+    (chars/tokens); a missing path counts as 0. Paths are sorted so the result is
+    deterministic and same-directory files stay adjacent."""
+    by_dir: dict[str, list[str]] = defaultdict(list)
+    for p in sorted(paths):
+        by_dir[posixpath.dirname(p)].append(p)
+    batches: list[list[str]] = []
+    for d in sorted(by_dir):
+        cur: list[str] = []
+        cur_size = 0
+        for p in by_dir[d]:
+            s = sizes.get(p, 0)
+            if cur and cur_size + s > budget:  # flush before exceeding the budget
+                batches.append(cur)
+                cur, cur_size = [], 0
+            cur.append(p)
+            cur_size += s
+        if cur:
+            batches.append(cur)
+    return batches
+
+
 class CodeWikiBuilder:
     """Builds (and incrementally refreshes) one code collection's wiki."""
 
@@ -130,7 +158,9 @@ class CodeWikiBuilder:
         self._coll_rm = spec.get_resource_manager(Collection)
 
     async def build(self, collection_id: str) -> None:
-        """Bring the collection's code wiki up to date with its SourceDocs."""
+        """Bring the collection's code wiki up to date with its SourceDocs — the
+        monolithic path (live checks / tests / no-fan-out fallback). The fan-out
+        path (#281 P4) instead runs build_cards() per batch + finalize() once."""
         sources = SpecstarWikiSources(self._spec, collection_id)
         paths = sources.list()
         changed = await self._file_cards(collection_id, sources, paths)
@@ -138,9 +168,51 @@ class CodeWikiBuilder:
         # they're only worth redoing when at least one card moved; a re-pull that
         # changed nothing is a no-op.
         if changed:
-            tree = _build_tree(paths)
-            await self._dir_pages(collection_id, tree)
-            await self._arch_pages(collection_id, tree)
+            await self.finalize(collection_id)
+
+    async def build_cards(self, collection_id: str, paths: list[str]) -> None:
+        """Build the L0 file cards for a SUBSET of the collection's sources — one
+        fan-out batch (#281 P4). Same per-file render + content-hash skip as a
+        full build; the upper pages are (re)built once by finalize()."""
+        sources = SpecstarWikiSources(self._spec, collection_id)
+        await self._file_cards(collection_id, sources, paths)
+
+    def plan_batches(self, collection_id: str, budget: int) -> list[list[str]]:
+        """Plan the L0 card batches for the fan-out (#281 P4): directory-coherent,
+        token-capped by source size. Sizes come from the stored source text; the
+        actual packing is :func:`plan_card_batches`."""
+        sources = SpecstarWikiSources(self._spec, collection_id)
+        paths = sources.list()
+        sizes = {p: len(ref.text) for p in paths if (ref := sources.ref(p)) is not None}
+        return plan_card_batches(paths, sizes, budget)
+
+    async def finalize(self, collection_id: str) -> None:
+        """Roll the directory pages + architecture/index/topics up from the file
+        cards, then prune any wiki page whose source is gone (#281 P4 / Q4b).
+        Runs once at the end of a fan-out (the cards are already written by the
+        card jobs); unconditional, so a delete-only change still prunes orphans."""
+        sources = SpecstarWikiSources(self._spec, collection_id)
+        paths = sources.list()
+        tree = _build_tree(paths)
+        await self._dir_pages(collection_id, tree)
+        topics = await self._arch_pages(collection_id, tree)
+        await self._prune_orphans(collection_id, paths, tree, topics)
+
+    async def _prune_orphans(
+        self, collection_id: str, paths: list[str], tree: _Tree, topics: list[str]
+    ) -> None:
+        """Delete wiki pages whose backing source no longer exists (#281 Q4b): a
+        deleted/renamed file's ``/files/<path>.md`` card, a now-empty
+        ``/dirs/<d>.md`` page, and a ``/topics/<slug>.md`` no longer proposed.
+        Reconciled against the CURRENT sources on every finalize, so deletions
+        converge without a per-delete rebuild (deletes deliberately don't trigger
+        one — see the coordinator)."""
+        keep = {f"/files/{p}.md" for p in paths}
+        keep |= {f"/dirs/{d}.md" for d in tree.all_dirs}
+        keep |= {f"/topics/{_slugify(t)}.md" for t in topics}
+        for page in await self._store.ls(collection_id):
+            if page.startswith(("/files/", "/dirs/", "/topics/")) and page not in keep:
+                await self._store.delete(collection_id, page)
 
     # ── L0: per-file cards ───────────────────────────────────────────
     async def _file_cards(
@@ -224,11 +296,12 @@ class CodeWikiBuilder:
         return prev[0].decode("utf-8", errors="replace").startswith(marker)
 
     # ── L2: architecture / index / topics ────────────────────────────
-    async def _arch_pages(self, collection_id: str, tree: _Tree) -> None:
-        """Synthesise the top-down pages from the top-level summaries. Each
-        top-level directory page already recursively rolls up its whole subtree,
-        so the top-level summaries are a bounded, full-repo picture — no matter
-        how big the repo is."""
+    async def _arch_pages(self, collection_id: str, tree: _Tree) -> list[str]:
+        """Synthesise the top-down pages from the top-level summaries, and return
+        the topic titles (so finalize can prune stale topic pages). Each top-level
+        directory page already recursively rolls up its whole subtree, so the
+        top-level summaries are a bounded, full-repo picture — no matter how big
+        the repo is."""
         top_dirs = sorted(tree.child_dirs.get("", set()))
         top_files = sorted(tree.child_files.get("", []))
         dir_summaries = [
@@ -260,6 +333,7 @@ class CodeWikiBuilder:
         assert isinstance(coll, Collection)
         index = _render_index(coll.name, dir_summaries, top_files, topics)
         await self._store.write(collection_id, "/index.md", index.encode("utf-8"))
+        return topics
 
     def _plan_topics(self, material: str) -> list[str]:
         """Ask the model for a few cross-cutting topic titles; tolerant of

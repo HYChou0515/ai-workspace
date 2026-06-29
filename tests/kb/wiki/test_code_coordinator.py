@@ -76,7 +76,7 @@ async def test_code_collection_enqueues_a_code_build_not_a_fold():
 
     jobs = _jobs(spec)
     assert len(jobs) == 1
-    assert jobs[0].payload.op == "code_build"
+    assert jobs[0].payload.op == "code_split"  # head of the #281 P4 fan-out
 
 
 async def test_bursty_code_indexes_coalesce_to_one_build():
@@ -89,7 +89,7 @@ async def test_bursty_code_indexes_coalesce_to_one_build():
     await coord.on_doc_indexed(a)
     await coord.on_doc_indexed(b)  # a build is already queued → coalesce
 
-    builds = [j for j in _jobs(spec) if j.payload.op == "code_build"]
+    builds = [j for j in _jobs(spec) if j.payload.op == "code_split"]
     assert len(builds) == 1
 
 
@@ -116,7 +116,7 @@ async def test_code_collection_without_llm_records_error_not_crash():
     coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=None)
     await coord.on_doc_indexed(doc)
 
-    assert not [j for j in _jobs(spec) if j.payload.op == "code_build"]  # nothing to run
+    assert not [j for j in _jobs(spec) if j.payload.op == "code_split"]  # nothing to run
     assert "not configured" in (coord.status(cid).last_error or "")  # surfaced, not silent
 
 

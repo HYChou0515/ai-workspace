@@ -37,9 +37,14 @@ class WikiJobPayload(msgspec.Struct):
     collection_id: str
     source_path: str
     doc_id: str = ""
-    op: str = "fold"  # fold | unfold
+    op: str = "fold"  # fold | unfold | code_split | code_card | code_finalize
     removed_label: str = ""
     removed_text: str = ""
+    # #281 P4 code-wiki fan-out: a ``code_card`` job builds the cards for ONE
+    # batch (``batch_paths``) and records ``batch_index`` in the CodeWikiBuildRun
+    # CAS join. ``code_split`` / ``code_finalize`` carry neither.
+    batch_index: int = 0
+    batch_paths: list[str] = msgspec.field(default_factory=list)
 
 
 class WikiMaintenanceJob(Job[WikiJobPayload]):
