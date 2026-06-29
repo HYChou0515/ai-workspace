@@ -138,6 +138,16 @@ def build_coordinators(
     # #50 P3: after a doc indexes, fold it into its collection's LLM wiki. The
     # coordinator serialises maintainer runs per collection so bursty uploads
     # coalesce instead of racing the wiki pages.
+    # #281: a code collection rebuilds its wiki by reading source hierarchically,
+    # driven by a deterministic summariser LLM — the SAME wiki model/endpoint the
+    # maintainer agent uses (kb.wiki.llm). Empty model ⇒ None ⇒ code-wiki off.
+    from .kb.llm import LitellmLlm
+
+    code_wiki_llm = (
+        LitellmLlm(wiki_model, wiki_llm_base_url or None, wiki_llm_api_key or None)
+        if wiki_model
+        else None
+    )
     wiki = WikiMaintenanceCoordinator(
         spec,
         runner,
@@ -152,6 +162,7 @@ def build_coordinators(
         maintainer_max_turns=wiki_maintainer_max_turns,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
+        code_wiki_llm=code_wiki_llm,
     )
     # #105: the doc-quality judge. Built only when a quality_judge model is wired;
     # otherwise None ⇒ the index coordinator skips scoring (docs stay un-scored).
