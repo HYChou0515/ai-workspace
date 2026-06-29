@@ -163,6 +163,16 @@ class Collection(Struct):  # → resource "collection"
     # (never filtered/sorted on), like the wiki guidance above — adding it needs
     # no migration (old rows decode with the empty default).
     quality_rubric: str = ""
+    # Issue #328: per-collection config for prompt/param-driven parsers,
+    # keyed by parser id (`type(parser).__name__`, the same key on
+    # `DocChunk.parser_id`) → `{knob: value}`. The default for tunable
+    # extraction (e.g. an ontology parser's prompt) at THIS collection; a
+    # per-doc `SourceDoc.parser_config_overrides` can still override one
+    # knob. Resolved at index time by `kb.parser_config.effective_config`
+    # (parser defaults < this < per-doc override). Non-indexed (never
+    # filtered/sorted on), like `quality_rubric` — adding it needs no
+    # migration (old rows decode with the empty default).
+    parser_configs: dict[str, dict[str, Any]] = {}
 
 
 class WikiPage(Struct):  # → resource "wiki-page"
@@ -255,6 +265,16 @@ class SourceDoc(Struct):  # → resource "source-doc"
     quality_score: int | None = None
     quality_breakdown: dict[str, Any] = {}
     quality_rationale: str = ""
+    # Issue #328: per-doc override of a prompt/param-driven parser's config —
+    # the "escape hatch" the findability-probe modal writes when an operator
+    # hand-tunes ONE document's extraction without changing the whole
+    # collection's `parser_configs`. Same shape (parser_id → {knob: value})
+    # and it WINS over the collection config in the precedence merge
+    # (`kb.parser_config.effective_config`). Storing it here — not just the
+    # resulting chunks — makes the fix durable: a later full re-index re-parses
+    # this doc with ITS override, so the hand-tuned result isn't clobbered.
+    # Non-indexed → no migration (old rows decode with the empty default).
+    parser_config_overrides: dict[str, dict[str, Any]] = {}
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"

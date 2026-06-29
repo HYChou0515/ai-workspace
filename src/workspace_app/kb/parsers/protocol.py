@@ -29,14 +29,35 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, Literal
 
 if TYPE_CHECKING:
     # Late import: ``llama_index`` is heavy + optional in some test
     # paths. The runtime type is opaque to the ABC — we only promise
     # the return is iterable.
     from llama_index.core.schema import Document
+
+
+@dataclass(frozen=True)
+class ParamSpec:
+    """One tunable knob a parser exposes (#328). A parser declares its
+    knobs via :meth:`IParser.config_fields`; the findability-probe modal
+    renders an editor from them (``text`` → textarea, ``number`` →
+    numeric input, ``bool`` → toggle) and the ingestor / dry-run
+    re-parse feed the chosen values back through ``parse(config=...)``.
+
+    ``key`` is the dict key the parser reads out of its ``config``;
+    ``default`` is what the parser uses when neither the collection nor a
+    per-doc override sets it (the bottom of the precedence merge —
+    ``kb.parser_config.effective_config``). ``label`` is the human string
+    shown in the editor."""
+
+    key: str
+    kind: Literal["text", "number", "bool"]
+    label: str
+    default: Any = None
 
 
 class IParserInput(ABC):
@@ -98,6 +119,26 @@ class IParser(ABC):
         fanned out and indexes as a single job, exactly as before the seam.
         Override only for parsers whose per-unit work can be large."""
         return 1
+
+    def config_fields(self) -> list[ParamSpec]:
+        """The tunable knobs this parser exposes (#328). Default ``[]`` —
+        the parser has no operator-tunable config, so the findability
+        modal shows no editor for it and the ingestor calls ``parse``
+        WITHOUT a ``config`` (back-compat: existing parsers are untouched).
+
+        A prompt-driven parser (e.g. an ontology extractor whose prompt
+        carries the target JSON schema, or the VLM describer) overrides
+        this to advertise its knobs; the ingestor then resolves the
+        effective config (parser defaults < collection < per-doc override)
+        and threads it into ``parse(config=...)``.
+
+        Declaring a knob here is the OPT-IN: a config-aware parser ADDS a
+        ``config: Mapping[str, Any] | None = None`` keyword to its own ``parse``
+        override (an optional kwarg, so it stays Liskov-compatible with this
+        base signature) and reads its knobs out of it. Knob-less parsers leave
+        both this and ``parse`` untouched — the ingestor never passes them a
+        ``config`` — so the seam is zero-churn for every existing parser."""
+        return []
 
     @abstractmethod
     def parse(

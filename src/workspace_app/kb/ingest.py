@@ -30,7 +30,8 @@ from ..resources.kb import Collection, DocChunk, SourceDoc
 from .chunker import Chunker
 from .doc_id import canonical_path, encode_doc_id
 from .embedder import Embedder
-from .parsers import MaterialisedParserInput, ParserRegistry
+from .parser_config import effective_config
+from .parsers import IParser, MaterialisedParserInput, ParserRegistry
 from .parsers.chat_export_parser import ChatExportParser
 from .parsers.json_file import JsonParser
 from .parsers.llamaindex_readers import DocxParser, HtmlParser
@@ -465,7 +466,16 @@ class Ingestor:
         if existing is not None and existing.content.file_id == xxhash.xxh3_128_hexdigest(data):
             return None
         doc = SourceDoc(
-            collection_id=collection_id, path=path, content=Binary(data=data), status="indexing"
+            collection_id=collection_id,
+            path=path,
+            content=Binary(data=data),
+            status="indexing",
+            # #328: carry the per-doc parser config override across a re-upload.
+            # It's a per-doc EXTRACTION setting (the escape hatch), not tied to a
+            # content version — so a hand-tuned doc keeps its tuning when its bytes
+            # change. (A full re-index never reconstructs the SourceDoc, so it was
+            # already safe there; this covers the re-upload-new-bytes path.)
+            parser_config_overrides=(existing.parser_config_overrides if existing else {}),
         )
         if existing is None:
             drm.create(doc, resource_id=doc_id)
@@ -493,6 +503,29 @@ class Ingestor:
             drm.update(doc_id, msgspec.structs.replace(sd, status_detail=message))
         except Exception:  # noqa: BLE001
             logger.warning("status_detail update failed for %s", doc_id, exc_info=True)
+
+    def _parse_config_for(
+        self, parser: IParser, *, collection_id: str, doc_id: str
+    ) -> dict[str, Any] | None:
+        """The effective config (#328) to feed ``parser.parse(config=...)``, or
+        ``None`` when this parser declares no tunable knobs (the common case —
+        then ``parse`` is called WITHOUT ``config``, exactly as before the seam).
+
+        Resolves parser defaults < the collection's ``parser_configs`` < the
+        doc's ``parser_config_overrides`` (the per-doc escape hatch), all keyed
+        by parser id. The Collection / SourceDoc fetches are skipped entirely
+        for knob-less parsers so the hot path is untouched."""
+        if not parser.config_fields():
+            return None
+        coll = self._spec.get_resource_manager(Collection).get(collection_id).data
+        assert isinstance(coll, Collection)
+        doc = self._spec.get_resource_manager(SourceDoc).get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        return effective_config(
+            parser,
+            collection_configs=coll.parser_configs,
+            doc_overrides=doc.parser_config_overrides,
+        )
 
     def _index(self, collection_id: str, doc_id: str, path: str, data: bytes) -> _IndexOutput:
         """(Re)build a doc's chunks. Returns the converter ``text`` (persisted on
@@ -568,6 +601,7 @@ class Ingestor:
             parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
             for parser in parsers:
                 parser_id = type(parser).__name__
+                cfg = self._parse_config_for(parser, collection_id=collection_id, doc_id=doc_id)
                 docs = list(
                     parser.parse(
                         source,
@@ -575,6 +609,12 @@ class Ingestor:
                         mime=mime,
                         on_progress=on_progress,
                         on_preview=on_preview,
+                        # `config` is opt-in (#328): it's NOT on the IParser ABC
+                        # (so knob-less parsers stay Liskov-clean), only on a
+                        # config-aware parser's own override. cfg is non-None only
+                        # when this parser declared config_fields, i.e. it accepts
+                        # the kwarg — the dict-unpack is the intentional bridge.
+                        **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
                     )
                 )
                 for d in docs:
@@ -724,6 +764,7 @@ class Ingestor:
             )
             assert len(parsers) == 1, "fanout_units guarantees a single parser"
             parser = parsers[0]
+            cfg = self._parse_config_for(parser, collection_id=doc.collection_id, doc_id=doc_id)
             docs = list(
                 parser.parse(
                     source,
@@ -735,6 +776,8 @@ class Ingestor:
                     # FE reads real progress from IndexRun.units_done/total instead.
                     on_progress=None,
                     unit_range=unit_range,
+                    # opt-in config bridge — see the note at the other parse site.
+                    **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
                 )
             )
             for d in docs:

@@ -275,6 +275,68 @@ def test_parser_text_is_persisted_on_sourcedoc_pre_chunk(spec: SpecStar, embedde
     assert "rawbytes" not in (doc.text or "")  # the #86 blowup: never the raw bytes
 
 
+def test_ingest_threads_collection_parser_config_into_parse(spec: SpecStar, embedder: HashEmbedder):
+    """#328: a parser that declares ``config_fields`` receives the
+    effective config (parser defaults overlaid by the Collection's
+    ``parser_configs``) at index time — so a prompt/param-driven parser
+    (e.g. an ontology extractor) is operator-tunable per collection."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.parsers import IParser, ParserRegistry
+    from workspace_app.kb.parsers.protocol import ParamSpec
+    from workspace_app.resources.kb import Collection
+
+    seen: dict[str, object] = {}
+
+    class RecordingParser(IParser):
+        def config_fields(self):
+            return [ParamSpec("prompt", "text", "Prompt", default="DEFAULT")]
+
+        def matches(self, *, filename, mime, source):  # type: ignore[no-untyped-def]
+            return filename.endswith(".onto")
+
+        def parse(self, source, *, filename, mime, config=None, **kw):  # type: ignore[no-untyped-def]
+            seen["config"] = config
+            return [Document(text=(config or {}).get("prompt", ""), metadata={})]
+
+    registry = ParserRegistry().register(RecordingParser())
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder, parser_registry=registry)
+    crm = spec.get_resource_manager(Collection)
+    cid = crm.create(
+        Collection(name="kb", parser_configs={"RecordingParser": {"prompt": "COLLECTION PROMPT"}})
+    ).resource_id
+
+    ingestor.ingest(collection_id=cid, user="a", filename="x.onto", data=b"raw onto bytes")
+
+    # default ("DEFAULT") overlaid by the collection value
+    assert seen["config"] == {"prompt": "COLLECTION PROMPT"}
+
+
+def test_per_doc_override_survives_reupload(spec: SpecStar, embedder: HashEmbedder):
+    """#328: a per-doc parser config override is an extraction setting, not
+    tied to a content version — re-uploading new bytes preserves it, so the
+    escape-hatch tuning isn't silently lost on the next upload."""
+    import msgspec
+
+    from workspace_app.resources.kb import SourceDoc
+
+    cid = _new_collection(spec)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder)
+    (doc_id,) = ingestor.ingest(collection_id=cid, user="a", filename="n.md", data=b"alpha beta")
+
+    drm = spec.get_resource_manager(SourceDoc)
+    doc = drm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    drm.update(doc_id, msgspec.structs.replace(doc, parser_config_overrides={"P": {"k": "v"}}))
+
+    ingestor.ingest(collection_id=cid, user="a", filename="n.md", data=b"gamma delta")
+    doc2 = drm.get(doc_id).data
+    assert isinstance(doc2, SourceDoc)
+    assert doc2.parser_config_overrides == {"P": {"k": "v"}}
+
+
 def test_inline_text_is_persisted_on_sourcedoc(spec: SpecStar, embedder: HashEmbedder):
     """A noop 'text converter' (md/txt: no parser claims it) still persists its
     normalized text on SourceDoc.text — and WITHOUT the heading breadcrumbs the
