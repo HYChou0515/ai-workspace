@@ -28,6 +28,28 @@ class _Llm(ILlm):
         yield ("a summary.", False)
 
 
+class _CountingLlm(ILlm):
+    """Counts every LLM call so a test can assert a no-change rebuild is free."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        self.calls += 1
+        yield ("a summary.", False)
+
+
+class _EchoLlm(ILlm):
+    """A content-dependent summariser: distinct input → distinct one-liner, so a
+    changed file's summary changes (and its dir's roll-up input with it). Lets a
+    test see WHICH dir pages the incremental build actually rebuilds."""
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        import hashlib
+
+        yield (f"summary {hashlib.sha256(prompt.encode()).hexdigest()[:8]}.", False)
+
+
 class _NoopRunner:
     async def run(self, prompt, ctx):  # the code build path never uses the runner
         if False:  # pragma: no cover
@@ -159,3 +181,62 @@ async def test_status_reports_code_build_progress_from_the_run():
     assert st.total == 2  # two dir-coherent batches
     assert st.done == 2  # both recorded done in the run
     assert st.errors == 0
+
+
+async def test_a_no_change_rebuild_makes_no_llm_calls():
+    """#281 P5 / Q3: a rebuild with no source change must be free — the L0 cards
+    skip on their content hash AND the L1 directory pages + L2 architecture/topics
+    skip on their input hash. Without per-page input-hashing the fan-out finalize
+    re-runs every dir + architecture LLM call on every rebuild."""
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)
+    a = _add(spec, cid, "app/a.py")
+    _add(spec, cid, "app/b.py")
+    _add(spec, cid, "lib/c.py")
+
+    llm = _CountingLlm()
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=llm)
+    await coord.on_doc_indexed(a)
+    await coord.aclose()
+    assert llm.calls > 0  # the first build did real work (cards + dirs + arch)
+
+    llm.calls = 0
+    await coord.trigger_code_build(cid)  # nothing changed since the last build
+    await coord.aclose()
+    assert llm.calls == 0  # every page hash-skipped — a free re-pull
+
+
+async def test_changing_one_file_rebuilds_only_its_dir_chain():
+    """#281 P5 / Q3: editing a file in app/ rebuilds app/'s directory page but
+    leaves an unrelated lib/ page untouched (its input hash is unchanged)."""
+    spec = make_spec(default_user="u")
+    cid = _code_collection(spec)
+    a_id = _add(spec, cid, "app/a.py", "def a():\n    return 1\n")
+    _add(spec, cid, "lib/c.py", "def c():\n    return 3\n")
+
+    coord = WikiMaintenanceCoordinator(spec, _NoopRunner(), code_wiki_llm=_EchoLlm())
+    await coord.on_doc_indexed(a_id)
+    await coord.aclose()
+
+    store = WikiFileStore(spec)
+    lib_before = (await store.read_with_etag(cid, "/dirs/lib.md"))[1]  # ty: ignore[non-subscriptable]
+    app_before = (await store.read_with_etag(cid, "/dirs/app.md"))[1]  # ty: ignore[non-subscriptable]
+
+    # Edit app/a.py (new bytes → new content hash → its card + summary change).
+    spec.get_resource_manager(SourceDoc).create_or_update(
+        a_id,
+        SourceDoc(
+            collection_id=cid,
+            path="app/a.py",
+            content=Binary(data=b"def a():\n    return 42  # changed\n"),
+            text="def a():\n    return 42  # changed\n",
+            status="ready",
+        ),
+    )
+    await coord.trigger_code_build(cid)
+    await coord.aclose()
+
+    lib_after = (await store.read_with_etag(cid, "/dirs/lib.md"))[1]  # ty: ignore[non-subscriptable]
+    app_after = (await store.read_with_etag(cid, "/dirs/app.md"))[1]  # ty: ignore[non-subscriptable]
+    assert lib_after == lib_before  # unrelated dir page not rewritten
+    assert app_after != app_before  # the affected dir chain was rebuilt

@@ -26,6 +26,7 @@ moved.
 
 from __future__ import annotations
 
+import hashlib
 import posixpath
 import re
 from collections import defaultdict
@@ -46,6 +47,19 @@ if TYPE_CHECKING:
 # A file card opens with a hidden marker carrying the source's content hash, so
 # an incremental build can skip a file whose bytes haven't changed.
 _SRC_MARKER = "<!-- src: {file_id} -->"
+
+# A directory / architecture page opens with a hidden marker carrying the hash of
+# its INPUT (the child summaries it was rolled up from), so an incremental
+# finalize can skip a page whose inputs are unchanged (#281 P5 / Q3) — rebuilding
+# only the dir chain affected by a changed card, not every page on every re-pull.
+_IN_MARKER = "<!-- in: {h} -->"
+
+
+def _hash_material(material: str) -> str:
+    """A short stable digest of a page's roll-up input — the skip key for the
+    per-page incremental build (#281 P5)."""
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
+
 
 _CARD_PROMPT = (
     "You are documenting a source file for a code wiki. In ONE sentence, say what "
@@ -195,23 +209,20 @@ class CodeWikiBuilder:
         paths = sources.list()
         tree = _build_tree(paths)
         await self._dir_pages(collection_id, tree)
-        topics = await self._arch_pages(collection_id, tree)
-        await self._prune_orphans(collection_id, paths, tree, topics)
+        await self._arch_pages(collection_id, tree)
+        await self._prune_orphans(collection_id, paths, tree)
 
-    async def _prune_orphans(
-        self, collection_id: str, paths: list[str], tree: _Tree, topics: list[str]
-    ) -> None:
+    async def _prune_orphans(self, collection_id: str, paths: list[str], tree: _Tree) -> None:
         """Delete wiki pages whose backing source no longer exists (#281 Q4b): a
-        deleted/renamed file's ``/files/<path>.md`` card, a now-empty
-        ``/dirs/<d>.md`` page, and a ``/topics/<slug>.md`` no longer proposed.
-        Reconciled against the CURRENT sources on every finalize, so deletions
-        converge without a per-delete rebuild (deletes deliberately don't trigger
-        one — see the coordinator)."""
+        deleted/renamed file's ``/files/<path>.md`` card and a now-empty
+        ``/dirs/<d>.md`` page (stale ``/topics`` pages are pruned by ``_arch_pages``
+        itself, which owns the topic set). Reconciled against the CURRENT sources
+        on every finalize, so deletions converge without a per-delete rebuild
+        (deletes deliberately don't trigger one — see the coordinator)."""
         keep = {f"/files/{p}.md" for p in paths}
         keep |= {f"/dirs/{d}.md" for d in tree.all_dirs}
-        keep |= {f"/topics/{_slugify(t)}.md" for t in topics}
         for page in await self._store.ls(collection_id):
-            if page.startswith(("/files/", "/dirs/", "/topics/")) and page not in keep:
+            if page.startswith(("/files/", "/dirs/")) and page not in keep:
                 await self._store.delete(collection_id, page)
 
     # ── L0: per-file cards ───────────────────────────────────────────
@@ -242,17 +253,22 @@ class CodeWikiBuilder:
         up from its direct child file cards + child sub-directory pages. Deepest
         first, so a parent reads summaries its children just wrote."""
         for d in sorted(tree.all_dirs, key=lambda x: x.count("/"), reverse=True):
-            page = await self._render_dir(
+            body = await self._render_dir(
                 collection_id,
                 d,
                 sorted(tree.child_files.get(d, [])),
                 sorted(tree.child_dirs.get(d, [])),
             )
-            await self._store.write(collection_id, f"/dirs/{d}.md", page.encode("utf-8"))
+            if body is not None:  # None ⇒ inputs unchanged, page kept as-is (P5)
+                await self._store.write(collection_id, f"/dirs/{d}.md", body.encode("utf-8"))
 
     async def _render_dir(
         self, collection_id: str, directory: str, files: list[str], subdirs: list[str]
-    ) -> str:
+    ) -> str | None:
+        """Roll a directory page up from its child summaries. Returns ``None`` to
+        SKIP (no rewrite, no LLM call) when the inputs are unchanged since the last
+        build (#281 P5) — so a re-pull only redoes the dir chain a changed card
+        actually moved."""
         file_lines = [
             f"- [{posixpath.basename(p)}](/files/{p}.md) — "
             f"{await self._summary_of(collection_id, f'/files/{p}.md')}"
@@ -266,12 +282,16 @@ class CodeWikiBuilder:
         material = "Files:\n" + ("\n".join(file_lines) or "(none)")
         if sub_lines:
             material += "\n\nSub-packages:\n" + "\n".join(sub_lines)
+        page = f"/dirs/{directory}.md"
+        input_hash = _hash_material(material)
+        if await self._is_input_current(collection_id, page, input_hash):
+            return None  # children's summaries unchanged — keep the existing page
         synthesis = _unfence(
             self._llm.collect(
                 _DIR_PROMPT.replace("{dir}", directory).replace("{material}", material)
             )
         )
-        body = f"# {directory}\n\n{synthesis}\n"
+        body = f"{_IN_MARKER.replace('{h}', input_hash)}\n# {directory}\n\n{synthesis}\n"
         if file_lines:
             body += "\n## Files\n" + "\n".join(file_lines) + "\n"
         if sub_lines:
@@ -295,13 +315,23 @@ class CodeWikiBuilder:
         marker = _SRC_MARKER.replace("{file_id}", file_id)
         return prev[0].decode("utf-8", errors="replace").startswith(marker)
 
+    async def _is_input_current(self, collection_id: str, page: str, input_hash: str) -> bool:
+        """True when ``page`` already exists and its input-hash marker matches —
+        i.e. the child summaries it was rolled up from are unchanged (#281 P5)."""
+        prev = await self._store.read_with_etag(collection_id, page)
+        if prev is None:
+            return False
+        marker = _IN_MARKER.replace("{h}", input_hash)
+        return prev[0].decode("utf-8", errors="replace").startswith(marker)
+
     # ── L2: architecture / index / topics ────────────────────────────
-    async def _arch_pages(self, collection_id: str, tree: _Tree) -> list[str]:
-        """Synthesise the top-down pages from the top-level summaries, and return
-        the topic titles (so finalize can prune stale topic pages). Each top-level
-        directory page already recursively rolls up its whole subtree, so the
-        top-level summaries are a bounded, full-repo picture — no matter how big
-        the repo is."""
+    async def _arch_pages(self, collection_id: str, tree: _Tree) -> None:
+        """Synthesise the top-down pages (architecture / topics / index) from the
+        top-level summaries. Each top-level directory page already recursively
+        rolls up its whole subtree, so the top-level summaries are a bounded,
+        full-repo picture — no matter how big the repo is. SKIPPED whole (no LLM)
+        when those summaries are unchanged since the last build (#281 P5); owns
+        the pruning of its own stale ``/topics`` pages when it does regenerate."""
         top_dirs = sorted(tree.child_dirs.get("", set()))
         top_files = sorted(tree.child_files.get("", []))
         dir_summaries = [
@@ -313,9 +343,14 @@ class CodeWikiBuilder:
             material += f"{sep}- {p}: " + await self._summary_of(collection_id, f"/files/{p}.md")
         material = material or "(empty repository)"
 
+        input_hash = _hash_material(material)
+        if await self._is_input_current(collection_id, "/architecture.md", input_hash):
+            return  # the top-level picture is unchanged — skip arch + topics + index
+
+        marker = _IN_MARKER.replace("{h}", input_hash)
         arch = _unfence(self._llm.collect(_ARCH_PROMPT.replace("{material}", material)))
         await self._store.write(
-            collection_id, "/architecture.md", f"# Architecture\n\n{arch}\n".encode()
+            collection_id, "/architecture.md", f"{marker}\n# Architecture\n\n{arch}\n".encode()
         )
 
         topics = self._plan_topics(material)
@@ -328,12 +363,17 @@ class CodeWikiBuilder:
             await self._store.write(
                 collection_id, f"/topics/{_slugify(title)}.md", f"# {title}\n\n{body}\n".encode()
             )
+        # Prune topic pages no longer proposed (the set can shift between builds);
+        # _arch_pages owns the topic lifecycle, so it reconciles them here.
+        keep_topics = {f"/topics/{_slugify(t)}.md" for t in topics}
+        for page in await self._store.ls(collection_id):
+            if page.startswith("/topics/") and page not in keep_topics:
+                await self._store.delete(collection_id, page)
 
         coll = self._coll_rm.get(collection_id).data
         assert isinstance(coll, Collection)
         index = _render_index(coll.name, dir_summaries, top_files, topics)
         await self._store.write(collection_id, "/index.md", index.encode("utf-8"))
-        return topics
 
     def _plan_topics(self, material: str) -> list[str]:
         """Ask the model for a few cross-cutting topic titles; tolerant of
