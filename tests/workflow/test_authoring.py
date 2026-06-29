@@ -172,3 +172,59 @@ def test_check_app_is_clean_for_shipped_apps():
 def test_check_app_handles_an_app_without_workflows():
     # rca ships only interactive profiles → nothing to check
     assert check_app("rca") == []
+
+
+# ── #323: DSL workflows authored as workflow.json ───────────────────────────
+
+
+def _write_dsl_profile(profile_dir: Path, manifest: dict, dsls: dict[str, str]) -> None:
+    """Lay out a profile whose list-form workflows are DSL ``workflow.json`` files."""
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "_profile.json").write_text(json.dumps(manifest))
+    for wf_id, body in dsls.items():
+        wf_dir = profile_dir / "workflows" / wf_id
+        wf_dir.mkdir(parents=True, exist_ok=True)
+        (wf_dir / "workflow.json").write_text(body)
+
+
+_CLEAN_DSL = json.dumps(
+    {
+        "id": "filer",
+        "phases": [{"id": "note"}],
+        "steps": [{"type": "agent", "prompt": "hi", "phase": "note", "out": "note.md"}],
+    }
+)
+
+
+def test_clean_dsl_workflow_profile_has_no_diagnostics(tmp_path):
+    _write_dsl_profile(
+        tmp_path,
+        {"workflows": [{"id": "filer", "phases": [{"id": "note"}]}]},
+        {"filer": _CLEAN_DSL},
+    )
+    assert check_profile_dir(tmp_path, "app/p") == []
+
+
+def test_unparseable_dsl_is_an_error(tmp_path):
+    _write_dsl_profile(
+        tmp_path,
+        {"workflows": [{"id": "filer", "phases": [{"id": "note"}]}]},
+        {"filer": "{not json"},
+    )
+    diags = check_profile_dir(tmp_path, "app/p")
+    assert _levels(diags) == ["error"] and "won't parse" in diags[0].message
+
+
+def test_invalid_dsl_reports_validation_errors(tmp_path):
+    bad = json.dumps(
+        {
+            "id": "filer",
+            "phases": [{"id": "note"}],
+            "steps": [{"type": "sandbox", "run": "x", "phase": "undeclared"}],
+        }
+    )
+    _write_dsl_profile(
+        tmp_path, {"workflows": [{"id": "filer", "phases": [{"id": "note"}]}]}, {"filer": bad}
+    )
+    diags = check_profile_dir(tmp_path, "app/p")
+    assert any("workflow.json:" in d.message and "not declared" in d.message for d in diags)

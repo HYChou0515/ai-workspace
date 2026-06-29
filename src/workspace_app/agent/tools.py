@@ -979,6 +979,67 @@ async def save_skill_impl(
     )
 
 
+def _profile_tool_ceiling(app_slug: str | None, profile: str | None) -> set[str] | None:
+    """The tools an agent in this App profile may hold — the App's ``agent.tools`` ceiling,
+    narrowed by the profile's ``tools`` override (#323, Q4: a workflow's agent steps can't
+    exceed what its author could use by hand). ``None`` (skip the clamp) for a synthetic /
+    unreadable slug."""
+    if app_slug is None or profile is None:
+        return None
+    from msgspec import UNSET
+
+    from ..apps.manifest import load_app_manifest
+    from ..apps.profiles import load_profile
+
+    try:
+        app_tools = set(load_app_manifest(app_slug).agent.tools)
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        return None
+    pm_tools = load_profile(app_slug, profile).tools
+    return (set(pm_tools) & app_tools) if pm_tools is not UNSET else app_tools
+
+
+async def save_workflow_impl(
+    ctx: RunContextWrapper[AgentToolContext], id: str, workflow_json: str
+) -> str:
+    """Save a workflow you co-designed with the user into THIS workspace so it can be run,
+    downloaded to hand off, or promoted to a default. A workflow is DATA, not code (#323):
+    a small ordered set of steps — `agent` (an LLM turn), `sandbox` (a command), `gate` (a
+    human approval), `capability` (file into a collection / write a context card), and
+    `map` (repeat over uploaded files) — that the platform interprets, so it's safe to run.
+    The `author-workflow` skill walks you through drafting one with the user.
+
+    `id` is a short name (kebab-cased to the filename + id); `workflow_json` is the full
+    workflow.json text. This VALIDATES it before saving — if a step type, phase, capability,
+    check, or `{variable}` is off, it returns the problems so you can fix and re-save (don't
+    guess; address each one). Re-saving the same id overwrites. On success the user can Run
+    it, or download `.workflows/` to reuse elsewhere."""
+    from ..workflow.workspace_store import (
+        save_workspace_workflow,
+        slugify_workflow_id,
+        validate_workflow_json,
+    )
+
+    files = ctx.context.files
+    inv = ctx.context.investigation_id
+    if files is None or inv is None:
+        return "error: save_workflow needs a workspace (none on this turn)"
+    slug = slugify_workflow_id(id)
+    if not slug:
+        return f"error: {id!r} has no letters or digits to make a workflow id from"
+    ceiling = _profile_tool_ceiling(ctx.context.app_slug, ctx.context.template_profile)
+    workflow, errs = validate_workflow_json(workflow_json, tool_ceiling=ceiling)
+    if workflow is None or errs:
+        return "error: the workflow has problems — fix these and save again:\n- " + "\n- ".join(
+            errs
+        )
+    path = await save_workspace_workflow(files, inv, slug, workflow)
+    return (
+        f"saved workflow '{slug}' to {path}. The user can Run it from this item, or download "
+        "the .workflows folder from the Workflows panel to reuse or hand it to the dev team."
+    )
+
+
 def resolve_collection_impl(ctx: RunContextWrapper[AgentToolContext], ref: str) -> str:
     """Resolve a collection id-or-name to its canonical {id, name} (JSON).
 
@@ -1154,6 +1215,9 @@ _IMPLS = {
     # `agent.tools` like any other (the workspace apps that ship the
     # `author-skill` meta-skill grant it). Deterministic SKILL.md write.
     "save_skill": save_skill_impl,
+    # `save_workflow` (#323) — same shape: an opt-in tool the apps that ship the
+    # `author-workflow` meta-skill grant. Validates + writes a workspace workflow.json.
+    "save_workflow": save_workflow_impl,
 }
 
 # The RCA workspace toolset — what `build_tools(None)` hands out. It includes

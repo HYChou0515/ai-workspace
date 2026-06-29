@@ -606,6 +606,58 @@ v1 的 gate 沒有它就不算「完成」。）
 
 **延後／非目標：** 對話式的 steer-and-resume **已在 #288 落地**（§10）——只有 *真正
 live* 的 run 進行中注入（一則 note 進一個已在執行的 node，而不 Stop）仍延後；
-宣告式 DAG authoring；node 層級的視覺化編輯；控制流 branching 基本元素（用資料）；
+~~宣告式 DAG authoring~~（§22 為 *使用者* authoring 重新打開了它的一個 **降階、非
+Turing-complete** 版本——理由正是這裡列出的「給非工程師 authoring」前提如今成立）；
+node 層級的視覺化編輯；控制流 branching 基本元素（用資料）；
 對外的 webhook callback；真正的 module 層級版本釘選（用新 profile 慣例）；
 真正的 SSO authz；把 LLM-judge check 當成超過偶一為之的逃生口之外的任何東西。
+
+---
+
+## 22. 使用者自己做 workflow（降階 DSL，#323）
+
+§3 否決了宣告式 DSL，理由是「只在『給非工程師 authoring』或『執行期可編輯定義』才
+划算」。**#323 正是那個前提成立的時候**：讓一個 *使用者*（非工程師）跟 AI 一起弄出一個
+能跑的 workflow——就像 #298 讓他們跟 AI 弄出一個 skill。差別在 skill 是 passive 的
+markdown（零執行風險），workflow 會 **執行**。所以使用者 **不能寫 code**：orchestration
+`run()` 是 trusted 後端 Python（持有 turn engine／sandbox 生命週期／capability
+credential，§1），把使用者的 Python 跑進 API 不安全。
+
+**解法 = 降階的資料 + trusted interpreter。** 使用者寫一份 `workflow.json`（一個
+**非 Turing-complete** 的 DSL），一個 trusted 的 generic `run()` 讀它、把每個 step 的
+欄位當參數 dispatch 到 §5 那些 *既有* 的 primitive。沒有使用者 *code* 跑進 API；
+§9 的 filesystem-journal + input-hash skip 原樣成立（DSL 固定、代入 deterministic →
+step 身分穩定）。詳細的 build 計畫 + 完整 grill 決策見
+[`plan-issue-323.md`](plan-issue-323.md)。
+
+- **詞彙（Q7 天花板）：** `steps` 有序清單；step `type` ∈
+  `agent` / `sandbox` / `gate` / `capability` / `map`（唯一的迴圈，one-level）；
+  `{x}` / `{x.field}` 唯讀字串代入（**非任意運算式**；`{x.field}` 在 `x` 指向 `.json`
+  檔時讀檔取欄位——正是 §8 的 decision→data→action routing）；`check` 是 §6 的宣告式
+  builder；branch 用資料 routing（§11）。**沒有** revise-loop / branch / 巢狀 map——那些
+  留給 dev 的 `run.py`。
+- **安全不變式（Q4）= 「使用者 workflow 能做的，恰好等於它的作者親手能做的」。**
+  capability（`ingest_to_collection`、`upsert_context_card`）是 interpreter 在
+  **captured user 的 authz scope** 下跑的 DSL primitive；一個使用者的 `sandbox` step 是
+  **compute-only**（不給 run-scoped credential），所以 side-effect 永遠只走受控的
+  capability primitive。authoring 不產生任何新權限。
+- **儲存／發現（Q5，照搬 §298 的 skill 模型）：** 一份使用者 workflow 住在
+  `<workspace>/.workflows/<id>.json`（FileStore），**item-local**、live 讀、同名
+  **shadow** 掉 package workflow，用既有的通用資料夾下載 export，由 dev promote。
+  **不是** specstar resource。
+- **一個 interpreter 服務兩層（Q6）：** 一個 *package* workflow 可以是 `run.py`
+  （trusted Python）**或** `workflow.json`（被 interpret）。**promote = 把 json 複製進
+  profile**，免 transpile（正如 skill promote 就是複製 `SKILL.md`）。
+- **Co-design（Q8）：** 一個 `author-workflow` shared meta-skill 引導 AI 起草 DSL；
+  一個 `save_workflow` tool 在寫入前 **驗證**（schema、phase 一致、`tools` ⊆ profile
+  上限、capability 在允許清單、`check` 格式）並把無效的 DSL **退回原因讓 AI 修**
+  （正如 `save_skill` 擋 body cap）。v1 **不**自動試跑——使用者按 Run 來測。
+- **上限／authz（Q9）：** 與 package workflow **同一組** cap（§16–§17）；能存取該 item
+  就能 author + run；captured-user scope。
+
+**v1 範圍（本案）：** DSL 引擎（schema + interpreter + validator）、package 端可
+interpret `workflow.json`（= promote target）、`save_workflow` + `author-workflow`
++ workspace 列表。**緊接 follow-up：** workspace 就地自助執行（把 item context 接進
+`load_run`，這是 workflow 唯一超出 skill 的地方）、FE Workflows panel。
+**v2 延後：** revise-loop / branch / 巢狀 map；co-design 自動試跑；promote 時
+transpile 成 Python；per-user quota。
