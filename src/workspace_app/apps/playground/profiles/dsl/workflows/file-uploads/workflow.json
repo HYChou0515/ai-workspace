@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "id": "file-uploads",
+  "title": "File uploads into a collection",
+  "tag": "batch",
+  "description": "Classify each upload, review the plan, then file it.",
+  "hint": "Drop files into uploads/.",
+  "config": { "collections": ["notes"] },
+  "phases": [
+    { "id": "classify", "title": "Classify" },
+    { "id": "review", "title": "Review" },
+    { "id": "commit", "title": "Commit" }
+  ],
+  "steps": [
+    {
+      "type": "map",
+      "over": "uploads/*",
+      "as": "file",
+      "phase": "classify",
+      "do": [
+        {
+          "type": "agent",
+          "prompt": "Read {file}. Choose a collection from {config.collections} and write a one-line digest. Reply with a JSON object holding keys collection, digest, and source (set source to {file}).",
+          "phase": "classify",
+          "out": "plan/{file}.json",
+          "tools": ["read_file"],
+          "check": {
+            "choice_in": {
+              "path": "plan/{file}.json",
+              "key": "collection",
+              "allowed": "{config.collections}"
+            }
+          },
+          "retries": 2
+        }
+      ]
+    },
+    {
+      "type": "gate",
+      "phase": "review",
+      "title": "File these into the collection?",
+      "summary_from": "plan/*.json",
+      "allow": ["approve", "reject"]
+    },
+    {
+      "type": "map",
+      "over": "plan/*.json",
+      "as": "p",
+      "phase": "commit",
+      "do": [
+        {
+          "type": "capability",
+          "call": "ingest_to_collection",
+          "phase": "commit",
+          "collection": "{p.collection}",
+          "path": "{p.source}"
+        }
+      ]
+    }
+  ]
+}

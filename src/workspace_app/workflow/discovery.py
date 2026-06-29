@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from ..apps.profiles import load_profile, workflow_profiles
+from .dsl import build_run, parse_def
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest
 from .preflight import Preflight
@@ -65,17 +66,31 @@ def _run_py_path(app_slug: str, profile: str, workflow_id: str):
     return base / "workflows" / workflow_id / "run.py" if workflow_id else base / "run.py"
 
 
+def _workflow_json_path(app_slug: str, profile: str, workflow_id: str):
+    """The ``workflow.json`` traversable for a list-form DSL workflow (#323, manual §22):
+    ``profiles/<profile>/workflows/<workflow_id>/workflow.json``. A DSL workflow is
+    declared in ``_profile.json`` like any other (its id addresses this dir); the trusted
+    interpreter runs the data in place of a ``run.py`` — the same interpreter that serves a
+    workspace-authored one (Q6). Only the list form (a non-empty ``workflow_id``)."""
+    base = resources.files(_APPS_PKG) / app_slug / "profiles" / profile
+    return base / "workflows" / workflow_id / "workflow.json"
+
+
 def _run_py_label(app_slug: str, profile: str, workflow_id: str) -> str:
     return f"{app_slug}_{profile}" + (f"_{workflow_id}" if workflow_id else "")
 
 
 def load_run_callable(app_slug: str, profile: str, workflow_id: str = "") -> ProfileRun:
-    """A workflow's ``run`` coroutine, loaded from its ``run.py`` by file path.
-
-    ``workflow_id`` selects the new list-form layout
-    (``profiles/<profile>/workflows/<workflow_id>/run.py``); the default ``""`` is the
-    legacy singular layout (``run.py`` at the profile root). Raises ``WorkflowNotFound``
-    when the file or the ``run`` callable is missing."""
+    """A workflow's ``run`` coroutine. A list-form workflow may be authored as **data** —
+    a ``workflow.json`` (#323, manual §22) the trusted interpreter runs — or as Python
+    (``run.py`` loaded by file path); the JSON wins when both are present (Q6). The legacy
+    singular layout (``workflow_id=""``) is ``run.py`` at the profile root. Raises
+    ``WorkflowNotFound`` when neither the JSON nor a ``run()`` callable is there."""
+    if workflow_id:
+        json_path = _workflow_json_path(app_slug, profile, workflow_id)
+        if json_path.is_file():
+            with resources.as_file(json_path) as p:
+                return build_run(parse_def(p.read_bytes()))
     run_path = _run_py_path(app_slug, profile, workflow_id)
     if not run_path.is_file():
         where = f"workflows/{workflow_id}/run.py" if workflow_id else "run.py"

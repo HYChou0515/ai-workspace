@@ -116,3 +116,10 @@ def test_load_preflight_callable_returns_none_when_absent():
 def test_load_preflight_callable_missing_run_py_is_none():
     """No run.py at all ⇒ no pre-flight (defensive — never raises)."""
     assert load_preflight_callable("playground", "multi", "nope") is None
+
+
+def test_load_run_callable_loads_a_dsl_workflow_json():
+    """#323: a list-form workflow authored as a workflow.json is run by the interpreter
+    (manual §22), not a run.py — load_run_callable returns the interpreter callable."""
+    run = load_run_callable("playground", "dsl", "file-uploads")
+    assert callable(run) and run.__name__ == "run"  # ty: ignore[unresolved-attribute]

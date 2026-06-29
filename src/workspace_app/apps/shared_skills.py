@@ -32,6 +32,9 @@ SHARED_SKILLS_DIR = _REPO / "sample-skills"
 # {skill name → source dir holding SKILL.md (+ optional references/ scripts/)}.
 SHARED_SKILLS: dict[str, Path] = {
     "author-skill": SHARED_SKILLS_DIR / "author-skill",
+    # #323: the meta-skill that teaches the agent to co-author a *workflow* (a runnable
+    # workflow.json) with the user — the workflow analogue of author-skill.
+    "author-workflow": SHARED_SKILLS_DIR / "author-workflow",
 }
 
 
