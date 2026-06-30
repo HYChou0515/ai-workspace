@@ -49,6 +49,23 @@ def test_sandbox_section_defaults():
     assert s.isolate is None
 
 
+def test_sandbox_isolation_and_scratch_quota_defaults_345():
+    # #345: the local sandbox grows a per-item OS-user + cgroup isolation block
+    # (for a SHARED working vol on multi-replica API) and a soft cap on that
+    # scratch vol. Both default OFF/auto so existing single-pod deploys are
+    # unchanged.
+    s = Settings().sandbox
+    assert s.max_workspace_bytes == 0  # 0 ⇒ no scratch-vol cap (du sweep off)
+    iso = s.isolation
+    assert iso.enabled is None  # auto: on iff CAP_SETUID + delegated cgroup v2
+    assert iso.uid_base == 1_000_000
+    assert iso.uid_range == 2_000_000_000  # xxhash(item_id) % range → negligible collisions
+    assert iso.cgroup_root is None
+    assert iso.memory_max == "512M"
+    assert iso.cpu_cores == 1.0
+    assert iso.pids_max == 512
+
+
 def test_filestore_section_defaults():
     s = Settings().filestore
     assert s.kind == "memory"

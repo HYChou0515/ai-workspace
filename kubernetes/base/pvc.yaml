@@ -3,14 +3,41 @@ kind: PersistentVolumeClaim
 metadata:
   name: rca-data
 spec:
-  # ReadWriteMany so every replica mounts the shared specstar store (#16:
-  # multi-pod). Requires an RWX-capable storageClass (NFS / CephFS / EFS /
-  # Filestore); set it per-overlay/cluster below. (specstar is multi-writer-safe;
-  # per-investigation sticky routing — see the Ingress — keeps a workspace's
-  # writes on one pod.)
+  # The DURABLE archive: specstar store + the FileStore snapshot (the recycle
+  # write-back target) + KB data. ReadWriteMany so every replica mounts the one
+  # shared specstar store (#16: multi-pod). Requires an RWX-capable storageClass
+  # (NFS / CephFS / EFS / Filestore); set it per-overlay/cluster below.
+  #
+  # #345: workspace correctness no longer depends on per-investigation sticky
+  # routing — every pod resolves an item's working dir by id on the shared scratch
+  # volume (rca-scratch) and a read on any pod hits the live dir (the facade falls
+  # back to this durable snapshot only when the dir is cold). The Ingress hash is
+  # now a pure latency optimisation (keep an item's turns on the pod holding its
+  # warm dir), not a correctness requirement.
   accessModes:
     - ReadWriteMany
   resources:
     requests:
       storage: 5Gi
   # storageClassName: ""   # MUST be an RWX class for multi-replica (e.g. nfs, efs)
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: rca-scratch
+spec:
+  # #345: the SCRATCH working volume — one fixed dir per item (`SANDBOX_ROOT`),
+  # shared across pods so every replica reads/writes the same live files. Kept
+  # SEPARATE from the durable archive (rca-data) so the two can use different
+  # storage classes (a fast/cheap RWX scratch vs a backed-up durable tier) and so
+  # a runaway item filling the scratch vol can't threaten the archive. Must be
+  # ReadWriteMany (the shared-dir model needs every pod to mount it). The idle
+  # reaper recycles each item's dir back to the durable archive, then frees it
+  # here; size for peak concurrent live workspaces (+ `sandbox.max_workspace_bytes`
+  # caps any single item).
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  # storageClassName: ""   # RWX class; may differ from rca-data's (scratch tier)

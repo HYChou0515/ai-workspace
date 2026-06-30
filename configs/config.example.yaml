@@ -42,12 +42,36 @@
 # ─── sandbox (agent execution environment) ──────────────────────────
 # sandbox:
 #   kind: local                # local | http | mock  (docker deprecated #252 — use http)
-#   root: null                 # null = tmpdir per sandbox
+#   root: null                 # null = tmpdir per sandbox. #345: set a path on a
+#                              # SHARED RWX volume for a multi-pod deploy — the
+#                              # local sandbox keys each item to a fixed dir
+#                              # `{root}/{item_id}/root`, so any replica resolves
+#                              # the same live working files (no more appear/vanish
+#                              # when sticky routing breaks). Point it at the
+#                              # scratch mount, NOT the durable filestore.disk_root.
 #   exec_timeout: 60.0         # TOTAL wall-clock cap per command; 0 = no cap
 #   log_timeout: 60.0          # IDLE cap (#70): kill if no stdout/stderr output
 #                              # for this long (assumed hung); 0 = disabled.
 #                              # Long jobs: set exec_timeout: 0 + a log_timeout.
 #   isolate: null              # null = auto-detect userns
+#   max_workspace_bytes: 0     # #345: hard cap on ONE item's scratch dir (bytes;
+#                              # 0 = unlimited). The idle reaper's du-sweeper
+#                              # recycles + frees any item over it, so a single
+#                              # runaway workspace can't fill the shared scratch
+#                              # volume the whole fleet shares.
+#   # #345 per-item OS-user + cgroup isolation (ported from the HTTP sandbox host).
+#   # Off by default — needs CAP_SETUID/SETGID + a writable cgroup v2 tree, which
+#   # most clusters forbid; the shared-dir fix above cures the data loss without
+#   # it. Each item maps to a STABLE uid (xxhash(item_id) → uid, same on every
+#   # pod) so file ownership + cgroups stay consistent fleet-wide.
+#   isolation:
+#     enabled: false           # true ⇒ drop each exec to its per-item uid + cgroup
+#     uid_base: 1000000        # uid = uid_base + xxhash(item_id) % uid_range
+#     uid_range: 2000000000
+#     cgroup_root: null        # null = auto-detect the pod's delegated cgroup v2 slice
+#     memory_max: 512M         # per-item cgroup memory.max
+#     cpu_cores: 1.0           # per-item cgroup cpu.max
+#     pids_max: 512            # per-item cgroup pids.max
 #   # kind: http — run sandboxes in a separate host pod (see sandbox_host).
 #   # http:
 #   #   base_url: http://sandbox-host:8000   # the host's ClusterIP Service

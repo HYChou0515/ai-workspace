@@ -30,6 +30,7 @@ from ..health.service import HealthService
 from ..kernels import KernelService
 from ..observability.boot import boot_step
 from .registry import InvestigationRegistry
+from .sandbox_activity import register_sandbox_activity
 
 # #227: how often the background index-sweeper recovers stuck fan-out runs, and
 # how long a run may go without progress before its missing batches are declared
@@ -49,6 +50,7 @@ def build_lifespan(
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
     mirror_interval: timedelta,
+    max_workspace_bytes: int,
     code_sync_check_interval: timedelta | None,
     gc_interval: timedelta | None,
     gc_t1: str,
@@ -61,11 +63,18 @@ def build_lifespan(
     async def idle_killer() -> None:
         """Periodically reap sandboxes whose last_active is past the
         threshold. The reaper sleeps the check_interval between sweeps
-        — short for tests, ~60 s in production."""
+        — short for tests, ~60 s in production.
+
+        #345: the same tick also enforces the scratch-vol soft quota — any item
+        whose working dir grew past ``max_workspace_bytes`` is recycled (even if
+        not idle), so one runaway workspace can't fill the shared scratch volume.
+        Gated on a positive cap (0 ⇒ no measurement, no overhead)."""
         try:
             while True:
                 await asyncio.sleep(idle_check_interval.total_seconds())
                 await registry.kill_idle(idle_timeout)
+                if max_workspace_bytes > 0:
+                    await registry.enforce_quota(max_workspace_bytes)
         except asyncio.CancelledError:
             return
 
@@ -189,6 +198,12 @@ def build_lifespan(
                 app.state.ingestor,
                 user=HELP_SYSTEM_USER,
             )
+        # #345: register the shared per-item activity-heartbeat model (only when
+        # the registry uses it — the local shared-vol sandbox). Registered HERE,
+        # after spec.apply, so its CRUD routes are never emitted (same reason as
+        # the #245 blob-GC lease below).
+        if registry.activity is not None:
+            register_sandbox_activity(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         # NOTE: the full capability round is deliberately NOT scheduled here

@@ -43,11 +43,12 @@ async def test_workspace_files_survive_idle_kill_and_restart(stack):
     killed = await registry.kill_idle(threshold=timedelta(minutes=15))
     assert killed == ["ws"]
 
-    # Second session: brand-new sandbox handle, restore-after-create
-    # should bring both files back.
+    # Second session: #345 — the handle id is now STABLY the item id (the shared
+    # per-item dir is addressed by id, not a fresh uuid per wake), and the
+    # restore-after-create (the dir went cold on kill) brings both files back.
     s2 = await registry.session("ws")
     h2 = await registry.ensure_handle(s2)
-    assert h2.id != h1.id
+    assert h2.id == h1.id == "ws"
 
     cat_output = await sandbox.exec(h2, ["cat", "/output.txt"])
     assert cat_output.stdout == b"shell wrote this"

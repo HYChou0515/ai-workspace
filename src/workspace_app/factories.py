@@ -33,7 +33,13 @@ from .api.runner import AgentRunner
 from .apps.catalog import AppCatalog, validate_all_apps
 from .config.catalog_build import build_catalog
 from .config.loader import load as load_settings
-from .config.schema import Preset, RetrievalLlmRef, Settings
+from .config.schema import (
+    Preset,
+    RetrievalLlmRef,
+    SandboxIsolationSettings,
+    SandboxSettings,
+    Settings,
+)
 from .failover.llm import FallbackLlm, FallbackVlm
 from .failover.observe import make_switch_logger
 from .failover.registry import get_cooldown_registry
@@ -46,6 +52,11 @@ from .kb.llm import ILlm, LitellmLlm
 from .kb.retriever import Enhancements
 from .kb.vlm.protocol import IVlm
 from .resources.kb import CODE_EMBED_DIM, EMBED_DIM
+from .sandbox.isolated_process import (
+    IsolatedProcessSandbox,
+    _detect_cgroup_root,
+    isolation_supported,
+)
 from .sandbox.local_process import LocalProcessSandbox
 from .sandbox.mock import MockSandbox
 from .sandbox.protocol import Sandbox
@@ -184,25 +195,67 @@ def _with_connect_timeout(dsn: str, seconds: int) -> str:
     return f"{dsn} connect_timeout={seconds}".strip()
 
 
+def _build_isolated_sandbox(
+    sb: SandboxSettings, iso: SandboxIsolationSettings, tools_dir: Path | None
+) -> IsolatedProcessSandbox:
+    """#345: the per-item uid+cgroup local sandbox. Reached only after
+    `isolation_supported` has confirmed a cgroup root exists, so the
+    auto-detect fallback is never None here."""
+    cgroup_root = iso.cgroup_root or _detect_cgroup_root()
+    assert cgroup_root is not None  # isolation_supported guaranteed a root
+    return IsolatedProcessSandbox(
+        cgroup_root=str(cgroup_root),
+        uid_base=iso.uid_base,
+        uid_range=iso.uid_range,
+        root_dir=Path(sb.root) if sb.root else None,
+        exec_timeout=sb.exec_timeout,
+        log_timeout=sb.log_timeout,
+        tools_dir=tools_dir,
+        memory_max=iso.memory_max,
+        cpu_cores=iso.cpu_cores,
+        pids_max=iso.pids_max,
+    )
+
+
 def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
     sb = settings.sandbox
     match sb.kind:
         case "mock":
             return MockSandbox()
         case "local":
+            iso = sb.isolation
             isolate = sb.isolate
+            # #345: per-item uid+cgroup isolation is a DIFFERENT model from the
+            # userns jail (`isolate`); `enabled` None = auto (on iff the host can),
+            # True = opt-in (fail-loud if it can't), False = off.
+            want_uid_isolation = iso.enabled
             if settings.tools.mode == "uv-run":
-                # uv-run runs tools from live source via `uv run`, which needs
-                # the host env — the chroot jail has neither uv nor network.
-                # Force isolation off; reject an explicit opt-in as a
-                # contradiction (#63).
-                if sb.isolate is True:
+                # uv-run runs tools from live source via `uv run`, which needs the
+                # host env + network — neither the chroot jail NOR a foreign-uid
+                # drop can reach it. Force both isolation models off; reject an
+                # explicit opt-in as a contradiction (#63 / #345).
+                if sb.isolate is True or iso.enabled is True:
                     raise ValueError(
                         "tools.mode=uv-run requires a non-isolated sandbox (uv run "
-                        "needs the host env), but sandbox.isolate is true — set "
-                        "sandbox.isolate: false (or remove it)."
+                        "needs the host env), but sandbox.isolate / "
+                        "sandbox.isolation.enabled is true — set them false (or "
+                        "remove them)."
                     )
                 isolate = False
+                want_uid_isolation = False
+            if want_uid_isolation is None:  # auto: on iff the host can honour it
+                want_uid_isolation = isolation_supported(iso.cgroup_root)[0]
+            elif want_uid_isolation:  # explicit opt-in: fail loud if it can't
+                ok, reason = isolation_supported(iso.cgroup_root)
+                if not ok:
+                    raise ValueError(
+                        f"sandbox.isolation.enabled is true but this host cannot "
+                        f"isolate: {reason}. Set sandbox.isolation.enabled: false, "
+                        f"or grant the pod CAP_SETUID/SETGID + a writable cgroup v2 "
+                        f"root (see kubernetes/base/deployment.yaml)."
+                    )
+            if want_uid_isolation:
+                return _build_isolated_sandbox(sb, iso, tools_dir)
             return LocalProcessSandbox(
                 root_dir=Path(sb.root) if sb.root else None,
                 exec_timeout=sb.exec_timeout,

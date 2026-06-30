@@ -93,7 +93,7 @@ async def test_read_skill_does_not_wake_sandbox(isolated_apps: Path):
     _profile_with_skill(isolated_apps, "rca", "local-lab", "fmt", "x", "body")
 
     class _BlowUpSandbox:
-        async def create(self, spec):
+        async def create(self, spec, sandbox_id=None):
             raise AssertionError("read_skill must NOT wake the sandbox")
 
         async def exec(self, *a, **kw):

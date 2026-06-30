@@ -91,7 +91,12 @@ class HttpSandbox:
         message = body.get("detail") or handle.id
         raise exc_type(message)
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        # #345 `sandbox_id` is the local-sandbox-on-shared-vol affordance; the
+        # HTTP host owns its OWN per-sandbox lifecycle + storage and mints the
+        # handle (pod_url+remote_id), so the hint does not apply here — accepted
+        # for protocol compatibility and ignored.
+        del sandbox_id
         resp = await self._client.post(
             f"{self._base_url}/sandboxes",
             json={
@@ -103,6 +108,13 @@ class HttpSandbox:
         resp.raise_for_status()
         data = resp.json()
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
+
+    def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+        # The HTTP host owns its own per-sandbox lifecycle and mints handles
+        # (pod_url+remote_id); it does not address by a caller-stable id, so
+        # there is nothing to derive (#345). A pod with no session reads the
+        # durable snapshot, as before.
+        return None
 
     async def kill(self, handle: SandboxHandle) -> None:
         await self._request(handle, "DELETE", "")

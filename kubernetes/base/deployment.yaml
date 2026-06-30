@@ -9,9 +9,13 @@ kind: Deployment
 metadata:
   name: rca-app
 spec:
-  # Multi-replica (#16): the specstar data is shared on an RWX PVC, and the
-  # in-pod runtime (sandbox / kernel / in-flight turn) is kept consistent by
-  # per-investigation sticky routing at the Ingress. Scale this for more users.
+  # Multi-replica (#16): the specstar data is shared on an RWX PVC. #345 makes
+  # the per-item WORKING dir shared too (one fixed dir per item on rca-scratch,
+  # resolvable on any pod), so workspace files stay consistent regardless of
+  # which replica serves a read — per-investigation sticky routing at the Ingress
+  # is now a warm-cache latency optimisation, not a correctness requirement. Only
+  # the in-pod kernel + in-flight turn remain pod-local (#349 tracks cross-pod
+  # turn cancel). Scale this for more users.
   replicas: 3
   strategy:
     type: RollingUpdate
@@ -35,6 +39,25 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            # #345: the shared scratch working volume (SANDBOX_ROOT). Separate
+            # PVC from /data so the durable archive and the churny per-item dirs
+            # can use different storage tiers and a runaway item can't fill the
+            # archive. RWX so every replica reads/writes the same live dir.
+            - name: scratch
+              mountPath: /scratch
+          # #345 isolation (per-item OS-user + cgroup). The base runs WITHOUT it
+          # (SANDBOX_ISOLATION_ENABLED="false"): most clusters forbid CAP_SETUID
+          # and the cgroup write, and the shared-dir fix already cures the data
+          # loss on its own. To opt in, set SANDBOX_ISOLATION_ENABLED="true"
+          # (configmap) AND grant the pod the privileges the setuid-drop + cgroup
+          # writes need:
+          # securityContext:
+          #   capabilities:
+          #     add: ["SETUID", "SETGID", "SETPCAP", "KILL"]
+          # plus a writable cgroup v2 mount at sandbox.isolation.cgroup_root
+          # (a delegated sub-tree of the pod's own slice). With enabled=true on a
+          # host that lacks these, the app fails loud at boot (it won't silently
+          # downgrade to no isolation).
           readinessProbe:
             httpGet:
               path: /openapi.json
@@ -58,3 +81,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: rca-data
+        - name: scratch
+          persistentVolumeClaim:
+            claimName: rca-scratch

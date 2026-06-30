@@ -874,3 +874,28 @@ def test_sandbox_log_timeout_defaults_to_60_and_is_configurable(tmp_path: Path):
     s = load(config_path=cfg, env={})
     assert s.sandbox.exec_timeout == 0
     assert s.sandbox.log_timeout == 120
+
+
+def test_sandbox_isolation_block_loads_as_typed_dataclass_345(tmp_path: Path):
+    """#345: operator YAML for the per-item-user isolation block must construct
+    the nested `SandboxIsolationSettings` (typed access), not a raw dict — and
+    `max_workspace_bytes` rides the flat sandbox section."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            sandbox:
+              max_workspace_bytes: 1048576
+              isolation:
+                enabled: true
+                memory_max: 1G
+                cpu_cores: 2.0
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    assert s.sandbox.max_workspace_bytes == 1048576
+    iso = s.sandbox.isolation
+    assert iso.enabled is True
+    assert iso.memory_max == "1G"
+    assert iso.cpu_cores == 2.0
+    assert iso.uid_base == 1_000_000  # untouched key keeps its default

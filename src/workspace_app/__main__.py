@@ -205,6 +205,10 @@ def main() -> None:
             max_file_size=settings.filestore.max_file_size,
             # #245: per-workspace total-size quota (protects the shared disk root).
             workspace_quota=settings.filestore.workspace_quota,
+            # #345: scratch-vol soft cap — the idle reaper recycles any item whose
+            # working dir grows past this (0 ⇒ off), so one runaway workspace can't
+            # fill the shared scratch volume the whole fleet shares.
+            max_workspace_bytes=settings.sandbox.max_workspace_bytes,
             # #245: blob-GC sweeper — reclaims orphaned blobs (0 ⇒ off).
             gc_interval=(
                 timedelta(seconds=settings.filestore.gc_interval_sec)

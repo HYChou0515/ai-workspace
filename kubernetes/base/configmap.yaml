@@ -18,12 +18,27 @@ data:
   # single all-in-one Deployment with no separate workers.
   RUN_CONSUMERS: "false"
 
-  # Sandbox: in-pod subprocess. Pods usually lack unprivileged userns, so
-  # disable isolation (falls back to direct exec). Workspace files live on the
-  # PVC mounted at /data.
+  # Sandbox: in-pod subprocess. #345 — the working files live on the SHARED
+  # SCRATCH volume (rca-scratch, mounted at /scratch), one fixed dir per item
+  # (`{SANDBOX_ROOT}/{item_id}/root`) so any replica resolves the same live dir.
+  # Kept off /data (the durable archive) so the two scale/back-up independently.
   SANDBOX_KIND: "local"
-  SANDBOX_ROOT: "/data/sandbox"
+  SANDBOX_ROOT: "/scratch/sandbox"
+  # The userns chroot jail (sandbox.isolate). Pods usually lack unprivileged
+  # userns, so leave it off — distinct from the #345 uid+cgroup isolation below.
   SANDBOX_ISOLATE: "false"
+  # #345 per-item OS-user + cgroup isolation (sandbox.isolation.enabled). Off by
+  # default — most clusters forbid the CAP_SETUID drop + cgroup write, and the
+  # shared-dir fix already cures the data loss without it. To enable, set "true"
+  # AND grant the pod the capabilities + cgroup mount documented in
+  # deployment.yaml. Map in config.yaml as
+  #   sandbox: { isolation: { enabled: ${SANDBOX_ISOLATION_ENABLED} } }
+  SANDBOX_ISOLATION_ENABLED: "false"
+  # #345: hard cap on one item's scratch usage (bytes; 0 = unlimited). The idle
+  # reaper's du-sweeper recycles + frees any item that blows past it, so a single
+  # runaway workspace can't fill the shared scratch volume. Map in config.yaml as
+  #   sandbox: { max_workspace_bytes: ${SANDBOX_MAX_WORKSPACE_BYTES} }
+  SANDBOX_MAX_WORKSPACE_BYTES: "0"
 
   # File store. "memory" = volatile (resets on restart). For durable
   # investigations/conversations/KB data, see the README note on persistence.

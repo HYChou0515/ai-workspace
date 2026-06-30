@@ -11,6 +11,19 @@ async def test_create_returns_unique_handles():
     assert h1.id != h2.id
 
 
+async def test_create_with_sandbox_id_is_stable_and_idempotent_345():
+    # #345: a given sandbox_id pins the handle id AND reattaches to the same
+    # underlying filesystem, so re-creating it does not wipe prior files (the
+    # shared per-item working dir survives across turns/pods).
+    sandbox = MockSandbox()
+    h1 = await sandbox.create(SandboxSpec(), sandbox_id="item-abc")
+    assert h1.id == "item-abc"
+    await sandbox.upload(h1, b"keep me", "/notes.txt")
+    h2 = await sandbox.create(SandboxSpec(), sandbox_id="item-abc")
+    assert h2.id == "item-abc"
+    assert await sandbox.download(h2, "/notes.txt") == b"keep me"
+
+
 async def test_exec_echo_returns_stdout():
     sandbox = MockSandbox()
     h = await sandbox.create(SandboxSpec())
