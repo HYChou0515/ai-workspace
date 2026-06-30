@@ -102,6 +102,91 @@ def test_get_sandbox_http_without_base_url_raises():
         get_sandbox(_with_sandbox("http"))
 
 
+# ─── #345: per-item uid + cgroup isolation selection ───────────────────────
+
+
+def _with_isolation(**iso_kwargs) -> Settings:
+    from workspace_app.config.schema import SandboxIsolationSettings
+
+    return replace(
+        Settings(),
+        sandbox=replace(
+            SandboxSettings(), kind="local", isolation=SandboxIsolationSettings(**iso_kwargs)
+        ),
+    )
+
+
+def test_get_sandbox_auto_isolation_off_falls_back_to_local():
+    # enabled=None (auto) on a host that can't isolate (the non-root test box) ⇒
+    # the plain local sandbox, NOT the isolated one.
+    from workspace_app.sandbox.isolated_process import IsolatedProcessSandbox
+
+    sb = get_sandbox(_with_isolation(enabled=None))
+    assert isinstance(sb, LocalProcessSandbox)
+    assert not isinstance(sb, IsolatedProcessSandbox)
+
+
+def test_get_sandbox_explicit_isolation_on_unsupported_host_fails_loud():
+    # enabled=True but the host can't honour it ⇒ boot fail-loud (not a silent
+    # downgrade), so a misconfigured isolation deploy is caught at startup.
+    with pytest.raises(ValueError, match="isolat"):
+        get_sandbox(_with_isolation(enabled=True))
+
+
+def test_get_sandbox_builds_isolated_when_supported(monkeypatch, tmp_path):
+    from workspace_app import factories
+    from workspace_app.sandbox.isolated_process import IsolatedProcessSandbox
+
+    monkeypatch.setattr(factories, "isolation_supported", lambda root: (True, "ok"))
+    sb = get_sandbox(_with_isolation(enabled=True, cgroup_root=str(tmp_path)))
+    assert isinstance(sb, IsolatedProcessSandbox)
+    assert sb._uid_base == 1_000_000  # defaults threaded through
+
+
+def test_get_sandbox_auto_isolation_on_when_supported(monkeypatch, tmp_path):
+    from workspace_app import factories
+    from workspace_app.sandbox.isolated_process import IsolatedProcessSandbox
+
+    monkeypatch.setattr(factories, "isolation_supported", lambda root: (True, "ok"))
+    sb = get_sandbox(_with_isolation(enabled=None, cgroup_root=str(tmp_path)))
+    assert isinstance(sb, IsolatedProcessSandbox)
+
+
+def test_get_sandbox_isolation_auto_detects_cgroup_root(monkeypatch, tmp_path):
+    # cgroup_root unset ⇒ the builder resolves it via _detect_cgroup_root.
+    from workspace_app import factories
+    from workspace_app.sandbox.isolated_process import IsolatedProcessSandbox
+
+    monkeypatch.setattr(factories, "isolation_supported", lambda root: (True, "ok"))
+    monkeypatch.setattr(factories, "_detect_cgroup_root", lambda: tmp_path)
+    sb = get_sandbox(_with_isolation(enabled=True, cgroup_root=None))
+    assert isinstance(sb, IsolatedProcessSandbox)
+    assert sb._cgroup_root == tmp_path
+
+
+def test_get_sandbox_uv_run_rejects_explicit_isolation():
+    from workspace_app.config.schema import ToolsSettings
+
+    s = _with_isolation(enabled=True)
+    s = replace(s, tools=replace(ToolsSettings(), mode="uv-run"))
+    with pytest.raises(ValueError, match="uv-run"):
+        get_sandbox(s)
+
+
+def test_get_sandbox_uv_run_forces_isolation_off(monkeypatch, tmp_path):
+    # uv-run + auto isolation ⇒ forced off (no foreign-uid drop), even on a host
+    # that would otherwise support it.
+    from workspace_app import factories
+    from workspace_app.config.schema import ToolsSettings
+    from workspace_app.sandbox.isolated_process import IsolatedProcessSandbox
+
+    monkeypatch.setattr(factories, "isolation_supported", lambda root: (True, "ok"))
+    s = _with_isolation(enabled=None, cgroup_root=str(tmp_path))
+    s = replace(s, tools=replace(ToolsSettings(), mode="uv-run"))
+    sb = get_sandbox(s)
+    assert not isinstance(sb, IsolatedProcessSandbox)
+
+
 def test_sandbox_isolate_threads_through_to_local_process():
     """sandbox.isolate=None lets the LocalProcessSandbox auto-detect
     userns; True/False forces the choice."""

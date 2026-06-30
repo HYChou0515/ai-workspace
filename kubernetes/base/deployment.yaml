@@ -46,15 +46,18 @@ spec:
             - name: scratch
               mountPath: /scratch
           # #345 isolation (per-item OS-user + cgroup). The base runs WITHOUT it
-          # (SANDBOX_ISOLATE="false"): most clusters forbid CAP_SETUID and the
-          # cgroup write, and the shared-dir fix already cures the data loss on
-          # its own. To opt in, set SANDBOX_ISOLATE="true" (configmap) AND grant
-          # the pod the privileges the setuid-drop + cgroup writes need:
+          # (SANDBOX_ISOLATION_ENABLED="false"): most clusters forbid CAP_SETUID
+          # and the cgroup write, and the shared-dir fix already cures the data
+          # loss on its own. To opt in, set SANDBOX_ISOLATION_ENABLED="true"
+          # (configmap) AND grant the pod the privileges the setuid-drop + cgroup
+          # writes need:
           # securityContext:
           #   capabilities:
           #     add: ["SETUID", "SETGID", "SETPCAP", "KILL"]
           # plus a writable cgroup v2 mount at sandbox.isolation.cgroup_root
-          # (a delegated sub-tree of the pod's own slice).
+          # (a delegated sub-tree of the pod's own slice). With enabled=true on a
+          # host that lacks these, the app fails loud at boot (it won't silently
+          # downgrade to no isolation).
           readinessProbe:
             httpGet:
               path: /openapi.json
