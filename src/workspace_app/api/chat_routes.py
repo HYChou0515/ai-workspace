@@ -186,7 +186,7 @@ def register_chat_routes(
         rid, conv = locator.require_chat(slug, item_id, chat_id)
         if conv.run_id:
             await workflow_orchestrator.cancel(conv.run_id, investigation_id)
-        turn_engine.forget(locator.engine_key(investigation_id, rid))
+        await turn_engine.forget(locator.engine_key(investigation_id, rid))
         conv_rm.delete(rid)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 

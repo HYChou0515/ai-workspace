@@ -273,6 +273,8 @@ def main() -> None:
             # server.run_consumers: false on the API so it's a pure producer and
             # dedicated worker pods drain each JobType.
             run_consumers=settings.server.run_consumers,
+            # #349: poll cadence for the cross-pod turn-cancel epoch.
+            turn_cancel_poll_seconds=settings.server.turn_cancel_poll_seconds,
             infer_modules_enhancements=infer_cfg.enhancements,
             infer_modules_reasoning_effort=infer_cfg.reasoning_effort,
             infer_modules_parallelism=infer_cfg.parallelism,

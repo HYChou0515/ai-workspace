@@ -271,7 +271,7 @@ class WorkflowExecutor:
         if not self._any_running(item_id):
             await self._registry.close_session(item_id)
         if terminal:
-            self._turn_engine.forget(chat_key)
+            await self._turn_engine.forget(chat_key)
 
     def notify_failure(self, run: WorkflowRun) -> None:
         """In-app failure notification to the item's owner (manual §17)."""
