@@ -24,7 +24,7 @@
 
 | 路徑 | 角色 |
 | --- | --- |
-| `src/workspace_app/kb/retriever.py` | 編排者。`Retriever.search()` 跑整條管線；持有 `Enhancements`（per-call 覆寫）、`_resolve_enhancements`（caller>default，被 operator max 夾住）、`LocationFilter`（#263 結構化範圍，推進 dense＋sparse 兩條查詢）、`_dense_order`（specstar 原生 cosine 向量查詢，選擇性 code-vector fan-out）、`_load_chunks`（BM25/MMR corpus）、`_apply_quality_prior`（#105 加性先驗，smoothstep `_saturate`）、`_canonical_text`（parent 文字解析）。 |
+| `src/workspace_app/kb/retriever.py` | 編排者。`Retriever.search()` 跑整條管線；持有 `Enhancements`（per-call 覆寫）、`_resolve_enhancements`（caller>default，被 operator max 夾住）、`LocationFilter`（#263 結構化範圍，推進 dense＋sparse 兩條查詢）、`Overlay`（#328 乾跑候選集覆寫）、`_dense`／`_dense_order`／`_dense_order_mem`（specstar 原生 cosine 向量查詢，選擇性 code-vector fan-out；overlay 時改 in-memory cosine）、`_load_chunks`（BM25/MMR corpus）、`_apply_quality_prior`（#105 加性先驗，smoothstep `_saturate`）、`_canonical_text`（parent 文字解析）。 |
 | `src/workspace_app/kb/fusion.py` | 純 rank 融合＋多樣化。`rrf_scores`／`reciprocal_rank_fusion`（Reciprocal Rank Fusion，k=60，帶量值）與 `mmr`（Maximal Marginal Relevance，lambda=0.5）。 |
 | `src/workspace_app/kb/bm25.py` | sparse 半邊。`bm25_rank` — in-process BM25（k1=1.5, b=0.75）over `(id, text)` corpus；丟掉零分文件；同分以 id 破題。 |
 | `src/workspace_app/kb/query.py` | LLM 驅動 query 轉換。`expand_queries`（multi-query 改寫，原 query 永遠第一、去重）與 `hypothetical_document`（HyDE 偽文件）。prompt＋parse 純，LLM 注入。 |
@@ -36,9 +36,9 @@
 | `src/workspace_app/kb/llm.py` | `ILlm` ABC — **僅串流**文字補全（`stream()` 為唯一原語，`collect()` 把它榨乾）。`LitellmLlm` 生產實作（LiteLLM，含 Ollama `think=False` 的 reasoning_effort 處理）。驅動 expand/HyDE/rerank 並串流即時進度。 |
 | `src/workspace_app/kb/context_cards.py` | #106 確定性 glossary。`norm`（NFKC＋casefold＋collapse）、`derive_norm_keys`、`lookup`／`find_cards_by_key` — 對 `norm_keys.contains` 做精確 element membership（無 LLM、無 retriever）。撐起 `lookup_glossary`。 |
 | `src/workspace_app/agent/tools.py` | agent 工具表面。`kb_search_impl`（檢索 leaf：#195 budget、#263 location 解析、#68 強化串接、append 進 per-turn `kb_passages`、用 `on_exec_output` 串流 retriever 工作）、`ask_knowledge_base_impl`（消費介面：#280 rank→tier、委派 `run_subagent('kb_chat',...)`、bucket 引用）、`lookup_glossary_impl`。`_WORKSPACE_TOOLS` 列 `ask_knowledge_base` 而非 `kb_search`。 |
-| `src/workspace_app/agent/context.py` | `AgentToolContext` — RCA 與 KB 共用的 dual-flavour per-run context。KB flavour 設 `retriever`＋`collection_ids`＋`kb_passages`＋`kb_search_max_calls`/`kb_search_calls`＋`collection_tiers`＋`kb_enhancements`＋`run_subagent`。 |
+| `src/workspace_app/agent/context.py` | `AgentToolContext` — RCA 與 KB 共用的 dual-flavour per-run context。KB flavour 設 `retriever`＋`collection_ids`＋`kb_passages`＋`kb_search_budget`（`KbSearchBudget` 值物件：`max_calls`/`used`，`.exhausted`/`.remaining`；#334 起取代舊的 `kb_search_max_calls`/`kb_search_calls`）＋`collection_tiers`＋`kb_enhancements`＋`run_subagent`。 |
 | `src/workspace_app/api/kb_chat_routes.py` | KB agent 回合表面。`answer_question` 跑**一次非串流** KB-agent 回合（給 `ask_knowledge_base` bridge 用），逐字捕捉工具錯誤／RunError，解析＋加 Sources footer；`kb_progress` 把子 agent 事件渲成 parent 進度行；`register_kb_chat_routes` 串流即時 KB 聊天。 |
-| `src/workspace_app/api/app.py` | 組裝根：`_run_subagent` 泛用 bridge（purpose→AgentConfig、collection scope、引用 relay＋logging、wiki 路由）接進每個 app 回合的 `run_subagent`；`_run_subagent_with_depth` 為 kb_chat 加上 #280 tier scope ＋ composer depth/effort。 |
+| `src/workspace_app/api/subagent_bridge.py` | `SubagentBridge.run` 泛用 bridge（purpose→AgentConfig、collection scope、引用 relay＋logging、wiki 路由、`budget=` 共用），接進每個 app 回合的 `run_subagent`。`api/app.py` 只構造它並留薄別名 `_run_subagent = subagent_bridge.run`；#280 tier scope ＋ composer depth/effort（#334 budget 串接）的包裝 `_run_subagent_with_depth` 是 `src/workspace_app/api/chat_send.py` 內 `ChatSendService.send` 的巢狀閉包。 |
 
 ## 介面與接縫
 
@@ -47,7 +47,7 @@
 | `ILlm` | ABC | `src/workspace_app/kb/llm.py` | `LitellmLlm`（生產 LiteLLM）；`FallbackLlm`（#196 failover 包裝，見原始碼）；測試注入 fake |
 | `Embedder` | Protocol/ABC | `src/workspace_app/kb/embedder.py` | `HashEmbedder`（測試）、`LitellmEmbedder`（Ollama／hosted）。實作細節見 [知識庫：攝取與索引](kb-ingest-index.md) |
 | `AgentRunner` | Protocol | `src/workspace_app/api/runner.py` | `LitellmAgentRunner`（live LLM，驅 kb_search loop）、`ScriptedAgentRunner`（測試）、`WikiAwareRunner`（chunk/wiki 路由） |
-| `run_subagent` bridge | callable 接縫 | `src/workspace_app/api/app.py` | `_run_subagent`（泛用 purpose→AgentConfig）、`_run_subagent_with_depth`（#280 tier scope ＋ kb_chat composer depth/effort） |
+| `run_subagent` bridge | callable 接縫 | `src/workspace_app/api/subagent_bridge.py` | `SubagentBridge.run`（泛用 purpose→AgentConfig；`api/app.py` 只留別名 `_run_subagent = subagent_bridge.run`）；`_run_subagent_with_depth`（#280 tier scope ＋ kb_chat composer depth/effort）在 `src/workspace_app/api/chat_send.py` 的 `ChatSendService.send` 內 |
 | `AgentToolContext`（RCA vs KB dual-flavour） | dataclass | `src/workspace_app/agent/context.py` | RCA flavour（sandbox＋files）、KB flavour（retriever＋collection_ids＋kb_passages） |
 | Retriever 純函式注入點 | callable 注入 | `src/workspace_app/kb/retriever.py` | `text_of=_canonical_text`（merge）、`similarity=cosine over _chunk_vec`（mmr）、`on_progress` sink（即時串流） |
 
@@ -94,7 +94,7 @@ flowchart TD
 
 只有**本身就是 KB agent** 的 agent 會拿到 `kb_search`。`kb_search_impl`：
 
-1. **先扣 budget**（#195）：`kb_search_calls >= kb_search_max_calls` 就回 sentinel，叫模型用已取得的段落作答，不再跑昂貴的 retriever。
+1. **先看 budget**（#195/#334）：`ctx.context.kb_search_budget.exhausted` 為真就回 sentinel，叫模型用已取得的段落作答，不再跑昂貴的 retriever。`max_calls == 0`（composer 選「這次回覆不搜尋」）回**自己一條**的 steer 字串（「不允許任何 KB 搜尋…」），與一般 budget 耗盡的 sentinel 區分（#334 Q4）。
 2. **解析 location**（#263）：若帶了 `page_*`/`sheet` 卻沒帶 `document`，**在花掉 budget 前**回一個可復原訊息；有 `document` 就用 `resolve_document` 把檔名→不透明 `source_doc_id`，組 `LocationFilter`。
 3. **解析強化串接**（#68）：`caller (ctx.kb_enhancements)` > `LLM tool args` > `operator default`，最後在 `Retriever` 裡被 operator `max` 夾住。
 4. 呼叫 `Retriever.search`。`search` 內部：`_load_chunks` 載入（選擇性 location-scoped 的）chunk 全集供 BM25/MMR；`_resolve_enhancements` 算出 ints/bool（**沒接 LLM 時三項全強制關掉**）；`expand>0` 時 `expand_queries` 擴成 N 個改寫；每個 query 經 `_dense_order`（specstar 原生 cosine 向量查詢 over `embedding`，接了 code embedder 時再對 `embedding_alt` fan-out）與 `bm25_rank` 各得一條 ranked list；`hyde>0` 時每個 `hypothetical_document` 被 embed 成另一條 dense probe。所有 ranked list → `rrf_scores`（RRF）→ 取 top `candidates` → `mmr` 多樣化（cosine of 存的 chunk 向量）→ `_apply_quality_prior`（#105：`final = 正規化 RRF + w·(smoothstep(quality/100) − 0.5)`，soft demote，選擇性硬 `quality_floor`）→ `merge_passages` 對 canonical `doc.text` 重建 parent 段落 → 選擇性 `rerank_passages` → 取 `top_k`。
@@ -127,7 +127,13 @@ flowchart TD
     `kb_search` 在帶了 page/sheet 卻沒帶檔名時，**在花 budget 前**回一個可復原訊息。location 以 indexed QB WHERE 推進 dense 向量查詢**與** BM25/MMR corpus 兩邊（`_scoped`），絕非 Python post-filter — 所以該欄位必須維持 index 在 `DocChunk` 上。
 
 !!! warning "budget 在搜尋前先扣"
-    `kb_search_calls += 1` 發生在呼叫 `retriever.search` **之前**，所以空手或出錯的搜尋一樣消耗一單位 — 一個什麼都 match 不到的小模型才不會無限重搜。
+    `budget.used += 1`（`KbSearchBudget`）發生在呼叫 `retriever.search` **之前**，所以空手或出錯的搜尋一樣消耗一單位 — 一個什麼都 match 不到的小模型才不會無限重搜。
+
+!!! note "per-message kb_search 次數上限（#334）"
+    composer picker 經 `max_kb_searches` 請求欄位（KB 聊天 `_MsgBody` 與 app 回合 `_MessageBody` 兩個 body 都有）帶進來；`resolve_max_searches(requested, default=, ceiling=)` 把它夾到 `[0, kb.max_searches_ceiling]`，沒帶（`None`）時回退 operator 預設 `kb.max_searches_per_turn`（可為 `None`＝不限）。`cap == 0` 代表「這次回覆不搜尋」。一個 app 回合內所有 `ask_knowledge_base` 子 agent **以 reference 共用同一個** `KbSearchBudget`（#334 Q6），由 `ChatSendService` 建好後 threaded `→ SubagentBridge.run(budget=) → answer_question`；`infer_modules`／workflows 不共用，各自拿一個 operator-default 的新 budget。
+
+!!! note "retriever overlay 是預覽接縫（#328，尚無生產 caller）"
+    `Retriever.search(overlay=Overlay(virtual_chunks, shadow_doc_id, virtual_text))` 是乾跑的候選集替換：把被影子的文件（`shadow_doc_id`）已存的 chunk 從候選集**移除**、把未持久化的 `virtual_chunks` 加入，再用**同一條** hybrid 管線（BM25／MMR／#105 品質先驗／parent-merge／rerank）重跑，所以預覽不會漂移。唯一 overlay-specific 的步驟是 dense 排序改走 `_dense`／`_dense_order_mem`（in-memory cosine over 覆寫後的集合，與 store 同樣的 specstar `cosine_distance` metric）、以及 merge 對被影子文件改切 `overlay.virtual_text`。不 reindex、不持久化任何東西。目前只有測試呼叫，findability modal 還在 #328 P3+。
 
 !!! warning "每次 `ask_knowledge_base` 必須剛好 append 一筆 bucket"
     引用依工具名 bucket（`subagent_citations['ask_knowledge_base']`），persist 時把第 N 筆 bucket 對到第 N 個同名 tool message。所有早退路徑（無 tier、rank 越界）都必須 `bucket.append([])`，否則配對會漂移。
@@ -166,8 +172,8 @@ flowchart TD
 - **資料層 — [資料層（specstar）](data-layer.md)**：`DocChunk`/`SourceDoc`/`RetrievedPassage`/`ContextCard` 模型（`src/workspace_app/resources/kb.py`；`Citation` 定義在 `src/workspace_app/resources/conversation.py`，由 `kb.py` re-export）＋ `CitationEvent`（`src/workspace_app/resources/citation_event.py`）＋原生向量查詢（QB cosine `order_by`）＋ retriever 依賴的 indexed provenance/collection 欄位。
 - **驅動 — [API 與回合引擎](api-and-turns.md)**：共用的 per-conversation 回合 pump（`ChatTurnEngine`）同時驅動 RCA 工作區聊天與 KB 聊天；KB 聊天建一個 KB `AgentToolContext` 與把 `TurnMessage`→`KbMessage` 的 `on_complete`。
 - **執行 — [Agent 執行時](agent-runtime.md)**：跑呼叫 `kb_search`/`ask_knowledge_base` 的 agent loop（`AgentRunner`/`litellm_runner`）；同一 runner 透過 dual-flavour `AgentToolContext` 服務兩種 flavour。
-- **消費者 — [App 平台](apps-platform.md)**：`apps/rca`、`apps/playground`、`apps/topic-hub`（經 `app.json` `agent.tools`）列 `ask_knowledge_base`（topic-hub 另加 `lookup_glossary`）；經 `api/app.py` 接的 `run_subagent` bridge 觸及 KB agent。
-- **平行路徑 — wiki 子系統**（`kb/wiki/`、`search_wiki`/`read_source` 工具）：另一條檢索路；`answer_question` 在 `wiki_query` 開時路由到 wiki-aware runner。詳見 [知識庫：攝取與索引](kb-ingest-index.md) 與原始碼。
+- **消費者 — [App 平台](apps-platform.md)**：`apps/rca`、`apps/playground`、`apps/topic-hub`（經 `app.json` `agent.tools`）列 `ask_knowledge_base`（topic-hub 另加 `lookup_glossary`）；經 `api/subagent_bridge.py` 的 `SubagentBridge.run`（在 `api/app.py` 構造並 wire）這個 `run_subagent` bridge 觸及 KB agent。
+- **平行路徑 — wiki 子系統**（`kb/wiki/`、`search_wiki`/`read_source` 工具）：另一條檢索路；`answer_question` 在 `wiki_query` 開時路由到 wiki-aware runner。`read_source`（`read_source_impl`）會容忍 code-wiki 的**卡片路徑**（`/files/<src>.md`）：先試字面 source path，失敗才用 `_coerce_source_path` 去掉前綴 `/files/` 與尾綴 `.md` coerce 回底層 source path（`/files/app/queue.py.md` → `app/queue.py`）當 fallback，maintainer 純文字與 reader 編號 `[n]` 兩種模式皆然（#281 P7）。詳見 [知識庫：攝取與索引](kb-ingest-index.md) 與原始碼。
 - **組裝 — [啟動與組裝根](boot-and-config.md)**：生產 `Retriever` 的構造點（`candidates`/`top_k`/`quality_weight`/`code_embedder`/`enhancement_defaults`）由工廠（`factories.py`/`coordinators`）注入；KB `AgentConfig` 與 `EnhancementSettings` 來自 config catalog（`agents.kb_chat` presets、`kb.retrieval_llm`、`kb.retrieval.enhancements`）。
 - **下游 — [前端（web/）](frontend.md)**：`CitationEvent` 餵 cited 次數（`kb/cited.py`）；FE 在 SSE `done` 時 refetch thread 渲染持久化的 `[n]`→`Citation`（可點，#221）。
 
@@ -185,4 +191,4 @@ flowchart TD
 - `src/workspace_app/kb/provenance.py` — `aggregate_provenance`、`format_location`。
 - `src/workspace_app/kb/citations.py` — `parse_citations`；`src/workspace_app/kb/cited.py` — `record_citations`。
 - `src/workspace_app/kb/llm.py` — `ILlm`、`LitellmLlm.stream`；`src/workspace_app/kb/context_cards.py` — `norm`、`lookup`。
-- `src/workspace_app/api/kb_chat_routes.py` — `answer_question`、`kb_progress`；`src/workspace_app/api/app.py` — `_run_subagent`。
+- `src/workspace_app/api/kb_chat_routes.py` — `answer_question`、`kb_progress`、`resolve_max_searches`；`src/workspace_app/api/subagent_bridge.py` — `SubagentBridge.run`（`api/app.py` 只留別名 `_run_subagent`）；`src/workspace_app/api/chat_send.py` — `ChatSendService.send`／`_run_subagent_with_depth`。

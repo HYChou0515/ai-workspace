@@ -29,17 +29,35 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 | `src/workspace_app/api/litellm_runner.py` | `LitellmAgentRunner`：`run()` 重試迴圈（`diagnose_error`/`classify_retry_event`，#26 progress-gated）、`_run_once` fan-in queue（producer 正規化 SDK 事件 + `ctx.on_exec_output` stdout）、`_delta_channel`、`ThinkSplitter`、`_final_tokens`、`_agent_for`。 |
 | `src/workspace_app/api/events.py` | `AgentEvent` dataclass union + `to_sse()`；在 `web/src/events.ts` 鏡像。 |
 | `src/workspace_app/api/registry.py` | `InvestigationRegistry`：只管 per-investigation 的 **SANDBOX** 生命週期（`ensure_handle`、`peek_handle`、`mirror_warm`/`kill_idle`/`close_all`）。 |
-| `src/workspace_app/api/app.py` | `create_app` 組裝根：接出兩個 `ChatTurnEngine`（`turn_engine` 套在 `runner`；`kb_turn_engine` 套在 `WikiAwareRunner`）、lifespan、`_run_subagent` bridge、RCA send/stream/cancel 端點。 |
+| `src/workspace_app/api/app.py` | `create_app` 組裝根（#54 後精簡為純 composition root，~767 行）：建構 `KernelService`、安裝 monitor、`build_coordinators`、接出兩個 `ChatTurnEngine`（`turn_engine` 套在 `runner`；`kb_turn_engine` 套在 `WikiAwareRunner`），再呼叫每個 `register_*_routes`。**不再**定義路由 handler 或 lifespan body——lifespan→`lifecycle.py:build_lifespan`、`_run_subagent` bridge→`subagent_bridge.py`、RCA send/stream/cancel→`chat_routes.py`（見下方路由模組表）。 |
 | `src/workspace_app/api/kb_chat_routes.py` | KB chat：`KbChat` CRUD + `send_message`（建 KB `AgentToolContext`、持久化帶 `[n]` 引用的 `KbMessage`）+ `answer_question`（給 `ask_knowledge_base` 用的非串流 KB run）+ `kb_progress`。 |
 | `src/workspace_app/api/kb_routes.py` | KB REST（無 turns/SSE）：collections、文件上傳+enqueue、分頁列表、render/reindex/move/delete、wiki、export/import。 |
 | `src/workspace_app/kernels/service.py` | `KernelService`：per-(item, notebook) 的 IPython kernel 管理（`get_or_start`/`execute_cell`→`CellEvent`/`interrupt`/`restart`/`reap_idle`）。是 `AgentEvent` 之外的**第二條 SSE 串流**，由 notebook cell 端點驅動。 |
+
+### 路由模組（#54 後拆分）
+
+`create_app` 不再內含路由 handler；每組路由各自落在一個 `register_*_routes(app, deps...)` 模組裡，由 `create_app` 呼叫。承接 turn-send / item 定位 / sub-agent 邏輯的**深模組**（小介面、行為在後）也一併從舊 monolith 抽出。
+
+| 路徑 | 角色 |
+| --- | --- |
+| `src/workspace_app/api/chat_routes.py` | `register_chat_routes`：RCA `send_message` / `stream_investigation` / `cancel_message` + 多 chat CRUD（`list/create/rename/delete_chat`）+ `promote_to_kb` / `export_chat`；以 `send_into=` 注入 `ChatSendService.send`。 |
+| `src/workspace_app/api/chat_send.py` | `ChatSendService.send`：舊 `_send_into` closure（append 使用者 `Message`、建 turn ctx、`enqueue` 到 `engine_key`、`on_complete` 持久化）；巢狀 `_run_subagent_with_depth`（#280 tier scope + composer depth/effort，包住 `SubagentBridge.run`）。 |
+| `src/workspace_app/api/turn_context.py` | `TurnContextBuilder`：建一場 turn 的 `AgentToolContext`，統一原本在 send 路徑與 workflow node driver 間漂移的建構（`build_chat_turn` / `build_workflow_turn`）。 |
+| `src/workspace_app/api/locator.py` | `ItemLocator`：item 身分解析、`resolve_agent_config`（#54 後 `_resolve_agent_config` 的家，仍委派 `resolve_item_agent_config`）、`engine_key`、`context_files`、`require_item` / `conversation_for` / `require_chat`。 |
+| `src/workspace_app/api/subagent_bridge.py` | `SubagentBridge.run`：通用 purpose→AgentConfig 的 `_run_subagent` bridge（wiki routing + 引用 relay + logging）；`app.py` 僅建構並留別名 `_run_subagent = subagent_bridge.run`。 |
+| `src/workspace_app/api/item_routes.py` | `register_item_routes`：App work-item 生命週期，含 `create_app_item`（`POST /a/{slug}/items`）。 |
+| `src/workspace_app/api/meta_routes.py` | `register_meta_routes`：`/me`、user directory、App launcher catalog（`get_app_manifest` = `GET /apps/{slug}`）、`/activity` feed、telemetry monitor（`GET /monitor`、`GET /monitor/stream`）。 |
+| `src/workspace_app/api/file_routes.py` | `register_file_routes`：workspace 檔案 / exec / search / replace / download + **notebook cell 端點**（`execute_cell` / interrupt / restart，第二條 SSE 的驅動點）。`KernelService` 本身仍在 `app.py` 建構。 |
+| `src/workspace_app/api/workflow_routes.py` | `register_workflow_routes`（run / runs / preview / stream 路由），由 `workflow_exec.py:WorkflowExecutor` 背書（`drive_turn` / run_sandbox / ingest / convert / upsert_card / release / notify_failure）。 |
+| `src/workspace_app/api/capability_routes.py` | `register_capability_routes`：item capability + export。 |
+| `src/workspace_app/api/lifecycle.py` | `build_lifespan(...)`：FastAPI lifespan；`run_consumers` gate 下的四個 `start_consuming()`（wiki/index/sanity/card_gen）＋五個非佇列 sweeper（`idle_killer` / `mirror_sweeper` / `index_sweeper` #227 / `blob_gc_sweeper` #245 / `code_sync_sweeper`，皆為巢狀函式、無前綴底線）。 |
 
 ## 介面與接縫
 
 | 接縫 | 定義位置 | 種類 | 實作 |
 | --- | --- | --- | --- |
 | `AgentRunner` | `src/workspace_app/api/runner.py` | Protocol | `LitellmAgentRunner`（正式）、`ScriptedAgentRunner`（測試）、`WikiAwareRunner`（`src/workspace_app/kb/wiki/orchestrator.py`，包在 KB engine 外） |
-| `AgentToolContext` | `src/workspace_app/agent/context.py` | dual-flavour context | RCA：sandbox/filestore/sync（`app.py:_send_into`）；KB：retriever + collection_ids、無 sandbox（`kb_chat_routes` + `answer_question`） |
+| `AgentToolContext` | `src/workspace_app/agent/context.py` | dual-flavour context | RCA：sandbox/filestore/sync（`chat_send.py:ChatSendService.send` + `turn_context.py:build_chat_turn`）；KB：retriever + collection_ids、無 sandbox（`kb_chat_routes` + `answer_question`） |
 | `_SyncHook` | `src/workspace_app/api/registry.py` | Protocol | `src/workspace_app/sync/sandbox_sync.py:SandboxSync` |
 | `AgentEvent` | `src/workspace_app/api/events.py` | tagged dataclass union | `web/src/events.ts`（FE 鏡像） |
 | inner SDK Model wrap | `src/workspace_app/api/litellm_runner.py:_agent_for._build_model` | swap | `LitellmModel`、`agent/repairing_model.py:RepairingModel`、`agent/decide_then_act.py:DecideThenActModel`、`failover/model.py:FallbackModel` |
@@ -51,7 +69,7 @@ HTTP / SSE 邊界：對外暴露 FastAPI 的 REST 表面（Apps/items、KB colle
 ```mermaid
 flowchart TD
   KBC["kb_chat_routes.send_message"] -->|"engine.stream(on_complete=persist KbMessage)"| ENG2["kb_turn_engine"]
-  RCA["app.py items send/stream"] -->|"enqueue + publish + subscribe_sse"| ENG1["turn_engine"]
+  RCA["chat_routes.py items send/stream"] -->|"enqueue + publish + subscribe_sse"| ENG1["turn_engine"]
   ENG1 --> RUN["runner (AgentRunner)"]
   ENG2 --> WRUN["WikiAwareRunner"] --> RUN
   RUN --> LIT["LitellmAgentRunner.run (retry loop)"]
@@ -75,7 +93,7 @@ flowchart TD
 
 ### RCA（#43 broadcast `enqueue()`）
 
-`POST /a/{slug}/items/{item_id}/messages` →（在 `_send_into`）append 使用者 `Message` → `turn_engine.publish(engine_key, UserMessage(...))`（先廣播給所有 live viewer）→ `turn_engine.enqueue(engine_key, turn_content, ctx, on_complete=persist)`。**新訊息不取消** in-flight turn——協作者共用一個 sandbox/檔案系統，turn 序列化排隊，只有 `cancel_current`（Stop）能打斷。`_worker` 以 FIFO 拉取，`_run_turn` 把每個 raw event 同時 `reducer.add()` 與 `publish()` 給訂閱者；turn 結束時 future `set_result(None)` 喚醒在等的那個 POST。`GET .../stream` → `subscribe_sse(key)`（eager 註冊，turn 在 connect 與首次 body-pull 之間開始也不漏）。`_engine_key` 讓**預設 chat** 沿用 `item_id` 當 key（item-level 端點、workflow drive、檔案變更廣播共享同一條 stream），其他 chat 各自以 `chat_id` 為 key。
+`POST /a/{slug}/items/{item_id}/messages` →（在 `chat_send.py:ChatSendService.send`，即抽出的舊 `_send_into`）append 使用者 `Message` → `turn_engine.publish(engine_key, UserMessage(...))`（先廣播給所有 live viewer）→ `turn_engine.enqueue(engine_key, turn_content, ctx, on_complete=persist)`。**新訊息不取消** in-flight turn——協作者共用一個 sandbox/檔案系統，turn 序列化排隊，只有 `cancel_current`（Stop）能打斷。`_worker` 以 FIFO 拉取，`_run_turn` 把每個 raw event 同時 `reducer.add()` 與 `publish()` 給訂閱者；turn 結束時 future `set_result(None)` 喚醒在等的那個 POST。`GET .../stream` → `subscribe_sse(key)`（eager 註冊，turn 在 connect 與首次 body-pull 之間開始也不漏）。`locator.py:ItemLocator.engine_key`（#54 後 `_engine_key` 的家）讓**預設 chat** 沿用 `item_id` 當 key（item-level 端點、workflow drive、檔案變更廣播共享同一條 stream），其他 chat 各自以 `chat_id` 為 key。
 
 ### Runner（`LitellmAgentRunner.run`）
 
@@ -85,7 +103,7 @@ flowchart TD
 
 ### Notebook cell 執行（kernels / 第二條 SSE）
 
-agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute` 走的是一條**獨立**的 SSE 串流：`KernelService.get_or_start(item_id, notebook_path)` 取得（或起一個）per-(item, notebook) 的 IPython kernel，`execute_cell(handle, code)` 把該 cell 跑出的 IOPub 訊息 drain 成 `CellEvent`（`CellStream` / `CellDisplayData` / `CellError` / `CellDone`，見 [線上契約](../contract.md)）直到 kernel 回到 `idle`。kernel 在 `create_app` 建一個 `KernelService` 持有、lifespan 收尾時 `shutdown_all`；`reap_idle(threshold)` 回收閒置 kernel。它與 `ChatTurnEngine` **完全分開**——notebook 不經 runner、不發 `AgentEvent`，但同樣跑在 sandbox host 上（kernel 起在 `LocalProcessSandbox` 的執行環境裡，見 [Sandbox、FileStore 與同步](sandbox-and-filestore.md)）。
+agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebooks/{notebook_path:path}/cells/{idx}/execute`（#54 後註冊在 `file_routes.py:register_file_routes`）走的是一條**獨立**的 SSE 串流：`KernelService.get_or_start(item_id, notebook_path)` 取得（或起一個）per-(item, notebook) 的 IPython kernel，`execute_cell(handle, code)` 把該 cell 跑出的 IOPub 訊息 drain 成 `CellEvent`（`CellStream` / `CellDisplayData` / `CellError` / `CellDone`，見 [線上契約](../contract.md)）直到 kernel 回到 `idle`。kernel 在 `create_app` 建一個 `KernelService` 持有、lifespan 收尾時 `shutdown_all`；`reap_idle(threshold)` 回收閒置 kernel。它與 `ChatTurnEngine` **完全分開**——notebook 不經 runner、不發 `AgentEvent`，但同樣跑在 sandbox host 上（kernel 起在 `LocalProcessSandbox` 的執行環境裡，見 [Sandbox、FileStore 與同步](sandbox-and-filestore.md)）。
 
 ## 關鍵不變式與眉角
 
@@ -121,7 +139,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 | `InvestigationRegistry` 只保留 sandbox 生命週期 | KB agent 沒有 sandbox；分離才能讓 KB 重用 engine | `registry.py` + `turns.py` docstring |
 | `_delta_channel` 按事件型別分類而非按 `.delta` 是否存在 | `function_call_arguments.delta` 必須忽略，否則 tool-call JSON 洩漏進答案 | `litellm_runner.py:_delta_channel` |
 | usage 缺席或為 0 時保留 chars/4 近似 | Ollama 常串流 usage=0，否則最後 token 行會翻成 0/0 | `litellm_runner.py:_final_tokens` |
-| RCA enqueue/broadcast：新訊息不取消執行中的 turn | 協作者共用一個 sandbox/檔案；turn 序列化，Stop 才是明確中斷 | `turns.py:enqueue`（#43）+ `app.py` |
+| RCA enqueue/broadcast：新訊息不取消執行中的 turn | 協作者共用一個 sandbox/檔案；turn 序列化，Stop 才是明確中斷 | `turns.py:enqueue`（#43）+ `chat_send.py:ChatSendService.send` |
 | 只在沒有使用者可見進度時重試 | SDK 無法 mid-turn resume，restart 會清掉可見輸出；reasoning-only 仍可重試 | `litellm_runner.py:_should_retry`（#26） |
 | 每個 turn 把 runner 包進 `guard_repetition` | 偵測退化重複迴圈並截斷持久訊息，活的串流保留重複以示模型出錯 | `ChatTurnEngine._events`（#113） |
 | `_agent_for` 不強制 `parallel_tool_calls=False` | 是 replay/live 唯一線級差異且部分 provider 直接拒絕；`args_recovery` wrap 才是真正防線 | `litellm_runner.py`（#69） |
@@ -132,7 +150,7 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 - **下游 agent 執行**：[Agent 執行時](agent-runtime.md) 提供 `AgentToolContext`、`build_tools`/`tooling.registry`、以及 `_agent_for._build_model` 換進的 Model 包裝（`RepairingModel`/`DecideThenActModel`/`FallbackModel`），底層走 OpenAI Agents SDK + LiteLLM/Ollama。
 - **Sandbox/檔案**：[Sandbox、FileStore 與同步](sandbox-and-filestore.md) — `InvestigationRegistry.peek_handle` 決定檔案操作走 warm sandbox 或 FileStore 快照；`_SyncHook` 即 `SandboxSync`。
 - **KB 攝取/檢索**：`kb_routes` 的上傳把文件 enqueue 給 [知識庫:攝取與索引](kb-ingest-index.md)（#312 `build_coordinators`）；`kb_chat_routes` + `answer_question` 走 [知識庫:檢索與 Agent](kb-retrieval-agent.md) 的 retriever 與 `[n]` 解析。
-- **App / Workflow**：[App 平台](apps-platform.md) 的 items 經 `_send_into` 進 RCA broadcast；[Workflow 引擎](workflow-engine.md) 的 step 事件折進 `AgentEvent` union 並搭 #43 stream 廣播。
+- **App / Workflow**：[App 平台](apps-platform.md) 的 items 經 `chat_send.py:ChatSendService.send`（舊 `_send_into`）進 RCA broadcast；[Workflow 引擎](workflow-engine.md) 的 step 事件折進 `AgentEvent` union 並搭 #43 stream 廣播。
 - **失敗轉移 / 擴展**：`failover/`（`FallbackModel` + `CooldownRegistry`）的 #196 切換 → `FailoverSwitch`；[背景工作與擴展](jobs-and-scaling.md) 的 worker pod / producer gating 影響 `kb_routes` 的 enqueue 行為。
 - **資料層 / 前端**：`on_complete` 持久化進 [資料層（specstar）](data-layer.md) 的 `Conversation` / `KbChat` 模型；[前端（web/）](frontend.md) 以 `web/src/events.ts` 鏡像事件、用共用的 `AgentEntryView.tsx` 渲染兩種聊天。
 
@@ -146,8 +164,9 @@ agent 回合不是這層唯一的串流。`POST /a/{slug}/items/{item_id}/notebo
 - `src/workspace_app/api/events.py` — `AgentEvent` union + `to_sse`（與 `web/src/events.ts` 對照）。
 - `src/workspace_app/api/registry.py` — `InvestigationRegistry`（只看 sandbox，對照 turn 生命週期的分界）。
 - `src/workspace_app/api/kb_chat_routes.py` — `register_kb_chat_routes` / `send_message` / `answer_question` / `kb_progress`。
-- `src/workspace_app/api/app.py` — `create_app`（搜 `turn_engine` / `kb_turn_engine` wiring）、`_send_into`、`_engine_key`、`_run_subagent`。
+- `src/workspace_app/api/app.py` — 只剩 `create_app`（搜 `turn_engine` / `kb_turn_engine` wiring）；#54 後 `_send_into`→`chat_send.py:ChatSendService.send`、`_engine_key` / `_resolve_agent_config`→`locator.py:ItemLocator`、turn-context 建構→`turn_context.py:TurnContextBuilder`、`_run_subagent`→`subagent_bridge.py:SubagentBridge.run`、lifespan→`lifecycle.py:build_lifespan`、RCA send/stream/cancel→`chat_routes.py`。
+- `src/workspace_app/api/chat_routes.py` / `chat_send.py` / `locator.py` / `turn_context.py` / `subagent_bridge.py` — #54 後 RCA send 路徑的家：`register_chat_routes`（send/stream/cancel + 多 chat）、`ChatSendService.send`（含巢狀 `_run_subagent_with_depth`）、`ItemLocator`、`TurnContextBuilder`、`SubagentBridge.run`。
 - `src/workspace_app/api/kb_routes.py` — `register_kb_routes`（純 REST，無 turns/SSE）。
-- `src/workspace_app/kernels/service.py` — `KernelService`（notebook cell 的第二條 SSE；`execute_cell` → `CellEvent`、`reap_idle`）；端點與 `KernelService` 建構在 `api/app.py`。
+- `src/workspace_app/kernels/service.py` — `KernelService`（notebook cell 的第二條 SSE；`execute_cell` → `CellEvent`、`reap_idle`）；`KernelService` 仍在 `api/app.py` 建構（~line 293），但驅動它的 cell 端點（execute/interrupt/restart）#54 後在 `api/file_routes.py:register_file_routes`。
 
 > 部分細節（`agent/context.py` 的 `AgentToolContext` 欄位全集、`repetition_guard.py` 的 `RepetitionStopped` 內部邏輯、`kb/wiki/orchestrator.py:WikiAwareRunner` 的路由）以原始碼為準；`_run_once` / `_run_once_nonstream` 標了 `# pragma: no cover`，只有 live-Ollama 整合測試會走到。

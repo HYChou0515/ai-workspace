@@ -27,9 +27,10 @@
 | 路徑 | 角色 |
 | --- | --- |
 | `src/workspace_app/apps/manifest.py` | `app.json` 的型別形狀:`AppManifest` + `FunctionToggles` / `AgentManifest` / `PickerEntry` / `Layout` / `Lifecycle` / `ItemNouns` / `Onboarding`。`load_app_manifest(slug)` 解碼。欄位**型別/選項**不在這裡——從 model 的 schema 讀(decision 19)。 |
-| `src/workspace_app/apps/base.py` | `WorkItemBase`——每個 App 的 item Struct 都繼承它。Tier1 `title`/`owner`(+ `profile`/`attached_preset`),Tier2 `members`/`topics`(`T \| UnsetType`,redeclaring 才 opt-in),Tier3 = App 自己的 domain 欄位。也定義 `IndexedFields` 型別別名。 |
+| `src/workspace_app/apps/base.py` | `WorkItemBase`——每個 App 的 item Struct 都繼承它。Tier1 `title`/`owner`(+ `profile`/`attached_preset`/`attached_tool_prefs`——#322 per-item tool tri-state 覆寫,`dict[str, bool]`,`attached_preset` 的姊妹欄位),Tier2 `members`/`topics`(`T \| UnsetType`,redeclaring 才 opt-in),Tier3 = App 自己的 domain 欄位。也定義 `IndexedFields` 型別別名。 |
 | `src/workspace_app/apps/registry.py` | 發現 + specstar 註冊。`_app_models` 掃 `discover_app_slugs()`、匯入各 `model.py`(slug 是合法識別字→`import_module`;含連字號如 `topic-hub`→`_load_model_module` 用 file-path exec),斷言 `MODEL` 是 `WorkItemBase` 子類。`register_apps` 對每個 App `add_model`。`resource_route` 把 model 名 kebab-case 成 FE CRUD 路由。`@cache`。 |
-| `src/workspace_app/apps/catalog.py` | `AppCatalog`——每回合三層 resolve。`resolve()` → `AgentConfig`:tools/presets 是 App ceiling 的 profile 子集(否則整個 ceiling),preset 給 model/creds/sandbox_image/idle/env,prompt = base ◇ #241 preamble ◇ profile appendix ◇ skill index。`validate_function_coherence` + `validate_all_apps` 在啟動時 enforce decision 11。 |
+| `src/workspace_app/apps/catalog.py` | `AppCatalog`——每回合三層 resolve。`resolve(*, …, tool_prefs=None)` → `AgentConfig`:tools/presets 是 App ceiling 的 profile 子集(否則整個 ceiling),`_apply_tool_prefs` 再把 per-item `tool_prefs` tri-state 覆寫(#322)疊上 default set 並以 ceiling 順序輸出,preset 給 model/creds/sandbox_image/idle/env,prompt = base ◇ #241 preamble ◇ profile appendix ◇ skill index。`validate_function_coherence` + `validate_all_apps` 在啟動時 enforce decision 11。 |
+| `src/workspace_app/tooling/catalog.py` | tool 顯示 metadata 的單一真相(#322)。`ToolMeta{name,label,description}`;`humanize_tool_label` 給永不外露 raw snake_case 的 fallback label;`flat_catalog(packages)` 每個可呼叫工具名 → `ToolMeta`(餵 chat tool cards),`picker_units(app_tools, packages)` 每個 `app.json` `tools[]` 一個顯示單元(餵 per-item picker)。built-in 描述來自 `agent/tools.py:builtin_tool_descriptions`(取 LLM-facing description),picker 與 tool card 都 label 自同一文字。 |
 | `src/workspace_app/apps/profiles.py` | `ProfileManifest`(`_profile.json`)——narrows `tools` ⊆ app.tools / `presets` ⊆ app.picker,加 `suggestions` / `default_preset` / `collections`(#280)/ `upload_dir`(#198)/ `workflows`(#100)。`load_profile` / `load_profile_appendix` / `list_profiles` + workflow 正規化 helper。 |
 | `src/workspace_app/apps/resolve.py` | `find_work_item(spec, item_id)`——「id → 哪個 App 擁有它 + 那個 item」的唯一接縫(掃 `registered_apps`,`item_id == resource_id`),per-turn 與 mention 路徑共用。`resolve_item_agent_config` 把它橋接到 `AppCatalog.resolve`。 |
 | `src/workspace_app/apps/schema.py` | `project_fields(model)` → `list[FieldSpec{name,label,kind,options?}]`(走 `msgspec.inspect`)。Enum→`select`(+options),list/Unset-wrapped-list→`tags`,其餘→`text`。折進 `GET /apps/{slug}` 當 `data['fields']`。 |
@@ -94,15 +95,17 @@ flowchart TD
 
 ### Manifest 抓取
 
-`GET /apps/{slug}`(`api/app.py:get_app_manifest`):`load_app_manifest` 轉 builtins 後,補上 `resource_route`、`project_fields(app_model(slug))` 當 `data['fields']`、各 profile 的 picker(`list_profiles`/`load_profile`,含 `upload_dir`),若 `icon` 以 `.svg` 結尾就 inline 進 `data['icon']`。前端拿這份 manifest × 欄位 schema 驅動整個 `WorkspaceShell`。
+`GET /apps/{slug}`(`api/meta_routes.py:get_app_manifest`,經 `register_meta_routes` 掛載):`load_app_manifest` 轉 builtins 後,補上 `resource_route`、`project_fields(app_model(slug))` 當 `data['fields']`、各 profile 的 picker(`list_profiles`/`load_profile`,含 `upload_dir`),若 `icon` 以 `.svg` 結尾就 inline 進 `data['icon']`。前端拿這份 manifest × 欄位 schema 驅動整個 `WorkspaceShell`。
 
 ### 建立 item
 
-`POST /a/{slug}/items`(`api/app.py:create_app_item`):`msgspec.convert(body + owner + 預設 profile → model)` → `spec.create` → `seed_item` 把 profile 的 starter 檔(`.tpl` 用 `case_from_item` 代換)複製進 item 的 FileStore(`item_id == resource_id`)→ #280 `resolve_profile_collections` 把 profile 預設 collection set 解析成 live id 寫進 `collections.json`。
+`POST /a/{slug}/items`(`api/item_routes.py:create_app_item`,經 `register_item_routes` 掛載):`msgspec.convert(body + owner + 預設 profile → model)` → `spec.create` → `seed_item` 把 profile 的 starter 檔(`.tpl` 用 `case_from_item` 代換)複製進 item 的 FileStore(`item_id == resource_id`)→ #280 `resolve_profile_collections` 把 profile 預設 collection set 解析成 live id 寫進 `collections.json`。
 
 ### 每回合 resolve
 
-`api/app.py` 的 `_resolve_agent_config(item_id)` 呼叫 `resolve_item_agent_config(spec, app_catalog, item_id)`:`find_work_item` 掃 `registered_apps()` 得到 `(slug, item)`,再 `app_catalog.resolve(app_slug=slug, profile=item.profile, attached_preset=item.attached_preset or None)`(keyword-only 簽名)合成 tools(profile ⊆ app ceiling)、allowed presets(profile ⊆ app.picker)、chosen preset(attached → profile default → 第一個),以及 system prompt(base `prompt_file` ◇ #241 workspace preamble(僅 workspace App)◇ profile `_prompt.md` appendix ◇ merged skill index)。同一回合,API 也呼叫 `build_context_block` 把 App `agent.context_files` 的即時內容 prepend 到 agent content(永不存進 history),另外 `build_workspace_skills_block` 把使用者在此 workspace 共創的 skill 索引一併 prepend。
+`api/locator.py:ItemLocator.resolve_agent_config(item_id)`(post-#54;原 `app.py` 的 `_resolve_agent_config` closure 改名搬進 `ItemLocator`,去掉前綴底線)委派給 `resolve_item_agent_config(spec, app_catalog, item_id)`:`find_work_item` 掃 `registered_apps()` 得到 `(slug, item)`,再 `app_catalog.resolve(app_slug=slug, profile=item.profile, attached_preset=item.attached_preset or None, tool_prefs=item.attached_tool_prefs or None)`(keyword-only 簽名)合成 tools(profile ⊆ app ceiling)、allowed presets(profile ⊆ app.picker)、chosen preset(attached → profile default → 第一個),以及 system prompt(base `prompt_file` ◇ #241 workspace preamble(僅 workspace App)◇ profile `_prompt.md` appendix ◇ merged skill index)。同一回合,`api/chat_send.py:ChatSendService.send`(post-#54;原 `app.py` 的 `_send_into` closure)也呼叫 `build_context_block` 把 App `agent.context_files` 的即時內容 prepend 到 agent content(永不存進 history),另外 `build_workspace_skills_block` 把使用者在此 workspace 共創的 skill 索引一併 prepend。
+
+**Per-item tool tri-state 覆寫(#322)**:`app.json` `agent.tools` 是 **ceiling**——可勾選工具的全集,也是任何覆寫的硬上限;profile `_profile.json` `tools` 只是 default-checked 子集(省略則整個 ceiling)。item 的 `attached_tool_prefs`(sparse `dict[str, bool]`)逐工具 pin:`True` 強制開、`False` 強制關、不在 dict 的鍵則 follow default。覆寫 ceiling 是 **app.json 而非 profile**,所以 force-on 能把 profile 收窄掉的工具加回來;ceiling 以外的鍵 no-op。`catalog.py:_apply_tool_prefs` 以 ceiling 順序輸出(deterministic)。picker state 由 `GET /a/{slug}/items/{item_id}/tools` 提供(`api/tools_routes.py:register_tools_routes`):每個 `picker_units(ceiling, packages)` 一列 `ItemToolState{key,label,description,default_on,pref(follow/on/off),effective}`,其中 `effective` 取自 `locator.resolve_agent_config(item_id)` 的 `allowed_tools`——**與真正回合走的同一個 resolve**(anti-drift);`GET /tools` 則回傳 flat catalog 給 chat tool cards 標 label(用 backend catalog 取代 FE raw-name fallback)。
 
 ## 關鍵不變式與眉角
 
@@ -176,5 +179,7 @@ flowchart TD
 - `src/workspace_app/apps/context_files.py`——`build_context_block`。
 - `src/workspace_app/apps/skills.py` + `shared_skills.py`——`merged_profile_skills` / `list_skills` / `SHARED_SKILLS`。
 - `src/workspace_app/apps/rca/model.py`、`apps/topic-hub/model.py`、`apps/playground/model.py`——三個對照範例(含連字號 slug 的 file-path 載入特例)。
-- `src/workspace_app/api/app.py`——`get_app_manifest` / `create_app_item` / `_resolve_agent_config` / `build_context_block` prepend 的呼叫點。
+- post-#54 後,原 `api/app.py` 的這幾個符號各自搬進了專屬 route/deep 模組(`app.py` 現在只是組裝根):`api/meta_routes.py:get_app_manifest`、`api/item_routes.py:create_app_item`、`api/locator.py:ItemLocator.resolve_agent_config`(委派 `apps/resolve.py:resolve_item_agent_config`)、`api/chat_send.py:ChatSendService.send`(`build_context_block` / `build_workspace_skills_block` prepend 的呼叫點)。
+- `src/workspace_app/tooling/catalog.py`——`ToolMeta` / `humanize_tool_label` / `picker_units` / `flat_catalog`(tool 顯示 metadata 單一真相,#322)。
+- `src/workspace_app/api/tools_routes.py`——`register_tools_routes`(`GET /tools` flat catalog + `GET /a/{slug}/items/{item_id}/tools` per-item picker state,reuse 同一個 `resolve` anti-drift)。
 - `src/workspace_app/factories.py`——`get_app_catalog`。

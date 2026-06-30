@@ -76,10 +76,10 @@ flowchart TD
 
 | 套件 | 職責 | 最該先看的檔 |
 |---|---|---|
-| `api/` | HTTP app、SSE 事件、回合編排 | `app.py`（`create_app`）、`turns.py`（`ChatTurnEngine`）、`events.py`（事件 schema）、`litellm_runner.py`（agent loop） |
+| `api/` | HTTP app、SSE 事件、回合編排 | `app.py`（`create_app` 組裝點;route handler 已拆進各 `*_routes.py`,#54）、`turns.py`（`ChatTurnEngine`）、`events.py`（事件 schema）、`litellm_runner.py`（agent loop） |
 | `sandbox/` | 可插拔的指令執行環境 | `protocol.py`、`local_process.py`、`http_client.py` |
 | `filestore/` | 每個 workspace 的永久檔案儲存 | `protocol.py`、`specstar_impl.py`、`blob_gc.py`（配額 + GC） |
-| `kb/` | 知識庫:攝取/切塊/嵌入/檢索 | `ingest.py`、`retriever.py`、`embedder.py`、`chunker.py`、`index_coordinator.py`、`llm.py` |
+| `kb/` | 知識庫:攝取/切塊/嵌入/檢索 | `ingest.py`、`retriever.py`、`embedder.py`、`chunker.py`、`index_coordinator.py`、`llm.py`、`wiki/code_wiki.py`（從原始碼建 code wiki,#281） |
 | `agent/` | agent 工具、context、prompt 組裝、設定解析 | `context.py`（`AgentToolContext`）、`tools.py`、`config_catalog.py` |
 | `apps/` | 多 App 平台（RCA / topic-hub / playground） | `catalog.py`（`AppCatalog`）、`manifest.py`、各 `apps/<slug>/` |
 | `resources/` | specstar 資料層（typed Struct + 自動 CRUD） | `__init__.py`（`make_spec`）、`kb.py`、`conversation.py` |
@@ -196,6 +196,7 @@ sequenceDiagram
 | 換 LLM / embedder / 檢索模型 | `config.yaml` 的 preset / 環境變數（`KB_*`） | [部署](deployment.md)、`README.md` |
 | 寫一個 workflow | `apps/<slug>/.../run.py`,先 `workflow new` 鷹架、`workflow check` 靜態檢查 | [撰寫 Workflow](workflows-authoring.md)、[Workflows 規格](workflows.md) |
 | 加一個 KB chunker / embedder | `kb/chunker.py` / `kb/embedder.py` 實作對應 Protocol | [開發者指南](development.md) |
+| 從原始碼建一份 code wiki | `kb/wiki/code_wiki.py`（`CodeWikiBuilder`）+ `kb/wiki/code_outline.py`,跑在 wiki job 佇列(非 workflow) | [開發者指南 §12](development.md) |
 | 串接 HTTP / SSE API | — | [線上契約](contract.md) |
 
 ---

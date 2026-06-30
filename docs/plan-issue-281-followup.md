@@ -103,7 +103,7 @@
       （total / len(done) / finalized / phase），散文 fold 路徑維持原本 active-job count。
 ```
 
-仿 `index` fan-out（[`index_jobs.py:30-51`](../src/workspace_app/kb/index_jobs.py) payload `kind` dispatch、[`index_coordinator.py:281-297`](../src/workspace_app/kb/index_coordinator.py) `_handle`、[`index_run.py:84-104`](../src/workspace_app/kb/index_run.py) `claim_finalize` / `_cas`）。`CodeWikiBuildRun` 仿 `IndexRun`（[`resources/kb.py:305-336`](../src/workspace_app/resources/kb.py)）。
+仿 `index` fan-out（`index_jobs.py:30-51` payload `kind` dispatch、`index_coordinator.py:281-297` `_handle`、`index_run.py:84-104` `claim_finalize` / `_cas`）。`CodeWikiBuildRun` 仿 `IndexRun`（`resources/kb.py:305-336`）。
 
 ---
 
