@@ -154,6 +154,19 @@ _WORKSPACE = "root"
 # Provisioned tools are made available here (a sibling of the workspace, so
 # they're outside what walk/sync see). MUST match the jail bootstrap's mount.
 _TOOLS = ".tools"
+# Unjailed `python` shim dir (#350). The jail bootstrap (isolate=True) routes
+# raw `python`/`python3*` to the python-stack carrier from inside the chroot;
+# unjailed pods — the model our deployments actually run (uid + cgroup, no
+# userns) — never execute that bootstrap, so without this `python` resolved via
+# the inherited PATH to the host's OWN service venv (fastapi/uvicorn/pydantic),
+# not the carrier. We materialise the same shim as a real bin dir (a sibling of
+# the workspace, so walk/sync never see it) and prepend it to PATH in
+# `_exec_argv`. MUST stay outside the workspace.
+_JAILBIN = ".jailbin"
+# Shim every flavour name the agent or a tool launcher might spell — matching
+# the jail bootstrap. A bare `python` shim alone would let `python3` fall
+# through to the host interpreter.
+_PYTHON_SHIM_NAMES = ("python", "python3", "python3.10", "python3.11", "python3.12", "python3.13")
 
 
 def _kill_process_group(proc: asyncio.subprocess.Process) -> None:
@@ -220,6 +233,39 @@ class LocalProcessSandbox:
         self._dirs[handle.id] = path
         return handle
 
+    def _install_python_shim(self, root: Path) -> None:
+        """Unjailed analogue of the jail bootstrap's two-tier `python` shim
+        (#350), rebuilt per-exec like the bootstrap is. Build a `.jailbin` dir
+        of `python`/`python3*` symlinks that route to the python-stack carrier's
+        launcher when present, else to `/usr/bin/python3` — never the host's own
+        service venv that heads the inherited PATH. `_exec_argv` prepends this
+        dir to PATH.
+
+        Checks the IN-SANDBOX `<root>/.tools/python-stack/launch`, not the
+        constructor's `tools_dir`, so it sees the carrier however it arrived: a
+        whole-dir `.tools` symlink (tools_dir) OR a per-package `provision_tools`
+        extract that lands after `create`. A plain symlink suffices: the carrier
+        launch does `readlink -f "$0"`, resolving the chain to the real bundle."""
+        carrier = root / _TOOLS / "python-stack" / "launch"
+        # Carrier when present, else the system python3 — anything but the host's
+        # own service venv that heads the inherited PATH. (A deployment image
+        # always ships one or the other; prod always ships the carrier.)
+        target = carrier if os.access(carrier, os.X_OK) else Path("/usr/bin/python3")
+        want = os.fspath(target)
+        jailbin = root / _JAILBIN
+        jailbin.mkdir(exist_ok=True)
+        for name in _PYTHON_SHIM_NAMES:
+            link = jailbin / name
+            if link.is_symlink() and os.readlink(link) == want:
+                continue  # already correct — no write (cheap + race-free on reruns)
+            # Atomic swap: create a uniquely-named temp link, then rename it over
+            # `link`. `os.replace` is atomic, so concurrent execs on a #345 shared
+            # dir never race into FileExistsError or a window with no `python`.
+            tmp = jailbin / f".{name}.{os.getpid()}.tmp"
+            tmp.unlink(missing_ok=True)
+            tmp.symlink_to(target)
+            os.replace(tmp, link)
+
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
@@ -249,6 +295,15 @@ class LocalProcessSandbox:
             argv = cmd
             sub_cwd = ws
             env["HOME"] = str(ws)
+            # (Re)build + prepend the `python` shim so `python`/`python3*` route
+            # to the python-stack carrier (or /usr/bin/python3), never the host's
+            # own service venv that heads the inherited PATH (#350). The jail path
+            # does this inside its per-exec bootstrap; unjailed has none, so we do
+            # it here — per-exec so a carrier provisioned after `create` is seen.
+            # The PATH survives the `setpriv` wrap (no `--reset-env`) and is
+            # inherited by any child the script spawns.
+            self._install_python_shim(root)
+            env["PATH"] = f"{root / _JAILBIN}{os.pathsep}{env.get('PATH', '')}"
         return argv, sub_cwd, env
 
     async def exec(

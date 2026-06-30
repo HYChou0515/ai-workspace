@@ -46,9 +46,10 @@ def test_resolve_default_inherits_ceiling_and_uses_chosen_preset():
 def test_resolved_rca_prompt_carries_fe_renderer_conventions():
     """#94 moved the artifact conventions from a shared base prompt into each
     App's prompt. The resolved RCA agent prompt must still teach versioned
-    reports (`/report.v`), notebooks (`.ipynb`) — the FE renderers depend on
-    these — and the one-tool-call-per-turn rule (the LiteLLM small-model bug
-    workaround)."""
+    reports (`/report.v`) and notebooks (`.ipynb`) — the FE renderers depend on
+    these. The one-tool-call-per-turn rule (the LiteLLM small-model bug
+    workaround) is a cross-App invariant, so it now lives in the shared `_base`
+    preamble — but it must still reach RCA's resolved prompt."""
     cfg = AppCatalog(presets=_presets()).resolve(
         app_slug="rca", profile="default", attached_preset="qwen3-local"
     )
@@ -189,6 +190,66 @@ def test_kb_chat_prompt_has_no_workspace_preamble():
     from workspace_app.kb.prompts import load_kb_system_prompt
 
     assert "## Working in this workspace" not in load_kb_system_prompt()
+
+
+# ─── shared sandbox preamble (cross-app consolidation) ──────────────
+def test_compose_prompt_inserts_sandbox_preamble_after_base_preamble():
+    """The sandbox preamble sits between the shared workspace preamble and the
+    profile appendix: base → preamble → sandbox → appendix. An empty sandbox
+    preamble (a non-sandbox App) is omitted entirely."""
+    from workspace_app.apps.catalog import _compose_prompt
+
+    assert (
+        _compose_prompt("BASE", "APPENDIX", [], preamble="PRE", sandbox_preamble="SBX")
+        == "BASE\n\nPRE\n\nSBX\n\nAPPENDIX"
+    )
+    # empty sandbox preamble drops out, leaving the #241 ordering intact
+    assert (
+        _compose_prompt("BASE", "APPENDIX", [], preamble="PRE", sandbox_preamble="")
+        == "BASE\n\nPRE\n\nAPPENDIX"
+    )
+
+
+def test_sandbox_app_resolved_prompt_carries_sandbox_preamble():
+    """A `function.sandbox` App's resolved prompt teaches running commands with
+    `exec` — the cross-app sandbox guidance now lives in the shared `_sandbox`
+    preamble, not in each App's own prompt."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    assert "## Running commands" in cfg.system_prompt
+    assert "exec" in cfg.system_prompt
+
+
+def test_sandboxless_workspace_app_omits_sandbox_preamble():
+    """A workspace App with `function.sandbox: false` (the `_template` App) still
+    gets the shared workspace preamble but NOT the sandbox preamble — it has no
+    `exec`, so shell/`exec`/python-via-exec guidance would only mislead it."""
+    cfg = AppCatalog(presets=_presets()).resolve(app_slug="_template", profile="default")
+    assert "## Working in this workspace" in cfg.system_prompt  # _base still applies
+    assert "## Running commands" not in cfg.system_prompt  # _sandbox gated out
+
+
+def test_security_guardrail_does_not_enumerate_root_as_offlimits():
+    """Regression: the shared workspace preamble must NOT hard-code `/root` as an
+    off-limits path. In the default chroot sandbox backend the workspace IS `/root`
+    (the agent's cwd + $HOME), so listing it as forbidden contradicts reality. The
+    guardrail is expressed backend-agnostically: workspace = your cwd / `~`."""
+    for slug in ("rca", "playground", "topic-hub", "_template"):
+        cfg = AppCatalog(presets=_presets()).resolve(
+            app_slug=slug, profile="default", attached_preset="qwen3-local"
+        )
+        assert "/root" not in cfg.system_prompt, f"{slug} prompt still lists /root"
+
+
+def test_every_workspace_app_inherits_base_preamble():
+    """All workspace Apps (the discoverable three) inherit the shared `_base`
+    workspace preamble — cross-app workspace awareness lives there, not per App."""
+    for slug in discover_app_slugs():
+        cfg = AppCatalog(presets=_presets()).resolve(
+            app_slug=slug, profile="default", attached_preset="qwen3-local"
+        )
+        assert "## Working in this workspace" in cfg.system_prompt, slug
 
 
 # ─── function ↔ tools coherence (startup hard error) ────────────────
