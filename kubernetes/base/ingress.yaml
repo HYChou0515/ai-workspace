@@ -21,17 +21,36 @@ metadata:
     # to `/a/{slug}/items/{id}` (#94-97) and gained the `/api` prefix, dropping
     # every chat to round-robin → the cross-pod blank-chat bug.
     #
+    # #349: the hash key is computed in a SERVER-snippet from `$request_uri`, NOT
+    # a location `configuration-snippet` from `$uri`. On a sub-path deploy the
+    # overlay sets `rewrite-target: /$2`, which emits a `rewrite … break;` in the
+    # location. `break` halts the ngx_http_rewrite_module directives that follow
+    # it in that location — and `set`/`if` ARE rewrite-module directives — so a
+    # `configuration-snippet` placed after the rewrite never runs `set
+    # $rca_ws_key`, the key stays `$host`, and every item silently falls back to
+    # round-robin (only on sub-path deploys; root deploys have no active rewrite,
+    # which is why this hid for so long). A `server-snippet` runs in the server
+    # rewrite phase BEFORE location selection, and `$request_uri` is the verbatim
+    # original request line (never rewritten, prefix intact), so the un-anchored
+    # match is immune to the location rewrite/break entirely.
+    #   Verify on a live controller (set must precede the location's rewrite/be
+    #   server-scoped, and the key must be the item/chat id, not $host):
+    #     kubectl exec -n ingress-nginx <controller-pod> -- cat /etc/nginx/nginx.conf \
+    #       | grep -n -E 'rca_ws_key|rewrite .* break'
+    #
     # Requires the controller's allow-snippet-annotations=true. If it is OFF
     # (the modern ingress-nginx default), this snippet silently no-ops and the
     # upstream falls back to round-robin; the FE store-poll fallback (#202) keeps
-    # chats usable in that case, just without live cross-pod streaming / LB.
+    # chats usable in that case, just without live cross-pod streaming / LB. Cross-
+    # pod TURN CANCEL no longer depends on this at all (#349): it rides a shared
+    # specstar epoch, so a Stop / new message is honoured even on round-robin.
     nginx.ingress.kubernetes.io/upstream-hash-by: "$rca_ws_key"
-    nginx.ingress.kubernetes.io/configuration-snippet: |
+    nginx.ingress.kubernetes.io/server-snippet: |
       set $rca_ws_key $host;
-      if ($uri ~ "/a/[^/]+/items/([^/]+)") {
+      if ($request_uri ~ "/a/[^/]+/items/([^/]+)") {
         set $rca_ws_key $1;
       }
-      if ($uri ~ "/kb/chats/([^/]+)") {
+      if ($request_uri ~ "/kb/chats/([^/]+)") {
         set $rca_ws_key $1;
       }
 spec:
