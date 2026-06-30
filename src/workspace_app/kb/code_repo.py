@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -55,12 +56,22 @@ class CodeRepoIngestor:
         self._spec = spec
         self._ingestor = ingestor
 
-    def sync(self, *, collection_id: str, user: str, now_ms: int | None = None) -> None:
+    def sync(
+        self,
+        *,
+        collection_id: str,
+        user: str,
+        now_ms: int | None = None,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> None:
         """Clone the Collection's `git_url` and ingest each tracked file.
 
         No-op when the Collection has no `git_url` set (so a scheduler can
         walk every Collection blindly). Raises `CodeRepoSyncError` on git
-        failure (bad URL, auth, branch missing)."""
+        failure (bad URL, auth, branch missing).
+
+        ``on_phase`` (#355) is called with ``"cloning"`` then ``"ingesting"`` so
+        the caller (the ``code_sync`` job handler) can surface live progress."""
         crm = self._spec.get_resource_manager(Collection)
         coll = crm.get(collection_id).data
         assert isinstance(coll, Collection)
@@ -81,8 +92,12 @@ class CodeRepoIngestor:
         with tempfile.TemporaryDirectory(prefix="code-repo-") as raw:
             checkout = Path(raw) / "repo"
             try:
+                if on_phase is not None:
+                    on_phase("cloning")
                 self._clone(url, coll.git_branch, checkout)
                 sha = self._head_sha(checkout)
+                if on_phase is not None:
+                    on_phase("ingesting")
                 self._ingest_tree(collection_id, user, checkout)
             except subprocess.CalledProcessError as e:
                 with crm.using(owner):

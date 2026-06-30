@@ -40,12 +40,19 @@ class CodeWikiBuildRunStore:
         self._rm = spec.get_resource_manager(CodeWikiBuildRun)
 
     # ── seed / read ──────────────────────────────────────────────────
-    def start(self, collection_id: str, total: int) -> None:
+    def start(self, collection_id: str, total: int, *, phase: str = "cards") -> None:
         """Seed (or reset) the run for a fresh build — overwrites any prior
-        terminal run. ``total`` is the card-batch count. Written as a draft
-        revision so the card jobs can ``modify`` it in place under CAS."""
-        run = CodeWikiBuildRun(collection_id=collection_id, total=total)
+        terminal run. ``total`` is the card-batch count; ``phase`` is the coarse
+        activity shown by the FE (#355 seeds it ``"cloning"`` for the pre-build
+        code-sync, then ``code_split`` re-seeds with the default ``"cards"``).
+        Written as a draft revision so the card jobs can ``modify`` it under CAS."""
+        run = CodeWikiBuildRun(collection_id=collection_id, total=total, phase=phase)
         self._rm.create_or_update(collection_id, run, status=RevisionStatus.draft)
+
+    def set_phase(self, collection_id: str, phase: str) -> None:
+        """Advance the coarse build phase (#355: ``cloning`` → ``ingesting``)
+        under CAS, so the FE's status poll reflects the live sync activity."""
+        self._cas(collection_id, lambda run: msgspec.structs.replace(run, phase=phase))
 
     def get(self, collection_id: str) -> CodeWikiBuildRun | None:
         try:

@@ -47,6 +47,7 @@ from specstar.types import (
 )
 
 from ...resources import AgentConfig, CodeWikiBuildRun, Collection, SourceDoc, WikiBuildState
+from ..code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..job_audit import preserve_job_creator
 from .code_wiki import CodeWikiBuilder
 from .code_wiki_run import CodeWikiBuildRunStore
@@ -141,10 +142,16 @@ class WikiMaintenanceCoordinator:
         get_user_id: Callable[[], str] | None = None,
         code_wiki_llm: ILlm | None = None,
         code_card_batch_chars: int = _DEFAULT_CARD_BATCH_CHARS,
+        code_repo: CodeRepoIngestor | None = None,
     ) -> None:
         self._spec = spec
         self._runner = runner
         self._wiki_store = WikiFileStore(spec)
+        # #355: the clone+ingest worker for a code collection's git_url. The
+        # `code_sync` job runs it ON the wiki worker (off the API), then chains
+        # into the code build. None ⇒ no code_repo wired ⇒ a code_sync job records
+        # an error (build_coordinators always wires one in production).
+        self._code_repo = code_repo
         # #281: a code collection (one with a git_url) builds its wiki by reading
         # source hierarchically via CodeWikiBuilder instead of folding one source
         # at a time. None ⇒ no code-wiki LLM wired ⇒ a code build records an error.
@@ -294,6 +301,35 @@ class WikiMaintenanceCoordinator:
                 )
             )
 
+    async def enqueue_code_sync(
+        self, collection_id: str, *, requested_by: str | None = None
+    ) -> None:
+        """#355: enqueue a ``code_sync`` job — clone the collection's git_url +
+        ingest it (on the wiki worker, off the API), then chain into the code
+        build. This is what the /sync route and the daily sweeper call instead of
+        running the (multi-minute) clone+ingest inline. Returns immediately; the
+        work happens in the background consumer. No-op unless the collection is a
+        code collection (has a ``git_url``); coalesces onto any sync/build already
+        in flight (``partition_key`` = the collection id, so it also serialises)."""
+        try:
+            coll = self._coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError:
+            return
+        if not (isinstance(coll, Collection) and coll.git_url):
+            return  # not a code collection — nothing to sync
+        actor = requested_by if requested_by is not None else self._get_user_id()
+        with self._job_rm.using(user=actor):
+            if self._has_active_code_build(collection_id):
+                return  # a sync/build is already queued/running — coalesce
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(
+                        collection_id=collection_id, source_path="", op="code_sync"
+                    ),
+                    partition_key=collection_id,
+                )
+            )
+
     async def trigger_code_build(
         self, collection_id: str, *, requested_by: str | None = None
     ) -> None:
@@ -329,9 +365,16 @@ class WikiMaintenanceCoordinator:
                     ),
                 )
             return
+        if self._has_active_code_build(cid):
+            return  # a build is already queued/running for this collection
+        self._enqueue_code_split(cid, actor)
+
+    def _enqueue_code_split(self, cid: str, actor: str) -> None:
+        """Create the ``code_split`` job (the head of the fan-out). Unguarded —
+        callers that already hold the coalescing decision use this directly: the
+        ``code_sync`` handler chains straight into the split after a successful
+        sync (#355), and ``_enqueue_code_build`` calls it past its own guard."""
         with self._job_rm.using(user=actor):
-            if self._has_active_code_build(cid):
-                return  # a build is already queued/running for this collection
             self._job_rm.create(
                 WikiMaintenanceJob(
                     payload=WikiJobPayload(collection_id=cid, source_path="", op="code_split"),
@@ -343,14 +386,15 @@ class WikiMaintenanceCoordinator:
         """Coalescing guard. A build is in flight if its CAS run is still
         ``running`` (covers the card + finalize phases — card jobs are
         partition_key=None so the queue can't tell us) OR a cid-keyed
-        ``code_split`` / ``code_finalize`` job is still queued/running (covers the
-        gap before the split has created the run)."""
+        ``code_sync`` / ``code_split`` / ``code_finalize`` job is still
+        queued/running (covers the gap before the split has created the run, and
+        the clone+ingest sync that precedes it — #355)."""
         if self._code_run.is_active(cid):
             return True
         q = (QB["status"].in_(_ACTIVE) & (QB["partition_key"] == cid)).build()
         return any(
             isinstance(r.data, WikiMaintenanceJob)
-            and r.data.payload.op in ("code_split", "code_finalize")
+            and r.data.payload.op in ("code_sync", "code_split", "code_finalize")
             for r in self._job_rm.list_resources(q)
         )
 
@@ -452,7 +496,9 @@ class WikiMaintenanceCoordinator:
         # unfold — #83.)
         actor = job.info.created_by
         with self._state_rm.using(user=actor):
-            if payload.op == "code_split":
+            if payload.op == "code_sync":
+                self._handle_code_sync(payload, triggered_by=actor)
+            elif payload.op == "code_split":
                 self._handle_code_split(payload, triggered_by=actor)
             elif payload.op == "code_card":
                 self._handle_code_card(payload, triggered_by=actor)
@@ -562,6 +608,50 @@ class WikiMaintenanceCoordinator:
                 ),
             )
         self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
+
+    def _handle_code_sync(self, payload, *, triggered_by: str) -> None:
+        """#355: clone the collection's git_url + ingest it (on the wiki worker,
+        off the API), then chain into the code build. Seeds the
+        ``CodeWikiBuildRun`` so ``GET /wiki/status`` shows ``cloning`` →
+        ``ingesting`` live. A clone/auth failure is recorded on the build state's
+        ``last_error`` (the async replacement for the old synchronous 502) and the
+        run is finished ``error``. A successful sync chains into the build when the
+        collection is a wiki collection with a code-wiki LLM; otherwise the run is
+        closed ``done`` (the ingested sources are still searchable — there's just
+        no wiki to build), or an error is recorded if the wiki is on but no LLM is
+        wired (mirrors ``_enqueue_code_build``)."""
+        cid = payload.collection_id
+        if self._code_repo is None:  # pragma: no cover — sync enqueued only when wired
+            self._record_code_error(cid, "code sync not configured")
+            return
+        # Fresh sync epoch: reset the build state (drop any stale error) and seed
+        # the run as cloning so the FE status poll reflects the live sync at once.
+        self._update_state(cid, lambda s: WikiBuildState(collection_id=cid))
+        self._code_run.start(cid, total=0, phase="cloning")
+        try:
+            self._code_repo.sync(
+                collection_id=cid,
+                user=triggered_by,
+                on_phase=lambda ph: self._code_run.set_phase(cid, ph),
+            )
+        except CodeRepoSyncError as exc:
+            _LOGGER.exception("code sync failed for %s", cid)
+            self._record_code_error(cid, str(exc) or "the git sync failed")
+            self._code_run.finish(cid, status="error")
+            return
+        try:
+            coll = self._coll_rm.get(cid).data
+        except ResourceIDNotFoundError:  # pragma: no cover — collection deleted mid-sync
+            self._code_run.finish(cid, status="done")
+            return
+        if isinstance(coll, Collection) and coll.use_wiki:
+            if self._code_builder is not None:
+                self._enqueue_code_split(cid, triggered_by)  # re-seeds run with total=N
+            else:
+                self._record_code_error(cid, "code-wiki LLM not configured (set kb.wiki.llm)")
+                self._code_run.finish(cid, status="error")
+        else:
+            self._code_run.finish(cid, status="done")  # synced; no wiki to build
 
     def _handle_code_split(self, payload, *, triggered_by: str) -> None:
         """Head of the code-wiki fan-out (#281 P4): plan directory-coherent,
