@@ -45,3 +45,50 @@ def test_remarking_extends_the_deadline():
     reg.mark(("qwen", "ep1"), 30.0)  # fresh 30s from t=20 → expires at 50
     clock.now = 49.9
     assert reg.is_cooling(("qwen", "ep1")) is True
+
+
+def test_now_exposes_the_injected_clock():
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    assert reg.now() == 0.0
+    clock.now = 7.5
+    assert reg.now() == 7.5
+
+
+def test_remaining_is_zero_when_nothing_is_cooling():
+    reg = CooldownRegistry(clock=_Clock())
+    # No keys → nothing to wait for; unmarked keys are available now.
+    assert reg.remaining([]) == 0.0
+    assert reg.remaining([("qwen", "ep1"), ("qwen", "ep2")]) == 0.0
+
+
+def test_remaining_is_zero_when_any_key_is_available_now():
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    reg.mark(("qwen", "ep1"), 30.0)  # ep1 cooling, ep2 free → a free one exists now
+    assert reg.remaining([("qwen", "ep1"), ("qwen", "ep2")]) == 0.0
+
+
+def test_remaining_is_soonest_expiry_when_all_keys_are_cooling():
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    reg.mark(("qwen", "ep1"), 30.0)
+    reg.mark(("qwen", "ep2"), 12.0)  # ep2 frees first
+    clock.now = 2.0
+    assert reg.remaining([("qwen", "ep1"), ("qwen", "ep2")]) == 10.0  # 12 - 2
+
+
+def test_remaining_treats_an_expired_key_as_available():
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    reg.mark(("qwen", "ep1"), 30.0)
+    clock.now = 30.0  # ep1's deadline reached → no longer cooling
+    assert reg.remaining([("qwen", "ep1")]) == 0.0
+
+
+def test_remaining_keeps_the_earliest_when_a_later_key_cools_longer():
+    clock = _Clock()
+    reg = CooldownRegistry(clock=clock)
+    reg.mark(("qwen", "ep1"), 10.0)  # frees first
+    reg.mark(("qwen", "ep2"), 30.0)  # cools longer → must NOT replace the soonest
+    assert reg.remaining([("qwen", "ep1"), ("qwen", "ep2")]) == 10.0
