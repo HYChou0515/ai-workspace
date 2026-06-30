@@ -31,10 +31,10 @@ from .core import CallProvider
 if TYPE_CHECKING:
     from tenacity import RetryCallState
 
-# Backoff between full sweeps of the provider chain (#249): a busy/blip window
-# usually clears in seconds, so wait a little longer each round before re-probing
-# from the top. The last value caps further rounds.
-_DEFAULT_ROUND_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
+# The per-endpoint attempt count (``m``) and the backoff between full sweeps
+# (``round_delays``) are NOT hardcoded here — they come from the `failover:`
+# config (``num_retries`` + ``round_backoff_s``), so an operator tunes index-time
+# resilience the same way as chat (#196-followup). The caller passes them in.
 
 # A switch/retry notice: (provider we just gave up on, the transient cause).
 OnSwitch = Callable[[CallProvider, BaseException], object]
@@ -63,7 +63,7 @@ def is_transient(exc: BaseException) -> bool:
 def try_provider[R](
     call: Callable[[], R],
     *,
-    m: int = 5,
+    m: int,
     gap: float = 0.2,
     sleep: Callable[[float], None] = time.sleep,
 ) -> R:
@@ -94,9 +94,9 @@ def _round_wait(delays: Sequence[float]) -> Callable[[RetryCallState], float]:
 def call_with_failover[R](
     providers: Sequence[CallProvider[R]],
     *,
-    m: int = 5,
+    m: int,
     gap: float = 0.2,
-    round_delays: Sequence[float] = _DEFAULT_ROUND_DELAYS,
+    round_delays: Sequence[float],
     sleep: Callable[[float], None] = time.sleep,
     on_switch: OnSwitch | None = None,
 ) -> R:

@@ -22,8 +22,10 @@ is expected to carry its own ``timeout`` so an abandoned producer eventually die
 
 from __future__ import annotations
 
+import math
 import queue
 import threading
+import time
 from collections.abc import Callable, Hashable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import cast
@@ -62,6 +64,10 @@ class Provider[T]:
     ttft_s: float
     idle_s: float
     cooldown_s: float
+    # #196-followup: quick same-endpoint retries before giving up on this entry
+    # and switching. 0 = the original "busy stays busy, switch immediately"
+    # behaviour; >0 absorbs a transient pre-first blip on the same endpoint.
+    num_retries: int = 0
 
 
 # Internal sentinel: a failure that happened before the first item was yielded,
@@ -114,25 +120,75 @@ def _drive[T](provider: Provider[T]) -> Iterator[T]:
         yield cast("T", payload)
 
 
+def _wait_before_round(
+    backoff: float,
+    cooldown: CooldownRegistry,
+    keys: Sequence[Hashable],
+    deadline: float,
+    sleep: Callable[[float], None],
+) -> bool:
+    """Sleep before a re-sweep round, cooldown-aware: wait at least ``backoff``
+    but, when every endpoint is cooling, until the SOONEST un-cools (re-probing
+    a parked endpoint any earlier just wastes a sweep). Never sleep past the
+    total deadline. Returns ``False`` when the deadline is already spent so the
+    caller stops re-sweeping and surfaces the busy failure."""
+    now = cooldown.now()
+    if now >= deadline:
+        return False
+    wait = min(max(backoff, cooldown.remaining(keys)), deadline - now)
+    if wait > 0:
+        sleep(wait)
+    return True
+
+
 def failover_stream[T](
     providers: Sequence[Provider[T]],
     cooldown: CooldownRegistry,
     *,
+    round_backoff_s: Sequence[float] = (),
+    total_deadline_s: float = math.inf,
     on_switch: OnSwitch[T] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Iterator[T]:
+    """Sweep ``providers`` in strict priority, switching on a pre-first failure
+    (each gets ``provider.num_retries`` quick same-endpoint retries first). A
+    whole sweep that produces nothing re-sweeps after a cooldown-aware backoff —
+    ``round_backoff_s`` gives one re-sweep per entry (``()`` = a single sweep, the
+    original #196 behaviour) — until one produces output, the rounds run out, or
+    ``total_deadline_s`` elapses, then :class:`AllProvidersFailed`. Mid-stream
+    failures (after the first item) still propagate: a stream already seen can't
+    restart."""
+    keys = [p.key for p in providers]
+    deadline = cooldown.now() + total_deadline_s
+    backoffs = tuple(round_backoff_s)
     last: BaseException | None = None
-    for provider in providers:
-        if cooldown.is_cooling(provider.key):
-            continue
-        try:
-            yield from _drive(provider)
-            return
-        except _PreFirstFailure as failure:
-            cooldown.mark(provider.key, provider.cooldown_s)
-            last = failure.cause
-            if on_switch is not None:
-                on_switch(provider, failure.cause)
-            continue
+    for round_idx in range(len(backoffs) + 1):
+        if round_idx > 0 and not _wait_before_round(
+            backoffs[round_idx - 1], cooldown, keys, deadline, sleep
+        ):
+            break
+        for provider in providers:
+            if cooldown.is_cooling(provider.key):
+                continue
+            for attempt in range(provider.num_retries + 1):
+                stream = _drive(provider)
+                try:
+                    first = next(stream)
+                except StopIteration:
+                    return  # empty completion — valid per the ILlm contract
+                except _PreFirstFailure as failure:
+                    last = failure.cause
+                    if attempt == provider.num_retries:
+                        # same-endpoint retries exhausted → park it and switch; the
+                        # loop then ends naturally and the next provider is tried.
+                        cooldown.mark(provider.key, provider.cooldown_s)
+                        if on_switch is not None:
+                            on_switch(provider, failure.cause)
+                    # else: a quick same-endpoint retry (pre-first only)
+                else:
+                    yield first
+                    yield from stream  # mid-stream errors / idle stalls propagate
+                    return
     raise AllProvidersFailed("all providers failed or were cooling") from last
 
 
@@ -146,26 +202,45 @@ class CallProvider[R]:
     label: str
     call: Callable[[], R]
     cooldown_s: float
+    num_retries: int = 0
 
 
 def failover_call[R](
     providers: Sequence[CallProvider[R]],
     cooldown: CooldownRegistry,
     *,
+    round_backoff_s: Sequence[float] = (),
+    total_deadline_s: float = math.inf,
     on_switch: Callable[[CallProvider[R], BaseException], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> R:
-    """Try each non-cooling provider in priority order; the first that returns
-    wins. Any error parks that provider on cooldown and switches to the next.
-    All exhausted ⇒ :class:`AllProvidersFailed`."""
+    """Try each non-cooling provider in priority order (``num_retries`` quick
+    same-endpoint retries each); the first that returns wins. Any error parks the
+    provider on cooldown and switches. A sweep that returns nothing re-sweeps
+    after a cooldown-aware backoff (``round_backoff_s`` per round) until success,
+    the rounds run out, or ``total_deadline_s`` elapses ⇒ :class:`AllProvidersFailed`."""
+    keys = [p.key for p in providers]
+    deadline = cooldown.now() + total_deadline_s
+    backoffs = tuple(round_backoff_s)
     last: BaseException | None = None
-    for provider in providers:
-        if cooldown.is_cooling(provider.key):
-            continue
-        try:
-            return provider.call()
-        except Exception as exc:  # noqa: BLE001 — any failure switches to the next
-            cooldown.mark(provider.key, provider.cooldown_s)
-            last = exc
-            if on_switch is not None:
-                on_switch(provider, exc)
+    for round_idx in range(len(backoffs) + 1):
+        if round_idx > 0 and not _wait_before_round(
+            backoffs[round_idx - 1], cooldown, keys, deadline, sleep
+        ):
+            break
+        for provider in providers:
+            if cooldown.is_cooling(provider.key):
+                continue
+            for attempt in range(provider.num_retries + 1):
+                try:
+                    return provider.call()
+                except Exception as exc:  # noqa: BLE001 — any failure retries/switches
+                    last = exc
+                    if attempt == provider.num_retries:
+                        # retries exhausted → park it and switch; the loop then
+                        # ends naturally and the next provider is tried.
+                        cooldown.mark(provider.key, provider.cooldown_s)
+                        if on_switch is not None:
+                            on_switch(provider, exc)
+                    # else: a quick same-endpoint retry
     raise AllProvidersFailed("all providers failed or were cooling") from last

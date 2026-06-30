@@ -39,10 +39,36 @@ def _reg(clock: _Clock | None = None) -> CooldownRegistry:
     return CooldownRegistry(clock=clock or _Clock())
 
 
-def _prov(key: str, start, *, ttft_s: float = 5.0, idle_s: float = 5.0, cooldown_s: float = 30.0):
+def _prov(
+    key: str,
+    start,
+    *,
+    ttft_s: float = 5.0,
+    idle_s: float = 5.0,
+    cooldown_s: float = 30.0,
+    num_retries: int = 0,
+):
     return Provider(
-        key=key, label=key, start=start, ttft_s=ttft_s, idle_s=idle_s, cooldown_s=cooldown_s
+        key=key,
+        label=key,
+        start=start,
+        ttft_s=ttft_s,
+        idle_s=idle_s,
+        cooldown_s=cooldown_s,
+        num_retries=num_retries,
     )
+
+
+def _advancing_sleep(clock: _Clock):
+    """A ``sleep`` that records and advances the SAME clock the registry reads,
+    so a cooldown waited out by the round loop actually expires."""
+    slept: list[float] = []
+
+    def sleep(s: float) -> None:
+        slept.append(s)
+        clock.now += s
+
+    return slept, sleep
 
 
 def _yield(*items: str):
@@ -219,8 +245,8 @@ def test_empty_stream_is_a_success_not_a_switch():
     assert switched == []
 
 
-def _call(key: str, fn, *, cooldown_s: float = 30.0) -> CallProvider:
-    return CallProvider(key=key, label=key, call=fn, cooldown_s=cooldown_s)
+def _call(key: str, fn, *, cooldown_s: float = 30.0, num_retries: int = 0) -> CallProvider:
+    return CallProvider(key=key, label=key, call=fn, cooldown_s=cooldown_s, num_retries=num_retries)
 
 
 def test_failover_call_returns_first_success():
@@ -257,3 +283,163 @@ def test_failover_call_skips_cooling_and_exhausts_to_error():
 
     with pytest.raises(AllProvidersFailed):
         failover_call([_call("a", lambda: "never"), _call("b", boom)], reg)
+
+
+# ── #196-followup: configurable resilience — num_retries + re-sweep rounds ──
+
+
+def test_num_retries_recovers_on_same_endpoint_without_switching():
+    reg = _reg()
+    switched: list[str] = []
+    attempts = {"a": 0}
+
+    def a_start() -> Iterator[str]:
+        attempts["a"] += 1
+        if attempts["a"] == 1:
+            raise RuntimeError("blip")  # first attempt fails before the first token
+        yield "ok"  # the same-endpoint retry succeeds
+
+    out = list(
+        failover_stream(
+            [_prov("a", a_start, num_retries=1), _prov("b", _yield("never"))],
+            reg,
+            on_switch=lambda p, exc: switched.append(p.key),
+        )
+    )
+    assert out == ["ok"]
+    assert switched == []  # recovered on the same endpoint → never switched
+    assert reg.is_cooling("a") is False  # a recovered endpoint is not parked
+
+
+def test_stream_re_sweeps_and_recovers_after_the_cooldown_clears():
+    clock = _Clock()
+    reg = _reg(clock)
+    slept, sleep = _advancing_sleep(clock)
+    rounds = {"a": 0}
+
+    def a_start() -> Iterator[str]:
+        rounds["a"] += 1
+        if rounds["a"] == 1:
+            raise RuntimeError("busy")  # whole sweep 1 fails before first token
+        yield "recovered"  # sweep 2 succeeds
+
+    out = list(
+        failover_stream(
+            [_prov("a", a_start, cooldown_s=30.0)],
+            reg,
+            round_backoff_s=(1.0,),
+            sleep=sleep,
+        )
+    )
+    assert out == ["recovered"]
+    # The round wait is cooldown-aware: floor 1.0s but the endpoint is parked
+    # 30s, so the loop sleeps until it un-cools rather than re-probing in vain.
+    assert slept == [30.0]
+
+
+def test_stream_total_deadline_caps_the_waiting_and_then_gives_up():
+    clock = _Clock()
+    reg = _reg(clock)
+    slept, sleep = _advancing_sleep(clock)
+
+    with pytest.raises(AllProvidersFailed):
+        list(
+            failover_stream(
+                [_prov("a", _raise(RuntimeError("x")), cooldown_s=30.0)],
+                reg,
+                round_backoff_s=(1.0, 1.0, 1.0),
+                total_deadline_s=50.0,
+                sleep=sleep,
+            )
+        )
+    # round1 fails (park 30s). round2 waits 30 (now=30), fails (park→60).
+    # round3 wait would be 30 but only 20s of the 50s budget remain → capped to
+    # 20 (now=50); the endpoint is still cooling so the sweep finds nothing, and
+    # round4 sees now==deadline and stops. Never sleeps past the deadline.
+    assert slept == [30.0, 20.0]
+
+
+def test_failover_call_retries_same_provider_before_switching():
+    reg = _reg()
+    switched: list[str] = []
+    n = {"a": 0}
+
+    def a():
+        n["a"] += 1
+        if n["a"] == 1:
+            raise RuntimeError("blip")
+        return "ok"
+
+    out = failover_call(
+        [_call("a", a, num_retries=1), _call("b", lambda: "b")],
+        reg,
+        on_switch=lambda p, exc: switched.append(p.key),
+    )
+    assert out == "ok"
+    assert switched == []
+    assert reg.is_cooling("a") is False
+
+
+def test_failover_call_re_sweeps_until_the_cooldown_clears():
+    clock = _Clock()
+    reg = _reg(clock)
+    slept, sleep = _advancing_sleep(clock)
+    n = {"a": 0}
+
+    def a():
+        n["a"] += 1
+        if n["a"] == 1:
+            raise RuntimeError("busy")
+        return "ok"
+
+    out = failover_call(
+        [_call("a", a, cooldown_s=5.0)],
+        reg,
+        round_backoff_s=(1.0,),
+        sleep=sleep,
+    )
+    assert out == "ok"
+    assert slept == [5.0]  # waited out the 5s cooldown before re-sweeping
+
+
+def test_stream_re_sweep_with_zero_cooldown_does_not_sleep():
+    clock = _Clock()
+    reg = _reg(clock)
+    slept, sleep = _advancing_sleep(clock)
+    rounds = {"a": 0}
+
+    def a_start() -> Iterator[str]:
+        rounds["a"] += 1
+        if rounds["a"] == 1:
+            raise RuntimeError("blip")
+        yield "ok"
+
+    out = list(
+        failover_stream(
+            [_prov("a", a_start, cooldown_s=0.0)],
+            reg,
+            round_backoff_s=(0.0,),
+            sleep=sleep,
+        )
+    )
+    assert out == ["ok"]
+    assert slept == []  # backoff 0 + nothing cooling ⇒ wait 0 ⇒ no sleep
+
+
+def test_failover_call_total_deadline_gives_up_immediately():
+    clock = _Clock()
+    reg = _reg(clock)
+    slept, sleep = _advancing_sleep(clock)
+
+    def boom():
+        raise RuntimeError("x")
+
+    with pytest.raises(AllProvidersFailed):
+        failover_call(
+            [_call("a", boom, cooldown_s=30.0)],
+            reg,
+            round_backoff_s=(1.0,),
+            total_deadline_s=0.0,  # no budget ⇒ the round loop stops after sweep 1
+            sleep=sleep,
+        )
+    assert slept == []

@@ -154,6 +154,64 @@ async def test_forget_on_an_unknown_key_is_a_noop():
     ChatTurnEngine(_Runner()).forget("never-touched")  # ty: ignore[invalid-argument-type]
 
 
+async def test_all_providers_failed_surfaces_a_readable_busy_message():
+    """When the runner exhausts the whole failover chain (every model busy →
+    AllProvidersFailed), the turn persists a human-readable "models are busy"
+    message instead of the raw exception class name (#196-followup)."""
+    from workspace_app.failover.core import AllProvidersFailed
+
+    class _Runner:
+        async def run(self, content, ctx):
+            raise AllProvidersFailed("all providers failed or were cooling")
+            yield  # pragma: no cover — marks this an async generator
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    captured: list = []
+    done = asyncio.Event()
+
+    def on_complete(msgs):
+        captured.extend(msgs)
+        done.set()
+
+    engine.enqueue("inv", "q", AgentToolContext(), on_complete=on_complete)
+    await asyncio.wait_for(done.wait(), 3)
+    engine.forget("inv")
+
+    errs = [m for m in captured if m.role == "error"]
+    assert errs, "a terminal error message should be persisted"
+    assert "busy" in errs[-1].content.lower()
+    assert "AllProvidersFailed" not in errs[-1].content  # the raw class is hidden
+
+
+async def test_busy_failure_is_detected_even_when_wrapped_by_the_runner():
+    """The SDK may re-raise the failover exhaustion wrapped in another error; the
+    readable busy message is still produced by walking the cause chain."""
+    from workspace_app.failover.core import AllProvidersFailed
+
+    class _Runner:
+        async def run(self, content, ctx):
+            try:
+                raise AllProvidersFailed("exhausted")
+            except AllProvidersFailed as cause:
+                raise RuntimeError("model error") from cause
+            yield  # pragma: no cover — marks this an async generator
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    captured: list = []
+    done = asyncio.Event()
+
+    def on_complete(msgs):
+        captured.extend(msgs)
+        done.set()
+
+    engine.enqueue("inv", "q", AgentToolContext(), on_complete=on_complete)
+    await asyncio.wait_for(done.wait(), 3)
+    engine.forget("inv")
+
+    errs = [m for m in captured if m.role == "error"]
+    assert errs and "busy" in errs[-1].content.lower()
+
+
 async def test_cancel_current_when_idle_is_a_noop():
     """Stop after a turn already finished (session exists, nothing in flight) is
     a clean no-op."""

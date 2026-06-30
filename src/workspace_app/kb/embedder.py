@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import struct
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Protocol
 
 from ..failover.core import CallProvider
@@ -114,6 +114,8 @@ class LitellmEmbedder(_PrefixedEmbedder):
         base_url: str | None = None,
         api_key: str | None = None,
         fallback_base_urls: list[str] | None = None,
+        num_retries: int = 0,
+        round_backoff_s: Sequence[float] = (),
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         super().__init__(query_prefix=query_prefix, doc_prefix=doc_prefix)
@@ -129,6 +131,11 @@ class LitellmEmbedder(_PrefixedEmbedder):
         # retry-with-backoff over that chain (see ``call_with_failover``). ``sleep``
         # is injectable so tests never wait on the backoff.
         self._fallback_base_urls = fallback_base_urls or []
+        # #196-followup: index-time resilience knobs from `failover:` config —
+        # ``num_retries`` quick same-endpoint shots before switching, and
+        # ``round_backoff_s`` re-sweep backoffs (``()`` = a single sweep).
+        self._num_retries = num_retries
+        self._round_backoff_s = tuple(round_backoff_s)
         self._sleep = sleep
 
     @property
@@ -160,7 +167,11 @@ class LitellmEmbedder(_PrefixedEmbedder):
         ]
         log = make_switch_logger("embedder")
         return call_with_failover(
-            providers, sleep=self._sleep, on_switch=lambda p, exc: log(p.label, exc)
+            providers,
+            m=self._num_retries + 1,  # num_retries retries ⇒ num_retries+1 attempts
+            round_delays=self._round_backoff_s,
+            sleep=self._sleep,
+            on_switch=lambda p, exc: log(p.label, exc),
         )
 
     def _embed_at(

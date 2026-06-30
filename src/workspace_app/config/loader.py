@@ -706,7 +706,7 @@ def _settings_from_dict(d: dict[str, Any]) -> Settings:
         observability=ObservabilitySettings(
             llm_log=_build(LlmLogSettings, d["observability"]["llm_log"]),
         ),
-        failover=_build(FailoverSettings, d["failover"]),
+        failover=_build_failover(d["failover"]),
     )
 
 
@@ -813,4 +813,21 @@ def _build_preset(d: dict[str, Any]) -> Preset:
         ttft_timeout_s=d.get("ttft_timeout_s"),
         cooldown_s=d.get("cooldown_s"),
         idle_timeout_s=d.get("idle_timeout_s"),
+        num_retries=d.get("num_retries"),
+        round_backoff_s=(tuple(rb) if (rb := d.get("round_backoff_s")) is not None else None),
+        total_deadline_s=d.get("total_deadline_s"),
+    )
+
+
+def _build_failover(d: dict[str, Any]) -> FailoverSettings:
+    """Build `failover:` explicitly (not the generic `_build`) so the YAML list
+    `round_backoff_s` is normalised to a tuple — keeping the frozen settings
+    hashable/immutable. All keys are present (bundled defaults ◇ operator)."""
+    return FailoverSettings(
+        ttft_timeout_s=d["ttft_timeout_s"],
+        cooldown_s=d["cooldown_s"],
+        idle_timeout_s=d["idle_timeout_s"],
+        num_retries=d["num_retries"],
+        round_backoff_s=tuple(d["round_backoff_s"]),
+        total_deadline_s=d["total_deadline_s"],
     )
