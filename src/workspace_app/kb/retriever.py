@@ -239,6 +239,7 @@ class Retriever:
         enhancements: Enhancements | None = None,
         location: LocationFilter | None = None,
         overlay: Overlay | None = None,
+        depth: int | None = None,
     ) -> list[RetrievedPassage]:
         """`enhancements` is the per-call override: any field set to a
         concrete value wins over the operator default for that knob,
@@ -256,7 +257,16 @@ class Retriever:
         stored chunks are dropped and the supplied virtual chunks added, so a
         findability preview ranks as if the doc were re-parsed — no reindex. When
         set, the dense order is recomputed in-memory (same cosine metric);
-        everything else runs unchanged over the overlaid chunk set."""
+        everything else runs unchanged over the overlaid chunk set.
+
+        `depth` (#328) widens the result: when set, the candidate pool and the
+        MMR window grow to `depth` and the full ranked passage list (up to
+        `depth`) is returned instead of the `top_k` slice — the findability probe
+        reads where a doc's chunk ranks beyond the 5 a user normally sees. `None`
+        (the default) is byte-for-byte the previous behaviour."""
+        cand = depth if depth is not None else self._candidates
+        mmr_k = depth if depth is not None else self._top_k * 3
+        limit = depth if depth is not None else self._top_k
         loc = location if location is not None and not location.is_empty() else None
         chunks = self._load_chunks(collection_ids, loc)  # {chunk_id: DocChunk}
         if overlay is not None:
@@ -360,7 +370,7 @@ class Retriever:
                     )
 
         fused_score = rrf_scores(ranked_lists)
-        fused = sorted(fused_score, key=lambda key: (-fused_score[key], key))[: self._candidates]
+        fused = sorted(fused_score, key=lambda key: (-fused_score[key], key))[:cand]
 
         # RRF order → descending relevance scores; MMR for diversity (cosine of
         # the stored chunk vectors as the similarity).
@@ -375,7 +385,7 @@ class Retriever:
             similarity=lambda a, b: (
                 1.0 - cosine_distance(_chunk_vec(chunks[a]), _chunk_vec(chunks[b]))
             ),
-            k=self._top_k * 3,
+            k=mmr_k,
         )
 
         # #105: second-phase document-quality prior. Recall (RRF + MMR above) is
@@ -414,7 +424,7 @@ class Retriever:
             assert self._llm is not None
             step("\n↻ rerank\n")
             passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
-        return passages[: self._top_k]
+        return passages[:limit]
 
     def _apply_quality_prior(
         self,

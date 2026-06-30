@@ -78,4 +78,4 @@ badge/sort. Revisit once the prompt-tuning loop proves useful.
 
 ## Progress
 
-- [x] P1  - [x] P2  - [ ] P3  - [ ] P4  - [ ] P5  - [ ] P6  - [ ] P7
+- [x] P1  - [x] P2  - [x] P3  - [ ] P4  - [ ] P5  - [ ] P6  - [ ] P7
