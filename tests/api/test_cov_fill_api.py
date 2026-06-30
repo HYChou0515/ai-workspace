@@ -120,11 +120,13 @@ def _bare_kb_app(spec) -> FastAPI:
     from workspace_app.api.kb_routes import register_kb_routes
     from workspace_app.kb.index_coordinator import IndexCoordinator
     from workspace_app.kb.ingest import Ingestor
+    from workspace_app.kb.retriever import Retriever
 
+    embedder = HashEmbedder(dim=EMBED_DIM)
     ingestor = Ingestor(
         spec,
         chunker=FixedTokenChunker(max_tokens=8, overlap_tokens=2),
-        embedder=HashEmbedder(dim=EMBED_DIM),
+        embedder=embedder,
     )
     index_coordinator = IndexCoordinator(spec, ingestor)
     app = FastAPI()
@@ -134,6 +136,7 @@ def _bare_kb_app(spec) -> FastAPI:
         ingestor,
         None,  # ← no wiki coordinator
         index_coordinator=index_coordinator,
+        retriever=Retriever(spec, embedder=embedder),
         get_user_id=lambda: "u",
     )
     return app

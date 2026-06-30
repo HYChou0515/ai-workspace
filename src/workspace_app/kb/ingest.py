@@ -636,7 +636,7 @@ class Ingestor:
                         # `guidance` (#328) is the parallel opt-in bridge — the
                         # collection's parser_guidance appended to a prompt-driven
                         # parser's base prompt. Same dict-unpack discipline.
-                        **self._guidance_kwargs(parser, guidance),  # ty: ignore[invalid-argument-type]
+                        **self._guidance_kwargs(parser, guidance),
                     )
                 )
                 for d in docs:
@@ -777,7 +777,7 @@ class Ingestor:
                         filename=doc.path,
                         mime=mime,
                         **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
-                        **self._guidance_kwargs(parser, guidance),  # ty: ignore[invalid-argument-type]
+                        **self._guidance_kwargs(parser, guidance),
                     )
                 )
                 for d in docs:
@@ -883,7 +883,7 @@ class Ingestor:
                     unit_range=unit_range,
                     # opt-in config + guidance bridges — see the other parse site.
                     **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
-                    **self._guidance_kwargs(parser, guidance),  # ty: ignore[invalid-argument-type]
+                    **self._guidance_kwargs(parser, guidance),
                 )
             )
             for d in docs:

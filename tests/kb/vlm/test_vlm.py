@@ -111,12 +111,12 @@ def test_describer_appends_collection_guidance_after_the_base_prompt():
 def test_describer_empty_guidance_leaves_the_prompt_unchanged():
     """Blank guidance (the default / a collection that set none) ⇒ the prompt is
     byte-for-byte the base template — no trailing separator, no behaviour change."""
-    base = VlmDescriber(FakeVlm())
-    base.describe(b"img", "image/png")
-    plain = str(base._vlm.calls[0]["prompt"])  # type: ignore[attr-defined]
-    g = VlmDescriber(FakeVlm())
-    g.describe(b"img", "image/png", guidance="")
-    assert str(g._vlm.calls[0]["prompt"]) == plain  # type: ignore[attr-defined]
+    v1 = FakeVlm()
+    VlmDescriber(v1).describe(b"img", "image/png")
+    plain = str(v1.calls[0]["prompt"])
+    v2 = FakeVlm()
+    VlmDescriber(v2).describe(b"img", "image/png", guidance="")
+    assert str(v2.calls[0]["prompt"]) == plain
 
 
 def test_describer_runs_formatter_stage_when_wired():
