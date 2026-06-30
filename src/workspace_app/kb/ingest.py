@@ -527,6 +527,23 @@ class Ingestor:
             doc_overrides=doc.parser_config_overrides,
         )
 
+    def _parse_guidance_for(self, collection_id: str) -> str:
+        """The collection's ``parser_guidance`` (#328) — appended to every
+        prompt-driven parser's base prompt. Empty ``""`` (the default) ⇒ the
+        ingestor never threads ``guidance`` (zero-churn for parsers/collections
+        that don't use it)."""
+        coll = self._spec.get_resource_manager(Collection).get(collection_id).data
+        assert isinstance(coll, Collection)
+        return coll.parser_guidance
+
+    @staticmethod
+    def _guidance_kwargs(parser: IParser, guidance: str) -> dict[str, str]:
+        """The opt-in ``guidance`` bridge — passed to ``parse`` only when this
+        parser consumes guidance AND the collection set some. Mirrors the
+        ``config`` bridge: the kwarg is off the IParser ABC, so knob-less /
+        non-LLM parsers never see it."""
+        return {"guidance": guidance} if guidance and parser.uses_guidance() else {}
+
     def _index(self, collection_id: str, doc_id: str, path: str, data: bytes) -> _IndexOutput:
         """(Re)build a doc's chunks. Returns the converter ``text`` (persisted on
         SourceDoc.text) + the doc's browser-preview Binary (pipeline mode only)."""
@@ -597,6 +614,7 @@ class Ingestor:
         # the inline text/code packet (parser_id="") is the fallback for
         # plain text no parser claims.
         packets: list[tuple[str, list[Document]]] = []
+        guidance = self._parse_guidance_for(collection_id)
         with MaterialisedParserInput(data, filename=path) as source:
             parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
             for parser in parsers:
@@ -615,6 +633,10 @@ class Ingestor:
                         # when this parser declared config_fields, i.e. it accepts
                         # the kwarg — the dict-unpack is the intentional bridge.
                         **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
+                        # `guidance` (#328) is the parallel opt-in bridge — the
+                        # collection's parser_guidance appended to a prompt-driven
+                        # parser's base prompt. Same dict-unpack discipline.
+                        **self._guidance_kwargs(parser, guidance),
                     )
                 )
                 for d in docs:
@@ -665,8 +687,34 @@ class Ingestor:
         can advance the offset. ``deterministic`` (#227) mints chunk ids from
         ``(doc_id, seq)`` so a redelivered fan-out process job OVERWRITES its
         slice instead of duplicating it; the single-job path keeps auto ids."""
-        assert self._pipeline is not None  # only the pipeline path emits packets
         chrm = self._spec.get_resource_manager(DocChunk)
+        chunks = self._build_chunks(
+            collection_id, doc_id, parser_id, docs, seq_base=seq_base, use_alt=use_alt
+        )
+        for chunk in chunks:
+            if deterministic:
+                chrm.create_or_update(chunk_id(doc_id, chunk.seq), chunk)
+            else:
+                chrm.create(chunk)
+        return len(chunks)
+
+    def _build_chunks(
+        self,
+        collection_id: str,
+        doc_id: str,
+        parser_id: str,
+        docs: list[Document],
+        *,
+        seq_base: int,
+        use_alt: bool,
+    ) -> list[DocChunk]:
+        """Split + embed a parser packet's Documents into ``DocChunk`` objects,
+        numbering ``seq`` from ``seq_base`` — but NOT persisted. The shared core
+        of ``_emit_packet`` (which persists them) and the #328 dry-run re-parse
+        (``dry_run_chunks``, which hands them to the retriever Overlay), so the
+        preview ranks on chunks built by the exact same split + embed as the real
+        index (no drift)."""
+        assert self._pipeline is not None  # only the pipeline path builds chunks
         nodes = self._pipeline.run(documents=docs, show_progress=False)
         alt_vecs: list[list[float]] | None = None
         if use_alt:
@@ -674,27 +722,83 @@ class Ingestor:
                 "Collection has embedder_id != 0 but no code_embedder was wired"
             )
             alt_vecs = self._code_embedder.embed_documents([n.get_content() for n in nodes])
+        out: list[DocChunk] = []
         for i, n in enumerate(nodes):
             start = n.start_char_idx if n.start_char_idx is not None else 0
             end = n.end_char_idx if n.end_char_idx is not None else len(n.get_content())
-            seq = seq_base + i
-            chunk = DocChunk(
-                collection_id=collection_id,
-                source_doc_id=doc_id,
-                seq=seq,
-                start=start,
-                end=end,
-                text=n.get_content(),
-                embedding=None if use_alt else (n.embedding or None),
-                embedding_alt=alt_vecs[i] if (use_alt and alt_vecs is not None) else None,
-                parser_id=parser_id,
-                provenance=_collect_provenance(n.metadata),
+            out.append(
+                DocChunk(
+                    collection_id=collection_id,
+                    source_doc_id=doc_id,
+                    seq=seq_base + i,
+                    start=start,
+                    end=end,
+                    text=n.get_content(),
+                    embedding=None if use_alt else (n.embedding or None),
+                    embedding_alt=alt_vecs[i] if (use_alt and alt_vecs is not None) else None,
+                    parser_id=parser_id,
+                    provenance=_collect_provenance(n.metadata),
+                )
             )
-            if deterministic:
-                chrm.create_or_update(chunk_id(doc_id, seq), chunk)
-            else:
-                chrm.create(chunk)
-        return len(nodes)
+        return out
+
+    def dry_run_chunks(self, doc_id: str, *, guidance: str) -> tuple[list[DocChunk], str]:
+        """#328 findability dry-run: re-parse ONE doc with a CANDIDATE
+        ``parser_guidance`` and return the (NOT persisted) virtual ``DocChunk``s
+        + the re-joined canonical text their offsets index into. The retriever
+        ``Overlay`` feeds these in (this doc's stored chunks shadowed) so the
+        modal previews "if I re-parsed this doc with THIS guidance, would its
+        chunks rank better?" — without touching the index.
+
+        Reuses the real parse + split + embed (``_build_chunks``) so the preview
+        can't drift from production. ``guidance`` is the modal's candidate; it
+        overrides the collection's stored ``parser_guidance`` for this preview
+        only. The branching mirrors ``_index_via_pipeline`` (parser packets, then
+        the inline text/code fallback) minus persistence / preview / status."""
+        assert self._pipeline is not None  # dry-run is a pipeline-mode feature
+        drm = self._spec.get_resource_manager(SourceDoc)
+        doc = drm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        raw = drm.restore_binary(doc).content.data
+        assert isinstance(raw, bytes)
+        mime = magic.from_buffer(raw, mime=True)
+        is_code = any(doc.path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
+        use_alt = self._should_use_alt_embedder(doc.collection_id)
+        packets: list[tuple[str, list[Document]]] = []
+        with MaterialisedParserInput(raw, filename=doc.path) as source:
+            parsers = self._parser_registry.all_matching(
+                filename=doc.path, mime=mime, source=source
+            )
+            for parser in parsers:
+                cfg = self._parse_config_for(parser, collection_id=doc.collection_id, doc_id=doc_id)
+                docs = list(
+                    parser.parse(
+                        source,
+                        filename=doc.path,
+                        mime=mime,
+                        **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
+                        **self._guidance_kwargs(parser, guidance),
+                    )
+                )
+                for d in docs:
+                    d.metadata.setdefault("filename", doc.path)
+                    d.metadata.setdefault("mime", mime)
+                packets.append((type(parser).__name__, docs))
+        if not packets and (mime in _TEXT_MIMES or is_code):
+            text = normalize_text(raw.decode("utf-8", errors="replace"))
+            packets.append(
+                ("", [Document(text=text, metadata={"filename": doc.path, "mime": mime})])
+            )
+        virtual_text = "\n\n".join(d.text for _, docs in packets for d in docs).strip()
+        chunks: list[DocChunk] = []
+        seq_offset = 0
+        for parser_id, docs in packets:
+            built = self._build_chunks(
+                doc.collection_id, doc_id, parser_id, docs, seq_base=seq_offset, use_alt=use_alt
+            )
+            chunks.extend(built)
+            seq_offset += len(built)
+        return chunks, virtual_text
 
     def _should_use_alt_embedder(self, collection_id: str) -> bool:
         """Return True iff the Collection's `embedder_id` selects the alt
@@ -765,6 +869,7 @@ class Ingestor:
             assert len(parsers) == 1, "fanout_units guarantees a single parser"
             parser = parsers[0]
             cfg = self._parse_config_for(parser, collection_id=doc.collection_id, doc_id=doc_id)
+            guidance = self._parse_guidance_for(doc.collection_id)
             docs = list(
                 parser.parse(
                     source,
@@ -776,8 +881,9 @@ class Ingestor:
                     # FE reads real progress from IndexRun.units_done/total instead.
                     on_progress=None,
                     unit_range=unit_range,
-                    # opt-in config bridge — see the note at the other parse site.
+                    # opt-in config + guidance bridges — see the other parse site.
                     **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
+                    **self._guidance_kwargs(parser, guidance),
                 )
             )
             for d in docs:

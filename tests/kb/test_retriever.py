@@ -52,6 +52,33 @@ def test_hybrid_search_surfaces_the_keyword_matching_document(
     assert "reflow" in passages[0].text
 
 
+def test_depth_returns_ranks_beyond_top_k(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#328: search(depth=N) widens the internal candidate / MMR caps and returns
+    the full ranked passage list (up to N) instead of the top_k slice — so the
+    findability probe can see where a doc's chunk lands beyond the 5 a user
+    normally sees. depth=None is byte-for-byte the current behaviour."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    for i in range(8):
+        ing.ingest(
+            collection_id=cid,
+            user="u",
+            filename=f"d{i}.md",
+            data=f"solder void analysis report number {i}".encode(),
+        )
+    r = Retriever(spec, embedder=embedder)  # top_k defaults to 5
+    shallow = r.search("solder void", [cid])
+    deep = r.search("solder void", [cid], depth=8)
+    assert len(shallow) == 5  # the user-facing top_k slice
+    assert len(deep) == 8  # every matching doc ranked, beyond the top 5
+    # depth=None inherits the default slice exactly.
+    assert [p.document_id for p in r.search("solder void", [cid], depth=None)] == [
+        p.document_id for p in shallow
+    ]
+
+
 def test_overlay_swaps_a_docs_chunks_for_virtual_ones(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

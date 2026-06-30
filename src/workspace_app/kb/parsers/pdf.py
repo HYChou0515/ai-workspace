@@ -115,6 +115,7 @@ def pdf_pages_to_documents(
     parser_label: str = "PdfParser",
     page_word: str = "page",
     page_range: tuple[int, int] | None = None,
+    guidance: str = "",
 ) -> list[Document]:
     """One Document per page: text layer + (selectively) VLM markdown.
 
@@ -152,7 +153,7 @@ def pdf_pages_to_documents(
                 on_progress(f"{parser_label}: {page_word} {i + 1}/{total} → VLM")
             png = _render_page_png(data, i)
             vlm_md = describer.describe(
-                png, "image/png", context=f"{page_word} {i + 1} of {filename}"
+                png, "image/png", context=f"{page_word} {i + 1} of {filename}", guidance=guidance
             )
         body = "\n\n".join(part for part in (text, vlm_md) if part)
         if not body:
@@ -191,6 +192,9 @@ class PdfParser(IParser):
     def matches(self, *, filename: str, mime: str, source: IParserInput) -> bool:
         return mime == "application/pdf" or filename.lower().endswith(".pdf")
 
+    def uses_guidance(self) -> bool:
+        return True
+
     def count_units(self, source: IParserInput, *, filename: str, mime: str) -> int:
         """Page count (#227) — cheap: pypdf reads the page tree without
         rendering or extracting text, so the splitter can size the fan-out
@@ -208,6 +212,7 @@ class PdfParser(IParser):
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
         unit_range: tuple[int, int] | None = None,
+        guidance: str = "",
     ) -> list[Document]:
         return pdf_pages_to_documents(
             source.as_bytes(),
@@ -217,4 +222,5 @@ class PdfParser(IParser):
             on_progress=on_progress,
             sparse_text_threshold=self._sparse_text_threshold,
             page_range=unit_range,
+            guidance=guidance,
         )

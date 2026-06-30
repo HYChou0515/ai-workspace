@@ -440,12 +440,27 @@ def create_app(
     if sanity_coordinator is not None:
         register_sanity_routes(api, sanity_models or [], sanity_coordinator)
     app.state.sanity_coordinator = sanity_coordinator
+    # The chat agent shares the injected runner; its retriever uses the same
+    # embedder as ingestion so query and document vectors are comparable.
+    # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
+    # Built BEFORE register_kb_routes so the findability probe (#328) can rank a
+    # doc through the real hybrid pipeline.
+    kb_retriever = Retriever(
+        spec,
+        embedder=embedder,
+        llm=kb_llm,
+        code_embedder=kb_code_embedder,
+        enhancement_defaults=kb_retrieval_enhancements,
+        quality_weight=kb_quality_weight,
+        quality_floor=kb_quality_floor,
+    )
     register_kb_routes(
         api,
         spec,
         ingestor,
         wiki_coordinator,
         index_coordinator=index_coordinator,
+        retriever=kb_retriever,
         get_user_id=get_user_id,
         superusers=superusers,
     )
@@ -457,18 +472,6 @@ def create_app(
     from .help_routes import register_help_routes
 
     register_help_routes(api, spec)
-    # The chat agent shares the injected runner; its retriever uses the same
-    # embedder as ingestion so query and document vectors are comparable.
-    # When a KB llm is wired, the retriever gains multi-query + HyDE + rerank.
-    kb_retriever = Retriever(
-        spec,
-        embedder=embedder,
-        llm=kb_llm,
-        code_embedder=kb_code_embedder,
-        enhancement_defaults=kb_retrieval_enhancements,
-        quality_weight=kb_quality_weight,
-        quality_floor=kb_quality_floor,
-    )
     # One turn engine drives the RCA workspace; one cancellable in-flight turn
     # per conversation, SSE streaming, cancel hook.
     turn_engine = ChatTurnEngine(runner)

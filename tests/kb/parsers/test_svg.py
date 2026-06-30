@@ -71,6 +71,12 @@ def test_svg_parser_matches_svg_only():
     assert p.matches(filename="d.png", mime="image/png", source=_input(b"x", "d.png")) is False
 
 
+def test_svg_parser_uses_guidance():
+    """#328: SVG is a VLM-described type, so it consumes the collection guidance."""
+    _, d = _describer()
+    assert SvgParser(d).uses_guidance() is True
+
+
 def test_svg_parser_rasterizes_then_describes_via_vlm():
     vlm, d = _describer()
     p = SvgParser(d)

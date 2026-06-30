@@ -36,6 +36,9 @@ class VlmImageParser(IParser):
             return False
         return mime in _IMAGE_MIMES or filename.lower().endswith(_IMAGE_EXTENSIONS)
 
+    def uses_guidance(self) -> bool:
+        return True
+
     def parse(
         self,
         source: IParserInput,
@@ -45,6 +48,7 @@ class VlmImageParser(IParser):
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
         unit_range: tuple[int, int] | None = None,
+        guidance: str = "",
     ) -> list[Document]:
         from llama_index.core.schema import Document
 
@@ -55,6 +59,7 @@ class VlmImageParser(IParser):
             source.as_bytes(),
             mime if mime in _IMAGE_MIMES else "image/png",
             context=f"the uploaded image {filename}",
+            guidance=guidance,
         )
         # content_format flags the text as Markdown so DispatchSplitter routes
         # it through the heading-aware Markdown path (issue #115) — the source

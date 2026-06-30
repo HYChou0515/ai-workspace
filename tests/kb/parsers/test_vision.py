@@ -139,6 +139,24 @@ def test_image_parser_one_image_one_document_via_vlm():
     assert any("wafer.png" in m for m in progress)
 
 
+def test_image_parser_uses_guidance_and_threads_it_to_the_vlm():
+    """#328: a VLM parser declares ``uses_guidance()`` True and threads the
+    collection's ``parser_guidance`` into the describe prompt, so the operator's
+    per-collection extraction steering reaches the VLM at parse time."""
+    vlm, d = _describer()
+    p = VlmImageParser(d)
+    assert p.uses_guidance() is True
+    list(
+        p.parse(
+            _input(_MIN_PNG, "wafer.png"),
+            filename="wafer.png",
+            mime="image/png",
+            guidance="A fishbone diagram -> emit JSON.",
+        )
+    )
+    assert "A fishbone diagram -> emit JSON." in str(vlm.calls[0]["prompt"])
+
+
 def test_image_parser_tags_document_as_markdown_content():
     """Issue #115: the VLM emits Markdown, but the source mime is image/png.
     The parser flags the output `content_format='markdown'` so DispatchSplitter
@@ -236,7 +254,32 @@ def test_pdf_matches_with_or_without_vlm():
     assert not p.matches(filename="a.txt", mime="text/plain", source=_input(b"x", "a.txt"))
 
 
+def test_pdf_parser_threads_guidance_into_the_vlm_describe():
+    """#328: a PDF's visual pages run through the VLM describe path, so the
+    collection's parser_guidance must reach that prompt (slides reuse the SAME
+    pdf_pages_to_documents helper, so this covers both)."""
+    vlm, d = _describer()
+    p = PdfParser(d)
+    assert p.uses_guidance() is True
+    list(
+        p.parse(
+            _input(_SPARSE_PDF, "deck.pdf"),
+            filename="deck.pdf",
+            mime="application/pdf",
+            guidance="A fishbone diagram -> emit JSON.",
+        )
+    )
+    assert any("A fishbone diagram -> emit JSON." in str(c["prompt"]) for c in vlm.calls)
+
+
 # ── PptxParser ───────────────────────────────────────────────────────
+
+
+def test_pptx_uses_guidance():
+    """PPTX is the user's headline case (slides → VLM → chunks); it threads the
+    collection guidance through the shared pdf-page helper."""
+    _, d = _describer()
+    assert PptxParser(d).uses_guidance() is True
 
 
 def test_pptx_matches_by_extension_or_office_mime():

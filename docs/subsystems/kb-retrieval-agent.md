@@ -132,8 +132,11 @@ flowchart TD
 !!! note "per-message kb_search 次數上限（#334）"
     composer picker 經 `max_kb_searches` 請求欄位（KB 聊天 `_MsgBody` 與 app 回合 `_MessageBody` 兩個 body 都有）帶進來；`resolve_max_searches(requested, default=, ceiling=)` 把它夾到 `[0, kb.max_searches_ceiling]`，沒帶（`None`）時回退 operator 預設 `kb.max_searches_per_turn`（可為 `None`＝不限）。`cap == 0` 代表「這次回覆不搜尋」。一個 app 回合內所有 `ask_knowledge_base` 子 agent **以 reference 共用同一個** `KbSearchBudget`（#334 Q6），由 `ChatSendService` 建好後 threaded `→ SubagentBridge.run(budget=) → answer_question`；`infer_modules`／workflows 不共用，各自拿一個 operator-default 的新 budget。
 
-!!! note "retriever overlay 是預覽接縫（#328，尚無生產 caller）"
-    `Retriever.search(overlay=Overlay(virtual_chunks, shadow_doc_id, virtual_text))` 是乾跑的候選集替換：把被影子的文件（`shadow_doc_id`）已存的 chunk 從候選集**移除**、把未持久化的 `virtual_chunks` 加入，再用**同一條** hybrid 管線（BM25／MMR／#105 品質先驗／parent-merge／rerank）重跑，所以預覽不會漂移。唯一 overlay-specific 的步驟是 dense 排序改走 `_dense`／`_dense_order_mem`（in-memory cosine over 覆寫後的集合，與 store 同樣的 specstar `cosine_distance` metric）、以及 merge 對被影子文件改切 `overlay.virtual_text`。不 reindex、不持久化任何東西。目前只有測試呼叫，findability modal 還在 #328 P3+。
+!!! note "retriever overlay 是預覽接縫（#328）"
+    `Retriever.search(overlay=Overlay(virtual_chunks, shadow_doc_id, virtual_text))` 是乾跑的候選集替換：把被影子的文件（`shadow_doc_id`）已存的 chunk 從候選集**移除**、把未持久化的 `virtual_chunks` 加入，再用**同一條** hybrid 管線（BM25／MMR／#105 品質先驗／parent-merge／rerank）重跑，所以預覽不會漂移。唯一 overlay-specific 的步驟是 dense 排序改走 `_dense`／`_dense_order_mem`（in-memory cosine over 覆寫後的集合，與 store 同樣的 specstar `cosine_distance` metric）、以及 merge 對被影子文件改切 `overlay.virtual_text`。不 reindex、不持久化任何東西。
+
+!!! note "findability 探測（#328 P3–P7）= prompt 調校 playground"
+    痛點：「怎麼給 AI 一個好的 prompt 讓它生出好 chunk」。`Collection.parser_guidance`（non-indexed，免 migration，第 5 個 per-collection prompt，append 到每個 prompt-driven parser 的 base prompt——VLM describer 系列）讓你下一段抽取引導（例：魚骨圖→JSON、表格→md）。`IParser.uses_guidance()` 宣告誰吃它；ingestor 兩處 parse site 都串。`POST /kb/findability/probe`（`kb/findability.py probe_findability`，唯讀）對一句代表性問題報告這份 doc 的 chunk 在真實 retriever 裡排第幾（`before`，用 `search(depth=N)` 撈深、不只 top-5）；給候選 guidance 時，`Ingestor.dry_run_chunks` 不落地重 parse 這**一**份 doc（重用同一條 parse+split+embed），再經 `Overlay` 撈深排名（`after`，其餘 collection 不動）。只看 rank（無 hit@k/MRR/分數）；FE `FindabilityModal` 從 KbDocIde 狀態列開，改 prompt 即時比 before/after，「Apply」才寫 `parser_guidance`（specstar 原生 PATCH）。自動逐 chunk 出題計分（#333 批次）刻意延後。
 
 !!! warning "每次 `ask_knowledge_base` 必須剛好 append 一筆 bucket"
     引用依工具名 bucket（`subagent_citations['ask_knowledge_base']`），persist 時把第 N 筆 bucket 對到第 N 個同名 tool message。所有早退路徑（無 tier、rank 越界）都必須 `bucket.append([])`，否則配對會漂移。

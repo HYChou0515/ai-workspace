@@ -12,7 +12,7 @@
  */
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { FileServiceProvider } from "../../api/fileService";
@@ -32,6 +32,7 @@ import { useT } from "../../lib/i18n";
 import { FileView } from "../../renderers/FileView";
 import { hasEditToggle, pickRenderer } from "../../renderers/registry";
 import { FileTree } from "../investigation/FileTree";
+import { FindabilityModal } from "./FindabilityModal";
 import { docHref } from "./kbLinks";
 import { QualityBadge } from "./QualityBadge";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
@@ -121,6 +122,8 @@ export function KbDocIde({
         : false,
   });
   const docs = useMemo(() => docsQuery.data ?? [], [docsQuery.data]);
+  // #328: the doc whose findability probe modal is open (null = closed).
+  const [probeDoc, setProbeDoc] = useState<KbDocument | null>(null);
   const refetch = useCallback(() => {
     void qc.invalidateQueries({ queryKey: qk.kb.documents(collectionId) });
   }, [qc, collectionId]);
@@ -259,7 +262,26 @@ export function KbDocIde({
                   )}
                 </div>
               </div>
-              <KbStatusBar doc={activePath ? docByPath.get(activePath) : undefined} />
+              <KbStatusBar
+                doc={activePath ? docByPath.get(activePath) : undefined}
+                onProbe={
+                  activePath
+                    ? () => {
+                        const d = docByPath.get(activePath);
+                        if (d) setProbeDoc(d);
+                      }
+                    : undefined
+                }
+              />
+              {probeDoc && (
+                <FindabilityModal
+                  collectionId={collectionId}
+                  docId={probeDoc.resource_id}
+                  docPath={probeDoc.path}
+                  onClose={() => setProbeDoc(null)}
+                  client={client}
+                />
+              )}
             </div>
           </DialogProvider>
         </EditModeProvider>
@@ -276,7 +298,7 @@ function fmtBytes(n: number): string {
 
 /** VSCode-style bottom status bar: the open doc's path + index status, plus the
  * per-doc chunks / cited / size that used to live in the table column. */
-function KbStatusBar({ doc }: { doc?: KbDocument }) {
+function KbStatusBar({ doc, onProbe }: { doc?: KbDocument; onProbe?: () => void }) {
   const t = useT();
   if (!doc) {
     return <div className="kb-ide__status kb-ide__status--empty" data-testid="kb-ide-status" />;
@@ -320,6 +342,18 @@ function KbStatusBar({ doc }: { doc?: KbDocument }) {
         )
       )}
       <span className="kb-ide__status-state">{status}</span>
+      {onProbe && doc.status === "ready" && (
+        // #328: open the findability probe for this doc — type a question, see
+        // where its chunks rank, tune the parser guidance, re-parse to compare.
+        <button
+          type="button"
+          className="kb-ide__status-probe"
+          onClick={onProbe}
+          title="Probe how findable this document is, and tune the parser guidance"
+        >
+          Findability
+        </button>
+      )}
       {typeof doc.quality_score === "number" && (
         // #105: the AI quality verdict — the coloured grade + a short rationale
         // ("why good/bad"), title-truncated. Only when the doc has been judged.

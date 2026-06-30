@@ -53,6 +53,9 @@ class PptxParser(IParser):
         # office mime or bare application/zip; extension is reliable.
         return mime == _PPTX_MIME or filename.lower().endswith(".pptx")
 
+    def uses_guidance(self) -> bool:
+        return True
+
     def parse(
         self,
         source: IParserInput,
@@ -62,6 +65,7 @@ class PptxParser(IParser):
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
         unit_range: tuple[int, int] | None = None,
+        guidance: str = "",
     ) -> list[Document]:
         soffice = _find_soffice()
         if soffice is None:
@@ -98,4 +102,5 @@ class PptxParser(IParser):
             sparse_text_threshold=self._sparse_text_threshold,
             parser_label="PptxParser",
             page_word="slide",
+            guidance=guidance,
         )

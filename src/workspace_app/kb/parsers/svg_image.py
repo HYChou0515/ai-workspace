@@ -151,6 +151,9 @@ class SvgParser(IParser):
             return False
         return mime == _SVG_MIME or filename.lower().endswith(".svg")
 
+    def uses_guidance(self) -> bool:
+        return True
+
     def parse(
         self,
         source: IParserInput,
@@ -160,6 +163,7 @@ class SvgParser(IParser):
         on_progress: Callable[[str], None] | None = None,
         on_preview: Callable[[bytes, str], None] | None = None,
         unit_range: tuple[int, int] | None = None,
+        guidance: str = "",
     ) -> list[Document]:
         from llama_index.core.schema import Document
 
@@ -176,7 +180,7 @@ class SvgParser(IParser):
             on_progress(f"SvgParser: describing {filename}")
         try:
             text = self._describer.describe(
-                png, "image/png", context=f"the uploaded SVG image {filename}"
+                png, "image/png", context=f"the uploaded SVG image {filename}", guidance=guidance
             )
         except Exception as exc:  # noqa: BLE001 — VLM choke on a featureless SVG → 0 chunks
             _LOGGER.warning("SvgParser: VLM describe failed for %s: %s", filename, exc)
