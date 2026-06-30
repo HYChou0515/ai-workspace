@@ -301,16 +301,16 @@ class WikiMaintenanceCoordinator:
                 )
             )
 
-    async def enqueue_code_sync(
-        self, collection_id: str, *, requested_by: str | None = None
-    ) -> None:
+    def enqueue_code_sync(self, collection_id: str, *, requested_by: str | None = None) -> None:
         """#355: enqueue a ``code_sync`` job — clone the collection's git_url +
         ingest it (on the wiki worker, off the API), then chain into the code
         build. This is what the /sync route and the daily sweeper call instead of
         running the (multi-minute) clone+ingest inline. Returns immediately; the
-        work happens in the background consumer. No-op unless the collection is a
-        code collection (has a ``git_url``); coalesces onto any sync/build already
-        in flight (``partition_key`` = the collection id, so it also serialises)."""
+        work happens in the background consumer. Synchronous (a pure specstar
+        enqueue, no awaiting) so the sweeper's ``tick`` thread can call it
+        directly. No-op unless the collection is a code collection (has a
+        ``git_url``); coalesces onto any sync/build already in flight
+        (``partition_key`` = the collection id, so it also serialises)."""
         try:
             coll = self._coll_rm.get(collection_id).data
         except ResourceIDNotFoundError:

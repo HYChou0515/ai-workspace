@@ -242,8 +242,8 @@ def test_splice_token_returns_url_untouched_for_non_http_schemes():
 
 
 def test_sync_raises_when_clone_fails(spec: SpecStar, tmp_path: Path):
-    """A bogus URL (no remote, no creds) bubbles a typed
-    `CodeRepoSyncError` so the API layer can return a clean 502."""
+    """A bogus URL (no remote, no creds) bubbles a typed `CodeRepoSyncError`
+    so the code_sync job can record it as the build's last_error."""
     bogus = (tmp_path / "does-not-exist").as_uri()
     cid = _new_code_collection(spec, bogus)
     embedder = HashEmbedder(dim=EMBED_DIM)
@@ -251,3 +251,19 @@ def test_sync_raises_when_clone_fails(spec: SpecStar, tmp_path: Path):
     repo = CodeRepoIngestor(spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder))
     with pytest.raises(CodeRepoSyncError):
         repo.sync(collection_id=cid, user="alice")
+
+
+def test_sync_stamps_pulled_at_even_on_failure(spec: SpecStar, tmp_path: Path):
+    """#355: a failed clone still stamps git_last_pulled_at (keeping git_last_sha
+    unchanged) so the daily sweeper treats the collection as "tried today" and
+    doesn't re-fire it every tick — no retry storm on a bad remote/token."""
+    bogus = (tmp_path / "does-not-exist").as_uri()
+    cid = _new_code_collection(spec, bogus)
+    embedder = HashEmbedder(dim=EMBED_DIM)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    repo = CodeRepoIngestor(spec, ingestor=Ingestor(spec, pipeline=pipeline, embedder=embedder))
+    with pytest.raises(CodeRepoSyncError):
+        repo.sync(collection_id=cid, user="alice", now_ms=1_700_000)
+    after = spec.get_resource_manager(Collection).get(cid).data
+    assert after.git_last_pulled_at == 1_700_000  # attempt stamped
+    assert after.git_last_sha is None  # but no sha from a failed clone

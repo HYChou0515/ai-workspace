@@ -95,7 +95,7 @@ async def test_code_sync_clones_ingests_and_builds_wiki(spec: SpecStar, remote: 
     build so the wiki pages are written and the run finishes done."""
     cid = _coll(spec, remote, use_wiki=True)
     coord = _coord(spec, llm=_Llm())
-    await coord.enqueue_code_sync(cid)
+    coord.enqueue_code_sync(cid)
     await coord.aclose()  # drains code_sync → code_split → card → finalize
 
     # Ingested: the tracked .py is now a SourceDoc.
@@ -122,7 +122,7 @@ async def test_code_sync_records_clone_failure(spec: SpecStar, tmp_path: Path):
     bogus = (tmp_path / "no-such").as_uri()
     cid = _coll(spec, bogus, use_wiki=True)
     coord = _coord(spec, llm=_Llm())
-    await coord.enqueue_code_sync(cid)
+    coord.enqueue_code_sync(cid)
     await coord.aclose()
 
     run = CodeWikiBuildRunStore(spec).get(cid)
@@ -136,7 +136,7 @@ async def test_code_sync_records_misconfig_when_no_wiki_llm(spec: SpecStar, remo
     records the not-configured error instead of silently building nothing."""
     cid = _coll(spec, remote, use_wiki=True)
     coord = _coord(spec, llm=None)  # no code-wiki LLM wired
-    await coord.enqueue_code_sync(cid)
+    coord.enqueue_code_sync(cid)
     await coord.aclose()
 
     # Ingest still happened.
@@ -154,7 +154,7 @@ async def test_code_sync_on_non_wiki_collection_just_ingests(spec: SpecStar, rem
     and closes the run done without building any wiki pages."""
     cid = _coll(spec, remote, use_wiki=False)
     coord = _coord(spec, llm=_Llm())
-    await coord.enqueue_code_sync(cid)
+    coord.enqueue_code_sync(cid)
     await coord.aclose()
 
     coll = spec.get_resource_manager(Collection).get(cid).data
@@ -169,8 +169,8 @@ async def test_enqueue_code_sync_coalesces(spec: SpecStar, remote: str):
     the active-build coalescing guard)."""
     cid = _coll(spec, remote, use_wiki=True)
     coord = _coord(spec, llm=_Llm())
-    await coord.enqueue_code_sync(cid)
-    await coord.enqueue_code_sync(cid)  # coalesced — no second code_sync queued
+    coord.enqueue_code_sync(cid)
+    coord.enqueue_code_sync(cid)  # coalesced — no second code_sync queued
 
     from specstar import QB
 
@@ -189,8 +189,8 @@ async def test_enqueue_code_sync_noop_for_non_code_collection(spec: SpecStar):
         .resource_id
     )
     coord = _coord(spec, llm=_Llm())
-    await coord.enqueue_code_sync(cid)
-    await coord.enqueue_code_sync("missing-id")  # unknown id → no-op
+    coord.enqueue_code_sync(cid)
+    coord.enqueue_code_sync("missing-id")  # unknown id → no-op
 
     from specstar import QB
 

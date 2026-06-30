@@ -1,61 +1,28 @@
-"""#355 daily auto-sync: CodeRepoSweeper.tick() re-syncs every code Collection
-once a day at a server-local wall-clock time (``daily_sync`` = ``HH:MM``),
-replacing the old per-collection ``sync_interval_hours`` interval.
+"""#355 daily auto-sync: CodeRepoSweeper.tick() enqueues a ``code_sync`` job for
+every code Collection due for its server-local daily wall-clock time
+(``daily_sync`` = ``HH:MM``), replacing the old per-collection
+``sync_interval_hours`` interval.
 
-The sweeper is driven by the app's lifespan loop on ``sync_check_interval_sec``;
-tests call ``tick(now_ms=…)`` directly so we don't have to wait real seconds.
-``now_ms`` is built from a *local* ``datetime`` so the gate's local-time maths
-round-trips identically regardless of the machine's timezone.
+The sweeper is a pure producer — it does NOT clone (the enqueued job does, on
+the wiki worker). Tests inject a fake ``enqueue`` to observe which collections it
+fires for, and call ``tick(now_ms=…)`` directly. ``now_ms`` is built from a
+*local* ``datetime`` so the gate's local-time maths round-trips identically
+regardless of the machine's timezone.
 """
 
 from __future__ import annotations
 
-import subprocess
 from datetime import datetime
-from pathlib import Path
 
 import msgspec
-import pytest
 from specstar import SpecStar
 
 from workspace_app.kb.code_repo import (
-    CodeRepoIngestor,
     CodeRepoSweeper,
     _due_for_daily_sync,
     parse_daily_sync,
 )
-from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.ingest import Ingestor
-from workspace_app.kb.li_pipeline import build_doc_pipeline
-from workspace_app.resources.kb import EMBED_DIM, Collection
-
-
-def _git(cwd: Path, *args: str) -> None:
-    env = {
-        "GIT_AUTHOR_NAME": "Test",
-        "GIT_AUTHOR_EMAIL": "t@t",
-        "GIT_COMMITTER_NAME": "Test",
-        "GIT_COMMITTER_EMAIL": "t@t",
-        "PATH": "/usr/bin:/bin",
-    }
-    subprocess.run(
-        ["git", "-c", "init.defaultBranch=main", *args],
-        cwd=cwd,
-        check=True,
-        env=env,
-        capture_output=True,
-    )
-
-
-@pytest.fixture
-def remote(tmp_path: Path) -> str:
-    work = tmp_path / "r"
-    work.mkdir()
-    (work / "x.py").write_text("def f():\n    return 1\n")
-    _git(work, "init")
-    _git(work, "add", ".")
-    _git(work, "commit", "-m", "i")
-    return work.as_uri()
+from workspace_app.resources.kb import Collection
 
 
 def _ms(dt: datetime) -> int:
@@ -63,12 +30,15 @@ def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
 
-def _make_sweeper(spec: SpecStar, *, daily_sync: str | None = "03:00") -> CodeRepoSweeper:
-    embedder = HashEmbedder(dim=EMBED_DIM)
-    pipeline = build_doc_pipeline(embedder=embedder)
-    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder)
-    return CodeRepoSweeper(
-        spec, code_repo=CodeRepoIngestor(spec, ingestor=ingestor), daily_sync=daily_sync
+def _sweeper(spec: SpecStar, enqueue, *, daily_sync: str | None = "03:00") -> CodeRepoSweeper:
+    return CodeRepoSweeper(spec, enqueue=enqueue, daily_sync=daily_sync)
+
+
+def _code_collection(spec: SpecStar) -> str:
+    return (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="repo", git_url="https://git.example/r.git", embedder_id=1))
+        .resource_id
     )
 
 
@@ -111,82 +81,52 @@ def test_due_gate_off_when_daily_sync_unset():
     assert _due_for_daily_sync(now_ms=at, last_pulled_ms=None, daily_sync="") is False
 
 
-# ── tick integration ──────────────────────────────────────────────────────
+# ── tick: due → enqueue ────────────────────────────────────────────────────
 
 
-def test_tick_syncs_code_collection_due_today(spec: SpecStar, remote: str):
-    """A code collection never synced (git_last_pulled_at=None), past the daily
-    time, is synced once: tick stamps git_last_sha + git_last_pulled_at."""
-    cid = (
-        spec.get_resource_manager(Collection)
-        .create(Collection(name="repo", git_url=remote, embedder_id=1))
-        .resource_id
-    )
-    sweeper = _make_sweeper(spec, daily_sync="03:00")
-    now = _ms(datetime(2026, 1, 2, 3, 5))
-    assert sweeper.tick(now_ms=now) == [cid]
-    after = spec.get_resource_manager(Collection).get(cid).data
-    assert after.git_last_sha and len(after.git_last_sha) == 40
-    assert after.git_last_pulled_at == now
-    # A second tick the same day is a no-op (already pulled after 03:00).
-    assert sweeper.tick(now_ms=now + 60_000) == []
+def test_tick_enqueues_code_collection_due_today(spec: SpecStar):
+    """A code collection never synced, past today's daily time, is enqueued."""
+    cid = _code_collection(spec)
+    enqueued: list[str] = []
+    sweeper = _sweeper(spec, enqueued.append, daily_sync="03:00")
+    assert sweeper.tick(now_ms=_ms(datetime(2026, 1, 2, 3, 5))) == [cid]
+    assert enqueued == [cid]
 
 
-def test_tick_skips_before_daily_time(spec: SpecStar, remote: str):
-    """Before today's daily-sync time, nothing is swept."""
-    spec.get_resource_manager(Collection).create(
-        Collection(name="r", git_url=remote, embedder_id=1)
-    )
-    sweeper = _make_sweeper(spec, daily_sync="03:00")
+def test_tick_skips_before_daily_time(spec: SpecStar):
+    _code_collection(spec)
+    enqueued: list[str] = []
+    sweeper = _sweeper(spec, enqueued.append, daily_sync="03:00")
     assert sweeper.tick(now_ms=_ms(datetime(2026, 1, 2, 1, 0))) == []
+    assert enqueued == []
 
 
-def test_tick_resyncs_next_day(spec: SpecStar, remote: str):
+def test_tick_resyncs_next_day(spec: SpecStar):
     """A collection pulled yesterday is due again past today's daily time."""
     rm = spec.get_resource_manager(Collection)
-    cid = rm.create(Collection(name="r", git_url=remote, embedder_id=1)).resource_id
+    cid = _code_collection(spec)
     coll = rm.get(cid).data
     rm.update(
-        cid,
-        msgspec.structs.replace(
-            coll, git_last_pulled_at=_ms(datetime(2026, 1, 1, 3, 0)), git_last_sha="abc"
-        ),
+        cid, msgspec.structs.replace(coll, git_last_pulled_at=_ms(datetime(2026, 1, 1, 3, 0)))
     )
-    sweeper = _make_sweeper(spec, daily_sync="03:00")
+    enqueued: list[str] = []
+    sweeper = _sweeper(spec, enqueued.append, daily_sync="03:00")
     assert sweeper.tick(now_ms=_ms(datetime(2026, 1, 2, 3, 5))) == [cid]
 
 
-def test_tick_off_when_daily_sync_none(spec: SpecStar, remote: str):
-    """daily_sync=None ⇒ the sweeper never auto-syncs (manual /sync only)."""
-    cid = (
-        spec.get_resource_manager(Collection)
-        .create(Collection(name="m", git_url=remote, embedder_id=1))
-        .resource_id
-    )
-    sweeper = _make_sweeper(spec, daily_sync=None)
+def test_tick_off_when_daily_sync_none(spec: SpecStar):
+    """daily_sync=None ⇒ the sweeper never enqueues (manual /sync only)."""
+    _code_collection(spec)
+    enqueued: list[str] = []
+    sweeper = _sweeper(spec, enqueued.append, daily_sync=None)
     assert sweeper.tick(now_ms=_ms(datetime(2026, 1, 2, 12, 0))) == []
-    assert spec.get_resource_manager(Collection).get(cid).data.git_last_sha is None
+    assert enqueued == []
 
 
 def test_tick_skips_non_code_collections(spec: SpecStar):
     """A plain (no git_url) collection is ignored entirely."""
     spec.get_resource_manager(Collection).create(Collection(name="plain", embedder_id=1))
-    sweeper = _make_sweeper(spec, daily_sync="03:00")
+    enqueued: list[str] = []
+    sweeper = _sweeper(spec, enqueued.append, daily_sync="03:00")
     assert sweeper.tick(now_ms=_ms(datetime(2026, 1, 2, 4, 0))) == []
-
-
-def test_tick_swallows_failure_and_stamps_attempt(spec: SpecStar, tmp_path: Path):
-    """A failing clone is logged + skipped (no crash). The attempt still stamps
-    git_last_pulled_at — so it won't re-fire every tick the same day (#355: no
-    create-time-typo retry storm) — while leaving git_last_sha unchanged."""
-    bogus = (tmp_path / "no-such").as_uri()
-    rm = spec.get_resource_manager(Collection)
-    bad = rm.create(Collection(name="bad", git_url=bogus, embedder_id=1)).resource_id
-    sweeper = _make_sweeper(spec, daily_sync="03:00")
-    now = _ms(datetime(2026, 1, 2, 3, 5))
-    assert sweeper.tick(now_ms=now) == []  # nothing succeeded
-    after = rm.get(bad).data
-    assert after.git_last_sha is None  # sha untouched by a failed clone
-    assert after.git_last_pulled_at == now  # but the attempt was stamped
-    # Same day, a minute later: not due again (no storm).
-    assert sweeper.tick(now_ms=now + 60_000) == []
+    assert enqueued == []

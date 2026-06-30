@@ -164,34 +164,41 @@ class CodeRepoIngestor:
 
 
 class CodeRepoSweeper:
-    """Background-loop helper: every tick, re-sync any code Collection that is
-    due for its daily wall-clock sync (#355).
+    """Background-loop helper: every tick, enqueue a ``code_sync`` job for any
+    code Collection that is due for its daily wall-clock sync (#355).
 
-    `tick()` is what does one pass (caller drives the cadence). Per-collection
-    sync failures are caught + logged so one bad remote never crashes the
-    sweeper. The app's lifespan task awakens every
-    ``Settings.sync_check_interval_sec`` and calls `tick()`.
+    `tick()` is what does one pass (caller drives the cadence). It is a pure
+    *producer*: it does NOT clone/ingest itself (that runs in the enqueued
+    ``code_sync`` job on the wiki worker — #312 keeps heavy work off the API).
+    The app's lifespan task awakens every ``Settings.sync_check_interval_sec``
+    and calls `tick()`.
 
     The schedule is a single server-local time-of-day (``daily_sync``, ``HH:MM``)
     that applies to *every* code collection — there is no per-collection knob.
     The old per-collection ``sync_interval_hours`` interval is no longer read
     (it stays on the model as a dormant field). ``daily_sync=None`` ⇒ the daily
-    auto-sync is off and `tick()` is a no-op (manual POST /sync only)."""
-
-    _DEFAULT_USER = "default-user"  # v1: no auth on the sweeper either
+    auto-sync is off and `tick()` is a no-op (manual POST /sync only). ``enqueue``
+    is the coordinator's ``enqueue_code_sync`` (which coalesces, so a still-running
+    sync isn't re-queued — and the job's own clone stamps ``git_last_pulled_at``
+    even on failure, so a due collection fires at most once a day: no retry
+    storm)."""
 
     def __init__(
-        self, spec: SpecStar, *, code_repo: CodeRepoIngestor, daily_sync: str | None = None
+        self,
+        spec: SpecStar,
+        *,
+        enqueue: Callable[[str], None],
+        daily_sync: str | None = None,
     ) -> None:
         self._spec = spec
-        self._code_repo = code_repo
+        self._enqueue = enqueue
         self._daily_sync = daily_sync
 
     def tick(self, *, now_ms: int | None = None) -> list[str]:
-        """Run one sweep pass. Returns the Collection ids that were
-        successfully synced this tick (skipped + failed ones excluded)."""
+        """Run one sweep pass. Returns the Collection ids a ``code_sync`` was
+        enqueued for this tick (collections not yet due are skipped)."""
         stamp = now_ms if now_ms is not None else int(time.time() * 1000)
-        synced: list[str] = []
+        enqueued: list[str] = []
         rm = self._spec.get_resource_manager(Collection)
         for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
             coll = r.data
@@ -205,20 +212,9 @@ class CodeRepoSweeper:
             ):
                 continue
             cid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            try:
-                self._code_repo.sync(
-                    collection_id=cid,
-                    user=self._DEFAULT_USER,
-                    now_ms=stamp,
-                )
-            except CodeRepoSyncError:
-                # Don't take down the whole sweep over one bad remote. `sync`
-                # still stamped git_last_pulled_at, so the failed collection
-                # won't re-fire until the next day's daily-sync time.
-                logger.exception("code-repo sweeper: sync failed for %s", cid)
-                continue
-            synced.append(cid)
-        return synced
+            self._enqueue(cid)
+            enqueued.append(cid)
+        return enqueued
 
 
 def parse_daily_sync(value: str | None) -> tuple[int, int] | None:

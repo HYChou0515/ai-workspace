@@ -80,34 +80,27 @@ def build_lifespan(
             return
 
     async def code_sync_sweeper(app: FastAPI) -> None:
-        """Re-clone any code Collection whose `sync_interval_hours` has
-        elapsed. The actual clone runs in a worker thread so the loop stays
-        responsive. Per-collection sync failures are caught inside `tick`.
-        ``app`` is passed in (vs captured) so the ingestor — built after the
-        FastAPI app — is read from ``app.state.ingestor`` post-construction,
-        symmetric with ``index_sweeper``'s coordinator lookup."""
-        from ..kb.code_repo import CodeRepoIngestor, CodeRepoSweeper
+        """Enqueue a ``code_sync`` job for every code Collection due for its
+        daily wall-clock sync (#355). The sweeper is a pure producer — the clone +
+        ingest + wiki build all run in the enqueued job on the wiki worker (#312),
+        not here on the API. ``app`` is passed in (vs captured) so the wiki
+        coordinator — built after the FastAPI app — is read from
+        ``app.state.wiki_coordinator`` post-construction, symmetric with
+        ``index_sweeper``'s coordinator lookup."""
+        from ..kb.code_repo import CodeRepoSweeper
 
         assert code_sync_check_interval is not None  # gated by caller
-        ingestor = app.state.ingestor
         sweeper = CodeRepoSweeper(
             spec,
-            code_repo=CodeRepoIngestor(spec, ingestor=ingestor),
+            enqueue=app.state.wiki_coordinator.enqueue_code_sync,
             daily_sync=code_daily_sync,
         )
         try:
             while True:
                 await asyncio.sleep(code_sync_check_interval.total_seconds())
-                synced = await asyncio.to_thread(sweeper.tick)
-                # #281 A0: sweeper.tick re-syncs via code_repo.sync, whose
-                # synchronous ingest bypasses the IndexCoordinator (so
-                # on_doc_indexed never fires). Trigger each re-synced code
-                # collection's wiki build explicitly — wired here in the lifespan
-                # closure (which holds app.state.wiki_coordinator) so code_repo
-                # stays a pure clone+ingest with no wiki dependency. No-op for
-                # collections without git_url + use_wiki.
-                for cid in synced:
-                    await app.state.wiki_coordinator.trigger_code_build(cid)
+                # tick enqueues code_sync jobs; the jobs themselves clone+ingest
+                # and chain into the build (no per-cid trigger needed here).
+                await asyncio.to_thread(sweeper.tick)
         except asyncio.CancelledError:
             return
 

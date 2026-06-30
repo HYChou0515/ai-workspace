@@ -28,7 +28,6 @@ from ..files.zip_download import (
 )
 from ..kb.chunk_counts import doc_chunks_for_ids
 from ..kb.cited import chunk_cited, collection_cited, doc_cited_count, doc_cited_for_ids
-from ..kb.code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..kb.collection_export import (
     build_collection_zip,
     build_kb_subtree_zip,
@@ -412,12 +411,6 @@ def register_kb_routes(
     get_user_id: Callable[[], str],
     superusers: frozenset[str] = frozenset(),
 ) -> None:
-    # The current user (owner), supplied by create_app — stamped as `created_by`
-    # on upload. The doc id is keyed on collection + path only (a path is one
-    # shared doc whoever uploads it), so cross-ref resolution no longer depends
-    # on the user matching.
-    code_repo = CodeRepoIngestor(spec, ingestor=ingestor)
-
     def _collection_out(row, cited: dict[str, int]) -> CollectionOut:
         """Build a card from one ``exp_aggregate_by`` group row: the Collection
         (``row.resource``) plus its per-collection doc aggregates (count / total
@@ -810,35 +803,25 @@ def register_kb_routes(
 
     @app.post("/kb/collections/{collection_id}/sync")
     async def sync_collection(collection_id: str) -> SyncOut:
-        """P3.0: re-clone the Collection's git_url and re-ingest. 400 when
-        the Collection isn't a code Collection (no git_url), 502 when the
-        clone/auth fails (typed CodeRepoSyncError), 404 when the id is unknown.
-
-        The clone + ingest runs in a worker thread so the event loop keeps
-        serving other requests during the (potentially multi-second) sync."""
-        rm = spec.get_resource_manager(Collection)
+        """#355: enqueue an async ``code_sync`` job — clone the collection's
+        git_url + ingest it on the wiki worker (off the request), then build the
+        wiki — and return immediately with ``status="queued"``. 400 when the
+        collection isn't a code collection (no git_url), 404 when the id is
+        unknown. The clone's success/failure is surfaced later via
+        ``GET /wiki/status`` (``last_error``), NOT a synchronous 502 — the
+        (potentially multi-minute) clone+ingest no longer runs on the request, so
+        it can't block the connection or be cut off by a proxy timeout. The
+        returned ``git_last_sha`` is the last *successful* sync's commit (the new
+        one isn't known until the job finishes; the FE polls for it)."""
         coll, _ = _authorize_collection(collection_id, "edit_content")  # #262
         if not coll.git_url:
             raise HTTPException(
                 status_code=400, detail="collection has no git_url; not a code collection"
             )
-        try:
-            await asyncio.to_thread(code_repo.sync, collection_id=collection_id, user=get_user_id())
-        except CodeRepoSyncError as e:
-            raise HTTPException(status_code=502, detail=str(e)) from e
-        # #281 A0: code_repo.sync stores + indexes each file synchronously, which
-        # BYPASSES the IndexCoordinator — so on_doc_indexed never fires and the
-        # code-wiki would never build on the main flow. Trigger the build
-        # explicitly now that sync has returned (all docs are indexed by then, so
-        # one build covers them all — no batch-join needed). No-op for non-wiki /
-        # non-code collections. create_app always wires a coordinator (same as the
-        # delete route's assert), so this never no-ops in practice.
+        # create_app always wires a coordinator (same as the delete route's assert).
         assert wiki_coordinator is not None
-        await wiki_coordinator.trigger_code_build(collection_id, requested_by=get_user_id())
-        # Re-read so we return the freshly-recorded sha.
-        refreshed = rm.get(collection_id).data
-        assert isinstance(refreshed, Collection)
-        return SyncOut(status="ok", git_last_sha=refreshed.git_last_sha)
+        wiki_coordinator.enqueue_code_sync(collection_id, requested_by=get_user_id())
+        return SyncOut(status="queued", git_last_sha=coll.git_last_sha)
 
     @app.post("/kb/collections/{collection_id}/reindex")
     async def reindex_collection(
