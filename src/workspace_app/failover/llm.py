@@ -40,11 +40,13 @@ class FallbackLlm(ILlm):
         *,
         make_llm: Callable[[LlmEndpoint], ILlm],
         on_switch: OnDegrade | None = None,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._endpoints = list(endpoints)
         self._registry = registry
         self._make_llm = make_llm
         self._on_switch = on_switch
+        self._sleep = sleep
 
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         def starter(endpoint: LlmEndpoint) -> Callable[[], Iterator[tuple[str, bool]]]:
@@ -58,11 +60,20 @@ class FallbackLlm(ILlm):
                 ttft_s=e.ttft_s,
                 idle_s=e.idle_s,
                 cooldown_s=e.cooldown_s,
+                num_retries=e.num_retries,
             )
             for e in self._endpoints
         ]
+        # Re-sweep rounds + total deadline are chain-level — read from the head
+        # endpoint (a fallback's own round budget is ignored, like its fallbacks).
+        head = self._endpoints[0]
         yield from failover_stream(
-            providers, self._registry, on_switch=_on_switch_adapter(self._on_switch)
+            providers,
+            self._registry,
+            round_backoff_s=head.round_backoff_s,
+            total_deadline_s=head.total_deadline_s,
+            on_switch=_on_switch_adapter(self._on_switch),
+            sleep=self._sleep,
         )
 
 
@@ -102,5 +113,12 @@ class FallbackVlm(IVlm):
             if degrade is not None:
                 degrade(provider.label, cause)
 
-        text = call_with_failover(providers, sleep=self._sleep, on_switch=on_switch)
+        head = self._endpoints[0]
+        text = call_with_failover(
+            providers,
+            m=head.num_retries + 1,
+            round_delays=head.round_backoff_s,
+            sleep=self._sleep,
+            on_switch=on_switch,
+        )
         yield (text, False)

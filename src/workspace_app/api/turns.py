@@ -24,6 +24,7 @@ from typing import Any
 from fastapi.responses import StreamingResponse
 
 from ..agent.context import AgentToolContext
+from ..failover.core import AllProvidersFailed
 from ..resources.conversation import MessageMetrics
 from ..users.labels import speaker_label
 from ..users.protocol import UserDirectory
@@ -222,6 +223,35 @@ class TurnMessage:
     # #113: "repetition" when the turn was stopped for a degenerate loop — the
     # FE renders a notice and `content`/`reasoning` is truncated to before it.
     stopped_reason: str | None = None
+
+
+# #196-followup: when the failover chain is exhausted (every model busy/cooling),
+# show a human-readable "try again" instead of the raw `AllProvidersFailed: …`.
+_BUSY_MESSAGE = (
+    "All available models are busy right now, so this response couldn't be "
+    "completed. Please try again in a moment."
+)
+
+
+def _is_all_busy(exc: BaseException) -> bool:
+    """True if ``exc`` (or anything in its cause/context chain — the SDK may wrap
+    it) is an :class:`AllProvidersFailed` from the failover loop."""
+    seen: set[int] = set()
+    cur: BaseException | None = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, AllProvidersFailed):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
+def _terminal_error(exc: BaseException) -> RunError:
+    """A terminal `RunError` for a turn that died — readable busy notice when the
+    failover chain was exhausted, else the raw class+message for an operator."""
+    if _is_all_busy(exc):
+        return RunError(message=_BUSY_MESSAGE)
+    return RunError(message=f"{type(exc).__name__}: {exc}")
 
 
 def _error_message(item: RunError | RunCancelled | MaxTurnsExceeded) -> TurnMessage:
@@ -443,7 +473,7 @@ class ChatTurnEngine:
             publish(cancelled)
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error message
-            err = RunError(message=f"{type(exc).__name__}: {exc}")
+            err = _terminal_error(exc)
             reducer.add(err)
             publish(err)
         finally:
@@ -523,7 +553,7 @@ class ChatTurnEngine:
             await queue.put(RunCancelled())
             raise
         except Exception as exc:  # noqa: BLE001 — surface as a terminal error event
-            await queue.put(RunError(message=f"{type(exc).__name__}: {exc}"))
+            await queue.put(_terminal_error(exc))
         finally:
             await queue.put(None)  # sentinel: stream closed
 

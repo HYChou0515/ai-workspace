@@ -17,7 +17,7 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pypdfium2>=5.9.0",
     "pyyaml>=6.0.3",
-    "specstar[magic]>=0.11.11",
+    "specstar[magic]>=0.11.12",
     "tenacity>=8.5.0",
     "tree-sitter<0.22",
     "tree-sitter-languages>=1.10.2",
