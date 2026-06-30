@@ -120,7 +120,12 @@ def _bare_kb_app(spec) -> FastAPI:
     from workspace_app.api.kb_routes import register_kb_routes
     from workspace_app.kb.index_coordinator import IndexCoordinator
     from workspace_app.kb.ingest import Ingestor
+    from workspace_app.kb.llm import ILlm
     from workspace_app.kb.retriever import Retriever
+
+    class _NoopLlm(ILlm):
+        def stream(self, prompt: str):
+            yield "", False
 
     embedder = HashEmbedder(dim=EMBED_DIM)
     ingestor = Ingestor(
@@ -138,6 +143,7 @@ def _bare_kb_app(spec) -> FastAPI:
         index_coordinator=index_coordinator,
         retriever=Retriever(spec, embedder=embedder),
         get_user_id=lambda: "u",
+        answer_llm=_NoopLlm(),
     )
     return app
 

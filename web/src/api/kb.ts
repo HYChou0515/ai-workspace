@@ -202,6 +202,9 @@ export type KbDocument = {
    * the per-dimension breakdown stays on `KbRenderedDoc`. */
   quality_score?: number | null;
   quality_rationale?: string;
+  /** #356: this doc's per-doc parser-guidance override (the Tune-parsing escape
+   * hatch). "" / absent ⇒ the doc inherits the collection guidance. */
+  parser_guidance_override?: string;
 };
 
 /** One page of documents inside a collection. The BE pages through specstar's
@@ -253,6 +256,9 @@ export type KbRenderedDoc = {
   quality_score?: number | null;
   quality_rationale?: string;
   quality_breakdown?: Record<string, number>;
+  /** #356: this doc's per-doc parser-guidance override (the Tune-parsing escape
+   * hatch). "" / absent ⇒ the doc inherits the collection guidance. */
+  parser_guidance_override?: string;
 };
 
 /** A resolved [n] marker — points at a span of a source document. */
@@ -476,8 +482,22 @@ export interface KbApi {
     doc_id: string;
     question: string;
     guidance?: string | null;
-    depth?: number;
+    /** #356: the slider — the top-k cutoff that flags which passages a user sees
+     * (and how deep the probe ranks). Defaults to the retriever's real top_k. */
+    k?: number;
   }): Promise<KbProbeResult>;
+  /** #356 "Try answer": stream the answer `question` gets from ONLY this doc's
+   * passages within the top-`k` (the kb_chat model, fixed context, no self-search).
+   * `guidance` re-parses the doc first (the After box). Yields chat-shaped events. */
+  answerFindability(args: {
+    doc_id: string;
+    question: string;
+    k: number;
+    guidance?: string;
+  }): AsyncGenerator<AgentEvent>;
+  /** #356: persist a doc's per-doc parser-guidance override (the escape hatch);
+   * "" clears it. Persist only — re-index to apply. POST /kb/documents/guidance. */
+  setDocumentGuidance(documentId: string, guidance: string): Promise<void>;
   /** Render a source document to markdown (kb:// links) for the citation viewer. */
   renderDocument(documentId: string): Promise<KbRenderedDoc>;
   /** A document's indexed chunks + their cited counts (the chunks debug view). */
@@ -617,6 +637,25 @@ export const realKbApi: KbApi = {
       body: JSON.stringify(body),
     });
     return (await ok(resp, "probe findability")).json();
+  },
+  async *answerFindability(args) {
+    const resp = await apiFetch(`/kb/findability/answer`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify(args),
+    });
+    if (!resp.ok || !resp.body) throw new Error(`findability answer failed: ${resp.status}`);
+    yield* parseSseStream(resp.body);
+  },
+  async setDocumentGuidance(documentId, guidance) {
+    await ok(
+      await apiFetch(`/kb/documents/guidance?id=${encodeURIComponent(documentId)}`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ guidance }),
+      }),
+      "set document guidance",
+    );
   },
   async listDocuments(collectionId, page) {
     const qs = new URLSearchParams();

@@ -276,16 +276,27 @@ class SourceDoc(Struct):  # → resource "source-doc"
     quality_score: int | None = None
     quality_breakdown: dict[str, Any] = {}
     quality_rationale: str = ""
-    # Issue #328: per-doc override of a prompt/param-driven parser's config —
-    # the "escape hatch" the findability-probe modal writes when an operator
-    # hand-tunes ONE document's extraction without changing the whole
-    # collection's `parser_configs`. Same shape (parser_id → {knob: value})
-    # and it WINS over the collection config in the precedence merge
-    # (`kb.parser_config.effective_config`). Storing it here — not just the
-    # resulting chunks — makes the fix durable: a later full re-index re-parses
-    # this doc with ITS override, so the hand-tuned result isn't clobbered.
+    # Issue #328: per-doc override of a prompt/param-driven parser's STRUCTURED
+    # config (the param "escape hatch") — same shape as `Collection.parser_configs`
+    # (parser_id → {knob: value}), and it WINS over the collection config in the
+    # precedence merge (`kb.parser_config.effective_config`: parser defaults <
+    # collection < per-doc). Storing it here — not just the resulting chunks —
+    # makes the fix durable: a later full re-index re-parses this doc with ITS
+    # override. DORMANT until a parser declares `config_fields()` AND a UI writes
+    # this — no concrete parser does either today, so it currently resolves to {}
+    # for every parser. The FREE-TEXT per-doc escape hatch the Tune-parsing modal
+    # actually writes is `parser_guidance_override` below (#356), NOT this.
     # Non-indexed → no migration (old rows decode with the empty default).
     parser_config_overrides: dict[str, dict[str, Any]] = {}
+    # Issue #356: the per-doc FREE-TEXT escape hatch — a non-empty value REPLACES
+    # the collection's `parser_guidance` for THIS doc at index time (see
+    # `Ingestor._parse_guidance_for`), so a few special docs can opt out of the
+    # collection prompt without changing it for everyone. Empty (default) ⇒ the
+    # doc inherits the collection guidance (today's behaviour for every doc). The
+    # Tune-parsing modal's "Save for this document" writes it; "Clear document
+    # override" resets it to "". Carried forward across a re-upload (see
+    # `_store_source_doc`). Non-indexed → no migration (old rows decode empty).
+    parser_guidance_override: str = ""
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"

@@ -9,6 +9,7 @@ from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import EMBED_DIM, SourceDoc
 from workspace_app.sandbox.mock import MockSandbox
@@ -249,11 +250,183 @@ def test_findability_probe_without_guidance_omits_after():
     assert r.json()["after"] is None
 
 
+def test_findability_probe_k_flows_through_to_top_k():
+    """#356: the modal's k (slider) is echoed as the response's top_k — the cutoff
+    the FE highlights against."""
+    client = _client_with_pipeline()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", b"solder void root cause", "text/markdown")},
+    )
+    _drain(client)
+    r = client.post(
+        "/kb/findability/probe",
+        json={"doc_id": encode_doc_id(cid, "a.md"), "question": "solder void", "k": 12},
+    )
+    assert r.status_code == 200
+    assert r.json()["top_k"] == 12
+
+
 def test_findability_probe_404_for_unknown_doc():
     client = _client_with_pipeline()
     cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
     r = client.post(
         "/kb/findability/probe",
+        json={"doc_id": encode_doc_id(cid, "nope.md"), "question": "x"},
+    )
+    assert r.status_code == 404
+
+
+class _FakeAnswerLlm(ILlm):
+    """Streams a canned answer word-by-word and records the prompt it received."""
+
+    def __init__(self, reply: str = "Grounded answer [1].") -> None:
+        self.prompts: list[str] = []
+        self._reply = reply
+
+    def stream(self, prompt: str):
+        self.prompts.append(prompt)
+        for tok in self._reply.split(" "):
+            yield tok + " ", False
+
+
+class _BoomLlm(ILlm):
+    def stream(self, prompt: str):
+        raise RuntimeError("boom")
+        yield  # pragma: no cover
+
+
+def _client_with_answer_llm(llm: ILlm) -> TestClient:
+    from workspace_app.kb.li_pipeline import build_doc_pipeline
+
+    spec = make_spec()
+    embedder = HashEmbedder(dim=EMBED_DIM)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        kb_embedder=embedder,
+        kb_pipeline=build_doc_pipeline(embedder=embedder),
+        answer_llm=llm,
+    )
+    return TestClient(app)
+
+
+def _sse_answer_text(raw: str) -> str:
+    """Join the streamed `message_delta` texts back into the full answer (each
+    chunk arrives as its own SSE frame)."""
+    import json
+
+    out: list[str] = []
+    for line in raw.splitlines():
+        if not line.startswith("data:"):
+            continue
+        ev = json.loads(line[len("data:") :].strip())
+        if ev.get("type") == "message_delta" and not ev.get("reasoning"):
+            out.append(ev["text"])
+    return "".join(out)
+
+
+def _seed_doc(client: TestClient, body: bytes) -> str:
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", body, "text/markdown")},
+    )
+    _drain(client)
+    return encode_doc_id(cid, "a.md")
+
+
+def test_findability_answer_streams_a_grounded_answer():
+    """#356: POST /kb/findability/answer streams the answer the question gets from
+    ONLY this doc's top-k passages — and those passages reach the LLM prompt."""
+    llm = _FakeAnswerLlm("Voids form from flux outgassing [1].")
+    client = _client_with_answer_llm(llm)
+    doc_id = _seed_doc(client, b"solder void root cause: flux outgassing during reflow")
+
+    r = client.post(
+        "/kb/findability/answer",
+        json={"doc_id": doc_id, "question": "why do voids form?", "k": 5},
+    )
+    assert r.status_code == 200
+    body = r.text
+    assert "message_delta" in body and "done" in body  # streamed live
+    assert "Voids form from flux outgassing" in _sse_answer_text(body)
+    # the doc's own passage text was handed to the answerer (fixed context).
+    assert llm.prompts and "flux outgassing during reflow" in llm.prompts[0]
+
+
+def test_findability_answer_after_guidance_reparses_then_answers():
+    """A candidate guidance ⇒ the doc is re-parsed (dry-run Overlay) before the
+    top-k is taken — the After box's answer."""
+    llm = _FakeAnswerLlm("After answer [1].")
+    client = _client_with_answer_llm(llm)
+    doc_id = _seed_doc(client, b"solder void root cause analysis")
+
+    r = client.post(
+        "/kb/findability/answer",
+        json={"doc_id": doc_id, "question": "voids?", "k": 5, "guidance": "focus on voids"},
+    )
+    assert r.status_code == 200
+    assert "After answer" in _sse_answer_text(r.text) and "done" in r.text
+
+
+def test_findability_answer_surfaces_llm_error_in_the_stream():
+    """A failure during answering is surfaced as an `error` event in the stream,
+    not a 500 — the modal shows it inline."""
+    client = _client_with_answer_llm(_BoomLlm())
+    doc_id = _seed_doc(client, b"anything")
+
+    r = client.post(
+        "/kb/findability/answer",
+        json={"doc_id": doc_id, "question": "q", "k": 5},
+    )
+    assert r.status_code == 200
+    body = r.text
+    assert "error" in body and "boom" in body
+
+
+def test_document_guidance_write_and_render_roundtrip():
+    """#356: POST /kb/documents/guidance persists a doc's per-doc override and the
+    rendered doc echoes it (the modal prefills its editor from this); empty clears."""
+    client = _client_with_pipeline()
+    doc_id = _seed_doc(client, b"solder void root cause")
+
+    # default: no override
+    assert client.get(f"/kb/documents?id={doc_id}").json()["parser_guidance_override"] == ""
+
+    # save a per-doc override
+    r = client.post(
+        f"/kb/documents/guidance?id={doc_id}", json={"guidance": "treat tables as JSON"}
+    )
+    assert r.status_code == 200
+    assert r.json()["parser_guidance_override"] == "treat tables as JSON"
+    assert (
+        client.get(f"/kb/documents?id={doc_id}").json()["parser_guidance_override"]
+        == "treat tables as JSON"
+    )
+
+    # clear it
+    client.post(f"/kb/documents/guidance?id={doc_id}", json={"guidance": ""})
+    assert client.get(f"/kb/documents?id={doc_id}").json()["parser_guidance_override"] == ""
+
+
+def test_document_guidance_404_for_unknown_doc():
+    client = _client_with_pipeline()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    r = client.post(
+        f"/kb/documents/guidance?id={encode_doc_id(cid, 'nope.md')}", json={"guidance": "x"}
+    )
+    assert r.status_code == 404
+
+
+def test_findability_answer_404_for_unknown_doc():
+    client = _client_with_answer_llm(_FakeAnswerLlm())
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    r = client.post(
+        "/kb/findability/answer",
         json={"doc_id": encode_doc_id(cid, "nope.md"), "question": "x"},
     )
     assert r.status_code == 404
