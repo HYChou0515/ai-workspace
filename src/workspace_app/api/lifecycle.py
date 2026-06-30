@@ -52,6 +52,7 @@ def build_lifespan(
     mirror_interval: timedelta,
     max_workspace_bytes: int,
     code_sync_check_interval: timedelta | None,
+    code_daily_sync: str | None = None,
     gc_interval: timedelta | None,
     gc_t1: str,
     gc_t2: str,
@@ -89,7 +90,11 @@ def build_lifespan(
 
         assert code_sync_check_interval is not None  # gated by caller
         ingestor = app.state.ingestor
-        sweeper = CodeRepoSweeper(spec, code_repo=CodeRepoIngestor(spec, ingestor=ingestor))
+        sweeper = CodeRepoSweeper(
+            spec,
+            code_repo=CodeRepoIngestor(spec, ingestor=ingestor),
+            daily_sync=code_daily_sync,
+        )
         try:
             while True:
                 await asyncio.sleep(code_sync_check_interval.total_seconds())

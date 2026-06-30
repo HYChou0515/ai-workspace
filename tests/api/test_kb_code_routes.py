@@ -163,11 +163,14 @@ def test_lifespan_runs_code_sync_sweeper(remote: str):
         kb_pipeline=build_doc_pipeline(embedder=text),
         # Quick poll so the test isn't slow.
         code_sync_check_interval=timedelta(milliseconds=50),
+        # "00:00" is always already past today, so a never-synced code
+        # collection is due on the first tick regardless of wall-clock time.
+        code_daily_sync="00:00",
     )
     client = TestClient(application)
     cid = client.post(
         "/kb/collections",
-        json={"name": "r", "git_url": remote, "sync_interval_hours": 1},
+        json={"name": "r", "git_url": remote},
     ).json()["resource_id"]
     with client:  # enter lifespan
         # The sweeper ticks once every 50ms; poll for the side-effect.
@@ -221,11 +224,12 @@ def test_lifespan_sweeper_triggers_code_wiki_build(remote: str):
         kb_embedder=text,
         kb_pipeline=build_doc_pipeline(embedder=text),
         code_sync_check_interval=timedelta(milliseconds=50),
+        code_daily_sync="00:00",  # always past today → due on the first tick
     )
     client = TestClient(application)
     cid = client.post(
         "/kb/collections",
-        json={"name": "r", "git_url": remote, "use_wiki": True, "sync_interval_hours": 1},
+        json={"name": "r", "git_url": remote, "use_wiki": True},
     ).json()["resource_id"]
     with client:  # enter lifespan → starts the sweeper
 

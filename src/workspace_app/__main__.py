@@ -296,6 +296,8 @@ def main() -> None:
                 if settings.kb.git.sync_check_interval_sec > 0
                 else None
             ),
+            # #355: the server-local daily auto-sync time for code collections.
+            code_daily_sync=settings.kb.git.daily_sync,
         )
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)
