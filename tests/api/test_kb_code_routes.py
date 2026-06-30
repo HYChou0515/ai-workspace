@@ -91,6 +91,23 @@ def test_create_collection_accepts_git_url_and_embedder_id(app):
     assert "git_token" not in body or body["git_token"] is None
 
 
+def test_patch_collection_edits_git_branch_and_rotates_token(app):
+    """#355 P6: the FE git-connection editor PATCHes the Collection's branch +
+    token through specstar's native CRUD route. A partial PATCH updates only the
+    fields sent (branch → develop, token rotated), leaving git_url intact."""
+    client = TestClient(app)
+    cid = client.post(
+        "/kb/collections",
+        json={"name": "r", "git_url": "https://git.example/r.git", "embedder_id": 1},
+    ).json()["resource_id"]
+    resp = client.patch(f"/collection/{cid}", json={"git_branch": "develop", "git_token": "ghp_new"})
+    assert resp.status_code in (200, 204), resp.text
+    # CollectionOut (the FE-facing list) reflects the new branch; url is unchanged.
+    coll = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert coll["git_branch"] == "develop"
+    assert coll["git_url"] == "https://git.example/r.git"
+
+
 def test_sync_endpoint_enqueues_clone_and_ingest(app, remote: str):
     """#355: POST /sync returns immediately with status="queued" (no synchronous
     clone). Once the enqueued code_sync job drains, the cloned files are ingested

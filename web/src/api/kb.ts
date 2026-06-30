@@ -419,6 +419,11 @@ export interface KbApi {
       /** #328: the per-collection parser guidance — the findability modal's
        * "Apply" persists the tuned guidance here. */
       parser_guidance?: string;
+      /** #355: edit a code collection's git connection. `git_branch` (null/"" ⇒
+       * remote default); `git_token` is write-only — send it ONLY to rotate the
+       * stored PAT (omit to keep the current one). */
+      git_branch?: string | null;
+      git_token?: string;
     },
   ): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
