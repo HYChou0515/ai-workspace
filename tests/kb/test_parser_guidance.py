@@ -8,6 +8,7 @@ import io
 from collections.abc import Iterator, Sequence
 
 import pypdf
+from specstar import QB
 
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
@@ -15,7 +16,7 @@ from workspace_app.kb.li_pipeline import build_doc_pipeline
 from workspace_app.kb.parsers import ParserRegistry
 from workspace_app.kb.parsers.pdf import PdfParser
 from workspace_app.kb.vlm import IVlm, VlmDescriber
-from workspace_app.resources import Collection, make_spec
+from workspace_app.resources import Collection, DocChunk, make_spec
 from workspace_app.resources.kb import EMBED_DIM
 
 
@@ -77,3 +78,38 @@ def test_no_guidance_leaves_the_prompt_unsteered():
 
     assert vlm.prompts
     assert all("fishbone" not in p.lower() for p in vlm.prompts)
+
+
+def _chunk_count(spec, doc_id: str) -> int:
+    rm = spec.get_resource_manager(DocChunk)
+    return len(list(rm.list_resources((QB["source_doc_id"] == doc_id).build())))
+
+
+def test_dry_run_reparses_with_candidate_guidance_and_persists_nothing():
+    """#328 dry-run: re-parse ONE doc with a CANDIDATE guidance → return virtual
+    chunks (real text + embeddings, for the Overlay preview) + the re-joined text,
+    WITHOUT writing a single row. The candidate steering reaches the VLM."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", parser_guidance="BASE GUIDANCE"))
+        .resource_id
+    )
+    vlm = _RecordingVlm()
+    ing = _ingestor(spec, vlm)
+    (doc_id,) = ing.ingest(collection_id=cid, user="u", filename="deck.pdf", data=_blank_pdf())
+    baseline = _chunk_count(spec, doc_id)
+    assert baseline > 0
+    vlm.prompts.clear()
+
+    chunks, virtual_text = ing.dry_run_chunks(doc_id, guidance="CANDIDATE: a fishbone -> JSON")
+
+    # Real virtual chunks: text + an embedding the Overlay can rank on.
+    assert chunks and all(c.text for c in chunks)
+    assert all(len(c.embedding or []) == EMBED_DIM for c in chunks)
+    assert virtual_text  # the re-joined canonical text the offsets index into
+    # The candidate guidance — not the collection's "BASE GUIDANCE" — drove this parse.
+    assert vlm.prompts and all("CANDIDATE: a fishbone -> JSON" in p for p in vlm.prompts)
+    assert all("BASE GUIDANCE" not in p for p in vlm.prompts)
+    # Nothing persisted: the store still holds exactly the baseline chunks.
+    assert _chunk_count(spec, doc_id) == baseline
