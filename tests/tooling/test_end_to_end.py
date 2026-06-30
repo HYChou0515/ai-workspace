@@ -142,6 +142,38 @@ def test_python_stack_office_libs_importable_in_real_sandbox(tmp_path: Path):
         await_(sandbox.kill(handle))
 
 
+@pytest.mark.skipif(not _has_uv(), reason="uv not on PATH")
+def test_python_stack_importable_via_bare_python_shim_unjailed_350(tmp_path: Path):
+    """#350: the agent calls bare `python`, not the carrier's launch path. In an
+    UNJAILED sandbox (the model our pods run) the shim must route `python` to the
+    provisioned carrier, so `exec(["python", ...])` imports the office stack
+    instead of the host's own venv. Same real-carrier setup as the #252 test
+    above, but exercises the bare `python` name the bug was actually about."""
+    from workspace_app.agent.provision import provision_tools
+    from workspace_app.sandbox.local_process import LocalProcessSandbox
+    from workspace_app.sandbox.protocol import SandboxSpec
+    from workspace_app.tooling.prebuild import build_package
+    from workspace_app.tooling.registry import discover_packages
+
+    prebuilt = tmp_path / "prebuilt"
+    build_package(
+        name="python-stack",
+        source=_REPO / "sample-tools" / "python-stack",
+        dst=prebuilt / "python-stack",
+    )
+    packages = discover_packages(prebuilt)
+    sandbox = LocalProcessSandbox(root_dir=tmp_path / "sbx", isolate=False)
+    handle = await_(sandbox.create(SandboxSpec()))
+    try:
+        await_(provision_tools(sandbox, handle, packages, prebuilt_dir=prebuilt))
+        src = "import pptx, openpyxl, xlsxwriter; print('office ok')"
+        result = await_(sandbox.exec(handle, ["python", "-c", src]))
+        assert result.exit_code == 0, result.stderr.decode()
+        assert result.stdout.decode().strip() == "office ok"
+    finally:
+        await_(sandbox.kill(handle))
+
+
 # tiny sync helper so the test file doesn't need pytest-asyncio just for
 # three awaits — most of the §B tests are sync. `asyncio.run` per call
 # is fine: each await wraps a single sandbox op.
