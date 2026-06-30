@@ -171,6 +171,10 @@ def create_app(
     # disabled (manual /sync only). __main__ derives this from
     # Settings.sync_check_interval_sec.
     code_sync_check_interval: timedelta | None = None,
+    # #355: server-local "HH:MM" wall-clock time the daily code-collection
+    # auto-sync fires (None ⇒ off). __main__ derives this from
+    # Settings.kb.git.daily_sync.
+    code_daily_sync: str | None = None,
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
     exec_output_max_chars: int = 30_000,
@@ -345,6 +349,7 @@ def create_app(
         mirror_interval=mirror_interval,
         max_workspace_bytes=max_workspace_bytes,
         code_sync_check_interval=code_sync_check_interval,
+        code_daily_sync=code_daily_sync,
         gc_interval=gc_interval,
         gc_t1=gc_t1,
         gc_t2=gc_t2,

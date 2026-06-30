@@ -148,6 +148,10 @@ def build_coordinators(
         if wiki_model
         else None
     )
+    # #355: the code_sync job clones a code collection's git_url + ingests it on
+    # the wiki worker (off the API), so the wiki coordinator owns the CodeRepoIngestor.
+    from .kb.code_repo import CodeRepoIngestor
+
     wiki = WikiMaintenanceCoordinator(
         spec,
         runner,
@@ -163,6 +167,7 @@ def build_coordinators(
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
         code_wiki_llm=code_wiki_llm,
+        code_repo=CodeRepoIngestor(spec, ingestor=ingestor),
     )
     # #105: the doc-quality judge. Built only when a quality_judge model is wired;
     # otherwise None ⇒ the index coordinator skips scoring (docs stay un-scored).

@@ -135,6 +135,10 @@ export const mockKbApi: KbApi = {
       owner: "me",
       use_rag: opts?.useRag ?? true,
       use_wiki: opts?.useWiki ?? false,
+      git_url: opts?.gitUrl ?? null,
+      git_branch: opts?.gitBranch ?? null,
+      git_last_sha: null,
+      git_last_pulled_at: null,
       wiki_maintainer_guidance: "",
       wiki_reader_guidance: "",
     };
@@ -420,6 +424,14 @@ export const mockKbApi: KbApi = {
         last_error: null,
       }
     );
+  },
+  async syncCollection(collectionId) {
+    // #355: simulate the async sync — stamp a fake synced commit so the dev
+    // collection page shows the "Synced to …" strip.
+    const c = collections.get(collectionId);
+    const sha = "0".repeat(40);
+    if (c) collections.set(collectionId, { ...c, git_last_sha: sha, git_last_pulled_at: Date.now() });
+    return { status: "queued", git_last_sha: c?.git_last_sha ?? null };
   },
   async listContextCards(collectionId) {
     return [...(contextCards.get(collectionId) ?? [])];

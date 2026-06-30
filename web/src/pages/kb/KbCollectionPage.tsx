@@ -38,6 +38,8 @@ import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { type MsgKey, useT } from "../../lib/i18n";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
+import { CodeConnectionEditor } from "./CodeConnectionEditor";
+import { CodeSyncStatus } from "./CodeSyncStatus";
 import { ContextCardsTab } from "./ContextCardsTab";
 import { fetchAllDocs, KbDocIde } from "./KbDocIde";
 import { useKbOutlet } from "./KbHome";
@@ -89,6 +91,8 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     false,
   );
   const [showRetrieval, setShowRetrieval] = useState(false);
+  // #355: the code-collection git-connection editor (branch / rotate token).
+  const [showGitEdit, setShowGitEdit] = useState(false);
   // The failure list is a default-closed disclosure (#224): the count is always
   // visible, the per-doc rows + retry stay tucked away until expanded. Transient
   // (not persisted) — a failed run is short-lived, so we don't remember it.
@@ -157,6 +161,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     setEditingDesc(false);
     setConfirmDel(false);
     setShowRetrieval(false);
+    setShowGitEdit(false);
     setFailsOpen(false);
     setImportFile(null);
     setBlocked([]);
@@ -518,6 +523,11 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                 <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setShowRetrieval((v) => !v); }}>
                   <Icon name="layers" size={14} color="var(--text-paper-d)" /> {t("kb.retrieval.title")}
                 </button>
+                {selected.git_url ? (
+                  <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); setShowGitEdit((v) => !v); }}>
+                    <Icon name="git" size={14} color="var(--text-paper-d)" /> Git connection
+                  </button>
+                ) : null}
                 <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
                   <Icon name="refresh" size={14} color="var(--text-paper-d)" /> {t("kb.reindexAll")}
                 </button>
@@ -591,6 +601,10 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           </div>
         ))}
       </div>
+
+      {/* #355: code-collection sync strip — clone/ingest/build progress, the
+          synced commit, and a Sync now / Retry action. Only for code collections. */}
+      {selected.git_url ? <CodeSyncStatus collection={selected} client={client} /> : null}
 
       {/* Index-status strip (#162, #170): visible on every tab so the upload →
           indexing → ready/error transition is never invisible. Shows live
@@ -685,6 +699,14 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           )}
         </div>
       )}
+
+      {showGitEdit && selected.git_url ? (
+        <CodeConnectionEditor
+          collection={selected}
+          client={client}
+          onClose={() => setShowGitEdit(false)}
+        />
+      ) : null}
 
       {showRetrieval && (
         <div

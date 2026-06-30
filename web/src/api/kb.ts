@@ -60,6 +60,13 @@ export type KbCollection = {
    * hierarchical builder, and refreshes only on sync / rebuild). Absent ⇒ a
    * plain document collection. */
   git_url?: string | null;
+  /** #355: the branch synced (null ⇒ remote default). */
+  git_branch?: string | null;
+  /** #355: the commit sha of the last SUCCESSFUL sync, and the wall-clock ms of
+   * the last sync attempt — drive the collection page's "Synced to … · …ago"
+   * strip. Both null until the first sync. */
+  git_last_sha?: string | null;
+  git_last_pulled_at?: number | null;
   /** Issue #90: per-collection wiki guidance, appended onto the bundled wiki
    * prompts. `maintainer` shapes how pages are written; `reader` shapes how the
    * wiki answers. Blank ⇒ the bundled prompt is used as-is. */
@@ -132,6 +139,9 @@ export type WikiPage = { path: string; content: string };
 
 /** Result of triggering a wiki rebuild — how many sources were queued. */
 export type WikiRebuild = { queued: number; status: string };
+/** #355: result of POST /kb/collections/:id/sync — the enqueue ack + the last
+ * KNOWN commit (the new one isn't known until the async job finishes). */
+export type SyncResult = { status: string; git_last_sha: string | null };
 
 /** Live wiki-build progress (the "Updating…" UI polls this). `phase` is the
  * current activity: "reading" | "identifying" | "writing" | null. */
@@ -148,7 +158,16 @@ export type WikiStatus = {
 };
 
 /** Create-time options for a collection's retrieval pipeline toggles. */
-export type CollectionOptions = { useRag?: boolean; useWiki?: boolean };
+export type CollectionOptions = {
+  useRag?: boolean;
+  useWiki?: boolean;
+  /** #355: code-collection wiring. A non-empty `gitUrl` makes this a code
+   * collection — the backend clones it and builds the wiki from source. `gitToken`
+   * is write-only (never echoed back). */
+  gitUrl?: string;
+  gitBranch?: string;
+  gitToken?: string;
+};
 
 export type KbDocument = {
   resource_id: string;
@@ -400,6 +419,11 @@ export interface KbApi {
       /** #328: the per-collection parser guidance — the findability modal's
        * "Apply" persists the tuned guidance here. */
       parser_guidance?: string;
+      /** #355: edit a code collection's git connection. `git_branch` (null/"" ⇒
+       * remote default); `git_token` is write-only — send it ONLY to rotate the
+       * stored PAT (omit to keep the current one). */
+      git_branch?: string | null;
+      git_token?: string;
     },
   ): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
@@ -480,6 +504,10 @@ export interface KbApi {
   rebuildWiki(collectionId: string): Promise<WikiRebuild>;
   /** Live build progress, polled while a wiki is being (re)built. */
   getWikiStatus(collectionId: string): Promise<WikiStatus>;
+  /** #355: re-sync a CODE collection — enqueues an async clone+ingest+build job
+   * (returns immediately with status="queued"). Progress + failures surface via
+   * `getWikiStatus`; the new commit shows once the job finishes. */
+  syncCollection(collectionId: string): Promise<SyncResult>;
 
   /** #106: a collection's context cards (the lightweight glossary). Lists via
    * specstar's auto CRUD route, scoped on the indexed `collection_id`. */
@@ -546,6 +574,11 @@ export const realKbApi: KbApi = {
           // Omit when unset so the BE defaults (use_rag on, use_wiki off) apply.
           ...(opts?.useRag != null ? { use_rag: opts.useRag } : {}),
           ...(opts?.useWiki != null ? { use_wiki: opts.useWiki } : {}),
+          // #355: code-collection git wiring (omit empties so a plain collection
+          // sends none of them).
+          ...(opts?.gitUrl ? { git_url: opts.gitUrl } : {}),
+          ...(opts?.gitBranch ? { git_branch: opts.gitBranch } : {}),
+          ...(opts?.gitToken ? { git_token: opts.gitToken } : {}),
         }),
       }),
       "create collection",
@@ -737,6 +770,10 @@ export const realKbApi: KbApi = {
   async getWikiStatus(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/status`;
     return (await ok(await apiFetch(url), "wiki status")).json();
+  },
+  async syncCollection(collectionId) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/sync`;
+    return (await ok(await apiFetch(url, { method: "POST" }), "sync collection")).json();
   },
 
   async listContextCards(collectionId) {
