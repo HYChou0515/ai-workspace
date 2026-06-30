@@ -213,7 +213,20 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
         busy={createMut.isPending}
         onClose={() => setNewOpen(false)}
         onCreate={(name, description, opts) =>
-          createMut.mutate({ name, description, opts }, { onSuccess: () => setNewOpen(false) })
+          createMut.mutate(
+            { name, description, opts },
+            {
+              onSuccess: (created) => {
+                setNewOpen(false);
+                // #355: a code collection kicks its first sync immediately and
+                // opens its page so the user watches the clone/build progress.
+                if (created.git_url) {
+                  void client.syncCollection(created.resource_id);
+                  navigate(`/kb/collections/${created.resource_id}`);
+                }
+              },
+            },
+          )
         }
       />
 

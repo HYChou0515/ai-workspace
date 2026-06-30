@@ -38,6 +38,7 @@ import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { type MsgKey, useT } from "../../lib/i18n";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
+import { CodeSyncStatus } from "./CodeSyncStatus";
 import { ContextCardsTab } from "./ContextCardsTab";
 import { fetchAllDocs, KbDocIde } from "./KbDocIde";
 import { useKbOutlet } from "./KbHome";
@@ -591,6 +592,10 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
           </div>
         ))}
       </div>
+
+      {/* #355: code-collection sync strip — clone/ingest/build progress, the
+          synced commit, and a Sync now / Retry action. Only for code collections. */}
+      {selected.git_url ? <CodeSyncStatus collection={selected} client={client} /> : null}
 
       {/* Index-status strip (#162, #170): visible on every tab so the upload →
           indexing → ready/error transition is never invisible. Shows live

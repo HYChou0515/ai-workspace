@@ -425,6 +425,14 @@ export const mockKbApi: KbApi = {
       }
     );
   },
+  async syncCollection(collectionId) {
+    // #355: simulate the async sync — stamp a fake synced commit so the dev
+    // collection page shows the "Synced to …" strip.
+    const c = collections.get(collectionId);
+    const sha = "0".repeat(40);
+    if (c) collections.set(collectionId, { ...c, git_last_sha: sha, git_last_pulled_at: Date.now() });
+    return { status: "queued", git_last_sha: c?.git_last_sha ?? null };
+  },
   async listContextCards(collectionId) {
     return [...(contextCards.get(collectionId) ?? [])];
   },

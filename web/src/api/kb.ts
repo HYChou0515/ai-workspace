@@ -139,6 +139,9 @@ export type WikiPage = { path: string; content: string };
 
 /** Result of triggering a wiki rebuild — how many sources were queued. */
 export type WikiRebuild = { queued: number; status: string };
+/** #355: result of POST /kb/collections/:id/sync — the enqueue ack + the last
+ * KNOWN commit (the new one isn't known until the async job finishes). */
+export type SyncResult = { status: string; git_last_sha: string | null };
 
 /** Live wiki-build progress (the "Updating…" UI polls this). `phase` is the
  * current activity: "reading" | "identifying" | "writing" | null. */
@@ -496,6 +499,10 @@ export interface KbApi {
   rebuildWiki(collectionId: string): Promise<WikiRebuild>;
   /** Live build progress, polled while a wiki is being (re)built. */
   getWikiStatus(collectionId: string): Promise<WikiStatus>;
+  /** #355: re-sync a CODE collection — enqueues an async clone+ingest+build job
+   * (returns immediately with status="queued"). Progress + failures surface via
+   * `getWikiStatus`; the new commit shows once the job finishes. */
+  syncCollection(collectionId: string): Promise<SyncResult>;
 
   /** #106: a collection's context cards (the lightweight glossary). Lists via
    * specstar's auto CRUD route, scoped on the indexed `collection_id`. */
@@ -758,6 +765,10 @@ export const realKbApi: KbApi = {
   async getWikiStatus(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/status`;
     return (await ok(await apiFetch(url), "wiki status")).json();
+  },
+  async syncCollection(collectionId) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/sync`;
+    return (await ok(await apiFetch(url, { method: "POST" }), "sync collection")).json();
   },
 
   async listContextCards(collectionId) {
