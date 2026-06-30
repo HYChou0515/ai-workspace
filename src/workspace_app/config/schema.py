@@ -49,6 +49,11 @@ class ServerSettings:
     # dedicated worker pods (`python -m workspace_app.worker <jobtype>`) consume
     # each JobType under their own HPA.
     run_consumers: bool = True
+    # #349: how often an in-flight turn polls the shared cross-pod cancel epoch.
+    # Under degraded sticky routing (a Stop / new message landing on a peer pod)
+    # the cancel latency equals this interval; the same-pod fast-path is instant.
+    # Smaller = snappier cancel but more store reads per active turn.
+    turn_cancel_poll_seconds: float = 0.5
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

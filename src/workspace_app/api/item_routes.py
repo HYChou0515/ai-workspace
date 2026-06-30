@@ -174,5 +174,5 @@ def register_item_routes(
                 {"item_id": item_id},
             )
         await registry.close_session(item_id)
-        turn_engine.forget(item_id)
+        await turn_engine.forget(item_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)

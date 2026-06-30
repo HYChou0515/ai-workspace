@@ -38,7 +38,7 @@ async def test_enqueue_runs_queued_turns_in_fifo_order_without_cancelling():
     engine.enqueue("inv", "a", AgentToolContext(), on_complete=on_complete)
     engine.enqueue("inv", "b", AgentToolContext(), on_complete=on_complete)
     await asyncio.wait_for(both_done.wait(), 3)
-    engine.forget("inv")
+    await engine.forget("inv")
 
     # 'a' fully finished before 'b' started — serialized, not cancelled.
     assert order == [("start", "a"), ("end", "a"), ("start", "b"), ("end", "b")]
@@ -76,7 +76,7 @@ async def test_cancel_current_stops_only_the_running_turn_then_next_runs():
     await asyncio.wait_for(started_slow.wait(), 3)
     await engine.cancel_current("inv")
     await asyncio.wait_for(fast_done.wait(), 3)
-    engine.forget("inv")
+    await engine.forget("inv")
 
     # the slow turn was cancelled → a cancelled error marker is persisted
     assert any(m.role == "error" and m.error_kind == "cancelled" for m in results["slow"])
@@ -109,7 +109,7 @@ async def test_all_subscribers_receive_a_turns_broadcast_events():
     t2 = asyncio.create_task(collect(sub2, 2))
     engine.enqueue("inv", "q", AgentToolContext(), on_complete=lambda m: None)
     got1, got2 = await asyncio.wait_for(asyncio.gather(t1, t2), 3)
-    engine.forget("inv")
+    await engine.forget("inv")
 
     assert [type(e).__name__ for e in got1] == ["MessageDelta", "RunDone"]
     assert got1 == got2  # both viewers saw identical events
@@ -138,7 +138,7 @@ async def test_subscribe_sse_yields_sse_encoded_frames():
     task = asyncio.create_task(collect(2))
     engine.enqueue("inv", "q", AgentToolContext(), on_complete=lambda m: None)
     got = await asyncio.wait_for(task, 3)
-    engine.forget("inv")
+    await engine.forget("inv")
     assert all(f.startswith("data: ") for f in got)
     assert '"message_delta"' in got[0]
 
@@ -151,7 +151,7 @@ async def test_forget_on_an_unknown_key_is_a_noop():
         async def run(self, content, ctx):  # pragma: no cover — never invoked
             yield RunDone()
 
-    ChatTurnEngine(_Runner()).forget("never-touched")  # ty: ignore[invalid-argument-type]
+    await ChatTurnEngine(_Runner()).forget("never-touched")  # ty: ignore[invalid-argument-type]
 
 
 async def test_all_providers_failed_surfaces_a_readable_busy_message():
@@ -175,7 +175,7 @@ async def test_all_providers_failed_surfaces_a_readable_busy_message():
 
     engine.enqueue("inv", "q", AgentToolContext(), on_complete=on_complete)
     await asyncio.wait_for(done.wait(), 3)
-    engine.forget("inv")
+    await engine.forget("inv")
 
     errs = [m for m in captured if m.role == "error"]
     assert errs, "a terminal error message should be persisted"
@@ -206,7 +206,7 @@ async def test_busy_failure_is_detected_even_when_wrapped_by_the_runner():
 
     engine.enqueue("inv", "q", AgentToolContext(), on_complete=on_complete)
     await asyncio.wait_for(done.wait(), 3)
-    engine.forget("inv")
+    await engine.forget("inv")
 
     errs = [m for m in captured if m.role == "error"]
     assert errs and "busy" in errs[-1].content.lower()
@@ -226,4 +226,4 @@ async def test_cancel_current_when_idle_is_a_noop():
     engine.enqueue("inv", "x", AgentToolContext(), on_complete=lambda m: finished.set())
     await asyncio.wait_for(finished.wait(), 3)
     await engine.cancel_current("inv")  # session exists, current_turn is None → no-op
-    engine.forget("inv")
+    await engine.forget("inv")

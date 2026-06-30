@@ -26,6 +26,7 @@ from fastapi.responses import StreamingResponse
 from ..agent.context import AgentToolContext
 from ..failover.core import AllProvidersFailed
 from ..resources.conversation import MessageMetrics
+from ..turn_control import InMemoryTurnControl, ITurnControl
 from ..users.labels import speaker_label
 from ..users.protocol import UserDirectory
 from .events import (
@@ -378,7 +379,13 @@ class ChatTurnEngine:
     its events over SSE, and reduces them into TurnMessages for the caller to
     persist. Shared by the RCA workspace and KB chat endpoints."""
 
-    def __init__(self, runner: AgentRunner) -> None:
+    def __init__(
+        self,
+        runner: AgentRunner,
+        *,
+        turn_control: ITurnControl | None = None,
+        poll_interval: float = 0.5,
+    ) -> None:
         self._runner = runner
         self._sessions: dict[str, _TurnSession] = {}
         # #113: every turn's event stream is wrapped so a degenerate repetition
@@ -386,6 +393,35 @@ class ChatTurnEngine:
         # #43: collaborative per-investigation queue/worker sessions, separate
         # from the per-requester `stream()` sessions KB chat uses.
         self._ws_sessions: dict[str, _WorkspaceSession] = {}
+        # #349: the cross-pod cancel epoch. Each in-flight turn stamps the epoch
+        # it started at; `_watch_epoch` aborts it once the shared epoch advances
+        # past that stamp from ANOTHER pod. Defaults to an in-memory backend, so
+        # a single-pod deployment (and every existing test) behaves exactly as
+        # before — the local fast-path still fires; the watcher just never sees a
+        # cross-pod bump. Multi-pod injects a specstar-backed control.
+        self._turn_control = turn_control or InMemoryTurnControl()
+        self._poll_interval = poll_interval
+
+    async def _watch_epoch(self, key: str, my_epoch: int, task: asyncio.Task) -> None:
+        """Cross-pod cancel backstop (#349): poll the shared epoch and cancel
+        `task` once a newer turn / Stop has advanced past `my_epoch` on ANOTHER
+        pod. When sticky routing holds, the in-pod fast-path (cancel-prior / Stop
+        on this engine) cancels the task first and this just winds down; when it
+        doesn't, this is the only thing that can reach a turn on a peer pod.
+
+        Loops until it either trips the epoch (cancels the turn) or is itself
+        cancelled by `_spawn_watcher`'s done-callback when the turn ends."""
+        while True:
+            await asyncio.sleep(self._poll_interval)
+            if await self._turn_control.current(key) > my_epoch:
+                task.cancel()
+                return
+
+    def _spawn_watcher(self, key: str, my_epoch: int, task: asyncio.Task) -> None:
+        """Attach a cross-pod cancel watcher to `task`, torn down the instant the
+        turn ends so no poller leaks past its turn."""
+        watcher = asyncio.create_task(self._watch_epoch(key, my_epoch, task))
+        task.add_done_callback(lambda _: watcher.cancel())
 
     def _events(self, content: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         """The runner's event stream, wrapped by the #113 repetition guard so a
@@ -399,10 +435,15 @@ class ChatTurnEngine:
     def _ws_session(self, key: str) -> _WorkspaceSession:
         return self._ws_sessions.setdefault(key, _WorkspaceSession())
 
-    def forget(self, key: str) -> None:
+    async def forget(self, key: str) -> None:
         """Drop a conversation's turn session (on close / delete) so the
         registry doesn't grow without bound. Also tears down the collaborative
-        worker + any in-flight turn (#43)."""
+        worker + any in-flight turn (#43).
+
+        #349: bump the shared epoch first so a turn for this key still running on
+        a PEER pod (the delete didn't land there) aborts via its watcher instead
+        of running against a conversation that no longer exists."""
+        await self._turn_control.advance(key)
         self._sessions.pop(key, None)
         ws = self._ws_sessions.pop(key, None)
         if ws is None:
@@ -429,20 +470,26 @@ class ChatTurnEngine:
         await its own turn while later messages queue behind it."""
         session = self._ws_session(key)
         if session.worker is None or session.worker.done():
-            session.worker = asyncio.create_task(self._worker(session))
+            session.worker = asyncio.create_task(self._worker(session, key))
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         session.queue.put_nowait((content, ctx, on_complete, fut))
         return fut
 
-    async def _worker(self, session: _WorkspaceSession) -> None:
+    async def _worker(self, session: _WorkspaceSession, key: str) -> None:
         """Run the investigation's queued turns one at a time, in order. Parks on
         an empty queue (cheap); torn down by `forget`. Each turn is its own
         cancellable task so `cancel_current` stops only the running turn and the
         worker proceeds to the next; its completion future is then resolved."""
         while True:
             content, ctx, on_complete, fut = await session.queue.get()
+            # #349: stamp the CURRENT epoch without bumping — a new collaborative
+            # message must NOT supersede the running turn (they serialize via this
+            # queue), but an explicit Stop (which DOES bump) on any pod still
+            # aborts it through the watcher.
+            my_epoch = await self._turn_control.current(key)
             turn = asyncio.create_task(self._run_turn(content, ctx, on_complete, session.publish))
             session.current_turn = turn
+            self._spawn_watcher(key, my_epoch, turn)
             # The turn persists its own (partial) result via on_complete even
             # when cancelled; swallow the cancellation here so the worker lives.
             with contextlib.suppress(asyncio.CancelledError):
@@ -482,7 +529,12 @@ class ChatTurnEngine:
     async def cancel_current(self, key: str) -> None:
         """#43 Stop: interrupt the investigation's in-flight turn (anyone may do
         this). Queued messages are untouched — the worker runs the next one. A
-        no-op when nothing is running."""
+        no-op when nothing is running.
+
+        #349: bump the shared epoch first so a turn running on a PEER pod's queue
+        worker (Stop didn't land on the pod holding it) aborts via its watcher;
+        the local cancel below is the same-pod fast path."""
+        await self._turn_control.advance(key)
         session = self._ws_sessions.get(key)
         if session is None:
             return
@@ -573,7 +625,13 @@ class ChatTurnEngine:
         session = self._session(key)
         async with session.lock:
             await self._cancel_prior_turn(session)
-            session.current_turn = asyncio.create_task(self._drive(content, ctx, queue))
+            # #349: bump the shared epoch BEFORE stamping this turn, so a prior
+            # turn running on a peer pod (sticky routing failed) sees the advance
+            # and aborts. `_cancel_prior_turn` above is the same-pod fast path.
+            my_epoch = await self._turn_control.advance(key)
+            task = asyncio.create_task(self._drive(content, ctx, queue))
+            session.current_turn = task
+            self._spawn_watcher(key, my_epoch, task)
 
         async def gen() -> AsyncIterator[str]:
             reducer = _TurnReducer()
@@ -589,6 +647,11 @@ class ChatTurnEngine:
 
     async def cancel(self, key: str) -> None:
         """Interrupt the conversation's in-flight turn (its stream gets
-        RunCancelled, then closes). A no-op when nothing is running."""
+        RunCancelled, then closes). A no-op when nothing is running.
+
+        #349: bump the shared epoch first so a turn running on a PEER pod (the
+        Stop request didn't land on the pod holding the turn) aborts via its
+        watcher; the local cancel-prior is the same-pod fast path."""
+        await self._turn_control.advance(key)
         async with (session := self._session(key)).lock:
             await self._cancel_prior_turn(session)

@@ -370,7 +370,7 @@ def register_kb_chat_routes(
     async def delete_chat(chat_id: str) -> Response:
         _require_owner(chat_id)
         chat_rm.permanently_delete(chat_id)
-        engine.forget(chat_id)
+        await engine.forget(chat_id)
         return Response(status_code=204)
 
     @app.post("/kb/chats/{chat_id}/share", status_code=204)

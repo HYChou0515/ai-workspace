@@ -38,6 +38,12 @@
 #                              # dedicated worker pods (`python -m
 #                              # workspace_app.worker <jobtype>`) consume each
 #                              # JobType under their own HPA. e.g. ${RUN_CONSUMERS}
+#   turn_cancel_poll_seconds: 0.5  # #349: how often an in-flight turn polls the
+#                              # shared cross-pod cancel epoch. Under degraded
+#                              # sticky routing (Stop / new message routed to a
+#                              # peer replica) the cancel latency equals this;
+#                              # the same-pod fast-path stays instant. Smaller =
+#                              # snappier cancel, more store reads per active turn.
 
 # ─── sandbox (agent execution environment) ──────────────────────────
 # sandbox:

@@ -31,6 +31,7 @@ from ..resources.kb import EMBED_DIM, Collection
 from ..sandbox.protocol import Sandbox, SandboxSpec
 from ..sync import SandboxSync
 from ..tooling.registry import PackageInfo
+from ..turn_control import SpecstarTurnControl
 from ..users import MockUserDirectory, UserDirectory
 from ..workflow.credential import CredentialBroker
 from ..workflow.discovery import load_run_callable
@@ -159,6 +160,11 @@ def create_app(
     # JobType under their own HPA. Sweepers (idle/mirror/index/blob-gc/code-sync)
     # are NOT gated — they always run on the API (the always-on control plane).
     run_consumers: bool = True,
+    # #349: how often a running turn polls the shared (cross-pod) cancel epoch.
+    # The cancel latency under degraded sticky routing equals this interval; the
+    # in-pod fast-path is unaffected. Threaded from
+    # settings.server.turn_cancel_poll_seconds.
+    turn_cancel_poll_seconds: float = 0.5,
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
@@ -490,9 +496,18 @@ def create_app(
     from .help_routes import register_help_routes
 
     register_help_routes(api, spec)
+    # #349: the cross-pod cancel epoch, backed by specstar so every replica over
+    # the shared store reads/bumps the SAME per-key counter. Shared by BOTH turn
+    # engines — their keys (item / conversation / KB-chat ids) are globally
+    # unique specstar ids, so one TurnEpoch table can't collide across surfaces.
+    # The in-pod fast-path (cancel-prior / Stop on this engine) still fires; this
+    # is what reaches a turn stranded on a peer pod when sticky routing degrades.
+    turn_control = SpecstarTurnControl(spec)
     # One turn engine drives the RCA workspace; one cancellable in-flight turn
     # per conversation, SSE streaming, cancel hook.
-    turn_engine = ChatTurnEngine(runner)
+    turn_engine = ChatTurnEngine(
+        runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
+    )
     # Exposed for introspection / tests of the #43 broadcast stream (the shared
     # per-investigation pub/sub lives on the engine).
     app.state.turn_engine = turn_engine
@@ -524,7 +539,9 @@ def create_app(
         ),
         reader_max_turns=wiki_reader_max_turns,
     )
-    kb_turn_engine = ChatTurnEngine(kb_runner)
+    kb_turn_engine = ChatTurnEngine(
+        kb_runner, turn_control=turn_control, poll_interval=turn_cancel_poll_seconds
+    )
     register_kb_chat_routes(
         api,
         spec,
