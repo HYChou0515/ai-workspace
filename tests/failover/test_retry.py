@@ -116,6 +116,7 @@ def test_call_with_failover_switches_to_next_provider_on_transient():
     out = call_with_failover(
         [_prov("a", _fails(_Status(502))), _prov("b", lambda: "from-b")],
         m=1,  # one shot per provider so we cross to 'b' immediately
+        round_delays=(),  # single sweep — 'b' wins it, no re-sweep needed
         sleep=sleep,
         on_switch=lambda p, exc: switched.append(p.label),
     )
@@ -137,6 +138,7 @@ def test_call_with_failover_aborts_immediately_on_a_permanent_error():
         call_with_failover(
             [_prov("a", _fails(_Status(400))), _prov("b", b)],
             m=1,
+            round_delays=(),
             on_switch=lambda p, exc: switched.append(p.label),
         )
 

@@ -352,6 +352,8 @@ def get_embedder(settings: Settings) -> Embedder:
             # #196 same-model replica failover + #249 transient-error retry over
             # the [primary, *replicas] chain (call_with_failover owns the retry).
             fallback_base_urls=list(e.fallbacks),
+            num_retries=settings.failover.num_retries,
+            round_backoff_s=settings.failover.round_backoff_s,
         )
     return HashEmbedder(dim=EMBED_DIM)
 
@@ -376,6 +378,8 @@ def get_code_embedder(settings: Settings) -> Embedder | None:
         batch_size=eb.batch_size,
         base_url=ce.base_url or None,
         api_key=ce.api_key or None,
+        num_retries=settings.failover.num_retries,
+        round_backoff_s=settings.failover.round_backoff_s,
     )
 
 
@@ -651,6 +655,14 @@ class LlmEndpoint:
     ttft_s: float
     idle_s: float
     cooldown_s: float
+    # #196-followup: per-endpoint same-endpoint retry budget, plus the chain-level
+    # re-sweep backoffs + total deadline (only the chain HEAD's are honoured by the
+    # adapters — a fallback's own round budget is ignored, like its `fallbacks`).
+    # Defaults are the conservative original #196 behaviour (no same-endpoint retry,
+    # a single sweep, no deadline); `_endpoint` always resolves them from config.
+    num_retries: int = 0
+    round_backoff_s: tuple[float, ...] = ()
+    total_deadline_s: float = float("inf")
 
     @property
     def cooldown_key(self) -> tuple[str, str]:
@@ -669,6 +681,9 @@ def _endpoint(
     reasoning_effort: str | None,
 ) -> LlmEndpoint:
     fo = settings.failover
+    round_backoff = (
+        preset.round_backoff_s if preset.round_backoff_s is not None else fo.round_backoff_s
+    )
     return LlmEndpoint(
         model=model,
         base_url=base_url,
@@ -677,6 +692,11 @@ def _endpoint(
         ttft_s=preset.ttft_timeout_s if preset.ttft_timeout_s is not None else fo.ttft_timeout_s,
         idle_s=preset.idle_timeout_s if preset.idle_timeout_s is not None else fo.idle_timeout_s,
         cooldown_s=preset.cooldown_s if preset.cooldown_s is not None else fo.cooldown_s,
+        num_retries=preset.num_retries if preset.num_retries is not None else fo.num_retries,
+        round_backoff_s=tuple(round_backoff),
+        total_deadline_s=(
+            preset.total_deadline_s if preset.total_deadline_s is not None else fo.total_deadline_s
+        ),
     )
 
 

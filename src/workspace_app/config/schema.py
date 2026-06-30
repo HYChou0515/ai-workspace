@@ -545,6 +545,15 @@ class Preset:
     ttft_timeout_s: float | None = None
     cooldown_s: float | None = None
     idle_timeout_s: float | None = None
+    # #196-followup: per-ENDPOINT same-endpoint retry budget (each preset in the
+    # chain uses its own). None = inherit the global default.
+    num_retries: int | None = None
+    # CHAIN-level resilience, read only from the chain HEAD preset (a fallback's
+    # own values are ignored, like its `fallbacks`): how many times to re-sweep
+    # the whole chain (one round per backoff entry; `[]` = a single sweep) and the
+    # total wall-clock budget for the turn before surfacing a busy failure.
+    round_backoff_s: tuple[float, ...] | None = None
+    total_deadline_s: float | None = None
 
 
 # Bundled default presets — these populate `Settings().agents.presets`
@@ -853,6 +862,16 @@ class FailoverSettings:
     ttft_timeout_s: float = 8.0
     cooldown_s: float = 30.0
     idle_timeout_s: float = 120.0
+    # #196-followup: configurable resilience under sustained busy. ``num_retries``
+    # quick same-endpoint retries before switching; ``round_backoff_s`` re-sweeps
+    # the whole chain once per entry (cooldown-aware wait — at least this long, but
+    # until a parked endpoint un-cools; ``[]`` = a single sweep, the original #196
+    # behaviour); ``total_deadline_s`` caps the whole turn so it fails readably
+    # instead of hanging forever. Per-preset overridable (num_retries per endpoint;
+    # round_backoff_s / total_deadline_s from the chain head).
+    num_retries: int = 2
+    round_backoff_s: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0, 16.0)
+    total_deadline_s: float = 120.0
 
 
 @dataclass(frozen=True)

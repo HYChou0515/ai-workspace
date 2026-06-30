@@ -43,6 +43,10 @@ def _patch(monkeypatch, behavior):
 
 
 def _embedder(**kw) -> LitellmEmbedder:
+    # num_retries=4 → m=5 quick shots per endpoint (the index-time default);
+    # round_backoff_s=() → single sweep (re-sweep rounds are covered in test_retry).
+    kw.setdefault("num_retries", 4)
+    kw.setdefault("round_backoff_s", ())
     return LitellmEmbedder("bge-m3", dim=1, sleep=lambda _s: None, **kw)
 
 

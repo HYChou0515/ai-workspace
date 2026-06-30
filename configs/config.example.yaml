@@ -200,19 +200,41 @@
 # parks the busy one on a `cooldown_s` so later requests skip it. The chain is
 # NOT recursive (a fallback's own `fallbacks` are ignored); roles don't override
 # it (open a different preset instead). These are the GLOBAL defaults; a preset
-# overrides ttft/cooldown/idle per-model (a slow hosted model needs a longer
-# ttft before "no token yet" means "busy"):
+# overrides them per-model (a slow hosted model needs a longer ttft before "no
+# token yet" means "busy").
+#
+# RESILIENCE UNDER SUSTAINED BUSY: switching once down the chain isn't enough when
+# EVERY model is busy at once — that would kill the turn. So a sweep that produces
+# nothing re-sweeps: `round_backoff_s` lists the wait before each re-sweep (its
+# LENGTH = how many re-sweep rounds; `[]` = a single sweep, the pre-#196-followup
+# behaviour). The wait is cooldown-aware — at least the listed backoff, but it
+# sleeps until a parked endpoint actually un-cools rather than re-probing in vain,
+# never past `total_deadline_s`. When the deadline/rounds run out the turn fails
+# with a readable "models are busy, try again" message instead of hanging.
 # failover:
 #   ttft_timeout_s: 8           # streaming: no first token within this ⇒ switch
-#   cooldown_s: 30              # how long a busy (model,endpoint) is skipped
+#   cooldown_s: 30              # how long a busy (model,endpoint) is skipped (= the
+#                               #   effective re-sweep wait — it's the wake alarm)
 #   idle_timeout_s: 120         # mid-stream stall ceiling ⇒ raise (NOT switch)
+#   num_retries: 2              # quick SAME-endpoint retries before switching (a
+#                               #   transient blip; 0 = switch immediately). Per-
+#                               #   endpoint: each preset in the chain uses its own.
+#   round_backoff_s: [1, 2, 4, 8, 16]   # re-sweep the whole chain up to len() times;
+#                               #   wait ≥ this much before each (capped by deadline).
+#                               #   [] = no re-sweep. Read from the chain HEAD preset.
+#   total_deadline_s: 120       # whole-turn ceiling; hit ⇒ readable busy failure.
+#                               #   Chain-level (head preset). Interactive presets
+#                               #   want this short; index/batch presets want it long.
 #
-# Example — local Qwen, fall over to a bigger local then to Claude when busy:
+# Example — local Qwen, fall over to a bigger local then to Claude when busy. The
+# interactive head keeps re-sweeps short (a user is waiting); a patient batch head
+# would set a longer round_backoff_s / total_deadline_s instead.
 # agents:
 #   presets:
-#     kb-default: { model: ollama_chat/qwen3:14b, fallbacks: [qwen3-32b-local, kb-claude] }
+#     kb-default: { model: ollama_chat/qwen3:14b, fallbacks: [qwen3-32b-local, kb-claude],
+#                   round_backoff_s: [1, 2, 4], total_deadline_s: 60 }
 #     qwen3-32b-local: { model: ollama_chat/qwen3:32b, llm: { base_url: http://gpu-2:11434 } }
-#     kb-claude: { model: claude-opus-4-7, ttft_timeout_s: 30 }   # hosted ⇒ relax ttft
+#     kb-claude: { model: claude-opus-4-7, ttft_timeout_s: 30, num_retries: 1 }  # hosted ⇒ relax ttft
 
 # ─── chat LLM endpoint (fallback for any preset that omits llm.*) ──
 # Per-preset `llm.base_url` / `llm.api_key` (under agents.presets.*)
