@@ -360,7 +360,9 @@
 #     api_key: ${KB_CODE_EMBED_API_KEY}
 #   git:
 #     default_token: ${GIT_DEFAULT_TOKEN}   # PAT for self-hosted gitlab
-#     sync_check_interval_sec: 300
+#     sync_check_interval_sec: 300          # how often the sweeper wakes to check the daily-sync time
+#     daily_sync: "03:00"                   # #355: server-local time every code collection re-syncs daily
+#     # daily_sync: null                    # ← off switch: daily auto-sync off (manual POST /sync only)
 #   vlm_llm:                                # issue #39: VLM for image / PDF visual pages / slides
 #     preset: kb-vlm                        # ← bundled LLM-only preset (qwen2.5-vl via Ollama)
 #     # model: openai/gpt-4o                # ← optional inline override (hosted vision model)

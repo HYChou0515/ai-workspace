@@ -934,6 +934,48 @@
     opacity: 0;
   }
 }
+
+/* #355: code-collection sync strip — a sibling of the index strip, but a single
+   row (status on the left, the Sync now / Retry action on the right). */
+.kb-sync-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 4px 0 10px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+.kb-sync-status.is-error {
+  background: color-mix(in srgb, var(--err) 12%, transparent);
+}
+.kb-sync-status__line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.kb-sync-status__btn {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border-paper);
+  border-radius: 5px;
+  background: var(--bg-paper);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+.kb-sync-status__btn:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+.kb-sync-status__btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .kb-index-status__fails {
   display: flex;
   flex-direction: column;
@@ -2285,21 +2327,6 @@
 }
 .kb-ide__status-state { text-transform: capitalize; }
 .kb-ide__status-meta { font-family: var(--font-mono); }
-/* #328: the findability-probe entry point in the status bar. */
-.kb-ide__status-probe {
-  font: inherit;
-  font-size: var(--fs-11, 0.6875rem);
-  padding: 1px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--paper-3);
-  background: var(--paper);
-  color: var(--text-paper-d);
-  cursor: pointer;
-}
-.kb-ide__status-probe:hover {
-  border-color: var(--accent);
-  color: var(--accent-h);
-}
 /* #248: the fan-out unit progress bar — a slim track + its done/total label. */
 .kb-ide__status-progress {
   display: inline-flex;

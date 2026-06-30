@@ -552,3 +552,98 @@ async def test_isolated_exec_protects_host_usr_read_only(tmp_path):
     r = await sb.exec(h, ["touch", "/usr/HACK"])
     assert r.exit_code != 0
     assert "read-only" in r.stderr.decode().lower()
+
+
+# --- #350: the python shim must work UNJAILED too ----------------------------
+# Production pods run unjailed (no unprivileged userns — uid + cgroup is the
+# isolation model), so the jail bootstrap's `python` → python-stack shim never
+# fired there: `exec(["python", ...])` fell through to the host's own service
+# venv. These tests pin the unjailed shim. No `@_needs_userns` — unjailed runs
+# anywhere, which is exactly the point.
+
+
+async def test_unjailed_python_shim_routes_to_python_stack_when_provisioned(tmp_path):
+    """Unjailed, `python` must still route to the provisioned `python-stack`
+    carrier's launcher — the agent's raw `exec(["python", ...])` then sees the
+    bundle's pandas / numpy / pptx, not the bare host python. Fake the carrier
+    with a sentinel-printing launch."""
+    tools = tmp_path / "prebuilt"
+    stack = tools / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["python", "-c", "ignored"])
+    assert r.exit_code == 0
+    assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode()
+
+
+async def test_unjailed_python3_flavour_also_routes_to_carrier(tmp_path):
+    """Not only `python`: `python3` must route too, or `python3 -c …` (which
+    agents commonly type) would fall through to the host interpreter."""
+    tools = tmp_path / "prebuilt"
+    stack = tools / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["python3", "-c", "ignored"])
+    assert r.exit_code == 0
+    assert "ROUTED-TO-PYTHON-STACK" in r.stdout.decode()
+
+
+async def test_unjailed_python_shim_falls_back_to_host_python3_without_carrier(tmp_path):
+    """Without a python-stack carrier, unjailed `python` must STILL not inherit
+    the host's own service venv (the head of the inherited PATH) — it falls
+    back to /usr/bin/python3. #350's bug was exactly that fall-through to the
+    host venv; the fallback shim is the regression lock."""
+    import os
+    import sys
+
+    tools = tmp_path / "prebuilt"
+    tools.mkdir()
+    (tools / "something-else").mkdir()  # tools dir present but NO python-stack
+
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=tools)
+    h = await sb.create(SandboxSpec())
+    r = await sb.exec(h, ["python", "-c", "import sys; print(sys.executable)"])
+    assert r.exit_code == 0
+    got = r.stdout.decode().strip()
+    assert got != sys.executable  # did NOT inherit the venv this test runs under
+    assert os.path.realpath(got) == os.path.realpath("/usr/bin/python3")
+
+
+async def test_unjailed_python_shim_is_invisible_to_walk_and_idempotent(tmp_path):
+    """The `.jailbin` shim lives outside the workspace, so walk never sees it
+    even once built; and being rebuilt every exec must stay idempotent."""
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = await sb.create(SandboxSpec())
+    await sb.upload(h, b"x", "/note.md")
+    r1 = await sb.exec(h, ["python", "-c", "print('ok')"])  # builds .jailbin
+    r2 = await sb.exec(h, ["python", "-c", "print('ok')"])  # rebuild: must not raise
+    assert r1.exit_code == 0 and r2.exit_code == 0
+    assert r2.stdout.decode().strip() == "ok"
+    assert {e.path for e in await sb.walk(h, "/")} == {"/note.md"}  # shim invisible
+
+
+async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback(tmp_path):
+    """A carrier provisioned AFTER the first exec (the `provision_tools` path)
+    must be picked up: the per-exec shim re-points `python` from the
+    /usr/bin/python3 fallback to the carrier. Covers the mismatch→re-point path
+    without a real bundle build."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    h = await sb.create(SandboxSpec())
+    r1 = await sb.exec(h, ["python", "-c", "print('fallback')"])  # no carrier yet
+    assert r1.exit_code == 0 and r1.stdout.decode().strip() == "fallback"
+    # A carrier lands in-sandbox after create (mimics provision_tools extract).
+    stack = tmp_path / "sb" / h.id / ".tools" / "python-stack"
+    stack.mkdir(parents=True)
+    (stack / "launch").write_text("#!/bin/sh\necho ROUTED-TO-PYTHON-STACK\n")
+    (stack / "launch").chmod(0o755)
+    r2 = await sb.exec(h, ["python", "-c", "ignored"])
+    assert r2.exit_code == 0
+    assert "ROUTED-TO-PYTHON-STACK" in r2.stdout.decode()

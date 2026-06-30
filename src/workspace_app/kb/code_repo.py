@@ -26,6 +26,8 @@ import shutil
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
 
@@ -54,25 +56,55 @@ class CodeRepoIngestor:
         self._spec = spec
         self._ingestor = ingestor
 
-    def sync(self, *, collection_id: str, user: str, now_ms: int | None = None) -> None:
+    def sync(
+        self,
+        *,
+        collection_id: str,
+        user: str,
+        now_ms: int | None = None,
+        on_phase: Callable[[str], None] | None = None,
+    ) -> None:
         """Clone the Collection's `git_url` and ingest each tracked file.
 
         No-op when the Collection has no `git_url` set (so a scheduler can
         walk every Collection blindly). Raises `CodeRepoSyncError` on git
-        failure (bad URL, auth, branch missing)."""
+        failure (bad URL, auth, branch missing).
+
+        ``on_phase`` (#355) is called with ``"cloning"`` then ``"ingesting"`` so
+        the caller (the ``code_sync`` job handler) can surface live progress."""
         crm = self._spec.get_resource_manager(Collection)
         coll = crm.get(collection_id).data
         assert isinstance(coll, Collection)
         if not coll.git_url:
             return  # not a code collection
         url = _splice_token(coll.git_url, coll.git_token)
+        # Stamp the wall-clock pull time on EVERY attempt — success or failure —
+        # so the daily sweeper (#355) treats this collection as "tried today" and
+        # doesn't re-fire it every tick after the daily-sync time. On success we
+        # also advance ``git_last_sha``; a failed clone keeps the prior sha (its
+        # error is surfaced separately, via the wiki build state's last_error).
+        # This is the collection's own sync bookkeeping, not a user edit, so write
+        # it AS THE OWNER: #262's write ACL (perm.checker) gates every Collection
+        # update on `write_meta`, and the syncer (a non-owner editor, or the
+        # sweeper running as the default user) need not hold it.
+        stamp = now_ms if now_ms is not None else int(time.time() * 1000)
+        owner = crm.get_meta(collection_id).created_by
         with tempfile.TemporaryDirectory(prefix="code-repo-") as raw:
             checkout = Path(raw) / "repo"
             try:
+                if on_phase is not None:
+                    on_phase("cloning")
                 self._clone(url, coll.git_branch, checkout)
                 sha = self._head_sha(checkout)
+                if on_phase is not None:
+                    on_phase("ingesting")
                 self._ingest_tree(collection_id, user, checkout)
             except subprocess.CalledProcessError as e:
+                with crm.using(owner):
+                    crm.update(
+                        collection_id,
+                        msgspec.structs.replace(coll, git_last_pulled_at=stamp),
+                    )
                 msg = (e.stderr or b"").decode("utf-8", errors="replace").strip()
                 raise CodeRepoSyncError(f"git failed: {msg or e}") from e
             finally:
@@ -80,14 +112,6 @@ class CodeRepoIngestor:
                 # for the case where git itself wrote .git permissions that
                 # block rmtree on some filesystems.
                 shutil.rmtree(checkout, ignore_errors=True)
-        # Stamp both the cloned HEAD and the wall-clock pull time so the
-        # background sweeper can decide whether the Collection is due next. This
-        # is the collection's own sync bookkeeping, not a user edit, so write it
-        # AS THE OWNER: #262's write ACL (perm.checker) gates every Collection
-        # update on `write_meta`, and the syncer (a non-owner editor, or the
-        # sweeper running as the default user) need not hold it.
-        stamp = now_ms if now_ms is not None else int(time.time() * 1000)
-        owner = crm.get_meta(collection_id).created_by
         with crm.using(owner):
             crm.update(
                 collection_id,
@@ -140,54 +164,98 @@ class CodeRepoIngestor:
 
 
 class CodeRepoSweeper:
-    """Background-loop helper: every tick, re-sync any Collection whose
-    `sync_interval_hours` has elapsed since `git_last_pulled_at`.
+    """Background-loop helper: every tick, enqueue a ``code_sync`` job for any
+    code Collection that is due for its daily wall-clock sync (#355).
 
-    `tick()` is what does one pass (caller drives the cadence). Per-collection
-    sync failures are caught + logged so one bad remote never crashes the
-    sweeper. The app's lifespan task awakens every
-    ``Settings.sync_check_interval_sec`` and calls `tick()`."""
+    `tick()` is what does one pass (caller drives the cadence). It is a pure
+    *producer*: it does NOT clone/ingest itself (that runs in the enqueued
+    ``code_sync`` job on the wiki worker — #312 keeps heavy work off the API).
+    The app's lifespan task awakens every ``Settings.sync_check_interval_sec``
+    and calls `tick()`.
 
-    _DEFAULT_USER = "default-user"  # v1: no auth on the sweeper either
+    The schedule is a single server-local time-of-day (``daily_sync``, ``HH:MM``)
+    that applies to *every* code collection — there is no per-collection knob.
+    The old per-collection ``sync_interval_hours`` interval is no longer read
+    (it stays on the model as a dormant field). ``daily_sync=None`` ⇒ the daily
+    auto-sync is off and `tick()` is a no-op (manual POST /sync only). ``enqueue``
+    is the coordinator's ``enqueue_code_sync`` (which coalesces, so a still-running
+    sync isn't re-queued — and the job's own clone stamps ``git_last_pulled_at``
+    even on failure, so a due collection fires at most once a day: no retry
+    storm)."""
 
-    def __init__(self, spec: SpecStar, *, code_repo: CodeRepoIngestor) -> None:
+    def __init__(
+        self,
+        spec: SpecStar,
+        *,
+        enqueue: Callable[[str], None],
+        daily_sync: str | None = None,
+    ) -> None:
         self._spec = spec
-        self._code_repo = code_repo
+        self._enqueue = enqueue
+        self._daily_sync = daily_sync
 
     def tick(self, *, now_ms: int | None = None) -> list[str]:
-        """Run one sweep pass. Returns the Collection ids that were
-        successfully synced this tick (skipped + failed ones excluded)."""
+        """Run one sweep pass. Returns the Collection ids a ``code_sync`` was
+        enqueued for this tick (collections not yet due are skipped)."""
         stamp = now_ms if now_ms is not None else int(time.time() * 1000)
-        synced: list[str] = []
+        enqueued: list[str] = []
         rm = self._spec.get_resource_manager(Collection)
         for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
             coll = r.data
             assert isinstance(coll, Collection)
-            if not coll.git_url or coll.sync_interval_hours is None:
+            if not coll.git_url:
                 continue
-            # First-pull (last_pulled_at=None) is always due — we don't make
-            # the user wait `sync_interval_hours` after creating a code
-            # Collection before its initial clone. Subsequent ticks honour
-            # the interval.
-            interval_ms = coll.sync_interval_hours * 3600_000
-            if (
-                coll.git_last_pulled_at is not None
-                and stamp - coll.git_last_pulled_at < interval_ms
+            if not _due_for_daily_sync(
+                now_ms=stamp,
+                last_pulled_ms=coll.git_last_pulled_at,
+                daily_sync=self._daily_sync,
             ):
-                continue  # not yet due
-            cid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            try:
-                self._code_repo.sync(
-                    collection_id=cid,
-                    user=self._DEFAULT_USER,
-                    now_ms=stamp,
-                )
-            except CodeRepoSyncError:
-                # Don't take down the whole sweep over one bad remote.
-                logger.exception("code-repo sweeper: sync failed for %s", cid)
                 continue
-            synced.append(cid)
-        return synced
+            cid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            self._enqueue(cid)
+            enqueued.append(cid)
+        return enqueued
+
+
+def parse_daily_sync(value: str | None) -> tuple[int, int] | None:
+    """Parse a ``daily_sync`` config string (``"HH:MM"``, 24-hour) into
+    ``(hour, minute)``. Returns ``None`` for an unset / malformed value, which
+    callers treat as "daily auto-sync off" (no crash on a typo'd config)."""
+    if not value:
+        return None
+    parts = value.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour, minute = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if 0 <= hour < 24 and 0 <= minute < 60:
+        return (hour, minute)
+    return None
+
+
+def _due_for_daily_sync(*, now_ms: int, last_pulled_ms: int | None, daily_sync: str | None) -> bool:
+    """Is a code collection due for its daily auto-sync right now?
+
+    Due when (a) ``daily_sync`` is set, (b) the current local time is at/after
+    today's ``HH:MM`` target, and (c) the last pull/attempt was before today's
+    target (or it has never synced). Because `CodeRepoIngestor.sync` stamps
+    ``git_last_pulled_at`` on every attempt — success OR failure — a due
+    collection fires at most once per day even if the clone keeps failing: no
+    every-tick retry storm (the user's create-time-typo worry)."""
+    hhmm = parse_daily_sync(daily_sync)
+    if hhmm is None:
+        return False
+    hour, minute = hhmm
+    now = datetime.fromtimestamp(now_ms / 1000)  # server-local time
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if now < target:
+        return False  # today's daily-sync time not reached yet
+    if last_pulled_ms is None:
+        return True  # never synced and past today's time → due
+    last = datetime.fromtimestamp(last_pulled_ms / 1000)
+    return last < target  # already synced/attempted after today's time → not due
 
 
 def _splice_token(url: str, token: str | None) -> str:

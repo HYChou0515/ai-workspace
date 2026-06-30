@@ -205,6 +205,73 @@ export const messages = {
   "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
   "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
 
+  // #356 Tune parsing modal.
+  "kb.tuneParsing.button": { "zh-TW": "調整解析", en: "Tune parsing" },
+  "kb.tuneParsing.buttonTitle": {
+    "zh-TW": "為這份文件調整解析 prompt,並試答看看",
+    en: "Tune the parse prompt for this document, and try answering",
+  },
+  "kb.tuneParsing.title": { "zh-TW": "調整解析", en: "Tune parsing" },
+  "kb.tuneParsing.description": {
+    "zh-TW": "打一個使用者會問的問題,看這份文件在檢索中排到多深(會排得比使用者實際看到的更深,所以埋很深的段落會顯示成像「#37」而不只是「找不到」)。編輯下面的解析 prompt 後可重新解析、並「試答」這題;只套用到這份文件,或套用到整個 collection。套用前不會寫入任何東西。",
+    en: 'Type a question your users would ask and see how deep this document ranks for it — we rank far past the top results a user sees, so a buried passage reads as "#37" rather than just "absent". Edit the parse prompt below, re-parse, and "Try answer" the question; save it for this document only, or apply it to the whole collection. Nothing is written until you apply.',
+  },
+  "kb.tuneParsing.close": { "zh-TW": "關閉", en: "Close" },
+  "kb.tuneParsing.question": { "zh-TW": "問題", en: "Question" },
+  "kb.tuneParsing.questionPlaceholder": {
+    "zh-TW": "例如:焊接空洞的根本原因是什麼?",
+    en: "e.g. what is the root cause of the solder void?",
+  },
+  "kb.tuneParsing.k": { "zh-TW": "前 k 段 (k={k})", en: "Top-k (k={k})" },
+  "kb.tuneParsing.kTitle": {
+    "zh-TW": "排名前 k 段才算「使用者看得到」、才會進入試答的 context;同時決定排名高亮。",
+    en: 'The top-k passages count as "what a user sees" and feed Try answer; also drives the rank highlight.',
+  },
+  "kb.tuneParsing.checkRanks": { "zh-TW": "檢查排名", en: "Check ranks" },
+  "kb.tuneParsing.reparse": { "zh-TW": "用 guidance 重新解析", en: "Re-parse with guidance" },
+  "kb.tuneParsing.reparseTitle": {
+    "zh-TW": "用下面的 guidance 重新解析這份文件(會跑解析器,可能要一下子)",
+    en: "Re-parse this document with the guidance below (runs the parser — may take a moment)",
+  },
+  "kb.tuneParsing.guidance": { "zh-TW": "解析 prompt", en: "Parser guidance" },
+  "kb.tuneParsing.guidancePlaceholder": {
+    "zh-TW": "例如:看到魚骨圖就輸出 JSON;看到表格就輸出 Markdown。",
+    en: "e.g. If you see a fishbone diagram, emit JSON; a table, emit Markdown.",
+  },
+  "kb.tuneParsing.sourceCustom": { "zh-TW": "此文件:專屬設定", en: "This document: custom override" },
+  "kb.tuneParsing.sourceInherited": {
+    "zh-TW": "此文件:繼承自 collection",
+    en: "This document: inherited from collection",
+  },
+  "kb.tuneParsing.before": { "zh-TW": "現況", en: "Before (current)" },
+  "kb.tuneParsing.after": { "zh-TW": "套用新 prompt 後", en: "After (this guidance)" },
+  "kb.tuneParsing.tryAnswer": { "zh-TW": "試答", en: "Try answer" },
+  "kb.tuneParsing.bestRank": { "zh-TW": "最佳 #{rank}", en: "best #{rank}" },
+  "kb.tuneParsing.notInTop": { "zh-TW": "不在前 {k} 名", en: "not in top {k}" },
+  "kb.tuneParsing.saveDoc": { "zh-TW": "只套用到這份文件", en: "Save for this document" },
+  "kb.tuneParsing.applyCollection": {
+    "zh-TW": "套用到整個 collection",
+    en: "Apply to whole collection",
+  },
+  "kb.tuneParsing.applyConfirm": {
+    "zh-TW": "這會改變整個 collection 之後所有文件的解析。確定要套用嗎?",
+    en: "This changes parsing for every document in the collection on the next re-index. Continue?",
+  },
+  "kb.tuneParsing.clearOverride": { "zh-TW": "清除專屬設定", en: "Clear document override" },
+  "kb.tuneParsing.savedNudge": {
+    "zh-TW": "已儲存,尚未生效 — 重新索引後才會套用。",
+    en: "Saved — not in effect yet; re-index to apply.",
+  },
+  "kb.tuneParsing.reindexDoc": { "zh-TW": "重新索引這份文件", en: "Re-index this document" },
+  "kb.tuneParsing.running": { "zh-TW": "執行中…", en: "running…" },
+  "kb.tuneParsing.applied": { "zh-TW": "已套用", en: "Applied" },
+  "kb.tuneParsing.probeFailed": { "zh-TW": "探測失敗", en: "probe failed" },
+  "kb.tuneParsing.answerFailed": { "zh-TW": "回答失敗", en: "answer failed" },
+  "kb.tuneParsing.emptyForQuestion": {
+    "zh-TW": "在前 {k} 名內,這份文件沒有任何段落 — 使用者問這題時用不到它(這就是要修的訊號)。",
+    en: "This document has no passage in the top {k} for the question — it won't help a user asking it (the red flag to fix).",
+  },
+
   // #105: document quality (badge + status-bar verdict + rubric editor).
   "kb.quality.good": { "zh-TW": "品質良好", en: "Good quality" },
   "kb.quality.ok": { "zh-TW": "品質普通", en: "Fair quality" },

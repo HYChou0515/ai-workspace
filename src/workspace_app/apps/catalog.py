@@ -148,14 +148,32 @@ def _read_base_preamble() -> str:
     return (resources.files(_APPS_PKG) / "_base.md").read_text("utf-8")
 
 
+def _read_sandbox_preamble() -> str:
+    """The shared sandbox preamble — `exec` / shell / python-via-exec guidance
+    prepended to every App whose `function.sandbox` is true. Split out from the
+    workspace `_base` preamble so a workspace App with no sandbox (e.g. the
+    `_template`) isn't told about an `exec` tool it doesn't have. A bundled
+    `_`-prefixed file so `discover_app_slugs` never mistakes it for an App."""
+    return (resources.files(_APPS_PKG) / "_sandbox.md").read_text("utf-8")
+
+
 def _compose_prompt(
-    base: str, appendix: str, skills: list[SkillMeta], *, preamble: str = ""
+    base: str,
+    appendix: str,
+    skills: list[SkillMeta],
+    *,
+    preamble: str = "",
+    sandbox_preamble: str = "",
 ) -> str:
     parts = [base.rstrip()] if base else []
     # #241: the shared workspace preamble sits after the App's identity (base)
     # and before the profile appendix. Empty for non-workspace Apps → omitted.
     if preamble:
         parts.append(preamble.rstrip())
+    # The shared sandbox preamble follows the workspace preamble, still ahead of
+    # the profile appendix. Empty for non-sandbox Apps → omitted.
+    if sandbox_preamble:
+        parts.append(sandbox_preamble.rstrip())
     if appendix:
         parts.append(appendix.rstrip())
     # §A skill index (#29 / #89): advertise the profile's `read_skill`-loadable
@@ -229,6 +247,7 @@ class AppCatalog:
             load_profile_appendix(app_slug, profile),
             merged_profile_skills(app_slug, profile, manifest.agent.skills),
             preamble=_read_base_preamble() if manifest.function.workspace else "",
+            sandbox_preamble=_read_sandbox_preamble() if manifest.function.sandbox else "",
         )
         suggestions = list(prof.suggestions or manifest.agent.suggestions)
         name = next((p.name for p in manifest.agent.picker if p.preset == chosen), chosen)

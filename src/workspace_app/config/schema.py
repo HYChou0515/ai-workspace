@@ -362,6 +362,14 @@ class CodeEmbedderSettings:
 class GitSettings:
     default_token: str = ""
     sync_check_interval_sec: int = 300
+    # Issue #355: wall-clock daily auto-sync time for code collections, "HH:MM"
+    # in the server's local timezone. Every code collection (one with a git_url)
+    # is re-synced once a day at this time — there is no per-collection override.
+    # The sweeper wakes every ``sync_check_interval_sec`` and fires the first tick
+    # past this time each day. ``""`` / ``None`` ⇒ daily auto-sync OFF (manual
+    # POST /sync only). Replaces the old per-collection ``sync_interval_hours``
+    # interval (now a dormant field).
+    daily_sync: str | None = "03:00"
 
 
 @dataclass(frozen=True)

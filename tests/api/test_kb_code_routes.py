@@ -91,36 +91,55 @@ def test_create_collection_accepts_git_url_and_embedder_id(app):
     assert "git_token" not in body or body["git_token"] is None
 
 
-def test_sync_endpoint_clones_and_ingests(app, remote: str):
-    """POST /kb/collections/:id/sync clones the git_url + ingests each file.
-    The endpoint returns 200 with the cloned HEAD sha."""
+def test_patch_collection_edits_git_branch_and_rotates_token(app):
+    """#355 P6: the FE git-connection editor PATCHes the Collection's branch +
+    token through specstar's native CRUD route. A partial PATCH updates only the
+    fields sent (branch → develop, token rotated), leaving git_url intact."""
     client = TestClient(app)
-    created = client.post(
+    cid = client.post(
+        "/kb/collections",
+        json={"name": "r", "git_url": "https://git.example/r.git", "embedder_id": 1},
+    ).json()["resource_id"]
+    resp = client.patch(
+        f"/collection/{cid}", json={"git_branch": "develop", "git_token": "ghp_new"}
+    )
+    assert resp.status_code in (200, 204), resp.text
+    # CollectionOut (the FE-facing list) reflects the new branch; url is unchanged.
+    coll = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert coll["git_branch"] == "develop"
+    assert coll["git_url"] == "https://git.example/r.git"
+
+
+def test_sync_endpoint_enqueues_clone_and_ingest(app, remote: str):
+    """#355: POST /sync returns immediately with status="queued" (no synchronous
+    clone). Once the enqueued code_sync job drains, the cloned files are ingested
+    as SourceDocs and git_last_sha is stamped."""
+    import asyncio
+
+    client = TestClient(app)
+    cid = client.post(
         "/kb/collections",
         json={"name": "repo", "git_url": remote, "embedder_id": 1},
-    ).json()
-    cid = created["resource_id"]
+    ).json()["resource_id"]
     resp = client.post(f"/kb/collections/{cid}/sync")
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert isinstance(body["git_last_sha"], str) and len(body["git_last_sha"]) == 40
-    # Verify side-effect via the documents-list endpoint: the cloned files
-    # made it into SourceDocs.
+    assert resp.json()["status"] == "queued"
+    asyncio.run(app.state.wiki_coordinator.aclose())  # drain the code_sync job
     docs = client.get(f"/kb/collections/{cid}/documents").json()["items"]
     paths = {d["path"] for d in docs}
     assert "a.py" in paths
     assert "README.md" in paths
+    coll = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert isinstance(coll["git_last_sha"], str) and len(coll["git_last_sha"]) == 40
 
 
 def test_sync_endpoint_triggers_a_code_wiki_build(app, remote: str):
-    """A0 regression: syncing a code collection with the wiki path on must
-    trigger a code-wiki build through the REAL endpoint seam. The old wiring
-    relied on ``on_doc_indexed``, which ``code_repo.sync``'s synchronous ingest
-    bypasses — so the wiki never built on the main flow. This app wires no wiki
-    LLM, so the observable proof the trigger reached the builder is the build
-    status recording the not-configured attempt; before the fix sync recorded
-    nothing at all (status default, ``last_error`` None)."""
+    """Syncing a wiki code collection chains the code_sync job into the code-wiki
+    build through the REAL endpoint seam. This app wires no wiki LLM, so the proof
+    the build reached the builder is the status recording the not-configured
+    attempt (observed after the job drains)."""
+    import asyncio
+
     client = TestClient(app)
     cid = client.post(
         "/kb/collections",
@@ -128,6 +147,8 @@ def test_sync_endpoint_triggers_a_code_wiki_build(app, remote: str):
     ).json()["resource_id"]
     resp = client.post(f"/kb/collections/{cid}/sync")
     assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "queued"
+    asyncio.run(app.state.wiki_coordinator.aclose())
     status = client.get(f"/kb/collections/{cid}/wiki/status").json()
     assert "not configured" in (status["last_error"] or "")
 
@@ -163,11 +184,14 @@ def test_lifespan_runs_code_sync_sweeper(remote: str):
         kb_pipeline=build_doc_pipeline(embedder=text),
         # Quick poll so the test isn't slow.
         code_sync_check_interval=timedelta(milliseconds=50),
+        # "00:00" is always already past today, so a never-synced code
+        # collection is due on the first tick regardless of wall-clock time.
+        code_daily_sync="00:00",
     )
     client = TestClient(application)
     cid = client.post(
         "/kb/collections",
-        json={"name": "r", "git_url": remote, "sync_interval_hours": 1},
+        json={"name": "r", "git_url": remote},
     ).json()["resource_id"]
     with client:  # enter lifespan
         # The sweeper ticks once every 50ms; poll for the side-effect.
@@ -221,11 +245,12 @@ def test_lifespan_sweeper_triggers_code_wiki_build(remote: str):
         kb_embedder=text,
         kb_pipeline=build_doc_pipeline(embedder=text),
         code_sync_check_interval=timedelta(milliseconds=50),
+        code_daily_sync="00:00",  # always past today → due on the first tick
     )
     client = TestClient(application)
     cid = client.post(
         "/kb/collections",
-        json={"name": "r", "git_url": remote, "use_wiki": True, "sync_interval_hours": 1},
+        json={"name": "r", "git_url": remote, "use_wiki": True},
     ).json()["resource_id"]
     with client:  # enter lifespan → starts the sweeper
 
@@ -241,12 +266,23 @@ def test_lifespan_sweeper_triggers_code_wiki_build(remote: str):
     assert err and "not configured" in err
 
 
-def test_sync_endpoint_502s_on_clone_failure(app, tmp_path: Path):
-    """A bogus git_url surfaces as 502 (upstream failure), not 500."""
+def test_sync_endpoint_records_clone_failure_async(app, tmp_path: Path):
+    """#355: a bogus git_url no longer 502s synchronously — the clone runs in the
+    async code_sync job. The endpoint returns queued; after the job drains, the
+    failure is surfaced via /wiki/status last_error (the async stand-in for 502)
+    and no sha is stamped."""
+    import asyncio
+
     client = TestClient(app)
     bogus = (tmp_path / "no-such").as_uri()
     cid = client.post(
         "/kb/collections", json={"name": "bad", "git_url": bogus, "embedder_id": 1}
     ).json()["resource_id"]
     resp = client.post(f"/kb/collections/{cid}/sync")
-    assert resp.status_code == 502
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "queued"
+    asyncio.run(app.state.wiki_coordinator.aclose())
+    status = client.get(f"/kb/collections/{cid}/wiki/status").json()
+    assert status["last_error"]
+    coll = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert coll["git_last_sha"] is None

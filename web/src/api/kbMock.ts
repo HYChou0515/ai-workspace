@@ -135,6 +135,10 @@ export const mockKbApi: KbApi = {
       owner: "me",
       use_rag: opts?.useRag ?? true,
       use_wiki: opts?.useWiki ?? false,
+      git_url: opts?.gitUrl ?? null,
+      git_branch: opts?.gitBranch ?? null,
+      git_last_sha: null,
+      git_last_pulled_at: null,
       wiki_maintainer_guidance: "",
       wiki_reader_guidance: "",
     };
@@ -250,21 +254,38 @@ export const mockKbApi: KbApi = {
     return { collection_id: collectionId, document_ids: [], status: "indexing" };
   },
   async probeFindability(body) {
-    // #328: a deterministic mock — the doc surfaces at #2, and any candidate
+    // #328/#356: a deterministic mock — the doc surfaces at #2, and any candidate
     // guidance "improves" it to #1, enough for tests that don't stub their own.
+    const k = body.k ?? 5;
     const passage = (rank: number) => ({
       rank,
-      in_top_k: rank <= 5,
+      in_top_k: rank <= k,
       text: `Mock passage for ${body.doc_id} (q: ${body.question}).`,
       location: "p.1",
     });
     return {
-      top_k: 5,
-      depth: body.depth ?? 50,
+      top_k: k,
+      depth: Math.max(50, k),
       before: { passages: [passage(2)], best_rank: 2 },
       after:
         body.guidance == null ? null : { passages: [passage(1)], best_rank: 1 },
     };
+  },
+  async *answerFindability(args) {
+    // #356: a deterministic streamed mock answer that cites the (mock) passage.
+    yield { type: "message_delta", text: `Mock answer for "${args.question}" `, reasoning: false };
+    yield { type: "message_delta", text: "from this document [1].", reasoning: false };
+    yield { type: "done" };
+  },
+  async setDocumentGuidance(documentId, guidance) {
+    const collectionId = documentId.split("/")[0] ?? "";
+    const list = documents.get(collectionId) ?? [];
+    documents.set(
+      collectionId,
+      list.map((d) =>
+        d.resource_id === documentId ? { ...d, parser_guidance_override: guidance } : d,
+      ),
+    );
   },
   async renderDocument(documentId): Promise<KbRenderedDoc> {
     const filename = documentId.split("/").pop() ?? documentId;
@@ -420,6 +441,14 @@ export const mockKbApi: KbApi = {
         last_error: null,
       }
     );
+  },
+  async syncCollection(collectionId) {
+    // #355: simulate the async sync — stamp a fake synced commit so the dev
+    // collection page shows the "Synced to …" strip.
+    const c = collections.get(collectionId);
+    const sha = "0".repeat(40);
+    if (c) collections.set(collectionId, { ...c, git_last_sha: sha, git_last_pulled_at: Date.now() });
+    return { status: "queued", git_last_sha: c?.git_last_sha ?? null };
   },
   async listContextCards(collectionId) {
     return [...(contextCards.get(collectionId) ?? [])];

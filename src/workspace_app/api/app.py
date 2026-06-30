@@ -17,7 +17,7 @@ from ..health.replay import ReplayService
 from ..health.service import HealthService
 from ..kb.chunker import Chunker
 from ..kb.embedder import Embedder, HashEmbedder
-from ..kb.llm import ILlm
+from ..kb.llm import ILlm, LitellmLlm
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import IVlm, VlmDescriber
 from ..kernels import KernelService
@@ -125,6 +125,11 @@ def create_app(
     sanity_judge_llm: ILlm | None = None,
     insights_collection_name: str = "Investigations Knowledge",
     kb_llm: ILlm | None = None,
+    # #356: the LLM the Tune-parsing "Try answer" path streams through — the
+    # kb_chat model, answering from a FIXED doc∩top-k passage set (no self-search).
+    # None ⇒ build a plain LitellmLlm from the default kb_chat AgentConfig so the
+    # probe answers with the same model a user's KB chat would; tests inject a fake.
+    answer_llm: ILlm | None = None,
     # #175: the LLM that drafts context cards from documents (自動 context card).
     # None ⇒ a no-op drafter (the feature stays mounted but proposes nothing).
     # __main__ passes factories.get_card_drafter_llm(settings).
@@ -177,6 +182,10 @@ def create_app(
     # disabled (manual /sync only). __main__ derives this from
     # Settings.sync_check_interval_sec.
     code_sync_check_interval: timedelta | None = None,
+    # #355: server-local "HH:MM" wall-clock time the daily code-collection
+    # auto-sync fires (None ⇒ off). __main__ derives this from
+    # Settings.kb.git.daily_sync.
+    code_daily_sync: str | None = None,
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
     exec_output_max_chars: int = 30_000,
@@ -290,6 +299,14 @@ def create_app(
     # Default for the RCA→KB ask_knowledge_base bridge (no picker
     # context — the RCA agent doesn't pick a KB model per turn).
     default_kb_agent_config = kb_agent_configs[0]
+    # #356: the Tune-parsing "Try answer" LLM — same model as the KB chat, so the
+    # probe's answer mirrors production. A plain LitellmLlm (no agent tool loop):
+    # it's handed a FIXED passage set, so it must NOT self-search.
+    kb_answer_llm = answer_llm or LitellmLlm(
+        default_kb_agent_config.model,
+        base_url=default_kb_agent_config.llm_base_url or None,
+        api_key=default_kb_agent_config.llm_api_key or None,
+    )
     # Same shape for infer_modules: fall back to bundled when the
     # supplied catalog didn't wire one (legacy positional-list tests).
     default_infer_modules_config = catalog.infer_modules() or _bundled.infer_modules()
@@ -351,6 +368,7 @@ def create_app(
         mirror_interval=mirror_interval,
         max_workspace_bytes=max_workspace_bytes,
         code_sync_check_interval=code_sync_check_interval,
+        code_daily_sync=code_daily_sync,
         gc_interval=gc_interval,
         gc_t1=gc_t1,
         gc_t2=gc_t2,
@@ -487,6 +505,8 @@ def create_app(
         retriever=kb_retriever,
         get_user_id=get_user_id,
         superusers=superusers,
+        answer_llm=kb_answer_llm,
+        answer_system_prompt=default_kb_agent_config.system_prompt,
     )
     # #106: the exposed deterministic context-card lookup (read route, post-apply).
     register_context_card_routes(api, spec)
