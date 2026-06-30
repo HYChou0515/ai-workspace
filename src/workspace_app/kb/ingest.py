@@ -470,12 +470,13 @@ class Ingestor:
             path=path,
             content=Binary(data=data),
             status="indexing",
-            # #328: carry the per-doc parser config override across a re-upload.
-            # It's a per-doc EXTRACTION setting (the escape hatch), not tied to a
-            # content version — so a hand-tuned doc keeps its tuning when its bytes
-            # change. (A full re-index never reconstructs the SourceDoc, so it was
-            # already safe there; this covers the re-upload-new-bytes path.)
+            # #328/#356: carry the per-doc extraction escape hatches across a
+            # re-upload. They're per-doc EXTRACTION settings, not tied to a content
+            # version — so a hand-tuned doc keeps its tuning when its bytes change.
+            # (A full re-index never reconstructs the SourceDoc, so it was already
+            # safe there; this covers the re-upload-new-bytes path.)
             parser_config_overrides=(existing.parser_config_overrides if existing else {}),
+            parser_guidance_override=(existing.parser_guidance_override if existing else ""),
         )
         if existing is None:
             drm.create(doc, resource_id=doc_id)
@@ -527,11 +528,17 @@ class Ingestor:
             doc_overrides=doc.parser_config_overrides,
         )
 
-    def _parse_guidance_for(self, collection_id: str) -> str:
-        """The collection's ``parser_guidance`` (#328) — appended to every
-        prompt-driven parser's base prompt. Empty ``""`` (the default) ⇒ the
-        ingestor never threads ``guidance`` (zero-churn for parsers/collections
-        that don't use it)."""
+    def _parse_guidance_for(self, collection_id: str, doc_id: str) -> str:
+        """The effective ``parser_guidance`` for this doc — appended to every
+        prompt-driven parser's base prompt. The doc's ``parser_guidance_override``
+        (#356) REPLACES the collection's ``parser_guidance`` when non-empty;
+        otherwise the doc inherits the collection's. Empty ``""`` (the common
+        case) ⇒ the ingestor never threads ``guidance`` (zero-churn for
+        parsers/collections that don't use it)."""
+        doc = self._spec.get_resource_manager(SourceDoc).get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        if doc.parser_guidance_override:
+            return doc.parser_guidance_override
         coll = self._spec.get_resource_manager(Collection).get(collection_id).data
         assert isinstance(coll, Collection)
         return coll.parser_guidance
@@ -614,7 +621,7 @@ class Ingestor:
         # the inline text/code packet (parser_id="") is the fallback for
         # plain text no parser claims.
         packets: list[tuple[str, list[Document]]] = []
-        guidance = self._parse_guidance_for(collection_id)
+        guidance = self._parse_guidance_for(collection_id, doc_id)
         with MaterialisedParserInput(data, filename=path) as source:
             parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
             for parser in parsers:
@@ -869,7 +876,7 @@ class Ingestor:
             assert len(parsers) == 1, "fanout_units guarantees a single parser"
             parser = parsers[0]
             cfg = self._parse_config_for(parser, collection_id=doc.collection_id, doc_id=doc_id)
-            guidance = self._parse_guidance_for(doc.collection_id)
+            guidance = self._parse_guidance_for(doc.collection_id, doc_id)
             docs = list(
                 parser.parse(
                     source,

@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 from collections.abc import Iterator, Sequence
 
+import msgspec
 import pypdf
 from specstar import QB
 
@@ -17,7 +18,7 @@ from workspace_app.kb.parsers import ParserRegistry
 from workspace_app.kb.parsers.pdf import PdfParser
 from workspace_app.kb.vlm import IVlm, VlmDescriber
 from workspace_app.resources import Collection, DocChunk, make_spec
-from workspace_app.resources.kb import EMBED_DIM
+from workspace_app.resources.kb import EMBED_DIM, SourceDoc
 
 
 class _RecordingVlm(IVlm):
@@ -78,6 +79,75 @@ def test_no_guidance_leaves_the_prompt_unsteered():
 
     assert vlm.prompts
     assert all("fishbone" not in p.lower() for p in vlm.prompts)
+
+
+def _set_override(spec, doc_id: str, override: str) -> None:
+    drm = spec.get_resource_manager(SourceDoc)
+    doc = drm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    drm.update(doc_id, msgspec.structs.replace(doc, parser_guidance_override=override))
+
+
+def test_doc_override_replaces_collection_guidance_at_index_time():
+    """#356 escape hatch: a doc whose ``parser_guidance_override`` is set is
+    parsed with THAT override INSTEAD OF the collection's ``parser_guidance``
+    (REPLACE, not append) — so a few special docs can opt out of the collection
+    prompt without changing it for everyone."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", parser_guidance="COLLECTION GUIDANCE"))
+        .resource_id
+    )
+    vlm = _RecordingVlm()
+    ing = _ingestor(spec, vlm)
+    (doc_id,) = ing.ingest(collection_id=cid, user="u", filename="deck.pdf", data=_blank_pdf())
+
+    _set_override(spec, doc_id, "DOC OVERRIDE")
+    vlm.prompts.clear()
+    ing.index(doc_id)  # re-index now that the doc carries its own override
+
+    assert vlm.prompts
+    assert all("DOC OVERRIDE" in p for p in vlm.prompts)
+    assert all("COLLECTION GUIDANCE" not in p for p in vlm.prompts)
+
+
+def test_empty_doc_override_inherits_collection_guidance():
+    """An empty override (the default for every doc) ⇒ the doc still inherits the
+    collection's ``parser_guidance`` — the escape hatch is opt-in per doc."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", parser_guidance="COLLECTION GUIDANCE"))
+        .resource_id
+    )
+    vlm = _RecordingVlm()
+    ing = _ingestor(spec, vlm)
+    (doc_id,) = ing.ingest(collection_id=cid, user="u", filename="deck.pdf", data=_blank_pdf())
+
+    assert vlm.prompts
+    assert all("COLLECTION GUIDANCE" in p for p in vlm.prompts)
+
+
+def test_doc_override_survives_reupload():
+    """#356: the override is an extraction setting, not tied to a content version
+    — re-uploading new bytes for the same path keeps the per-doc tuning."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", parser_guidance="COLLECTION GUIDANCE"))
+        .resource_id
+    )
+    ing = _ingestor(spec, _RecordingVlm())
+    (doc_id,) = ing.ingest(collection_id=cid, user="u", filename="deck.pdf", data=_blank_pdf(1))
+    _set_override(spec, doc_id, "DOC OVERRIDE")
+
+    # re-upload DIFFERENT bytes for the same path → new revision in place, same id
+    (doc_id2,) = ing.ingest(collection_id=cid, user="u", filename="deck.pdf", data=_blank_pdf(2))
+    assert doc_id2 == doc_id
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    assert doc.parser_guidance_override == "DOC OVERRIDE"
 
 
 def _chunk_count(spec, doc_id: str) -> int:

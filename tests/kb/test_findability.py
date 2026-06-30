@@ -7,19 +7,25 @@ from __future__ import annotations
 
 import io
 from collections.abc import Iterator, Sequence
+from typing import cast
 
 import pypdf
 
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.findability import probe_findability
+from workspace_app.kb.findability import (
+    answer_from_passages,
+    doc_passages_in_top_k,
+    probe_findability,
+)
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.li_pipeline import build_doc_pipeline
+from workspace_app.kb.llm import ILlm
 from workspace_app.kb.parsers import ParserRegistry
 from workspace_app.kb.parsers.pdf import PdfParser
 from workspace_app.kb.retriever import Retriever
 from workspace_app.kb.vlm import IVlm, VlmDescriber
 from workspace_app.resources import Collection, make_spec
-from workspace_app.resources.kb import EMBED_DIM
+from workspace_app.resources.kb import EMBED_DIM, RetrievedPassage
 
 
 class _EchoVlm(IVlm):
@@ -107,3 +113,136 @@ def test_probe_candidate_guidance_improves_the_rank():
     # generic, query-irrelevant description before).
     before = result.before.best_rank
     assert before is None or result.after.best_rank <= before
+
+
+# ── #356 answer preview: doc∩top-k passages, then a tool-less grounded answer ──
+
+
+def _passage(doc_id: str, text: str = "x", cid: str = "c") -> RetrievedPassage:
+    return RetrievedPassage(
+        collection_id=cid,
+        document_id=doc_id,
+        filename="f",
+        start=0,
+        end=len(text),
+        source_chunk_ids=[],
+        text=text,
+    )
+
+
+class _FakeRetriever:
+    """Returns a fixed ranked list so a test can pin exactly which of the doc's
+    passages fall inside (or outside) the top-k cutoff."""
+
+    top_k = 5
+
+    def __init__(self, ranked: list[RetrievedPassage]) -> None:
+        self._ranked = ranked
+
+    def search(self, query, collection_ids, on_progress=None, *, depth=None, **kw):
+        return self._ranked[:depth] if depth is not None else self._ranked
+
+
+def _fake_retriever(ranked: list[RetrievedPassage]) -> Retriever:
+    """A `_FakeRetriever` typed as `Retriever` for the probe functions (it only
+    uses `.search`/`.top_k`, which the fake supplies)."""
+    return cast(Retriever, _FakeRetriever(ranked))
+
+
+class _RecordingLlm(ILlm):
+    """Streams a canned reply word-by-word and records the prompt it was given."""
+
+    def __init__(self, reply: str) -> None:
+        self.prompts: list[str] = []
+        self._reply = reply
+
+    def stream(self, prompt: str):
+        self.prompts.append(prompt)
+        for tok in self._reply.split(" "):
+            yield tok + " ", False
+
+
+def test_probe_k_sets_top_k_cutoff_and_widens_depth():
+    """#356: the probe's k (slider) both flags which passages are in_top_k AND
+    widens how deep we rank (max(DEFAULT_DEPTH, k)). k=5 ⇒ a rank-60 passage is
+    beyond depth 50 (invisible); k=100 ⇒ it surfaces and counts as in_top_k."""
+    spec, embedder, ing, doc_id = _setup()
+    ranked = [
+        _passage(doc_id if pos in (1, 60) else "other-doc", text=f"r{pos}") for pos in range(1, 101)
+    ]
+
+    res5 = probe_findability(spec, _fake_retriever(ranked), ing, doc_id=doc_id, question="q", k=5)
+    assert res5.top_k == 5
+    assert [p.rank for p in res5.before.passages] == [1]  # rank 60 is beyond depth 50
+    assert res5.before.passages[0].in_top_k is True
+
+    res100 = probe_findability(
+        spec, _fake_retriever(ranked), ing, doc_id=doc_id, question="q", k=100
+    )
+    assert res100.top_k == 100
+    assert [p.rank for p in res100.before.passages] == [1, 60]  # depth now 100
+    assert all(p.in_top_k for p in res100.before.passages)
+
+
+def test_doc_passages_in_top_k_keeps_only_doc_passages_within_k():
+    """#356 example: the doc's passages rank 1, 4, 6, 12 and k=5 ⇒ only ranks 1 &
+    4 enter the context window (intersection of THIS doc and the global top-k)."""
+    spec, embedder, ing, doc_id = _setup()
+    doc_positions = {1, 4, 6, 12}
+    ranked = [
+        _passage(doc_id, text=f"mine {pos}")
+        if pos in doc_positions
+        else _passage("other-doc", text=f"theirs {pos}")
+        for pos in range(1, 15)
+    ]
+    got = doc_passages_in_top_k(spec, _fake_retriever(ranked), ing, doc_id=doc_id, question="q", k=5)
+    assert [p.text for p in got] == ["mine 1", "mine 4"]
+
+
+def test_doc_passages_in_top_k_after_guidance_returns_full_passage_text():
+    """With a candidate guidance, the doc is re-parsed (Overlay) and its surfacing
+    passages come back with FULL text (not the 600-char probe snippet) so the
+    answerer has the real content."""
+    spec, embedder, ing, doc_id = _setup()
+    got = doc_passages_in_top_k(
+        spec,
+        Retriever(spec, embedder=embedder),
+        ing,
+        doc_id=doc_id,
+        question="solder void root cause",
+        k=5,
+        guidance="Focus the description on solder void root cause defects.",
+    )
+    assert got and all(p.document_id == doc_id for p in got)
+    assert "solder void root cause" in got[0].text.lower()
+
+
+def test_answer_from_passages_streams_grounded_in_the_passages():
+    """The answer is streamed chunk-by-chunk and the LLM is handed the kb system
+    prompt + the numbered passages + the question (so its citation rules apply)."""
+    llm = _RecordingLlm("Grounded answer [1].")
+    seen: list[str] = []
+    out = answer_from_passages(
+        llm,
+        system_prompt="KB-SYS",
+        question="why do voids form?",
+        passages=[_passage("d", text="voids form from flux outgassing")],
+        on_chunk=lambda t, _r: seen.append(t),
+    )
+    assert "Grounded answer" in out
+    assert seen, "the answer should stream"
+    prompt = llm.prompts[0]
+    assert "KB-SYS" in prompt
+    assert "why do voids form?" in prompt
+    assert "voids form from flux outgassing" in prompt
+    assert "[1]" in prompt
+
+
+def test_answer_from_passages_empty_intersection_still_calls_the_llm():
+    """#356 Q8: an empty doc∩top-k still calls the LLM — the kb prompt then says
+    the KB doesn't cover it (or answers from general knowledge), rather than us
+    hard-coding a refusal."""
+    llm = _RecordingLlm("The knowledge base does not appear to cover this.")
+    out = answer_from_passages(llm, system_prompt="KB-SYS", question="q", passages=[])
+    assert out and llm.prompts
+    assert "no passages" in llm.prompts[0].lower()

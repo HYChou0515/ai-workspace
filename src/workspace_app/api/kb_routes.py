@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import msgspec
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 from specstar.aggregates import Count, ForeignAggregate, Max, Sum
@@ -36,15 +36,23 @@ from ..kb.collection_export import (
 )
 from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
-from ..kb.findability import ProbeResult, ProbeSide, probe_findability
+from ..kb.findability import (
+    ProbeResult,
+    ProbeSide,
+    answer_from_passages,
+    doc_passages_in_top_k,
+    probe_findability,
+)
 from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
+from ..kb.llm import ILlm
 from ..kb.preview import preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
 from ..resources.kb import Collection, DocChunk, SourceDoc
+from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
 from .notifications import notify
 
 if TYPE_CHECKING:
@@ -213,7 +221,33 @@ class _ProbeBody(BaseModel):
     doc_id: str
     question: str
     guidance: str | None = None
-    depth: int = 50
+    # #356: the modal's slider — the top-k cutoff that flags which passages a user
+    # sees. The service always ranks deeper (max(DEFAULT_DEPTH, k)) so buried ranks
+    # still show.
+    k: int = 5
+
+
+class _AnswerBody(BaseModel):
+    """#356 "Try answer": stream the answer a question gets from ONLY this doc's
+    passages that land in the top-``k``. ``guidance is None`` ⇒ the current indexed
+    chunks (the Before box); a string ⇒ the candidate re-parse (the After box)."""
+
+    doc_id: str
+    question: str
+    k: int = 5
+    guidance: str | None = None
+
+
+class _DocGuidanceBody(BaseModel):
+    """#356: the per-doc parser-guidance override to persist. ``""`` clears it."""
+
+    guidance: str = ""
+
+
+class DocGuidanceOut(BaseModel):
+    """Echo of the persisted per-doc override (the FE re-syncs its editor)."""
+
+    parser_guidance_override: str
 
 
 class ProbePassageOut(BaseModel):
@@ -289,6 +323,10 @@ class RenderedDoc(BaseModel):
     quality_score: int | None = None
     quality_rationale: str = ""
     quality_breakdown: dict[str, float] = {}
+    # #356: this doc's per-doc parser-guidance override (the escape hatch the
+    # Tune-parsing modal writes). "" ⇒ the doc inherits the collection guidance;
+    # the modal prefills its editor from this (else the collection's).
+    parser_guidance_override: str = ""
 
 
 class DocDeletedOut(BaseModel):
@@ -333,6 +371,10 @@ class DocumentRow(BaseModel):
     # `render_document` detail.
     quality_score: int | None = None
     quality_rationale: str = ""
+    # #356: this doc's per-doc parser-guidance override (the Tune-parsing escape
+    # hatch). "" ⇒ inherits the collection guidance. Rides the row so the modal
+    # prefills its editor without a separate render call.
+    parser_guidance_override: str = ""
 
 
 class CollectionImported(BaseModel):
@@ -411,6 +453,8 @@ def register_kb_routes(
     retriever: Retriever,
     get_user_id: Callable[[], str],
     superusers: frozenset[str] = frozenset(),
+    answer_llm: ILlm,
+    answer_system_prompt: str = "",
 ) -> None:
     # The current user (owner), supplied by create_app — stamped as `created_by`
     # on upload. The doc id is keyed on collection + path only (a path is one
@@ -637,9 +681,68 @@ def register_kb_routes(
             doc_id=body.doc_id,
             question=body.question,
             guidance=body.guidance,
-            depth=max(1, min(body.depth, 200)),
+            k=max(1, min(body.k, 100)),
         )
         return _probe_result_out(result)
+
+    @app.post("/kb/findability/answer")
+    async def findability_answer(body: _AnswerBody) -> StreamingResponse:
+        """#356 "Try answer": stream the answer ``body.question`` gets from ONLY
+        ``body.doc_id``'s passages within the top-``k`` of the real ranked list —
+        the kb_chat model answering a FIXED context (no self-search), so the
+        operator sees whether their doc actually answers the question. ``guidance``
+        re-parses the doc first (the After box). Retrieve / dry-run / LLM stream are
+        all blocking, so they run in a worker thread feeding an async SSE queue."""
+        try:
+            spec.get_resource_manager(SourceDoc).get(body.doc_id)
+        except ResourceIDNotFoundError:
+            raise HTTPException(status_code=404, detail="document not found") from None
+        k = max(1, min(body.k, 100))
+
+        async def gen() -> AsyncIterator[str]:
+            queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
+            loop = asyncio.get_running_loop()
+
+            def emit(event: AgentEvent) -> None:
+                loop.call_soon_threadsafe(queue.put_nowait, event)
+
+            def work() -> None:
+                try:
+                    passages = doc_passages_in_top_k(
+                        spec,
+                        retriever,
+                        ingestor,
+                        doc_id=body.doc_id,
+                        question=body.question,
+                        k=k,
+                        guidance=body.guidance,
+                    )
+                    answer_from_passages(
+                        answer_llm,
+                        system_prompt=answer_system_prompt,
+                        question=body.question,
+                        passages=passages,
+                        on_chunk=lambda text, reasoning: emit(
+                            MessageDelta(text=text, reasoning=reasoning)
+                        ),
+                    )
+                except Exception as exc:  # noqa: BLE001 — failures belong IN the stream
+                    emit(RunError(message=str(exc)))
+                finally:
+                    loop.call_soon_threadsafe(queue.put_nowait, None)
+
+            task = asyncio.create_task(asyncio.to_thread(work))
+            try:
+                while True:
+                    event = await queue.get()
+                    if event is None:
+                        break
+                    yield to_sse(event)
+                yield to_sse(RunDone())
+            finally:
+                await task
+
+        return StreamingResponse(gen(), media_type="text/event-stream")
 
     @app.post("/kb/collections/{collection_id}/documents")
     async def upload_document(
@@ -1086,6 +1189,7 @@ def register_kb_routes(
                     units_total=units_total,
                     quality_score=data.quality_score,
                     quality_rationale=data.quality_rationale,
+                    parser_guidance_override=data.parser_guidance_override,
                 )
             )
         return DocumentsPage(
@@ -1177,7 +1281,25 @@ def register_kb_routes(
             quality_breakdown={
                 k: float(v) for k, v in doc.quality_breakdown.items() if isinstance(v, (int, float))
             },
+            parser_guidance_override=doc.parser_guidance_override,
         )
+
+    @app.post("/kb/documents/guidance")
+    async def set_document_guidance(
+        body: _DocGuidanceBody, doc_id: str = Query(alias="id")
+    ) -> DocGuidanceOut:
+        """#356: write a doc's per-doc ``parser_guidance_override`` (the escape
+        hatch). A non-empty value REPLACES the collection guidance for this doc at
+        index time; ``""`` clears it (the doc re-inherits the collection's). Persist
+        only — like "Apply to collection", it takes effect on the next re-index."""
+        rm = spec.get_resource_manager(SourceDoc)
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+        assert isinstance(doc, SourceDoc)
+        rm.update(doc_id, msgspec.structs.replace(doc, parser_guidance_override=body.guidance))
+        return DocGuidanceOut(parser_guidance_override=body.guidance)
 
     @app.post("/kb/documents/reindex")
     async def reindex_document(doc_id: str = Query(alias="id")) -> ReindexOut:
