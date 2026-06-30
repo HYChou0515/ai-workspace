@@ -182,6 +182,64 @@ def test_upload_encrypted_office_is_rejected_with_422_and_stores_nothing():
     assert client.get(f"/kb/collections/{cid}/documents").json()["items"] == []
 
 
+def test_findability_probe_reports_before_and_after_ranks():
+    """#328: POST /kb/findability/probe ranks a doc's content for a question
+    (before) and, when a candidate guidance is given, re-parses the doc (dry-run,
+    Overlay) and ranks the result (after) — read-only, typed response."""
+    client = _client_with_pipeline()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    for name, body in [
+        ("a.md", b"solder void root cause analysis report"),
+        ("b.md", b"an unrelated note about reflow ovens"),
+    ]:
+        client.post(
+            f"/kb/collections/{cid}/documents", files={"file": (name, body, "text/markdown")}
+        )
+    _drain(client)
+
+    doc_id = encode_doc_id(cid, "a.md")
+    r = client.post(
+        "/kb/findability/probe",
+        json={"doc_id": doc_id, "question": "solder void", "guidance": "focus on solder void"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["top_k"] == 5
+    assert isinstance(data["before"]["passages"], list)
+    assert data["after"] is not None  # a candidate guidance was supplied
+    # a.md carries the query terms → it surfaces in the ranking.
+    assert data["before"]["best_rank"] is not None
+    assert data["before"]["passages"][0]["rank"] == data["before"]["best_rank"]
+
+
+def test_findability_probe_without_guidance_omits_after():
+    """No candidate guidance ⇒ the probe only reports current ranks (`after` is
+    null) — a pure 'where does this doc land today' read."""
+    client = _client_with_pipeline()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("a.md", b"solder void root cause", "text/markdown")},
+    )
+    _drain(client)
+    r = client.post(
+        "/kb/findability/probe",
+        json={"doc_id": encode_doc_id(cid, "a.md"), "question": "solder void"},
+    )
+    assert r.status_code == 200
+    assert r.json()["after"] is None
+
+
+def test_findability_probe_404_for_unknown_doc():
+    client = _client_with_pipeline()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    r = client.post(
+        "/kb/findability/probe",
+        json={"doc_id": encode_doc_id(cid, "nope.md"), "question": "x"},
+    )
+    assert r.status_code == 404
+
+
 def test_upload_checks_endpoint_lists_browser_runnable_hints():
     """#325: the FE fetches these to pre-block encrypted Office files in the
     browser. Server-only checks (PDF) are not listed."""

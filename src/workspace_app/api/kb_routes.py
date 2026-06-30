@@ -36,10 +36,12 @@ from ..kb.collection_export import (
 )
 from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
+from ..kb.findability import ProbeResult, ProbeSide, probe_findability
 from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
 from ..kb.preview import preview_markdown
+from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
 from ..resources.kb import Collection, DocChunk, SourceDoc
@@ -200,6 +202,59 @@ class ReindexOut(BaseModel):
     status: str = "indexing"
 
 
+class _ProbeBody(BaseModel):
+    """#328 findability probe request. ``guidance`` is the modal's CANDIDATE
+    parser_guidance: ``None`` ⇒ report current ranks only; a string (incl. ``""``)
+    ⇒ also re-parse this doc under it (dry-run) and report the after-ranks."""
+
+    doc_id: str
+    question: str
+    guidance: str | None = None
+    depth: int = 50
+
+
+class ProbePassageOut(BaseModel):
+    rank: int
+    in_top_k: bool
+    text: str
+    location: str
+
+
+class ProbeSideOut(BaseModel):
+    passages: list[ProbePassageOut]
+    best_rank: int | None = None
+
+
+class ProbeResultOut(BaseModel):
+    """#328 findability probe response — where this doc's content ranks for the
+    question now (``before``) and under a candidate guidance (``after``, null when
+    none was given)."""
+
+    top_k: int
+    depth: int
+    before: ProbeSideOut
+    after: ProbeSideOut | None = None
+
+
+def _probe_side_out(side: ProbeSide) -> ProbeSideOut:
+    return ProbeSideOut(
+        passages=[
+            ProbePassageOut(rank=p.rank, in_top_k=p.in_top_k, text=p.text, location=p.location)
+            for p in side.passages
+        ],
+        best_rank=side.best_rank,
+    )
+
+
+def _probe_result_out(result: ProbeResult) -> ProbeResultOut:
+    return ProbeResultOut(
+        top_k=result.top_k,
+        depth=result.depth,
+        before=_probe_side_out(result.before),
+        after=_probe_side_out(result.after) if result.after is not None else None,
+    )
+
+
 class RenderedDoc(BaseModel):
     """A source document rendered for the viewer drawer: the markdown body plus
     the metadata its header (meta strip) + actions (download / re-index / remove)
@@ -350,6 +405,7 @@ def register_kb_routes(
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     *,
     index_coordinator: IndexCoordinator,
+    retriever: Retriever,
     get_user_id: Callable[[], str],
     superusers: frozenset[str] = frozenset(),
 ) -> None:
@@ -557,6 +613,29 @@ def register_kb_routes(
             )
             for hint in ingestor.upload_check_hints()
         ]
+
+    @app.post("/kb/findability/probe")
+    async def findability_probe(body: _ProbeBody) -> ProbeResultOut:
+        """#328: rank a doc's content for a representative question (``before``)
+        and — when a candidate ``guidance`` is given — a non-persisted re-parse of
+        this one doc under it (``after``). Read-only: the modal writes nothing; the
+        operator persists a good guidance separately via PATCH /collection. The
+        re-parse re-runs the parser (VLM), so this is offloaded off the loop."""
+        try:
+            spec.get_resource_manager(SourceDoc).get(body.doc_id)
+        except ResourceIDNotFoundError:
+            raise HTTPException(status_code=404, detail="document not found") from None
+        result = await asyncio.to_thread(
+            probe_findability,
+            spec,
+            retriever,
+            ingestor,
+            doc_id=body.doc_id,
+            question=body.question,
+            guidance=body.guidance,
+            depth=max(1, min(body.depth, 200)),
+        )
+        return _probe_result_out(result)
 
     @app.post("/kb/collections/{collection_id}/documents")
     async def upload_document(

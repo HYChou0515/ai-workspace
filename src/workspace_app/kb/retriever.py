@@ -230,6 +230,13 @@ class Retriever:
         self._quality_weight = quality_weight
         self._quality_floor = quality_floor
 
+    @property
+    def top_k(self) -> int:
+        """The user-facing result cut — how many passages a normal search
+        returns. The findability probe reads it to mark which deep ranks fall
+        within "what the user actually sees"."""
+        return self._top_k
+
     def search(
         self,
         query: str,
