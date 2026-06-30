@@ -57,7 +57,9 @@ class _Recording:
         self.uploads: list[tuple[str, int]] = []
         self._results = results or {}
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:  # pragma: no cover
+    async def create(
+        self, spec: SandboxSpec, sandbox_id: str | None = None
+    ) -> SandboxHandle:  # pragma: no cover
         return SandboxHandle(id="s1")
 
     async def exec(self, handle, cmd, on_output=None) -> ExecResult:

@@ -93,6 +93,10 @@ class DockerSandbox:
             ports=ports,
         )
 
+    def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+        # DEPRECATED (#252); per-container sandboxes aren't id-addressable.
+        return None
+
     async def kill(self, handle: SandboxHandle) -> None:
         container = self._require(handle)
         await asyncio.to_thread(self._stop_and_remove, container)

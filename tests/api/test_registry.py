@@ -11,9 +11,9 @@ class _CountingSandbox(MockSandbox):
         self.create_calls = 0
         self.kill_calls = 0
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         self.create_calls += 1
-        return await super().create(spec)
+        return await super().create(spec, sandbox_id)
 
     async def kill(self, handle: SandboxHandle) -> None:
         self.kill_calls += 1
@@ -34,13 +34,29 @@ async def test_same_investigation_id_returns_same_session_instance():
     assert a is b
 
 
-async def test_peek_handle_is_none_until_ensured_then_returns_it():
+async def test_peek_handle_routes_to_shared_dir_then_session_handle_345():
+    # #345: file ops route through peek_handle. With a shared per-item dir, even
+    # a pod with NO local session must route reads to the shared dir (id-derived
+    # handle) — the facade falls back to the snapshot if it's cold — instead of
+    # reading a stale snapshot. Once this pod warms a session, its handle is used.
     registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
-    assert registry.peek_handle("ws-1") is None  # no session yet
+    derived = registry.peek_handle("ws-1")
+    assert derived is not None and derived.id == "ws-1"  # no session, still routable
     session = await registry.session("ws-1")
-    assert registry.peek_handle("ws-1") is None  # session exists, still cold
     handle = await registry.ensure_handle(session)
-    assert registry.peek_handle("ws-1") is handle  # warm
+    assert registry.peek_handle("ws-1") is handle  # this pod's session handle once warm
+
+
+async def test_peek_handle_is_none_when_sandbox_not_id_addressable_345():
+    # An HTTP-style backend mints its own handles (no shared-vol id addressing):
+    # peek_handle has nothing to derive before a session, so it stays None and
+    # reads fall back to the snapshot — the old per-pod behaviour for that kind.
+    class _NoIdSandbox(MockSandbox):
+        def handle_for_id(self, sandbox_id):
+            return None
+
+    registry = InvestigationRegistry(sandbox=_NoIdSandbox(), default_spec=SandboxSpec())
+    assert registry.peek_handle("ws-1") is None
 
 
 async def test_different_investigation_ids_return_distinct_sessions():
@@ -60,6 +76,24 @@ async def test_ensure_handle_creates_sandbox_on_first_call():
     assert s.handle is handle
 
 
+async def test_second_pod_does_not_re_restore_a_live_shared_sandbox_345():
+    # #345: two pods share one sandbox backend (the shared vol). Pod A wakes the
+    # item cold → restores from the snapshot. Pod B, serving the SAME item later,
+    # must NOT re-restore (that would resurrect files the agent deleted) — it
+    # reattaches to the already-materialized shared dir. (_RecordingSync is
+    # defined below; resolved at call time.)
+    sandbox = MockSandbox()  # one backing store shared by both registries
+    sync_a, sync_b = _RecordingSync(), _RecordingSync()
+    pod_a = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync_a)
+    pod_b = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync_b)
+
+    await pod_a.ensure_handle(await pod_a.session("ws-1"))
+    assert sync_a.calls == [("restore", "ws-1")]  # cold → restored once
+
+    await pod_b.ensure_handle(await pod_b.session("ws-1"))
+    assert sync_b.calls == []  # already materialized on the shared vol → no re-restore
+
+
 async def test_ensure_handle_reuses_same_handle_on_second_call():
     sandbox = _CountingSandbox()
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
@@ -74,7 +108,7 @@ async def test_concurrent_ensure_handle_calls_create_exactly_once():
     import asyncio
 
     class _SlowSandbox(_CountingSandbox):
-        async def create(self, spec):
+        async def create(self, spec, sandbox_id=None):
             self.create_calls += 1
             await asyncio.sleep(0.01)  # let other coroutines stack up at the lock
             return SandboxHandle(id=f"h-{self.create_calls}")

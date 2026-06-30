@@ -116,6 +116,17 @@ class Sandbox(Protocol):
         a shared volume, so every pod resolves the same dir for an item."""
         ...
 
+    def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+        """#345: the handle that reaches the sandbox for `sandbox_id` on shared
+        storage WITHOUT a prior `create` on this process — or None if this
+        backend doesn't address sandboxes by a stable id (e.g. the HTTP host
+        mints its own pod-scoped handles). Existence is NOT checked here (it's a
+        pure id→handle mapping); a later file op raises `SandboxNotFound` when
+        the sandbox is cold, and the caller falls back to the durable snapshot.
+        Lets a file read on ANY pod route to the live shared dir instead of a
+        stale snapshot, so workspace data no longer depends on sticky routing."""
+        return None
+
     async def kill(self, handle: SandboxHandle) -> None:
         """Tear the sandbox down and release its resources (temp dir /
         container). The handle is invalid afterwards — further calls with it

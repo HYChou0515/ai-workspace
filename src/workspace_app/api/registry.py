@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxSpec
+from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
 
 
 class _SyncHook(Protocol):
@@ -59,12 +59,25 @@ class InvestigationRegistry:
             )
         return self._sessions[investigation_id]
 
+    def _handle_for_id(self, investigation_id: str) -> SandboxHandle | None:
+        """The shared-vol handle this backend would use for an item id, or None
+        when it doesn't address by id (HTTP) — duck-typed so ad-hoc test doubles
+        without the method simply route to the snapshot."""
+        fn = getattr(self.sandbox, "handle_for_id", None)
+        return fn(investigation_id) if fn is not None else None
+
     def peek_handle(self, investigation_id: str) -> SandboxHandle | None:
-        """The live sandbox handle for this investigation, or None when it's
-        cold — WITHOUT creating one. WorkspaceFiles reads this to decide whether
-        a file op routes to the sandbox (warm) or the FileStore snapshot."""
+        """The handle WorkspaceFiles routes a file op through — WITHOUT creating
+        a sandbox. This pod's session handle when it owns one; otherwise the
+        shared-vol handle derived from the id, so a read on ANY pod hits the
+        live shared dir (the facade falls back to the snapshot when that dir is
+        cold) instead of a stale snapshot (#345 — correctness no longer depends
+        on sticky routing). None when the backend isn't id-addressable and this
+        pod has no session."""
         s = self._sessions.get(investigation_id)
-        return s.handle if s is not None else None
+        if s is not None and s.handle is not None:
+            return s.handle
+        return self._handle_for_id(investigation_id)
 
     async def ensure_handle(self, session: InvestigationSession) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
@@ -72,14 +85,34 @@ class InvestigationRegistry:
         # up their own container.
         async with session.lock:
             if session.handle is None:
-                session.handle = await self.sandbox.create(self.default_spec)
-                # Restore-after-create so the agent's shell starts with
-                # the files it left behind last time the investigation was
-                # up.
-                if self.sync is not None:
-                    await self.sync.restore(session.investigation_id, session.handle)
+                item = session.investigation_id
+                # #345 restore-when-absent: a shared-vol item dir may already be
+                # live (this pod cold-started, or another pod materialized it).
+                # Probe BEFORE create so we restore from the snapshot ONLY when
+                # the dir doesn't exist — re-restoring over a live dir would
+                # resurrect files the agent deleted. A backend that mints its own
+                # handles (handle_for_id None, e.g. HTTP) is always a fresh
+                # create, so it always restores (the prior per-pod behaviour).
+                fresh = await self._is_cold(item)
+                session.handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
+                if fresh and self.sync is not None:
+                    await self.sync.restore(item, session.handle)
             session.last_active = _utcnow()
         return session.handle
+
+    async def _is_cold(self, investigation_id: str) -> bool:
+        """True when the item's sandbox dir is NOT yet materialized on shared
+        storage (so a restore should seed it). Probes via the id-derived handle;
+        a backend that isn't id-addressable is always treated as cold (a fresh
+        create needs a restore)."""
+        probe = self._handle_for_id(investigation_id)
+        if probe is None:
+            return True
+        try:
+            await self.sandbox.walk(probe, "/")
+        except SandboxNotFound:
+            return True
+        return False
 
     async def flush(self, investigation_id: str) -> None:
         """Mirror this investigation's live sandbox to the snapshot right now

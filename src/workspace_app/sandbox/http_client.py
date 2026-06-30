@@ -109,6 +109,13 @@ class HttpSandbox:
         data = resp.json()
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
 
+    def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+        # The HTTP host owns its own per-sandbox lifecycle and mints handles
+        # (pod_url+remote_id); it does not address by a caller-stable id, so
+        # there is nothing to derive (#345). A pod with no session reads the
+        # durable snapshot, as before.
+        return None
+
     async def kill(self, handle: SandboxHandle) -> None:
         await self._request(handle, "DELETE", "")
 

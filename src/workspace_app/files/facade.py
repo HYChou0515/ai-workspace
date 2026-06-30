@@ -19,7 +19,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from ..filestore.protocol import FileNotFound, FileStore
-from ..sandbox.protocol import Sandbox, SandboxHandle
+from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
 # before giving up and reporting a conflict. A handful is plenty — contention
@@ -50,16 +50,29 @@ class WorkspaceFiles:
         # write) is atomic against other writers going through this facade.
         self._locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
-        """The live sandbox for this workspace, or None when it's cold."""
+    async def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
+        """The live sandbox for this workspace, or None when there's no sandbox,
+        no routable handle, or the shared dir is cold.
+
+        #345: `handle_for` may hand back a handle that is merely *derivable* (any
+        pod can route an item to its shared dir), so we probe — a cold dir raises
+        `SandboxNotFound` and the op falls back to the durable snapshot. With a
+        shared per-item dir the probe is what keeps a read on a non-owning pod
+        consistent instead of reading a stale snapshot."""
         if self._sb is None or self._handle_for is None:
             return None
         handle = self._handle_for(workspace_id)
-        return (self._sb, handle) if handle is not None else None
+        if handle is None:
+            return None
+        try:
+            await self._sb.exists(handle, "/")  # raises SandboxNotFound when cold
+        except SandboxNotFound:
+            return None
+        return (self._sb, handle)
 
     async def read(self, workspace_id: str, path: str) -> bytes:
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             try:
@@ -70,7 +83,7 @@ class WorkspaceFiles:
 
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             await sb.upload(h, data, path)
@@ -86,7 +99,7 @@ class WorkspaceFiles:
         snapshot catches up on the next mirror, exactly like any warm write);
         cold ⇒ stream into the FileStore blob."""
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             await sb.upload_file(h, source, path)
@@ -98,7 +111,7 @@ class WorkspaceFiles:
         for big files (issue #219). Routes warm→sandbox / cold→snapshot like
         `read`; a missing file maps to `FileNotFound`."""
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             try:
@@ -110,7 +123,7 @@ class WorkspaceFiles:
 
     async def exists(self, workspace_id: str, path: str) -> bool:
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             return await sb.exists(h, path)
@@ -148,7 +161,7 @@ class WorkspaceFiles:
 
     async def delete(self, workspace_id: str, path: str) -> None:
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             try:
@@ -160,7 +173,7 @@ class WorkspaceFiles:
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = _norm(prefix) if prefix else prefix
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             return [e.path for e in await sb.walk(h, prefix or "/")]
@@ -168,7 +181,7 @@ class WorkspaceFiles:
 
     async def mkdir(self, workspace_id: str, path: str) -> None:
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             await sb.mkdir(h, path)
@@ -177,7 +190,7 @@ class WorkspaceFiles:
 
     async def rmdir(self, workspace_id: str, path: str) -> None:
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             try:
@@ -189,7 +202,7 @@ class WorkspaceFiles:
 
     async def is_dir(self, workspace_id: str, path: str) -> bool:
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             base = path.rstrip("/") + "/"
@@ -198,7 +211,7 @@ class WorkspaceFiles:
 
     async def listdir(self, workspace_id: str, prefix: str = "") -> list[str]:
         prefix = _norm(prefix) if prefix else prefix
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         if warm is not None:
             sb, h = warm
             dirs: set[str] = set()
@@ -237,7 +250,7 @@ class WorkspaceFiles:
         ingest worker), not just other coroutines — the per-path lock only
         covers this process."""
         path = _norm(path)
-        warm = self._warm(workspace_id)
+        warm = await self._warm(workspace_id)
         write_cas = getattr(self._fs, "write_cas", None)
         read_with_etag = getattr(self._fs, "read_with_etag", None)
         async with self._locks[(workspace_id, path)]:

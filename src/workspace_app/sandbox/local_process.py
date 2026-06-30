@@ -247,6 +247,16 @@ class LocalProcessSandbox:
         self._dirs[hid] = path
         return SandboxHandle(id=hid)
 
+    def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+        # #345: dirs are keyed by id under the (shared) root, so the handle IS
+        # the id. None for an unsafe id (routes to the snapshot rather than
+        # raising in the sync routing path). Existence is not checked here — a
+        # file op raises SandboxNotFound when the dir is cold.
+        try:
+            return SandboxHandle(id=_validate_sandbox_id(sandbox_id))
+        except ValueError:
+            return None
+
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)

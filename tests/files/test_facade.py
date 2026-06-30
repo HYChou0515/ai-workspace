@@ -8,7 +8,7 @@ from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.protocol import FileNotFound
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxSpec
+from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
 
 WS = "inv-1"
 
@@ -68,6 +68,20 @@ async def test_cold_ops_hit_snapshot():
     assert await files.read(WS, "/a.txt") == b"cold"
     assert await files.exists(WS, "/a.txt") is True
     assert await files.ls(WS) == ["/a.txt"]
+
+
+async def test_derivable_handle_for_cold_sandbox_falls_back_to_snapshot_345():
+    # #345: peek_handle hands back a derivable (id-based) handle even when the
+    # item's shared dir is cold (e.g. a read on a pod that never woke it). The
+    # facade probes, hits SandboxNotFound, and serves the durable snapshot
+    # instead of erroring — so a cross-pod read stays consistent.
+    fs = MemoryFileStore()
+    sb = MockSandbox()
+    await fs.write(WS, "/archived.txt", b"from snapshot")
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=lambda ws: SandboxHandle(id=ws))
+    assert await files.read(WS, "/archived.txt") == b"from snapshot"
+    assert await files.ls(WS) == ["/archived.txt"]
+    assert await files.exists(WS, "/archived.txt") is True
 
 
 async def test_warm_ops_hit_sandbox_not_snapshot():

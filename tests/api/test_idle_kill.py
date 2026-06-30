@@ -40,9 +40,9 @@ class _CountingSandbox(MockSandbox):
         self.create_calls = 0
         self.kill_calls = 0
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
         self.create_calls += 1
-        return await super().create(spec)
+        return await super().create(spec, sandbox_id)
 
     async def kill(self, handle: SandboxHandle) -> None:
         self.kill_calls += 1

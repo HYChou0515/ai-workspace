@@ -37,6 +37,10 @@ class MockSandbox:
         self._exposed[hid] = list(spec.exposed_ports)
         return SandboxHandle(id=hid)
 
+    def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+        # #345: the in-memory store is keyed by id, so the handle is the id.
+        return SandboxHandle(id=sandbox_id)
+
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)
         del self._fs[handle.id]
