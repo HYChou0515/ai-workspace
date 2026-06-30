@@ -147,6 +147,21 @@ def _userns_supported() -> bool:
     return proc.returncode == 0
 
 
+def _validate_sandbox_id(sandbox_id: str) -> str:
+    """#345: the id becomes a single path component under the (shared) sandbox
+    root, so reject anything that could traverse out of / between sandboxes —
+    empty, `.`/`..`, or a path separator. Returns the id unchanged when safe."""
+    if (
+        not sandbox_id
+        or sandbox_id in (".", "..")
+        or "/" in sandbox_id
+        or "\\" in sandbox_id
+        or "\x00" in sandbox_id
+    ):
+        raise ValueError(f"unsafe sandbox_id {sandbox_id!r}: must be a single safe path component")
+    return sandbox_id
+
+
 # The user workspace is this subdir of the sandbox root (the agent's ~/cwd).
 # MUST match the `/root` the jail bootstrap cds into.
 _WORKSPACE = "root"
@@ -195,9 +210,15 @@ class LocalProcessSandbox:
 
     def _require(self, handle: SandboxHandle) -> Path:
         """The sandbox root — the chroot root / infra area (system overlays,
-        provisioned tools). The user workspace is the `_workspace` subdir."""
-        path = self._dirs.get(handle.id)
-        if path is None:
+        provisioned tools). The user workspace is the `_workspace` subdir.
+
+        Resolved as a PURE function of the root + handle id (#345): a handle
+        created by another process/pod on the same shared root resolves here
+        without this instance having called `create` — the dir's existence on
+        the shared vol is the source of truth, not a pod-local map. Missing dir
+        ⇒ ``SandboxNotFound`` (cold / never materialized)."""
+        path = self._root / handle.id
+        if not path.is_dir():
             raise SandboxNotFound(handle.id)
         return path
 
@@ -207,22 +228,29 @@ class LocalProcessSandbox:
         sandbox root (the infra area, outside this) are never seen or synced."""
         return self._require(handle) / _WORKSPACE
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
-        handle = SandboxHandle(id=str(uuid.uuid4()))
-        path = self._root / handle.id
-        # Create the workspace subdir (and its parent, the sandbox/infra root).
-        (path / _WORKSPACE).mkdir(parents=True, exist_ok=False)
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        # #345: a given sandbox_id pins the handle id to a STABLE dir on the
+        # (possibly shared) root and is IDEMPOTENT — re-creating reattaches to
+        # the existing files instead of wiping them (so an item's working dir
+        # survives across turns/pods). None keeps the original fresh-uuid path.
+        hid = _validate_sandbox_id(sandbox_id) if sandbox_id is not None else str(uuid.uuid4())
+        path = self._root / hid
+        # exist_ok=True so a re-create reattaches; the first create still makes
+        # the workspace subdir (and the sandbox/infra root parent).
+        (path / _WORKSPACE).mkdir(parents=True, exist_ok=True)
         # Unjailed: expose the shared tools dir via a symlink (jailed uses a
         # read-only bind-mount, set up per-exec in the bootstrap instead).
-        if self._tools_dir is not None and not self._isolate:
-            (path / _TOOLS).symlink_to(self._tools_dir)
-        self._dirs[handle.id] = path
-        return handle
+        # Guard on existence so a re-create doesn't raise FileExistsError.
+        tools_link = path / _TOOLS
+        if self._tools_dir is not None and not self._isolate and not tools_link.exists():
+            tools_link.symlink_to(self._tools_dir)
+        self._dirs[hid] = path
+        return SandboxHandle(id=hid)
 
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
-        del self._dirs[handle.id]
+        self._dirs.pop(handle.id, None)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]

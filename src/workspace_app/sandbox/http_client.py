@@ -91,7 +91,12 @@ class HttpSandbox:
         message = body.get("detail") or handle.id
         raise exc_type(message)
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        # #345 `sandbox_id` is the local-sandbox-on-shared-vol affordance; the
+        # HTTP host owns its OWN per-sandbox lifecycle + storage and mints the
+        # handle (pod_url+remote_id), so the hint does not apply here — accepted
+        # for protocol compatibility and ignored.
+        del sandbox_id
         resp = await self._client.post(
             f"{self._base_url}/sandboxes",
             json={

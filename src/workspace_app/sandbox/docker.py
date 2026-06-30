@@ -65,7 +65,11 @@ class DockerSandbox:
             raise SandboxNotFound(handle.id)
         return c
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        # DEPRECATED backend (#252); `sandbox_id` (the #345 shared-vol stable-id
+        # affordance) does not apply to per-container sandboxes — accepted for
+        # protocol compatibility and ignored.
+        del sandbox_id
         handle = SandboxHandle(id=str(uuid.uuid4()))
         container = await asyncio.to_thread(self._start_container, spec)
         self._containers[handle.id] = container

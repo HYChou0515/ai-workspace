@@ -102,11 +102,18 @@ class FileEntry:
 
 
 class Sandbox(Protocol):
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
-        """Provision a fresh, empty sandbox and return its handle. Each handle
-        has its own isolated filesystem (no sharing between handles). Any
-        `spec.exposed_ports` must be arranged here (e.g. Docker publishes them
-        at container start) — they cannot be added later."""
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        """Provision a sandbox and return its handle. Any `spec.exposed_ports`
+        must be arranged here (e.g. Docker publishes them at container start) —
+        they cannot be added later.
+
+        `sandbox_id` None → a FRESH, empty sandbox with a random handle (each
+        handle has its own isolated filesystem). A given `sandbox_id` makes
+        create STABLE + IDEMPOTENT: the handle id IS `sandbox_id` and the same
+        id re-attaches to the same underlying filesystem — so a different
+        process/pod sharing the storage reattaches to (not wipes) the existing
+        files. #345: the local sandbox keys an item's working dir by item id on
+        a shared volume, so every pod resolves the same dir for an item."""
         ...
 
     async def kill(self, handle: SandboxHandle) -> None:

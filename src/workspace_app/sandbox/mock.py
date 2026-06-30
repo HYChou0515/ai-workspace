@@ -28,11 +28,14 @@ class MockSandbox:
             raise SandboxNotFound(handle.id)
         return self._fs[handle.id]
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
-        handle = SandboxHandle(id=str(uuid.uuid4()))
-        self._fs[handle.id] = {}
-        self._exposed[handle.id] = list(spec.exposed_ports)
-        return handle
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        # #345: a given sandbox_id is STABLE + IDEMPOTENT — reattach to the
+        # existing filesystem (setdefault) rather than wiping it; only None mints
+        # a fresh random handle.
+        hid = sandbox_id if sandbox_id is not None else str(uuid.uuid4())
+        self._fs.setdefault(hid, {})
+        self._exposed[hid] = list(spec.exposed_ports)
+        return SandboxHandle(id=hid)
 
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)

@@ -22,6 +22,46 @@ async def test_create_returns_unique_handles(sandbox: LocalProcessSandbox):
     assert h1.id != h2.id
 
 
+async def test_create_with_sandbox_id_is_deterministic_and_idempotent_345(tmp_path):
+    # #345: the same sandbox_id maps to the same dir on the shared vol, and
+    # re-creating it is idempotent (does not wipe files the agent left behind).
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = await sb.create(SandboxSpec(), sandbox_id="item-xyz")
+    assert h.id == "item-xyz"
+    assert (tmp_path / "item-xyz" / "root").is_dir()
+    await sb.upload(h, b"left behind", "/a.txt")
+    h2 = await sb.create(SandboxSpec(), sandbox_id="item-xyz")  # no FileExistsError
+    assert await sb.download(h2, "/a.txt") == b"left behind"
+
+
+async def test_second_instance_same_root_sees_files_345(tmp_path):
+    # #345 core invariant: two LocalProcessSandbox instances (= two API pods)
+    # sharing one root + the same item id see the SAME files — WITHOUT the
+    # second instance ever calling create (it resolves the dir from the id).
+    pod_a = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    pod_b = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = await pod_a.create(SandboxSpec(), sandbox_id="item-shared")
+    await pod_a.upload(h, b"written by A", "/report.md")
+    # pod_b never called create; it operates on the same handle/dir.
+    assert await pod_b.download(SandboxHandle(id="item-shared"), "/report.md") == b"written by A"
+    paths = {e.path for e in await pod_b.walk(SandboxHandle(id="item-shared"), "/")}
+    assert "/report.md" in paths
+
+
+async def test_create_rejects_unsafe_sandbox_id_345(sandbox: LocalProcessSandbox):
+    # #345: the id becomes a path component on a shared vol — reject traversal /
+    # separators so one item can't be steered into another's (or escape root).
+    for bad in ["../evil", "a/b", "", ".", ".."]:
+        with pytest.raises(ValueError):
+            await sandbox.create(SandboxSpec(), sandbox_id=bad)
+
+
+async def test_unknown_handle_dir_raises_sandbox_not_found_345(tmp_path):
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    with pytest.raises(SandboxNotFound):
+        await sb.walk(SandboxHandle(id="never-created"), "/")
+
+
 async def test_exec_real_echo(sandbox: LocalProcessSandbox):
     h = await sandbox.create(SandboxSpec())
     r = await sandbox.exec(h, ["echo", "hello"])
