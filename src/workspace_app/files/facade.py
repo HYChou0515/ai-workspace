@@ -1,9 +1,14 @@
 """WorkspaceFiles — the single chokepoint for workspace file access.
 
-It routes by **sandbox liveness**: when a sandbox is up for the workspace (the
-single source of truth), reads/writes go there; when it's cold, they fall back
-to the FileStore snapshot. A cold sandbox is frozen, so the snapshot is its
-exact image — there's never a moment where two writable sources diverge.
+It routes by **sandbox liveness**: when a sandbox dir is live for the workspace
+(the single source of truth), reads/writes go there; when it's cold/recycled,
+they fall back to the durable FileStore snapshot.
+
+#345: with a shared per-item dir on one volume, the handle is derivable on ANY
+pod (not just the one that woke the sandbox), so `_warm` PROBES the dir and
+falls back to the snapshot only on `SandboxNotFound` (the dir is cold). That's
+what keeps a read on a non-owning pod consistent with the live dir instead of
+serving a stale snapshot — so workspace data no longer depends on sticky routing.
 
 `is_dir`/`listdir` are derived from `walk` when warm (the Sandbox Protocol has
 no native dir listing); cold, they read the FileStore which tracks dirs
