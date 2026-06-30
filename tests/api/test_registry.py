@@ -538,3 +538,42 @@ async def test_enforce_quota_ignores_handleless_sessions_345():
     recycled = await registry.enforce_quota(max_bytes=1)
     assert recycled == []
     assert sandbox.kill_calls == 0
+
+
+async def test_enforce_quota_treats_a_cold_dir_as_zero_usage_345():
+    # The dir went cold (vanished) between sessions — walk raises SandboxNotFound,
+    # which counts as 0 bytes (nothing to reap), not a crash.
+    sandbox = _CountingSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())
+    s = await registry.session("ws-1")
+    h = await registry.ensure_handle(s)
+    await sandbox.kill(h)  # dir gone ⇒ subsequent walk raises SandboxNotFound
+    sandbox.kill_calls = 0
+    recycled = await registry.enforce_quota(max_bytes=1)
+    assert recycled == []
+    assert sandbox.kill_calls == 0
+
+
+async def test_ensure_handle_restores_when_backend_not_id_addressable_345():
+    # A non-id-addressable backend (handle_for_id None) is always treated as cold
+    # by _is_cold (no shared dir to probe), so ensure_handle always restores —
+    # the prior per-pod behaviour for that kind.
+    class _NoIdSandbox(MockSandbox):
+        def handle_for_id(self, sandbox_id):
+            return None
+
+    sandbox = _NoIdSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    assert sync.calls == [("restore", "ws-1")]
+
+
+async def test_close_session_forgets_global_activity_345():
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), activity=activity)
+    await registry.ensure_handle(await registry.session("ws-1"))
+    assert "ws-1" in activity.ms
+    await registry.close_session("ws-1")
+    assert "ws-1" not in activity.ms  # heartbeat forgotten on manual close

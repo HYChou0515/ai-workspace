@@ -238,6 +238,29 @@ async def test_quota_sweeper_off_by_default_leaves_big_workspace():
     assert sandbox.kill_calls == 1  # only shutdown close_all reaps it
 
 
+async def test_lifespan_registers_activity_model_for_local_sandbox(tmp_path):
+    # #345: a LocalProcessSandbox wires the global activity store, so the lifespan
+    # startup registers the per-item heartbeat model (the `registry.activity is
+    # not None` boot branch). MockSandbox-backed apps skip it (activity is None).
+    from workspace_app.api.sandbox_activity import _SandboxActivity
+    from workspace_app.sandbox.local_process import LocalProcessSandbox
+
+    spec = make_spec(default_user="u")
+    sandbox = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False)
+    filestore = SpecstarFileStore(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=sandbox,
+        filestore=filestore,
+        runner=_ExecRunner(),
+        idle_timeout=timedelta(seconds=60),
+        idle_check_interval=timedelta(seconds=60),
+    )
+    async with _running_app(app):
+        # registered at boot ⇒ get_resource_manager resolves instead of raising.
+        assert spec.get_resource_manager(_SandboxActivity) is not None
+
+
 async def test_default_idle_timeout_matches_rca_pivot():
     """Default knob is 8h per the RCA pivot (was 15min for the prior
     workspace-app — RCA sessions are long-running per grill-me Q10)."""

@@ -43,3 +43,26 @@ async def test_distinct_items_are_independent():
     await store.forget("a")
     assert await store.last_active_ms("a") is None
     assert await store.last_active_ms("b") == 1000
+
+
+async def test_default_clock_stamps_a_real_timestamp():
+    # No injected clock ⇒ the real wall-clock branch; the value is just a
+    # positive epoch-ms (exercises the default-clock path).
+    spec = SpecStar()
+    register_sandbox_activity(spec)
+    store = SpecstarActivityStore(spec)  # now_ms=None → real clock
+    await store.bump("ws-1")
+    ms = await store.last_active_ms("ws-1")
+    assert ms is not None and ms > 0
+
+
+async def test_bump_after_forget_restores_the_row():
+    # #345: a forgotten (soft-deleted) item that becomes active again must
+    # restore + re-stamp, not error — the ResourceIsDeletedError branch.
+    store, clock = _store()
+    await store.bump("ws-1")
+    await store.forget("ws-1")  # soft-delete
+    assert await store.last_active_ms("ws-1") is None
+    clock["t"] = 5000
+    await store.bump("ws-1")  # hits IsDeleted → restore + modify
+    assert await store.last_active_ms("ws-1") == 5000
