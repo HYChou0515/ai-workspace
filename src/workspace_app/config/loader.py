@@ -53,6 +53,7 @@ from .schema import (
     RetrievalSettings,
     RunnerSettings,
     SandboxHostSettings,
+    SandboxIsolationSettings,
     SandboxSettings,
     ServerSettings,
     Settings,
@@ -357,8 +358,9 @@ def _dataclass_keys(cls) -> set[str]:
 _TOP_SCHEMA: dict[str, Any] = {
     "server": _dataclass_keys(ServerSettings),
     "sandbox": {
-        **{k: None for k in _dataclass_keys(SandboxSettings) if k != "http"},
+        **{k: None for k in _dataclass_keys(SandboxSettings) if k not in ("http", "isolation")},
         "http": _dataclass_keys(HttpSandboxSettings),
+        "isolation": _dataclass_keys(SandboxIsolationSettings),
     },
     "sandbox_host": _dataclass_keys(SandboxHostSettings),
     "tools": _dataclass_keys(ToolsSettings),
@@ -718,11 +720,20 @@ def _build(cls, sub: dict[str, Any]):
 
 
 def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:
-    """`sandbox` has one nested dataclass (`http`), so it can't use the flat
-    `_build`. `http` is None unless `kind: http` declares the client block."""
+    """`sandbox` has two nested dataclasses (`http`, #345 `isolation`), so it
+    can't use the flat `_build`. `http` is None unless `kind: http` declares the
+    client block; `isolation` always builds (its own defaults when the operator
+    omits the block)."""
     http = d.get("http")
-    flat = {k: v for k, v in d.items() if k != "http"}
-    return SandboxSettings(**flat, http=HttpSandboxSettings(**http) if http is not None else None)
+    iso = d.get("isolation")
+    flat = {k: v for k, v in d.items() if k not in ("http", "isolation")}
+    return SandboxSettings(
+        **flat,
+        http=HttpSandboxSettings(**http) if http is not None else None,
+        isolation=SandboxIsolationSettings(**iso)
+        if iso is not None
+        else SandboxIsolationSettings(),
+    )
 
 
 def _normalize_usage_list(raw: Any) -> list[dict[str, Any]]:

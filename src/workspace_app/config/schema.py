@@ -64,6 +64,33 @@ class HttpSandboxSettings:
 
 
 @dataclass(frozen=True)
+class SandboxIsolationSettings:
+    """#345: per-item OS-user + cgroup-v2 isolation for the LOCAL sandbox when it
+    runs on a SHARED working volume (multi-replica API, one fixed dir per item).
+    Unlike the userns ``isolate`` jail (which needs unprivileged user namespaces
+    — unavailable in our pods), this is the sandbox-host model: each item's exec
+    runs as its OWN Linux uid under its OWN cgroup v2 slice, so items can't read,
+    signal, or starve one another even though their dirs are siblings on one vol.
+
+    The uid is ``uid_base + xxhash(item_id) % uid_range`` — a pure function of the
+    item id, so every pod derives the SAME uid (file ownership on the shared vol
+    stays consistent) with NO cross-pod coordination; the wide range keeps
+    collisions negligible. ``enabled`` None = auto (on iff the pod has CAP_SETUID
+    and a writable delegated cgroup v2 subtree); explicit False forces it off
+    (dev / tests / hosts without the caps). Needs ``CAP_SETUID``/``CAP_SETGID`` +
+    a delegated cgroup root on the API pod (see kubernetes/base/deployment.yaml).
+    """
+
+    enabled: bool | None = None
+    uid_base: int = 1_000_000
+    uid_range: int = 2_000_000_000
+    cgroup_root: str | None = None  # delegated cgroup v2 subtree; None = auto-detect
+    memory_max: str = "512M"
+    cpu_cores: float = 1.0
+    pids_max: int = 512
+
+
+@dataclass(frozen=True)
 class SandboxSettings:
     kind: str = "local"  # local | docker | mock | http
     root: str | None = None  # null → tmpdir per sandbox
@@ -74,6 +101,13 @@ class SandboxSettings:
     exec_timeout: float = 60.0
     log_timeout: float = 60.0
     isolate: bool | None = None  # None = auto-detect userns
+    # #345: soft cap (bytes) on ONE item's shared scratch dir, enforced by a `du`
+    # sweep before exec (the scratch vol is now a bounded resource, separate from
+    # the durable filestore root). 0 ⇒ no cap. Distinct from filestore.workspace_quota
+    # (#245), which governs the durable archive the recycle write-back lands in.
+    max_workspace_bytes: int = 0
+    # #345: per-item OS-user + cgroup isolation for the shared-vol local sandbox.
+    isolation: SandboxIsolationSettings = field(default_factory=SandboxIsolationSettings)
     http: HttpSandboxSettings | None = None  # only when kind == "http"
 
 
