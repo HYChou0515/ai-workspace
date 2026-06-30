@@ -162,6 +162,11 @@ def create_app(
     idle_timeout: timedelta = timedelta(hours=8),
     idle_check_interval: timedelta = timedelta(seconds=60),
     mirror_interval: timedelta = timedelta(seconds=5),
+    # #345: soft cap (bytes) on ONE item's shared scratch dir; the idle reaper's
+    # du-sweep recycles any item over it so a runaway workspace can't fill the
+    # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
+    # Threaded from settings.sandbox.max_workspace_bytes.
+    max_workspace_bytes: int = 0,
     # P3.0: background code-repo sync sweeper interval. None ⇒ sweeper
     # disabled (manual /sync only). __main__ derives this from
     # Settings.sync_check_interval_sec.
@@ -338,6 +343,7 @@ def create_app(
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,
         mirror_interval=mirror_interval,
+        max_workspace_bytes=max_workspace_bytes,
         code_sync_check_interval=code_sync_check_interval,
         gc_interval=gc_interval,
         gc_t1=gc_t1,

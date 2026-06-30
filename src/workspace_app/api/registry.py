@@ -177,6 +177,48 @@ class InvestigationRegistry:
             killed.append(inv_id)
         return killed
 
+    async def enforce_quota(self, max_bytes: int) -> list[str]:
+        """#345: recycle any live item whose shared scratch working dir has grown
+        past ``max_bytes``, so one runaway workspace can't fill the scratch volume
+        the whole fleet shares. 0 ⇒ disabled (the lenient default). Same recycle
+        as the idle reaper — mirror→kill→forget — so nothing is lost: the dir is
+        written back to the durable snapshot before the rmtree and restored on the
+        item's next turn.
+
+        Unlike idle-kill this is NOT gated on global idleness: an over-quota dir
+        is reaped even while busy (it's the only relief from disk pressure), and
+        because the sweep iterates THIS pod's sessions it naturally targets items
+        this pod is serving — the sticky-routed owner is the one that reaps its own
+        runaway, and the mirror-before-kill keeps a concurrent pod's view durable."""
+        if max_bytes <= 0:
+            return []
+        recycled: list[str] = []
+        for inv_id in list(self._sessions):
+            s = self._sessions.get(inv_id)
+            if s is None or s.handle is None:
+                continue
+            if await self._scratch_usage(s.handle) <= max_bytes:
+                continue
+            if self.sync is not None:
+                await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
+            await self.sandbox.kill(s.handle)
+            if self.activity is not None:
+                await self.activity.forget(inv_id)
+            del self._sessions[inv_id]
+            recycled.append(inv_id)
+        return recycled
+
+    async def _scratch_usage(self, handle: SandboxHandle) -> int:
+        """Bytes the item's working dir occupies — the du basis for the scratch
+        quota. Summed from the sandbox's own ``walk`` so it works for every
+        backend (the shared local dir, mock, http) without a new Protocol method.
+        A cold/absent dir reports 0 (nothing to reap)."""
+        try:
+            entries = await self.sandbox.walk(handle, "/")
+        except SandboxNotFound:
+            return 0
+        return sum(e.size for e in entries)
+
     async def _globally_idle(self, investigation_id: str, cutoff_ms: int) -> bool:
         """True when no pod has touched the item's shared dir since ``cutoff_ms``.
         No heartbeat wired ⇒ True (single-process: pod-local idleness is global)."""

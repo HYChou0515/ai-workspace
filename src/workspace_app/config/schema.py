@@ -101,10 +101,12 @@ class SandboxSettings:
     exec_timeout: float = 60.0
     log_timeout: float = 60.0
     isolate: bool | None = None  # None = auto-detect userns
-    # #345: soft cap (bytes) on ONE item's shared scratch dir, enforced by a `du`
-    # sweep before exec (the scratch vol is now a bounded resource, separate from
-    # the durable filestore root). 0 ⇒ no cap. Distinct from filestore.workspace_quota
-    # (#245), which governs the durable archive the recycle write-back lands in.
+    # #345: soft cap (bytes) on ONE item's shared scratch dir, enforced by the
+    # idle reaper's periodic `du` sweep (the scratch vol is now a bounded resource,
+    # separate from the durable filestore root) — an over-cap item is recycled
+    # (mirror→kill→restore-next-turn) even while active. 0 ⇒ no cap. Distinct from
+    # filestore.workspace_quota (#245), which governs the durable archive the
+    # recycle write-back lands in.
     max_workspace_bytes: int = 0
     # #345: per-item OS-user + cgroup isolation for the shared-vol local sandbox.
     isolation: SandboxIsolationSettings = field(default_factory=SandboxIsolationSettings)

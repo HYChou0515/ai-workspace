@@ -50,6 +50,7 @@ def build_lifespan(
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
     mirror_interval: timedelta,
+    max_workspace_bytes: int,
     code_sync_check_interval: timedelta | None,
     gc_interval: timedelta | None,
     gc_t1: str,
@@ -62,11 +63,18 @@ def build_lifespan(
     async def idle_killer() -> None:
         """Periodically reap sandboxes whose last_active is past the
         threshold. The reaper sleeps the check_interval between sweeps
-        — short for tests, ~60 s in production."""
+        — short for tests, ~60 s in production.
+
+        #345: the same tick also enforces the scratch-vol soft quota — any item
+        whose working dir grew past ``max_workspace_bytes`` is recycled (even if
+        not idle), so one runaway workspace can't fill the shared scratch volume.
+        Gated on a positive cap (0 ⇒ no measurement, no overhead)."""
         try:
             while True:
                 await asyncio.sleep(idle_check_interval.total_seconds())
                 await registry.kill_idle(idle_timeout)
+                if max_workspace_bytes > 0:
+                    await registry.enforce_quota(max_workspace_bytes)
         except asyncio.CancelledError:
             return
 
