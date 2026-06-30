@@ -195,7 +195,9 @@ def test_doc_passages_in_top_k_keeps_only_doc_passages_within_k():
         else _passage("other-doc", text=f"theirs {pos}")
         for pos in range(1, 15)
     ]
-    got = doc_passages_in_top_k(spec, _fake_retriever(ranked), ing, doc_id=doc_id, question="q", k=5)
+    got = doc_passages_in_top_k(
+        spec, _fake_retriever(ranked), ing, doc_id=doc_id, question="q", k=5
+    )
     assert [p.text for p in got] == ["mine 1", "mine 4"]
 
 
