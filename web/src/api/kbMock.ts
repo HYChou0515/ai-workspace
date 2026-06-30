@@ -135,6 +135,10 @@ export const mockKbApi: KbApi = {
       owner: "me",
       use_rag: opts?.useRag ?? true,
       use_wiki: opts?.useWiki ?? false,
+      git_url: opts?.gitUrl ?? null,
+      git_branch: opts?.gitBranch ?? null,
+      git_last_sha: null,
+      git_last_pulled_at: null,
       wiki_maintainer_guidance: "",
       wiki_reader_guidance: "",
     };

@@ -20,7 +20,7 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useT } from "../../lib/i18n";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { fmtBytes, fmtCount, fmtDate } from "./collectionFormat";
-import { NewCollectionModal } from "./NewCollectionModal";
+import { NewCollectionModal, type NewCollectionOpts } from "./NewCollectionModal";
 import { WikiBadge } from "./RetrievalToggles";
 
 type Tab = "all" | "mine" | "pinned";
@@ -58,8 +58,8 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
   });
 
   const createMut = useMutation({
-    mutationFn: (v: { name: string; description: string; useRag: boolean; useWiki: boolean }) =>
-      client.createCollection(v.name, v.description, { useRag: v.useRag, useWiki: v.useWiki }),
+    mutationFn: (v: { name: string; description: string; opts: NewCollectionOpts }) =>
+      client.createCollection(v.name, v.description, v.opts),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
   });
 
@@ -213,10 +213,7 @@ export function KbCollectionsGrid({ client = kbApi }: { client?: KbApi }) {
         busy={createMut.isPending}
         onClose={() => setNewOpen(false)}
         onCreate={(name, description, opts) =>
-          createMut.mutate(
-            { name, description, useRag: opts.useRag, useWiki: opts.useWiki },
-            { onSuccess: () => setNewOpen(false) },
-          )
+          createMut.mutate({ name, description, opts }, { onSuccess: () => setNewOpen(false) })
         }
       />
 

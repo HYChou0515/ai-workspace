@@ -60,6 +60,13 @@ export type KbCollection = {
    * hierarchical builder, and refreshes only on sync / rebuild). Absent ⇒ a
    * plain document collection. */
   git_url?: string | null;
+  /** #355: the branch synced (null ⇒ remote default). */
+  git_branch?: string | null;
+  /** #355: the commit sha of the last SUCCESSFUL sync, and the wall-clock ms of
+   * the last sync attempt — drive the collection page's "Synced to … · …ago"
+   * strip. Both null until the first sync. */
+  git_last_sha?: string | null;
+  git_last_pulled_at?: number | null;
   /** Issue #90: per-collection wiki guidance, appended onto the bundled wiki
    * prompts. `maintainer` shapes how pages are written; `reader` shapes how the
    * wiki answers. Blank ⇒ the bundled prompt is used as-is. */
@@ -148,7 +155,16 @@ export type WikiStatus = {
 };
 
 /** Create-time options for a collection's retrieval pipeline toggles. */
-export type CollectionOptions = { useRag?: boolean; useWiki?: boolean };
+export type CollectionOptions = {
+  useRag?: boolean;
+  useWiki?: boolean;
+  /** #355: code-collection wiring. A non-empty `gitUrl` makes this a code
+   * collection — the backend clones it and builds the wiki from source. `gitToken`
+   * is write-only (never echoed back). */
+  gitUrl?: string;
+  gitBranch?: string;
+  gitToken?: string;
+};
 
 export type KbDocument = {
   resource_id: string;
@@ -546,6 +562,11 @@ export const realKbApi: KbApi = {
           // Omit when unset so the BE defaults (use_rag on, use_wiki off) apply.
           ...(opts?.useRag != null ? { use_rag: opts.useRag } : {}),
           ...(opts?.useWiki != null ? { use_wiki: opts.useWiki } : {}),
+          // #355: code-collection git wiring (omit empties so a plain collection
+          // sends none of them).
+          ...(opts?.gitUrl ? { git_url: opts.gitUrl } : {}),
+          ...(opts?.gitBranch ? { git_branch: opts.gitBranch } : {}),
+          ...(opts?.gitToken ? { git_token: opts.gitToken } : {}),
         }),
       }),
       "create collection",
