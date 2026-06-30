@@ -62,6 +62,7 @@ from .notifications import register_notification_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .runner import AgentRunner
+from .sandbox_activity import IActivityStore, SpecstarActivityStore
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .tools_routes import register_tools_routes
@@ -284,7 +285,18 @@ def create_app(
     assert default_infer_modules_config  # bundled always populates infer_modules
 
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
-    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    # #345: only the local process sandbox keeps an item's working dir on a
+    # shared volume across pods, so only it needs the GLOBAL activity heartbeat
+    # that lets the idle reaper recycle a dir solely when no pod is using it.
+    # Other backends (mock/http) own their own per-pod lifecycle → no heartbeat.
+    from ..sandbox.local_process import LocalProcessSandbox
+
+    activity_store: IActivityStore | None = (
+        SpecstarActivityStore(spec) if isinstance(sandbox, LocalProcessSandbox) else None
+    )
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, activity=activity_store
+    )
     # The single chokepoint for workspace file ops (agent tools + file routes):
     # routes to the live sandbox (single source of truth) when one is up for the
     # investigation, else to the FileStore snapshot. registry.peek_handle reads

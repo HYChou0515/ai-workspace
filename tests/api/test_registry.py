@@ -174,6 +174,73 @@ async def test_kill_idle_ignores_sessions_with_no_handle():
     assert new is not s
 
 
+class _FakeActivity:
+    """In-memory IActivityStore double: item_id → last_active_ms."""
+
+    def __init__(self) -> None:
+        self.ms: dict[str, int] = {}
+
+    async def bump(self, item_id: str) -> None:
+        self.ms[item_id] = 10**13  # far future → counts as "active now"
+
+    async def last_active_ms(self, item_id: str) -> int | None:
+        return self.ms.get(item_id)
+
+    async def forget(self, item_id: str) -> None:
+        self.ms.pop(item_id, None)
+
+
+async def test_kill_idle_spares_globally_active_shared_dir_345():
+    # #345: this pod is idle on the item, but a GLOBAL heartbeat says another pod
+    # touched the shared dir recently → don't rmtree it; just drop our session.
+    from datetime import UTC, datetime, timedelta
+
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), activity=activity
+    )
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)  # bumps the global heartbeat
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)  # pod-local idle
+
+    killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+    assert sandbox.kill_calls == 0  # shared dir NOT torn down
+    assert killed == []
+    assert (await registry.session("ws-1")) is not s  # local session still dropped
+
+
+async def test_kill_idle_recycles_globally_idle_shared_dir_345():
+    # #345: no pod has touched the dir past the threshold → recycle it
+    # (mirror → kill → forget the heartbeat).
+    from datetime import UTC, datetime, timedelta
+
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), activity=activity
+    )
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    await activity.forget("ws-1")  # heartbeat gone → globally idle
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+
+    killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+    assert sandbox.kill_calls == 1
+    assert killed == ["ws-1"]
+    assert "ws-1" not in activity.ms  # heartbeat forgotten on recycle
+
+
+async def test_ensure_handle_bumps_global_activity_345():
+    sandbox = _CountingSandbox()
+    activity = _FakeActivity()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), activity=activity
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+    assert "ws-1" in activity.ms  # global heartbeat recorded
+
+
 async def test_close_all_kills_every_alive_handle():
     sandbox = _CountingSandbox()
     registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec())

@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
 from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from .sandbox_activity import IActivityStore
 
 
 class _SyncHook(Protocol):
@@ -50,6 +51,11 @@ class InvestigationRegistry:
     sandbox: Sandbox
     default_spec: SandboxSpec
     sync: _SyncHook | None = None
+    # #345: global per-item activity heartbeat. When wired (shared-vol local
+    # sandbox on multi-replica API), the idle reaper recycles a shared dir only
+    # when GLOBALLY idle. None → single-process / non-shared behaviour (the dir
+    # is reaped on pod-local idleness, as before).
+    activity: IActivityStore | None = None
     _sessions: dict[str, InvestigationSession] = field(default_factory=dict)
 
     async def session(self, investigation_id: str) -> InvestigationSession:
@@ -97,6 +103,10 @@ class InvestigationRegistry:
                 session.handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
                 if fresh and self.sync is not None:
                     await self.sync.restore(item, session.handle)
+            # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
+            # so another pod's idle reaper sees this item as live (#345).
+            if self.activity is not None:
+                await self.activity.bump(session.investigation_id)
             session.last_active = _utcnow()
         return session.handle
 
@@ -138,19 +148,42 @@ class InvestigationRegistry:
         return mirrored
 
     async def kill_idle(self, threshold: timedelta) -> list[str]:
+        """Reap sandboxes idle past ``threshold``. #345: with a shared per-item
+        dir, tearing it down (``rmtree`` via ``sandbox.kill``) on pod-local
+        idleness alone would delete a dir another pod is still using. So when a
+        global heartbeat is wired, a pod-locally-idle item whose dir is GLOBALLY
+        active is only dropped from THIS pod's sessions — the dir is left for the
+        active pod. The recycle (mirror→kill→forget) runs only when no pod has
+        touched the item past the threshold."""
         cutoff = _utcnow() - threshold
+        cutoff_ms = int(cutoff.timestamp() * 1000)
         killed: list[str] = []
         for inv_id in list(self._sessions):
             s = self._sessions[inv_id]
             if s.last_active >= cutoff:
                 continue
+            if s.handle is not None and not await self._globally_idle(inv_id, cutoff_ms):
+                # Another pod is live on the shared dir — drop our local session
+                # only, leave the dir (and its heartbeat) intact.
+                del self._sessions[inv_id]
+                continue
             if s.handle is not None:
                 if self.sync is not None:
-                    await self.sync.mirror(inv_id, s.handle)
+                    await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
                 await self.sandbox.kill(s.handle)
+                if self.activity is not None:
+                    await self.activity.forget(inv_id)
             del self._sessions[inv_id]
             killed.append(inv_id)
         return killed
+
+    async def _globally_idle(self, investigation_id: str, cutoff_ms: int) -> bool:
+        """True when no pod has touched the item's shared dir since ``cutoff_ms``.
+        No heartbeat wired ⇒ True (single-process: pod-local idleness is global)."""
+        if self.activity is None:
+            return True
+        ms = await self.activity.last_active_ms(investigation_id)
+        return ms is None or ms < cutoff_ms
 
     async def close_all(self) -> None:
         for inv_id in list(self._sessions):
@@ -171,3 +204,5 @@ class InvestigationRegistry:
             if self.sync is not None:
                 await self.sync.mirror(investigation_id, s.handle)
             await self.sandbox.kill(s.handle)
+            if self.activity is not None:
+                await self.activity.forget(investigation_id)
