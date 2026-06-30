@@ -51,13 +51,21 @@ class VlmDescriber:
         mime: str,
         *,
         context: str = "",
+        guidance: str = "",
         on_chunk: OnChunk | None = None,
     ) -> str:
         """One image → one Markdown description. ``context`` anchors the
         VLM (e.g. ``"page 3 of slides.pdf"``) and is folded into the
-        prompt; ``on_chunk`` surfaces the live stream of both stages."""
+        prompt; ``on_chunk`` surfaces the live stream of both stages.
+
+        ``guidance`` (#328) is the collection's ``parser_guidance`` —
+        per-collection extraction steering APPENDED after the base layered
+        template (e.g. "a fishbone diagram → emit JSON"). Blank ⇒ the base
+        prompt verbatim (no trailing separator, no behaviour change)."""
         context_line = f"Context: this image is {context}.\n\n" if context else ""
         prompt = self._prompt_template.format(context_line=context_line)
+        if guidance:
+            prompt = f"{prompt}\n\n{guidance}"
         raw = self._vlm.collect(prompt, images=[(image, mime)], on_chunk=on_chunk).strip()
         if self._formatter is None or not raw:
             return raw

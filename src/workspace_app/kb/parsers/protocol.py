@@ -140,6 +140,21 @@ class IParser(ABC):
         ``config`` — so the seam is zero-churn for every existing parser."""
         return []
 
+    def uses_guidance(self) -> bool:
+        """Whether this parser consumes the collection's ``parser_guidance``
+        (#328) — a single per-collection free-text prompt APPENDED to a
+        prompt-driven parser's base prompt (e.g. "a fishbone diagram → emit
+        JSON"). Default ``False``: the parser ignores guidance, so the ingestor
+        never threads it (zero-churn for non-LLM parsers — JSON / CSV / PDF
+        text-layer have no prompt to append to).
+
+        A prompt-driven parser (the VLM describer family) overrides this to
+        ``True`` and ADDS an opt-in ``guidance: str = ""`` keyword to its own
+        ``parse`` override, appending it to the model prompt. Like ``config``
+        (above) the kwarg stays OFF this base signature so knob-less parsers
+        remain Liskov-clean and untouched."""
+        return False
+
     @abstractmethod
     def parse(
         self,

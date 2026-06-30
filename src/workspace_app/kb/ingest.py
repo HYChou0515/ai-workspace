@@ -527,6 +527,23 @@ class Ingestor:
             doc_overrides=doc.parser_config_overrides,
         )
 
+    def _parse_guidance_for(self, collection_id: str) -> str:
+        """The collection's ``parser_guidance`` (#328) — appended to every
+        prompt-driven parser's base prompt. Empty ``""`` (the default) ⇒ the
+        ingestor never threads ``guidance`` (zero-churn for parsers/collections
+        that don't use it)."""
+        coll = self._spec.get_resource_manager(Collection).get(collection_id).data
+        assert isinstance(coll, Collection)
+        return coll.parser_guidance
+
+    @staticmethod
+    def _guidance_kwargs(parser: IParser, guidance: str) -> dict[str, str]:
+        """The opt-in ``guidance`` bridge — passed to ``parse`` only when this
+        parser consumes guidance AND the collection set some. Mirrors the
+        ``config`` bridge: the kwarg is off the IParser ABC, so knob-less /
+        non-LLM parsers never see it."""
+        return {"guidance": guidance} if guidance and parser.uses_guidance() else {}
+
     def _index(self, collection_id: str, doc_id: str, path: str, data: bytes) -> _IndexOutput:
         """(Re)build a doc's chunks. Returns the converter ``text`` (persisted on
         SourceDoc.text) + the doc's browser-preview Binary (pipeline mode only)."""
@@ -597,6 +614,7 @@ class Ingestor:
         # the inline text/code packet (parser_id="") is the fallback for
         # plain text no parser claims.
         packets: list[tuple[str, list[Document]]] = []
+        guidance = self._parse_guidance_for(collection_id)
         with MaterialisedParserInput(data, filename=path) as source:
             parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
             for parser in parsers:
@@ -615,6 +633,10 @@ class Ingestor:
                         # when this parser declared config_fields, i.e. it accepts
                         # the kwarg — the dict-unpack is the intentional bridge.
                         **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
+                        # `guidance` (#328) is the parallel opt-in bridge — the
+                        # collection's parser_guidance appended to a prompt-driven
+                        # parser's base prompt. Same dict-unpack discipline.
+                        **self._guidance_kwargs(parser, guidance),  # ty: ignore[invalid-argument-type]
                     )
                 )
                 for d in docs:
@@ -765,6 +787,7 @@ class Ingestor:
             assert len(parsers) == 1, "fanout_units guarantees a single parser"
             parser = parsers[0]
             cfg = self._parse_config_for(parser, collection_id=doc.collection_id, doc_id=doc_id)
+            guidance = self._parse_guidance_for(doc.collection_id)
             docs = list(
                 parser.parse(
                     source,
@@ -776,8 +799,9 @@ class Ingestor:
                     # FE reads real progress from IndexRun.units_done/total instead.
                     on_progress=None,
                     unit_range=unit_range,
-                    # opt-in config bridge — see the note at the other parse site.
+                    # opt-in config + guidance bridges — see the other parse site.
                     **({"config": cfg} if cfg is not None else {}),  # ty: ignore[invalid-argument-type]
+                    **self._guidance_kwargs(parser, guidance),  # ty: ignore[invalid-argument-type]
                 )
             )
             for d in docs:

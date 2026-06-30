@@ -92,6 +92,33 @@ def test_describer_context_line_lands_in_the_prompt():
     assert "page 3 of slides.pdf" in str(vlm.calls[0]["prompt"])
 
 
+def test_describer_appends_collection_guidance_after_the_base_prompt():
+    """#328: a collection's `parser_guidance` is appended AFTER the base
+    describe template, so the operator can steer extraction per collection
+    (e.g. "a fishbone diagram → emit JSON") without replacing the SOTA layers."""
+    vlm = FakeVlm()
+    VlmDescriber(vlm).describe(
+        b"img", "image/png", guidance="If you see a fishbone diagram, emit JSON."
+    )
+    prompt = str(vlm.calls[0]["prompt"])
+    assert "If you see a fishbone diagram, emit JSON." in prompt
+    # the base layered template is still there — guidance augments, never replaces.
+    assert "verbatim" in prompt.lower()
+    # appended at the end (after the base prompt body).
+    assert prompt.rstrip().endswith("If you see a fishbone diagram, emit JSON.")
+
+
+def test_describer_empty_guidance_leaves_the_prompt_unchanged():
+    """Blank guidance (the default / a collection that set none) ⇒ the prompt is
+    byte-for-byte the base template — no trailing separator, no behaviour change."""
+    base = VlmDescriber(FakeVlm())
+    base.describe(b"img", "image/png")
+    plain = str(base._vlm.calls[0]["prompt"])  # type: ignore[attr-defined]
+    g = VlmDescriber(FakeVlm())
+    g.describe(b"img", "image/png", guidance="")
+    assert str(g._vlm.calls[0]["prompt"]) == plain  # type: ignore[attr-defined]
+
+
 def test_describer_runs_formatter_stage_when_wired():
     """Issue #115: a small VLM often emits free text, not Markdown. With a
     text-LLM formatter wired, describe() pipes the VLM's text through it and

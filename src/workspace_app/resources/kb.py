@@ -173,6 +173,17 @@ class Collection(Struct):  # → resource "collection"
     # filtered/sorted on), like `quality_rubric` — adding it needs no
     # migration (old rows decode with the empty default).
     parser_configs: dict[str, dict[str, Any]] = {}
+    # Issue #328: a single per-collection free-text steering prompt APPENDED to
+    # every prompt-driven parser's base prompt at index time (e.g. "a fishbone
+    # diagram → emit JSON; a table → emit Markdown"). Unlike `parser_configs`
+    # (per-parser-id structured knobs) this is one string shared across ALL the
+    # collection's prompt-driven parsers (the VLM describer family — whichever a
+    # given upload routes through), the 5th sibling of `quality_rubric` /
+    # `wiki_*_guidance`. The findability-probe modal tunes a CANDIDATE of this on
+    # ONE doc (dry-run, never persisted); "Apply" writes it here. Blank ⇒ nothing
+    # appended (back-compat). Non-indexed (never filtered/sorted on) — adding it
+    # needs no migration (old rows decode with the empty default).
+    parser_guidance: str = ""
 
 
 class WikiPage(Struct):  # → resource "wiki-page"
