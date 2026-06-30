@@ -18,12 +18,20 @@
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| **P1** | **每日同步閘門**:新增 config `kb.git.daily_sync: "HH:MM"`（伺服器當地時間;null=關閉）+ `CodeRepoSweeper.tick` 改「每日某時刻」閘門,全面取代舊 `sync_interval_hours` 間隔邏輯 | ⬜ |
-| **P2** | **`code_sync` job**:`wiki` JobType 新增 `op="code_sync"` handler（clone+ingest → 鏈到既有 `code_split`）;`CodeWikiBuildRun` 加 `cloning`/`ingesting` phase + clone/auth 失敗記 `last_error` | ⬜ |
-| **P3** | **觸發端非同步化**:`/sync` route 與 `tick()` 改成 enqueue `code_sync` 後**立刻返回**(契約改 `status="queued"`);移除 lifecycle loop 逐 cid `trigger_code_build`;更新既有 /sync 同步行為測試 | ⬜ |
-| **P4** | **建立表單(FE)**:`NewCollectionModal` 分段切換 Documents \| Code repository + code 模式欄位;`createCollection` 帶 git 欄位 | ⬜ |
-| **P5** | **首次 sync + 狀態 strip(FE)**:建立後導向 collection 頁 + 自動 enqueue 首次 sync;collection 頁 sync status strip（複用 #162 strip + `/wiki/status` 輪詢）| ⬜ |
-| **P6** | **(延後,獨立)編輯既有 git 連線**:設定 modal 換 branch / 輪換 token(placeholder 不回填、PATCH 帶 git 欄位)| 🔜 v2 |
+| **P1** | **每日同步閘門**:新增 config `kb.git.daily_sync: "HH:MM"`（伺服器當地時間;null=關閉）+ `CodeRepoSweeper.tick` 改「每日某時刻」閘門,全面取代舊 `sync_interval_hours` 間隔邏輯 | ✅ |
+| **P2** | **`code_sync` job**:`wiki` JobType 新增 `op="code_sync"` handler（clone+ingest → 鏈到既有 `code_split`）;`CodeWikiBuildRun` 加 `cloning`/`ingesting` phase + clone/auth 失敗記 `last_error` | ✅ |
+| **P3** | **觸發端非同步化**:`/sync` route 與 `tick()` 改成 enqueue `code_sync` 後**立刻返回**(契約改 `status="queued"`);移除 lifecycle loop 逐 cid `trigger_code_build`;更新既有 /sync 同步行為測試 | ✅ |
+| **P4** | **建立表單(FE)**:`NewCollectionModal` 分段切換 Documents \| Code repository + code 模式欄位;`createCollection` 帶 git 欄位 | ✅ |
+| **P5** | **首次 sync + 狀態 strip(FE)**:建立後導向 collection 頁 + 自動 enqueue 首次 sync;collection 頁 sync status strip（複用 #162 strip + `/wiki/status` 輪詢）| ✅ |
+| **P6** | **編輯既有 git 連線**:`CodeConnectionEditor`(collection 頁設定選單→「Git connection」,只 code collection 顯示)換 branch / 輪換 token(placeholder 不回填、PATCH 帶 git 欄位)| ✅ |
+
+### 實作偏離 / 註記(實作時定的)
+
+- **stamp-on-attempt(P1)**:為了讓 daily 閘門「每天最多一次嘗試」天然防連環重試(create-typo + remote-broke 兩種 storm),`CodeRepoIngestor.sync` 改成**每次嘗試都 stamp `git_last_pulled_at`**(成功才更新 `git_last_sha`)。比 grill 的「None 不掃」更乾淨:None 過了時刻就掃一次,失敗也 stamp → 不再每 tick 重試。
+- **phase 放 `CodeWikiBuildRun`(P2)**:cloning/ingesting 放在 `CodeWikiBuildRun.phase`(非 `WikiBuildState`),因 code collection 的 `status()` 讀 run;`start()` 加 `phase` 參數 + 新 `set_phase()`,`on_phase` callback 由 sync 觸發。
+- **`enqueue_code_sync` 同步(P3)**:純 specstar enqueue 無 await,設成 sync method 讓 sweeper 的 tick thread 直接呼叫;`CodeRepoSweeper` 退化成純 producer(注入 `enqueue` callback、不再持有 `code_repo`),tick 回傳 enqueued cids。
+- **P6 沒延後**:使用者要求一次做完 P1–P6,故 P6 在本 PR 一併完成(原 plan 標 v2)。git 連線編輯走既有 specstar-native PATCH,後端零改動(只加一個 round-trip 測試守約)。
+- **git_token v1 明文**:specstar-native GET/PATCH 會序列化 `git_token`(只有自訂的 `CollectionOut` 省略它);沿用 #281 P3.0「v1 明文儲存」既定,本 issue 不改。
 
 **排序理由**:後端先行(P1–P3),FE 才有可呼叫的非同步契約;P1（排程閘門）與 P2/P3（job 化）相對獨立,但 P3 依賴 P2 的 job 存在。P4（建立)先於 P5（首次 sync 要先建得出 code collection)。P6 是 v1 不做的編輯路徑,獨立成 phase。
 

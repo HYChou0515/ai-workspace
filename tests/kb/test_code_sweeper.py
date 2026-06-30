@@ -65,9 +65,7 @@ def test_due_gate_fires_once_past_the_daily_time():
     # Last pull was before today's time → due.
     assert _due_for_daily_sync(now_ms=at, last_pulled_ms=before, daily_sync="03:00") is True
     # Already synced after today's time → not due again today.
-    assert (
-        _due_for_daily_sync(now_ms=at, last_pulled_ms=_ms(target), daily_sync="03:00") is False
-    )
+    assert _due_for_daily_sync(now_ms=at, last_pulled_ms=_ms(target), daily_sync="03:00") is False
 
 
 def test_due_gate_not_before_the_daily_time():

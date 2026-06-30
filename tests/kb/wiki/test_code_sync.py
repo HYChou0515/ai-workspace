@@ -101,10 +101,8 @@ async def test_code_sync_clones_ingests_and_builds_wiki(spec: SpecStar, remote: 
     # Ingested: the tracked .py is now a SourceDoc.
     from specstar import QB
 
-    docs = spec.get_resource_manager(SourceDoc).list_resources(
-        (QB["collection_id"] == cid).build()
-    )
-    assert [d.data.path for d in docs] == ["app/x.py"]
+    docs = spec.get_resource_manager(SourceDoc).list_resources((QB["collection_id"] == cid).build())
+    assert [d.data.path for d in docs if isinstance(d.data, SourceDoc)] == ["app/x.py"]
     # Synced: HEAD sha stamped on the collection.
     coll = spec.get_resource_manager(Collection).get(cid).data
     assert coll.git_last_sha and len(coll.git_last_sha) == 40
@@ -142,10 +140,8 @@ async def test_code_sync_records_misconfig_when_no_wiki_llm(spec: SpecStar, remo
     # Ingest still happened.
     from specstar import QB
 
-    docs = spec.get_resource_manager(SourceDoc).list_resources(
-        (QB["collection_id"] == cid).build()
-    )
-    assert [d.data.path for d in docs] == ["app/x.py"]
+    docs = spec.get_resource_manager(SourceDoc).list_resources((QB["collection_id"] == cid).build())
+    assert [d.data.path for d in docs if isinstance(d.data, SourceDoc)] == ["app/x.py"]
     assert "not configured" in (coord.status(cid).last_error or "")
 
 
@@ -177,7 +173,12 @@ async def test_enqueue_code_sync_coalesces(spec: SpecStar, remote: str):
     from workspace_app.kb.wiki.jobs import WikiMaintenanceJob
 
     jobs = spec.get_resource_manager(WikiMaintenanceJob).list_resources(QB.all().build())
-    assert sum(j.data.payload.op == "code_sync" for j in jobs) == 1
+    assert (
+        sum(
+            j.data.payload.op == "code_sync" for j in jobs if isinstance(j.data, WikiMaintenanceJob)
+        )
+        == 1
+    )
     await coord.aclose()
 
 

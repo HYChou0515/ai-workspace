@@ -100,7 +100,9 @@ def test_patch_collection_edits_git_branch_and_rotates_token(app):
         "/kb/collections",
         json={"name": "r", "git_url": "https://git.example/r.git", "embedder_id": 1},
     ).json()["resource_id"]
-    resp = client.patch(f"/collection/{cid}", json={"git_branch": "develop", "git_token": "ghp_new"})
+    resp = client.patch(
+        f"/collection/{cid}", json={"git_branch": "develop", "git_token": "ghp_new"}
+    )
     assert resp.status_code in (200, 204), resp.text
     # CollectionOut (the FE-facing list) reflects the new branch; url is unchanged.
     coll = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)

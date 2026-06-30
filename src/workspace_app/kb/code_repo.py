@@ -235,9 +235,7 @@ def parse_daily_sync(value: str | None) -> tuple[int, int] | None:
     return None
 
 
-def _due_for_daily_sync(
-    *, now_ms: int, last_pulled_ms: int | None, daily_sync: str | None
-) -> bool:
+def _due_for_daily_sync(*, now_ms: int, last_pulled_ms: int | None, daily_sync: str | None) -> bool:
     """Is a code collection due for its daily auto-sync right now?
 
     Due when (a) ``daily_sync`` is set, (b) the current local time is at/after
