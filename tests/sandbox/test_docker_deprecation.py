@@ -35,3 +35,12 @@ def test_deprecation_points_to_sandbox_host():
         DockerSandbox(client=_DUMMY_CLIENT)
     messages = [str(w.message) for w in caught if issubclass(w.category, DeprecationWarning)]
     assert any("sandbox-host" in m for m in messages), messages
+
+
+def test_handle_for_id_is_none_345():
+    # #345: per-container Docker sandboxes aren't id-addressable, so the shared-vol
+    # routing has nothing to derive → None (reads fall back to the snapshot).
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        sb = DockerSandbox(client=_DUMMY_CLIENT)
+    assert sb.handle_for_id("anything") is None

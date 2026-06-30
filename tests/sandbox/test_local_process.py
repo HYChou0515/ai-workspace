@@ -62,6 +62,17 @@ async def test_unknown_handle_dir_raises_sandbox_not_found_345(tmp_path):
         await sb.walk(SandboxHandle(id="never-created"), "/")
 
 
+async def test_handle_for_id_derives_handle_or_none_for_unsafe_345(tmp_path):
+    # #345: the sync routing path derives a handle from an id WITHOUT a session —
+    # a safe id yields a handle (existence is not checked here), an unsafe id
+    # yields None so it routes to the snapshot instead of raising.
+    sb = LocalProcessSandbox(root_dir=tmp_path, isolate=False)
+    h = sb.handle_for_id("item-1")
+    assert h is not None and h.id == "item-1"
+    for bad in ["../evil", "a/b", "", ".", ".."]:
+        assert sb.handle_for_id(bad) is None
+
+
 async def test_exec_real_echo(sandbox: LocalProcessSandbox):
     h = await sandbox.create(SandboxSpec())
     r = await sandbox.exec(h, ["echo", "hello"])

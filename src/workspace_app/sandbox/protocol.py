@@ -124,8 +124,13 @@ class Sandbox(Protocol):
         pure id→handle mapping); a later file op raises `SandboxNotFound` when
         the sandbox is cold, and the caller falls back to the durable snapshot.
         Lets a file read on ANY pod route to the live shared dir instead of a
-        stale snapshot, so workspace data no longer depends on sticky routing."""
-        return None
+        stale snapshot, so workspace data no longer depends on sticky routing.
+
+        Optional: callers reach it via ``getattr(sandbox, "handle_for_id", None)``
+        (so a backend / test double that omits it routes to the snapshot), hence
+        a pure-signature body like the rest of the Protocol — never a runtime
+        default."""
+        ...
 
     async def kill(self, handle: SandboxHandle) -> None:
         """Tear the sandbox down and release its resources (temp dir /

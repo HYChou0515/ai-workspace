@@ -148,6 +148,13 @@ async def test_create_returns_unique_handles(http_sandbox: HttpSandbox):
     assert h1.id != h2.id
 
 
+def test_handle_for_id_is_none_345(http_sandbox: HttpSandbox):
+    # #345: the HTTP host mints its own pod-scoped handles and isn't addressable
+    # by a caller-stable id, so there's nothing to derive → None (a pod with no
+    # session reads the durable snapshot, the prior behaviour for this backend).
+    assert http_sandbox.handle_for_id("anything") is None
+
+
 async def test_kill_then_reuse_raises_sandbox_not_found(http_sandbox: HttpSandbox):
     h = await http_sandbox.create(SandboxSpec())
     await http_sandbox.kill(h)
