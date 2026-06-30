@@ -70,6 +70,41 @@ export type KbCollection = {
    * not scored and its search ranking is unaffected. Optional on the wire (the
    * real BE always sends it, defaulting to ""); absent ⇒ treat as "". */
   quality_rubric?: string;
+  /** #328: the per-collection parser guidance — a free-text prompt appended to
+   * every prompt-driven parser's base prompt (e.g. "a fishbone diagram → emit
+   * JSON"). Blank ⇒ no steering. Optional on the wire (BE defaults to ""). */
+  parser_guidance?: string;
+};
+
+/** #328 findability probe: where a doc's content ranks for a question, and how
+ * a candidate parser_guidance would change it. */
+export type KbProbePassage = {
+  /** 1-based position in the deep ranked list (across the whole collection). */
+  rank: number;
+  /** Within the top_k a normal search returns — i.e. what a user actually sees. */
+  in_top_k: boolean;
+  /** A preview of the passage text (truncated). */
+  text: string;
+  /** Human structural locator ("p.3" / "slide 2 · Ch.2"), or "" when none. */
+  location: string;
+};
+
+export type KbProbeSide = {
+  /** The target doc's passages within the search depth, best rank first. */
+  passages: KbProbePassage[];
+  /** The doc's best (lowest) rank, or null if it didn't surface at all. */
+  best_rank: number | null;
+};
+
+export type KbProbeResult = {
+  /** The user-facing result cut — ranks ≤ top_k are "what the user sees". */
+  top_k: number;
+  /** How deep the probe ranked (the cap on `rank`). */
+  depth: number;
+  /** Where the doc's currently-indexed chunks rank for the question. */
+  before: KbProbeSide;
+  /** The candidate-guidance re-parse ranks — null when no guidance was given. */
+  after: KbProbeSide | null;
 };
 
 /** Issue #101: result of preparing a collection export — the handle to stream
@@ -362,6 +397,9 @@ export interface KbApi {
       /** #105: the per-collection quality rubric (what makes a doc a good/bad
        * knowledge source + which dimensions to assess). Blank = not scored. */
       quality_rubric?: string;
+      /** #328: the per-collection parser guidance — the findability modal's
+       * "Apply" persists the tuned guidance here. */
+      parser_guidance?: string;
     },
   ): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
@@ -407,6 +445,15 @@ export interface KbApi {
     file: File,
     mode: "overwrite" | "skip",
   ): Promise<CollectionImported>;
+  /** #328 findability probe: rank a doc's content for a question (`before`) and,
+   * when a candidate `guidance` is given, a non-persisted re-parse of the doc
+   * (`after`). Read-only — nothing is written. */
+  probeFindability(body: {
+    doc_id: string;
+    question: string;
+    guidance?: string | null;
+    depth?: number;
+  }): Promise<KbProbeResult>;
   /** Render a source document to markdown (kb:// links) for the citation viewer. */
   renderDocument(documentId: string): Promise<KbRenderedDoc>;
   /** A document's indexed chunks + their cited counts (the chunks debug view). */
@@ -529,6 +576,14 @@ export const realKbApi: KbApi = {
       await apiFetch(`/kb/collections/${encodeURIComponent(id)}/reindex${qs}`, { method: "POST" }),
       "reindex collection",
     );
+  },
+  async probeFindability(body) {
+    const resp = await apiFetch(`/kb/findability/probe`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    });
+    return (await ok(resp, "probe findability")).json();
   },
   async listDocuments(collectionId, page) {
     const qs = new URLSearchParams();

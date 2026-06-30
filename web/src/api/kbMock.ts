@@ -249,6 +249,23 @@ export const mockKbApi: KbApi = {
   async importCollectionInto(collectionId, _file, _mode) {
     return { collection_id: collectionId, document_ids: [], status: "indexing" };
   },
+  async probeFindability(body) {
+    // #328: a deterministic mock — the doc surfaces at #2, and any candidate
+    // guidance "improves" it to #1, enough for tests that don't stub their own.
+    const passage = (rank: number) => ({
+      rank,
+      in_top_k: rank <= 5,
+      text: `Mock passage for ${body.doc_id} (q: ${body.question}).`,
+      location: "p.1",
+    });
+    return {
+      top_k: 5,
+      depth: body.depth ?? 50,
+      before: { passages: [passage(2)], best_rank: 2 },
+      after:
+        body.guidance == null ? null : { passages: [passage(1)], best_rank: 1 },
+    };
+  },
   async renderDocument(documentId): Promise<KbRenderedDoc> {
     const filename = documentId.split("/").pop() ?? documentId;
     const collection_id = documentId.split("/")[0] ?? "";

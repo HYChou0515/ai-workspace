@@ -2285,6 +2285,21 @@
 }
 .kb-ide__status-state { text-transform: capitalize; }
 .kb-ide__status-meta { font-family: var(--font-mono); }
+/* #328: the findability-probe entry point in the status bar. */
+.kb-ide__status-probe {
+  font: inherit;
+  font-size: var(--fs-11, 0.6875rem);
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--paper-3);
+  background: var(--paper);
+  color: var(--text-paper-d);
+  cursor: pointer;
+}
+.kb-ide__status-probe:hover {
+  border-color: var(--accent);
+  color: var(--accent-h);
+}
 /* #248: the fan-out unit progress bar — a slim track + its done/total label. */
 .kb-ide__status-progress {
   display: inline-flex;

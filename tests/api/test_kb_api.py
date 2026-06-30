@@ -114,6 +114,25 @@ def test_collection_lists_its_per_wiki_guidance_after_a_patch():
     assert got["wiki_reader_guidance"] == "TL;DR first."
 
 
+def test_collection_lists_its_parser_guidance_after_a_patch():
+    """#328: the per-collection parser_guidance round-trips through the card list,
+    so the findability modal can prefill the editor. Apply writes it via the same
+    native PATCH /collection/{id}."""
+    client = _client()
+    cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]
+    fresh = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert fresh["parser_guidance"] == ""
+
+    r = client.patch(
+        f"/collection/{cid}",
+        json={"parser_guidance": "If you see a fishbone diagram, emit JSON."},
+    )
+    assert r.status_code < 300, r.text
+
+    got = next(c for c in client.get("/kb/collections").json() if c["resource_id"] == cid)
+    assert got["parser_guidance"] == "If you see a fishbone diagram, emit JSON."
+
+
 def test_collection_card_aggregates_docs_size_and_updated():
     client = _client()
     cid = client.post("/kb/collections", json={"name": "kb"}).json()["resource_id"]

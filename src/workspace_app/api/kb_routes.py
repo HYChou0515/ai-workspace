@@ -133,6 +133,9 @@ class CollectionOut(BaseModel):
     # #105: the per-collection quality rubric, so the editor can prefill it.
     # Blank ⇒ the collection is not scored.
     quality_rubric: str = ""
+    # #328: the per-collection parser guidance (appended to prompt-driven parsers),
+    # so the findability modal can prefill the editor. Blank ⇒ no steering.
+    parser_guidance: str = ""
 
 
 class SyncOut(BaseModel):
@@ -450,6 +453,7 @@ def register_kb_routes(
             wiki_maintainer_guidance=data.wiki_maintainer_guidance,
             wiki_reader_guidance=data.wiki_reader_guidance,
             quality_rubric=data.quality_rubric,
+            parser_guidance=data.parser_guidance,
         )
 
     @app.post("/kb/collections")
