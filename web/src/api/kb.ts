@@ -298,6 +298,11 @@ export type KbChatSummary = {
   message_count: number;
   owner?: string;
   shared_with?: string[];
+  /** #357: first user message (collapsed/truncated) — the FE labels an unnamed
+   * chat with this so the list can tell threads apart. "" until the first turn. */
+  name_hint?: string;
+  /** #357: specstar revision time (epoch ms) — the recency-sort key. */
+  updated_ms?: number | null;
 };
 
 export type KbChatDetail = {
@@ -307,6 +312,9 @@ export type KbChatDetail = {
   messages: KbChatMessage[];
   owner?: string;
   shared_with?: string[];
+  /** #357: same fallback label the list uses, so the chat-view header can show a
+   * meaningful title for an unnamed thread instead of a generic "Chat". */
+  name_hint?: string;
 };
 
 export type SendKbMessageArgs = {

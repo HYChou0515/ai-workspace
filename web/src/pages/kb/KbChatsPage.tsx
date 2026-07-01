@@ -16,6 +16,7 @@ import { UserChip } from "../../components/UserChip";
 import { UserPicker } from "../../components/UserPicker";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
+import { kbChatLabel } from "./kbChatLabel";
 
 type Tab = "all" | "pinned" | "shared";
 
@@ -81,7 +82,10 @@ export function KbChatsPage({
     .sort(
       (a, b) =>
         Number(pinned.has(b.resource_id)) - Number(pinned.has(a.resource_id)) ||
-        a.title.localeCompare(b.title),
+        // #357: recency — most recently updated first (matches the KbChat model's
+        // ".info.updated_time → recency sort" intent), since titles are now mostly
+        // blank (name_hint-labelled) and would all collate together.
+        (b.updated_ms ?? 0) - (a.updated_ms ?? 0),
     );
 
   const tabs: [Tab, string, number][] = [
@@ -93,6 +97,7 @@ export function KbChatsPage({
   const row = (c: KbChatSummary) => {
     const owned = isMine(c);
     const isPinned = pinned.has(c.resource_id);
+    const label = kbChatLabel(c); // #357: title → name_hint → timestamp
     return (
       <li key={c.resource_id} className="kb-chats__row">
         <button
@@ -101,7 +106,7 @@ export function KbChatsPage({
           onClick={() => onOpenChat?.(c.resource_id)}
         >
           <Icon name="chat" size={15} color="var(--text-paper-d)" />
-          <span className="kb-chats__title">{c.title}</span>
+          <span className="kb-chats__title">{label}</span>
           {owned ? (
             <span className="kb-chats__meta">{c.message_count} msgs</span>
           ) : (
@@ -111,7 +116,7 @@ export function KbChatsPage({
         <button
           type="button"
           className={`kb-iconbtn${isPinned ? " is-pinned" : ""}`}
-          aria-label={`${isPinned ? "Unpin" : "Pin"} ${c.title}`}
+          aria-label={`${isPinned ? "Unpin" : "Pin"} ${label}`}
           aria-pressed={isPinned}
           onClick={() => pinned.toggle(c.resource_id)}
         >
@@ -122,7 +127,7 @@ export function KbChatsPage({
             <Popover
               align="end"
               trigger={({ onClick }) => (
-                <button type="button" className="kb-iconbtn" aria-label={`Share ${c.title}`} onClick={onClick}>
+                <button type="button" className="kb-iconbtn" aria-label={`Share ${label}`} onClick={onClick}>
                   <Icon name="users" size={14} />
                 </button>
               )}
@@ -149,7 +154,7 @@ export function KbChatsPage({
             <button
               type="button"
               className="kb-iconbtn"
-              aria-label={`Delete ${c.title}`}
+              aria-label={`Delete ${label}`}
               disabled={removeMut.isPending && removeMut.variables === c.resource_id}
               onClick={() => removeMut.mutate(c.resource_id)}
             >
