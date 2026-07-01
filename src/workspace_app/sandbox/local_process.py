@@ -165,6 +165,10 @@ def _validate_sandbox_id(sandbox_id: str) -> str:
 # The user workspace is this subdir of the sandbox root (the agent's ~/cwd).
 # MUST match the `/root` the jail bootstrap cds into.
 _WORKSPACE = "root"
+# #366: readiness marker at the SANDBOX ROOT (a sibling of the workspace, OUTSIDE
+# it) — written via mark_ready after a restore, so walk/sync/the file tree never
+# see it and no user file can forge it. Teardown unlinks it FIRST (before rmtree).
+_READY_MARKER = ".ready"
 # Provisioned tools are made available here (a sibling of the workspace, so
 # they're outside what walk/sync see). MUST match the jail bootstrap's mount.
 _TOOLS = ".tools"
@@ -305,8 +309,23 @@ class LocalProcessSandbox:
 
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
+        # #366: unlink `.ready` FIRST — rmtree's order is arbitrary, so a racing
+        # mirror must never see "ready + files half-gone" and wipe the snapshot.
+        await asyncio.to_thread((path / _READY_MARKER).unlink, missing_ok=True)
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
         self._dirs.pop(handle.id, None)
+
+    async def mark_ready(self, handle: SandboxHandle) -> None:
+        """#366: mark the sandbox authoritative — an empty file at the sandbox
+        ROOT (`$root/id/.ready`), a sibling of the workspace, so it is never
+        walked/synced nor shown in the file tree, and no user file can forge it."""
+        marker = self._require(handle) / _READY_MARKER
+        await asyncio.to_thread(marker.touch)
+
+    async def is_ready(self, handle: SandboxHandle) -> bool:
+        """#366: True once `mark_ready` ran (and the sandbox dir still exists)."""
+        marker = self._require(handle) / _READY_MARKER
+        return await asyncio.to_thread(marker.is_file)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]

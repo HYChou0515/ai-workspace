@@ -71,6 +71,14 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     async def exists(rid: str, path: str) -> dict[str, bool]:
         return {"exists": await backend.exists(SandboxHandle(id=rid), path)}
 
+    @app.post("/sandboxes/{rid}/mark-ready", status_code=204)
+    async def mark_ready(rid: str) -> None:
+        await backend.mark_ready(SandboxHandle(id=rid))
+
+    @app.get("/sandboxes/{rid}/ready")
+    async def is_ready(rid: str) -> dict[str, bool]:
+        return {"ready": await backend.is_ready(SandboxHandle(id=rid))}
+
     @app.get("/sandboxes/{rid}/walk")
     async def walk(rid: str, root: str) -> dict[str, list[dict]]:
         entries = await backend.walk(SandboxHandle(id=rid), root)
@@ -191,6 +199,13 @@ async def test_exists_reflects_uploaded_file(http_sandbox: HttpSandbox):
     assert await http_sandbox.exists(h, "/a.txt") is False
     await http_sandbox.upload(h, b"x", "/a.txt")
     assert await http_sandbox.exists(h, "/a.txt") is True
+
+
+async def test_mark_ready_then_is_ready_roundtrip_366(http_sandbox: HttpSandbox):
+    h = await http_sandbox.create(SandboxSpec())
+    assert await http_sandbox.is_ready(h) is False
+    await http_sandbox.mark_ready(h)
+    assert await http_sandbox.is_ready(h) is True
 
 
 async def test_walk_lists_files_with_versions(http_sandbox: HttpSandbox):

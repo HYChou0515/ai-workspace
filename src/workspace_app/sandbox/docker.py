@@ -42,6 +42,9 @@ if TYPE_CHECKING:
 
 
 _WORKDIR = "/workspace"
+# #366: readiness marker OUTSIDE the workspace (container root), so walk never
+# sees it. Deprecated backend — kept only to satisfy the Sandbox protocol.
+_READY_MARKER = "/.ready"
 
 
 class DockerSandbox:
@@ -179,6 +182,17 @@ class DockerSandbox:
     async def exists(self, handle: SandboxHandle, path: str) -> bool:
         container = self._require(handle)
         r = await asyncio.to_thread(container.exec_run, ["test", "-f", self._target(path)])
+        return r.exit_code == 0
+
+    async def mark_ready(self, handle: SandboxHandle) -> None:
+        # #366: marker at the container root (`/.ready`), OUTSIDE the `/workspace`
+        # walk scope — so it never shows up in the file tree or in sync.
+        container = self._require(handle)
+        await asyncio.to_thread(container.exec_run, ["touch", _READY_MARKER])
+
+    async def is_ready(self, handle: SandboxHandle) -> bool:
+        container = self._require(handle)
+        r = await asyncio.to_thread(container.exec_run, ["test", "-f", _READY_MARKER])
         return r.exit_code == 0
 
     async def delete(self, handle: SandboxHandle, path: str) -> None:

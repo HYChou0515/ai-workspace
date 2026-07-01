@@ -96,14 +96,20 @@ async def test_mirror_updates_changed_files(fs: SpecstarFileStore, sandbox: Mock
     assert await fs.read("ws", "/x.txt") == b"new"
 
 
-async def test_mirror_propagates_deletions(fs: SpecstarFileStore, sandbox: MockSandbox):
+async def test_mirror_propagates_deletions_on_a_ready_sandbox(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    # #366: a genuine (shell `rm`) deletion on a COMPLETE sandbox still propagates
+    # to the snapshot — readiness held throughout proves the missing file was
+    # really removed, not merely a not-yet-restored state.
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sandbox.mark_ready(h)  # authoritative, complete sandbox
     await sandbox.upload(h, b"x", "/gone.txt")
     await sync.mirror("ws", h)
     assert await fs.exists("ws", "/gone.txt") is True
 
-    await sandbox.delete(h, "/gone.txt")  # removed in the sandbox
+    await sandbox.delete(h, "/gone.txt")  # removed in the sandbox (shell rm)
     n = await sync.mirror("ws", h)
     assert n == 1  # one deletion
     assert await fs.exists("ws", "/gone.txt") is False
@@ -158,3 +164,109 @@ async def test_mirror_skips_ignored_paths(fs: SpecstarFileStore, sandbox: MockSa
 
     await sync.mirror("ws", h)
     assert await fs.ls("ws") == ["/src/main.py"]
+
+
+# ---- #366 P3: the .ready sandwich (deletes only on a complete sandbox) ----
+
+
+async def test_mirror_does_not_delete_snapshot_when_sandbox_not_ready_366(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    # #366 face B: a (re)created sandbox that is not yet ready — mid rebuild,
+    # before restore completes — must NOT let the deletion-aware mirror wipe the
+    # durable snapshot (that is what emptied the filetree).
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sandbox.mark_ready(h)  # a complete, authoritative sandbox
+    await sandbox.upload(h, b"data", "/keep.txt")
+    await sync.mirror("ws", h)  # ready → keep.txt backed up + tracked
+    assert await fs.exists("ws", "/keep.txt") is True
+
+    # the item is served by a freshly (re)created sandbox — EMPTY and not yet
+    # ready (its restore is still in flight); same workspace id, so the mirror's
+    # diff state still remembers keep.txt.
+    rebuilt = await sandbox.create(SandboxSpec())
+    await sync.mirror("ws", rebuilt)  # not ready → deletion phase skipped
+    assert await fs.exists("ws", "/keep.txt") is True  # snapshot preserved
+
+
+async def test_restore_marks_sandbox_ready_366(fs: SpecstarFileStore, sandbox: MockSandbox):
+    await fs.write("ws", "/a.txt", b"A")
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    assert await sandbox.is_ready(h) is False  # not yet authoritative
+    await sync.restore("ws", h)
+    assert await sandbox.is_ready(h) is True  # marked authoritative
+    # readiness is out of the workspace, so restore never tracks it as a file
+    assert "/.ready" not in {e.path for e in await sandbox.walk(h, "/")}
+    # a second restore is idempotent
+    await sync.restore("ws", h)
+    assert await sandbox.is_ready(h) is True
+
+
+async def test_mirror_on_reaped_sandbox_is_a_noop_366(fs: SpecstarFileStore, sandbox: MockSandbox):
+    # #366: the sandbox was reaped (dir gone) — walk raises SandboxNotFound. The
+    # mirror skips cleanly (no crash, no deletion) rather than wiping the snapshot.
+    await fs.write("ws", "/keep.txt", b"data")
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sandbox.kill(h)  # host reaped it
+    assert await sync.mirror("ws", h) == 0
+    assert await fs.exists("ws", "/keep.txt") is True
+
+
+async def test_mirror_skips_deletion_when_readiness_drops_mid_walk_366(
+    fs: SpecstarFileStore,
+):
+    class _ReadinessDropsMidWalk(MockSandbox):
+        def __init__(self) -> None:
+            super().__init__()
+            self.arm = False
+
+        async def walk(self, handle, root):  # type: ignore[override]
+            if self.arm and await self.is_ready(handle):
+                # teardown drops readiness FIRST, then starts removing files
+                self._ready.discard(handle.id)
+                await self.delete(handle, "/keep.txt")
+                self.arm = False
+            return await super().walk(handle, root)
+
+    sb = _ReadinessDropsMidWalk()
+    h = await sb.create(SandboxSpec())
+    await sb.mark_ready(h)
+    await sb.upload(h, b"data", "/keep.txt")
+    sync = SandboxSync(filestore=fs, sandbox=sb)
+    await sync.mirror("ws", h)  # calm → keep.txt tracked + backed up
+    assert await fs.exists("ws", "/keep.txt") is True
+
+    sb.arm = True
+    await sync.mirror("ws", h)  # readiness drops during walk → gate 2 skips deletes
+    assert await fs.exists("ws", "/keep.txt") is True
+
+
+async def test_mirror_skips_deletion_when_sandbox_vanishes_mid_walk_366(
+    fs: SpecstarFileStore,
+):
+    class _SandboxVanishesMidWalk(MockSandbox):
+        def __init__(self) -> None:
+            super().__init__()
+            self.arm = False
+
+        async def walk(self, handle, root):  # type: ignore[override]
+            entries = await super().walk(handle, root)
+            if self.arm:
+                await self.kill(handle)  # whole sandbox gone right after we read it
+                self.arm = False
+            return entries
+
+    sb = _SandboxVanishesMidWalk()
+    h = await sb.create(SandboxSpec())
+    await sb.mark_ready(h)
+    await sb.upload(h, b"data", "/keep.txt")
+    sync = SandboxSync(filestore=fs, sandbox=sb)
+    await sync.mirror("ws", h)
+    assert await fs.exists("ws", "/keep.txt") is True
+
+    sb.arm = True
+    await sync.mirror("ws", h)  # sandbox vanishes mid-walk → gate 2 re-check raises → skip
+    assert await fs.exists("ws", "/keep.txt") is True

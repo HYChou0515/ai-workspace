@@ -22,6 +22,10 @@ class MockSandbox:
     def __init__(self) -> None:
         self._fs: dict[str, dict[str, bytes]] = {}
         self._exposed: dict[str, list[int]] = {}
+        # #366: readiness is a first-class marker kept OUTSIDE the file store, so
+        # it never appears in walk/exists (it lives outside the workspace on a
+        # real backend). A handle id here ⇔ its sandbox is marked authoritative.
+        self._ready: set[str] = set()
 
     def _require(self, handle: SandboxHandle) -> dict[str, bytes]:
         if handle.id not in self._fs:
@@ -45,6 +49,19 @@ class MockSandbox:
         self._require(handle)
         del self._fs[handle.id]
         self._exposed.pop(handle.id, None)
+        self._ready.discard(handle.id)  # #366: teardown drops the readiness mark
+
+    async def mark_ready(self, handle: SandboxHandle) -> None:
+        """#366: mark the sandbox authoritative (its files are the complete,
+        restored state). Kept outside the file store so it never shows up as a
+        workspace file — mirror deletions are honoured only while this holds."""
+        self._require(handle)
+        self._ready.add(handle.id)
+
+    async def is_ready(self, handle: SandboxHandle) -> bool:
+        """#366: True once `mark_ready` ran and the sandbox still lives."""
+        self._require(handle)
+        return handle.id in self._ready
 
     async def expose_port(self, handle: SandboxHandle, container_port: int) -> tuple[str, int]:
         self._require(handle)

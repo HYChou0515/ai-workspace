@@ -647,3 +647,45 @@ async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback
     r2 = await sb.exec(h, ["python", "-c", "ignored"])
     assert r2.exit_code == 0
     assert "ROUTED-TO-PYTHON-STACK" in r2.stdout.decode()
+
+
+async def test_readiness_marker_lives_outside_workspace_and_is_invisible_366(sandbox, tmp_path):
+    # #366 P5: readiness is a first-class marker at the SANDBOX ROOT ($ROOT/id/
+    # .ready) — a sibling of the workspace, never inside it. So it never shows
+    # up in walk / a file listing (can't clutter the file tree or be faked by a
+    # user file), yet any pod can still ask `is_ready`.
+    h = await sandbox.create(SandboxSpec())
+    assert await sandbox.is_ready(h) is False
+    await sandbox.mark_ready(h)
+    assert await sandbox.is_ready(h) is True
+
+    # physically at the sandbox root, NOT the user workspace
+    assert (tmp_path / h.id / ".ready").exists()
+    assert not (tmp_path / h.id / "root" / ".ready").exists()
+    # invisible to the workspace view
+    assert await sandbox.walk(h, "/") == []
+    assert await sandbox.exists(h, "/.ready") is False
+
+
+async def test_kill_unlinks_ready_marker_before_rmtree_366(sandbox, tmp_path, monkeypatch):
+    # #366 P4/P5: teardown must unlink `.ready` BEFORE the (arbitrarily-ordered)
+    # rmtree, so a mirror racing the reap sees an incomplete sandbox and skips
+    # its delete phase instead of wiping the durable snapshot. The marker now
+    # lives at the sandbox root (out of the workspace).
+    import sandbox_host.local_process as lp
+
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.mark_ready(h)
+    marker = tmp_path / h.id / ".ready"
+    assert marker.exists()
+
+    ready_gone_at_rmtree = {}
+    real_rmtree = lp.shutil.rmtree
+
+    def spy_rmtree(p, **kw):
+        ready_gone_at_rmtree["v"] = not marker.exists()  # already unlinked?
+        return real_rmtree(p, **kw)
+
+    monkeypatch.setattr(lp.shutil, "rmtree", spy_rmtree)
+    await sandbox.kill(h)
+    assert ready_gone_at_rmtree["v"] is True  # marker unlinked BEFORE rmtree

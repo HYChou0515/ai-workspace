@@ -172,6 +172,13 @@ class HttpSandbox:
         resp = await self._request(handle, "GET", "/exists", params={"path": path})
         return bool(resp.json()["exists"])
 
+    async def mark_ready(self, handle: SandboxHandle) -> None:
+        await self._request(handle, "POST", "/mark-ready")
+
+    async def is_ready(self, handle: SandboxHandle) -> bool:
+        resp = await self._request(handle, "GET", "/ready")
+        return bool(resp.json()["ready"])
+
     async def walk(self, handle: SandboxHandle, root: str) -> list[FileEntry]:
         resp = await self._request(handle, "GET", "/walk", params={"root": root})
         return [
