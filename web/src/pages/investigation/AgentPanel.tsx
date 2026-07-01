@@ -38,7 +38,8 @@ import { TurnStatus } from "../../components/TurnStatus";
 import { turnsFromEntry } from "./agentLog";
 import { pxToRem } from "../../lib/pxToRem";
 import { useT } from "../../lib/i18n";
-import { type AttachProgress, attachPrompt, runAttach } from "./attach";
+import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
+import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer";
 
 export function AgentPanel({
   investigationId,
@@ -139,6 +140,11 @@ export function AgentPanel({
   // aggregate byte/file progress driving the bar. `dragging` flags the drop overlay.
   const [progress, setProgress] = useState<AttachProgress | null>(null);
   const [dragging, setDragging] = useState(false);
+  // #364: attached images show as removable preview chips instead of a raw path in
+  // the box; each holds the uploaded workspace `path` (appended to the message on send
+  // so the agent can read_image it) + an object-URL `url` for the thumbnail.
+  const [imageChips, setImageChips] = useState<{ id: string; path: string; url: string }[]>([]);
+  const chipSeq = useRef(0);
   // #51 P6: replay diagnostic for one past entry (assistant / tool).
   const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
   // Handoff 3.0 composer model picker. Picking a model here CHANGES THE item's
@@ -198,6 +204,71 @@ export function AgentPanel({
     }
   };
 
+  // #364: images upload immediately (same as a file drop) but surface as thumbnail
+  // chips rather than a path in the box; the path is appended to the message on send.
+  const doAttachImages = async (images: File[]) => {
+    if (!images.length || attaching) return;
+    setProgress({
+      loadedBytes: 0,
+      totalBytes: images.reduce((n, f) => n + f.size, 0),
+      doneFiles: 0,
+      totalFiles: images.length,
+    });
+    try {
+      const res = await runAttach({
+        files: images,
+        uploadDir,
+        upload: (path, file, onChunk) =>
+          api.uploadFile(slug, investigationId, path, file, {
+            onProgress: (loaded) => onChunk?.(loaded),
+          }),
+        onProgress: setProgress,
+      });
+      // runAttach derives each path via uploadPathFor, so re-deriving pairs an uploaded
+      // path back to its source blob for the thumbnail.
+      const byPath = new Map(images.map((f) => [uploadPathFor(uploadDir, f), f]));
+      const fresh = res.uploaded.map((path) => ({
+        id: `${chipSeq.current++}`,
+        path,
+        url: URL.createObjectURL(byPath.get(path) ?? new Blob()),
+      }));
+      if (fresh.length) setImageChips((prev) => [...prev, ...fresh]);
+      if (res.overQuota.length) {
+        alert(t("workspace.overQuota", { names: res.overQuota.join(", ") }));
+      }
+      const problems = [
+        ...res.tooLarge.map((p) => `${p} — exceeds the size limit`),
+        ...res.failed.map((p) => `${p} — upload failed`),
+      ];
+      if (problems.length) alert(`Some files weren't attached:\n${problems.join("\n")}`);
+    } finally {
+      setProgress(null);
+      queryClient.invalidateQueries({ queryKey: qk.workspaceUsage(slug, investigationId) });
+    }
+  };
+
+  // #364: route a drop / paste / picker batch — images → chip flow, others → path flow.
+  // Sequential so the two flows don't race on the shared `progress`/`attaching` state.
+  const handleIncoming = async (files: File[]) => {
+    const images = files.filter(isImage);
+    const others = files.filter((f) => !isImage(f));
+    if (images.length) await doAttachImages(images);
+    if (others.length) await doAttach(others);
+  };
+
+  const removeImageChip = (id: string) =>
+    setImageChips((prev) => {
+      const gone = prev.find((c) => c.id === id);
+      if (gone) URL.revokeObjectURL(gone.url);
+      return prev.filter((c) => c.id !== id);
+    });
+
+  const clearImageChips = () =>
+    setImageChips((prev) => {
+      prev.forEach((c) => URL.revokeObjectURL(c.url));
+      return [];
+    });
+
   const submit = () => {
     const text = draft.trim();
     if (log.streaming) return;
@@ -218,9 +289,14 @@ export function AgentPanel({
       setDraft("");
       return;
     }
-    if (!text) return;
+    // #364: image chips carry their workspace path — prepend them so the agent gets
+    // the paths (it only ever sees paths). A message with only images is valid.
+    const imagePaths = imageChips.map((c) => c.path);
+    if (!text && !imagePaths.length) return;
+    const body = imagePaths.length ? [attachPrompt(imagePaths), text].filter(Boolean).join("\n\n") : text;
     setDraft("");
-    void send(text);
+    clearImageChips();
+    void send(body);
   };
 
   const onChip = (label: string) => {
@@ -384,11 +460,14 @@ export function AgentPanel({
           if (!dragging) setDragging(true);
         }}
         onDragLeave={() => setDragging(false)}
+        // #364: recurse dropped folders (webkitGetAsEntry) and route through the same
+        // image-vs-file split as the picker + paste.
         onDrop={(e) => {
           e.preventDefault();
           setDragging(false);
-          const files = Array.from(e.dataTransfer.files);
-          if (files.length) void doAttach(files);
+          void readTransferEntries(e.dataTransfer).then((files) => {
+            if (files.length) void handleIncoming(files);
+          });
         }}
         style={{
           padding: 12,
@@ -467,11 +546,85 @@ export function AgentPanel({
             ))}
           </div>
         )}
+        {imageChips.length > 0 && (
+          <div
+            data-testid="image-chips"
+            style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "flex-start" }}
+          >
+            {imageChips.map((c) => (
+              <div
+                key={c.id}
+                data-testid="image-chip"
+                title={c.path}
+                style={{
+                  position: "relative",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  gap: 2,
+                  maxWidth: 84,
+                }}
+              >
+                <img
+                  src={c.url}
+                  alt={c.path}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    objectFit: "cover",
+                    borderRadius: "var(--radius-chip)",
+                    border: "1px solid var(--paper-3)",
+                  }}
+                />
+                <span
+                  style={{
+                    fontSize: pxToRem(10),
+                    color: "var(--text-paper-d)",
+                    maxWidth: 84,
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {c.path.split("/").pop()}
+                </span>
+                <button
+                  type="button"
+                  aria-label={`Remove ${c.path}`}
+                  onClick={() => removeImageChip(c.id)}
+                  style={{
+                    position: "absolute",
+                    top: -6,
+                    right: -6,
+                    background: "var(--white)",
+                    border: "1px solid var(--paper-3)",
+                    borderRadius: "50%",
+                    lineHeight: 0,
+                    padding: 2,
+                    cursor: "pointer",
+                  }}
+                >
+                  <Icon name="x" size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={composerRef}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onComposerKeyDown}
+          // #364: paste an image (screenshot) → chip; paste a file → path; plain text
+          // falls through untouched (we only intercept when the clipboard carries files).
+          onPaste={(e) => {
+            const { images, files } = extractClipboardFiles(e.clipboardData, Date.now());
+            const all = [...images, ...files];
+            if (all.length) {
+              e.preventDefault();
+              void handleIncoming(all);
+            }
+          }}
           placeholder={
             onSteer
               ? "Tell the run what to change (e.g. use the X collection, redo from ingest)…"
@@ -510,7 +663,7 @@ export function AgentPanel({
             onChange={(e) => {
               const files = Array.from(e.target.files ?? []);
               e.target.value = "";
-              if (files.length) void doAttach(files);
+              if (files.length) void handleIncoming(files);
             }}
             style={{ display: "none" }}
           />
@@ -522,7 +675,7 @@ export function AgentPanel({
             onChange={(e) => {
               const files = Array.from(e.target.files ?? []);
               e.target.value = "";
-              if (files.length) void doAttach(files);
+              if (files.length) void handleIncoming(files);
             }}
             style={{ display: "none" }}
           />
