@@ -1,7 +1,7 @@
 from workspace_app.api.registry import InvestigationRegistry
 from workspace_app.api.sandbox_activity import IActivityStore
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
 
 
 class _CountingSandbox(MockSandbox):
@@ -196,6 +196,106 @@ async def test_kill_idle_ignores_sessions_with_no_handle():
     # Eviction still happened.
     new = await registry.session("ws-1")
     assert new is not s
+
+
+class _ZombieKillSandbox(MockSandbox):
+    """MockSandbox whose `kill` raises SandboxNotFound for chosen handle ids —
+    mimics the host reaping a sandbox (idle TTL) out from under a live session."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.zombie_ids: set[str] = set()
+        self.really_killed: list[str] = []
+
+    async def kill(self, handle: SandboxHandle) -> None:
+        if handle.id in self.zombie_ids:
+            raise SandboxNotFound(handle.id)  # host already reaped it
+        self.really_killed.append(handle.id)
+        await super().kill(handle)
+
+
+class _FlakyMirrorSync:
+    """Sync double whose `mirror` raises for chosen workspace ids (an unexpected
+    per-item error), succeeds otherwise. `restore` is a no-op."""
+
+    def __init__(self, boom: set[str]) -> None:
+        self.boom = boom
+        self.mirrored: list[str] = []
+
+    async def restore(self, workspace_id: str, handle: SandboxHandle) -> int:
+        return 0
+
+    async def mirror(self, workspace_id: str, handle: SandboxHandle) -> int:
+        if workspace_id in self.boom:
+            raise RuntimeError("mirror boom")
+        self.mirrored.append(workspace_id)
+        return 0
+
+
+async def test_kill_idle_survives_zombie_and_flaky_items_and_reaps_the_rest_366():
+    # #366 P7: a per-item failure must not abort the reaper sweep.
+    #  - "ws-zombie": host already reaped it → kill raises SandboxNotFound →
+    #    treated as done, session cleaned.
+    #  - "ws-flaky": an unexpected error (mirror boom) → skipped, session left
+    #    for a later retry (NOT lost, NOT crashing the sweep).
+    #  - "ws-live": healthy → reaped normally.
+    from datetime import UTC, datetime, timedelta
+
+    sandbox = _ZombieKillSandbox()
+    sync = _FlakyMirrorSync(boom={"ws-flaky"})
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    sessions = {}
+    for wid in ("ws-zombie", "ws-flaky", "ws-live"):
+        s = await registry.session(wid)
+        await registry.ensure_handle(s)
+        s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+        sessions[wid] = s
+    assert sessions["ws-zombie"].handle is not None
+    sandbox.zombie_ids.add(sessions["ws-zombie"].handle.id)
+
+    killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+
+    assert set(killed) == {"ws-zombie", "ws-live"}  # sweep survived the flaky one
+    assert sandbox.really_killed == [sessions["ws-live"].handle.id]  # only live truly died
+    # zombie cleaned despite its kill raising; live cleaned; flaky left for retry
+    assert (await registry.session("ws-zombie")) is not sessions["ws-zombie"]
+    assert (await registry.session("ws-live")) is not sessions["ws-live"]
+    assert (await registry.session("ws-flaky")) is sessions["ws-flaky"]
+
+
+async def test_enforce_quota_survives_zombie_and_flaky_items_366():
+    # #366 P7: same per-item resilience for the over-quota recycler.
+    sandbox = _ZombieKillSandbox()
+    sync = _FlakyMirrorSync(boom={"ws-flaky"})
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), sync=sync)
+    sessions = {}
+    for wid in ("ws-zombie", "ws-flaky", "ws-live"):
+        s = await registry.session(wid)
+        await registry.ensure_handle(s)
+        await sandbox.upload(s.handle, b"x" * 100, "/big.bin")  # push over quota
+        sessions[wid] = s
+    sandbox.zombie_ids.add(sessions["ws-zombie"].handle.id)
+
+    recycled = await registry.enforce_quota(max_bytes=10)
+
+    assert set(recycled) == {"ws-zombie", "ws-live"}  # flaky skipped, sweep survived
+    assert sandbox.really_killed == [sessions["ws-live"].handle.id]
+    assert (await registry.session("ws-flaky")) is sessions["ws-flaky"]  # left for retry
+
+
+async def test_mirror_warm_survives_one_failing_item_366():
+    # #366 P7: a mirror that errors on one item must not stop the sweep from
+    # mirroring the others (one bad item ≠ a dead sweeper task).
+    sync = _FlakyMirrorSync(boom={"ws-bad"})
+    registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec(), sync=sync)
+    for wid in ("ws-bad", "ws-good"):
+        s = await registry.session(wid)
+        await registry.ensure_handle(s)
+
+    mirrored = await registry.mirror_warm()
+
+    assert mirrored == ["ws-good"]  # bad item skipped, good one still mirrored
+    assert sync.mirrored == ["ws-good"]
 
 
 class _FakeActivity(IActivityStore):

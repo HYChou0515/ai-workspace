@@ -11,6 +11,7 @@ cancel or expire from.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -195,7 +196,10 @@ class InvestigationRegistry:
             s = self._sessions.get(inv_id)
             if s is None or s.handle is None or self.sync is None:
                 continue
-            await self.sync.mirror(inv_id, s.handle)
+            try:
+                await self.sync.mirror(inv_id, s.handle)
+            except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
+                continue
             mirrored.append(inv_id)
         return mirrored
 
@@ -214,19 +218,25 @@ class InvestigationRegistry:
             s = self._sessions[inv_id]
             if s.last_active >= cutoff:
                 continue
-            if s.handle is not None and not await self._globally_idle(inv_id, cutoff_ms):
-                # Another pod is live on the shared dir — drop our local session
-                # only, leave the dir (and its heartbeat) intact.
+            try:
+                if s.handle is not None and not await self._globally_idle(inv_id, cutoff_ms):
+                    # Another pod is live on the shared dir — drop our local session
+                    # only, leave the dir (and its heartbeat) intact.
+                    del self._sessions[inv_id]
+                    continue
+                if s.handle is not None:
+                    if self.sync is not None:
+                        await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
+                    # #366: a handle the host already reaped (idle TTL) raises
+                    # SandboxNotFound — that IS the goal, so still drop the session.
+                    with contextlib.suppress(SandboxNotFound):
+                        await self.sandbox.kill(s.handle)
+                    if self.activity is not None:
+                        await self.activity.forget(inv_id)
                 del self._sessions[inv_id]
+                killed.append(inv_id)
+            except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
                 continue
-            if s.handle is not None:
-                if self.sync is not None:
-                    await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
-                await self.sandbox.kill(s.handle)
-                if self.activity is not None:
-                    await self.activity.forget(inv_id)
-            del self._sessions[inv_id]
-            killed.append(inv_id)
         return killed
 
     async def enforce_quota(self, max_bytes: int) -> list[str]:
@@ -249,15 +259,19 @@ class InvestigationRegistry:
             s = self._sessions.get(inv_id)
             if s is None or s.handle is None:
                 continue
-            if await self._scratch_usage(s.handle) <= max_bytes:
+            try:
+                if await self._scratch_usage(s.handle) <= max_bytes:
+                    continue
+                if self.sync is not None:
+                    await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
+                with contextlib.suppress(SandboxNotFound):  # #366: already-reaped is fine
+                    await self.sandbox.kill(s.handle)
+                if self.activity is not None:
+                    await self.activity.forget(inv_id)
+                del self._sessions[inv_id]
+                recycled.append(inv_id)
+            except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
                 continue
-            if self.sync is not None:
-                await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
-            await self.sandbox.kill(s.handle)
-            if self.activity is not None:
-                await self.activity.forget(inv_id)
-            del self._sessions[inv_id]
-            recycled.append(inv_id)
         return recycled
 
     async def _scratch_usage(self, handle: SandboxHandle) -> int:
