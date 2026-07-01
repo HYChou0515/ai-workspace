@@ -198,6 +198,18 @@ class WorkflowOrchestrator:
                 return r.info.resource_id
         return None
 
+    def active_run_for_chat(self, item_id: str, chat_id: str) -> str | None:
+        """The active run driving ``chat_id`` (a specific thread), or None. #343: a
+        chat hosts one run at a time — a takeover launch checks this so a thread whose
+        run is still live can't start a second one (a terminal one is fine). Scoped to
+        the item via the indexed ``item_id`` query, then filtered by chat."""
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.chat_id == chat_id and data.status in _ACTIVE:
+                return r.info.resource_id
+        return None
+
     async def start(
         self,
         *,
@@ -213,10 +225,13 @@ class WorkflowOrchestrator:
         run (manual §4); ``chat_id`` is the workflow chat it drives (manual §3). With a
         ``chat_id``, runs are **per-chat** so many may run in parallel on one item
         (§3); without one (legacy), the one-active-run-per-item rule still holds (§14)."""
-        if not chat_id:
-            existing = self.active_run(item_id)
-            if existing is not None:
-                raise ActiveRunExists(item_id, existing)
+        # Without a chat_id the one-active-run-per-item rule holds (§14); with one, runs
+        # are per-chat, so guard only the target chat (#343 takeover / topic-hub §3).
+        existing = (
+            self.active_run_for_chat(item_id, chat_id) if chat_id else self.active_run(item_id)
+        )
+        if existing is not None:
+            raise ActiveRunExists(item_id, existing)
         manifest = await self._resolve_manifest(slug, profile, workflow_id, item_id)
         assert manifest is not None  # the route validated this is a workflow profile
         phases = [PhaseState(phase=p.id) for p in manifest.phases]
