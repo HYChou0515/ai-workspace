@@ -209,3 +209,41 @@ async def test_rename_file_and_subtree():
     assert paths == {"/dst/a.txt", "/dst/sub/b.txt"}
     with pytest.raises(FileNotFoundError):
         await sandbox.rename(h, "/nope", "/x")
+
+
+# ---- #366 P5: readiness marker (lives OUTSIDE the workspace) ----
+
+
+async def test_readiness_toggles_and_is_invisible_to_the_workspace_366():
+    # #366: `.ready` is an out-of-workspace marker, so it is a first-class
+    # sandbox concept — NOT a file. A fresh sandbox is not ready; mark_ready
+    # flips it; and it never leaks into the user's file listing (walk/exists),
+    # which is exactly why it can't be seen in the file tree or fool the mirror.
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    assert await sandbox.is_ready(h) is False
+    await sandbox.mark_ready(h)
+    assert await sandbox.is_ready(h) is True
+    # invisible to the workspace: no phantom file appears anywhere
+    assert await sandbox.walk(h, "/") == []
+    assert await sandbox.exists(h, "/.ready") is False
+
+
+async def test_readiness_ops_on_unknown_handle_raise_366():
+    sandbox = MockSandbox()
+    fake = SandboxHandle(id="never")
+    with pytest.raises(SandboxNotFound):
+        await sandbox.mark_ready(fake)
+    with pytest.raises(SandboxNotFound):
+        await sandbox.is_ready(fake)
+
+
+async def test_kill_clears_readiness_so_a_recreated_sandbox_is_not_ready_366():
+    # A reaped-then-recreated sandbox (dir rmtree'd, marker gone) must start
+    # NOT ready — so the mirror won't trust a half-restored rebuild.
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-x")
+    await sandbox.mark_ready(h)
+    await sandbox.kill(h)
+    h2 = await sandbox.create(SandboxSpec(), sandbox_id="item-x")
+    assert await sandbox.is_ready(h2) is False

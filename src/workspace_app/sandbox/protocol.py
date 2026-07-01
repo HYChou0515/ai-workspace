@@ -196,6 +196,25 @@ class Sandbox(Protocol):
         False — mirror FileStore.exists)."""
         ...
 
+    async def mark_ready(self, handle: SandboxHandle) -> None:
+        """#366: mark this sandbox authoritative — its files are the complete,
+        restored state. SandboxSync calls it at the END of `restore`, and the
+        deletion-aware mirror only propagates deletions while `is_ready` holds
+        (before + after its walk), so a mid-rebuild/half-restored sandbox can
+        never make the mirror wipe the durable snapshot.
+
+        The marker lives OUTSIDE the workspace (a real backend puts it beside,
+        not inside, the walked dir), so it never appears in `walk`/`exists`/the
+        file tree and no user file can forge it. Cleared when the sandbox is
+        `kill()`ed (the underlying dir — and marker — is gone)."""
+        ...
+
+    async def is_ready(self, handle: SandboxHandle) -> bool:
+        """#366: True once `mark_ready` ran and the sandbox still lives; False
+        for a fresh/rebuilt-but-not-yet-restored sandbox. A vanished sandbox
+        raises `SandboxNotFound` like every other op."""
+        ...
+
     async def delete(self, handle: SandboxHandle, path: str) -> None:
         """Delete the regular file at `path`. Raise `FileNotFoundError` if it
         does not exist. Parent directories are left intact."""
