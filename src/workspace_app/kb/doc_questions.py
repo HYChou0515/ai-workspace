@@ -16,11 +16,35 @@ import msgspec
 from specstar import QB
 
 from ..resources.kb import DocQuestion
+from .card_gen import DescriptionQuestionDraft, TermQuestionDraft
 from .context_cards import norm
 
 if TYPE_CHECKING:
     from specstar import SpecStar
     from specstar.types import IResourceManager
+
+
+def plan_doc_questions(
+    term_questions: list[TermQuestionDraft],
+    description_questions: list[DescriptionQuestionDraft],
+    *,
+    carded_norm_keys: set[str],
+    cap: int,
+) -> tuple[list[TermQuestionDraft], list[DescriptionQuestionDraft]]:
+    """Apply the deterministic digest guardrails (#377 Q6) to one doc's raised
+    questions, returning the ones actually worth raising:
+
+      - **①** drop term questions whose ``norm(term)`` is already carded (don't
+        re-ask a defined term); and
+      - **③** cap the doc's total questions at ``cap`` — terms (definitions) fill
+        the budget first, then descriptions take what's left.
+
+    (Guardrail ② — "the doc already explains it" — is the LLM's judgment at draft
+    time, not a deterministic filter.)"""
+    terms = [q for q in term_questions if norm(q.term) not in carded_norm_keys]
+    terms = terms[: max(cap, 0)]
+    descs = description_questions[: max(cap - len(terms), 0)]
+    return terms, descs
 
 
 def _open_term_question(

@@ -2,12 +2,14 @@
 it can't confidently define a term (→ card) or follow a passage (→ wiki). Tests
 exercise the ``kb.doc_questions`` helper surface, not specstar internals."""
 
+from workspace_app.kb.card_gen import DescriptionQuestionDraft, TermQuestionDraft
 from workspace_app.kb.doc_questions import (
     add_description_question,
     answer_question,
     discard_question,
     open_or_merge_term_question,
     open_questions_for_collections,
+    plan_doc_questions,
 )
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, DocQuestion
@@ -141,3 +143,20 @@ def test_inbox_lists_only_open_questions_in_the_given_collections():
     )
     ids = [qid for qid, _ in open_questions_for_collections(spec, [a])]
     assert ids == [q_open]  # answered / discarded / other-collection all excluded
+
+
+def test_plan_drops_term_questions_already_carded():
+    # Guardrail ①: a term the collection already has a card for is not re-asked.
+    terms = [TermQuestionDraft(term="M4", question="?"), TermQuestionDraft(term="R7", question="?")]
+    kept_terms, kept_desc = plan_doc_questions(terms, [], carded_norm_keys={"m4"}, cap=10)
+    assert [t.term for t in kept_terms] == ["R7"]
+    assert kept_desc == []
+
+
+def test_plan_caps_total_questions_per_doc_with_terms_first():
+    # Guardrail ③: at most `cap` questions per doc; terms (definitions) prioritised.
+    terms = [TermQuestionDraft(term=f"T{i}", question="?") for i in range(4)]
+    descs = [DescriptionQuestionDraft(quote=f"q{i}", question="?") for i in range(4)]
+    kept_terms, kept_desc = plan_doc_questions(terms, descs, carded_norm_keys=set(), cap=5)
+    assert len(kept_terms) == 4  # terms fill first
+    assert len(kept_desc) == 1  # then descriptions up to the remaining budget
