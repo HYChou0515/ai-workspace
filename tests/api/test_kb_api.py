@@ -539,15 +539,35 @@ def test_render_document_exposes_quality_rationale_and_breakdown():
 def test_render_document_returns_structured_text_verbatim_without_link_rewrite():
     """#361: structured docs (csv / json / …) come back as verbatim text — the
     FE builds the tree/grid client-side — and a markdown-link-looking value is
-    NOT rewritten (the viewer renders a grid, not markdown)."""
+    NOT rewritten (the viewer renders a tree/grid, not markdown)."""
+    from specstar.types import Binary
+
+    from workspace_app.resources import SourceDoc
+
     client, spec = _client_and_spec()
     cid = _new_collection(client)
-    # A cell that looks like a markdown link must survive byte-for-byte.
-    body = b"path,note\nx,[docs](kb://doc/other)\n"
-    _upload(client, cid, "data.csv", data=body)
-    _drain(client)
-    rd = client.get(f"/kb/documents?id={encode_doc_id(cid, 'data.csv')}").json()
-    assert rd["markdown"] == "path,note\nx,[docs](kb://doc/other)\n"
+    drm = spec.get_resource_manager(SourceDoc)
+    # Created directly (not via _upload) so the assertion tests render_document's
+    # per-type projection, NOT ingestion: the fixture's text-only ingest + the
+    # libmagic mime sniff vary by env, but a structured doc must always render
+    # verbatim. A value that looks like a markdown link must survive byte-for-byte.
+    cases = [
+        ("data.csv", b"path,note\nx,[docs](kb://doc/other)\n", "text/csv"),
+        ("config.json", b'{"see": "[docs](kb://doc/other)"}', "application/json"),
+    ]
+    for path, body, ct in cases:
+        doc_id = encode_doc_id(cid, path)
+        drm.create(
+            SourceDoc(
+                collection_id=cid,
+                path=path,
+                content=Binary(data=body, content_type=ct),
+                status="ready",
+            ),
+            resource_id=doc_id,
+        )
+        rd = client.get(f"/kb/documents?id={doc_id}").json()
+        assert rd["markdown"] == body.decode()
 
 
 def test_list_documents_exposes_unit_progress_for_an_indexing_fanout_doc():
