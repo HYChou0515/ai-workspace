@@ -165,3 +165,46 @@ def test_an_unterminated_json_object_yields_nothing():
     assert (
         LlmCardDrafter(_FakeLlm('{"cards": [')).digest(doc_path="a.md", doc_text="...").cards == []
     )
+
+
+def test_malformed_term_questions_are_dropped():
+    # not-a-list → none; then per-item drops: non-dict, blank term, wrong-typed term.
+    assert (
+        LlmCardDrafter(_FakeLlm(json.dumps({"term_questions": "nope"})))
+        .digest(doc_path="a.md", doc_text="...")
+        .term_questions
+        == []
+    )
+    raw = json.dumps(
+        {
+            "term_questions": [
+                "just a string",  # not a dict
+                {"term": "   ", "question": "blank term"},  # blank after strip
+                {"term": 5, "question": "wrong type"},  # term not a string
+                {"term": "R7", "question": "kept"},  # the one good item
+            ]
+        }
+    )
+    qs = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").term_questions
+    assert [(q.term, q.question) for q in qs] == [("R7", "kept")]
+
+
+def test_malformed_description_questions_are_dropped():
+    assert (
+        LlmCardDrafter(_FakeLlm(json.dumps({"description_questions": "nope"})))
+        .digest(doc_path="a.md", doc_text="...")
+        .description_questions
+        == []
+    )
+    raw = json.dumps(
+        {
+            "description_questions": [
+                "just a string",  # not a dict
+                {"quote": "  ", "question": "blank quote"},  # blank after strip
+                {"quote": 9, "question": "wrong type"},  # quote not a string
+                {"quote": "uses M4 then CMP", "question": "kept"},  # the one good item
+            ]
+        }
+    )
+    qs = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").description_questions
+    assert [(q.quote, q.question) for q in qs] == [("uses M4 then CMP", "kept")]

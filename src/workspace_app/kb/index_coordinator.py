@@ -590,8 +590,7 @@ class IndexCoordinator:
             return
         try:
             doc = self._spec.get_resource_manager(SourceDoc).get(doc_id).data
-            if not isinstance(doc, SourceDoc):
-                return
+            assert isinstance(doc, SourceDoc)  # a just-indexed doc; narrow Struct|Unset
             coll = self._spec.get_resource_manager(Collection).get(doc.collection_id).data
             if not (isinstance(coll, Collection) and coll.auto_digest):
                 return  # opt-out (the default) → digest stays a manual action

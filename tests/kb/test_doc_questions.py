@@ -95,31 +95,66 @@ def test_term_question_merge_is_idempotent_for_same_doc():
     assert _get(spec, qid).source_doc_ids == ["doc1"]
 
 
-def test_description_question_carries_quote_and_does_not_dedupe():
+def test_description_question_carries_its_quote_and_passage():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
-    q1 = add_description_question(
+    qid = add_description_question(
         spec,
         collection_id=cid,
         source_doc_id="doc1",
         quote="uses M4 then CMP",
         question_text="Why skip the clean before CMP?",
     )
-    # An identical description from the same doc is a DISTINCT question (no dedupe).
-    q2 = add_description_question(
-        spec,
-        collection_id=cid,
-        source_doc_id="doc1",
-        quote="uses M4 then CMP",
-        question_text="Why skip the clean before CMP?",
-    )
-    assert q1 != q2
-    got = _get(spec, q1)
+    got = _get(spec, qid)
     assert got.kind == "description"
     assert got.status == "open"
     assert got.source_doc_id == "doc1"
     assert got.quote == "uses M4 then CMP"
     assert got.question_text == "Why skip the clean before CMP?"
+
+
+def test_description_question_dedupes_within_the_same_source_doc():
+    # #377 P7 re-run idempotency: re-indexing a doc re-raises the same passage; it
+    # must NOT duplicate the question (else the inbox floods on every reindex).
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    q1 = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc1", quote="uses M4 then CMP", question_text="?"
+    )
+    q2 = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc1", quote="uses M4 then CMP", question_text="?"
+    )
+    assert q2 == q1  # same (doc, passage) → the same question, not a duplicate
+
+
+def test_description_question_reopens_only_for_a_new_source_doc():
+    # A DIFFERENT doc quoting the same passage is a distinct, doc-specific question.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    q1 = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc1", quote="uses M4 then CMP", question_text="?"
+    )
+    q2 = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc2", quote="uses M4 then CMP", question_text="?"
+    )
+    assert q2 != q1
+    assert _get(spec, q2).source_doc_id == "doc2"
+
+
+def test_discarded_description_stays_discarded_on_same_doc_rerun():
+    # #377 Q11 scoped to descriptions: a discarded passage does NOT re-open when the
+    # SAME doc is re-indexed — only a new source doc raises it afresh.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    q1 = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc1", quote="uses M4 then CMP", question_text="?"
+    )
+    discard_question(spec, q1)
+    q2 = add_description_question(
+        spec, collection_id=cid, source_doc_id="doc1", quote="uses M4 then CMP", question_text="?"
+    )
+    assert q2 == q1  # the discarded question, not a fresh one
+    assert _get(spec, q1).status == "discarded"  # still discarded, not re-opened
 
 
 def test_answer_question_sets_answered_with_answer_and_result_ref():
@@ -265,6 +300,50 @@ async def test_land_description_answer_appends_without_dropping_prior_entries():
     page = (await store.read(cid, CLARIFICATIONS_PATH)).decode()
     assert "answer one" in page and "answer two" in page  # both entries survive
     assert "quote one" in page and "quote two" in page
+
+
+def test_discarded_term_is_re_asked_when_raised_again():
+    # #377 Q11: discarding a term isn't permanent suppression — a later occurrence
+    # opens a FRESH question (unlike descriptions, terms dedupe only among `open`).
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    q1 = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="d1", question_text="q"
+    )
+    discard_question(spec, q1)
+    q2 = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="d2", question_text="q"
+    )
+    assert q2 != q1  # a new open question, not the discarded one
+    assert _get(spec, q2).status == "open"
+    assert _get(spec, q1).status == "discarded"  # the old one is left as-is
+
+
+# NOTE (edge — collection/doc delete): DocQuestion declares the same
+# `Ref("collection"/"source-doc", on_delete=cascade)` as the rest of the KB
+# (intent + real-DB enforcement), but collection/doc delete does NOT cascade to
+# children in this specstar config — SourceDoc/DocChunk/WikiPage orphan the same
+# way (see tests/kb/test_wiki_store.py). That's a pre-existing platform-wide
+# lifecycle gap, not something #377 introduces or scopes. A question is
+# self-contained anyway (its term/quote/question text are copied in, never
+# re-fetched), so an orphaned question still answers correctly; no cleanup test.
+
+
+async def test_clarification_entry_omits_a_blank_question_and_quote():
+    # Defensive shape: a description question with no question text / no quote still
+    # lands — the rendered entry is just the answer, without an empty heading or
+    # blockquote (covers the "skip the blank part" branches of _render_clarification).
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    store = WikiFileStore(spec)
+    qid = (
+        spec.get_resource_manager(DocQuestion)
+        .create(DocQuestion(collection_id=cid, kind="description", source_doc_id="d1"))
+        .resource_id
+    )
+    await land_description_answer(spec, qid, answer="just the answer", wiki_store=store)
+    page = (await store.read(cid, CLARIFICATIONS_PATH)).decode()
+    assert "just the answer" in page
 
 
 def test_plan_drops_term_questions_already_carded():

@@ -71,12 +71,12 @@ def _parse_digest(raw: str, *, max_cards: int) -> DocDigest:
     "description_questions": [...]}`` response into a ``DocDigest`` (#377).
     Tolerant of leading prose / fenced blocks (peel the first ``{...}``); each
     section is parsed independently and malformed items are dropped. Any
-    unrecoverable parse error yields an EMPTY digest — never raises."""
+    unrecoverable parse error yields an EMPTY digest — never raises. (``obj`` is
+    always a ``dict``: ``_extract_json_object`` only ever returns a ``{``-led
+    balanced object, so a successful ``json.loads`` can't be a non-object.)"""
     try:
         obj = json.loads(_extract_json_object(raw))
-        if not isinstance(obj, dict):
-            return DocDigest()
-    except (json.JSONDecodeError, ValueError, AttributeError):
+    except (json.JSONDecodeError, ValueError):
         logger.warning("CardDrafter: LLM response was not parseable JSON")
         return DocDigest()
     return DocDigest(

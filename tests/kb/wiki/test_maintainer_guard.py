@@ -48,3 +48,38 @@ async def test_guard_reports_a_cas_write_to_the_reserved_page_as_lost():
     spec = make_spec(default_user="u")
     guarded = MaintainerWikiStore(WikiFileStore(spec))
     assert await guarded.write_cas("c", CLARIFICATIONS_PATH, b"x", None) is False
+
+
+async def test_guard_allows_a_cas_write_to_a_normal_page():
+    spec = make_spec(default_user="u")
+    guarded = MaintainerWikiStore(WikiFileStore(spec))
+    assert await guarded.write_cas("c", "/index.md", b"v1", None) is True
+    assert (await guarded.read("c", "/index.md")) == b"v1"
+
+
+async def test_guard_allows_deleting_a_normal_page():
+    spec = make_spec(default_user="u")
+    guarded = MaintainerWikiStore(WikiFileStore(spec))
+    await guarded.write("c", "/tmp.md", b"x")
+    await guarded.delete("c", "/tmp.md")
+    assert not await guarded.exists("c", "/tmp.md")
+
+
+async def test_guard_ignores_agent_write_from_path_to_the_reserved_page(tmp_path):
+    spec = make_spec(default_user="u")
+    inner = WikiFileStore(spec)
+    guarded = MaintainerWikiStore(inner)
+    await inner.write("c", CLARIFICATIONS_PATH, b"human answers")
+    src = tmp_path / "src.md"
+    src.write_bytes(b"AGENT CLOBBER")
+    await guarded.write_from_path("c", CLARIFICATIONS_PATH, src)  # ignored
+    assert (await inner.read("c", CLARIFICATIONS_PATH)) == b"human answers"
+
+
+async def test_guard_allows_agent_write_from_path_to_a_normal_page(tmp_path):
+    spec = make_spec(default_user="u")
+    guarded = MaintainerWikiStore(WikiFileStore(spec))
+    src = tmp_path / "src.md"
+    src.write_bytes(b"from file")
+    await guarded.write_from_path("c", "/notes.md", src)
+    assert (await guarded.read("c", "/notes.md")) == b"from file"

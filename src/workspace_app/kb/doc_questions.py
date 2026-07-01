@@ -231,6 +231,27 @@ async def land_description_answer(
     return CLARIFICATIONS_PATH
 
 
+def _existing_description(
+    rm: IResourceManager[DocQuestion], collection_id: str, source_doc_id: str, norm_key: str
+) -> str | None:
+    """The id of a description question already raised for this exact
+    ``(source_doc_id, passage)`` in ``collection_id`` — in ANY status — or None.
+    Queried on the indexed ``(collection_id, kind, norm_key)`` then narrowed to the
+    doc in Python (``source_doc_id`` isn't indexed; ``norm_key`` already makes the
+    candidate set tiny)."""
+    q = (
+        (QB["collection_id"] == collection_id)
+        & (QB["kind"] == "description")
+        & (QB["norm_key"] == norm_key)
+    )
+    for r in rm.list_resources(q.build()):
+        data = r.data
+        assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
+        if data.source_doc_id == source_doc_id:
+            return r.info.resource_id  # ty: ignore[unresolved-attribute]
+    return None
+
+
 def add_description_question(
     spec: SpecStar,
     *,
@@ -240,9 +261,20 @@ def add_description_question(
     question_text: str,
 ) -> str:
     """Raise a description question — a passage in ``source_doc_id`` the digest
-    couldn't follow, quoted verbatim. Doc-specific and never deduped (unlike term
-    questions); its answer lands on the collection's clarification wiki page."""
+    couldn't follow, quoted verbatim. Its answer lands on the collection's
+    clarification wiki page.
+
+    Re-run idempotency (#377 P7): a description question re-opens only for a NEW
+    source doc. Keyed by ``(source_doc_id, norm(quote))``, the same passage from the
+    same doc is raised at most once REGARDLESS of status — so re-indexing a doc
+    can't spam the inbox with duplicates, and a passage a human already discarded
+    stays discarded for that doc. A DIFFERENT doc quoting a similar passage is a
+    distinct question (descriptions are doc-specific, never cross-doc deduped)."""
     rm = spec.get_resource_manager(DocQuestion)
+    key = norm(quote)
+    existing = _existing_description(rm, collection_id, source_doc_id, key)
+    if existing is not None:
+        return existing  # same (doc, passage) already raised — don't re-open
     return rm.create(
         DocQuestion(
             collection_id=collection_id,
@@ -250,5 +282,6 @@ def add_description_question(
             source_doc_id=source_doc_id,
             quote=quote,
             question_text=question_text,
+            norm_key=key,
         )
     ).resource_id

@@ -54,3 +54,16 @@ def test_llm_formatter_falls_back_when_fields_are_missing_or_wrong_typed():
     raw = json.dumps({"title": 5})  # title wrong-typed, body missing
     title, body = LlmAnswerCardFormatter(_FakeLlm(raw)).format(term="M4", answer="the answer")
     assert (title, body) == ("M4", "the answer")
+
+
+def test_llm_formatter_peels_an_object_with_a_nested_value():
+    # A nested object exercises brace-depth tracking (inner } doesn't close the top).
+    raw = json.dumps({"meta": {"k": 1}, "title": "Metal 4", "body": "The 4th metal."})
+    title, body = LlmAnswerCardFormatter(_FakeLlm(raw)).format(term="M4", answer="raw")
+    assert (title, body) == ("Metal 4", "The 4th metal.")
+
+
+def test_llm_formatter_falls_back_on_an_unterminated_object():
+    # An opening brace with no matching close → _first_json_object raises → verbatim.
+    title, body = LlmAnswerCardFormatter(_FakeLlm('{"title": "x"')).format(term="M4", answer="raw")
+    assert (title, body) == ("M4", "raw")
