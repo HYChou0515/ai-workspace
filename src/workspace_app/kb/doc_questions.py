@@ -123,6 +123,19 @@ def open_questions_for_collections(
     return out
 
 
+def list_open_questions(spec: SpecStar) -> list[tuple[str, DocQuestion]]:
+    """Every ``open`` question across ALL collections — the global inbox's rows,
+    each with its id. One indexed ``status`` query, no scan. (Per-collection
+    scoping arrives with ACL; until then the inbox is shared, #377 Q13.)"""
+    rm = spec.get_resource_manager(DocQuestion)
+    out: list[tuple[str, DocQuestion]] = []
+    for r in rm.list_resources((QB["status"] == "open").build()):
+        data = r.data
+        assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
+        out.append((r.info.resource_id, data))  # ty: ignore[unresolved-attribute]
+    return out
+
+
 def answer_question(spec: SpecStar, qid: str, *, answer: str, result_ref: str) -> None:
     """Record a human's answer and flip the question to ``answered``. ``result_ref``
     points at what the answer produced (a context-card id or clarification page path),

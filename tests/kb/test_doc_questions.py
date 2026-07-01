@@ -11,6 +11,7 @@ from workspace_app.kb.doc_questions import (
     discard_question,
     land_description_answer,
     land_term_answer,
+    list_open_questions,
     open_or_merge_term_question,
     open_questions_for_collections,
     plan_doc_questions,
@@ -164,6 +165,24 @@ def test_inbox_lists_only_open_questions_in_the_given_collections():
     )
     ids = [qid for qid, _ in open_questions_for_collections(spec, [a])]
     assert ids == [q_open]  # answered / discarded / other-collection all excluded
+
+
+def test_list_open_questions_spans_all_collections_and_excludes_resolved():
+    # The global inbox: every open question, any collection; answered/discarded out.
+    spec = make_spec(default_user="u")
+    a, b = _collection(spec, "a"), _collection(spec, "b")
+    qa = open_or_merge_term_question(
+        spec, collection_id=a, term="M4", source_doc_id="d1", question_text="?"
+    )
+    qb = add_description_question(
+        spec, collection_id=b, source_doc_id="d1", quote="q", question_text="?"
+    )
+    resolved = open_or_merge_term_question(
+        spec, collection_id=a, term="R7", source_doc_id="d1", question_text="?"
+    )
+    answer_question(spec, resolved, answer="x", result_ref="context-card:z")
+    ids = {qid for qid, _ in list_open_questions(spec)}
+    assert ids == {qa, qb}  # both collections' open questions, resolved excluded
 
 
 def test_land_term_answer_creates_a_card_and_marks_answered():
