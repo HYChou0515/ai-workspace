@@ -21,6 +21,29 @@ class _CountingSandbox(MockSandbox):
         await super().kill(handle)
 
 
+class _HttpStyleSandbox(MockSandbox):
+    """Mimics the http sandbox-host (#366): `create` IGNORES `sandbox_id` and
+    mints a fresh unique handle each call, and the backend is NOT id-addressable
+    (`handle_for_id` is None). So two pods that each `create` for one item get
+    two DIVERGING sandboxes unless they converge via the shared address store."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.create_calls = 0
+        self.kill_calls = 0
+
+    async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
+        self.create_calls += 1
+        return await super().create(spec, sandbox_id=None)  # ignore id → fresh uuid
+
+    def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
+        return None
+
+    async def kill(self, handle: SandboxHandle) -> None:
+        self.kill_calls += 1
+        await super().kill(handle)
+
+
 async def test_session_for_new_workspace_returns_session_with_no_handle():
     registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
     session = await registry.session("ws-1")
@@ -577,3 +600,114 @@ async def test_close_session_forgets_global_activity_345():
     assert "ws-1" in activity.ms
     await registry.close_session("ws-1")
     assert "ws-1" not in activity.ms  # heartbeat forgotten on manual close
+
+
+async def test_two_http_pods_converge_on_one_address_366():
+    # #366: on the http backend two API pods each `create` their own sandbox.
+    # With the shared address store, the first pod to claim wins and the second
+    # converges on that ONE address instead of keeping a diverging sandbox.
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import (
+        SpecstarAddressStore,
+        register_sandbox_address,
+    )
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)  # one shared address slot for both pods
+    sandbox = _HttpStyleSandbox()  # one shared host backend
+    pod_a = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+    pod_b = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+
+    ha = await pod_a.ensure_handle(await pod_a.session("ws-1"))
+    hb = await pod_b.ensure_handle(await pod_b.session("ws-1"))
+
+    assert ha == hb  # both pods route to the SAME sandbox address
+    assert sandbox.create_calls == 1  # pod B converged — it did NOT mint its own
+
+
+async def test_ensure_handle_kills_orphan_when_it_loses_the_claim_race_366():
+    # #366: two pods both find no address, both create, and race to claim. The
+    # loser must kill the sandbox it just created (an orphan) and converge on the
+    # winner's address — never leave two diverging sandboxes for one item.
+    from workspace_app.api.sandbox_address import IAddressStore
+
+    winner = SandboxHandle(id="winner")
+
+    class _RaceLostAddress(IAddressStore):
+        async def get(self, item_id: str) -> SandboxHandle | None:
+            return None  # nothing claimed yet → this pod will create
+
+        async def claim(self, item_id: str, handle: SandboxHandle) -> SandboxHandle:
+            return winner  # ...but a peer won the race between our get and claim
+
+        async def swap(  # pragma: no cover - unused (no stale address in this path)
+            self, item_id: str, expected: SandboxHandle, new: SandboxHandle
+        ) -> SandboxHandle:
+            return winner
+
+        async def forget(self, item_id: str) -> None:  # pragma: no cover - unused here
+            return None
+
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), address=_RaceLostAddress()
+    )
+    h = await registry.ensure_handle(await registry.session("ws-1"))
+
+    assert h == winner  # converged on the race winner
+    assert sandbox.create_calls == 1  # we created an orphan...
+    assert sandbox.kill_calls == 1  # ...then killed it to converge
+
+
+async def test_ensure_handle_reacquires_when_host_reaped_the_sandbox_366():
+    # #366 face A: the http host reaps the sandbox behind a warm session's handle
+    # (30-min idle TTL). The NEXT ensure_handle must detect the dead handle (and
+    # the dead shared address) and rebuild — NOT hand back the stale handle that
+    # would yield SandboxNotFound on the terminal's exec.
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import (
+        SpecstarAddressStore,
+        register_sandbox_address,
+    )
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), address=SpecstarAddressStore(spec)
+    )
+    s = await registry.session("ws-1")
+    h1 = await registry.ensure_handle(s)
+
+    await sandbox.kill(h1)  # host reaps it out from under us
+
+    h2 = await registry.ensure_handle(s)
+    assert h2 != h1  # rebuilt a fresh sandbox
+    assert await sandbox.exists(h2, "/") is False  # h2 is alive (no SandboxNotFound)
+    assert sandbox.create_calls == 2  # created the replacement
+
+
+async def test_http_ensure_handle_reuses_live_handle_without_churn_366():
+    # With a shared address wired, a still-live session handle is kept as-is — the
+    # liveness probe must NOT rebuild a healthy sandbox on every wake.
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import (
+        SpecstarAddressStore,
+        register_sandbox_address,
+    )
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), address=SpecstarAddressStore(spec)
+    )
+    s = await registry.session("ws-1")
+    h1 = await registry.ensure_handle(s)
+    h2 = await registry.ensure_handle(s)  # sandbox still alive → keep it
+    assert h2 is h1
+    assert sandbox.create_calls == 1

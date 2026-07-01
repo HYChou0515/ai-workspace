@@ -17,6 +17,7 @@ from typing import Protocol
 
 from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
 from .sandbox_activity import IActivityStore
+from .sandbox_address import IAddressStore
 
 
 class _SyncHook(Protocol):
@@ -56,6 +57,11 @@ class InvestigationRegistry:
     # when GLOBALLY idle. None → single-process / non-shared behaviour (the dir
     # is reaped on pod-local idleness, as before).
     activity: IActivityStore | None = None
+    # #366: per-item sandbox ADDRESS shared across pods. When wired (http backend,
+    # whose handles are ephemeral + not id-addressable), pods converge on ONE
+    # address per item instead of each minting a diverging sandbox. None → the
+    # local shared-vol / single-process behaviour (the item-keyed dir converges).
+    address: IAddressStore | None = None
     _sessions: dict[str, InvestigationSession] = field(default_factory=dict)
 
     async def session(self, investigation_id: str) -> InvestigationSession:
@@ -90,25 +96,71 @@ class InvestigationRegistry:
         # this, N parallel POSTs to the same investigation would each spin
         # up their own container.
         async with session.lock:
-            if session.handle is None:
-                item = session.investigation_id
-                # #345 restore-when-absent: a shared-vol item dir may already be
-                # live (this pod cold-started, or another pod materialized it).
-                # Probe BEFORE create so we restore from the snapshot ONLY when
-                # the dir doesn't exist — re-restoring over a live dir would
-                # resurrect files the agent deleted. A backend that mints its own
-                # handles (handle_for_id None, e.g. HTTP) is always a fresh
-                # create, so it always restores (the prior per-pod behaviour).
-                fresh = await self._is_cold(item)
-                session.handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
-                if fresh and self.sync is not None:
-                    await self.sync.restore(item, session.handle)
+            # #366 face A: a shared-address (http) session's cached handle may be
+            # DEAD — the host reaped the sandbox out from under us (30-min idle
+            # TTL / pod death). Probe it and re-acquire so the terminal never
+            # execs a stale handle. Local shared-vol (address None) keeps the
+            # create-once behaviour — its dir liveness is handled by #345 and
+            # probing every wake would only churn.
+            if session.handle is None or (
+                self.address is not None and not await self._alive(session.handle)
+            ):
+                session.handle = await self._acquire(session.investigation_id)
             # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
             # so another pod's idle reaper sees this item as live (#345).
             if self.activity is not None:
                 await self.activity.bump(session.investigation_id)
             session.last_active = _utcnow()
         return session.handle
+
+    async def _alive(self, handle: SandboxHandle) -> bool:
+        """True when the sandbox behind ``handle`` still exists — a cheap
+        existence probe. A reaped/dead handle raises ``SandboxNotFound`` (the
+        item was recycled by the host or another pod), which means 'rebuild'."""
+        try:
+            await self.sandbox.exists(handle, "/")
+        except SandboxNotFound:
+            return False
+        return True
+
+    async def _acquire(self, item: str) -> SandboxHandle:
+        """Materialise (or converge on) the item's single live sandbox handle.
+
+        #366: when an address store is wired (http backend), the handle is SHARED
+        across pods — so first converge on an already-claimed address; else
+        create + restore and CLAIM the shared slot (published AFTER restore), and
+        a pod that loses the claim race kills its orphan and takes the winner.
+
+        #345 restore-when-absent: probe BEFORE create so we restore from the
+        snapshot ONLY when the dir doesn't exist — re-restoring over a live dir
+        would resurrect files the agent deleted. A backend that mints its own
+        handles (handle_for_id None, e.g. HTTP) is always a fresh create, so it
+        always restores (the prior per-pod behaviour). Without an address store
+        (local shared-vol / single-process) this is exactly that prior path."""
+        stale: SandboxHandle | None = None
+        if self.address is not None:
+            existing = await self.address.get(item)
+            if existing is not None:
+                if await self._alive(existing):
+                    return existing  # a live shared sandbox → converge on ONE
+                stale = existing  # dead address → rebuild + swap it out below
+        fresh = await self._is_cold(item)
+        handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
+        if fresh and self.sync is not None:
+            await self.sync.restore(item, handle)
+        if self.address is not None:
+            # Publish the fresh address AFTER restore. Swap (CAS on the dead one)
+            # when replacing a reaped address, else claim the empty slot; either
+            # way the loser of a concurrent rebuild converges on the winner.
+            winner = (
+                await self.address.swap(item, expected=stale, new=handle)
+                if stale is not None
+                else await self.address.claim(item, handle)
+            )
+            if winner != handle:
+                await self.sandbox.kill(handle)  # lost the race — drop our orphan
+                return winner
+        return handle
 
     async def _is_cold(self, investigation_id: str) -> bool:
         """True when the item's sandbox dir is NOT yet materialized on shared
