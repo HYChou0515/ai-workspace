@@ -42,6 +42,13 @@ def test_matches_by_extension_or_mime(filename: str, mime: str, expected: bool):
     assert got is expected
 
 
+def test_json_parser_inherits_base_no_guidance_328():
+    # #328: a non-prompt-driven parser (JSON has no model prompt to append to)
+    # inherits the base `uses_guidance()` default of False, so the ingestor
+    # never threads the collection's parser_guidance through it.
+    assert JsonParser().uses_guidance() is False
+
+
 # ── parse: .json ─────────────────────────────────────────────────────
 
 

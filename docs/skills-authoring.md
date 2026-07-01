@@ -1,5 +1,9 @@
 # 共創 skills（#298）
 
+> 這篇是 **user 端**（跟 AI 共創、存進 workspace）的流程。想看三個擴充面（tool / skill /
+> workflow）× dev/user 的全景,以及 **dev 端**把 skill commit 進 `sample-skills/` + 註冊
+> `SHARED_SKILLS` 的那條路,請先讀 [`extending-the-platform.md`](extending-the-platform.md)。
+
 **skill** 是一份簡短、可重複使用的指令檔，agent 會在需要時即時載入。它記錄的是
 *你想要某一類任務怎麼被完成*——你分析流程的步驟、你的術語、你偏好的輸出風格——
 這樣下次同樣的工作就會照你的方式走，不必再重新解釋一遍。這建立在開發者撰寫 skill 的機制

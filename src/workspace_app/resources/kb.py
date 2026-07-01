@@ -473,7 +473,7 @@ class KbChat(Struct):  # → resource "kb-chat"
     read-only with other users via ``shared_with``; those users see it under
     "Shared with me" and can read it, but only the owner can send."""
 
-    title: str = "New chat"
+    title: str = ""  # #357: "" = unnamed → FE labels it by name_hint (first msg)
     collection_ids: list[str] = field(default_factory=list)  # plain ids
     messages: list[KbMessage] = field(default_factory=list)
     shared_with: list[str] = field(default_factory=list)  # user ids (read-only)

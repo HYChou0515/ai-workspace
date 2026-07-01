@@ -46,6 +46,7 @@ export type IconName =
   | "quote"
   | "external"
   | "paperclip"
+  | "pencil"
   | "home";
 
 export function Icon({
@@ -230,6 +231,13 @@ export function Icon({
         d="M16 7 L9 14 A3 3 0 0 0 13 18 L20 11 A5 5 0 0 0 13 4 L5 12 A7 7 0 0 0 15 22 L18 19"
         {...sp}
       />
+    ),
+    // pencil / rename — a diagonal pencil with a nib line (#357).
+    pencil: (
+      <>
+        <path d="M4 20 L8 19 L19 8 A2 2 0 0 0 16 5 L5 16 Z" {...sp} />
+        <path d="M14 7 L17 10" {...sp} />
+      </>
     ),
     home: (
       <>

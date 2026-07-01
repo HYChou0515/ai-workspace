@@ -31,6 +31,17 @@ const baseChat: KbChatDetail = {
 describe("KbChatView header", () => {
   afterEach(cleanup);
 
+  it("labels an unnamed thread by its first user message, not a generic 'Chat' (#357)", async () => {
+    const unnamed: KbChatDetail = {
+      ...baseChat,
+      title: "",
+      name_hint: "why is my reflow oven drifting",
+    };
+    render(<KbChatView chatId="chat:1" client={chatClient(unnamed)} />);
+    expect(await screen.findByText("why is my reflow oven drifting")).toBeInTheDocument();
+    expect(screen.queryByText("Chat")).not.toBeInTheDocument();
+  });
+
   it("shows the message count and a private badge", async () => {
     render(<KbChatView chatId="chat:1" client={chatClient(baseChat)} />);
     expect(await screen.findByText("Void thresholds")).toBeInTheDocument();

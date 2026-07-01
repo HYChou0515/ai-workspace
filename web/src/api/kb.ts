@@ -298,6 +298,11 @@ export type KbChatSummary = {
   message_count: number;
   owner?: string;
   shared_with?: string[];
+  /** #357: first user message (collapsed/truncated) — the FE labels an unnamed
+   * chat with this so the list can tell threads apart. "" until the first turn. */
+  name_hint?: string;
+  /** #357: specstar revision time (epoch ms) — the recency-sort key. */
+  updated_ms?: number | null;
 };
 
 export type KbChatDetail = {
@@ -307,6 +312,9 @@ export type KbChatDetail = {
   messages: KbChatMessage[];
   owner?: string;
   shared_with?: string[];
+  /** #357: same fallback label the list uses, so the chat-view header can show a
+   * meaningful title for an unnamed thread instead of a generic "Chat". */
+  name_hint?: string;
 };
 
 export type SendKbMessageArgs = {
@@ -555,6 +563,8 @@ export interface KbApi {
   listChats(): Promise<KbChatSummary[]>;
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
   getChat(chatId: string): Promise<KbChatDetail>;
+  /** #357: owner-only rename. "" clears the title back to the name_hint label. */
+  renameChat(chatId: string, title: string): Promise<KbChatSummary>;
   deleteChat(chatId: string): Promise<void>;
   /** Owner-only: share a thread read-only with users (they get a notification). */
   shareChat(chatId: string, userIds: string[]): Promise<void>;
@@ -905,6 +915,18 @@ export const realKbApi: KbApi = {
   },
   async getChat(chatId) {
     return (await ok(await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`), "get chat")).json();
+  },
+  async renameChat(chatId, title) {
+    return (
+      await ok(
+        await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`, {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({ title }),
+        }),
+        "rename chat",
+      )
+    ).json();
   },
   async deleteChat(chatId) {
     await ok(

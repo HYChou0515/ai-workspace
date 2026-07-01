@@ -198,6 +198,18 @@ class WorkflowOrchestrator:
                 return r.info.resource_id
         return None
 
+    def active_run_for_chat(self, item_id: str, chat_id: str) -> str | None:
+        """The active run driving ``chat_id`` (a specific thread), or None. #343: a
+        chat hosts one run at a time — a takeover launch checks this so a thread whose
+        run is still live can't start a second one (a terminal one is fine). Scoped to
+        the item via the indexed ``item_id`` query, then filtered by chat."""
+        for r in self._rm().list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, WorkflowRun)
+            if data.chat_id == chat_id and data.status in _ACTIVE:
+                return r.info.resource_id
+        return None
+
     async def start(
         self,
         *,
@@ -213,10 +225,13 @@ class WorkflowOrchestrator:
         run (manual §4); ``chat_id`` is the workflow chat it drives (manual §3). With a
         ``chat_id``, runs are **per-chat** so many may run in parallel on one item
         (§3); without one (legacy), the one-active-run-per-item rule still holds (§14)."""
-        if not chat_id:
-            existing = self.active_run(item_id)
-            if existing is not None:
-                raise ActiveRunExists(item_id, existing)
+        # Without a chat_id the one-active-run-per-item rule holds (§14); with one, runs
+        # are per-chat, so guard only the target chat (#343 takeover / topic-hub §3).
+        existing = (
+            self.active_run_for_chat(item_id, chat_id) if chat_id else self.active_run(item_id)
+        )
+        if existing is not None:
+            raise ActiveRunExists(item_id, existing)
         manifest = await self._resolve_manifest(slug, profile, workflow_id, item_id)
         assert manifest is not None  # the route validated this is a workflow profile
         phases = [PhaseState(phase=p.id) for p in manifest.phases]
@@ -237,9 +252,25 @@ class WorkflowOrchestrator:
         self._spawn(run_id, slug, item_id, profile, captured_user, manifest, workflow_id, chat_id)
         return run_id
 
+    def _chat_referenced_runs(self, item_id: str) -> set[str]:
+        """Run ids a live chat still points at (its ``run_id``). #343: with same-thread
+        relaunch a chat outlives its run and keeps showing that run's result, so a
+        referenced run is pinned against retention pruning."""
+        from ..resources import Conversation
+
+        conv_rm = self.spec.get_resource_manager(Conversation)
+        out: set[str] = set()
+        for r in conv_rm.list_resources((QB["item_id"] == item_id).build()):
+            data = r.data
+            assert isinstance(data, Conversation)
+            if data.run_id:
+                out.add(data.run_id)
+        return out
+
     def _prune_runs(self, item_id: str, *, keep: str) -> None:
         """Keep at most ``keep_last_runs`` runs per item, pruning the oldest TERMINAL
-        ones (active runs + the just-created ``keep`` are never pruned) — manual §16."""
+        ones (active runs, the just-created ``keep``, and any a live chat still points
+        at are never pruned) — manual §16 + #343."""
         if not self.keep_last_runs:
             return
         rows: list[tuple[str, WorkflowRun]] = []
@@ -248,14 +279,15 @@ class WorkflowOrchestrator:
             rows.append((r.info.resource_id, r.data))
         if len(rows) <= self.keep_last_runs:
             return
-        # Oldest first; prune terminal, never-keep rows until within the cap.
+        pinned = self._chat_referenced_runs(item_id)
+        # Oldest first; prune terminal, unpinned, never-keep rows until within the cap.
         rows.sort(key=lambda rd: rd[1].started or 0)
-        prunable = sum(1 for _id, d in rows if d.status not in _ACTIVE)
+        prunable = sum(1 for rid, d in rows if d.status not in _ACTIVE and rid not in pinned)
         to_drop = len(rows) - self.keep_last_runs
         for rid, data in rows:
             if to_drop <= 0 or prunable <= 0:
                 break
-            if rid == keep or data.status in _ACTIVE:
+            if rid == keep or data.status in _ACTIVE or rid in pinned:
                 continue
             self._rm().permanently_delete(rid)
             to_drop -= 1
