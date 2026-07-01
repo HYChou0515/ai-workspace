@@ -229,6 +229,20 @@ export type ItemToolState = {
   effective: boolean;
 };
 
+/** #380: one available skill's per-item picker state (GET
+ * /a/{slug}/items/{id}/skills), the skill sibling of ItemToolState. `source` is
+ * where it comes from (`shared` / `profile` / `workspace`); the tri-state toggle
+ * is stored under `name`. Resolved server-side so the picker can't drift from the
+ * turn's skill index. `pref` reuses the tool picker's tri-state. */
+export type ItemSkillState = {
+  name: string;
+  description: string;
+  source: string;
+  default_on: boolean;
+  pref: ToolPref;
+  effective: boolean;
+};
+
 /** Lean subset of the specstar list/count query params the dashboard uses
  * (#95 follow-up). `data_conditions` is a JSON array of
  * `{ field_path, operator, value }`; arrays (created_bys/updated_bys) serialize
@@ -289,6 +303,9 @@ export type SendMessageArgs = {
   /** #334: per-message cap on kb_search calls this turn (shared across the
    * turn's ask_knowledge_base calls). 0 = don't search; omitted = operator default. */
   maxKbSearches?: number;
+  /** #380: skills the user chose to APPLY this turn (skills picker "apply"
+   * button). Each named skill's body is hard-preloaded into the turn; one-shot. */
+  applySkills?: string[];
 };
 
 export type ExecuteCellArgs = {
@@ -367,6 +384,9 @@ export interface ApiClient {
   /** GET /a/{slug}/items/{id}/tools — the per-item tool picker state (per-tool
    * tri-state, resolved server-side) the tool picker reads (#322). */
   getItemTools(slug: string, itemId: string): Promise<ItemToolState[]>;
+  /** GET /a/{slug}/items/{id}/skills — the per-item skills picker state (per-skill
+   * source + tri-state + effective), resolved server-side (#380). */
+  getItemSkills(slug: string, itemId: string): Promise<ItemSkillState[]>;
   /** GET {resource_route} — the App's items (specstar list → flat rows).
    * Optional SearchParams filter/sort server-side (dashboard nav + filters). */
   listAppItems(resourceRoute: string, params?: SearchParams): Promise<AppItem[]>;

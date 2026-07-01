@@ -33,15 +33,14 @@ export const qk = {
   toolsCatalog: ["toolsCatalog"] as const,
   itemTools: (slug: string, itemId: string) => ["itemTools", slug, itemId] as const,
 
+  // #380: one item's skills-picker state (per-skill source + tri-state + effective).
+  // Invalidate after saving the picker (the override changed).
+  itemSkills: (slug: string, itemId: string) => ["itemSkills", slug, itemId] as const,
+
   // topic-hub §5 (#142): the parsed `collections.json` of one Hub item — the
   // collection-set picker's badge + modal read it; saving the picker invalidates
   // this AND `qk.file(id, "/collections.json")` (so an open Monaco tab refreshes).
   itemCollections: (scopeId: string) => ["itemCollections", scopeId] as const,
-
-  // #298: a workspace's co-created skills (`.skill/`). The Skills panel reads this;
-  // importing a skill invalidates it (a new `.skill/<name>/` appears).
-  workspaceSkills: (slug: string, itemId: string) =>
-    ["workspaceSkills", slug, itemId] as const,
 
   // #323: a workspace's co-created workflows (`.workflows/<id>.json`). The Workflows
   // panel reads this; saving / importing one invalidates it.
