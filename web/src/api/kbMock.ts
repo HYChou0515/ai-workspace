@@ -373,6 +373,13 @@ export const mockKbApi: KbApi = {
     if (!chat) throw new Error(`chat not found: ${chatId}`);
     return structuredClone(chat);
   },
+  async renameChat(chatId, title) {
+    const chat = chats.get(chatId);
+    if (!chat) throw new Error(`chat not found: ${chatId}`);
+    chat.title = title; // #357: "" reverts to the name_hint label
+    touchChat(chatId);
+    return summarize(chat);
+  },
   async deleteChat(chatId) {
     chats.delete(chatId);
   },

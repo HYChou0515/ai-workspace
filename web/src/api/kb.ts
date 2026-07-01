@@ -563,6 +563,8 @@ export interface KbApi {
   listChats(): Promise<KbChatSummary[]>;
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
   getChat(chatId: string): Promise<KbChatDetail>;
+  /** #357: owner-only rename. "" clears the title back to the name_hint label. */
+  renameChat(chatId: string, title: string): Promise<KbChatSummary>;
   deleteChat(chatId: string): Promise<void>;
   /** Owner-only: share a thread read-only with users (they get a notification). */
   shareChat(chatId: string, userIds: string[]): Promise<void>;
@@ -913,6 +915,18 @@ export const realKbApi: KbApi = {
   },
   async getChat(chatId) {
     return (await ok(await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`), "get chat")).json();
+  },
+  async renameChat(chatId, title) {
+    return (
+      await ok(
+        await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`, {
+          method: "PATCH",
+          headers: jsonHeaders,
+          body: JSON.stringify({ title }),
+        }),
+        "rename chat",
+      )
+    ).json();
   },
   async deleteChat(chatId) {
     await ok(

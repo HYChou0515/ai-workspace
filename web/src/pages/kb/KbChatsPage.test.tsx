@@ -134,6 +134,37 @@ describe("KbChatsPage", () => {
     expect(titles[1]).toMatch(/^Apple/);
   });
 
+  it("renames a chat inline via the pencil, updating the row (#357)", async () => {
+    await mockKbApi.createChat("Draft title", []);
+    const renameSpy = vi.spyOn(mockKbApi, "renameChat");
+    render(<KbChatsPage client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Draft title/ }));
+    const input = await screen.findByRole("textbox");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Final title{Enter}");
+
+    await waitFor(() =>
+      expect(renameSpy).toHaveBeenCalledWith(expect.any(String), "Final title"),
+    );
+    expect(await screen.findByRole("button", { name: /^Final title/ })).toBeInTheDocument();
+  });
+
+  it("cancels an inline rename on Escape without calling the API (#357)", async () => {
+    await mockKbApi.createChat("Keep me", []);
+    const renameSpy = vi.spyOn(mockKbApi, "renameChat");
+    render(<KbChatsPage client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Keep me/ }));
+    const input = await screen.findByRole("textbox");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Discarded{Escape}");
+
+    // the edit is abandoned: no API call, original label intact
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /^Keep me/ })).toBeInTheDocument();
+  });
+
   it("separates owned chats from ones shared with me (read-only)", async () => {
     // current user is "default-user" (mock); this chat is owned by alice → shared.
     vi.spyOn(api, "getUsers").mockResolvedValue([

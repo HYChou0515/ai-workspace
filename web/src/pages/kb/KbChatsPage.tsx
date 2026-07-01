@@ -59,10 +59,30 @@ export function KbChatsPage({
   const pinned = usePersistentSet("kb:pinned-chats");
   const [tab, setTab] = useState<Tab>("all");
 
+  // #357: inline rename — which row is being edited + its draft title. skipCommit
+  // lets Escape blur the input without saving (blur is the single commit path).
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const skipCommit = useRef(false);
+
   const removeMut = useMutation({
     mutationFn: (chatId: string) => client.deleteChat(chatId),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
   });
+  const renameMut = useMutation({
+    mutationFn: (v: { chatId: string; title: string }) => client.renameChat(v.chatId, v.title),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
+  });
+
+  const startRename = (c: KbChatSummary) => {
+    setDraft(c.title); // edit the raw title ("" allowed → reverts to name_hint)
+    setEditingId(c.resource_id);
+  };
+  const commitRename = (c: KbChatSummary) => {
+    setEditingId(null);
+    const title = draft.trim();
+    if (title !== c.title) renameMut.mutate({ chatId: c.resource_id, title });
+  };
   const shareMut = useMutation({
     mutationFn: (v: { chatId: string; userId: string; on: boolean }) =>
       v.on ? client.shareChat(v.chatId, [v.userId]) : client.unshareChat(v.chatId, v.userId),
@@ -100,19 +120,46 @@ export function KbChatsPage({
     const label = kbChatLabel(c); // #357: title → name_hint → timestamp
     return (
       <li key={c.resource_id} className="kb-chats__row">
-        <button
-          type="button"
-          className={`kb-chats__open${c.resource_id === selectedId ? " is-active" : ""}`}
-          onClick={() => onOpenChat?.(c.resource_id)}
-        >
-          <Icon name="chat" size={15} color="var(--text-paper-d)" />
-          <span className="kb-chats__title">{label}</span>
-          {owned ? (
-            <span className="kb-chats__meta">{c.message_count} msgs</span>
-          ) : (
-            c.owner && <UserChip userId={c.owner} size={18} />
-          )}
-        </button>
+        {editingId === c.resource_id ? (
+          <input
+            className="kb-chats__open kb-chats__rename"
+            aria-label={`Rename ${label}`}
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.blur(); // blur is the single commit path
+              } else if (e.key === "Escape") {
+                skipCommit.current = true;
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={() => {
+              if (skipCommit.current) {
+                skipCommit.current = false;
+                setEditingId(null);
+              } else {
+                commitRename(c);
+              }
+            }}
+          />
+        ) : (
+          <button
+            type="button"
+            className={`kb-chats__open${c.resource_id === selectedId ? " is-active" : ""}`}
+            onClick={() => onOpenChat?.(c.resource_id)}
+          >
+            <Icon name="chat" size={15} color="var(--text-paper-d)" />
+            <span className="kb-chats__title">{label}</span>
+            {owned ? (
+              <span className="kb-chats__meta">{c.message_count} msgs</span>
+            ) : (
+              c.owner && <UserChip userId={c.owner} size={18} />
+            )}
+          </button>
+        )}
         <button
           type="button"
           className={`kb-iconbtn${isPinned ? " is-pinned" : ""}`}
@@ -124,6 +171,14 @@ export function KbChatsPage({
         </button>
         {owned && (
           <>
+            <button
+              type="button"
+              className="kb-iconbtn"
+              aria-label={`Rename ${label}`}
+              onClick={() => startRename(c)}
+            >
+              <Icon name="pencil" size={14} />
+            </button>
             <Popover
               align="end"
               trigger={({ onClick }) => (
