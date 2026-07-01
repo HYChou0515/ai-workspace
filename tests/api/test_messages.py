@@ -141,6 +141,61 @@ def test_ask_knowledge_base_tool_message_persists_with_citations():
     assert tool.citations[0].filename == "reflow-spec.md"
 
 
+def test_ask_kb_tool_message_beyond_its_citation_pool_gets_empty_citations():
+    """#54 defensive branch: when an `ask_knowledge_base` tool NAME recurs more
+    times than its citation pool has buckets, the extra tool messages keep
+    `citations=[]` while the per-name cursor still advances — exercising the
+    `idx >= len(pool)` path of the per-name citation pairing."""
+    from workspace_app.api import ToolEnd, ToolStart
+    from workspace_app.resources.conversation import Citation
+
+    cite = Citation(
+        marker=1,
+        collection_id="col",
+        document_id="doc-a",
+        filename="reflow-spec.md",
+        start=0,
+        end=50,
+        source_chunk_ids=["ck-a"],
+    )
+
+    class _TwoAskKbOneBucketRunner:
+        """Two ask_knowledge_base calls but only ONE stashed citation bucket, so
+        the second call runs past the end of the pool."""
+
+        async def run(self, prompt, ctx):
+            yield ToolStart(call_id="c1", name="ask_knowledge_base", args={"question": prompt})
+            ctx.subagent_citations.setdefault("ask_knowledge_base", []).append([cite])
+            yield ToolEnd(call_id="c1", output="answer with [1]")
+            # Second call — no new bucket appended → the pool is exhausted.
+            yield ToolStart(call_id="c2", name="ask_knowledge_base", args={"question": "again"})
+            yield ToolEnd(call_id="c2", output="answer, no citations left")
+            yield RunDone()
+
+    spec = make_spec(default_user="u")
+
+    iid = register_rca_item(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_TwoAskKbOneBucketRunner(),
+    )
+    client = TestClient(app)
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "why drift?"})
+
+    rm = spec.get_resource_manager(Conversation)
+    conv = next(
+        r.data
+        for r in rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
+        if isinstance(r.data, Conversation) and r.data.item_id == iid
+    )
+    tools = [m for m in conv.messages if m.role == "tool" and m.tool_name == "ask_knowledge_base"]
+    assert len(tools) == 2
+    assert len(tools[0].citations) == 1  # first pairs with the only bucket
+    assert tools[1].citations == []  # second is beyond the pool → stays empty
+
+
 def test_infer_modules_tool_message_persists_with_citations():
     """Same shape as ask_knowledge_base: the `infer_modules` sub-agent
     bridge returns text + KB citations, persist pairs the Nth list with
