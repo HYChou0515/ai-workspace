@@ -14,6 +14,7 @@ from specstar import QB, SpecStar
 
 from ..resources import Conversation
 from ..workflow.run import WorkflowRun
+from .chat_naming import first_user_snippet
 from .schemas import _ChatInfo
 from .timeutil import dt_ms
 
@@ -21,10 +22,7 @@ from .timeutil import dt_ms
 def chat_name_hint(conv: Conversation, *, limit: int = 60) -> str:
     """First user message of a chat, whitespace-collapsed and truncated — the FE's
     fallback display name for an unnamed chat (#132). "" when no user turn yet."""
-    for m in conv.messages:
-        if m.role == "user" and m.content.strip():
-            return " ".join(m.content.split())[:limit]
-    return ""
+    return first_user_snippet(conv.messages, limit=limit)
 
 
 def chat_info(

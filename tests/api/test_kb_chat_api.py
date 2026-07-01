@@ -239,6 +239,45 @@ def test_create_list_get_delete_chat():
     assert client.get(f"/kb/chats/{cid}").status_code == 404
 
 
+def test_list_chat_derives_name_hint_and_updated_ms_from_first_message():
+    """#357: an unnamed chat (title left blank) is labelled in the list by its
+    first user message so threads can be told apart, and the list carries the
+    recency-sort key (updated_ms)."""
+    client = _client(_KbRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
+    client.post(
+        f"/kb/chats/{cid}/messages",
+        json={"content": "  why is my   reflow oven drifting?  "},
+    )
+
+    match = next(c for c in client.get("/kb/chats").json() if c["resource_id"] == cid)
+    assert match["title"] == ""  # unnamed → blank, not the dead "New chat" default
+    assert match["name_hint"] == "why is my reflow oven drifting?"  # whitespace-collapsed
+    assert isinstance(match["updated_ms"], int) and match["updated_ms"] > 0
+
+
+def test_get_chat_includes_name_hint_for_the_header():
+    """#357: the chat-view header labels an unnamed thread by its first user
+    message, so the detail response carries the same name_hint the list uses."""
+    client = _client(_KbRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "reflow void investigation"})
+
+    got = client.get(f"/kb/chats/{cid}").json()
+    assert got["title"] == ""
+    assert got["name_hint"] == "reflow void investigation"
+
+
+def test_unnamed_chat_without_user_turn_has_empty_name_hint():
+    """#357: a brand-new chat with no user turn yet has no derivable label — the
+    FE falls back to a timestamp; the server reports name_hint as ""."""
+    client = _client(_KbRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
+
+    match = next(c for c in client.get("/kb/chats").json() if c["resource_id"] == cid)
+    assert match["title"] == "" and match["name_hint"] == ""
+
+
 def test_send_message_streams_and_persists_answer_with_citations():
     runner = _KbRunner()
     client = _client(runner)

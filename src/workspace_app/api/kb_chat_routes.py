@@ -33,9 +33,11 @@ from ..kb.retriever import Enhancements, Retriever
 from ..resources import AgentConfig
 from ..resources.kb import Citation, KbChat, KbMessage
 from ..users.protocol import UserDirectory
+from .chat_naming import first_user_snippet
 from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolLog, ToolStart
 from .notifications import notify
 from .runner import AgentRunner
+from .timeutil import dt_ms
 from .turns import ChatTurnEngine, TurnMessage, history_items
 
 
@@ -174,8 +176,26 @@ def _looks_like_tool_error(output: str) -> bool:
 
 
 class _ChatBody(BaseModel):
-    title: str = "New chat"
+    # #357: unnamed by default ("" not "New chat") so the list's
+    # title-or-name_hint fallback surfaces the first user message instead of a
+    # generic label. Manual rename sets a real title.
+    title: str = ""
     collection_ids: list[str] = []
+
+
+class KbChatSummary(BaseModel):
+    """One KB chat in the list (#357). `name_hint` labels an unnamed chat by its
+    first user message and `updated_ms` is the recency-sort key, so the FE renders
+    a meaningful, sorted list without fetching each thread."""
+
+    resource_id: str
+    title: str
+    collection_ids: list[str]
+    message_count: int = 0
+    owner: str | None = None
+    shared_with: list[str] = []
+    name_hint: str = ""
+    updated_ms: int | None = None
 
 
 class EnhancementsInput(BaseModel):
@@ -317,37 +337,42 @@ def register_kb_chat_routes(
         ]
 
     @app.post("/kb/chats")
-    async def create_chat(body: _ChatBody) -> dict:
+    async def create_chat(body: _ChatBody) -> KbChatSummary:
         rev = chat_rm.create(KbChat(title=body.title, collection_ids=body.collection_ids))
-        return {
-            "resource_id": rev.resource_id,
-            "title": body.title,
-            "collection_ids": body.collection_ids,
-        }
+        return KbChatSummary(
+            resource_id=rev.resource_id,
+            title=body.title,
+            collection_ids=body.collection_ids,
+            owner=get_user_id(),
+        )
 
     @app.get("/kb/chats")
-    async def list_chats() -> list[dict]:
+    async def list_chats() -> list[KbChatSummary]:
         """Only the current user's chats: ones they own + ones shared with them.
         Two indexed queries (owner = created_by meta; shared_with contains me),
-        merged + deduped — not a full scan."""
+        merged + deduped — not a full scan. Each row carries `name_hint` (first
+        user message) so an unnamed chat is still tellable apart, and `updated_ms`
+        (specstar revision time) as the recency-sort key (#357)."""
         me = get_user_id()
         owned = chat_rm.list_resources((QB.created_by() == me).build())
         shared = chat_rm.list_resources((QB["shared_with"].contains(me)).build())
         # owned ∩ shared is empty by construction (the share endpoint forbids
         # the owner being in their own shared_with), so concatenation is enough.
-        out: list[dict] = []
+        out: list[KbChatSummary] = []
         for r in [*owned, *shared]:
             data = r.data
             assert isinstance(data, KbChat)
             out.append(
-                {
-                    "resource_id": r.info.resource_id,  # ty: ignore[unresolved-attribute]
-                    "title": data.title,
-                    "collection_ids": data.collection_ids,
-                    "message_count": len(data.messages),
-                    "owner": r.info.created_by,  # ty: ignore[unresolved-attribute]
-                    "shared_with": data.shared_with,
-                }
+                KbChatSummary(
+                    resource_id=r.info.resource_id,  # ty: ignore[unresolved-attribute]
+                    title=data.title,
+                    collection_ids=data.collection_ids,
+                    message_count=len(data.messages),
+                    owner=r.info.created_by,  # ty: ignore[unresolved-attribute]
+                    shared_with=data.shared_with,
+                    name_hint=first_user_snippet(data.messages),
+                    updated_ms=dt_ms(r.info.updated_time),  # ty: ignore[unresolved-attribute]
+                )
             )
         return out
 
@@ -364,6 +389,9 @@ def register_kb_chat_routes(
             "messages": [_message_dict(m) for m in data.messages],
             "owner": owner,
             "shared_with": data.shared_with,
+            # #357: same fallback label the list uses, so the chat-view header can
+            # show a meaningful title for an unnamed thread instead of "Chat".
+            "name_hint": first_user_snippet(data.messages),
         }
 
     @app.delete("/kb/chats/{chat_id}", status_code=204)
