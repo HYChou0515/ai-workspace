@@ -46,7 +46,7 @@ from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
 from ..kb.llm import ILlm
-from ..kb.preview import preview_markdown
+from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
@@ -1201,15 +1201,13 @@ def register_kb_routes(
         ct = doc.content.content_type
         raw = rm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)  # restore_binary populates the blob bytes
-        # Issue #39: per-type "file view" projection — text decodes,
-        # structured types (json/csv/xlsx/docx) project into markdown,
-        # browser-native types (image/pdf/html) ship "" and the FE
-        # renders the blob itself. See kb.preview.
-        text = preview_markdown(
-            path=doc.path,
-            content_type=ct if isinstance(ct, str) else "application/octet-stream",
-            raw=raw,
-        )
+        # Issue #39/#361: per-type "file view" projection — text decodes,
+        # structured types (json/jsonl/csv/tsv/yaml) return verbatim text the
+        # FE renders as a tree/grid, xlsx/docx project into markdown,
+        # browser-native types (image/pdf/html) ship "" and the FE renders the
+        # blob itself. See kb.preview.
+        ct_str = ct if isinstance(ct, str) else "application/octet-stream"
+        text = preview_markdown(path=doc.path, content_type=ct_str, raw=raw)
         # #114: browser-native types (image/pdf) project to "" — the FE shows the
         # blob itself. But for an image VLM-parsed at ingest, the extracted text
         # on `doc.text` is exactly what the retriever cited; surface it below the
@@ -1234,9 +1232,15 @@ def register_kb_routes(
                 return f"/blobs/{file_id}"
             return f"kb://doc/{rid}"
 
-        markdown = rewrite_md_links(
-            text, doc_path=doc.path, collection_id=doc.collection_id, resolve=resolve
-        )
+        if is_structured_text(doc.path, ct_str):
+            # #361: the FE renders these as a tree/grid from the verbatim text;
+            # it isn't markdown, so a `[..](..)`-looking JSON value must not be
+            # link-rewritten.
+            markdown = text
+        else:
+            markdown = rewrite_md_links(
+                text, doc_path=doc.path, collection_id=doc.collection_id, resolve=resolve
+            )
         chrm = spec.get_resource_manager(DocChunk)
         assert isinstance(doc.content.size, int)
         assert isinstance(doc.content.file_id, str)
