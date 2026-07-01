@@ -154,6 +154,11 @@ _WORKSPACE = "root"
 # Provisioned tools are made available here (a sibling of the workspace, so
 # they're outside what walk/sync see). MUST match the jail bootstrap's mount.
 _TOOLS = ".tools"
+# #366: the app writes this marker (workspace-relative) once a restore completes,
+# and its mirror only propagates DELETIONS while it is present. Teardown must
+# unlink it FIRST (before rmtree) so a racing mirror sees an incomplete sandbox
+# and never wipes the durable snapshot. MUST match the app's sync READY_MARKER.
+_READY_MARKER = ".ready"
 # Unjailed `python` shim dir (#350). The jail bootstrap (isolate=True) routes
 # raw `python`/`python3*` to the python-stack carrier from inside the chroot;
 # unjailed pods — the model our deployments actually run (uid + cgroup, no
@@ -268,6 +273,11 @@ class LocalProcessSandbox:
 
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
+        # #366: unlink the `.ready` marker FIRST — rmtree's order is arbitrary, so
+        # relying on it to remove `.ready` before the files would leave a window
+        # where a racing mirror sees "ready + files half-gone" and wrongly
+        # propagates the deletions, wiping the durable snapshot.
+        await asyncio.to_thread((path / _WORKSPACE / _READY_MARKER).unlink, missing_ok=True)
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
         del self._dirs[handle.id]
 

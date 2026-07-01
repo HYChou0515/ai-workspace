@@ -647,3 +647,26 @@ async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback
     r2 = await sb.exec(h, ["python", "-c", "ignored"])
     assert r2.exit_code == 0
     assert "ROUTED-TO-PYTHON-STACK" in r2.stdout.decode()
+
+
+async def test_kill_unlinks_ready_marker_before_rmtree_366(sandbox, tmp_path, monkeypatch):
+    # #366 P4: teardown must unlink `.ready` BEFORE the (arbitrarily-ordered)
+    # rmtree, so a mirror racing the reap sees an incomplete sandbox and skips
+    # its delete phase instead of wiping the durable snapshot.
+    import sandbox_host.local_process as lp
+
+    h = await sandbox.create(SandboxSpec())
+    await sandbox.upload(h, b"", "/.ready")
+    marker = tmp_path / h.id / "root" / ".ready"
+    assert marker.exists()
+
+    ready_gone_at_rmtree = {}
+    real_rmtree = lp.shutil.rmtree
+
+    def spy_rmtree(p, **kw):
+        ready_gone_at_rmtree["v"] = not marker.exists()  # already unlinked?
+        return real_rmtree(p, **kw)
+
+    monkeypatch.setattr(lp.shutil, "rmtree", spy_rmtree)
+    await sandbox.kill(h)
+    assert ready_gone_at_rmtree["v"] is True  # marker unlinked BEFORE rmtree
