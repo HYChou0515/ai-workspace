@@ -426,6 +426,11 @@ export const messages = {
     en: "Apply this skill for the assistant's next turn",
   },
   "skills.save": { "zh-TW": "儲存", en: "Save" },
+  "skills.applied": { "zh-TW": "這回合套用：", en: "Applying:" },
+  "skills.appliedTip": {
+    "zh-TW": "助理這回合會照這個技能做（送出後自動移除）",
+    en: "The assistant follows this skill this turn (removed after you send)",
+  },
   // #323 — the Workflows panel (co-created workflows in a workspace).
   "workflows.button": { "zh-TW": "工作流程", en: "Workflows" },
   "workflows.tip": {

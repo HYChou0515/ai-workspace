@@ -234,6 +234,75 @@ describe("AgentPanel image chip (#364)", () => {
   });
 });
 
+describe("AgentPanel applied skills (#380)", () => {
+  const skill = {
+    name: "designed-pptx",
+    description: "polished slides",
+    source: "shared",
+    default_on: false,
+    pref: "follow",
+    effective: true,
+  };
+
+  function renderWithAgent() {
+    const agent = stubAgent();
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+        />
+      </DialogProvider>,
+    );
+    return agent;
+  }
+
+  // Open the Skills panel, queue the sample skill "for this turn", then dismiss the
+  // panel so the composer underneath is reachable again.
+  async function queueSkill() {
+    vi.spyOn(api, "getItemSkills").mockResolvedValue([skill] as never);
+    fireEvent.click(screen.getByTestId("skills-button"));
+    fireEvent.click(await screen.findByTestId("skill-apply-designed-pptx"));
+    fireEvent.click(screen.getByTestId("skills-modal").parentElement!);
+  }
+
+  it("queuing a skill shows an applied-skill chip in the composer", async () => {
+    renderWithAgent();
+    await queueSkill();
+    expect(await screen.findByTestId("applied-skill-chip")).toHaveTextContent("designed-pptx");
+  });
+
+  it("sends the queued skills with the turn and clears the chip", async () => {
+    const agent = renderWithAgent();
+    await queueSkill();
+    await screen.findByTestId("applied-skill-chip");
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "make slides" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+    expect(agent.send).toHaveBeenCalledWith("make slides", { applySkills: ["designed-pptx"] });
+    expect(screen.queryByTestId("applied-skill-chip")).not.toBeInTheDocument();
+  });
+
+  it("removing the applied chip drops it from the next send", async () => {
+    const agent = renderWithAgent();
+    await queueSkill();
+    const chip = await screen.findByTestId("applied-skill-chip");
+    fireEvent.click(within(chip).getByRole("button"));
+    expect(screen.queryByTestId("applied-skill-chip")).not.toBeInTheDocument();
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "hi" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+    expect(agent.send).toHaveBeenCalledWith("hi", { applySkills: [] });
+  });
+});
+
 describe("AgentPanel steer (#288)", () => {
   it("a run-chat composer steers the run instead of sending an interactive turn", () => {
     const onSteer = vi.fn();

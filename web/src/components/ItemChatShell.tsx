@@ -43,6 +43,9 @@ type AgentChrome = {
   /** #322: persist this item's per-tool override (`attached_tool_prefs`). Threaded
    * to the AgentPanel header's Tools picker; absent → no picker button. */
   onSaveToolPrefs?: (prefs: Record<string, boolean>) => void;
+  /** #380: persist this item's per-skill override (`attached_skill_prefs`). Threaded
+   * to the AgentPanel header's Skills picker; absent → its Save is a no-op. */
+  onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void;
   /** #198: the folder the composer's attach stages files into (the item's profile's
    * upload_dir; default uploads/). Threaded straight through to the AgentPanel. */
   uploadDir: string;
@@ -73,6 +76,7 @@ export function ItemChatShell({
   attachedPreset,
   onAttachPreset,
   onSaveToolPrefs,
+  onSaveSkillPrefs,
   uploadDir,
 }: {
   slug: string;
@@ -227,6 +231,7 @@ export function ItemChatShell({
           attachedPreset={attachedPreset}
           onAttachPreset={onAttachPreset}
           onSaveToolPrefs={onSaveToolPrefs}
+          onSaveSkillPrefs={onSaveSkillPrefs}
           uploadDir={uploadDir}
         />
       ) : (
@@ -252,6 +257,7 @@ function ItemChatPanel({
   attachedPreset,
   onAttachPreset,
   onSaveToolPrefs,
+  onSaveSkillPrefs,
   uploadDir,
 }: {
   slug: string;
@@ -357,6 +363,7 @@ function ItemChatPanel({
         attachedPreset={attachedPreset}
         onAttachPreset={onAttachPreset}
         onSaveToolPrefs={onSaveToolPrefs}
+        onSaveSkillPrefs={onSaveSkillPrefs}
         appTitle={appTitle}
         appIcon={appIcon}
         appColor={appColor}
