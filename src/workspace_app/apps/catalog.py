@@ -26,7 +26,7 @@ from msgspec import UNSET
 from ..resources import AgentConfig
 from .manifest import AppManifest, load_app_manifest
 from .profiles import load_profile, load_profile_appendix
-from .skills import SkillMeta, list_skills, merged_profile_skills
+from .skills import SkillMeta, effective_item_skills
 
 if TYPE_CHECKING:
     from ..config.schema import Preset
@@ -243,24 +243,22 @@ class AppCatalog:
             )
         preset = self._presets[chosen]
 
-        # skills — the profile narrows the App's declared shared skills to a
-        # default-on subset (else all declared are on); package `.skill/` skills
-        # are always default-on. A per-item tri-state `skill_prefs` override then
-        # sits on top (#380), mirroring `tool_prefs`: True forces a skill ON (even
-        # one the profile left default-off), False OFF, absent follows the default.
+        # skills — single source: `effective_item_skills` computes each available
+        # skill's default_on (the profile's `skills` gates the declared shared set)
+        # + effective (the per-item tri-state `skill_prefs` applied on top: True
+        # forces ON even a default-off skill, False OFF, absent follows the
+        # default). The prompt advertises only the effective ones. Workspace skills
+        # are added per-turn (chat_send), so resolve passes none. The subset check
+        # keeps a `skills` typo a loud config error, not a silently dropped skill.
         if prof.skills is not UNSET:
             _subset_or_raise(
                 prof.skills, manifest.agent.skills, kind="skills", app=app_slug, profile=profile
             )
-            default_shared = list(prof.skills)
-        else:
-            default_shared = list(manifest.agent.skills)
-        skill_metas = merged_profile_skills(app_slug, profile, manifest.agent.skills)
-        pkg_skill_names = [m.name for m in list_skills(app_slug, profile)]
-        default_on = sorted({*default_shared, *pkg_skill_names})
-        ceiling_names = [m.name for m in skill_metas]
-        enabled = set(_apply_tool_prefs(default_on, ceiling_names, skill_prefs))
-        skill_metas = [m for m in skill_metas if m.name in enabled]
+        skill_metas = [
+            SkillMeta(name=s.name, description=s.description)
+            for s in effective_item_skills(app_slug, profile, skill_prefs or {}, [])
+            if s.effective
+        ]
 
         system_prompt = _compose_prompt(
             _read_app_text(app_slug, manifest.agent.prompt_file),
