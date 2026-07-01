@@ -261,6 +261,51 @@ async def test_lifespan_registers_activity_model_for_local_sandbox(tmp_path):
         assert spec.get_resource_manager(_SandboxActivity) is not None
 
 
+async def test_lifespan_registers_address_model_for_http_sandbox():
+    # #366: an HttpSandbox mints per-pod uuid handles that don't converge across
+    # pods, so the lifespan wires the shared per-item address store + registers
+    # its model (the `registry.address is not None` boot branch). Local/mock apps
+    # skip it — they already converge via the item-keyed shared dir.
+    from workspace_app.api.sandbox_address import _SandboxAddress
+    from workspace_app.sandbox.http_client import HttpSandbox
+
+    spec = make_spec(default_user="u")
+    sandbox = HttpSandbox(base_url="http://sandbox-host.invalid")
+    filestore = SpecstarFileStore(spec)
+    app = create_app(
+        spec=spec,
+        sandbox=sandbox,
+        filestore=filestore,
+        runner=_ExecRunner(),
+        idle_timeout=timedelta(seconds=60),
+        idle_check_interval=timedelta(seconds=60),
+    )
+    async with _running_app(app):
+        # registered at boot ⇒ get_resource_manager resolves instead of raising.
+        assert spec.get_resource_manager(_SandboxAddress) is not None
+
+
+async def test_lifespan_skips_address_model_for_mock_sandbox_366():
+    # A non-http backend does not wire the address store, so its model stays
+    # unregistered (no needless table for a backend that already converges).
+    import pytest
+
+    from workspace_app.api.sandbox_address import _SandboxAddress
+
+    spec = make_spec(default_user="u")
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=SpecstarFileStore(spec),
+        runner=_ExecRunner(),
+        idle_timeout=timedelta(seconds=60),
+        idle_check_interval=timedelta(seconds=60),
+    )
+    async with _running_app(app):
+        with pytest.raises(Exception):  # noqa: B017,PT011 — unregistered ⇒ lookup fails
+            spec.get_resource_manager(_SandboxAddress)
+
+
 async def test_default_idle_timeout_matches_rca_pivot():
     """Default knob is 8h per the RCA pivot (was 15min for the prior
     workspace-app — RCA sessions are long-running per grill-me Q10)."""
