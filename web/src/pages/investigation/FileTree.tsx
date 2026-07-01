@@ -15,7 +15,13 @@ import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { buildFileTree, type TreeNode } from "./fileTree";
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
+import { extractClipboardFiles, readTransferEntries } from "./transfer";
 import { pxToRem } from "../../lib/pxToRem";
+
+// #364: a drag carrying OS files/folders (not one of our internal reorder payloads).
+const isExternalDrag = (e: React.DragEvent): boolean =>
+  !e.dataTransfer.types.includes("application/x-rca-file") &&
+  e.dataTransfer.types.includes("Files");
 
 type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
@@ -107,7 +113,7 @@ export function FileTree({
   // Upload into `targetDir` ("" = root). Defaults to the anchored folder so the
   // toolbar button drops files where the rest of the create actions land; the
   // folder context menu passes an explicit dir.
-  const upload = async (fileList: FileList | null, targetDir: string = createDir) => {
+  const upload = async (fileList: FileList | File[] | null, targetDir: string = createDir) => {
     if (!fileList || fileList.length === 0) return;
     const existing = new Set(files.map((f) => f.path));
     let firstPath: string | null = null;
@@ -136,6 +142,24 @@ export function FileTree({
     }
     refresh();
     if (firstPath) onOpen(firstPath, { preview: false });
+  };
+
+  // #364: upload OS files/folders dropped from outside (not an internal reorder) into
+  // `dir` — recursing dropped folders so their subtree keeps its shape.
+  const uploadExternal = async (dt: DataTransfer, dir: string) => {
+    const incoming = await readTransferEntries(dt);
+    if (incoming.length) await upload(incoming, dir);
+  };
+
+  // #364: paste files/images into `dir`. Plain-text pastes carry no files → no-op, so
+  // pasting into a focused editor is unaffected. Images get a synthesized name.
+  const pasteInto = (e: React.ClipboardEvent, dir: string) => {
+    const { images, files: pasted } = extractClipboardFiles(e.clipboardData, Date.now());
+    const all = [...images, ...pasted];
+    if (all.length) {
+      e.preventDefault();
+      void upload(all, dir);
+    }
   };
 
   // Move (or Ctrl/⌘-copy) dragged files/folders into `destDir` ("" = root).
@@ -438,10 +462,14 @@ export function FileTree({
           genuine empty area highlights, so dragging a file no longer tints
           the whole tree: we ignore dragover that bubbled up from a row. */}
       <div
+        data-testid="file-tree-body"
+        // #364: also the paste target — files/images land in the anchored folder; a
+        // plain-text paste is a no-op (so pasting in a focused editor is untouched).
+        onPaste={(e) => pasteInto(e, createDir)}
         onDragOver={(e) => {
           if (
             e.target === e.currentTarget &&
-            e.dataTransfer.types.includes("application/x-rca-file")
+            (e.dataTransfer.types.includes("application/x-rca-file") || isExternalDrag(e))
           ) {
             e.preventDefault();
             setRootDrop(true);
@@ -457,6 +485,12 @@ export function FileTree({
           if (d) {
             e.preventDefault();
             void dropFileInto(d.paths, "", e.ctrlKey || e.metaKey);
+            return;
+          }
+          // #364: OS files/folders dropped on the empty area → upload into anchored dir.
+          if (isExternalDrag(e)) {
+            e.preventDefault();
+            void uploadExternal(e.dataTransfer, createDir);
           }
         }}
         tabIndex={0}
@@ -525,6 +559,7 @@ export function FileTree({
             onCommitRename={(n, name) => void commitRename(n, name)}
             onCancelRename={() => setRenaming(null)}
             onDropFile={(srcPaths, destDir, copy) => void dropFileInto(srcPaths, destDir, copy)}
+            onUploadExternal={(dt, dir) => void uploadExternal(dt, dir)}
             readDragFile={readDragFile}
             onContext={(n, e) => {
               e.preventDefault();
@@ -637,6 +672,7 @@ function TreeRow({
   onCommitRename,
   onCancelRename,
   onDropFile,
+  onUploadExternal,
   readDragFile,
 }: {
   node: TreeNode;
@@ -659,6 +695,7 @@ function TreeRow({
   onCommitRename: (node: TreeNode, name: string) => void;
   onCancelRename: () => void;
   onDropFile: (srcPaths: string[], destDir: string, copy: boolean) => void;
+  onUploadExternal: (dt: DataTransfer, dir: string) => void;
   readDragFile: (e: React.DragEvent) => { paths: string[] } | null;
 }) {
   const indent = 8 + depth * 12;
@@ -697,9 +734,10 @@ function TreeRow({
           onDragEnd={() => setDragging(false)}
           onClick={(e) => onActivate(node, e)}
           onContextMenu={(e) => onContext(node, e)}
-          // Drop target: move/copy a dragged file or folder into this folder.
+          // Drop target: move/copy an internally-dragged file/folder into this folder,
+          // or (#364) upload OS files/folders dropped from outside into it.
           onDragOver={(e) => {
-            if (e.dataTransfer.types.includes("application/x-rca-file")) {
+            if (e.dataTransfer.types.includes("application/x-rca-file") || isExternalDrag(e)) {
               e.preventDefault();
               e.stopPropagation();
               setDropOver(true);
@@ -713,6 +751,12 @@ function TreeRow({
               e.preventDefault();
               e.stopPropagation();
               onDropFile(d.paths, node.path, e.ctrlKey || e.metaKey);
+              return;
+            }
+            if (isExternalDrag(e)) {
+              e.preventDefault();
+              e.stopPropagation();
+              onUploadExternal(e.dataTransfer, node.path);
             }
           }}
           title="Drag onto another folder to move · Ctrl/⌘ to copy"
@@ -774,6 +818,7 @@ function TreeRow({
                 onCommitRename={onCommitRename}
                 onCancelRename={onCancelRename}
                 onDropFile={onDropFile}
+                onUploadExternal={onUploadExternal}
                 readDragFile={readDragFile}
               />
             ))}
