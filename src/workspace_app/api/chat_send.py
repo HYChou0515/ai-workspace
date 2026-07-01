@@ -205,6 +205,9 @@ class ChatSendService:
             collection_tiers=hub_collection_tiers,
             acting_user=author,
             speaker=self._users.get(author),
+            # #380: skills applied THIS turn — so read_skill exempts them from the
+            # disable gate (their bodies are already preloaded into the prompt).
+            apply_skills=body.apply_skills or [],
         )
 
         def persist(produced: list[TurnMessage]) -> None:
@@ -252,7 +255,7 @@ class ChatSendService:
         # message + the broadcast UserMessage stay clean (block never enters history),
         # so it is idempotent + replay-safe. "" for Apps that declare no context_files.
         from ..apps.context_files import build_context_block
-        from ..apps.skills import build_workspace_skills_block
+        from ..apps.skills import build_applied_skills_block, build_workspace_skills_block
 
         block = await build_context_block(
             self._filestore, investigation_id, self._locator.context_files(investigation_id)
@@ -261,8 +264,25 @@ class ChatSendService:
         # live each turn (through the same file facade the agent writes with, so a
         # skill saved last turn shows up now). Injected like context_files —
         # never persisted into history.
-        skills_block = await build_workspace_skills_block(self._files, investigation_id)
-        prefix = "\n\n".join(p for p in (block, skills_block) if p)
+        skills_block = await build_workspace_skills_block(
+            self._files, investigation_id, self._locator.skill_prefs_of(investigation_id)
+        )
+        # #380: skills the user picked to APPLY this turn — hard-preload each body
+        # so the model applies it without a read_skill round-trip. One-shot: built
+        # from the per-message `apply_skills`, injected like the blocks above, never
+        # persisted. Overrides a disabled toggle (resolve_skill_body ignores prefs).
+        applied_block = (
+            await build_applied_skills_block(
+                self._files,
+                investigation_id,
+                self._locator.slug_of(investigation_id),
+                self._locator.profile_of(investigation_id),
+                body.apply_skills,
+            )
+            if body.apply_skills
+            else ""
+        )
+        prefix = "\n\n".join(p for p in (block, skills_block, applied_block) if p)
         turn_content = f"{prefix}\n\n{body.content}" if prefix else body.content
 
         # #43: broadcast the human's message to every live viewer, then queue the

@@ -147,9 +147,14 @@ class AgentToolContext:
     # #380: the item's per-turn tri-state skill override (`attached_skill_prefs`),
     # set by the API layer. `read_skill` refuses a skill pinned OFF here (a skill
     # the user toggled off is also absent from the advertised index). Empty ⇒ every
-    # skill follows its profile/App default. A skill applied THIS turn (P3) is
-    # loaded regardless — apply overrides the off toggle.
+    # skill follows its profile/App default. A skill applied THIS turn is loaded
+    # regardless — apply overrides the off toggle (see `applied_skills`).
     skill_prefs: dict[str, bool] = field(default_factory=dict)
+
+    # #380: skills the user chose to APPLY this turn (per-message). Their bodies are
+    # already preloaded into the turn; read_skill also exempts them from the toggle
+    # gate so apply consistently overrides a disabled skill. Empty on most turns.
+    applied_skills: list[str] = field(default_factory=list)
 
     # #112: the VLM describer the `read_image` tool uses to read a workspace
     # image. Set by the API layer from `get_kb_vlm`/`VlmDescriber` (shared with

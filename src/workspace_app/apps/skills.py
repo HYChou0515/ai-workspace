@@ -206,9 +206,17 @@ def workspace_skills_block(metas: list[SkillMeta]) -> str:
     return "\n".join(lines)
 
 
-async def build_workspace_skills_block(files: WorkspaceFiles, workspace_id: str) -> str:
-    """Read the workspace's `.skill/` live and render the index block (or ``""``)."""
-    return workspace_skills_block(await workspace_skill_metas(files, workspace_id))
+async def build_workspace_skills_block(
+    files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
+) -> str:
+    """Read the workspace's `.skill/` live and render the index block (or ``""``).
+    A workspace skill the item toggled OFF (`prefs[name]` is False, #380) is
+    dropped — the agent isn't told about a skill the user turned off (workspace
+    skills are default-on, so only an explicit False hides one)."""
+    metas = await workspace_skill_metas(files, workspace_id)
+    if prefs:
+        metas = [m for m in metas if prefs.get(m.name) is not False]
+    return workspace_skills_block(metas)
 
 
 class SkillState(msgspec.Struct, frozen=True):
@@ -275,6 +283,66 @@ def effective_item_skills(
             )
         )
     return out
+
+
+async def resolve_skill_body(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> str | None:
+    """A skill's body across the three sources in read_skill's precedence —
+    workspace ``.skill/`` first (the user's own shadows), then a shared registry
+    skill, then the profile package skill. ``None`` when no source has it. Raises
+    ``SkillError`` only on a body over the cap. #380: the apply-this-turn preload
+    resolves the body IGNORING the enable/disable toggle (apply overrides off)."""
+    from .shared_skills import SHARED_SKILLS, load_shared_skill
+
+    body = await load_workspace_skill(files, workspace_id, name)
+    if body is not None:
+        return body
+    if name in SHARED_SKILLS:
+        return load_shared_skill(name)
+    if app_slug is not None and profile is not None:
+        try:
+            return load_skill(app_slug, profile, name)
+        except SkillError:
+            return None
+    return None
+
+
+async def build_applied_skills_block(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    names: list[str],
+) -> str:
+    """Render the per-turn "apply these skills now" block (#380) — each named
+    skill's full body under its own heading, preceded by an instruction to apply
+    them this turn. A name whose body can't be resolved (unknown, or over the cap)
+    is skipped with a short note so the turn still proceeds. ``""`` when nothing
+    resolves. Injected like the workspace block: transient, never persisted."""
+    sections: list[str] = []
+    for name in names:
+        try:
+            body = await resolve_skill_body(files, workspace_id, app_slug, profile, name)
+        except SkillError as e:
+            sections.append(f"### {name}\n\n(could not load: {e})")
+            continue
+        if body is None:
+            sections.append(f"### {name}\n\n(skill not found — skipped)")
+        else:
+            sections.append(f"### {name}\n\n{body}")
+    if not sections:
+        return ""
+    header = (
+        "## Apply these skills now\n\n"
+        "The user selected the following skill(s) to apply THIS turn. Read them and "
+        "follow them as you answer."
+    )
+    return "\n\n".join([header, *sections])
 
 
 def merged_profile_skills(
