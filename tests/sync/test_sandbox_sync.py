@@ -78,6 +78,19 @@ async def test_mirror_is_not_quota_gated(fs: SpecstarFileStore, sandbox: MockSan
     assert await fs.read("ws", "/agent-made.bin") == b"y" * 50_000
 
 
+async def test_mirror_copies_large_files_into_snapshot(fs: SpecstarFileStore, sandbox: MockSandbox):
+    # #374: a big agent-produced file (>10 MB) must be mirrored to the durable
+    # snapshot too. The old MAX_FILE_SIZE cap silently dropped it, so it vanished
+    # on sandbox reap and under-counted in the usage bar. write_from_path streams
+    # to the blob store (#219), so size is not a durability concern.
+    big = b"x" * (11 * 1024 * 1024)
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    await sandbox.upload(h, big, "/model.bin")
+    assert await sync.mirror("ws", h) == 1
+    assert await fs.read("ws", "/model.bin") == big
+
+
 async def test_mirror_skips_unchanged_via_version(fs: SpecstarFileStore, sandbox: MockSandbox):
     h = await sandbox.create(SandboxSpec())
     sync = SandboxSync(filestore=fs, sandbox=sandbox)
@@ -131,7 +144,7 @@ async def test_mirror_propagates_deletions_on_a_ready_sandbox(
     ],
 )
 def test_default_ignores_match(path: str):
-    assert should_ignore(path, DEFAULT_IGNORES, size=10) is True
+    assert should_ignore(path, DEFAULT_IGNORES) is True
 
 
 @pytest.mark.parametrize(
@@ -139,20 +152,21 @@ def test_default_ignores_match(path: str):
     ["/src/main.py", "/README.md", "/data/x.json", "/.gitignore"],
 )
 def test_default_ignores_let_real_files_through(path: str):
-    assert should_ignore(path, DEFAULT_IGNORES, size=10) is False
+    assert should_ignore(path, DEFAULT_IGNORES) is False
 
 
-def test_ignore_rejects_files_over_size_cap():
-    big = 11 * 1024 * 1024
-    assert should_ignore("/totally_fine.bin", DEFAULT_IGNORES, size=big) is True
+def test_large_files_are_not_ignored():
+    # #374: no size cap — a big data file is a real file and must be backed up.
+    # The size-based skip that used to drop it is gone.
+    assert should_ignore("/totally_fine.bin", DEFAULT_IGNORES) is False
 
 
 def test_ignore_literal_segment_pattern():
     """A pattern like 'secret' (no trailing /, no *.) matches a path
     segment with that exact name anywhere in the path."""
-    assert should_ignore("/secret", ["secret"], size=10) is True
-    assert should_ignore("/sub/secret", ["secret"], size=10) is True
-    assert should_ignore("/not-a-secret", ["secret"], size=10) is False
+    assert should_ignore("/secret", ["secret"]) is True
+    assert should_ignore("/sub/secret", ["secret"]) is True
+    assert should_ignore("/not-a-secret", ["secret"]) is False
 
 
 async def test_mirror_skips_ignored_paths(fs: SpecstarFileStore, sandbox: MockSandbox):

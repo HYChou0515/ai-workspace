@@ -68,7 +68,7 @@ class SandboxSync:
         self._versions[workspace_id] = {
             e.path: e.version
             for e in await self._sb.walk(handle, "/")
-            if not should_ignore(e.path, self._ignores, e.size)
+            if not should_ignore(e.path, self._ignores)
         }
         # #366: mark the sandbox authoritative AFTER the restore completes. The
         # marker lives OUTSIDE the workspace (see Sandbox.mark_ready), so it is
@@ -100,7 +100,7 @@ class SandboxSync:
         seen: dict[str, str] = {}
         n = 0
         for entry in entries:
-            if should_ignore(entry.path, self._ignores, entry.size):
+            if should_ignore(entry.path, self._ignores):
                 continue
             seen[entry.path] = entry.version
             if prev.get(entry.path) == entry.version:
