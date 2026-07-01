@@ -1,9 +1,14 @@
 """Ignore rules for reverse-syncing sandbox files into the FileStore.
 
 The defaults cover the standard noise (build/cache directories, compiled
-artifacts) plus a per-file size cap so a stray model dump doesn't blow
-up specstar. Per-workspace customization can override DEFAULT_IGNORES
-when constructing SandboxSync.
+artifacts) — regenerable derivatives, never the agent's own data. Per-workspace
+customization can override DEFAULT_IGNORES when constructing SandboxSync.
+
+There is deliberately NO per-file size cap: the mirror is a COMPLETE backup, so
+a big agent-produced file (a model dump, a generated dataset) is persisted like
+any other — else it would silently vanish on sandbox reap and under-count in the
+usage bar (#374). Streaming to the blob store (#219) keeps a big file off the
+heap, so size is not a durability concern.
 
 Pattern conventions:
 - `name/` — directory anywhere in the path (matches if the trailing-slash
@@ -25,12 +30,8 @@ DEFAULT_IGNORES: list[str] = [
     "*.pyo",
 ]
 
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB; spilling specstar with one big blob is rarely intentional
 
-
-def should_ignore(path: str, patterns: list[str], size: int = 0) -> bool:
-    if size > MAX_FILE_SIZE:
-        return True
+def should_ignore(path: str, patterns: list[str]) -> bool:
     segments = [s for s in path.split("/") if s]
     for pat in patterns:
         if pat.endswith("/"):
