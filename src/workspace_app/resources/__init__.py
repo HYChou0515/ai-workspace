@@ -32,6 +32,7 @@ from .kb import (
     Collection,
     ContextCard,
     DocChunk,
+    DocQuestion,
     IndexRun,
     IndexUnitText,
     KbChat,
@@ -57,6 +58,7 @@ __all__ = [
     "Conversation",
     "CustomSanityQuestion",
     "DocChunk",
+    "DocQuestion",
     "IndexRun",
     "IndexUnitText",
     "KbChat",
@@ -282,6 +284,11 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # load the match() vocab is a query; norm_keys indexed → get(term)'s exact
     # element-membership lookup (same list-membership index as KbChat.shared_with).
     spec.add_model(ContextCard, indexed_fields=["collection_id", "norm_keys"])
+    # #377 doc-clarification questions. collection_id + status indexed → the global
+    # inbox ("open questions in collections I can edit") is a query; norm_key indexed
+    # → term-question dedup is an exact element lookup; kind indexed → split term vs
+    # description without a scan.
+    spec.add_model(DocQuestion, indexed_fields=["collection_id", "status", "kind", "norm_key"])
     # recipient indexed so "my notifications" is a query, not a full scan.
     spec.add_model(Notification, indexed_fields=["recipient"])
     # #100: workflow runs. item_id indexed so "an item's runs" is a query; status
