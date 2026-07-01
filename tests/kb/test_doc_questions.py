@@ -9,11 +9,13 @@ from workspace_app.kb.doc_questions import (
     add_description_question,
     answer_question,
     discard_question,
+    land_description_answer,
     land_term_answer,
     open_or_merge_term_question,
     open_questions_for_collections,
     plan_doc_questions,
 )
+from workspace_app.kb.wiki.store import CLARIFICATIONS_PATH, WikiFileStore
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, ContextCard, DocQuestion
 
@@ -200,6 +202,50 @@ def test_land_term_answer_updates_an_existing_card_for_the_term():
     assert card_id == existing  # updated in place, not duplicated
     (card,) = _cards(spec, cid)
     assert card.body == "def: new def"
+
+
+async def test_land_description_answer_appends_to_the_clarification_page():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    store = WikiFileStore(spec)
+    qid = add_description_question(
+        spec,
+        collection_id=cid,
+        source_doc_id="d1",
+        quote="uses M4 then CMP",
+        question_text="Why skip the clean before CMP?",
+    )
+    path = await land_description_answer(
+        spec, qid, answer="The M4 stack is already clean.", wiki_store=store
+    )
+    assert path == CLARIFICATIONS_PATH
+
+    q = _get(spec, qid)
+    assert q.status == "answered"
+    assert q.answer == "The M4 stack is already clean."
+    assert q.result_ref == CLARIFICATIONS_PATH
+
+    page = (await store.read(cid, CLARIFICATIONS_PATH)).decode()
+    assert "uses M4 then CMP" in page  # the quoted passage, faithfully
+    assert "The M4 stack is already clean." in page  # the human's answer
+
+
+async def test_land_description_answer_appends_without_dropping_prior_entries():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    store = WikiFileStore(spec)
+    q1 = add_description_question(
+        spec, collection_id=cid, source_doc_id="d1", quote="quote one", question_text="q1?"
+    )
+    q2 = add_description_question(
+        spec, collection_id=cid, source_doc_id="d1", quote="quote two", question_text="q2?"
+    )
+    await land_description_answer(spec, q1, answer="answer one", wiki_store=store)
+    await land_description_answer(spec, q2, answer="answer two", wiki_store=store)
+
+    page = (await store.read(cid, CLARIFICATIONS_PATH)).decode()
+    assert "answer one" in page and "answer two" in page  # both entries survive
+    assert "quote one" in page and "quote two" in page
 
 
 def test_plan_drops_term_questions_already_carded():
