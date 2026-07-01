@@ -1,4 +1,4 @@
-"""Per-type "file view" projections for the doc viewer (issue #39).
+"""Per-type "file view" projections for the doc viewer (issue #39, #361).
 
 `render_document` used to utf-8-decode EVERY doc's blob into the
 markdown body — correct when ingest was text-only, mojibake once
@@ -8,30 +8,31 @@ decision per type:
   - **browser-native** (image / pdf / html): return "" — the FE
     renders the original bytes from the blob endpoint (`<img>`,
     `<iframe>`); shipping a text body would be garbage.
-  - **structured text** (json / csv / tsv / xlsx / docx): project into
-    markdown the existing ReactMarkdown view renders — fenced code for
-    JSON, GFM tables for tabular, extracted text for docx.
+  - **structured text** (json / jsonl / csv / tsv / yaml): return the
+    verbatim decoded text — the FE projects it into a collapsible tree /
+    data grid client-side (#361), so no server-side markdown projection.
+    `is_structured_text` marks them so the caller skips markdown-link
+    rewriting (they aren't markdown).
+  - **office (xlsx / docx)**: still projected server-side — xlsx into
+    per-sheet GFM tables, docx into extracted text (binary formats the FE
+    can't parse without a heavy dep).
   - **text / markdown / code**: the decoded body, as before.
   - **undisplayable binary** (pptx, unknown): "" — the FE shows the
     download notice; the chunks tab still shows what got indexed.
 
-Previews are bounded (`_MAX_TABLE_ROWS` per table) — the viewer is a
-peek, the Download button is the full fidelity path.
+Office previews are bounded (`_MAX_XLSX_ROWS_PER_SHEET`) — the viewer is
+a peek, the Download button is the full fidelity path.
 """
 
 from __future__ import annotations
 
-import contextlib
-import csv
 import io
-import json
 import logging
 
 from .ingest import normalize_text
 
 logger = logging.getLogger(__name__)
 
-_MAX_TABLE_ROWS = 200
 _MAX_XLSX_ROWS_PER_SHEET = 100
 
 # Types the FE renders natively from `/blobs/{file_id}` — no text body.
@@ -40,20 +41,34 @@ _BLOB_NATIVE_EXTENSIONS = (".pdf", ".html", ".htm")
 
 _CODE_EXTENSIONS = (".py", ".ts", ".tsx", ".js", ".jsx")
 
+# Structured-data text the FE renders itself (#361): the doc viewer projects
+# these into a collapsible tree / data grid, so the BE returns verbatim text.
+_STRUCTURED_TEXT_EXTENSIONS = (".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".yaml", ".yml")
+_STRUCTURED_TEXT_MIMES = {"application/json", "text/csv"}
+
+
+def is_structured_text(path: str, content_type: str) -> bool:
+    """A type the FE renders structurally from the raw text (#361). The doc
+    viewer must NOT markdown-link-rewrite these — they aren't markdown, and a
+    JSON string value that happens to look like a link must stay verbatim."""
+    ext_match = path.lower().endswith(_STRUCTURED_TEXT_EXTENSIONS)
+    return ext_match or content_type in _STRUCTURED_TEXT_MIMES
+
 
 def preview_markdown(*, path: str, content_type: str, raw: bytes) -> str:
-    """The markdown body the doc viewer shows for this document, or ""
-    when the FE should render (or refuse) the blob itself."""
+    """The body the doc viewer shows for this document, or "" when the FE
+    should render (or refuse) the blob itself. Structured-data types return
+    verbatim decoded text (the FE builds the tree/grid); xlsx/docx are still
+    projected to markdown here."""
     p = path.lower()
     ct = content_type
     if ct.startswith("image/"):
         return ""
     if ct in _BLOB_NATIVE_MIMES or p.endswith(_BLOB_NATIVE_EXTENSIONS):
         return ""
-    if ct == "application/json" or p.endswith((".json", ".jsonl")):
-        return _json_preview(raw)
-    if ct == "text/csv" or p.endswith((".csv", ".tsv")):
-        return _table_preview(raw, delimiter="\t" if p.endswith(".tsv") else ",")
+    if is_structured_text(path, content_type):
+        # FE renders the tree/grid from this — hand back the verbatim text.
+        return normalize_text(raw.decode("utf-8", errors="replace"))
     if p.endswith(".xlsx"):
         return _xlsx_preview(raw)
     if p.endswith(".docx"):
@@ -62,14 +77,6 @@ def preview_markdown(*, path: str, content_type: str, raw: bytes) -> str:
         return normalize_text(raw.decode("utf-8", errors="replace"))
     # Undisplayable binary (pptx, unknown) — FE shows the download notice.
     return ""
-
-
-def _json_preview(raw: bytes) -> str:
-    text = raw.decode("utf-8", errors="replace")
-    # jsonl / malformed stay as-is inside the fence.
-    with contextlib.suppress(json.JSONDecodeError):
-        text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
-    return f"```json\n{text}\n```"
 
 
 def _md_table(header: list[str], rows: list[list[str]], *, omitted: int) -> str:
@@ -84,18 +91,6 @@ def _md_table(header: list[str], rows: list[list[str]], *, omitted: int) -> str:
     if omitted > 0:
         lines.append(f"\n_… {omitted} more rows — download the file for the full data._")
     return "\n".join(lines)
-
-
-def _table_preview(raw: bytes, *, delimiter: str) -> str:
-    text = raw.decode("utf-8", errors="replace")
-    reader = csv.reader(io.StringIO(text), delimiter=delimiter)
-    try:
-        header = next(reader)
-    except StopIteration:
-        return ""
-    rows = list(reader)
-    shown = rows[:_MAX_TABLE_ROWS]
-    return _md_table(header, shown, omitted=len(rows) - len(shown))
 
 
 def _xlsx_preview(raw: bytes) -> str:

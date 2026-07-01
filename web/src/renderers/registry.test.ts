@@ -48,6 +48,15 @@ describe("pickRenderer", () => {
     expect(pickRenderer("/Makefile")).toBe("text");
   });
 
+  it("#361: routes structured-data extensions to their tree/grid renderers", () => {
+    expect(pickRenderer("/config.json")).toBe("json");
+    expect(pickRenderer("/events.jsonl")).toBe("jsonl");
+    expect(pickRenderer("/events.ndjson")).toBe("jsonl");
+    expect(pickRenderer("/conf.yaml")).toBe("yaml");
+    expect(pickRenderer("/conf.yml")).toBe("yaml");
+    expect(pickRenderer("/data/spc.tsv")).toBe("csv");
+  });
+
   it("every routed path resolves to a renderer component", () => {
     for (const p of ["/a.md", "/a.csv", "/a.html", "/a.bmp", "/a.ipynb", "/x"]) {
       expect(rendererComponent(p)).toBeTypeOf("function");
@@ -57,13 +66,15 @@ describe("pickRenderer", () => {
 
 describe("isRawEditorView", () => {
   it("rawEditor types are always full-bleed", () => {
-    for (const k of ["text", "json"]) {
+    for (const k of ["text"]) {
       expect(isRawEditorView(k, false)).toBe(true);
       expect(isRawEditorView(k, true)).toBe(true);
     }
   });
   it("editToggle types are full-bleed only while editing", () => {
-    for (const k of ["markdown", "image", "csv", "html", "pdf"]) {
+    // #361: json / jsonl / yaml now have a tree/record preview, so they gain
+    // the same preview⇄edit toggle csv has (were rawEditor before).
+    for (const k of ["markdown", "image", "csv", "html", "pdf", "json", "jsonl", "yaml"]) {
       expect(isRawEditorView(k, false)).toBe(false);
       expect(isRawEditorView(k, true)).toBe(true);
     }
@@ -77,8 +88,10 @@ describe("isRawEditorView", () => {
 
 describe("hasEditToggle", () => {
   it("is true for preview⇄edit types, false for the rest", () => {
-    for (const k of ["markdown", "image", "csv", "html", "pdf"]) expect(hasEditToggle(k)).toBe(true);
-    for (const k of ["text", "json", "notebook", "report"]) {
+    for (const k of ["markdown", "image", "csv", "html", "pdf", "json", "jsonl", "yaml"]) {
+      expect(hasEditToggle(k)).toBe(true);
+    }
+    for (const k of ["text", "notebook", "report"]) {
       expect(hasEditToggle(k)).toBe(false);
     }
   });

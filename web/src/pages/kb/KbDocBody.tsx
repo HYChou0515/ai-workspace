@@ -14,13 +14,40 @@ import remarkGfm from "remark-gfm";
 import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { parseCsv } from "../../renderers/csv";
+import { DataGrid } from "../../renderers/DataGrid";
+import { JsonlView } from "../../renderers/JsonlView";
+import { JsonTreeView } from "../../renderers/JsonTreeView";
 import { baseAwareUrlTransform } from "../../renderers/mdUrlTransform";
+import { pickRenderer } from "../../renderers/registry";
+import { YamlTree } from "../../renderers/YamlTree";
 import { blobHref, parseKbDocHref } from "./kbLinks";
 import { rehypeHighlightSnippet } from "./rehypeHighlightSnippet";
 
 // Keep kb:// links intact for the in-app link handler; root-relative URLs the
 // BE emits (e.g. `/blobs/...` image siblings) get the deploy sub-path (#73).
 const urlTransform = baseAwareUrlTransform("kb://");
+
+// #361: structured-data docs arrive as verbatim text (kb.preview no longer
+// projects them to markdown) and render through the SAME pure cores the
+// workspace file viewer uses — one implementation, both surfaces. Returns null
+// for markdown / text / code, which keep the ReactMarkdown path (and its inline
+// snippet highlight). Structured types show the cited-passage callout but no
+// inline highlight — a tree/grid can't rehype-highlight a passage (#361 Q11).
+function structuredCore(filename: string, text: string): React.ReactNode | null {
+  switch (pickRenderer(filename)) {
+    case "json":
+      return <JsonTreeView text={text} />;
+    case "jsonl":
+      return <JsonlView text={text} />;
+    case "yaml":
+      return <YamlTree text={text} />;
+    case "csv":
+      return <DataGrid rows={parseCsv(text, filename.toLowerCase().endsWith(".tsv") ? "\t" : ",")} />;
+    default:
+      return null;
+  }
+}
 
 export function KbDocBody({
   documentId,
@@ -206,16 +233,18 @@ export function KbDocBody({
             use Download to view it.
           </div>
         ) : (
-          <article className="md-body">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              rehypePlugins={rehypePlugins}
-              urlTransform={urlTransform}
-              components={components}
-            >
-              {doc.markdown}
-            </ReactMarkdown>
-          </article>
+          (structuredCore(doc.filename, doc.markdown) ?? (
+            <article className="md-body">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={rehypePlugins}
+                urlTransform={urlTransform}
+                components={components}
+              >
+                {doc.markdown}
+              </ReactMarkdown>
+            </article>
+          ))
         ))
       )}
     </>

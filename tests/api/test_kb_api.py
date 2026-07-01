@@ -536,6 +536,20 @@ def test_render_document_exposes_quality_rationale_and_breakdown():
     assert rd["quality_breakdown"] == {"noise": 0.7}
 
 
+def test_render_document_returns_structured_text_verbatim_without_link_rewrite():
+    """#361: structured docs (csv / json / …) come back as verbatim text — the
+    FE builds the tree/grid client-side — and a markdown-link-looking value is
+    NOT rewritten (the viewer renders a grid, not markdown)."""
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    # A cell that looks like a markdown link must survive byte-for-byte.
+    body = b"path,note\nx,[docs](kb://doc/other)\n"
+    _upload(client, cid, "data.csv", data=body)
+    _drain(client)
+    rd = client.get(f"/kb/documents?id={encode_doc_id(cid, 'data.csv')}").json()
+    assert rd["markdown"] == "path,note\nx,[docs](kb://doc/other)\n"
+
+
 def test_list_documents_exposes_unit_progress_for_an_indexing_fanout_doc():
     """#248: a fanned-out doc that is still indexing carries a real done/total
     unit count so the FE can draw a monotonic progress bar (not parse a string)."""
