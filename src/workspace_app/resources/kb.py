@@ -184,6 +184,14 @@ class Collection(Struct):  # → resource "collection"
     # appended (back-compat). Non-indexed (never filtered/sorted on) — adding it
     # needs no migration (old rows decode with the empty default).
     parser_guidance: str = ""
+    # Issue #377: opt-in proactive clarification. When True, each doc is digested
+    # once it's ready (the SAME card-drafting pass that proposes cards also raises
+    # the terms it can't define and the passages it can't follow, as DocQuestions
+    # for a human to answer). Default False ⇒ the digest is a MANUAL action only
+    # (the user still triggers card generation by hand). Non-indexed (never
+    # filtered/sorted on), like `quality_rubric` — adding it needs no migration
+    # (old rows decode with the False default).
+    auto_digest: bool = False
 
 
 class WikiPage(Struct):  # → resource "wiki-page"
