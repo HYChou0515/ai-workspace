@@ -22,7 +22,36 @@
 #     (catches "kb_chat pointed at an RCA preset without overrides" footgun)
 #   - `kb.retrieval_llm` with missing `preset` → raise (use `null` to disable)
 
-# ─── server ─────────────────────────────────────────────────────────
+# ╔═══════════════════════════════════════════════════════════════════╗
+# ║  QUICKSTART — start here, the file is long but you touch little.   ║
+# ║  Task-oriented walkthrough (deploy ladders, footgun table):       ║
+# ║  → docs/configuration.md                                          ║
+# ╚═══════════════════════════════════════════════════════════════════╝
+#
+# It already runs with NO config.yaml (local sandbox + in-memory filestore +
+# Qwen3 via Ollama). You only override a delta. ~90% of deploys touch just:
+#
+#   agents.presets.*.model  + .llm.api_key   change the LLM  (→ [MUST] agents)
+#   filestore.kind: specstar + pg_dsn        persist files   (→ [MUST] filestore)
+#   server.superusers                        admins          (→ [MUST] server)
+#   sandbox.kind: http + http.base_url       multi-pod       (→ [SCALE] sandbox)
+#   server.run_consumers: false              split workers   (→ [SCALE] message_queue)
+#
+# Each section below is tagged so you can triage in place:
+#   [MUST]  most real deploys set this        (server, sandbox, filestore, agents)
+#   [OPT]   tune only if the default bites    (runner, failover, llm, history, kb, ...)
+#   [SCALE] multi-pod / isolation / workers   (sandbox multi-pod, message_queue, run_consumers)
+#
+# Section directory (search the tagged banner to jump):
+#   [MUST]  server · sandbox · filestore · agents (presets / picker / kb_chat)
+#   [SCALE] sandbox multi-pod (root / http / isolation) · message_queue · run_consumers
+#   [OPT]   tools · runner · observability · failover · llm · read_file ·
+#           exec · history · kb (embedder / retrieval / vlm / wiki) · health
+#
+# Secrets: never inline them — write ${ENV_VAR} and set it in the environment
+# (unset ⇒ loud raise at boot). Full env-var catalog: docs/configuration.md §13.
+
+# ─── server ─────────────────────────────────── [MUST] ──────────────
 # server:
 #   default_user: default-user
 #   host: 127.0.0.1
@@ -45,7 +74,7 @@
 #                              # the same-pod fast-path stays instant. Smaller =
 #                              # snappier cancel, more store reads per active turn.
 
-# ─── sandbox (agent execution environment) ──────────────────────────
+# ─── sandbox (agent execution environment) ──── [MUST] · [SCALE] ────
 # sandbox:
 #   kind: local                # local | http | mock  (docker deprecated #252 — use http)
 #   root: null                 # null = tmpdir per sandbox. #345: set a path on a
@@ -104,7 +133,7 @@
 #   tools_dir: null            # → SANDBOX_HOST_TOOLS_DIR (prebuilt tools at /.tools)
 #   idle_ttl: 1800.0           # → SANDBOX_HOST_IDLE_TTL (reap orphaned; 0 = off)
 
-# ─── tools (how RCA tool packages are provisioned) ──────────────────
+# ─── tools (how RCA tool packages are provisioned) ──── [OPT] ───────
 # tools:
 #   mode: prebuilt             # prebuilt | uv-run
 #   # prebuilt: the self-contained bundles from scripts/prebuild_tools.py
@@ -114,7 +143,7 @@
 #   #   no rebuild and no copied python. Needs uv on the host and forces a
 #   #   non-isolated sandbox (set sandbox.isolate: false / leave it null).
 
-# ─── filestore ──────────────────────────────────────────────────────
+# ─── filestore ──────────────────────────────── [MUST] ──────────────
 # filestore:
 #   kind: memory               # memory | specstar
 #   pg_dsn: ${SPECSTAR_PG_DSN} # secret → env
@@ -147,7 +176,7 @@
 #   gc_t1: 1h
 #   gc_t2: 24h
 
-# ─── runner (RCA agent loop) ────────────────────────────────────────
+# ─── runner (RCA agent loop) ──────────────────── [OPT] ─────────────
 # runner:
 #   max_retries: 2
 #   max_turns: 10
@@ -156,7 +185,7 @@
 #   # (issue #56), so they follow the same preset-reference pattern as
 #   # every other LLM. A stale `runner.wiki_*` now fails validation loud.
 
-# ─── message queue (issue #58/#59/#82: durable background job queues) ──
+# ─── message queue (#58/#59/#82: durable job queues) ──── [SCALE] ───
 # Two background queues — wiki maintenance (#59) AND KB indexing (#82,
 # chunk+embed off the request path) — share ONE backend, selected here.
 # Jobs survive restarts, dedup re-uploads, serialize per collection, and
@@ -177,7 +206,7 @@
 #   #   heartbeat_seconds: 600     # AMQP heartbeat — RAISE if slow index
 #   #                              # jobs run longer than this (else reaped)
 
-# ─── observability ──────────────────────────────────────────────────
+# ─── observability ────────────────────────────── [OPT] ─────────────
 # Two startup observability aids:
 #   1. Resolved-config dump — ALWAYS ON (no knob). On boot the fully
 #      resolved config is printed (provenance-annotated, secrets masked)
@@ -198,7 +227,7 @@
 #     dir: logs/llm             # log root (relative → run's cwd)
 #     keep_days: 0              # 0 = keep all (manual prune)
 
-# ─── busy-aware LLM failover (#196 / #131) ──────────────────────────
+# ─── busy-aware LLM failover (#196 / #131) ────── [OPT] ─────────────
 # When you have SEVERAL models and any can get "too busy", give a preset a
 # `fallbacks:` chain (names of OTHER presets, in priority order). Every role
 # that references the preset inherits it. On a busy model — a fast error OR no
@@ -242,7 +271,7 @@
 #     qwen3-32b-local: { model: ollama_chat/qwen3:32b, llm: { base_url: http://gpu-2:11434 } }
 #     kb-claude: { model: claude-opus-4-7, ttft_timeout_s: 30, num_retries: 1 }  # hosted ⇒ relax ttft
 
-# ─── chat LLM endpoint (fallback for any preset that omits llm.*) ──
+# ─── chat LLM endpoint (fallback when a preset omits llm.*) ── [OPT] ─
 # Per-preset `llm.base_url` / `llm.api_key` (under agents.presets.*)
 # win over this. Empty = LiteLLM's provider env defaults.
 # llm:
@@ -266,12 +295,12 @@
 #   # n-grams (open-ended-only — it wrecks legitimate term/table repetition in
 #   # diagnosis/JSON), and this tool has no open-ended surface (#146).
 
-# ─── read_file caps (sandbox tool) ──────────────────────────────────
+# ─── read_file caps (sandbox tool) ────────────── [OPT] ─────────────
 # read_file:
 #   max_lines: 2000
 #   max_chars: 200000
 
-# ─── exec / tool output cap (issue #44) ─────────────────────────────
+# ─── exec / tool output cap (issue #44) ───────── [OPT] ─────────────
 # A tool command (e.g. `grep` over a big file) whose stdout+stderr
 # exceeds this is truncated head+tail with a notice, so one call can't
 # flood the model's context. Smaller than read_file's cap because tool
@@ -279,7 +308,7 @@
 # exec:
 #   output_max_chars: 30000
 
-# ─── cross-turn memory (chat history replay) ────────────────────────
+# ─── cross-turn memory (chat history replay) ──── [OPT] ─────────────
 # `max_context_tokens` (issue #45): after the message-count window,
 # oldest items are dropped until the estimated tokens (~chars/4) fit, so
 # huge tool outputs can't overflow the context within max_messages. 0
@@ -289,7 +318,7 @@
 #   max_messages: 40
 #   max_context_tokens: 24000
 
-# ─── KB subsystem ───────────────────────────────────────────────────
+# ─── KB subsystem ─────────────────────────────── [OPT] ─────────────
 # kb:
 #   embedder:
 #     model: ollama/bge-m3                  # change → re-index event
@@ -412,7 +441,7 @@
 #                                           #   parsers: ["my.pkg.DoclingParser"]
 #                                           #   parsers_disabled: ["PdfParser"]
 
-# ─── agents (named presets + the picker / KB-chat that reference them) ──
+# ─── agents (presets + the picker / KB-chat) ──── [MUST] ────────────
 #
 # Mental model:
 #
@@ -559,7 +588,7 @@
 #     - { preset: kb-default,    name: "KB · Qwen (local)" }   # default
 #     - { preset: hosted-claude, name: "KB · Claude" }
 
-# ─── Diagnostics: AI judge for the sanity matrix (issue #231) ───────
+# ─── Diagnostics: AI judge for the sanity matrix (#231) ──── [OPT] ──
 #
 # `health.judge_llm` wires an LLM-as-judge that scores every sanity-matrix
 # cell pass/fail (the AI verdict + note columns) and writes a per-model
