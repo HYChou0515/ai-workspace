@@ -253,6 +253,51 @@ describe("ItemChatShell", () => {
     );
   });
 
+  it("re-offers the in-chat launch after a run finished and relaunches in the same thread (#343)", async () => {
+    // A chat whose previous run is terminal (done) — the same thread may host another.
+    stubChatApi([
+      summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" }),
+    ]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "done",
+      current_phase: "",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: 2,
+      result: null,
+      pending_decision: null,
+    } as WorkflowRunDTO);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "collections",
+      title: "File uploads into collections",
+      description: "",
+      phases: [],
+      summary: "x",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
+    const start = vi
+      .spyOn(workflowApi, "startRun")
+      .mockResolvedValue({ run_id: "r2", item_id: "it", chat_id: "conversation:wf1" });
+    render({ chatSwitcher: "auto", showCollections: false });
+    // The launch entry is back on the finished chat; relaunching reuses its id (r1→r2).
+    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
+    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-collections"));
+    await screen.findByTestId("wf-launch-dialog");
+    const runBtn = await screen.findByTestId("wf-launch-run");
+    await waitFor(() => expect(runBtn).not.toBeDisabled());
+    fireEvent.click(runBtn);
+    await waitFor(() =>
+      expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections", "conversation:wf1"),
+    );
+  });
+
   it("nudges to pick collections when the hub has none, and opens the picker modal", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     stubCollectionsFile(); // 404 → empty selection
