@@ -97,21 +97,26 @@ class DocQuestion(Struct):
   - `IndexCoordinator` 於 doc `ready` 後，若該 collection 開關開 → 自動 enqueue digest（仿 `_quality_hook`／wiki hook；失敗安全、以 doc owner 身分）。
   - 手動路徑維持（既有 card_gen enqueue，順帶產題）。
 
-- **P4 — 回答落地**
-  - 詞類 answer → AI 把答案整理成「標題＋定義」→ 建/更新 context card（沿用 `author/edit` action、derive norm_keys）；`result_ref` 記卡 id；題目 status→answered。
-  - 描述 answer → 附加到澄清 wiki 頁（忠實：quote＋answer 一節）；builder 免疫；`result_ref` 記頁 path；status→answered。
-  - 丟棄 → status→discarded。
+- **P4 — 回答落地：詞類 → context card**
+  - 詞類 answer → AI 把答案整理成「標題＋定義」（LLM formatter seam，可注入 fake / verbatim fallback）→ 建/更新 context card（沿用 create/update 語意、derive norm_keys）；`result_ref` 記卡 id；題目 status→answered。
+  - 丟棄 → status→discarded（沿用 P1 `discard_question`）。
 
-- **P5 — FE 全域收件匣 + 澄清頁呈現**
+- **P5 — 回答落地：描述 → 澄清 wiki 頁（builder 免疫）**
+  - 描述 answer → 附加到 collection 保留 path 的澄清 wiki 頁（忠實：quote＋answer 一節，不經 AI 重寫）；`result_ref` 記頁 path；status→answered。
+  - **builder 免疫**：maintainer/unfolder 跑 wiki 時用一層 guard 包住 `WikiFileStore`，拒絕對保留 path 的 write/delete/clear；WikiBrowser 與本功能的 append 用原始 store 可寫。
+
+- **P6 — FE 全域收件匣 + 澄清頁呈現**
   - 頂層「待釐清」inbox 頁（TanStack Query）：列 open 題（詞類一詞一列＋來源 doc、描述帶 quote），答／丟棄；權限＝可編輯 collection。
+  - answer / discard 的 HTTP 路由（薄 adapter，串 P4/P5 domain）。
   - Collection 開關的 FE 入口（Context Cards 或 collection 設定處）。
-  - 澄清 wiki 頁在既有 WikiBrowser 正常呈現。
-  - UI copy 不露內部名詞（i18n 台灣用語）。
+  - 澄清 wiki 頁在既有 WikiBrowser 正常呈現。UI copy 不露內部名詞（i18n 台灣用語）。
 
-- **P6 — 重跑語意 ＋ 邊界**
+- **P7 — 重跑語意 ＋ 邊界 ＋ gate**
   - 去重／丟棄再問（描述題限「新來源 doc」才重開）。
   - 邊界：doc/collection 刪除的 cascade、cap N、collection 無開關時 no-op、空語料、失敗安全。
   - 收尾：`ruff` / `ty`（whole-project）/ 100% coverage gate；FE `typecheck` + build。
+
+> 註：原 P4 依 CLAUDE.md flat-phase 拆規則拆成 P4（詞類→card）+ P5（描述→wiki），後續 phase 順延一個整數。
 
 ## 沿用既有機制（不重造輪子）
 

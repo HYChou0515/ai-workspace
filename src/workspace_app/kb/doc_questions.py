@@ -15,13 +15,15 @@ from typing import TYPE_CHECKING
 import msgspec
 from specstar import QB
 
-from ..resources.kb import DocQuestion
+from ..resources.kb import ContextCard, DocQuestion
 from .card_gen import DescriptionQuestionDraft, TermQuestionDraft
-from .context_cards import norm
+from .context_cards import derive_norm_keys, find_cards_by_key, norm
 
 if TYPE_CHECKING:
     from specstar import SpecStar
     from specstar.types import IResourceManager
+
+    from .answer_formatter import AnswerCardFormatter
 
 
 def plan_doc_questions(
@@ -139,6 +141,37 @@ def discard_question(spec: SpecStar, qid: str) -> None:
     data = rm.get(qid).data
     assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
     rm.update(qid, msgspec.structs.replace(data, status="discarded"))
+
+
+def land_term_answer(
+    spec: SpecStar, qid: str, *, answer: str, formatter: AnswerCardFormatter
+) -> str:
+    """Land a human's answer to a TERM question as a context card and mark the
+    question answered (#377 Q9/Q13). The answer is trusted — the ``formatter`` only
+    tidies it into a ``(title, body)``; the card is keyed by the question's term.
+    Create-or-update: an existing card for the term is overwritten in place rather
+    than duplicated. Returns the card id (also stored as the question's
+    ``result_ref`` for provenance)."""
+    rm = spec.get_resource_manager(DocQuestion)
+    q = rm.get(qid).data
+    assert isinstance(q, DocQuestion)  # narrow Struct|Unset for ty
+    title, body = formatter.format(term=q.term, answer=answer)
+    card = ContextCard(
+        collection_id=q.collection_id,
+        keys=[q.term],
+        norm_keys=derive_norm_keys([q.term]),
+        title=title,
+        body=body,
+    )
+    card_rm = spec.get_resource_manager(ContextCard)
+    existing = find_cards_by_key(spec, q.collection_id, q.term)
+    if existing:
+        card_id = existing[0][0]
+        card_rm.create_or_update(card_id, card)  # overwrite in place, not a duplicate
+    else:
+        card_id = card_rm.create(card).resource_id
+    answer_question(spec, qid, answer=answer, result_ref=card_id)
+    return card_id
 
 
 def add_description_question(

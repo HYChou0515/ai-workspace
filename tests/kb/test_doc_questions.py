@@ -2,17 +2,36 @@
 it can't confidently define a term (→ card) or follow a passage (→ wiki). Tests
 exercise the ``kb.doc_questions`` helper surface, not specstar internals."""
 
+from specstar import QB
+
 from workspace_app.kb.card_gen import DescriptionQuestionDraft, TermQuestionDraft
 from workspace_app.kb.doc_questions import (
     add_description_question,
     answer_question,
     discard_question,
+    land_term_answer,
     open_or_merge_term_question,
     open_questions_for_collections,
     plan_doc_questions,
 )
 from workspace_app.resources import make_spec
-from workspace_app.resources.kb import Collection, DocQuestion
+from workspace_app.resources.kb import Collection, ContextCard, DocQuestion
+
+
+class _FakeFormatter:
+    """Turns a term + the human's raw answer into a clean (title, body)."""
+
+    def format(self, *, term: str, answer: str) -> tuple[str, str]:
+        return (f"{term} (title)", f"def: {answer}")
+
+
+def _cards(spec, cid: str) -> list[ContextCard]:
+    rm = spec.get_resource_manager(ContextCard)
+    out = []
+    for r in rm.list_resources((QB["collection_id"] == cid).build()):
+        assert isinstance(r.data, ContextCard)
+        out.append(r.data)
+    return out
 
 
 def _collection(spec, name: str = "c") -> str:
@@ -143,6 +162,44 @@ def test_inbox_lists_only_open_questions_in_the_given_collections():
     )
     ids = [qid for qid, _ in open_questions_for_collections(spec, [a])]
     assert ids == [q_open]  # answered / discarded / other-collection all excluded
+
+
+def test_land_term_answer_creates_a_card_and_marks_answered():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="d1", question_text="?"
+    )
+    card_id = land_term_answer(spec, qid, answer="fourth metal layer", formatter=_FakeFormatter())
+
+    q = _get(spec, qid)
+    assert q.status == "answered"
+    assert q.answer == "fourth metal layer"
+    assert q.result_ref == card_id  # provenance points at the produced card
+
+    (card,) = _cards(spec, cid)
+    assert card.keys == ["M4"]  # keyed by the question's term
+    assert card.norm_keys == ["m4"]
+    assert card.title == "M4 (title)"  # AI-formatted from the human's answer
+    assert card.body == "def: fourth metal layer"
+
+
+def test_land_term_answer_updates_an_existing_card_for_the_term():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    existing = (
+        spec.get_resource_manager(ContextCard)
+        .create(ContextCard(collection_id=cid, keys=["M4"], norm_keys=["m4"], body="old"))
+        .resource_id
+    )
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="d1", question_text="?"
+    )
+    card_id = land_term_answer(spec, qid, answer="new def", formatter=_FakeFormatter())
+
+    assert card_id == existing  # updated in place, not duplicated
+    (card,) = _cards(spec, cid)
+    assert card.body == "def: new def"
 
 
 def test_plan_drops_term_questions_already_carded():
