@@ -11,11 +11,28 @@ from workspace_app.kb.collections import (
     resolve_profile_collections,
 )
 from workspace_app.resources import make_spec
-from workspace_app.resources.kb import Collection
+from workspace_app.resources.kb import Collection, SourceDoc
 
 
 def _coll(spec, name: str) -> str:
     return spec.get_resource_manager(Collection).create(Collection(name=name)).resource_id
+
+
+def test_source_doc_numeric_aggregates_stay_pushdown_eligible():
+    """The collections dashboard (`GET /kb/collections`) sums each collection's
+    doc `content_size` + `token_count` via `ForeignAggregate(Sum(...))`. Those
+    push down to a real GROUP BY only when the indexed field carries a declared
+    numeric `field_type` (specstar #406/#407); drop it and the aggregate
+    silently falls back to streaming every doc into Python — a prod-only perf
+    regression no other test would catch. Guard it here."""
+    spec = make_spec(default_user="u")
+    rm = spec.get_resource_manager(SourceDoc)
+    # indexed_fields is on the concrete ResourceManager, not the interface ty
+    # sees (same as exp_aggregate_by / event_handlers elsewhere).
+    fields = rm.indexed_fields  # ty: ignore[unresolved-attribute]
+    by_key = {(f.index_key or f.field_path): f for f in fields}
+    assert by_key["content_size"].field_type is int
+    assert by_key["token_count"].field_type is int
 
 
 def test_collection_ids_from_json_extracts_ids_in_order():
