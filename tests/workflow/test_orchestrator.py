@@ -635,6 +635,7 @@ async def test_prune_keeps_a_terminal_run_a_chat_still_points_at(spec_instance: 
         if data.status not in _active:
             break
     conv_rm.create(Conversation(item_id="ik", run_id=r1))  # a live chat still points at r1
+    conv_rm.create(Conversation(item_id="ik", run_id=None))  # a plain free chat alongside it
     r2 = await orch.start(slug="rca", item_id="ik", profile="echo", captured_user="u", chat_id="cB")
     await asyncio.sleep(0.05)
     ids = {
