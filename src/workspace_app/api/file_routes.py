@@ -136,13 +136,15 @@ def register_file_routes(
 
     @app.get("/a/{slug}/items/{item_id}/files")
     async def list_files(slug: str, item_id: str, prefix: str = "") -> list[_FileEntry]:
+        # #362: size comes from cheap metadata (a warm `walk` stat, or the cold
+        # snapshot record's inline size) — NEVER by reading each file's bytes, so
+        # a 600-file tree costs one listing, not 600 full-content downloads.
         investigation_id = locator.require_item(slug, item_id)
-        paths = await files.ls(investigation_id, prefix)
-        out: list[_FileEntry] = []
-        for p in sorted(paths):
-            data = await files.read(investigation_id, p)
-            out.append(_FileEntry(path=p, size=len(data), read_only=_is_readonly_path(p)))
-        return out
+        entries = await files.stat_all(investigation_id, prefix)
+        return [
+            _FileEntry(path=p, size=size, read_only=_is_readonly_path(p))
+            for p, size in sorted(entries)
+        ]
 
     @app.get("/a/{slug}/items/{item_id}/files/usage")
     async def workspace_files_usage(slug: str, item_id: str) -> _WorkspaceUsage:

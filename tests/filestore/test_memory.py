@@ -41,6 +41,19 @@ async def test_ls_empty_prefix_returns_all(fs: MemoryFileStore):
     assert sorted(await fs.ls("ws-1")) == ["/a", "/b"]
 
 
+async def test_stat_all_returns_path_and_size(fs: MemoryFileStore):
+    # #362: batch (path, size) so the file-tree endpoint needn't read bytes.
+    await fs.write("ws-1", "/a.txt", b"hello")
+    await fs.write("ws-1", "/sub/b.txt", b"world!")
+    assert sorted(await fs.stat_all("ws-1")) == [("/a.txt", 5), ("/sub/b.txt", 6)]
+
+
+async def test_stat_all_filters_by_prefix(fs: MemoryFileStore):
+    await fs.write("ws-1", "/src/a.py", b"aa")
+    await fs.write("ws-1", "/README", b"r")
+    assert await fs.stat_all("ws-1", "/src/") == [("/src/a.py", 2)]
+
+
 async def test_exists(fs: MemoryFileStore):
     await fs.write("ws-1", "/a", b"a")
     assert await fs.exists("ws-1", "/a")

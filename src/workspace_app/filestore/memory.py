@@ -53,6 +53,16 @@ class MemoryFileStore:
         async with self._lock:
             return [p for p in self._files.get(workspace_id, {}) if p.startswith(prefix)]
 
+    async def stat_all(self, workspace_id: str, prefix: str = "") -> list[tuple[str, int]]:
+        """#362: every file under ``prefix`` as ``(path, size)`` — the sizes are
+        already in hand (we hold the bytes), so no per-file read is needed."""
+        async with self._lock:
+            return [
+                (p, len(b))
+                for p, b in self._files.get(workspace_id, {}).items()
+                if p.startswith(prefix)
+            ]
+
     async def exists(self, workspace_id: str, path: str) -> bool:
         async with self._lock:
             return path in self._files.get(workspace_id, {})

@@ -203,6 +203,70 @@ async def test_warm_mkdir_and_rmdir():
         await files.rmdir(WS, "/d")  # gone → FileNotFoundError mapped to FileNotFound
 
 
+# ─── stat_all: batch (path, size) WITHOUT reading file bytes (#362) ─────
+
+
+class _CountingSandbox(MockSandbox):
+    """A MockSandbox that counts full-content `download` calls, so a test can
+    assert that listing a file tree never reads any file's bytes (#362)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.download_calls = 0
+
+    async def download(self, handle: SandboxHandle, remote_path: str) -> bytes:
+        self.download_calls += 1
+        return await super().download(handle, remote_path)
+
+
+async def test_stat_all_warm_reports_sizes_from_walk_without_reading_bytes():
+    """#362: warm listing takes sizes straight from `walk` (which stats, never
+    reads) — so building a 600-file tree does zero full-content downloads."""
+    fs = MemoryFileStore()
+    sb = _CountingSandbox()
+    handle: dict[str, SandboxHandle | None] = {"h": None}
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=lambda _ws: handle["h"])
+    handle["h"] = await sb.create(SandboxSpec())
+    await files.write(WS, "/a.txt", b"hello")  # 5 bytes
+    await files.write(WS, "/sub/b.txt", b"world!")  # 6 bytes
+    entries = await files.stat_all(WS)
+    assert sorted(entries) == [("/a.txt", 5), ("/sub/b.txt", 6)]
+    assert sb.download_calls == 0  # never read any file's content
+
+
+async def test_stat_all_warm_honours_prefix():
+    fs = MemoryFileStore()
+    sb = _CountingSandbox()
+    handle: dict[str, SandboxHandle | None] = {"h": None}
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=lambda _ws: handle["h"])
+    handle["h"] = await sb.create(SandboxSpec())
+    await files.write(WS, "/a.txt", b"x")
+    await files.write(WS, "/sub/b.txt", b"yy")
+    assert await files.stat_all(WS, "/sub") == [("/sub/b.txt", 2)]
+    assert sb.download_calls == 0
+
+
+async def test_stat_all_cold_uses_store_batch():
+    """Cold (no live sandbox): sizes come from the durable store's own batch
+    ``stat_all`` — the snapshot metadata, no blob reads."""
+    files, fs, _sb, _h = await _wired()  # handle is None → cold
+    await files.write(WS, "/a.txt", b"hello")
+    await files.write(WS, "/sub/b.txt", b"world!")
+    assert sorted(await files.stat_all(WS)) == [("/a.txt", 5), ("/sub/b.txt", 6)]
+
+
+async def test_stat_all_cold_falls_back_to_zero_size_when_store_lacks_batch():
+    """An exotic store without a batch ``stat_all`` still lists — paths with an
+    unknown size of 0, and never a blob read (just ``ls``)."""
+
+    class _NoStatStore:
+        async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
+            return ["/x.txt", "/y.txt"]
+
+    files = WorkspaceFiles(_NoStatStore())  # ty: ignore[invalid-argument-type]
+    assert sorted(await files.stat_all(WS)) == [("/x.txt", 0), ("/y.txt", 0)]
+
+
 # ─── path normalization (./, /, bare all map to same key) ──────────────
 
 
