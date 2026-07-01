@@ -169,6 +169,17 @@ async def test_file_ops_exists_delete_mkdir_rmdir_rename(sandbox: DockerSandbox)
         await sandbox.rename(h, "/nope", "/x")
 
 
+async def test_readiness_marker_is_out_of_workspace_366(sandbox: DockerSandbox):
+    # #366: mark_ready flips is_ready, and the marker (container root /.ready)
+    # is OUTSIDE /workspace, so walk never lists it.
+    h = await sandbox.create(SandboxSpec(image=_IMAGE))
+    assert await sandbox.is_ready(h) is False
+    await sandbox.mark_ready(h)
+    assert await sandbox.is_ready(h) is True
+    await sandbox.upload(h, b"x", "/a.txt")
+    assert {e.path for e in await sandbox.walk(h, "/")} == {"/a.txt"}  # no /.ready
+
+
 def test_parse_find_output_skips_blank_lines():
     """find's output may include a trailing newline; _parse_find_output
     has to skip the resulting empty record without throwing."""

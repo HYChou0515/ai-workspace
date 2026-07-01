@@ -180,6 +180,21 @@ async def test_kill_removes_workspace_dir(sandbox: LocalProcessSandbox):
         await sandbox.exec(h, ["echo", "x"])
 
 
+async def test_readiness_marker_lives_outside_workspace_366(sandbox: LocalProcessSandbox, tmp_path):
+    # #366: mark_ready flips is_ready; the marker sits at the SANDBOX ROOT
+    # ($root/id/.ready), a sibling of the workspace — so walk/exists never see
+    # it and it can't clutter the file tree.
+    h = await sandbox.create(SandboxSpec())
+    assert await sandbox.is_ready(h) is False
+    await sandbox.mark_ready(h)
+    assert await sandbox.is_ready(h) is True
+    assert (tmp_path / h.id / ".ready").is_file()  # sandbox root
+    assert not (tmp_path / h.id / "root" / ".ready").exists()  # not the workspace
+    await sandbox.upload(h, b"x", "/a.txt")
+    assert [e.path for e in await sandbox.walk(h, "/")] == ["/a.txt"]  # no /.ready
+    assert await sandbox.exists(h, "/.ready") is False
+
+
 @pytest.mark.parametrize("op_name", ["exec", "upload", "download", "kill"])
 async def test_op_on_unknown_handle_raises(sandbox: LocalProcessSandbox, op_name: str):
     fake = SandboxHandle(id="not-real")

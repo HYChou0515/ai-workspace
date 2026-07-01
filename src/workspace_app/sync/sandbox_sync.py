@@ -21,7 +21,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from ..filestore.protocol import FileStore
-from ..sandbox.protocol import Sandbox, SandboxHandle
+from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound
 from .ignore import DEFAULT_IGNORES, should_ignore
 
 
@@ -70,17 +70,36 @@ class SandboxSync:
             for e in await self._sb.walk(handle, "/")
             if not should_ignore(e.path, self._ignores, e.size)
         }
+        # #366: mark the sandbox authoritative AFTER the restore completes. The
+        # marker lives OUTSIDE the workspace (see Sandbox.mark_ready), so it is
+        # never walked/tracked/mirrored. Written last so a crash mid-restore
+        # leaves it absent → the mirror skips a half-restored dir instead of
+        # trusting its (incomplete) file set.
+        await self._sb.mark_ready(handle)
         return n
 
     async def mirror(self, workspace_id: str, handle: SandboxHandle) -> int:
         """PULL the live sandbox into the snapshot: copy files whose `version`
         changed since the last mirror, and delete snapshot files the sandbox no
-        longer has (a complete, deletion-aware mirror). Returns how many paths
-        were written or deleted."""
+        longer has. Returns how many paths were written or deleted.
+
+        #366: UPLOADS are always safe (add/update never loses data) and run
+        unconditionally. DELETIONS are honoured only when the sandbox is a
+        complete, authoritative state — `is_ready` holds BEFORE AND AFTER the
+        walk. A teardown drops readiness FIRST (unlinks the out-of-workspace
+        marker before rmtree), so a mid-walk reap is caught by the second check;
+        a not-yet-restored (empty/partial) sandbox is not ready at all. A
+        vanished sandbox (walk raises SandboxNotFound) is a clean skip — nothing
+        to mirror, and certainly nothing to delete."""
+        try:
+            ready_before = await self._sb.is_ready(handle)
+            entries = await self._sb.walk(handle, "/")
+        except SandboxNotFound:
+            return 0  # sandbox gone (reaped) → skip; the snapshot is the archive
         prev = self._versions.get(workspace_id, {})
         seen: dict[str, str] = {}
         n = 0
-        for entry in await self._sb.walk(handle, "/"):
+        for entry in entries:
             if should_ignore(entry.path, self._ignores, entry.size):
                 continue
             seen[entry.path] = entry.version
@@ -92,9 +111,19 @@ class SandboxSync:
                 await self._sb.download_to_file(handle, entry.path, tmp)
                 await self._fs.write_from_path(workspace_id, entry.path, tmp, None)
             n += 1
-        for path in prev:
-            if path not in seen and await self._fs.exists(workspace_id, path):
-                await self._fs.delete(workspace_id, path)
-                n += 1
+        if ready_before and await self._ready_after(handle):
+            for path in prev:
+                if path not in seen and await self._fs.exists(workspace_id, path):
+                    await self._fs.delete(workspace_id, path)
+                    n += 1
         self._versions[workspace_id] = seen
         return n
+
+    async def _ready_after(self, handle: SandboxHandle) -> bool:
+        """Gate 2: re-check readiness after the walk. A teardown that began
+        during the walk dropped readiness first (or the whole sandbox is gone),
+        so a now-not-ready sandbox means 'do not trust this delete'."""
+        try:
+            return await self._sb.is_ready(handle)
+        except SandboxNotFound:
+            return False

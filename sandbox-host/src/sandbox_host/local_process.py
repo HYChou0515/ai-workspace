@@ -154,6 +154,13 @@ _WORKSPACE = "root"
 # Provisioned tools are made available here (a sibling of the workspace, so
 # they're outside what walk/sync see). MUST match the jail bootstrap's mount.
 _TOOLS = ".tools"
+# #366: readiness marker written (via mark_ready) once a restore completes; the
+# app's mirror only propagates DELETIONS while `is_ready` holds. It lives at the
+# SANDBOX ROOT — a sibling of the workspace, OUTSIDE it — so walk/sync/the file
+# tree never see it and a user can't fake it with a workspace file. Teardown must
+# unlink it FIRST (before rmtree) so a racing mirror sees an incomplete sandbox
+# and never wipes the durable snapshot.
+_READY_MARKER = ".ready"
 # Unjailed `python` shim dir (#350). The jail bootstrap (isolate=True) routes
 # raw `python`/`python3*` to the python-stack carrier from inside the chroot;
 # unjailed pods — the model our deployments actually run (uid + cgroup, no
@@ -268,8 +275,27 @@ class LocalProcessSandbox:
 
     async def kill(self, handle: SandboxHandle) -> None:
         path = self._require(handle)
+        # #366: unlink the `.ready` marker FIRST — rmtree's order is arbitrary, so
+        # relying on it to remove `.ready` before the files would leave a window
+        # where a racing mirror sees "ready + files half-gone" and wrongly
+        # propagates the deletions, wiping the durable snapshot. The marker sits at
+        # the sandbox root (outside the workspace).
+        await asyncio.to_thread((path / _READY_MARKER).unlink, missing_ok=True)
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
         del self._dirs[handle.id]
+
+    async def mark_ready(self, handle: SandboxHandle) -> None:
+        """#366: mark the sandbox authoritative once its restore completed. The
+        marker is an empty file at the sandbox ROOT (`$ROOT/id/.ready`), a sibling
+        of the workspace — so it is never walked/synced nor visible in the file
+        tree, and no user file can forge it."""
+        marker = self._require(handle) / _READY_MARKER
+        await asyncio.to_thread(marker.touch)
+
+    async def is_ready(self, handle: SandboxHandle) -> bool:
+        """#366: True once `mark_ready` ran (and the sandbox still exists)."""
+        marker = self._require(handle) / _READY_MARKER
+        return await asyncio.to_thread(marker.is_file)
 
     def _exec_argv(
         self, handle: SandboxHandle, cmd: list[str]
