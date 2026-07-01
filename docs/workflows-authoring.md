@@ -1,5 +1,9 @@
 # 撰寫 workflow
 
+> 這篇是 **dev 端**（Python `run.py`）的 how-to。想看三個擴充面（tool / skill / workflow）
+> × dev/user 的全景,以及 **user 端**用 `workflow.json` DSL 共創 workflow 的那條路,請先讀
+> [`extending-the-platform.md`](extending-the-platform.md)。
+
 撰寫 workflow 的實用指南——block catalog、各種慣例,以及讓你不會掉進「開機就 crash」迴圈的
 工具。想了解背後的*為什麼*（設計、decision/action 拆分、filesystem journal），請讀規格文件
 [`workflows.md`](workflows.md);這篇是 how-to。
