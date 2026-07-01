@@ -7,7 +7,7 @@ import type { ItemChatSummary } from "../api/itemChats";
  * `created_ms`, so it never reshuffles as sibling chats come and go. A chat with
  * no creation time yet (shouldn't normally happen) falls back to a plain "Chat".
  */
-function untitledChatLabel(created_ms: number | null): string {
+export function untitledChatLabel(created_ms: number | null): string {
   if (created_ms == null) return "Chat";
   const d = new Date(created_ms);
   const mm = String(d.getMinutes()).padStart(2, "0");

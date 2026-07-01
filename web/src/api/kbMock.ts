@@ -28,6 +28,12 @@ const collections = new Map<string, KbCollection>();
 const documents = new Map<string, KbDocument[]>();
 const docChunks = new Map<string, KbDocChunk[]>();
 const chats = new Map<string, KbChatDetail>();
+// #357: monotonic "revision time" per chat, bumped on create / rename / send —
+// stands in for specstar's updated_time so the list's recency sort is testable
+// without wall-clock nondeterminism.
+let chatClock = 1_000;
+const chatStamps = new Map<string, number>();
+const touchChat = (id: string) => chatStamps.set(id, (chatClock += 1));
 // collectionId → its context cards (#106), keyed by collection like documents.
 const contextCards = new Map<string, KbContextCard[]>();
 // jobId → a 自動 context card generation run (#175). The mock completes the run
@@ -84,6 +90,7 @@ function synthChunks(docId: string, body: string): KbDocChunk[] {
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function summarize(chat: KbChatDetail): KbChatSummary {
+  const firstUser = chat.messages.find((m) => m.role === "user" && m.content.trim());
   return {
     resource_id: chat.resource_id,
     title: chat.title,
@@ -91,6 +98,9 @@ function summarize(chat: KbChatDetail): KbChatSummary {
     message_count: chat.messages.length,
     owner: chat.owner ?? "default-user",
     shared_with: chat.shared_with ?? [],
+    // #357: label an unnamed chat by its first user message.
+    name_hint: firstUser ? firstUser.content.split(/\s+/).join(" ").slice(0, 60) : "",
+    updated_ms: chatStamps.get(chat.resource_id) ?? null,
   };
 }
 
@@ -350,17 +360,25 @@ export const mockKbApi: KbApi = {
   async createChat(title, collectionIds) {
     const chat: KbChatDetail = {
       resource_id: nextId("chat"),
-      title: title || "New chat",
+      title, // #357: unnamed = "" (labelled by name_hint), not a literal "New chat"
       collection_ids: collectionIds,
       messages: [],
     };
     chats.set(chat.resource_id, chat);
+    touchChat(chat.resource_id);
     return summarize(chat);
   },
   async getChat(chatId) {
     const chat = chats.get(chatId);
     if (!chat) throw new Error(`chat not found: ${chatId}`);
     return structuredClone(chat);
+  },
+  async renameChat(chatId, title) {
+    const chat = chats.get(chatId);
+    if (!chat) throw new Error(`chat not found: ${chatId}`);
+    chat.title = title; // #357: "" reverts to the name_hint label
+    touchChat(chatId);
+    return summarize(chat);
   },
   async deleteChat(chatId) {
     chats.delete(chatId);
@@ -554,6 +572,7 @@ export const mockKbApi: KbApi = {
     const chat = chats.get(args.chatId);
     if (!chat) throw new Error(`chat not found: ${args.chatId}`);
     chat.messages.push(blankUser(args.content));
+    touchChat(chat.resource_id); // #357: a new turn bumps recency
 
     const answer = "Per the knowledge base, reflow zone three drifted [1].";
     await delay(40);
