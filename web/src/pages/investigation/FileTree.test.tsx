@@ -448,3 +448,14 @@ describe("<FileTree /> external drop + paste (#364)", () => {
     expect(moveFile.mock.calls[0]![1]).toBe("/dst/notes.md");
   });
 });
+
+describe("<FileTree /> sticky header (#346)", () => {
+  it("pins the Files header to the top so it survives scrolling the tree", () => {
+    renderTree();
+    const header = screen.getByTestId("file-tree-header");
+    // Sticky-at-top keeps the title + action icons visible no matter how far
+    // the file list scrolls inside its container.
+    expect(header).toHaveStyle({ position: "sticky" });
+    expect(header.style.top).toMatch(/^0(px)?$/);
+  });
+});
