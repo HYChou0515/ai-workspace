@@ -34,6 +34,8 @@ sandbox。
 | `PUT /sandboxes/{rid}/file?path=` | raw octet-stream body | `204` | 上傳 |
 | `GET /sandboxes/{rid}/file?path=` | — | `200` octet-stream | 下載 |
 | `GET /sandboxes/{rid}/exists?path=` | — | `200 {exists: bool}` | 存在性檢查 |
+| `POST /sandboxes/{rid}/mark-ready` | — | `204` | 標記沙盒「已完整還原、可信」(#366) |
+| `GET /sandboxes/{rid}/ready` | — | `200 {ready: bool}` | 讀 ready 狀態(#366) |
 | `GET /sandboxes/{rid}/walk?root=` | — | `200 {entries: [{path,size,version}]}` | walk |
 | `DELETE /sandboxes/{rid}/file?path=` | — | `204` | 刪除 |
 | `POST /sandboxes/{rid}/mkdir` | `{path}` | `204` | mkdir |
@@ -45,6 +47,11 @@ sandbox。
 
 檔案以 **raw `application/octet-stream`** 的 body 傳遞(不是 base64-in-JSON)。
 路徑都是相對於 workspace root;開頭的 `/` 代表 workspace root。
+
+**Readiness marker(#366)**:`mark-ready`/`ready` 操作的是一個放在**沙盒根、workspace
+外**的空檔(`$root/{id}/.ready`,跟 workspace 平輩),所以它**不會**出現在 `walk`、檔案樹或
+`exists`,使用者也無法用同名檔偽造。app 的 mirror 只有在 `ready` 為真(walk 前後各驗一次)時才
+傳播刪除;沙盒回收(`DELETE /sandboxes/{rid}`)會**先**移除這個 marker 再 rmtree。
 
 這裡**沒有 `expose_port` endpoint**——v1 沒有 sandbox 內網路服務的路徑。client 的
 `expose_port` 會丟 `NotImplementedError`。`upload_file` /

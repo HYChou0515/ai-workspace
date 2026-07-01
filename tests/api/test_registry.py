@@ -272,9 +272,12 @@ async def test_enforce_quota_survives_zombie_and_flaky_items_366():
     for wid in ("ws-zombie", "ws-flaky", "ws-live"):
         s = await registry.session(wid)
         await registry.ensure_handle(s)
+        assert s.handle is not None
         await sandbox.upload(s.handle, b"x" * 100, "/big.bin")  # push over quota
         sessions[wid] = s
-    sandbox.zombie_ids.add(sessions["ws-zombie"].handle.id)
+    zombie_handle = sessions["ws-zombie"].handle
+    assert zombie_handle is not None
+    sandbox.zombie_ids.add(zombie_handle.id)
 
     recycled = await registry.enforce_quota(max_bytes=10)
 
