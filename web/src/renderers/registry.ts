@@ -20,6 +20,7 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 import { NotebookRenderer } from "./notebook/NotebookRenderer";
 import { PdfRenderer } from "./PdfRenderer";
 import { ReportRenderer } from "./report/ReportRenderer";
+import { JsonRenderer, JsonlRenderer, YamlRenderer } from "./structuredRenderers";
 import { TextRenderer } from "./TextRenderer";
 
 export type RendererProps = { path: string };
@@ -64,7 +65,12 @@ export const RENDERERS: RendererDef[] = [
     Component: ImageRenderer,
     editToggle: true,
   },
-  { key: "json", match: ext("json"), Component: TextRenderer, rawEditor: true },
+  // #361: structured-text types get a collapsible tree / per-record view with a
+  // preview⇄edit toggle (Edit flips to the byte editor). `.ndjson` shares the
+  // jsonl renderer; `.yml`/`.yaml` parse to the same tree as JSON.
+  { key: "json", match: ext("json"), Component: JsonRenderer, editToggle: true },
+  { key: "jsonl", match: ext("jsonl", "ndjson"), Component: JsonlRenderer, editToggle: true },
+  { key: "yaml", match: ext("yaml", "yml"), Component: YamlRenderer, editToggle: true },
   // Catch-all — keep last. Plain text in the byte editor (any file is editable).
   { key: "text", match: () => true, Component: TextRenderer, rawEditor: true },
 ];

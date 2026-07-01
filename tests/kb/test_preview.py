@@ -5,9 +5,11 @@ in the FE, not just text).
 The contract per type:
   - browser-native types (image / pdf / html) → "" — the FE renders
     them from the blob endpoint (<img> / <iframe>) instead.
-  - structured text (json / csv / tsv / xlsx / docx) → a markdown
-    projection the existing ReactMarkdown view renders (fenced code,
-    GFM tables, plain text).
+  - structured text (json / jsonl / csv / tsv / yaml) → the verbatim
+    decoded text (#361); the FE projects it into a collapsible tree /
+    data grid client-side, so no server-side markdown projection.
+  - office (xlsx / docx) → a markdown projection the existing
+    ReactMarkdown view renders (GFM tables, extracted text).
   - text/markdown/code → the decoded body (pre-existing behaviour).
   - undisplayable binary (pptx, unknown) → "" — FE shows the download
     notice; the chunks tab still shows what got indexed.
@@ -17,7 +19,7 @@ from __future__ import annotations
 
 import io
 
-from workspace_app.kb.preview import preview_markdown
+from workspace_app.kb.preview import is_structured_text, preview_markdown
 
 
 def _xlsx(sheets: dict[str, list[dict[str, object]]]) -> bytes:
@@ -41,49 +43,81 @@ def test_image_pdf_html_and_pptx_yield_empty_preview():
     assert preview_markdown(path="blob.bin", content_type="application/o", raw=b"\x00") == ""
 
 
-# ── structured text → markdown projections ──────────────────────────
+# ── structured text → verbatim decoded text (FE renders tree/grid, #361) ──
 
 
-def test_json_pretty_prints_into_a_fenced_block():
+def test_json_returns_verbatim_text_not_a_fenced_projection():
     raw = b'{"users":[{"name":"Bob"}]}'
     md = preview_markdown(path="u.json", content_type="application/json", raw=raw)
-    assert md.startswith("```json\n")
-    assert '"name": "Bob"' in md  # pretty-printed, not the minified original
-    assert md.rstrip().endswith("```")
+    # No server-side pretty-print / fence — the FE builds the tree from this.
+    assert md == '{"users":[{"name":"Bob"}]}'
+    assert "```" not in md
 
 
-def test_invalid_json_falls_back_to_raw_text_in_the_fence():
+def test_invalid_json_still_returns_the_raw_bytes_verbatim():
     md = preview_markdown(path="u.json", content_type="text/plain", raw=b"{broken")
-    assert "{broken" in md and md.startswith("```json\n")
+    assert md == "{broken"  # the FE's JsonTreeView degrades to raw text itself
 
 
-def test_csv_renders_a_gfm_table_with_headers():
-    raw = b"name,email\nBob,bob@x.com\nAmy,amy@x.com\n"
+def test_jsonl_returns_verbatim_text():
+    raw = b'{"a":1}\n{"b":2}\n'
+    md = preview_markdown(path="events.jsonl", content_type="text/plain", raw=raw)
+    assert md == '{"a":1}\n{"b":2}\n'
+
+
+def test_ndjson_is_treated_as_jsonl():
+    raw = b'{"a":1}\n'
+    md = preview_markdown(path="events.ndjson", content_type="application/octet-stream", raw=raw)
+    assert md == '{"a":1}\n'
+
+
+def test_csv_returns_verbatim_text_not_a_gfm_table():
+    raw = b"name,email\nBob,bob@x.com\n"
     md = preview_markdown(path="u.csv", content_type="text/csv", raw=raw)
-    assert "| name | email |" in md
-    assert "| --- | --- |" in md
-    assert "| Bob | bob@x.com |" in md
+    assert md == "name,email\nBob,bob@x.com\n"
+    assert "|" not in md  # no markdown table
 
 
-def test_tsv_renders_the_same_table_via_tab_delimiter():
+def test_tsv_returns_verbatim_text():
     raw = b"name\temail\nBob\tbob@x.com\n"
     md = preview_markdown(path="u.tsv", content_type="text/plain", raw=raw)
-    assert "| name | email |" in md and "| Bob | bob@x.com |" in md
+    assert md == "name\temail\nBob\tbob@x.com\n"
 
 
-def test_csv_caps_rows_and_says_how_many_were_omitted():
-    rows = "\n".join(f"r{i},v{i}" for i in range(500))
-    raw = f"a,b\n{rows}\n".encode()
-    md = preview_markdown(path="big.csv", content_type="text/csv", raw=raw)
-    assert "| r0 | v0 |" in md
-    assert "| r499 | v499 |" not in md  # capped
-    assert "300 more rows" in md  # 500 - 200 shown
+def test_yaml_returns_verbatim_text():
+    raw = b"name: widget\nqty: 3\n"
+    want = "name: widget\nqty: 3\n"
+    assert preview_markdown(path="c.yaml", content_type="text/plain", raw=raw) == want
+    assert preview_markdown(path="c.yml", content_type="application/octet-stream", raw=raw) == want
 
 
-def test_csv_cells_escape_pipes():
-    raw = b"a,b\nx|y,z\n"
-    md = preview_markdown(path="p.csv", content_type="text/csv", raw=raw)
-    assert r"x\|y" in md
+def test_structured_text_normalizes_crlf():
+    md = preview_markdown(path="u.csv", content_type="text/csv", raw=b"a,b\r\n1,2\r\n")
+    assert md == "a,b\n1,2\n"
+
+
+def test_is_structured_text_matches_by_extension_and_mime():
+    assert is_structured_text("x.json", "text/plain")
+    assert is_structured_text("x.jsonl", "text/plain")
+    assert is_structured_text("x.ndjson", "application/octet-stream")
+    assert is_structured_text("x.csv", "text/plain")
+    assert is_structured_text("x.tsv", "text/plain")
+    assert is_structured_text("x.yaml", "text/plain")
+    assert is_structured_text("x.yml", "text/plain")
+    # mime-only match (extension not recognised) still routes structured.
+    assert is_structured_text("noext", "application/json")
+    assert is_structured_text("noext", "text/csv")
+    # markdown / plain text are NOT structured (they keep link-rewriting).
+    assert not is_structured_text("x.md", "text/markdown")
+    assert not is_structured_text("x.txt", "text/plain")
+
+
+def test_xlsx_caps_rows_per_sheet_and_says_how_many_were_omitted():
+    raw = _xlsx({"Big": [{"n": i} for i in range(101)]})  # 101 rows, cap is 100
+    md = preview_markdown(path="big.xlsx", content_type="application/zip", raw=raw)
+    assert "| 0 |" in md
+    assert "| 100 |" not in md  # capped at 100 shown
+    assert "more rows" in md  # the omitted-rows notice (1 omitted)
 
 
 def test_xlsx_renders_one_table_per_sheet_with_sheet_headings():
