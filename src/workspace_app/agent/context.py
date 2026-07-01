@@ -144,6 +144,13 @@ class AgentToolContext:
     app_slug: str | None = None
     template_profile: str | None = None
 
+    # #380: the item's per-turn tri-state skill override (`attached_skill_prefs`),
+    # set by the API layer. `read_skill` refuses a skill pinned OFF here (a skill
+    # the user toggled off is also absent from the advertised index). Empty ⇒ every
+    # skill follows its profile/App default. A skill applied THIS turn (P3) is
+    # loaded regardless — apply overrides the off toggle.
+    skill_prefs: dict[str, bool] = field(default_factory=dict)
+
     # #112: the VLM describer the `read_image` tool uses to read a workspace
     # image. Set by the API layer from `get_kb_vlm`/`VlmDescriber` (shared with
     # KB ingestion). None when the deployment configured no VLM (`kb.vlm_llm`

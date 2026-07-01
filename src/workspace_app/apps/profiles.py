@@ -52,6 +52,7 @@ class ProfileManifest(Struct):
     in #234). Omitted ⇒ ``uploads``."""
     suggestions: list[Suggestion] = field(default_factory=list)
     tools: list[str] | UnsetType = UNSET  # ⊆ app.tools; UNSET → inherit all
+    skills: list[str] | UnsetType = UNSET  # ⊆ app.skills; UNSET → inherit all (#380)
     presets: list[str] | UnsetType = UNSET  # ⊆ app.picker; UNSET → inherit all
     default_preset: str = ""
     workflows: list[WorkflowManifest] = field(default_factory=list)

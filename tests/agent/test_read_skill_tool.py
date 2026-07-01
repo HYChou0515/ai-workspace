@@ -56,6 +56,24 @@ async def test_read_skill_returns_body_for_known_skill(isolated_apps: Path):
     assert body.startswith("# Fmt")
 
 
+async def test_read_skill_refuses_a_skill_toggled_off_for_the_item(isolated_apps: Path):
+    """#380: a skill the item turned OFF (``skill_prefs`` False) is not readable —
+    ``read_skill`` refuses it (defense in depth), matching its absence from the
+    advertised index. The refusal names the skill + points at the picker."""
+    from workspace_app.agent.tools import read_skill_impl
+
+    _profile_with_skill(isolated_apps, "rca", "local-lab", "report-format", "fmt", "# Fmt\n\nbody.")
+    ctx = AgentToolContext(
+        app_slug="rca",
+        template_profile="local-lab",
+        skill_prefs={"report-format": False},
+    )
+    out = await read_skill_impl(RunContextWrapper(ctx), "report-format")
+    assert "error" in out
+    assert "report-format" in out
+    assert "off" in out.lower()
+
+
 async def test_read_skill_unknown_name_returns_error_listing_available(isolated_apps: Path):
     from workspace_app.agent.tools import read_skill_impl
 

@@ -26,7 +26,7 @@ from msgspec import UNSET
 from ..resources import AgentConfig
 from .manifest import AppManifest, load_app_manifest
 from .profiles import load_profile, load_profile_appendix
-from .skills import SkillMeta, merged_profile_skills
+from .skills import SkillMeta, list_skills, merged_profile_skills
 
 if TYPE_CHECKING:
     from ..config.schema import Preset
@@ -201,6 +201,7 @@ class AppCatalog:
         profile: str,
         attached_preset: str | None = None,
         tool_prefs: Mapping[str, bool] | None = None,
+        skill_prefs: Mapping[str, bool] | None = None,
     ) -> AgentConfig:
         manifest = load_app_manifest(app_slug)
         prof = load_profile(app_slug, profile)
@@ -242,10 +243,29 @@ class AppCatalog:
             )
         preset = self._presets[chosen]
 
+        # skills — the profile narrows the App's declared shared skills to a
+        # default-on subset (else all declared are on); package `.skill/` skills
+        # are always default-on. A per-item tri-state `skill_prefs` override then
+        # sits on top (#380), mirroring `tool_prefs`: True forces a skill ON (even
+        # one the profile left default-off), False OFF, absent follows the default.
+        if prof.skills is not UNSET:
+            _subset_or_raise(
+                prof.skills, manifest.agent.skills, kind="skills", app=app_slug, profile=profile
+            )
+            default_shared = list(prof.skills)
+        else:
+            default_shared = list(manifest.agent.skills)
+        skill_metas = merged_profile_skills(app_slug, profile, manifest.agent.skills)
+        pkg_skill_names = [m.name for m in list_skills(app_slug, profile)]
+        default_on = sorted({*default_shared, *pkg_skill_names})
+        ceiling_names = [m.name for m in skill_metas]
+        enabled = set(_apply_tool_prefs(default_on, ceiling_names, skill_prefs))
+        skill_metas = [m for m in skill_metas if m.name in enabled]
+
         system_prompt = _compose_prompt(
             _read_app_text(app_slug, manifest.agent.prompt_file),
             load_profile_appendix(app_slug, profile),
-            merged_profile_skills(app_slug, profile, manifest.agent.skills),
+            skill_metas,
             preamble=_read_base_preamble() if manifest.function.workspace else "",
             sandbox_preamble=_read_sandbox_preamble() if manifest.function.sandbox else "",
         )

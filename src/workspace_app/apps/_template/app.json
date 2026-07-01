@@ -17,6 +17,7 @@
   "agent": {
     "prompt_file": "prompts/system.md",
     "tools": ["read_file", "write_file", "edit_file", "list_files", "exists", "delete_file"],
+    "skills": ["author-skill", "author-workflow"],
     "picker": [{ "preset": "qwen3-local", "name": "My App · Qwen3 (local)" }],
     "suggestions": [{ "label": "Summarise", "prompt": "Summarise this item." }]
   },

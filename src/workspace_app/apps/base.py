@@ -49,6 +49,15 @@ class WorkItemBase(Struct):
     Resolved by ``AppCatalog.resolve(tool_prefs=...)``; edited in the web tool
     picker."""
 
+    attached_skill_prefs: dict[str, bool] = field(default_factory=dict)
+    """Tier 1 — per-item tri-state *skill* override (#380), the skill sibling of
+    ``attached_tool_prefs``. Each entry pins one skill ON (``True``) or OFF
+    (``False``); an absent key follows the profile/App default. The override
+    ceiling is the App's declared shared skills + the profile's package skills, so
+    a force-ON can re-add an available-but-default-off skill. Empty (the default)
+    → every skill follows its default. Resolved by
+    ``AppCatalog.resolve(skill_prefs=...)``; edited in the web skills picker."""
+
     members: list[str] | UnsetType = UNSET
     """Tier 2 (opt-in) — collaborators. Redeclare as ``list[str]`` in the App's
     subclass to enable; left ``UNSET`` the App has no members concept."""
