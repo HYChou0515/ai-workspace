@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
@@ -198,6 +198,12 @@ class KbChatSummary(BaseModel):
     updated_ms: int | None = None
 
 
+class _RenameBody(BaseModel):
+    # #357: manual rename. "" clears the name → the chat drops back to being
+    # labelled by its first user message (name_hint).
+    title: str
+
+
 class EnhancementsInput(BaseModel):
     """Per-message enhancement override (Issue #33 follow-up). Any
     field set to a concrete value overrides the operator's retriever
@@ -315,6 +321,22 @@ def register_kb_chat_routes(
             raise HTTPException(status_code=403, detail="only the owner can do that")
         return chat, owner
 
+    def _summary(r: Any) -> KbChatSummary:
+        """Build a list/rename summary row from a fetched chat revision (#357):
+        name_hint labels an unnamed chat, updated_ms is the recency-sort key."""
+        data = r.data
+        assert isinstance(data, KbChat)
+        return KbChatSummary(
+            resource_id=r.info.resource_id,
+            title=data.title,
+            collection_ids=data.collection_ids,
+            message_count=len(data.messages),
+            owner=r.info.created_by,
+            shared_with=data.shared_with,
+            name_hint=first_user_snippet(data.messages),
+            updated_ms=dt_ms(r.info.updated_time),
+        )
+
     @app.get("/kb/agent")
     async def kb_agent_config_endpoint() -> list[dict]:
         """The KB chat picker (issue #32): every declared KB agent in
@@ -358,23 +380,7 @@ def register_kb_chat_routes(
         shared = chat_rm.list_resources((QB["shared_with"].contains(me)).build())
         # owned ∩ shared is empty by construction (the share endpoint forbids
         # the owner being in their own shared_with), so concatenation is enough.
-        out: list[KbChatSummary] = []
-        for r in [*owned, *shared]:
-            data = r.data
-            assert isinstance(data, KbChat)
-            out.append(
-                KbChatSummary(
-                    resource_id=r.info.resource_id,  # ty: ignore[unresolved-attribute]
-                    title=data.title,
-                    collection_ids=data.collection_ids,
-                    message_count=len(data.messages),
-                    owner=r.info.created_by,  # ty: ignore[unresolved-attribute]
-                    shared_with=data.shared_with,
-                    name_hint=first_user_snippet(data.messages),
-                    updated_ms=dt_ms(r.info.updated_time),  # ty: ignore[unresolved-attribute]
-                )
-            )
-        return out
+        return [_summary(r) for r in [*owned, *shared]]
 
     @app.get("/kb/chats/{chat_id}")
     async def get_chat(chat_id: str) -> dict:
@@ -393,6 +399,15 @@ def register_kb_chat_routes(
             # show a meaningful title for an unnamed thread instead of "Chat".
             "name_hint": first_user_snippet(data.messages),
         }
+
+    @app.patch("/kb/chats/{chat_id}")
+    async def rename_chat(chat_id: str, body: _RenameBody) -> KbChatSummary:
+        """Owner renames the thread (#357) — set its display title. "" clears the
+        name so the chat drops back to its name_hint label. Owner-only; 404 if
+        missing."""
+        chat, _ = _require_owner(chat_id)
+        chat_rm.update(chat_id, msgspec.structs.replace(chat, title=body.title))
+        return _summary(chat_rm.get(chat_id))
 
     @app.delete("/kb/chats/{chat_id}", status_code=204)
     async def delete_chat(chat_id: str) -> Response:

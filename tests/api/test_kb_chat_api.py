@@ -278,6 +278,62 @@ def test_unnamed_chat_without_user_turn_has_empty_name_hint():
     assert match["title"] == "" and match["name_hint"] == ""
 
 
+def _holder_client(holder: dict[str, str]) -> TestClient:
+    """App where owner (created_by) + current user both follow holder['id'] — flip
+    holder['id'] to act as a different user (owner-gate tests)."""
+    spec = make_spec(default_user=lambda: holder["id"])
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_KbRunner(),
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+        get_user_id=lambda: holder["id"],
+    )
+    return TestClient(app)
+
+
+def test_rename_sets_the_chat_title():
+    """#357: manual rename sets a real display title that wins over name_hint."""
+    client = _client(_KbRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
+
+    out = client.patch(f"/kb/chats/{cid}", json={"title": "Q3 reflow review"})
+    assert out.status_code == 200
+    assert out.json()["title"] == "Q3 reflow review"
+
+    match = next(c for c in client.get("/kb/chats").json() if c["resource_id"] == cid)
+    assert match["title"] == "Q3 reflow review"
+
+
+def test_rename_is_owner_only_and_404s_for_a_missing_chat():
+    """#357: only the owner can rename their thread; a missing id is a 404."""
+    holder = {"id": "alice"}
+    client = _holder_client(holder)
+    cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
+
+    holder["id"] = "bob"  # a share recipient (or stranger) cannot rename
+    assert client.patch(f"/kb/chats/{cid}", json={"title": "hijack"}).status_code == 403
+
+    holder["id"] = "alice"
+    assert client.patch("/kb/chats/ghost", json={"title": "x"}).status_code == 404
+
+
+def test_rename_to_empty_reverts_to_name_hint():
+    """#357: clearing the title (title="") is allowed and drops the chat back to
+    being labelled by its first user message."""
+    client = _client(_KbRunner())
+    cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "reflow void investigation"})
+    client.patch(f"/kb/chats/{cid}", json={"title": "Named"})
+
+    out = client.patch(f"/kb/chats/{cid}", json={"title": ""})
+    assert out.status_code == 200
+    body = out.json()
+    assert body["title"] == "" and body["name_hint"] == "reflow void investigation"
+
+
 def test_send_message_streams_and_persists_answer_with_citations():
     runner = _KbRunner()
     client = _client(runner)
