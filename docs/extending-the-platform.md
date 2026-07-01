@@ -364,9 +364,9 @@ workflow,**不是** specstar resource)。FE 的 **Workflows 面板**(`WorkflowsM
 AgentPanel)每列一個 **Run** + 下載／匯入;使用者按 Run,既有的 Run 端點／orchestrator／journal／
 gate 機制原樣把它跑起來。
 
-**一個 interpreter 服務兩層**:一個 *package* workflow 可以是 `run.py`(trusted Python)**或**
-`workflow.json`(被 interpret)。所以 **promote = 把 json 複製進 profile**(免 transpile,正如
-skill promote 就是複製 `SKILL.md`),再補一行 `_profile.json` 條目。
+當一個 user workflow 穩定了,dev 可以把它**升格**成 profile 內建(免 transpile,因為同一個
+interpreter 也跑 package 端的 `workflow.json`)——步驟見下面
+[〈把 user 的 `workflow.json` 升格為 profile 內建〉](#promote-workflow-json)。
 
 **細節**:[`workflows.md`](workflows.md) §22、[`plan-issue-323.md`](plan-issue-323.md)。
 
@@ -395,10 +395,29 @@ skill promote 就是複製 `SKILL.md`),再補一行 `_profile.json` 條目。
 
 - **skill** → dev 把資料夾 commit 進 `apps/<slug>/profiles/<profile>/.skill/<name>/`。v1 只帶
   `SKILL.md` 本體,不帶掛載的 `references/` / `scripts/`。
-- **workflow** → dev 把 `workflow.json` 複製進 profile 的 `workflows/<id>/` 並補一行
-  `_profile.json` 條目(免 transpile)。
 - **skill 的 script** → 當它需要自訂依賴或值得驗證後重用,dev 把它**升格成 tool-package**
   (見上面 Tool 段)。
+
+### 把 user 的 `workflow.json` 升格為 profile 內建 {#promote-workflow-json}
+
+**同一個 trusted interpreter 服務兩層**:一個 *package* workflow 可以是 `run.py`(trusted
+Python)**或** `workflow.json`(被 interpret)。所以升格**免 transpile**——就是把資料檔搬進 repo:
+
+1. **拿到 json** — 從 FE 的 Workflows 面板 **Download**,或直接取
+   `<workspace>/.workflows/<id>.json`。
+2. **放進 profile** — 落在 `apps/<app>/profiles/<profile>/workflows/<id>/workflow.json`,也就是
+   同名 `run.py` 會住的**同一個資料夾**(資料夾名 = workflow id)。內容原封不動,**不必改寫成
+   Python**。
+3. **在 `_profile.json` 宣告它** — 加一條 `workflows: [...]` 條目(id、title、phases…),跟任何
+   package workflow 一樣。v1 的 discovery 是**宣告驅動**的,Run picker 讀 `_profile.json`;所以
+   「升格 = 丟 json **加** 補一行條目」。(不必改 `_profile.json` 的自描述 drop-in 掃描是 v2
+   follow-up。)
+4. **重啟** — 開機時 `discovery.load_run_callable(app, profile, id)` 解析這個 id:**先找
+   `workflows/<id>/workflow.json`,有就交給 interpreter**,沒有才 fall 回 `run.py`——**兩者同時
+   存在時 JSON 勝**(#323 Q6)。開機與 CI 的 bundled-clean gate 會用 `validate_workflow_profiles`
+   驗證這份 DSL(schema／phase 一致),壞掉就 fail-loud。
+
+現成的活範例:`apps/playground/profiles/dsl/`(`_profile.json` + `workflows/file-uploads/workflow.json`)。
 
 ---
 
