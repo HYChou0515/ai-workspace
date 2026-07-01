@@ -119,6 +119,7 @@ function Switcher() {
           ))}
           <div style={{ height: 1, background: "var(--paper-3)", margin: "6px 0" }} />
           <FixedLink to="/kb" icon="layers" label="Knowledge base" pathname={pathname} />
+          <FixedLink to="/clarifications" icon="chat" label={t("docq.title")} pathname={pathname} />
           <FixedLink to="/diagnostics" icon="sparkle" label="Diagnostics" pathname={pathname} />
         </div>
       )}

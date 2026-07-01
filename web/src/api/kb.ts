@@ -397,6 +397,22 @@ export type KbCardGenStatus = {
 /** #175 — the tallies returned by committing a run's accepted proposals. */
 export type KbCardGenCommit = { created: number; updated: number; skipped: number };
 
+/** #377 — one open clarification question in the global inbox. A `term` question
+ * carries `term` + `source_doc_ids` (deduped across docs) and becomes a context
+ * card when answered; a `description` question carries `source_doc_id` + `quote`
+ * and lands on the collection's clarification wiki page. */
+export type KbDocQuestion = {
+  id: string;
+  collection_id: string;
+  kind: "term" | "description";
+  status: string;
+  question_text: string;
+  term: string;
+  source_doc_ids: string[];
+  source_doc_id: string;
+  quote: string;
+};
+
 export interface KbApi {
   /** The KB agent picker (issue #32): an ARRAY of {name, model,
    * suggestions}. FE renders a dropdown; first entry is the default. */
@@ -551,6 +567,15 @@ export interface KbApi {
   reviewCardGen(jobId: string, proposals: KbProposedCard[]): Promise<KbCardGenStatus>;
   /** Commit the run's accepted proposals to real cards; returns the tallies. */
   commitCardGen(jobId: string): Promise<KbCardGenCommit>;
+
+  /** #377: the global "待釐清" inbox — every open clarification question the
+   * digest raised across collections. */
+  getDocQuestions(): Promise<KbDocQuestion[]>;
+  /** #377: answer a question — a term becomes a context card, a description a
+   * clarification-page section. Returns the produced result_ref. */
+  answerDocQuestion(id: string, answer: string): Promise<string>;
+  /** #377: discard a misclassified / irrelevant question. */
+  discardDocQuestion(id: string): Promise<void>;
 
   listChats(): Promise<KbChatSummary[]>;
   createChat(title: string, collectionIds: string[]): Promise<KbChatSummary>;
@@ -886,6 +911,28 @@ export const realKbApi: KbApi = {
   async commitCardGen(jobId) {
     const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}/commit`;
     return (await ok(await apiFetch(url, { method: "POST" }), "commit card gen")).json();
+  },
+
+  async getDocQuestions() {
+    return (await ok(await apiFetch("/kb/doc-questions"), "list doc questions")).json();
+  },
+  async answerDocQuestion(id, answer) {
+    const resp = await ok(
+      await apiFetch(`/kb/doc-questions/${encodeURIComponent(id)}/answer`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ answer }),
+      }),
+      "answer doc question",
+    );
+    const out: { result_ref: string } = await resp.json();
+    return out.result_ref;
+  },
+  async discardDocQuestion(id) {
+    await ok(
+      await apiFetch(`/kb/doc-questions/${encodeURIComponent(id)}/discard`, { method: "POST" }),
+      "discard doc question",
+    );
   },
 
   async listChats() {
