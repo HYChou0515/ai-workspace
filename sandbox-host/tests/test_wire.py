@@ -76,6 +76,13 @@ async def test_exists_reflects_uploaded_file(client):
     }
 
 
+async def test_mark_ready_then_ready_roundtrip_366(client):
+    rid = await _create(client)
+    assert (await client.get(f"/sandboxes/{rid}/ready")).json() == {"ready": False}
+    assert (await client.post(f"/sandboxes/{rid}/mark-ready")).status_code == 204
+    assert (await client.get(f"/sandboxes/{rid}/ready")).json() == {"ready": True}
+
+
 async def test_walk_lists_files_with_versions(client):
     rid = await _create(client)
     await client.put(f"/sandboxes/{rid}/file", params={"path": "/dir/a.txt"}, content=b"aaa")

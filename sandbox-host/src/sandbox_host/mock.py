@@ -23,6 +23,8 @@ def _version(data: bytes) -> str:
 class MockSandbox:
     def __init__(self) -> None:
         self._fs: dict[str, dict[str, bytes]] = {}
+        # #366: readiness kept outside the file store so it never shows in walk.
+        self._ready: set[str] = set()
 
     def _require(self, handle: SandboxHandle) -> dict[str, bytes]:
         if handle.id not in self._fs:
@@ -37,6 +39,15 @@ class MockSandbox:
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)
         del self._fs[handle.id]
+        self._ready.discard(handle.id)
+
+    async def mark_ready(self, handle: SandboxHandle) -> None:
+        self._require(handle)
+        self._ready.add(handle.id)
+
+    async def is_ready(self, handle: SandboxHandle) -> bool:
+        self._require(handle)
+        return handle.id in self._ready
 
     async def exec(
         self,

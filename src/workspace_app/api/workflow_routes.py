@@ -23,6 +23,7 @@ from ..resources import Conversation
 from ..workflow.handle import WorkflowHandle
 from ..workflow.inputs import resolve_inputs
 from ..workflow.orchestrator import (
+    ActiveRunExists,
     NotAwaitingDecision,
     NotAwaitingSteer,
     WorkflowOrchestrator,
@@ -161,13 +162,23 @@ def register_workflow_routes(
 
     @app.post("/a/{slug}/items/{item_id}/run", status_code=status.HTTP_202_ACCEPTED)
     async def run_workflow_item(
-        slug: str, item_id: str, request: Request, workflow_id: str = Query("")
+        slug: str,
+        item_id: str,
+        request: Request,
+        workflow_id: str = Query(""),
+        chat_id: str = Query(""),
     ) -> dict:
         """#100 / topic-hub P8 (manual §3, §4, §14): launch a workflow. Opens a fresh
         WORKFLOW CHAT (a `Conversation` with `run_id`) the run streams into, and returns
         its `chat_id`. ``workflow_id`` selects which of the profile's workflows (§4);
         runs are per-chat, so several may run in parallel on one item (§3). Inputs come
         from the workspace (``MANIFEST.input_json``).
+
+        #343: with a ``chat_id`` the run instead TAKES OVER that existing chat — the one
+        the user prepared in — so the workflow's agent nodes inherit the chat's history
+        and the run streams into the same thread. The chat must have no active run
+        (else 409); once its previous run is terminal it may host another. Without a
+        ``chat_id`` the legacy behaviour holds (a fresh workflow chat is opened).
 
         #197: an external system triggers headlessly by uploading the workflow's input
         FILES in the SAME call — we communicate with workflows through the workspace, not
@@ -191,31 +202,38 @@ def register_workflow_routes(
             turn_engine.publish(
                 investigation_id, FileChanged(path=norm, by=get_user_id(), kind="written")
             )
-        # The chat overlay (manual §3): create it, start the run on it, then link the
-        # run_id back. This runs synchronously before the run task drives any turn, so
-        # the chat carries its run_id before it streams.
-        title = manifest.title or workflow_id or "Workflow"
-        chat_id = conv_rm.create(
-            Conversation(item_id=investigation_id, title=title, created_ms=now_ms())
-        ).resource_id
-        run_id = await workflow_orchestrator.start(
-            slug=slug,
-            item_id=investigation_id,
-            profile=profile,
-            captured_user=get_user_id(),
-            workflow_id=workflow_id,
-            chat_id=chat_id,
-        )
-        chat = conv_rm.get(chat_id).data
+        # The chat overlay (manual §3): resolve the chat, start the run on it, then link
+        # the run_id back. This runs synchronously before the run task drives any turn, so
+        # the chat carries its run_id before it streams. #343: with a chat_id, take over
+        # that existing chat; otherwise open a fresh workflow chat (the legacy path).
+        if chat_id:
+            target_chat_id, _conv = locator.require_chat(slug, item_id, chat_id)
+        else:
+            title = manifest.title or workflow_id or "Workflow"
+            target_chat_id = conv_rm.create(
+                Conversation(item_id=investigation_id, title=title, created_ms=now_ms())
+            ).resource_id
+        try:
+            run_id = await workflow_orchestrator.start(
+                slug=slug,
+                item_id=investigation_id,
+                profile=profile,
+                captured_user=get_user_id(),
+                workflow_id=workflow_id,
+                chat_id=target_chat_id,
+            )
+        except ActiveRunExists as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        chat = conv_rm.get(target_chat_id).data
         assert isinstance(chat, Conversation)
         chat.run_id = run_id
-        conv_rm.update(chat_id, chat)
+        conv_rm.update(target_chat_id, chat)
         activity.record(
             "workflow_started",
             "Started a workflow run",
-            {"item_id": investigation_id, "run_id": run_id, "chat_id": chat_id},
+            {"item_id": investigation_id, "run_id": run_id, "chat_id": target_chat_id},
         )
-        return {"run_id": run_id, "item_id": investigation_id, "chat_id": chat_id}
+        return {"run_id": run_id, "item_id": investigation_id, "chat_id": target_chat_id}
 
     @app.get("/a/{slug}/items/{item_id}/runs")
     async def list_workflow_runs(slug: str, item_id: str) -> list[dict]:

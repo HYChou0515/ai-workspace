@@ -274,10 +274,16 @@ export const workflowApi = {
     slug: string,
     itemId: string,
     workflowId = "",
+    chatId = "",
   ): Promise<{ run_id: string; item_id: string; chat_id: string }> {
     // topic-hub §3/§4: launching opens a workflow CHAT (returns its chat_id) and
-    // `workflow_id` picks which of the profile's workflows to run.
-    const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : "";
+    // `workflow_id` picks which of the profile's workflows to run. #343: with a
+    // `chatId`, the run TAKES OVER that existing chat (the one prepared in) instead
+    // of opening a fresh one — the returned chat_id is that same chat.
+    const params = new URLSearchParams();
+    if (workflowId) params.set("workflow_id", workflowId);
+    if (chatId) params.set("chat_id", chatId);
+    const qs = params.toString() ? `?${params}` : "";
     return jsonOrThrow(
       await apiFetch(`${base(slug, itemId)}/run${qs}`, { method: "POST" }),
       "start run",

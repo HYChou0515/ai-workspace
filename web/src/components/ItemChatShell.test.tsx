@@ -196,6 +196,108 @@ describe("ItemChatShell", () => {
     await waitFor(() => expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections"));
   });
 
+  it("launches a workflow IN the current chat (takeover) — dialog then startRun with chat_id (#343)", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true, run_id: null })]);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "collections",
+      title: "File uploads into collections",
+      description: "",
+      phases: [{ id: "classify", title: "Classify" }],
+      summary: "x",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
+    const start = vi
+      .spyOn(workflowApi, "startRun")
+      .mockResolvedValue({ run_id: "r1", item_id: "it", chat_id: "conversation:c1" });
+    render({ chatSwitcher: "auto", showCollections: false });
+    // A free chat with no active run offers an in-chat launch entry (distinct from the
+    // "+ New" picker, which opens a fresh chat).
+    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
+    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-collections"));
+    await screen.findByTestId("wf-launch-dialog");
+    expect(start).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByTestId("wf-launch-run"));
+    // Takeover: startRun is called WITH the current chat's id.
+    await waitFor(() =>
+      expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections", "conversation:c1"),
+    );
+  });
+
+  it("hides the in-chat launch entry while the chat's run is active (#343)", async () => {
+    stubChatApi([
+      summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" }),
+    ]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "running",
+      current_phase: "classify",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: null,
+      result: null,
+      pending_decision: null,
+      pending_steer: null,
+      workflow_id: "collections",
+    } as WorkflowRunDTO);
+    render({ chatSwitcher: "auto", showCollections: false });
+    // Once the running run loads, the in-chat launch entry is gone (a thread hosts one
+    // run at a time — you can't launch another over a live one).
+    await waitFor(() =>
+      expect(screen.queryByTestId("launch-in-chat-button")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("re-offers the in-chat launch after a run finished and relaunches in the same thread (#343)", async () => {
+    // A chat whose previous run is terminal (done) — the same thread may host another.
+    stubChatApi([
+      summary({ chat_id: "conversation:wf1", run_id: "r1", is_default: false, title: "Run" }),
+    ]);
+    vi.spyOn(workflowApi, "getRun").mockResolvedValue({
+      run_id: "r1",
+      item_id: "it",
+      captured_user: "u",
+      status: "done",
+      current_phase: "",
+      phases: [],
+      steps: [],
+      failures: [],
+      started: 1,
+      ended: 2,
+      result: null,
+      pending_decision: null,
+    } as WorkflowRunDTO);
+    vi.spyOn(workflowApi, "previewRun").mockResolvedValue({
+      workflow_id: "collections",
+      title: "File uploads into collections",
+      description: "",
+      phases: [],
+      summary: "x",
+      checks: [],
+      can_run: true,
+      has_preflight: true,
+    });
+    const start = vi
+      .spyOn(workflowApi, "startRun")
+      .mockResolvedValue({ run_id: "r2", item_id: "it", chat_id: "conversation:wf1" });
+    render({ chatSwitcher: "auto", showCollections: false });
+    // The launch entry is back on the finished chat; relaunching reuses its id (r1→r2).
+    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
+    fireEvent.click(await screen.findByTestId("launch-in-chat-workflow-collections"));
+    await screen.findByTestId("wf-launch-dialog");
+    const runBtn = await screen.findByTestId("wf-launch-run");
+    await waitFor(() => expect(runBtn).not.toBeDisabled());
+    fireEvent.click(runBtn);
+    await waitFor(() =>
+      expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections", "conversation:wf1"),
+    );
+  });
+
   it("nudges to pick collections when the hub has none, and opens the picker modal", async () => {
     stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
     stubCollectionsFile(); // 404 → empty selection

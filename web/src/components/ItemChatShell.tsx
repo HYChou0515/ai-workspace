@@ -27,6 +27,7 @@ import { ManageChatsModal } from "./ManageChatsModal";
 import { NewItemPicker } from "./NewItemPicker";
 import { WorkflowDecisionCard } from "./WorkflowDecisionCard";
 import { WorkflowLaunchDialog } from "./WorkflowLaunchDialog";
+import { WorkflowLaunchMenu } from "./WorkflowLaunchMenu";
 import { WorkflowProgress } from "./WorkflowProgress";
 
 /** What ItemChatShell feeds straight through to each chat's AgentPanel — the
@@ -281,12 +282,53 @@ function ItemChatPanel({
   // panel (run.data is undefined, the panel renders nothing).
   const declared = workflows.find((w) => w.id === run.data?.workflow_id)?.phases ?? [];
 
+  // #343: launch a workflow IN this chat (takeover), offered when the chat has no
+  // ACTIVE run — a free chat, or one whose previous run is terminal (relaunch in the
+  // same thread). The run reuses this chat, so its agent nodes inherit the prepared
+  // history; the returned chat_id is this same chat.
+  const qc = useQueryClient();
+  const [pendingLaunch, setPendingLaunch] = useState<string | null>(null);
+  const runActive =
+    !!chat.run_id &&
+    (run.data?.status === "pending" ||
+      run.data?.status === "running" ||
+      run.data?.status === "awaiting_human");
+  const canLaunch = !runActive && workflows.length > 0;
+  const launchHere = async () => {
+    if (pendingLaunch == null) return;
+    const workflowId = pendingLaunch;
+    setPendingLaunch(null);
+    await workflowApi.startRun(slug, itemId, workflowId, chat.chat_id);
+    // The chat's run_id now points at the new run — refetch the list + thread so the
+    // progress bar / run polling pick it up in place.
+    void qc.invalidateQueries({ queryKey: qk.itemChats(slug, itemId) });
+    void qc.invalidateQueries({ queryKey: qk.itemChat(slug, itemId, chat.chat_id) });
+  };
+
   return (
     <div
       className="item-chat-panel"
       data-testid="item-chat-panel"
       style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}
     >
+      {canLaunch && (
+        <div
+          className="item-chat-panel__launch"
+          data-testid="item-chat-panel__launch"
+          style={{ flex: "0 0 auto", padding: "4px 8px" }}
+        >
+          <WorkflowLaunchMenu workflows={workflows} onPick={setPendingLaunch} />
+        </div>
+      )}
+      {pendingLaunch != null && (
+        <WorkflowLaunchDialog
+          slug={slug}
+          itemId={itemId}
+          workflowId={pendingLaunch}
+          onConfirm={launchHere}
+          onClose={() => setPendingLaunch(null)}
+        />
+      )}
       {/* #331: the run's progress (collapsible bar → #283 detail) sits above the
           decision/steer cards and the feed (I1 甲) — the structural overview the
           retired WorkflowRunPanel used to give, restored for the multi-chat shell. */}

@@ -52,6 +52,10 @@ class _ExistsReply(BaseModel):
     exists: bool
 
 
+class _ReadyReply(BaseModel):
+    ready: bool
+
+
 class _FileEntryModel(BaseModel):
     path: str
     size: int
@@ -268,6 +272,15 @@ def make_host_app(
     async def exists(rid: str, path: str) -> _ExistsReply:
         ok = await sandbox.exists(SandboxHandle(id=rid), path)
         return _ExistsReply(exists=ok)
+
+    @app.post("/sandboxes/{rid}/mark-ready", status_code=204)
+    async def mark_ready(rid: str) -> None:
+        await sandbox.mark_ready(SandboxHandle(id=rid))
+
+    @app.get("/sandboxes/{rid}/ready")
+    async def is_ready(rid: str) -> _ReadyReply:
+        ok = await sandbox.is_ready(SandboxHandle(id=rid))
+        return _ReadyReply(ready=ok)
 
     @app.get("/sandboxes/{rid}/walk")
     async def walk(rid: str, root: str) -> _WalkReply:

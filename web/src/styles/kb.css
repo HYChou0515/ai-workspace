@@ -1783,6 +1783,17 @@
 .kb-chats__open:hover {
   border-color: var(--accent);
 }
+/* #357: inline rename input takes the open button's footprint while editing. */
+.kb-chats__rename {
+  font-size: var(--text-body-sm);
+  font-weight: 500;
+  color: var(--text-paper);
+  cursor: text;
+}
+.kb-chats__rename:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 .kb-chats__title {
   flex: 1;
   min-width: 0;
@@ -2236,6 +2247,10 @@
   padding: 10px 0;
   border-right: 1px solid var(--paper-3);
   background: var(--paper-1, transparent);
+  /* #346: the FileTree "Files" header is sticky; here the tree sits on the
+     white .kb-ide surface, so match the header background to it (the workspace
+     sidebar leaves the default --paper). */
+  --filetree-header-bg: var(--white);
 }
 .kb-ide__pane {
   display: flex;

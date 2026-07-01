@@ -321,9 +321,18 @@ export function FileTree({
 
   return (
     <div>
-      {/* "Files" header with the three actions: new file, new folder, upload. */}
+      {/* "Files" header with the three actions: new file, new folder, upload.
+          #346: sticky-at-top so the title + action icons stay visible however
+          far the tree scrolls inside its container. The opaque background is
+          container-tunable via --filetree-header-bg (KB IDEs sit on --white,
+          the workspace sidebar on --paper) so nothing is a see-through smear. */}
       <div
+        data-testid="file-tree-header"
         style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+          background: "var(--filetree-header-bg, var(--paper))",
           display: "flex",
           alignItems: "center",
           padding: "0 10px 4px 14px",

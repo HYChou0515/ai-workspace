@@ -106,6 +106,7 @@ nav:
   - 開發:
       - 開發者指南: development.md
       - 新增一個 App: adding-an-app.md
+      - 擴充平台（Tools / Skills / Workflows）: extending-the-platform.md
       - 撰寫 Workflow: workflows-authoring.md
       - 共創 Skills: skills-authoring.md
   - 功能手冊:
@@ -115,6 +116,7 @@ nav:
       - Sandbox Host 線上契約: sandbox-host-wire.md
       - sci-plot 科學繪圖: sci-plot.md
   - 部署與運維:
+      - 設定指南: configuration.md
       - 部署與客製化: deployment.md
   - 使用者手冊: user-guide.md
   - 設計計畫與歷史: design-history.md

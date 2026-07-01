@@ -188,6 +188,14 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # a full scan (issue #14: ~100 docs hung). content.size is indexed (as a
     # scalar `content_size`) so the collection cards can SUM blob sizes per
     # collection via one `exp_aggregate_by` instead of materialising every doc.
+    # Its `field_type=int` is load-bearing: the collections dashboard's
+    # `ForeignAggregate(Sum(content_size))` only pushes down to a real GROUP BY
+    # (vs streaming every doc into Python) when the field carries a declared
+    # numeric type (specstar #406/#407). `token_count` below is likewise `int`;
+    # `updated_time` (the `latest_doc` Max) is a meta column, auto-eligible.
+    # Adding `field_type` is registration-only (query-time push-down eligibility
+    # + result coercion) — the stored value is unchanged, so it needs NO Schema
+    # bump / re-extraction. A test guards this (test_collections.py).
     #
     # #263: `path` indexed so resolving a user-supplied filename → its
     # source-doc id is a query (exact or basename via `.contains`), the lookup
@@ -221,7 +229,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
         .step("v4", _reindex_only, to="v5", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
-            IndexableField("content.size", index_key="content_size"),
+            IndexableField("content.size", int, index_key="content_size"),
             IndexableField("path", str),
             IndexableField("token_count", int),
             IndexableField("quality_score", int),

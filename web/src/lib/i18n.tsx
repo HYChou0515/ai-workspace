@@ -555,6 +555,8 @@ export const messages = {
   },
   "wf.launch.required": { "zh-TW": "必要", en: "Required" },
   "wf.launch.advisory": { "zh-TW": "提醒", en: "Heads-up" },
+  // #343: launch a workflow in the CURRENT chat (takeover), after preparing in it.
+  "wf.launchHere.trigger": { "zh-TW": "在此對話執行", en: "Run in this chat" },
   "wf.view.steps": { "zh-TW": "步驟清單", en: "Steps" },
   "wf.view.timeline": { "zh-TW": "時間軸", en: "Timeline" },
   "wf.timeline.now": { "zh-TW": "回到現在", en: "Jump to now" },

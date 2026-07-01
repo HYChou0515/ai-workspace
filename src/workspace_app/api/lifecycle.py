@@ -31,6 +31,7 @@ from ..kernels import KernelService
 from ..observability.boot import boot_step
 from .registry import InvestigationRegistry
 from .sandbox_activity import register_sandbox_activity
+from .sandbox_address import register_sandbox_address
 
 # #227: how often the background index-sweeper recovers stuck fan-out runs, and
 # how long a run may go without progress before its missing batches are declared
@@ -202,6 +203,11 @@ def build_lifespan(
         # the #245 blob-GC lease below).
         if registry.activity is not None:
             register_sandbox_activity(spec)
+        # #366: register the shared per-item sandbox-address model (only when the
+        # registry uses it — the HTTP sandbox-host backend). Same post-apply
+        # timing so its CRUD routes are never emitted.
+        if registry.address is not None:
+            register_sandbox_address(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         # NOTE: the full capability round is deliberately NOT scheduled here

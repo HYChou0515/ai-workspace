@@ -65,6 +65,7 @@ from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore
+from .sandbox_address import IAddressStore, SpecstarAddressStore
 from .spa import SpaStaticFiles
 from .subagent_bridge import SubagentBridge
 from .tools_routes import register_tools_routes
@@ -318,13 +319,26 @@ def create_app(
     # shared volume across pods, so only it needs the GLOBAL activity heartbeat
     # that lets the idle reaper recycle a dir solely when no pod is using it.
     # Other backends (mock/http) own their own per-pod lifecycle → no heartbeat.
+    from ..sandbox.http_client import HttpSandbox
     from ..sandbox.local_process import LocalProcessSandbox
 
     activity_store: IActivityStore | None = (
         SpecstarActivityStore(spec) if isinstance(sandbox, LocalProcessSandbox) else None
     )
+    # #366: the HTTP sandbox-host mints a per-pod uuid handle on every `create`
+    # (it does NOT reattach by item id), so two pods diverge into two sandboxes
+    # for one item. The shared per-item address store makes them converge on ONE
+    # live sandbox (CAS publish + dead-handle rebuild). Local/mock already
+    # converge via the item-keyed shared dir, so they need no address store.
+    address_store: IAddressStore | None = (
+        SpecstarAddressStore(spec) if isinstance(sandbox, HttpSandbox) else None
+    )
     registry = InvestigationRegistry(
-        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, activity=activity_store
+        sandbox=sandbox,
+        default_spec=SandboxSpec(),
+        sync=sync,
+        activity=activity_store,
+        address=address_store,
     )
     # The single chokepoint for workspace file ops (agent tools + file routes):
     # routes to the live sandbox (single source of truth) when one is up for the

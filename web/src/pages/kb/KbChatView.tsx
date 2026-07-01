@@ -56,7 +56,9 @@ export function KbChatView({
     queryFn: () => client.getChat(mountChatId as string),
     enabled: mountChatId != null,
   });
-  const title = mountChatId == null ? "New chat" : chat?.title || "Chat";
+  // #357: label an unnamed thread by its first user message (name_hint) instead
+  // of a generic "Chat", matching the list. A not-yet-created chat stays "New chat".
+  const title = mountChatId == null ? "New chat" : chat?.title || chat?.name_hint || "Chat";
 
   const shareMut = useMutation({
     mutationFn: (v: { userId: string; on: boolean }) =>
@@ -83,8 +85,11 @@ export function KbChatView({
     // the promote path does. Shape mirrors kb/chat_export.py — only
     // {title, messages:[{role, content, tool_name}]}, not the raw
     // KbChat dump (citations/metrics don't round-trip).
+    // #357: fall back to the name_hint label so an unnamed thread exports with a
+    // meaningful title / filename instead of a bare "chat".
+    const name = chat.title || chat.name_hint || "chat";
     const payload = {
-      title: chat.title || "chat",
+      title: name,
       messages: chat.messages.map((m) => ({
         role: m.role,
         content: m.content,
@@ -95,7 +100,7 @@ export function KbChatView({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${(chat.title || "chat").replace(/[^\w.-]+/g, "-")}.chat.json`;
+    a.download = `${name.replace(/[^\w.-]+/g, "-")}.chat.json`;
     a.click();
     URL.revokeObjectURL(url);
   };

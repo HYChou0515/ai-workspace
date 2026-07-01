@@ -95,6 +95,76 @@ describe("KbChatsPage", () => {
     expect(onNewChat).toHaveBeenCalled();
   });
 
+  it("labels an unnamed chat by its first user message (#357)", async () => {
+    const client = {
+      ...mockKbApi,
+      listChats: async () => [
+        {
+          resource_id: "chat:u1",
+          title: "", // unnamed
+          collection_ids: [],
+          message_count: 2,
+          owner: "default-user",
+          shared_with: [],
+          name_hint: "why is my reflow oven drifting",
+          updated_ms: 1000,
+        },
+      ],
+    } as typeof mockKbApi;
+    render(<KbChatsPage client={client} />);
+    expect(
+      await screen.findByRole("button", { name: /^why is my reflow oven drifting/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("sorts chats by recency — most recently updated first (#357)", async () => {
+    // Titles chosen so alphabetical order (Apple < Zebra) DISAGREES with recency
+    // order (Zebra is newer) — proving the sort is by updated_ms, not by title.
+    const client = {
+      ...mockKbApi,
+      listChats: async () => [
+        { resource_id: "chat:old", title: "Apple", collection_ids: [], message_count: 1, owner: "default-user", shared_with: [], updated_ms: 1000 },
+        { resource_id: "chat:new", title: "Zebra", collection_ids: [], message_count: 1, owner: "default-user", shared_with: [], updated_ms: 9000 },
+      ],
+    } as typeof mockKbApi;
+    render(<KbChatsPage client={client} />);
+    await screen.findByRole("button", { name: /^Zebra/ });
+    const titles = screen.getAllByRole("button", { name: /^(Zebra|Apple)/ }).map((b) => b.textContent);
+    expect(titles[0]).toMatch(/^Zebra/); // newest first
+    expect(titles[1]).toMatch(/^Apple/);
+  });
+
+  it("renames a chat inline via the pencil, updating the row (#357)", async () => {
+    await mockKbApi.createChat("Draft title", []);
+    const renameSpy = vi.spyOn(mockKbApi, "renameChat");
+    render(<KbChatsPage client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Draft title/ }));
+    const input = await screen.findByRole("textbox");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Final title{Enter}");
+
+    await waitFor(() =>
+      expect(renameSpy).toHaveBeenCalledWith(expect.any(String), "Final title"),
+    );
+    expect(await screen.findByRole("button", { name: /^Final title/ })).toBeInTheDocument();
+  });
+
+  it("cancels an inline rename on Escape without calling the API (#357)", async () => {
+    await mockKbApi.createChat("Keep me", []);
+    const renameSpy = vi.spyOn(mockKbApi, "renameChat");
+    render(<KbChatsPage client={mockKbApi} />);
+
+    await userEvent.click(await screen.findByRole("button", { name: /Rename Keep me/ }));
+    const input = await screen.findByRole("textbox");
+    await userEvent.clear(input);
+    await userEvent.type(input, "Discarded{Escape}");
+
+    // the edit is abandoned: no API call, original label intact
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: /^Keep me/ })).toBeInTheDocument();
+  });
+
   it("separates owned chats from ones shared with me (read-only)", async () => {
     // current user is "default-user" (mock); this chat is owned by alice → shared.
     vi.spyOn(api, "getUsers").mockResolvedValue([
