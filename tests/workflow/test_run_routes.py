@@ -343,6 +343,26 @@ def test_relaunch_in_the_same_chat_after_the_previous_run_finished():
     assert conv.run_id == body["run_id"]
 
 
+def test_takeover_of_the_default_chat_leaves_a_fresh_item_level_default():
+    """#343: taking over the item's default chat (the common case — the user prepared
+    in it) doesn't strand the item-level endpoints; the next item-level use resolves a
+    FRESH free default, and the prepared chat becomes the workflow chat."""
+    app, _spec, item_id = _app()
+    with TestClient(app) as client:
+        _put_input(client, item_id, '{"n": 5}')
+        prep = client.post(f"{_base(item_id)}/chats", json={"title": "prep"}).json()["chat_id"]
+        assert next(c for c in client.get(f"{_base(item_id)}/chats").json())["is_default"]
+        run_id = client.post(f"{_base(item_id)}/run?chat_id={prep}").json()["run_id"]
+        _poll(client, item_id, run_id, "done")
+        # Item-level send still works — it get-or-creates a fresh free default.
+        assert client.post(f"{_base(item_id)}/messages", json={"content": "hi"}).status_code == 202
+        after = {c["chat_id"]: c for c in client.get(f"{_base(item_id)}/chats").json()}
+    assert after[prep]["run_id"] == run_id  # the prepared chat is now the workflow chat
+    new_default = next(c for c in after.values() if c["is_default"])
+    assert new_default["chat_id"] != prep  # a fresh free default replaced the taken-over one
+    assert new_default["run_id"] is None
+
+
 def test_two_parallel_runs_both_complete_sharing_the_filestore():
     """P8 (manual §3, §3.1): two runs proceed concurrently in one item (two chats);
     both reach done. Their shared note.json write is last-write-wins (no torn write)."""

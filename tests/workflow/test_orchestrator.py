@@ -612,6 +612,39 @@ async def test_keep_last_one_prunes_down_to_the_active_run(spec_instance: SpecSt
     assert ids == [keep]  # the prior terminal run was pruned, the new one kept
 
 
+async def test_prune_keeps_a_terminal_run_a_chat_still_points_at(spec_instance: SpecStar):
+    """#343: with same-thread relaunch a chat outlives its run and keeps showing that
+    run's result, so retention must never prune a run a live chat still references
+    (its ``run_id``) — even a terminal one over the keep_last_runs cap."""
+    from specstar import QB
+
+    from workspace_app.resources import Conversation
+
+    async def run(wf, inputs):
+        return {}
+
+    orch, _ = _orch(spec_instance, run, keep_last_runs=1)
+    rm = spec_instance.get_resource_manager(WorkflowRun)
+    conv_rm = spec_instance.get_resource_manager(Conversation)
+    _active = (RunStatus.PENDING, RunStatus.RUNNING, RunStatus.AWAITING_HUMAN)
+    r1 = await orch.start(slug="rca", item_id="ik", profile="echo", captured_user="u", chat_id="cA")
+    for _ in range(50):  # let r1 reach a terminal state so it would otherwise be prunable
+        await asyncio.sleep(0.01)
+        data = rm.get(r1).data
+        assert isinstance(data, WorkflowRun)
+        if data.status not in _active:
+            break
+    conv_rm.create(Conversation(item_id="ik", run_id=r1))  # a live chat still points at r1
+    r2 = await orch.start(slug="rca", item_id="ik", profile="echo", captured_user="u", chat_id="cB")
+    await asyncio.sleep(0.05)
+    ids = {
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["item_id"] == "ik").build())
+    }
+    assert r1 in ids  # referenced terminal run survived pruning
+    assert r2 in ids
+
+
 async def test_concurrency_cap_queues_excess(spec_instance: SpecStar):
     release_first = asyncio.Event()
 
