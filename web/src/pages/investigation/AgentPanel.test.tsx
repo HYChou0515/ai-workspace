@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../api";
@@ -106,6 +106,131 @@ describe("AgentPanel attach (#198)", () => {
     expect(composer.value).not.toContain("big.bin");
     await waitFor(() => expect(alertSpy).toHaveBeenCalled());
     expect(alertSpy.mock.calls[0][0]).toContain("size limit");
+  });
+});
+
+describe("AgentPanel image chip (#364)", () => {
+  function renderWithAgent(uploadDir = "uploads") {
+    const agent = stubAgent();
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir={uploadDir}
+        />
+      </DialogProvider>,
+    );
+    return agent;
+  }
+  const imageFile = () => new File([new Uint8Array(4)], "shot.png", { type: "image/png" });
+  function selectImage(file = imageFile()) {
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+  }
+  const sentText = (agent: AgentState) =>
+    (agent.send as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+
+  beforeEach(() => {
+    // happy-dom doesn't back object URLs — stub so thumbnails don't throw.
+    Object.assign(URL, { createObjectURL: () => "blob:mock", revokeObjectURL: () => {} });
+  });
+
+  it("shows a preview chip for an attached image and keeps the composer clean", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    renderWithAgent();
+    selectImage();
+    expect(await screen.findByTestId("image-chip")).toBeInTheDocument();
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    expect(composer.value).not.toContain("shot.png");
+  });
+
+  it("sends the image path in the message and clears the chip", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    const agent = renderWithAgent();
+    selectImage();
+    await screen.findByTestId("image-chip");
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "what is this" } });
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+    expect(sentText(agent)).toContain("/uploads/shot.png");
+    expect(sentText(agent)).toContain("what is this");
+    expect(screen.queryByTestId("image-chip")).not.toBeInTheDocument();
+  });
+
+  it("can send with only an image and no typed text", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    const agent = renderWithAgent();
+    selectImage();
+    await screen.findByTestId("image-chip");
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.keyDown(composer, { key: "Enter" });
+    await waitFor(() => expect(agent.send).toHaveBeenCalled());
+    expect(sentText(agent)).toContain("/uploads/shot.png");
+  });
+
+  it("removing the chip drops the image so an empty message won't send", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    const agent = renderWithAgent();
+    selectImage();
+    const chip = await screen.findByTestId("image-chip");
+    fireEvent.click(within(chip).getByRole("button"));
+    expect(screen.queryByTestId("image-chip")).not.toBeInTheDocument();
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.keyDown(composer, { key: "Enter" });
+    expect(agent.send).not.toHaveBeenCalled();
+  });
+
+  const fileClip = (file: File) => ({
+    items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+    files: [file],
+  });
+
+  it("pasting an image adds a preview chip", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    renderWithAgent();
+    const composer = screen.getByPlaceholderText("Ask the agent…");
+    fireEvent.paste(composer, {
+      clipboardData: fileClip(new File([new Uint8Array(3)], "image.png", { type: "image/png" })),
+    });
+    expect(await screen.findByTestId("image-chip")).toBeInTheDocument();
+  });
+
+  it("pasting a non-image file injects its path (not a chip)", async () => {
+    const upload = vi.spyOn(api, "uploadFile").mockResolvedValue();
+    renderWithAgent();
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.paste(composer, {
+      clipboardData: fileClip(new File(["x"], "data.csv", { type: "text/csv" })),
+    });
+    await waitFor(() => expect(composer.value).toContain("/uploads/data.csv"));
+    expect(screen.queryByTestId("image-chip")).not.toBeInTheDocument();
+    expect(upload).toHaveBeenCalled();
+  });
+
+  it("pasting plain text is not hijacked", async () => {
+    const upload = vi.spyOn(api, "uploadFile").mockResolvedValue();
+    renderWithAgent();
+    const composer = screen.getByPlaceholderText("Ask the agent…");
+    fireEvent.paste(composer, {
+      clipboardData: { items: [{ kind: "string", type: "text/plain", getAsFile: () => null }], files: [] },
+    });
+    expect(screen.queryByTestId("image-chip")).not.toBeInTheDocument();
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it("dropping a file stages it into the composer", async () => {
+    vi.spyOn(api, "uploadFile").mockResolvedValue();
+    renderWithAgent();
+    const form = document.querySelector("form") as HTMLFormElement;
+    fireEvent.drop(form, { dataTransfer: { items: [], files: [new File(["x"], "d.csv")] } });
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    await waitFor(() => expect(composer.value).toContain("/uploads/d.csv"));
   });
 });
 

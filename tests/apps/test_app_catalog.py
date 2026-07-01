@@ -173,6 +173,23 @@ def test_resolved_workspace_prompt_carries_base_preamble():
     assert "scope" in cfg.system_prompt.lower()
 
 
+def test_resolved_workspace_prompt_teaches_file_upload_affordances():
+    """#363: users routinely ask operational questions like "why can't I upload
+    my image?" The shared workspace preamble must positively describe how files
+    enter the chat — the `attach` button, dragging, and pasting — and that they
+    land in the workspace as ordinary files the agent can `list_files` /
+    `read_image`. (Paste is the #364 UX; the prompt leads it deliberately.)"""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    lowered = cfg.system_prompt.lower()
+    for gesture in ("attach", "drag", "paste"):
+        assert gesture in lowered
+    # the point of documenting uploads is that they become workspace files
+    assert "workspace" in lowered
+    assert "list_files" in cfg.system_prompt
+
+
 def test_rca_prompt_no_longer_endorses_exec_cat():
     """#241: with the hard tool-over-shell rule in the preamble, the RCA prompt
     must not still advertise `exec` as the way to `cat` a file — reading goes

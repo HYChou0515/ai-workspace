@@ -326,3 +326,125 @@ describe("<FileTree /> upload target", () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe("<FileTree /> external drop + paste (#364)", () => {
+  function spyService(over: Partial<FileService>): FileService {
+    return { ...investigationFileService("rca", "inv"), ...over };
+  }
+  function renderWith(svc: FileService, fileList: FileInfo[]) {
+    render(
+      <FileServiceProvider value={svc}>
+        <DialogProvider>
+          <FileTree files={fileList} dirs={[]} activePath={null} onOpen={vi.fn()} />
+        </DialogProvider>
+      </FileServiceProvider>,
+    );
+  }
+  const external = (files: File[]) => ({
+    dataTransfer: { types: ["Files"], files, items: [], getData: () => "" },
+  });
+  const body = () => screen.getByTestId("file-tree-body");
+
+  it("drops an external file onto the empty tree into the anchored folder", async () => {
+    const user = userEvent.setup();
+    const writeFile = vi.fn(async (_path: string, _body?: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir"));
+    fireEvent.drop(body(), external([new File(["x"], "up.png", { type: "image/png" })]));
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toBe("/mydir/up.png");
+  });
+
+  it("drops an external file onto a folder row into that folder", async () => {
+    const writeFile = vi.fn(async (_path: string, _body?: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    fireEvent.drop(screen.getByText("mydir"), external([new File(["x"], "up.csv")]));
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toBe("/mydir/up.csv");
+  });
+
+  it("recurses a dropped external folder, preserving structure", async () => {
+    const writeFile = vi.fn(async (_path: string, _body?: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
+    let handed = false;
+    const dir = {
+      isFile: false,
+      isDirectory: true,
+      name: "data",
+      createReader: () => ({
+        readEntries: (cb: (e: unknown[]) => void) => {
+          if (handed) return cb([]);
+          handed = true;
+          cb([
+            {
+              isFile: true,
+              isDirectory: false,
+              name: "n.csv",
+              file: (ok: (f: File) => void) => ok(new File(["x"], "n.csv")),
+            },
+          ]);
+        },
+      }),
+    };
+    fireEvent.drop(body(), {
+      dataTransfer: {
+        types: ["Files"],
+        files: [],
+        items: [{ kind: "file", webkitGetAsEntry: () => dir }],
+        getData: () => "",
+      },
+    });
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toBe("/data/n.csv");
+  });
+
+  it("pastes a file into the focused tree, into the anchored folder", async () => {
+    const user = userEvent.setup();
+    const writeFile = vi.fn(async (_path: string, _body?: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/mydir/a.md", size: 1 }]);
+    await user.click(screen.getByText("mydir"));
+    fireEvent.paste(body(), {
+      clipboardData: {
+        items: [
+          {
+            kind: "file",
+            type: "image/png",
+            getAsFile: () => new File(["x"], "image.png", { type: "image/png" }),
+          },
+        ],
+        files: [],
+      },
+    });
+    await waitFor(() => expect(writeFile).toHaveBeenCalled());
+    expect(writeFile.mock.calls[0]![0]).toMatch(/^\/mydir\/pasted-image-\d+\.png$/);
+  });
+
+  it("does not upload when plain text is pasted", () => {
+    const writeFile = vi.fn(async (_path: string, _body?: string | Blob | ArrayBuffer) => {});
+    renderWith(spyService({ writeFile }), [{ path: "/a.md", size: 1 }]);
+    fireEvent.paste(body(), {
+      clipboardData: { items: [{ kind: "string", type: "text/plain", getAsFile: () => null }], files: [] },
+    });
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("still moves an internally-dragged file (regression)", async () => {
+    const moveFile = vi.fn(async (_src: string, _dst: string) => {});
+    renderWith(spyService({ moveFile }), [
+      { path: "/notes.md", size: 1 },
+      { path: "/dst/x.md", size: 1 },
+    ]);
+    fireEvent.drop(screen.getByText("dst"), {
+      dataTransfer: {
+        types: ["application/x-rca-file"],
+        getData: (t: string) =>
+          t === "application/x-rca-file" ? JSON.stringify({ paths: ["/notes.md"] }) : "",
+        files: [],
+        items: [],
+      },
+    });
+    await waitFor(() => expect(moveFile).toHaveBeenCalled());
+    expect(moveFile.mock.calls[0]![0]).toBe("/notes.md");
+    expect(moveFile.mock.calls[0]![1]).toBe("/dst/notes.md");
+  });
+});
