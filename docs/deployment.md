@@ -79,6 +79,10 @@ uv run python -m workspace_app
 
 > 沒有 `web/dist` 也能跑，只是 `/` 不會有前端；API 仍可用。
 
+> **要調 `config.yaml` 的旋鈕**（換模型、sandbox `kind`、多 pod、環境變數…）看
+> **[設定指南 configuration.md](configuration.md)**——本頁專講「用程式/factory 換整塊實作」，
+> 設定指南專講「用 YAML 調哪顆旋鈕」。逐行參照在 [`configs/config.example.yaml`](../configs/config.example.yaml)。
+
 ---
 
 ## 3. 自訂進入點
