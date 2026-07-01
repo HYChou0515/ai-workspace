@@ -22,7 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 from msgspec import Struct, field
@@ -127,6 +127,13 @@ class SpecstarFileStore:
 
     async def ls(self, workspace_id: str, prefix: str = "") -> list[str]:
         return await asyncio.to_thread(self._ls_sync, workspace_id, prefix)
+
+    async def stat_all(self, workspace_id: str, prefix: str = "") -> list[tuple[str, int]]:
+        """Every file under ``prefix`` as ``(path, size)`` — the file-tree
+        endpoint's batch stat (#362). Sizes come from each record's inline
+        ``content.size`` metadata via a ``partial`` projection, so no blob is
+        ever restored just to size a file."""
+        return await asyncio.to_thread(self._stat_all_sync, workspace_id, prefix)
 
     async def exists(self, workspace_id: str, path: str) -> bool:
         return await asyncio.to_thread(self._files.exists, _fid(workspace_id, path))
@@ -255,6 +262,28 @@ class SpecstarFileStore:
             for r in rows
             if isinstance(r.data, WorkspaceFile) and r.data.path.startswith(prefix)
         ]
+
+    def _stat_all_sync(self, workspace_id: str, prefix: str) -> list[tuple[str, int]]:
+        # #362: `partial` projects ONLY path + the record's inline content.size,
+        # so `get_partial` reads just that metadata — a blob-backed file's bytes
+        # are never restored, and inline bytes are never decoded. One search +
+        # N small metadata reads, versus the old one-full-read-per-file.
+        rows = self._files.list_resources(
+            (QB["workspace_id"] == workspace_id).build(),
+            returns=["data"],
+            partial=["/path", "/content/size"],
+        )
+        out: list[tuple[str, int]] = []
+        for r in rows:
+            # `partial` returns a projected struct (path + content.size only);
+            # it's structurally a WorkspaceFile subset, so cast for the type
+            # checker — the runtime object carries exactly these two fields.
+            data = cast(WorkspaceFile, r.data)
+            size = data.content.size
+            assert isinstance(size, int)  # always set on a stored Binary
+            if data.path.startswith(prefix):
+                out.append((data.path, size))
+        return out
 
     def _delete_sync(self, workspace_id: str, path: str) -> None:
         rid = _fid(workspace_id, path)

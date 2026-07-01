@@ -184,6 +184,30 @@ class WorkspaceFiles:
             return [e.path for e in await sb.walk(h, prefix or "/")]
         return await self._fs.ls(workspace_id, prefix)
 
+    async def stat_all(self, workspace_id: str, prefix: str = "") -> list[tuple[str, int]]:
+        """Every file under ``prefix`` as ``(path, size)`` — WITHOUT reading a
+        single file's bytes (#362). The file-tree endpoint only needs each
+        file's size, and both routes already carry it as cheap metadata:
+
+        - **warm**: ``walk`` returns ``FileEntry(path, size)`` (a stat, never a
+          read), so a 600-file tree costs one directory traversal, not 600
+          full-content downloads.
+        - **cold**: the durable store exposes a batch ``stat_all`` (duck-typed,
+          like ``file_size`` / ``workspace_usage``) that reads each record's
+          inline ``size`` metadata, never restoring the offloaded blob.
+
+        A store without that optimisation (an exotic backend) degrades to paths
+        with an unknown size of 0 — still blob-free."""
+        prefix = _norm(prefix) if prefix else prefix
+        warm = await self._warm(workspace_id)
+        if warm is not None:
+            sb, h = warm
+            return [(e.path, e.size) for e in await sb.walk(h, prefix or "/")]
+        batch = getattr(self._fs, "stat_all", None)
+        if batch is not None:
+            return await batch(workspace_id, prefix)
+        return [(p, 0) for p in await self._fs.ls(workspace_id, prefix)]
+
     async def mkdir(self, workspace_id: str, path: str) -> None:
         path = _norm(path)
         warm = await self._warm(workspace_id)

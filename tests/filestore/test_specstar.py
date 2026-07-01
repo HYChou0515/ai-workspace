@@ -108,6 +108,49 @@ async def test_list_filters_by_prefix(store: SpecstarFileStore):
     assert sorted(await store.ls("ws1", prefix="/src/")) == ["/src/a.py", "/src/b.py"]
 
 
+async def test_stat_all_returns_path_and_size(store: SpecstarFileStore):
+    await store.write("ws1", "/a.txt", b"hello")
+    await store.write("ws1", "/sub/b.txt", b"world!")
+    assert sorted(await store.stat_all("ws1")) == [("/a.txt", 5), ("/sub/b.txt", 6)]
+
+
+async def test_stat_all_filters_by_prefix(store: SpecstarFileStore):
+    await store.write("ws1", "/src/a.py", b"aa")
+    await store.write("ws1", "/README", b"r")
+    assert await store.stat_all("ws1", "/src/") == [("/src/a.py", 2)]
+
+
+async def test_stat_all_unknown_workspace_is_empty(store: SpecstarFileStore):
+    assert await store.stat_all("nope") == []
+
+
+async def test_stat_all_reports_sizes_without_restoring_blobs(disk_store, tmp_path):
+    """#362 perf guard: sizes come from each record's inline metadata, so
+    listing a blob-backed file NEVER restores its offloaded bytes. A regression
+    to per-file reads would trip ``restore_binary`` and fail this."""
+    big = tmp_path / "big.bin"
+    big.write_bytes(b"x" * 5000)
+    await disk_store.write("ws1", "/a.txt", b"hello")  # 5, inline
+    await disk_store.write_from_path(
+        "ws1", "/big.bin", big, "application/octet-stream"
+    )  # 5000, blob-backed
+
+    calls: list[int] = []
+    orig = disk_store._files.restore_binary
+
+    def _spy(data):
+        calls.append(1)
+        return orig(data)
+
+    disk_store._files.restore_binary = _spy
+    try:
+        entries = await disk_store.stat_all("ws1")
+    finally:
+        disk_store._files.restore_binary = orig
+    assert sorted(entries) == [("/a.txt", 5), ("/big.bin", 5000)]
+    assert calls == []  # never restored a blob just to size it
+
+
 async def test_two_workspaces_are_isolated(store: SpecstarFileStore):
     await store.write("ws1", "/x", b"one")
     await store.write("ws2", "/x", b"two")

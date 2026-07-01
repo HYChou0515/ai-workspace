@@ -110,6 +110,43 @@ def test_usage_endpoint_quota_zero_surfaces_unlimited():
     assert client.get(f"/a/rca/items/{iid}/files/usage").json() == {"used": 0, "quota": 0}
 
 
+def test_list_files_reports_sizes_without_reading_file_contents():
+    # #362: GET /files must build the tree from cheap metadata (walk stat / the
+    # record's inline size), NEVER by reading each file's bytes. A regression to
+    # the old per-file read would trip the `read` spy below.
+    spec = make_spec()
+    fs = SpecstarFileStore(spec)
+    reads: list[str] = []
+    orig_read = fs.read
+
+    async def _spy_read(workspace_id: str, path: str) -> bytes:
+        reads.append(path)
+        return await orig_read(workspace_id, path)
+
+    fs.read = _spy_read  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=fs,
+        runner=ScriptedAgentRunner([]),
+    )
+    iid = register_rca_item(spec)
+    client = ApiTestClient(app)
+    client.put(f"/a/rca/items/{iid}/files/a.txt", content=b"hello")
+    client.put(f"/a/rca/items/{iid}/files/sub/b.txt", content=b"world!")
+    reads.clear()
+
+    resp = client.get(f"/a/rca/items/{iid}/files")
+    assert resp.status_code == 200
+    by_path = {e["path"]: e for e in resp.json()}
+    assert by_path["/a.txt"]["size"] == 5
+    assert by_path["/sub/b.txt"]["size"] == 6
+    # response shape is unchanged so the FE needn't move (#362 backend-only)
+    assert set(by_path["/a.txt"]) == {"path", "size", "read_only"}
+    assert by_path["/a.txt"]["read_only"] is False
+    assert reads == []  # listing read zero file contents
+
+
 def test_refresh_files_is_ok_when_cold(harness: Harness):
     # No sandbox up for this investigation → flush is a no-op, endpoint still OK.
     resp = harness.client.post(harness.wpath("/files/refresh"))
