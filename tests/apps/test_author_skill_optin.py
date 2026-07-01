@@ -58,6 +58,25 @@ def test_app_exposes_read_skill_and_save_skill_tools(slug: str):
     assert "read_skill" in names
 
 
+def test_skills_endpoint_reports_the_tristate_pref_label():
+    """A stored ``attached_skill_prefs`` value surfaces on the picker as its
+    ``on`` / ``off`` label (and flips ``effective``) — the twin of the tool
+    picker's forced-off row (#380). ``follow`` is the absent-key case the
+    across-sources test already covers."""
+    from tests.api.conftest import register_rca_item
+
+    app, spec = _app(_Capture())
+    client = TestClient(app)
+    off = register_rca_item(spec, attached_skill_prefs={"author-skill": False})
+    on = register_rca_item(spec, attached_skill_prefs={"author-skill": True})
+    off_row = {s["name"]: s for s in client.get(f"/a/rca/items/{off}/skills").json()["skills"]}
+    on_row = {s["name"]: s for s in client.get(f"/a/rca/items/{on}/skills").json()["skills"]}
+    assert off_row["author-skill"]["pref"] == "off"
+    assert off_row["author-skill"]["effective"] is False
+    assert on_row["author-skill"]["pref"] == "on"
+    assert on_row["author-skill"]["effective"] is True
+
+
 def test_workspace_skill_is_advertised_to_the_agent_each_turn():
     """A skill saved into the workspace `.skill/` shows up in the next turn's
     prompt (the "Skills in this workspace" block), read live like context_files
