@@ -259,3 +259,79 @@ describe("AgentPanel steer (#288)", () => {
     expect(composer.value).toBe(""); // draft cleared
   });
 });
+
+describe("AgentPanel undo restores draft (#370)", () => {
+  const userMsg = (content: string) => ({ kind: "message", message: { role: "user", content } });
+  const assistantMsg = (content: string) => ({
+    kind: "message",
+    message: { role: "assistant", content },
+  });
+
+  function renderWithLog(entries: unknown[]) {
+    const agent = stubAgent();
+    agent.log = { entries, streaming: false } as unknown as AgentState["log"];
+    renderWithQuery(
+      <DialogProvider>
+        <AgentPanel
+          investigationId="it1"
+          agent={agent}
+          picker={[]}
+          suggestions={[]}
+          attachedPreset=""
+          onAttachPreset={() => {}}
+          uploadDir="uploads"
+        />
+      </DialogProvider>,
+    );
+    return agent;
+  }
+
+  const confirmUndo = async () =>
+    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
+
+  it("puts the undone user message back into the composer and focuses it", async () => {
+    const agent = renderWithLog([userMsg("原本這句話")]);
+    fireEvent.click(screen.getByRole("button", { name: /復原/ }));
+    await confirmUndo();
+    await waitFor(() => expect(agent.undo).toHaveBeenCalledWith(1));
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    await waitFor(() => expect(composer.value).toBe("原本這句話"));
+    expect(composer).toHaveFocus();
+  });
+
+  it("restores the clicked (earliest) message when undoing multiple turns", async () => {
+    const agent = renderWithLog([
+      userMsg("最早的問題"),
+      assistantMsg("回覆"),
+      userMsg("後來的問題"),
+    ]);
+    // Undo on the FIRST user prompt removes both turns (2 user messages onward).
+    fireEvent.click(screen.getAllByRole("button", { name: /復原/ })[0]!);
+    await confirmUndo();
+    await waitFor(() => expect(agent.undo).toHaveBeenCalledWith(2));
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    await waitFor(() => expect(composer.value).toBe("最早的問題"));
+  });
+
+  it("overwrites an in-progress draft with the restored message", async () => {
+    const agent = renderWithLog([userMsg("被復原的訊息")]);
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "half-typed next message" } });
+    fireEvent.click(screen.getByRole("button", { name: /復原/ }));
+    await confirmUndo();
+    await waitFor(() => expect(agent.undo).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(composer.value).toBe("被復原的訊息"));
+  });
+
+  it("leaves the draft untouched when undo fails", async () => {
+    vi.stubGlobal("alert", vi.fn());
+    const agent = renderWithLog([userMsg("原句")]);
+    (agent.undo as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("boom"));
+    const composer = screen.getByPlaceholderText("Ask the agent…") as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: "keep me" } });
+    fireEvent.click(screen.getByRole("button", { name: /復原/ }));
+    await confirmUndo();
+    await waitFor(() => expect(agent.undo).toHaveBeenCalled());
+    expect(composer.value).toBe("keep me");
+  });
+});

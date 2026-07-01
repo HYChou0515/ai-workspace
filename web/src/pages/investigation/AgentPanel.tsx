@@ -126,8 +126,18 @@ export function AgentPanel({
       ],
     });
     if (choice !== "undo") return;
+    // #370: bring the undone prompt back into the composer so the user can tweak
+    // and resend it instead of retyping. Capture it BEFORE undo re-fetches and
+    // rebuilds the log — entry `i` is the prompt we're rewinding TO (the earliest
+    // of the removed turns). Restore only on success (a failed undo mustn't wipe
+    // whatever the user was drafting).
+    const undone = log.entries[i];
+    const restore =
+      undone?.kind === "message" && undone.message.role === "user" ? undone.message.content : "";
     try {
       await undo(turns);
+      setDraft(restore);
+      composerRef.current?.focus();
     } catch (err) {
       alert(`Undo failed: ${err instanceof Error ? err.message : String(err)}`);
     }
