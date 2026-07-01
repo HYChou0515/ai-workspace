@@ -119,8 +119,9 @@ def run(args: Args) -> None:                        # 3. 拿驗證過的 args �
 註冊,再從 console_script entry point 呼叫 `d.main()`,三段 argv 路由它全包了:
 
 ```python
-# sample-tools/<name>/src/<pkg>/cli.py — decorator 版
+# sample-tools/<name>/src/<pkg>/cli.py — decorator 版（多 command，各自不同 Args）
 import json
+from typing import Literal
 from pydantic import BaseModel, Field
 from workspace_app.tooling.dispatcher import Dispatcher
 
@@ -134,9 +135,23 @@ def summarise(args: SummariseArgs) -> None:
     ...
     print(json.dumps({...}))
 
+class PlotArgs(BaseModel):                                       # 不同 command → 不同 Args
+    csv: str = Field(description="Path to the CSV file in the workspace.")
+    column: str = Field(description="Column to plot.")
+    kind: Literal["hist", "box", "line"] = Field("hist", description="Chart type.")
+    out: str = Field("plot.png", description="Output image path.")
+
+@d.command("plot", "Plot one column of a CSV as an image.")     # ← 第二個 command
+def plot(args: PlotArgs) -> None:
+    ...
+    print(json.dumps({"out": args.out}))
+
 def main() -> None:        # pyproject.toml [project.scripts] 指向這裡
-    d.main()               # stage-1 列表 / stage-2 schema / stage-3 執行，全自動
+    d.main()               # stage-1 列出 summarise + plot / stage-2 各自 schema / stage-3 執行
 ```
+
+每個 `@d.command` 各自綁一個 Args model,`d.main()` 就能對 `./launch summarise` 與
+`./launch plot` 回不同的 schema——兩個 command 共用同一個 venv(依賴裝一次)。
 
 要點:
 
