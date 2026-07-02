@@ -396,6 +396,27 @@ class DocumentsPage(BaseModel):
     has_more: bool
 
 
+class DocUnitProgress(BaseModel):
+    """#248 unit progress for one in-flight fan-out (e.g. PDF pages done/total)."""
+
+    units_done: int
+    units_total: int
+
+
+class DocumentsStatus(BaseModel):
+    """#395: the few-hundred-byte summary the FE polls while docs are indexing,
+    instead of refetching the whole document list every tick. `counts` +
+    `total` + `latest_ms` together form the change stamp — when none of them
+    moved, the list is guaranteed unchanged and the FE skips the refetch;
+    `runs` carries the in-flight docs' unit progress so the bars advance by
+    client-side merge, again without a list refetch."""
+
+    total: int
+    counts: dict[str, int]  # status → doc count
+    runs: dict[str, DocUnitProgress]  # doc id → in-flight fan-out progress
+    latest_ms: int  # newest doc update in the collection (epoch ms), 0 if empty
+
+
 class UploadAccepted(BaseModel):
     """The upload endpoint's success shape: the SourceDoc ids that now
     need indexing (new or changed bytes) and the doc status. Indexing runs
@@ -426,6 +447,23 @@ def _opt_int(v: object) -> int | None:
     """Narrow an `indexed_data` value to the optional int it was written as
     (`bool` is an `int` subclass — exclude it)."""
     return v if isinstance(v, int) and not isinstance(v, bool) else None
+
+
+def _running_unit_progress(spec: SpecStar, collection_id: str) -> dict[str, DocUnitProgress]:
+    """#395 Batch A: the in-flight fan-outs' unit progress for one collection,
+    read as ONE metas search (`units_*` ride IndexRun's indexed_data, live
+    under the CAS bumps) — never a per-doc `IndexRunStore.get` point read."""
+    run_rm = spec.get_resource_manager(IndexRun)
+    run_q = (QB["collection_id"] == collection_id) & (QB["status"] == "running")
+    out: dict[str, DocUnitProgress] = {}
+    for m in run_rm.search_resources(run_q.build()):
+        indexed = m.indexed_data if isinstance(m.indexed_data, dict) else {}
+        done, total = indexed.get("units_done"), indexed.get("units_total")
+        out[m.resource_id] = DocUnitProgress(
+            units_done=done if isinstance(done, int) else 0,
+            units_total=total if isinstance(total, int) else 0,
+        )
+    return out
 
 
 def _granted_user_ids(perm: Permission | None) -> set[str]:
@@ -1155,13 +1193,7 @@ def register_kb_routes(
         # `units_*` ride IndexRun's indexed_data, live under the CAS bumps),
         # NOT a per-indexing-doc point get in the row loop: that read was an
         # N+1 exactly when a fresh upload had the whole page indexing.
-        run_rm = spec.get_resource_manager(IndexRun)
-        run_q = (QB["collection_id"] == collection_id) & (QB["status"] == "running")
-        runs_by_doc: dict[str, dict[str, object]] = {
-            m.resource_id: m.indexed_data
-            for m in run_rm.search_resources(run_q.build())
-            if isinstance(m.indexed_data, dict)
-        }
+        runs_by_doc = _running_unit_progress(spec, collection_id)
 
         items: list[DocumentRow] = []
         for m in metas:
@@ -1176,8 +1208,8 @@ def register_kb_routes(
             size = indexed.get("content_size")
             ct = indexed.get("content_type")
             fid = indexed.get("file_id")
-            units_done = run.get("units_done") if run is not None else 0
-            units_total = run.get("units_total") if run is not None else 0
+            units_done = run.units_done if run is not None else 0
+            units_total = run.units_total if run is not None else 0
             items.append(
                 DocumentRow(
                     resource_id=rid,
@@ -1195,8 +1227,8 @@ def register_kb_routes(
                     cited=cited.get(rid, 0),
                     size=size if isinstance(size, int) else 0,
                     updated_at=_ms(m.updated_time),
-                    units_done=units_done if isinstance(units_done, int) else 0,
-                    units_total=units_total if isinstance(units_total, int) else 0,
+                    units_done=units_done,
+                    units_total=units_total,
                     quality_score=_opt_int(indexed.get("quality_score")),
                 )
             )
@@ -1206,6 +1238,36 @@ def register_kb_routes(
             offset=offset,
             limit=limit,
             has_more=offset + len(items) < total,
+        )
+
+    @app.get("/kb/collections/{collection_id}/documents/status")
+    async def documents_status(collection_id: str) -> DocumentsStatus:
+        """#395: the poll target while docs are indexing — see DocumentsStatus.
+        One `Count` + `Max(updated_time)` GROUP BY push-down over the indexed
+        `status` (the #103 aggregate pattern; the datetime Max is the
+        collections dashboard's `latest_doc`, specstar #406) plus the same
+        collection-scoped IndexRun metas search the list uses. Metas-only, no
+        row materialisation — cheap enough to tick every 1.5s."""
+        rm = spec.get_resource_manager(SourceDoc)
+        rows = rm.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
+            by=QB["status"],
+            aggregates={"n": Count(), "latest": Max(QB.updated_time())},
+            query=(QB["collection_id"] == collection_id).build(),
+        )
+        counts: dict[str, int] = {}
+        latest = 0
+        for row in rows:
+            # Pre-v6-migrate rows group under a missing status; fold them into
+            # "ready" exactly like the list rows do.
+            status = row.key if isinstance(row.key, str) and row.key else "ready"
+            counts[status] = counts.get(status, 0) + (row.n if isinstance(row.n, int) else 0)
+            if isinstance(row.latest, datetime):
+                latest = max(latest, _ms(row.latest))
+        return DocumentsStatus(
+            total=sum(counts.values()),
+            counts=counts,
+            runs=_running_unit_progress(spec, collection_id),
+            latest_ms=latest,
         )
 
     @app.get("/kb/documents")

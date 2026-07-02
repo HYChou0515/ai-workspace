@@ -1534,6 +1534,72 @@ def test_list_documents_accepts_a_fetch_all_sized_limit():
     assert r.status_code == 200
 
 
+def test_documents_status_reports_counts_progress_and_change_stamp():
+    # #395: the FE's indexing poll ticks this few-hundred-byte summary instead
+    # of refetching the whole document list every 1.5s: per-status counts (the
+    # "did anything flip?" signal), the in-flight runs' unit progress (merged
+    # into rows client-side, no list refetch per tick), and a change stamp.
+    from specstar.types import Binary
+
+    from workspace_app.kb.index_run import IndexRunStore
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    _upload(client, cid, "a.md")
+    _drain(client)  # → one "ready" doc
+
+    drm = spec.get_resource_manager(SourceDoc)
+    doc_id = drm.create(
+        SourceDoc(collection_id=cid, path="big.pdf", content=Binary(data=b"x"), status="indexing")
+    ).resource_id
+    runs = IndexRunStore(spec)
+    runs.start(doc_id, cid, total=3, units_total=24)
+    runs.mark_done(doc_id, 0, batch_units=8)
+
+    s = client.get(f"/kb/collections/{cid}/documents/status").json()
+    assert s["total"] == 2
+    assert s["counts"] == {"ready": 1, "indexing": 1}
+    assert s["runs"] == {doc_id: {"units_done": 8, "units_total": 24}}
+    assert s["latest_ms"] > 0
+
+
+def test_documents_status_of_an_empty_collection_is_all_zeroes():
+    client = _client()
+    cid = _new_collection(client)
+    s = client.get(f"/kb/collections/{cid}/documents/status").json()
+    assert s == {"total": 0, "counts": {}, "runs": {}, "latest_ms": 0}
+
+
+def test_documents_status_is_a_metas_only_aggregate(monkeypatch):
+    # #395: same mechanism pin as the list — the poll target must stay a
+    # GROUP BY push-down + metas search; a data-blob read (or a
+    # materialise-then-tally loop, which would never call exp_aggregate_by)
+    # blows up / fails the positive assertion.
+    client, spec = _client_and_spec()
+    cid = _upload_two_chunky_docs(client)
+
+    drm = spec.get_resource_manager(SourceDoc)
+    agg_calls = 0
+    real = drm.exp_aggregate_by  # ty: ignore[unresolved-attribute]
+
+    def _spy(*a, **k):
+        nonlocal agg_calls
+        agg_calls += 1
+        return real(*a, **k)
+
+    def _boom(*a, **k):
+        raise AssertionError("documents/status touched the data table")
+
+    monkeypatch.setattr(drm, "exp_aggregate_by", _spy)
+    for blob_read in ("list_resources", "get_partial", "get_resource_revision", "get"):
+        monkeypatch.setattr(drm, blob_read, _boom)
+
+    s = client.get(f"/kb/collections/{cid}/documents/status").json()
+    assert agg_calls == 1
+    assert s["counts"] == {"ready": 2}
+    assert s["total"] == 2
+
+
 def _chunk_ids(spec: SpecStar, doc_id: str) -> set[str]:
     rm = spec.get_resource_manager(DocChunk)
     return {
