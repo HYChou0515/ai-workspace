@@ -36,11 +36,17 @@ from .card_gen import (
     CardGenJob,
     CardGenPayload,
     CommitResult,
+    DocDigest,
     ProposedCard,
     classify_against_existing,
     merge_drafts,
 )
 from .context_cards import cards_with_ids_for_collections, derive_norm_keys
+from .doc_questions import (
+    add_description_question,
+    open_or_merge_term_question,
+    plan_doc_questions,
+)
 from .job_audit import preserve_job_creator
 from .wiki.sources import SpecstarWikiSources
 
@@ -71,9 +77,14 @@ class CardGenCoordinator:
         *,
         message_queue_factory: object | None = None,
         get_user_id: Callable[[], str] | None = None,
+        max_questions_per_doc: int = 5,
     ) -> None:
         self._spec = spec
         self._drafter = drafter
+        # #377 guardrail ③: cap the clarification questions one document may raise
+        # so a pathological digest can't flood the inbox (terms fill the budget
+        # first, then descriptions).
+        self._max_questions_per_doc = max_questions_per_doc
         # Who an enqueue is credited to — the real user in a request; production
         # injects the same get_user_id the other coordinators use.
         self._get_user_id = get_user_id or (lambda: spec.get_resource_manager(SourceDoc).user)
@@ -200,16 +211,52 @@ class CardGenCoordinator:
         cid = payload.collection_id
         sources = SpecstarWikiSources(self._spec, cid)
         raw: list[tuple[str, str, CardDraft]] = []
+        per_doc: list[tuple[str, DocDigest]] = []  # #377: questions to raise, per doc
         for doc_id in payload.doc_ids:
             ref = sources.ref_by_id(doc_id)
             if ref is None:
                 continue  # doc deleted between enqueue and run — skip it
-            for draft in self._drafter.draft(doc_path=ref.path, doc_text=ref.text):
+            digest = self._drafter.digest(doc_path=ref.path, doc_text=ref.text)
+            for draft in digest.cards:
                 raw.append((doc_id, ref.path, draft))
+            per_doc.append((doc_id, digest))
         proposals = merge_drafts(raw)
         existing = cards_with_ids_for_collections(self._spec, [cid])
         kept = [p for p in proposals if classify_against_existing(p, existing) != "skip"]
         job_context.set_artifact(CardGenArtifact(proposals=kept))
+        self._raise_questions(cid, per_doc, existing)
+
+    def _raise_questions(
+        self, cid: str, per_doc: list[tuple[str, DocDigest]], existing: list
+    ) -> None:
+        """#377: persist the clarification questions each document's digest raised
+        (instead of hallucinating), after the deterministic guardrails —
+        already-carded terms dropped, per-doc total capped. Term questions dedupe
+        at collection level; description questions are doc-specific."""
+        carded = {nk for _, card in existing for nk in getattr(card, "norm_keys", [])}
+        for doc_id, digest in per_doc:
+            terms, descs = plan_doc_questions(
+                digest.term_questions,
+                digest.description_questions,
+                carded_norm_keys=carded,
+                cap=self._max_questions_per_doc,
+            )
+            for tq in terms:
+                open_or_merge_term_question(
+                    self._spec,
+                    collection_id=cid,
+                    term=tq.term,
+                    source_doc_id=doc_id,
+                    question_text=tq.question,
+                )
+            for dq in descs:
+                add_description_question(
+                    self._spec,
+                    collection_id=cid,
+                    source_doc_id=doc_id,
+                    quote=dq.quote,
+                    question_text=dq.question,
+                )
 
     # ── lifecycle ────────────────────────────────────────────────────
     def _ensure_consuming(self) -> None:

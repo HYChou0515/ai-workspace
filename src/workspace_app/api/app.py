@@ -44,6 +44,7 @@ from .card_gen_routes import register_card_gen_routes
 from .chat_routes import register_chat_routes
 from .chat_send import ChatSendService
 from .context_card_routes import register_context_card_actions, register_context_card_routes
+from .doc_question_routes import register_doc_question_routes
 from .file_routes import register_file_routes
 from .health_routes import (
     register_health_routes,
@@ -491,6 +492,23 @@ def create_app(
     card_gen_coordinator = coordinators.card_gen
     app.state.card_gen_coordinator = card_gen_coordinator
     register_card_gen_routes(api, card_gen_coordinator)
+    # #377: the global "待釐清" inbox — answer/discard the clarification questions
+    # the digest raised. A term answer becomes a context card (the card-drafter LLM
+    # tidies it, verbatim fallback when none is wired); a description answer lands
+    # on the collection's clarification wiki page.
+    from ..kb.answer_formatter import LlmAnswerCardFormatter, VerbatimAnswerFormatter
+    from ..kb.wiki.store import WikiFileStore
+
+    register_doc_question_routes(
+        api,
+        spec,
+        formatter=(
+            LlmAnswerCardFormatter(card_drafter_llm)
+            if card_drafter_llm is not None
+            else VerbatimAnswerFormatter()
+        ),
+        wiki_store=WikiFileStore(spec),
+    )
     # Model-sanity battery routes mount only when the live-LLM factory is wired.
     sanity_coordinator = coordinators.sanity
     if sanity_coordinator is not None:

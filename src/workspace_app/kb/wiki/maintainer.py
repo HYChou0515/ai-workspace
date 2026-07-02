@@ -23,7 +23,7 @@ from ...agent.context import AgentToolContext
 from ...files import WorkspaceFiles
 from ...resources import AgentConfig
 from .sources import IWikiSources
-from .store import WikiFileStore
+from .store import MaintainerWikiStore, WikiFileStore
 
 if TYPE_CHECKING:
     from ...api.events import AgentEvent
@@ -112,10 +112,13 @@ async def run_wiki_maintainer(
     if not await wiki_store.exists(collection_id, "/WIKI.md"):
         await wiki_store.write(collection_id, "/WIKI.md", _WIKI_SCHEMA.encode("utf-8"))
 
+    # #377: give the agent a guarded view — it can edit every page except the
+    # reserved clarification page (human answers), which it must not overwrite.
+    guarded = MaintainerWikiStore(wiki_store)
     ctx = AgentToolContext(
         investigation_id=collection_id,  # WikiFileStore is keyed by collection id
-        filestore=wiki_store,
-        files=WorkspaceFiles(wiki_store),
+        filestore=guarded,
+        files=WorkspaceFiles(guarded),
         sandbox=None,
         agent_config=agent_config,
         wiki_sources=wiki_sources,

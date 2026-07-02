@@ -38,6 +38,20 @@ from ...resources import WikiPage
 
 _SLASH = "∕"  # division-slash look-alike (same convention as kb/doc_id.py)
 
+# #377: the reserved wiki page where human answers to description questions land,
+# one section per Q&A. It is human-owned: the wiki maintainer/unfolder agent is
+# denied write/delete on it (see MaintainerWikiStore) so a rebuild can't clobber
+# the answers. The WikiBrowser + the answer-landing path use the raw store and
+# can write it.
+CLARIFICATIONS_PATH = "/clarifications.md"
+
+
+def _is_reserved(path: str) -> bool:
+    """Whether ``path`` is the reserved clarification page, tolerating the
+    ``/clarifications.md`` / ``clarifications.md`` / ``./clarifications.md`` forms
+    the file tools accept interchangeably."""
+    return path.lstrip("./") == CLARIFICATIONS_PATH.lstrip("/")
+
 
 def _rid(collection_id: str, path: str) -> str:
     """Slash-free resource id for one wiki page (specstar ids can't hold
@@ -227,3 +241,39 @@ class WikiFileStore:
             return sorted(d for d in seen if d.startswith(prefix))
 
         return await asyncio.to_thread(_dirs)
+
+
+class MaintainerWikiStore(WikiFileStore):
+    """A ``WikiFileStore`` view for the wiki maintainer/unfolder agent (#377): it
+    can read, list, and edit every page EXCEPT the reserved clarification page,
+    whose writes/deletes it silently drops. That page holds human answers to
+    description questions, so a wiki rebuild must not overwrite them. Reads stay
+    open so the agent can still see the answers as context. Shares the inner
+    store's ``WikiPage`` manager, so it's the same pages — just guarded."""
+
+    def __init__(self, inner: WikiFileStore) -> None:
+        self._rm = inner._rm
+
+    async def write(self, workspace_id: str, path: str, data: bytes) -> None:
+        if _is_reserved(path):
+            return  # human-owned page — the agent must not overwrite it
+        await super().write(workspace_id, path, data)
+
+    async def write_from_path(
+        self, workspace_id: str, path: str, source: Path, content_type: str | None = None
+    ) -> None:
+        if _is_reserved(path):
+            return
+        await super().write_from_path(workspace_id, path, source, content_type)
+
+    async def write_cas(
+        self, workspace_id: str, path: str, data: bytes, expected_etag: str | None
+    ) -> bool:
+        if _is_reserved(path):
+            return False  # report the write as lost so the agent's edit loop gives up
+        return await super().write_cas(workspace_id, path, data, expected_etag)
+
+    async def delete(self, workspace_id: str, path: str) -> None:
+        if _is_reserved(path):
+            return
+        await super().delete(workspace_id, path)

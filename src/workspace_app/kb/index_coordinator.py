@@ -35,7 +35,7 @@ from specstar.message_queue import NoRetry
 from specstar.types import ResourceAction, ResourceIDNotFoundError, TaskStatus
 
 from ..failover.retry import is_transient
-from ..resources import DocChunk, IndexRun, IndexUnitText, SourceDoc
+from ..resources import Collection, DocChunk, IndexRun, IndexUnitText, SourceDoc
 from .index_jobs import IndexJob, IndexJobPayload
 from .index_run import IndexRunStore
 from .job_audit import preserve_job_creator
@@ -44,6 +44,7 @@ from .tokens import count_tokens
 if TYPE_CHECKING:
     from specstar.events import EventContext
 
+    from .card_gen_coordinator import CardGenCoordinator
     from .ingest import Ingestor
     from .quality_coordinator import QualityCoordinator
     from .wiki.coordinator import WikiMaintenanceCoordinator
@@ -70,6 +71,7 @@ class IndexCoordinator:
         *,
         wiki_coordinator: WikiMaintenanceCoordinator | None = None,
         quality_coordinator: QualityCoordinator | None = None,
+        card_gen_coordinator: CardGenCoordinator | None = None,
         message_queue_factory: object | None = None,
         unit_batch_sizes: dict[str, int] | None = None,
         default_unit_batch: int = 8,
@@ -82,6 +84,10 @@ class IndexCoordinator:
         # #105: scores a doc's quality once it's ready (off the request path, like
         # the wiki hook). None ⇒ scoring off (no judge configured).
         self._quality = quality_coordinator
+        # #377: digests a doc once it's ready IF its collection opted in
+        # (auto_digest) — the card-drafting pass that also raises clarification
+        # questions. None ⇒ no drafter wired; opt-out collections skip it anyway.
+        self._card_gen = card_gen_coordinator
         # #249: how many times specstar re-delivers a single-job split before it
         # dead-letters. Stamped on the split job so the handler can tell a
         # mid-retry "retrying" from the terminal "error" (see `_index_whole`).
@@ -389,6 +395,7 @@ class IndexCoordinator:
             return
         self._wiki_hook(doc_id, requester)
         self._quality_hook(doc_id, updater)
+        self._digest_hook(doc_id, updater)
 
     def _set_doc_status(self, doc_id: str, updater: str, *, status: str, detail: str) -> None:
         """Stamp a SourceDoc's terminal/interim status (#249), AS its real
@@ -496,6 +503,7 @@ class IndexCoordinator:
         if status == "ready":
             self._wiki_hook(doc_id, requester)
             self._quality_hook(doc_id, updater)
+            self._digest_hook(doc_id, updater)
 
     # ── safety sweep (#227): recover the fan-out failure branch ──────
     def sweep_stuck_runs(self, *, stuck_after_seconds: float = 3600.0) -> list[str]:
@@ -571,6 +579,24 @@ class IndexCoordinator:
             self._quality.score_doc(doc_id, acting_user)
         except Exception:  # noqa: BLE001 — a scoring failure must not fail the index job
             _LOGGER.exception("IndexCoordinator: quality hook failed for %s", doc_id)
+
+    def _digest_hook(self, doc_id: str, acting_user: str) -> None:
+        # #377: if the doc's collection opted into proactive clarification
+        # (auto_digest, default off), enqueue a digest for it now that it's ready —
+        # the SAME card-drafting pass that proposes cards also raises the questions
+        # it couldn't answer. Best-effort like the wiki/quality hooks: a failure
+        # must NEVER fail the index job. Credits the doc's owner (#83).
+        if self._card_gen is None:
+            return
+        try:
+            doc = self._spec.get_resource_manager(SourceDoc).get(doc_id).data
+            assert isinstance(doc, SourceDoc)  # a just-indexed doc; narrow Struct|Unset
+            coll = self._spec.get_resource_manager(Collection).get(doc.collection_id).data
+            if not (isinstance(coll, Collection) and coll.auto_digest):
+                return  # opt-out (the default) → digest stays a manual action
+            self._card_gen.enqueue(doc.collection_id, [doc_id], requested_by=acting_user)
+        except Exception:  # noqa: BLE001 — a digest-enqueue failure must not fail the index job
+            _LOGGER.exception("IndexCoordinator: digest hook failed for %s", doc_id)
 
     # ── fan-out text staging (#227) ──────────────────────────────────
     def _stage_text(self, doc_id: str, batch_index: int, text: str) -> None:

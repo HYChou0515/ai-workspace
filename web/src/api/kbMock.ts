@@ -15,6 +15,7 @@ import type {
   KbCollection,
   KbContextCard,
   KbDocChunk,
+  KbDocQuestion,
   KbDocument,
   KbProposedCard,
   KbRenderedDoc,
@@ -36,6 +37,9 @@ const chatStamps = new Map<string, number>();
 const touchChat = (id: string) => chatStamps.set(id, (chatClock += 1));
 // collectionId → its context cards (#106), keyed by collection like documents.
 const contextCards = new Map<string, KbContextCard[]>();
+// #377: the global doc-question inbox (id → question). Empty by default; the
+// page tests drive the api directly.
+const docQuestions = new Map<string, KbDocQuestion>();
 // jobId → a 自動 context card generation run (#175). The mock completes the run
 // synchronously (status "completed") with one proposal per selected document.
 const cardGenJobs = new Map<
@@ -563,6 +567,19 @@ export const mockKbApi: KbApi = {
       }
     }
     return { created, updated, skipped };
+  },
+
+  async getDocQuestions() {
+    return [...docQuestions.values()].filter((q) => q.status === "open");
+  },
+  async answerDocQuestion(id, _answer) {
+    const q = docQuestions.get(id);
+    if (q) docQuestions.set(id, { ...q, status: "answered" });
+    return q?.kind === "description" ? "/clarifications.md" : nextId("card");
+  },
+  async discardDocQuestion(id) {
+    const q = docQuestions.get(id);
+    if (q) docQuestions.set(id, { ...q, status: "discarded" });
   },
 
   async cancelMessage(_chatId) {

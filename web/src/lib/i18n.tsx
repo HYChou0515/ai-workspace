@@ -516,6 +516,19 @@ export const messages = {
     "zh-TW": "選一張詞彙卡，或新增一張。",
     en: "Select a glossary card, or create a new one.",
   },
+  // #377: the global clarification-question inbox.
+  "docq.title": { "zh-TW": "待釐清", en: "Clarifications" },
+  "docq.subtitle": {
+    "zh-TW": "AI 讀文件時看不懂、需要你補充的地方。回答後：名詞會寫成詞彙卡，段落說明會寫進 wiki。",
+    en: "Things the assistant couldn't understand while reading your documents. Your answers become glossary cards (terms) or wiki notes (passages).",
+  },
+  "docq.empty": { "zh-TW": "目前沒有待釐清的問題。", en: "Nothing to clarify right now." },
+  "docq.kind.term": { "zh-TW": "名詞", en: "Term" },
+  "docq.kind.description": { "zh-TW": "段落", en: "Passage" },
+  "docq.sources": { "zh-TW": "{n} 份文件提到", en: "raised in {n} document(s)" },
+  "docq.answerPlaceholder": { "zh-TW": "輸入你的答案…", en: "Type your answer…" },
+  "docq.answer": { "zh-TW": "送出", en: "Submit" },
+  "docq.discard": { "zh-TW": "丟棄", en: "Discard" },
   // Wiki: AI-written + editable badge, and the rebuild confirmation.
   "kb.wiki.badge": { "zh-TW": "AI 撰寫，可編輯", en: "AI-written, editable" },
   "kb.wiki.rebuild.confirm": {
