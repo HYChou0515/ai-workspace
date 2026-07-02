@@ -158,6 +158,33 @@ export const messages = {
   "entry.undo": { "zh-TW": "復原這一回合（含之後）", en: "Undo this turn and everything after it" },
   // Compact label revealed on hover/focus of the undo control (#172).
   "entry.undo.label": { "zh-TW": "復原此回合之後", en: "Undo this turn onward" },
+  // #397: report a wrong answer so the wiki gets corrected.
+  "entry.reportWiki": { "zh-TW": "回報有誤", en: "Report a wiki error in this answer" },
+
+  // #397: wiki-correction dialog ("回報有誤")
+  "wikiCorrection.title": { "zh-TW": "回報 wiki 有誤", en: "Report a wiki error" },
+  "wikiCorrection.intro": {
+    "zh-TW": "告訴維護者哪裡錯、應該怎樣，AI 會去修正 wiki（你不用自己改）。",
+    en: "Tell the maintainer what's wrong and how it should read; the AI corrects the wiki for you.",
+  },
+  "wikiCorrection.generate": { "zh-TW": "AI 幫我草擬", en: "Draft with AI" },
+  "wikiCorrection.generating": { "zh-TW": "草擬中…", en: "Drafting…" },
+  "wikiCorrection.instructionLabel": { "zh-TW": "哪裡錯 / 應該怎樣", en: "What's wrong / how it should read" },
+  "wikiCorrection.instructionPlaceholder": {
+    "zh-TW": "例如：Foo 成立於 1998 年，不是 1989 年。（可留空按「AI 幫我草擬」）",
+    en: "e.g. Foo was founded in 1998, not 1989. (Leave blank and click “Draft with AI”.)",
+  },
+  "wikiCorrection.targetLabel": { "zh-TW": "wiki 頁面（可選）", en: "Wiki page (optional)" },
+  "wikiCorrection.targetPlaceholder": { "zh-TW": "/entities/foo.md（留空讓維護者自己找）", en: "/entities/foo.md (blank = let the maintainer find it)" },
+  "wikiCorrection.questionsIntro": {
+    "zh-TW": "AI 需要多一點資訊，請回答：",
+    en: "The AI needs a little more to go on:",
+  },
+  "wikiCorrection.submit": { "zh-TW": "送出修正", en: "Submit correction" },
+  "wikiCorrection.submitting": { "zh-TW": "送出中…", en: "Submitting…" },
+  "wikiCorrection.cancel": { "zh-TW": "取消", en: "Cancel" },
+  "wikiCorrection.done": { "zh-TW": "已送出，wiki 更新中。", en: "Submitted — the wiki is being updated." },
+  "wikiCorrection.error": { "zh-TW": "送出失敗，請再試一次。", en: "Couldn't submit — please try again." },
 
   // App launcher (Launcher)
   "launcher.appsEyebrow": { "zh-TW": "應用程式", en: "APPS" },

@@ -472,6 +472,20 @@ export const mockKbApi: KbApi = {
     if (c) collections.set(collectionId, { ...c, git_last_sha: sha, git_last_pulled_at: Date.now() });
     return { status: "queued", git_last_sha: c?.git_last_sha ?? null };
   },
+  async submitWikiCorrection(_collectionId, body) {
+    // #397: pretend the correction landed on a per-target immune page.
+    const slug = (body.target_page || "general").replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "");
+    return { path: `/corrections/${slug || "general"}.md` };
+  },
+  async draftWikiCorrection(_collectionId, body) {
+    // #397 Q12: a deterministic stand-in — echo the flagged answer as a draft.
+    return {
+      action: "draft",
+      instruction: `The answer "${body.answer}" is wrong; please correct it.`,
+      target_page: body.wiki_pages?.[0] ?? "",
+      questions: [],
+    };
+  },
   async listContextCards(collectionId) {
     return [...(contextCards.get(collectionId) ?? [])];
   },

@@ -139,6 +139,31 @@ export type WikiPage = { path: string; content: string };
 
 /** Result of triggering a wiki rebuild — how many sources were queued. */
 export type WikiRebuild = { queued: number; status: string };
+
+/** #397: result of submitting a wiki correction — the immune corrections page it
+ * was recorded on. The fix runs in the background. */
+export type WikiCorrectionSubmitted = { path: string };
+
+/** #397: one answered clarifying question from a prior AI-drafting round. */
+export type WikiCorrectionQA = { question: string; answer: string };
+
+/** #397: request body for the AI drafting assist (the flagged Q&A + any prior
+ * mini-grill answers to fold in). */
+export type WikiCorrectionDraftBody = {
+  question: string;
+  answer: string;
+  wiki_pages?: string[];
+  answered?: WikiCorrectionQA[];
+};
+
+/** #397 Q12: the AI drafting step's result — either a ready `draft` (the user
+ * edits + submits) or an `ask` for 1–3 clarifying questions. */
+export type WikiCorrectionDraft = {
+  action: "draft" | "ask";
+  instruction: string;
+  target_page: string;
+  questions: string[];
+};
 /** #355: result of POST /kb/collections/:id/sync — the enqueue ack + the last
  * KNOWN commit (the new one isn't known until the async job finishes). */
 export type SyncResult = { status: string; git_last_sha: string | null };
@@ -552,6 +577,18 @@ export interface KbApi {
    * (returns immediately with status="queued"). Progress + failures surface via
    * `getWikiStatus`; the new commit shows once the job finishes. */
   syncCollection(collectionId: string): Promise<SyncResult>;
+  /** #397: submit a user's wiki correction — records the corrected fact on the
+   * immune corrections page and queues the corrector agent. */
+  submitWikiCorrection(
+    collectionId: string,
+    body: { instruction: string; target_page?: string; reference?: string },
+  ): Promise<WikiCorrectionSubmitted>;
+  /** #397 Q12: AI-draft a correction from a flagged Q&A — returns a ready draft
+   * or up to 3 clarifying questions (adaptive). */
+  draftWikiCorrection(
+    collectionId: string,
+    body: WikiCorrectionDraftBody,
+  ): Promise<WikiCorrectionDraft>;
 
   /** #106: a collection's context cards (the lightweight glossary). Lists via
    * specstar's auto CRUD route, scoped on the indexed `collection_id`. */
@@ -848,6 +885,24 @@ export const realKbApi: KbApi = {
   async syncCollection(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/sync`;
     return (await ok(await apiFetch(url, { method: "POST" }), "sync collection")).json();
+  },
+  async submitWikiCorrection(collectionId, body) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/corrections`;
+    return (
+      await ok(
+        await apiFetch(url, { method: "POST", headers: jsonHeaders, body: JSON.stringify(body) }),
+        "submit wiki correction",
+      )
+    ).json();
+  },
+  async draftWikiCorrection(collectionId, body) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/corrections/draft`;
+    return (
+      await ok(
+        await apiFetch(url, { method: "POST", headers: jsonHeaders, body: JSON.stringify(body) }),
+        "draft wiki correction",
+      )
+    ).json();
   },
 
   async listContextCards(collectionId) {
