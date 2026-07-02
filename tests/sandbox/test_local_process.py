@@ -739,3 +739,104 @@ async def test_unjailed_python_shim_repoints_when_carrier_appears_after_fallback
     r2 = await sb.exec(h, ["python", "-c", "ignored"])
     assert r2.exit_code == 0
     assert "ROUTED-TO-PYTHON-STACK" in r2.stdout.decode()
+
+
+# ─── #393 end-to-end: a user's package install stays in the per-sandbox .home ──
+
+
+@pytest.fixture(scope="module")
+def carrier_tools(tmp_path_factory):
+    """A real `python-stack` carrier built via uv, with its site-packages made
+    read-only — simulating the pod's root-owned carrier that a dropped uid
+    can't write, so `pip install --break-system-packages X` falls back to
+    `--user` = $HOME/.local (the exact #393 path). Perms restored on teardown
+    so the tmp tree can be cleaned up."""
+    import os
+    import shutil
+    import subprocess
+
+    if shutil.which("uv") is None:
+        pytest.skip("uv not available")
+
+    base = tmp_path_factory.mktemp("carrier")
+    src = base / "src" / "python-stack"
+    src.mkdir(parents=True)
+    (src / "pyproject.toml").write_text(
+        '[project]\nname = "python-stack"\nversion = "0.1.0"\n'
+        'requires-python = ">=3.10"\ndependencies = []\n\n'
+        '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n\n'
+        '[tool.hatch.build.targets.wheel]\npackages = ["src/python_stack"]\n'
+    )
+    pkg = src / "src" / "python_stack"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    subprocess.run(["uv", "lock", "--directory", str(src)], check=True)
+
+    from workspace_app.tooling.prebuild import build_package
+
+    tools = base / "tools"
+    build_package(name="python-stack", source=src, dst=tools / "python-stack")
+    site_dirs = list((tools / "python-stack").rglob("site-packages"))
+    for sp in site_dirs:
+        os.chmod(sp, 0o555)
+    yield tools
+    for sp in site_dirs:
+        os.chmod(sp, 0o755)
+
+
+async def test_unjailed_carrier_user_site_is_per_sandbox_home(tmp_path, carrier_tools):
+    """#393 end-to-end (offline): the exec path's SANDBOX_HOME must flow through
+    the carrier shim → launcher → the python's user-site. So the `pip --user`
+    fallback target (where a user's install lands on the root-owned carrier) is
+    THIS sandbox's `.home/.local`, distinct per sandbox, never a shared /tmp."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=carrier_tools)
+    a = await sb.create(SandboxSpec(), sandbox_id="A")
+    b = await sb.create(SandboxSpec(), sandbox_id="B")
+    code = "import site; print(site.getusersitepackages())"
+    ra = await sb.exec(a, ["python", "-c", code])
+    rb = await sb.exec(b, ["python", "-c", code])
+    assert ra.exit_code == 0, ra.stderr.decode()
+    assert rb.exit_code == 0, rb.stderr.decode()
+    a_site = ra.stdout.decode().strip()
+    b_site = rb.stdout.decode().strip()
+    assert a_site.startswith(str(sb._require(a) / ".home"))  # A's install → A's .home
+    assert b_site.startswith(str(sb._require(b) / ".home"))  # B's → B's own .home
+    assert a_site != b_site  # not a shared location
+    assert "/tmp/.local" not in a_site  # never the shared pod /tmp
+
+
+async def test_unjailed_pip_install_stays_in_home_and_other_sandbox_cannot_see_it(
+    tmp_path, carrier_tools
+):
+    """#393 faithful reproduction: `pip install --break-system-packages cowsay`
+    in an unjailed sandbox lands in THIS sandbox's `.home/.local` (the carrier
+    is read-only → pip --user), and a SECOND sandbox — which installed nothing —
+    cannot import it. This is the pod-wide leak the fix closes, reproduced
+    through the real exec path. Needs network (PyPI)."""
+    sb = LocalProcessSandbox(root_dir=tmp_path / "sb", isolate=False, tools_dir=carrier_tools)
+    a = await sb.create(SandboxSpec(), sandbox_id="A")
+    r = await sb.exec(
+        a,
+        [
+            "python",
+            "-m",
+            "pip",
+            "install",
+            "--break-system-packages",
+            "--no-input",
+            "--disable-pip-version-check",
+            "cowsay",
+        ],
+    )
+    assert r.exit_code == 0, r.stderr.decode()
+    a_home = sb._require(a) / ".home"
+    # Installed into THIS sandbox's private .home, reaped with the sandbox.
+    assert any(p.name == "cowsay" for p in (a_home / ".local").rglob("cowsay")), sorted(
+        str(p) for p in a_home.rglob("*")
+    )
+    # .home is outside the workspace → invisible to the file tree.
+    assert {e.path for e in await sb.walk(a, "/")} == set()
+    # A fresh sandbox never sees A's install (no cross-sandbox leak).
+    b = await sb.create(SandboxSpec(), sandbox_id="B")
+    rb = await sb.exec(b, ["python", "-c", "import cowsay"])
+    assert rb.exit_code != 0
