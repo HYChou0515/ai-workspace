@@ -49,14 +49,45 @@ class CardDraft(msgspec.Struct):
     snippet: str = ""
 
 
+class TermQuestionDraft(msgspec.Struct):
+    """A term the digest couldn't confidently define from the document (#377) —
+    raised as a question instead of a hallucinated card. ``term`` is the surface
+    form the reader saw; ``question`` is what to ask the human. Its answer becomes
+    a context card."""
+
+    term: str
+    question: str = ""
+
+
+class DescriptionQuestionDraft(msgspec.Struct):
+    """A passage the digest couldn't follow (#377), ``quote``d verbatim, with the
+    focused ``question`` to ask the human. Its answer lands on the collection's
+    clarification wiki page."""
+
+    quote: str
+    question: str = ""
+
+
+class DocDigest(msgspec.Struct):
+    """One document's full digest (#377): the cards the reader could confidently
+    draft, plus the questions it raised instead of guessing — terms it couldn't
+    define and passages it couldn't follow. The single LLM pass yields all three
+    so the reader writes what it knows and asks what it doesn't in one go."""
+
+    cards: list[CardDraft] = msgspec.field(default_factory=list)
+    term_questions: list[TermQuestionDraft] = msgspec.field(default_factory=list)
+    description_questions: list[DescriptionQuestionDraft] = msgspec.field(default_factory=list)
+
+
 class CardDrafter(Protocol):
     """The LLM-driven seam the generation job calls once per document: read the
-    document's extracted text, return the glossary cards worth drafting from it.
+    document's extracted text and return its ``DocDigest`` — the confident cards
+    plus the term / description questions it raised instead of guessing (#377).
     Production wraps an ``Llm`` + a classify prompt; tests inject a fake that
-    returns canned drafts (so the job's orchestration is testable without a
+    returns a canned digest (so the job's orchestration is testable without a
     model)."""
 
-    def draft(self, *, doc_path: str, doc_text: str) -> list[CardDraft]: ...
+    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest: ...
 
 
 class Provenance(msgspec.Struct):

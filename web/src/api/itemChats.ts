@@ -116,6 +116,9 @@ export const itemChatApi = {
      * ask_knowledge_base lookups — mirrors the item-level `api.sendMessage`. The
      * chat-scoped backend forwards `body.enhancements`. */
     enhancements?: BodyEnhancements;
+    /** #380: skills the user queued to apply THIS turn (one-shot, hard-preloaded).
+     * Mirrors the item-level `api.sendMessage`; the chat endpoint shares the body. */
+    applySkills?: string[];
     signal?: AbortSignal;
   }): Promise<void> {
     // #43 broadcast model: POST enqueues (202); events arrive on `subscribe`.
@@ -126,6 +129,7 @@ export const itemChatApi = {
         content: args.content,
         reasoning_effort: args.reasoningEffort,
         enhancements: args.enhancements,
+        apply_skills: args.applySkills,
       }),
       signal: args.signal,
     });

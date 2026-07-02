@@ -11,10 +11,16 @@ from __future__ import annotations
 from specstar import QB
 from specstar.types import Binary, TaskStatus
 
-from workspace_app.kb.card_gen import CardDraft
+from workspace_app.kb.card_gen import (
+    CardDraft,
+    DescriptionQuestionDraft,
+    DocDigest,
+    TermQuestionDraft,
+)
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
+from workspace_app.kb.doc_questions import open_questions_for_collections
 from workspace_app.resources import Collection, ContextCard, SourceDoc, make_spec
 
 
@@ -48,15 +54,28 @@ def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
 
 
 class _FakeDrafter:
-    """Returns canned drafts per document path (keyed by ``doc_path``)."""
+    """Returns a canned digest per document path (keyed by ``doc_path``): cards
+    plus, for #377, the term / description questions the reader raised."""
 
-    def __init__(self, by_path: dict[str, list[CardDraft]]) -> None:
+    def __init__(
+        self,
+        by_path: dict[str, list[CardDraft]],
+        *,
+        term_qs: dict[str, list[TermQuestionDraft]] | None = None,
+        desc_qs: dict[str, list[DescriptionQuestionDraft]] | None = None,
+    ) -> None:
         self._by_path = by_path
+        self._term_qs = term_qs or {}
+        self._desc_qs = desc_qs or {}
         self.seen: list[str] = []
 
-    def draft(self, *, doc_path: str, doc_text: str) -> list[CardDraft]:
+    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
         self.seen.append(doc_path)
-        return self._by_path.get(doc_path, [])
+        return DocDigest(
+            cards=self._by_path.get(doc_path, []),
+            term_questions=self._term_qs.get(doc_path, []),
+            description_questions=self._desc_qs.get(doc_path, []),
+        )
 
 
 def _collection(spec, name: str = "c") -> str:
@@ -154,6 +173,62 @@ async def test_drafts_sharing_a_key_across_documents_merge_into_one_proposal():
     (p,) = coord.proposals(jid).proposals
     assert set(derive_norm_keys(p.keys)) == {"rz3", "reflow zone 3"}
     assert {pr.path for pr in p.provenance} == {"a.md", "b.md"}
+
+
+async def test_digest_term_question_is_raised_as_an_open_doc_question():
+    """#377: a term the digest couldn't define is persisted as an OPEN term
+    question carrying its source doc — not hallucinated into a card."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "spec.md", "Uses the R7 recipe.")
+    drafter = _FakeDrafter(
+        {}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="What is the R7 recipe?")]}
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+    ((_qid, q),) = open_questions_for_collections(spec, [cid])
+    assert q.kind == "term"
+    assert q.term == "R7"
+    assert q.question_text == "What is the R7 recipe?"
+    assert q.source_doc_ids == [doc]
+
+
+async def test_a_term_already_carded_is_not_raised_as_a_question():
+    """#377 guardrail ①: the digest doesn't re-ask a term the collection already
+    has a card for."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _add_card(spec, cid, ["R7"], body="the R7 reflow recipe")
+    doc = _add_source(spec, cid, "spec.md", "Uses the R7 recipe.")
+    drafter = _FakeDrafter({}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="?")]})
+    coord = CardGenCoordinator(spec, drafter)
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+    assert open_questions_for_collections(spec, [cid]) == []
+
+
+async def test_digest_description_question_is_raised_with_its_quote():
+    """#377: a passage the digest couldn't follow is persisted as a description
+    question quoting the passage, bound to its source doc."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "spec.md", "uses M4 then CMP")
+    drafter = _FakeDrafter(
+        {},
+        desc_qs={
+            "spec.md": [
+                DescriptionQuestionDraft(quote="uses M4 then CMP", question="Why skip the clean?")
+            ]
+        },
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+    ((_qid, q),) = open_questions_for_collections(spec, [cid])
+    assert q.kind == "description"
+    assert q.quote == "uses M4 then CMP"
+    assert q.source_doc_id == doc
 
 
 async def test_a_document_deleted_before_the_run_is_skipped_cleanly():

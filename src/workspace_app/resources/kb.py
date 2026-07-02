@@ -184,6 +184,14 @@ class Collection(Struct):  # → resource "collection"
     # appended (back-compat). Non-indexed (never filtered/sorted on) — adding it
     # needs no migration (old rows decode with the empty default).
     parser_guidance: str = ""
+    # Issue #377: opt-in proactive clarification. When True, each doc is digested
+    # once it's ready (the SAME card-drafting pass that proposes cards also raises
+    # the terms it can't define and the passages it can't follow, as DocQuestions
+    # for a human to answer). Default False ⇒ the digest is a MANUAL action only
+    # (the user still triggers card generation by hand). Non-indexed (never
+    # filtered/sorted on), like `quality_rubric` — adding it needs no migration
+    # (old rows decode with the False default).
+    auto_digest: bool = False
 
 
 class WikiPage(Struct):  # → resource "wiki-page"
@@ -438,6 +446,36 @@ class ContextCard(Struct):  # → resource "context-card"
     norm_keys: list[str] = field(default_factory=list)  # derived + indexed; server-set
     title: str = ""  # display name (FE list/detail); "" → keys[0]
     body: str = ""  # markdown explanation
+
+
+class DocQuestion(Struct):  # → resource "doc-question"
+    """Issue #377: a clarification question the per-doc digest raises when it can't
+    confidently define a term (``kind="term"`` → a context card) or follow a passage
+    (``kind="description"`` → a wiki "clarifications" page) — instead of hallucinating
+    knowledge into the KB. A human answers it in the global inbox; the answer lands
+    directly (trusted), and ``result_ref`` points at what it produced.
+
+    ``term`` questions dedupe at collection level by ``norm_key`` (the same
+    ``kb.context_cards.norm``): one open question per unknown term, accumulating the
+    ``source_doc_ids`` that raised it, so a human answers once and it applies
+    everywhere. ``description`` questions are doc-specific (``source_doc_id`` +
+    ``quote``) and never dedupe.
+    """
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    kind: str  # "term" | "description"
+    status: str = "open"  # "open" | "answered" | "discarded"
+    question_text: str = ""  # the AI's question
+    # term questions: deduped by norm_key across the collection
+    term: str = ""  # author surface form (e.g. "M4")
+    norm_key: str = ""  # derived (norm(term)); indexed for dedup + lookup
+    source_doc_ids: list[str] = field(default_factory=list)  # docs that raised the term
+    # description questions: bound to one doc + the passage it quotes
+    source_doc_id: str = ""
+    quote: str = ""  # the passage the AI couldn't follow
+    # answer / landing
+    answer: str = ""  # the human's answer (once answered)
+    result_ref: str = ""  # produced card id or clarification page path (provenance)
 
 
 # ─────────────────── value structs (nested / payloads) ───────────────────

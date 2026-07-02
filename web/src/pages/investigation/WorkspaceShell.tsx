@@ -476,6 +476,7 @@ function ShellBody({
               attachedPreset={String(item.attached_preset ?? "")}
               onAttachPreset={(preset) => setField("attached_preset", preset)}
               onSaveToolPrefs={(prefs) => setField("attached_tool_prefs", prefs)}
+              onSaveSkillPrefs={(prefs) => setField("attached_skill_prefs", prefs)}
             />
           </div>
         </div>

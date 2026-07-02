@@ -47,4 +47,5 @@ def resolve_item_agent_config(
         profile=item.profile,
         attached_preset=item.attached_preset or None,
         tool_prefs=item.attached_tool_prefs or None,
+        skill_prefs=item.attached_skill_prefs or None,
     )

@@ -7,6 +7,7 @@ import { AppDashboard } from "./pages/AppDashboard";
 import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
+import { DocQuestionsPage } from "./pages/DocQuestionsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
@@ -41,6 +42,9 @@ export function AppRoutes() {
         {kbRoutes()}
         <Route path="/kb/doc/*" element={<KbDocPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
+        {/* #377: the global clarification inbox — questions the digest raised
+            about terms / logic it couldn't safely infer, answered here. */}
+        <Route path="/clarifications" element={<DocQuestionsPage />} />
         {/* #230: the platform help / intro page (usage guides + release notes +
             an AI that answers how-to questions over the Help collection). */}
         <Route path="/help" element={<HelpPage />} />

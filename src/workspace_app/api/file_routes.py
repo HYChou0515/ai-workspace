@@ -14,6 +14,7 @@ import os
 import tempfile
 from collections.abc import AsyncIterator, Callable
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse, StreamingResponse
@@ -39,17 +40,26 @@ from .schemas import (
     _CellExecuteBody,
     _ExecBody,
     _FileEntry,
+    _ItemSkills,
+    _ItemSkillState,
     _MkdirBody,
     _MoveBody,
     _ReplaceBody,
     _SearchBody,
-    _SkillEntry,
     _WorkspaceUsage,
 )
 from .search import InvalidQuery, compile_query, path_selected, search_text
 from .turns import ChatTurnEngine
 
 _READONLY_DIR = ".readonly"
+
+
+def _skill_pref_state(value: bool | None) -> Literal["follow", "on", "off"]:
+    """#380: a raw ``attached_skill_prefs`` value → the picker's tri-state label
+    (absent key ⇒ ``follow``), mirroring the tool picker's ``_pref_state``."""
+    if value is None:
+        return "follow"
+    return "on" if value else "off"
 
 
 def _is_readonly_path(path: str) -> bool:
@@ -124,15 +134,33 @@ def register_file_routes(
     """Mount the workspace file / notebook / shell routes onto ``app``."""
 
     @app.get("/a/{slug}/items/{item_id}/skills")
-    async def list_workspace_skills(slug: str, item_id: str) -> list[_SkillEntry]:
-        """#298: the skills the user co-created in this workspace (`.skill/`), for
-        the Skills panel. Parsed live from each `SKILL.md`'s frontmatter; malformed
-        ones are skipped (same tolerance as the loader)."""
-        from ..apps.skills import workspace_skill_metas
+    async def list_item_skills(slug: str, item_id: str) -> _ItemSkills:
+        """#380: the skills picker state for this item — the App's declared shared
+        skills + the profile's package skills + the workspace's co-created ones
+        (`.skill/`), each with its source / default_on / tri-state pref / resolved
+        effective. Backs the Skills panel (list + toggle + apply). The effective
+        state comes from the SAME `effective_item_skills` resolve the turn's prompt
+        index uses, so the picker can't drift from what the agent sees."""
+        from ..apps.skills import effective_item_skills, workspace_skill_metas
 
         investigation_id = locator.require_item(slug, item_id)
-        metas = await workspace_skill_metas(files, investigation_id)
-        return [_SkillEntry(name=m.name, description=m.description) for m in metas]
+        profile = locator.profile_of(investigation_id)
+        prefs = locator.skill_prefs_of(investigation_id)
+        ws_metas = await workspace_skill_metas(files, investigation_id)
+        states = effective_item_skills(slug, profile, prefs, ws_metas)
+        return _ItemSkills(
+            skills=[
+                _ItemSkillState(
+                    name=s.name,
+                    description=s.description,
+                    source=s.source,
+                    default_on=s.default_on,
+                    pref=_skill_pref_state(prefs.get(s.name)),
+                    effective=s.effective,
+                )
+                for s in states
+            ]
+        )
 
     @app.get("/a/{slug}/items/{item_id}/files")
     async def list_files(slug: str, item_id: str, prefix: str = "") -> list[_FileEntry]:

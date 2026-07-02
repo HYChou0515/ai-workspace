@@ -44,7 +44,10 @@ export type AgentState = {
    * (notebook cell execution) are scoped to it. */
   investigationId: string;
   log: AgentLog;
-  send: (content: string) => Promise<void>;
+  /** Enqueue an interactive turn. `opts.applySkills` (#380) loads the named skills
+   * into THIS turn (one-shot, chosen from the Skills panel); the composer clears
+   * them after sending. */
+  send: (content: string, opts?: { applySkills?: string[] }) => Promise<void>;
   /** @mention people to "come look" — notifies them, does NOT run the agent. */
   mention: (userIds: string[], note: string) => Promise<void>;
   cancel: () => void;
@@ -156,7 +159,7 @@ export function useAgentInternal(
   });
 
   const send = useCallback(
-    async (content: string) => {
+    async (content: string, opts?: { applySkills?: string[] }) => {
       const trimmed = content.trim();
       if (!trimmed) return;
 
@@ -181,6 +184,9 @@ export function useAgentInternal(
           // #334: per-message kb_search-count cap, shared across this turn's
           // ask_knowledge_base calls.
           maxKbSearches: getKbSearchMax(),
+          // #380: skills the user queued in the Skills panel to apply THIS turn
+          // (hard-loaded into the agent's context). Empty/absent → nothing forced.
+          applySkills: opts?.applySkills,
         });
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;

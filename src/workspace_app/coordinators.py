@@ -176,6 +176,20 @@ def build_coordinators(
         if quality_judge_llm is not None
         else None
     )
+    # #175: a background job drafts context cards from a collection's selected
+    # documents for human review (mirrors the wiki/index coordinators). #377: the
+    # same drafter also raises clarification questions, and the index coordinator
+    # hands each ready doc to it when the collection opted into auto_digest — so
+    # it's built BEFORE index and injected below.
+    drafter = (
+        LlmCardDrafter(card_drafter_llm) if card_drafter_llm is not None else NullCardDrafter()
+    )
+    card_gen = CardGenCoordinator(
+        spec,
+        drafter,
+        message_queue_factory=message_queue_factory,
+        get_user_id=get_user_id,
+    )
     # #82: indexing runs off the request path on a durable, cross-pod job queue.
     # It chains the index→wiki hook, so the wiki coordinator is handed in here.
     index = IndexCoordinator(
@@ -183,17 +197,7 @@ def build_coordinators(
         ingestor,
         wiki_coordinator=wiki,
         quality_coordinator=quality,
-        message_queue_factory=message_queue_factory,
-        get_user_id=get_user_id,
-    )
-    # #175: a background job drafts context cards from a collection's selected
-    # documents for human review (mirrors the wiki/index coordinators).
-    drafter = (
-        LlmCardDrafter(card_drafter_llm) if card_drafter_llm is not None else NullCardDrafter()
-    )
-    card_gen = CardGenCoordinator(
-        spec,
-        drafter,
+        card_gen_coordinator=card_gen,
         message_queue_factory=message_queue_factory,
         get_user_id=get_user_id,
     )

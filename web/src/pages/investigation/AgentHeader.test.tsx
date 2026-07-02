@@ -10,14 +10,16 @@ import { AgentHeader } from "./AgentPanel";
 const downloadChatExport = vi.hoisted(() => vi.fn());
 vi.mock("../../api/workflows", () => ({ downloadChatExport }));
 
-vi.mock("../../api/workspaceSkills", async (orig) => {
-  const actual = await orig<typeof import("../../api/workspaceSkills")>();
-  return { ...actual, workspaceSkillsApi: { list: vi.fn(async () => []) } };
-});
-
 vi.mock("../../api", async (orig) => {
   const actual = await orig<typeof import("../../api")>();
-  return { ...actual, api: { ...actual.api, getItemTools: vi.fn(async () => []) } };
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      getItemTools: vi.fn(async () => []),
+      getItemSkills: vi.fn(async () => []),
+    },
+  };
 });
 
 describe("AgentHeader export", () => {

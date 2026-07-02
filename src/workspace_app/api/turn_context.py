@@ -139,6 +139,10 @@ class TurnContextBuilder:
             prebuilt_dir=self._prebuilt_dir,
             app_slug=self._locator.slug_of(item_id),
             template_profile=self._locator.profile_of(item_id),
+            # #380: the item's tri-state skill override, so read_skill's toggle gate
+            # fires live (a skill turned off is unreadable) and the workspace-skill
+            # block can drop the disabled ones.
+            skill_prefs=self._locator.skill_prefs_of(item_id),
         )
 
     async def build_chat_turn(
@@ -154,6 +158,7 @@ class TurnContextBuilder:
         collection_tiers: list[list[str]],
         acting_user: str,
         speaker: User | None,
+        apply_skills: list[str] | None = None,
     ) -> AgentToolContext:
         """The full interactive RCA/workspace-chat turn context (`_send_into`)."""
         session = await self._registry.session(item_id)
@@ -185,6 +190,9 @@ class TurnContextBuilder:
             speaker=speaker,
             # #275: the directory the `lookup_user` tool resolves a handle through.
             users=self._users,
+            # #380: skills applied this turn — read_skill exempts them from the
+            # disable gate (their bodies are already preloaded into the prompt).
+            applied_skills=apply_skills or [],
         )
 
     async def build_workflow_turn(

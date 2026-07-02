@@ -101,6 +101,74 @@ async def test_quality_hook_failure_does_not_fail_the_index_job():
     assert ing.indexed == [doc_id]  # indexing succeeded despite the judge blowing up
 
 
+class _FakeCardGen:
+    def __init__(self) -> None:
+        self.enqueued: list[tuple[str, list[str], str | None]] = []
+
+    def enqueue(
+        self, collection_id: str, doc_ids: list[str], *, requested_by: str | None = None
+    ) -> str:
+        self.enqueued.append((collection_id, list(doc_ids), requested_by))
+        return "job-id"
+
+
+def _collection_auto_digest(spec, enabled: bool) -> str:
+    return (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", auto_digest=enabled))
+        .resource_id
+    )
+
+
+async def test_digest_runs_after_indexing_when_the_collection_opts_in():
+    # #377: a collection with auto_digest on hands each ready doc to the digest
+    # (the SAME card-drafting pass that raises clarification questions), off the
+    # request path, crediting the doc's owner.
+    spec = make_spec(default_user="owner")
+    cid = _collection_auto_digest(spec, enabled=True)
+    doc_id = _doc(spec, cid)
+    ing, cg = _FakeIngestor(), _FakeCardGen()
+    coord = IndexCoordinator(spec, ing, card_gen_coordinator=cg)  # ty: ignore[invalid-argument-type]
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert ing.indexed == [doc_id]
+    assert cg.enqueued == [(cid, [doc_id], "owner")]  # digested as the doc's owner
+
+
+async def test_digest_is_skipped_when_the_collection_opts_out():
+    # Default (auto_digest off) → the digest never auto-runs; it's a manual action.
+    spec = make_spec(default_user="owner")
+    cid = _collection_auto_digest(spec, enabled=False)
+    doc_id = _doc(spec, cid)
+    ing, cg = _FakeIngestor(), _FakeCardGen()
+    coord = IndexCoordinator(spec, ing, card_gen_coordinator=cg)  # ty: ignore[invalid-argument-type]
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert ing.indexed == [doc_id]
+    assert cg.enqueued == []
+
+
+async def test_digest_hook_failure_does_not_fail_the_index_job():
+    spec = make_spec(default_user="u")
+    cid = _collection_auto_digest(spec, enabled=True)
+    doc_id = _doc(spec, cid)
+
+    class _BoomCardGen:
+        def enqueue(self, collection_id, doc_ids, *, requested_by=None):
+            raise RuntimeError("queue is down")
+
+    ing = _FakeIngestor()
+    coord = IndexCoordinator(spec, ing, card_gen_coordinator=_BoomCardGen())  # ty: ignore
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert ing.indexed == [doc_id]  # indexing succeeded despite the digest enqueue blowing up
+
+
 async def test_indexing_without_a_wiki_coordinator_still_works():
     spec = make_spec(default_user="u")
     cid = _collection(spec)
