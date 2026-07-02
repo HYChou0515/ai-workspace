@@ -352,6 +352,49 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     )
 
 
+class CachedChunk(Struct):
+    """#390: one chunk payload inside an :class:`IndexCache` entry — everything
+    needed to rebuild a ``DocChunk`` for a different doc WITHOUT re-parsing or
+    re-embedding. Mirrors the persisted ``DocChunk`` fields except identity
+    (``collection_id`` / ``source_doc_id`` are stamped fresh on copy). The
+    vectors are stored as plain ``list[float]`` (not a searchable ``Vector``):
+    the cache is a keyed blob looked up by id, never vector-queried."""
+
+    seq: int
+    start: int
+    end: int
+    text: str
+    parser_id: str = ""
+    provenance: dict[str, Any] = field(default_factory=dict)
+    embedding: list[float] | None = None
+    embedding_alt: list[float] | None = None
+
+
+class IndexCache(Struct):  # → resource "index-cache"
+    """#390: a reusable index result, so re-indexing content that was already
+    indexed under the same settings copies the chunks instead of re-parsing +
+    re-embedding (the expensive work).
+
+    Content-addressed: the resource id IS the composite key
+    ``hash(content.file_id + effective prompt + embedder identity)`` (see
+    ``kb.index_cache.compute_cache_key``) — so it is SHARED across docs and
+    collections (no ``Ref``: a moved/renamed doc, or the same bytes uploaded to a
+    second path, resolves the same entry). A hit guarantees the reused chunks
+    match what a fresh index would produce: same bytes (``content.file_id``),
+    same extraction settings, same embedding space (``embedder identity``).
+
+    Stores the whole index output: the chunk payloads (incl. raw vectors), the
+    extracted ``text`` (→ ``SourceDoc.text``), and the browser ``preview`` Binary
+    (regenerating it — e.g. soffice pptx→pdf — is itself expensive, so it is
+    cached too). Written when a real (cache-miss) index completes; read on the
+    producer path (upload / move). No GC in v1 — a superseded entry (content or
+    settings changed) is simply orphaned; a later sweep can drop stale rows."""
+
+    chunks: list[CachedChunk] = field(default_factory=list)
+    text: str | None = None
+    preview: Binary | None = None
+
+
 class IndexRun(Struct):  # → resource "index-run"
     """Issue #227: the fan-out **join state** for one indexing of a SourceDoc.
 

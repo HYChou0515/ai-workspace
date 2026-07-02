@@ -28,11 +28,13 @@ from .check_run import CheckRun
 from .citation_event import CitationEvent
 from .conversation import Conversation, Message
 from .kb import (
+    CachedChunk,
     CodeWikiBuildRun,
     Collection,
     ContextCard,
     DocChunk,
     DocQuestion,
+    IndexCache,
     IndexRun,
     IndexUnitText,
     KbChat,
@@ -51,6 +53,7 @@ from .sanity import (
 
 __all__ = [
     "AgentConfig",
+    "CachedChunk",
     "CitationEvent",
     "CodeWikiBuildRun",
     "Collection",
@@ -59,6 +62,7 @@ __all__ = [
     "CustomSanityQuestion",
     "DocChunk",
     "DocQuestion",
+    "IndexCache",
     "IndexRun",
     "IndexUnitText",
     "KbChat",
@@ -266,6 +270,11 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("provenance.jsonl_line", int, index_key="line"),
         ],
     )
+    # #390: cross-path index-result cache. Content-addressed (id = the composite
+    # key), shared across docs/collections, so no Ref and no indexed_fields — it
+    # is only ever a point get/put/delete by id. specstar's auto `updated_time`
+    # meta is enough for a future GC sweep ("drop rows unused for N days").
+    spec.add_model(IndexCache)
     # #227: fan-out join state, one row per doc (id = doc id). `status` indexed
     # so the safety sweep can find runs still "running" with no live jobs; the
     # per-doc active-run guard is a point get by id.
