@@ -737,6 +737,16 @@ def register_kb_routes(
 
         return StreamingResponse(gen(), media_type="text/event-stream")
 
+    async def _index_or_reuse(doc_id: str, collection_id: str) -> None:
+        """#390: index ``doc_id``, reusing a prior result when possible. If the
+        content was already indexed under the same settings + embedder, copy the
+        cached chunks on a worker thread (no parse, no embed, no queue) and the
+        doc is ready when this returns; otherwise enqueue a real index. The copy
+        is offloaded (a huge doc is thousands of chunk writes) so the event loop
+        never blocks."""
+        if not await asyncio.to_thread(ingestor.copy_from_cache, doc_id):
+            index_coordinator.enqueue(doc_id, collection_id)
+
     @app.post("/kb/collections/{collection_id}/documents")
     async def upload_document(
         collection_id: str,
@@ -770,7 +780,7 @@ def register_kb_routes(
                 },
             ) from rej
         for doc_id in ids:
-            index_coordinator.enqueue(doc_id, collection_id)
+            await _index_or_reuse(doc_id, collection_id)
         return UploadAccepted(document_ids=ids, status="indexing")
 
     # ── Issue #101: collection export (two-step prepare → stream) ──────────
@@ -951,6 +961,10 @@ def register_kb_routes(
                 continue
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
             rm.update(rid, msgspec.structs.replace(doc, status="indexing"))
+            # #390: reindex = force recompute. Drop the cached result first so the
+            # rebuild misses and repopulates it (refreshing the shared entry after
+            # a parser/prompt change the key doesn't capture).
+            ingestor.invalidate_cache(rid)
             index_coordinator.enqueue(rid, collection_id)
             count += 1
         return ReindexOut(reindexed=count)
@@ -1297,6 +1311,9 @@ def register_kb_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         assert isinstance(doc, SourceDoc)
         rm.update(doc_id, msgspec.structs.replace(doc, status="indexing"))
+        # #390: force recompute — drop the cached result so the rebuild misses and
+        # repopulates it (see reindex_collection).
+        ingestor.invalidate_cache(doc_id)
         index_coordinator.enqueue(doc_id, doc.collection_id)
         return ReindexOut(reindexed=1)
 
@@ -1375,7 +1392,7 @@ def register_kb_routes(
         for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
             chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
         rm.permanently_delete(doc_id)
-        index_coordinator.enqueue(new_id, old.collection_id)
+        await _index_or_reuse(new_id, old.collection_id)
         return DocMovedOut(moved_from=doc_id, moved_to=new_id)
 
     @app.get("/kb/documents/chunks")

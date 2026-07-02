@@ -11,7 +11,7 @@ from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.llm import ILlm
 from workspace_app.resources import make_spec
-from workspace_app.resources.kb import EMBED_DIM, SourceDoc
+from workspace_app.resources.kb import EMBED_DIM, DocChunk, SourceDoc
 from workspace_app.sandbox.mock import MockSandbox
 
 from ._client import TestClient
@@ -1422,3 +1422,106 @@ def test_list_documents_counts_chunks_via_aggregate_pushdown_not_materialisation
     }
     assert {d["path"]: d["chunks"] for d in items} == truth  # counts correct ...
     assert agg_calls >= 1  # ... reached via the GROUP BY push-down, not a loop.
+
+
+def _chunk_ids(spec: SpecStar, doc_id: str) -> set[str]:
+    rm = spec.get_resource_manager(DocChunk)
+    return {
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["source_doc_id"] == doc_id).build())
+    }
+
+
+def test_upload_same_bytes_new_path_is_served_from_cache_without_a_reindex():
+    # #390: once content is indexed (cache populated), the SAME bytes at a DIFFERENT
+    # path are served from the cache synchronously on the request — the doc is
+    # already "ready" with chunks BEFORE any background consumer runs.
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    body = b"# Doc\nalpha beta gamma delta epsilon"
+    client.post(f"/kb/collections/{cid}/documents", files={"file": ("a.md", body, "text/markdown")})
+    _drain(client)  # first index completes → its result is cached
+
+    client.post(f"/kb/collections/{cid}/documents", files={"file": ("b.md", body, "text/markdown")})
+    # NO _drain: a cache hit copied the chunks on the request thread.
+    doc2_id = encode_doc_id(cid, "b.md")
+    doc2 = spec.get_resource_manager(SourceDoc).get(doc2_id).data
+    assert isinstance(doc2, SourceDoc)
+    assert doc2.status == "ready"  # ready without a background index
+    assert _chunk_ids(spec, doc2_id)  # reused chunks are present
+
+
+def test_move_document_is_served_from_cache_without_a_reindex():
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    body = b"# A\nmovable body one two three"
+    client.post(f"/kb/collections/{cid}/documents", files={"file": ("a.md", body, "text/markdown")})
+    old_id = encode_doc_id(cid, "a.md")
+    _drain(client)  # index + cache
+
+    r = client.post(f"/kb/documents/move?id={old_id}&to=b.md")
+    assert r.status_code == 200
+    new_id = encode_doc_id(cid, "b.md")
+    # NO _drain: the move reused the cache synchronously.
+    doc = spec.get_resource_manager(SourceDoc).get(new_id).data
+    assert isinstance(doc, SourceDoc)
+    assert doc.status == "ready"
+    assert _chunk_ids(spec, new_id)
+
+
+def test_upload_of_new_content_still_enqueues_a_real_index():
+    # Cache MISS path is unaffected: brand-new bytes go through the queue and are
+    # only "ready" after the background consumer drains.
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    client.post(
+        f"/kb/collections/{cid}/documents",
+        files={"file": ("fresh.md", b"never seen before content", "text/markdown")},
+    )
+    doc_id = encode_doc_id(cid, "fresh.md")
+    assert spec.get_resource_manager(SourceDoc).get(doc_id).data.status == "indexing"
+    _drain(client)
+    assert spec.get_resource_manager(SourceDoc).get(doc_id).data.status == "ready"
+
+
+def test_reindex_document_invalidates_the_cache_then_repopulates():
+    # #390: reindex is the "force recompute" path — it drops the cached result so
+    # the rebuild misses, then the recompute repopulates it.
+    from workspace_app.kb.index_cache import IndexCacheStore
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    body = b"reindexable body one two three four"
+    client.post(f"/kb/collections/{cid}/documents", files={"file": ("a.md", body, "text/markdown")})
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+    ingestor = client.app.state.index_coordinator._ingestor  # noqa: SLF001
+    key = ingestor.cache_key(doc_id)
+    store = IndexCacheStore(spec)
+    assert store.get(key) is not None  # cached after the first index
+
+    r = client.post(f"/kb/documents/reindex?id={doc_id}")
+    assert r.status_code == 200
+    assert store.get(key) is None  # force path dropped the entry (recompute enqueued)
+
+    _drain(client)
+    assert store.get(key) is not None  # recompute repopulated it
+
+
+def test_reindex_collection_invalidates_the_cache():
+    from workspace_app.kb.index_cache import IndexCacheStore
+
+    client, spec = _client_and_spec()
+    cid = _new_collection(client)
+    body = b"collection reindex body alpha beta gamma"
+    client.post(f"/kb/collections/{cid}/documents", files={"file": ("a.md", body, "text/markdown")})
+    _drain(client)
+    doc_id = encode_doc_id(cid, "a.md")
+    ingestor = client.app.state.index_coordinator._ingestor  # noqa: SLF001
+    key = ingestor.cache_key(doc_id)
+    store = IndexCacheStore(spec)
+    assert store.get(key) is not None
+
+    r = client.post(f"/kb/collections/{cid}/reindex")
+    assert r.status_code == 200
+    assert store.get(key) is None  # collection reindex dropped it too
