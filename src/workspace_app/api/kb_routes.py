@@ -449,19 +449,28 @@ def _opt_int(v: object) -> int | None:
     return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
+def _indexed_of(m: object) -> dict[str, object]:
+    """A search meta's `indexed_data` as a plain dict. Rows persisted before
+    the meta store's indexed_data column (or before any index existed) carry
+    UNSET/None — normalise to `{}` so every reader degrades field-by-field."""
+    indexed = getattr(m, "indexed_data", None)
+    return indexed if isinstance(indexed, dict) else {}
+
+
 def _running_unit_progress(spec: SpecStar, collection_id: str) -> dict[str, DocUnitProgress]:
     """#395 Batch A: the in-flight fan-outs' unit progress for one collection,
     read as ONE metas search (`units_*` ride IndexRun's indexed_data, live
-    under the CAS bumps) — never a per-doc `IndexRunStore.get` point read."""
+    under the CAS bumps) — never a per-doc `IndexRunStore.get` point read.
+    A run written before the #395 unit indexes reads as a 0/0 bar until the
+    next fan-out re-seeds it (short-lived join state, no migrate ceremony)."""
     run_rm = spec.get_resource_manager(IndexRun)
     run_q = (QB["collection_id"] == collection_id) & (QB["status"] == "running")
     out: dict[str, DocUnitProgress] = {}
     for m in run_rm.search_resources(run_q.build()):
-        indexed = m.indexed_data if isinstance(m.indexed_data, dict) else {}
-        done, total = indexed.get("units_done"), indexed.get("units_total")
+        indexed = _indexed_of(m)
         out[m.resource_id] = DocUnitProgress(
-            units_done=done if isinstance(done, int) else 0,
-            units_total=total if isinstance(total, int) else 0,
+            units_done=_opt_int(indexed.get("units_done")) or 0,
+            units_total=_opt_int(indexed.get("units_total")) or 0,
         )
     return out
 
@@ -1197,7 +1206,7 @@ def register_kb_routes(
 
         items: list[DocumentRow] = []
         for m in metas:
-            indexed = m.indexed_data if isinstance(m.indexed_data, dict) else {}
+            indexed = _indexed_of(m)
             rid = m.resource_id
             # A row written before the v6 migrate has no `status` in its
             # indexed_data yet; surface it as "ready" (the overwhelmingly
@@ -1205,7 +1214,6 @@ def register_kb_routes(
             # the #395 note in `resources/__init__`.
             status = indexed.get("status") or "ready"
             run = runs_by_doc.get(rid) if status == "indexing" else None
-            size = indexed.get("content_size")
             ct = indexed.get("content_type")
             fid = indexed.get("file_id")
             units_done = run.units_done if run is not None else 0
@@ -1225,7 +1233,7 @@ def register_kb_routes(
                     status_detail=str(indexed.get("status_detail") or ""),
                     chunks=chunk_counts.get(rid, 0),
                     cited=cited.get(rid, 0),
-                    size=size if isinstance(size, int) else 0,
+                    size=_opt_int(indexed.get("content_size")) or 0,
                     updated_at=_ms(m.updated_time),
                     units_done=units_done,
                     units_total=units_total,
@@ -1260,9 +1268,14 @@ def register_kb_routes(
             # Pre-v6-migrate rows group under a missing status; fold them into
             # "ready" exactly like the list rows do.
             status = row.key if isinstance(row.key, str) and row.key else "ready"
-            counts[status] = counts.get(status, 0) + (row.n if isinstance(row.n, int) else 0)
-            if isinstance(row.latest, datetime):
-                latest = max(latest, _ms(row.latest))
+            n, newest = row.n, row.latest
+            # A GROUP BY row is a non-empty group by construction: its Count is
+            # an int and its Max(updated_time) a datetime (meta columns always
+            # carry one). Narrow for ty, coverage-clean.
+            assert isinstance(n, int)
+            assert isinstance(newest, datetime)
+            counts[status] = counts.get(status, 0) + n
+            latest = max(latest, _ms(newest))
         return DocumentsStatus(
             total=sum(counts.values()),
             counts=counts,

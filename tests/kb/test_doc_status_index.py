@@ -67,6 +67,26 @@ def test_migrate_backfills_status_index(tmp_path) -> None:
     assert [m.resource_id for m in drm.search_resources(q)] == [rid]
 
 
+def test_pre_395_index_run_rows_read_as_zero_progress(tmp_path) -> None:
+    # An IndexRun written before the #395 unit indexes has no units_* in its
+    # indexed_data — the metas read degrades to a 0/0 bar (no Schema/migrate
+    # ceremony for short-lived join state; the next fan-out re-seeds it fresh).
+    backend = _disk_backend(tmp_path)
+    old = SpecStar()
+    old.configure(default_user="u", backend=backend)
+    old.add_model(IndexRun, indexed_fields=["status"])  # the pre-#395 registration
+    old.get_resource_manager(IndexRun).create_or_update(
+        "doc-1", IndexRun(doc_id="doc-1", collection_id="coll-1", total=2, units_total=8)
+    )
+
+    rm = make_spec(default_user="u", backend=backend).get_resource_manager(IndexRun)
+    metas = rm.search_resources((QB["status"] == "running").build())
+    assert len(metas) == 1
+    indexed = metas[0].indexed_data
+    assert isinstance(indexed, dict)
+    assert "units_done" not in indexed  # the degradation the API folds to 0/0
+
+
 def test_index_run_progress_readable_from_metas(spec: SpecStar) -> None:
     # #395 Batch A: one collection-scoped metas search replaces the per-doc
     # `IndexRunStore.get` point-reads in the list loop — so a run's unit

@@ -1570,6 +1570,22 @@ def test_documents_status_of_an_empty_collection_is_all_zeroes():
     assert s == {"total": 0, "counts": {}, "runs": {}, "latest_ms": 0}
 
 
+def test_indexed_data_narrowing_degrades_missing_values():
+    # #395: rows persisted before an index existed miss keys (or the whole
+    # JSONB column) — every reader degrades field-by-field instead of crashing.
+    from workspace_app.api.kb_routes import _indexed_of, _opt_int
+
+    class _PreColumnMeta:  # indexed_data predates the meta store's column
+        indexed_data = None
+
+    assert _indexed_of(_PreColumnMeta()) == {}
+    assert _indexed_of(object()) == {}  # UNSET attribute
+    assert _opt_int(7) == 7
+    assert _opt_int(None) is None
+    assert _opt_int("7") is None
+    assert _opt_int(True) is None  # bool is an int subclass — not a count
+
+
 def test_documents_status_is_a_metas_only_aggregate(monkeypatch):
     # #395: same mechanism pin as the list — the poll target must stay a
     # GROUP BY push-down + metas search; a data-blob read (or a
