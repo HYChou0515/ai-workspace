@@ -36,6 +36,9 @@ _MAINTAINER_PROMPT = (Path(__file__).parent.parent / "prompts" / "wiki_maintaine
 _UNFOLDER_PROMPT = (Path(__file__).parent.parent / "prompts" / "wiki_unfolder.md").read_text(
     encoding="utf-8"
 )
+_CORRECTOR_PROMPT = (Path(__file__).parent.parent / "prompts" / "wiki_corrector.md").read_text(
+    encoding="utf-8"
+)
 
 # Default user-turn instruction for a fold pass (a source was added). The
 # unfold pass passes its own remove-oriented instruction.
@@ -80,6 +83,18 @@ def default_wiki_unfolder_config() -> AgentConfig:
     return AgentConfig(
         name="Wiki Unfolder",
         system_prompt=_UNFOLDER_PROMPT,
+        allowed_tools=list(_WIKI_MAINTAINER_TOOLS),
+    )
+
+
+def default_wiki_corrector_config() -> AgentConfig:
+    """The bundled wiki-CORRECTOR AgentConfig (#397): same toolset as the
+    maintainer, but a correction-oriented system prompt — it applies a user's
+    reported correction (optionally guided by a reference doc / named page) to the
+    affected pages instead of folding a source in."""
+    return AgentConfig(
+        name="Wiki Corrector",
+        system_prompt=_CORRECTOR_PROMPT,
         allowed_tools=list(_WIKI_MAINTAINER_TOOLS),
     )
 

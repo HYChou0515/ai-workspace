@@ -13,6 +13,7 @@ tools, proving the hook wires the right context end-to-end.
 
 from __future__ import annotations
 
+import pytest
 from agents import RunContextWrapper
 from specstar import QB
 from specstar.types import Binary
@@ -20,8 +21,9 @@ from specstar.types import Binary
 from workspace_app.agent.tools import read_new_source_impl, write_file_impl
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.wiki.coordinator import WikiMaintenanceCoordinator
+from workspace_app.kb.wiki.corrections import WikiNotEnabledError
 from workspace_app.kb.wiki.jobs import WikiMaintenanceJob
-from workspace_app.kb.wiki.store import WikiFileStore
+from workspace_app.kb.wiki.store import CORRECTIONS_DIR, WikiFileStore, correction_page_path
 from workspace_app.resources import Collection, SourceDoc, make_spec
 
 
@@ -100,6 +102,97 @@ async def test_deleting_a_source_runs_an_unfold_pass_with_its_snapshot():
     seen = "\n".join(runner.sources_seen)
     assert "ALICE secret fact" in seen  # removed content reached the remove-pass
     assert "report.md" in seen  # …labelled so the agent can grep pages for it
+
+
+class _CorrectionRunner:
+    """Stands in for the corrector LLM: records the user-turn instruction it was
+    handed and edits a page, so a test can prove the directive reached it."""
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def run(self, prompt, ctx):
+        self.prompts.append(prompt)
+        wrapped = RunContextWrapper(ctx)
+        await write_file_impl(wrapped, "/entities/foo.md", "corrected: founded 1998\n")
+        if False:
+            yield  # pragma: no cover — make this an async generator
+
+
+async def test_submit_correction_records_the_immune_page_and_runs_the_corrector():
+    """#397: submitting a correction (a) appends the corrected fact to the immune
+    /corrections/ page for the target and (b) runs the corrector with a directive
+    carrying the correction + reference + target page."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    store = WikiFileStore(spec)
+    runner = _CorrectionRunner()
+    coord = WikiMaintenanceCoordinator(spec, runner)
+
+    path = await coord.submit_correction(
+        cid,
+        instruction="Foo was founded in 1998, not 1989.",
+        target_page="/entities/foo.md",
+        reference="Annual report p.3: incorporated 1998.",
+        requested_by="alice",
+    )
+    # (a) the immune page is written immediately, keyed by the target page
+    assert path == correction_page_path("/entities/foo.md")
+    assert path.startswith(CORRECTIONS_DIR)
+    recorded = (await store.read(cid, path)).decode()
+    assert "Foo was founded in 1998, not 1989." in recorded
+
+    await coord.aclose()  # drain the queue → the corrector job runs
+
+    # (b) the corrector received the directive with the correction, target + reference
+    directive = "\n".join(runner.prompts)
+    assert "Foo was founded in 1998, not 1989." in directive
+    assert "/entities/foo.md" in directive
+    assert "Annual report p.3" in directive  # the reference rides the pass (Q9)
+
+
+async def test_submit_correction_on_a_non_wiki_collection_is_rejected():
+    """#397 Q13: a collection with no wiki has nothing to correct — submit raises
+    (the tool/route map it to a friendly message)."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=False))
+        .resource_id
+    )
+    coord = WikiMaintenanceCoordinator(spec, _CorrectionRunner())
+    with pytest.raises(WikiNotEnabledError):
+        await coord.submit_correction(cid, instruction="x is wrong")
+    with pytest.raises(WikiNotEnabledError):
+        await coord.submit_correction("no-such-collection", instruction="x is wrong")
+
+
+async def test_corrector_cannot_clobber_the_immune_corrections_page():
+    """#397: the corrector agent edits live pages but must NOT overwrite the immune
+    /corrections/ record (MaintainerWikiStore guards the folder)."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    store = WikiFileStore(spec)
+
+    class _Clobberer:
+        async def run(self, prompt, ctx):
+            wrapped = RunContextWrapper(ctx)
+            await write_file_impl(wrapped, correction_page_path("/x.md"), "CLOBBERED")
+            if False:
+                yield  # pragma: no cover
+
+    coord = WikiMaintenanceCoordinator(spec, _Clobberer())
+    path = await coord.submit_correction(cid, instruction="real fact", target_page="/x.md")
+    await coord.aclose()
+    assert "real fact" in (await store.read(cid, path)).decode()  # survived the agent
 
 
 async def test_fold_stamps_the_pages_with_the_source_uploader_not_the_worker():

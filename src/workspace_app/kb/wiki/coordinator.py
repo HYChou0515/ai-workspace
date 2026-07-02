@@ -51,9 +51,11 @@ from ..code_repo import CodeRepoIngestor, CodeRepoSyncError
 from ..job_audit import preserve_job_creator
 from .code_wiki import CodeWikiBuilder
 from .code_wiki_run import CodeWikiBuildRunStore
+from .corrections import WikiNotEnabledError, append_correction_page
 from .guidance import with_collection_guidance
 from .jobs import WikiJobPayload, WikiMaintenanceJob
 from .maintainer import (
+    default_wiki_corrector_config,
     default_wiki_maintainer_config,
     default_wiki_unfolder_config,
     run_wiki_maintainer,
@@ -108,6 +110,25 @@ _UNFOLD_INSTRUCTION = (
 )
 
 
+def _correction_instruction(payload) -> str:  # payload: WikiJobPayload
+    """Build the corrector's user-turn message from a ``correct`` payload (#397):
+    the directive, the optional target page, and the optional reference snapshot
+    (this pass only — never persisted). The corrector prompt handles the how."""
+    parts = [
+        "A user reported that the wiki is wrong and asked you to correct it.",
+        f"\n\nCorrection:\n{payload.correction}",
+    ]
+    if payload.target_page.strip():
+        parts.append(f"\n\nThe error is on (or near) this page: {payload.target_page}")
+    if payload.reference.strip():
+        parts.append(f"\n\nReference document to follow:\n{payload.reference}")
+    parts.append(
+        "\n\nThe corrected fact is also on record under /corrections/. Apply it to "
+        "the affected wiki page(s) now."
+    )
+    return "".join(parts)
+
+
 @dataclass
 class WikiBuildStatus:
     """Live progress of a collection's wiki maintenance, for the FE's
@@ -137,6 +158,7 @@ class WikiMaintenanceCoordinator:
         *,
         agent_config: AgentConfig | None = None,
         unfolder_config: AgentConfig | None = None,
+        corrector_config: AgentConfig | None = None,
         maintainer_max_turns: int = 40,
         message_queue_factory: object | None = None,
         get_user_id: Callable[[], str] | None = None,
@@ -171,6 +193,7 @@ class WikiMaintenanceCoordinator:
         self._get_user_id = get_user_id or (lambda: spec.get_resource_manager(SourceDoc).user)
         self._agent_config = agent_config or default_wiki_maintainer_config()
         self._unfolder_config = unfolder_config or default_wiki_unfolder_config()
+        self._corrector_config = corrector_config or default_wiki_corrector_config()
         self._maintainer_max_turns = maintainer_max_turns
         self._doc_rm = spec.get_resource_manager(SourceDoc)
         self._coll_rm = spec.get_resource_manager(Collection)
@@ -300,6 +323,70 @@ class WikiMaintenanceCoordinator:
                     partition_key=cid,
                 )
             )
+
+    async def submit_correction(
+        self,
+        collection_id: str,
+        *,
+        instruction: str,
+        target_page: str = "",
+        reference: str = "",
+        requested_by: str | None = None,
+    ) -> str:
+        """#397: record a user's wiki correction and schedule its application.
+
+        The corrected fact is appended to the collection's builder-immune
+        ``/corrections/`` page (regression-proof across rebuilds — Q1/Q5), and a
+        ``correct`` job is enqueued (``partition_key`` = collection id, so it
+        serialises with folds) for the corrector agent to apply it to the live
+        pages. Returns the corrections page path. Raises ``WikiNotEnabledError``
+        when the collection has no wiki — there is nothing to correct (Q13).
+
+        This is the single convergence point both entry paths call: the
+        ``request_wiki_update`` agent tool and the FE "回報有誤" route."""
+        try:
+            coll = self._coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError as exc:
+            raise WikiNotEnabledError(collection_id) from exc
+        if not (isinstance(coll, Collection) and coll.use_wiki):
+            raise WikiNotEnabledError(collection_id)
+
+        actor = requested_by if requested_by is not None else self._get_user_id()
+        with self._wiki_store.acting_as(actor):
+            path = await append_correction_page(
+                self._wiki_store,
+                collection_id=collection_id,
+                target_page=target_page,
+                instruction=instruction,
+                actor=actor,
+                has_reference=bool(reference.strip()),
+            )
+        # #186: the build-state row + the job are both credited to the requester.
+        # Bump the batch counter (like a fold) so the FE shows the wiki "updating".
+        with self._state_rm.using(user=actor), self._job_rm.using(user=actor):
+            fresh = self._active_count(collection_id) == 0
+            self._update_state(
+                collection_id,
+                lambda s: (
+                    WikiBuildState(collection_id=collection_id, total=1)
+                    if fresh
+                    else msgspec.structs.replace(s, total=s.total + 1)
+                ),
+            )
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(
+                        collection_id=collection_id,
+                        source_path="",
+                        op="correct",
+                        correction=instruction,
+                        reference=reference,
+                        target_page=target_page,
+                    ),
+                    partition_key=collection_id,
+                )
+            )
+        return path
 
     def enqueue_code_sync(self, collection_id: str, *, requested_by: str | None = None) -> None:
         """#355: enqueue a ``code_sync`` job — clone the collection's git_url +
@@ -509,6 +596,10 @@ class WikiMaintenanceCoordinator:
                 # preserve — credit the scrub to whoever triggered it (the job's
                 # creator, i.e. the user who deleted the source).
                 self._handle_unfold(payload, triggered_by=actor)
+            elif payload.op == "correct":
+                # #397: credit the correction's page edits to whoever submitted it
+                # (the job's creator), like an unfold — there's no source updater.
+                self._handle_correct(payload, triggered_by=actor)
             else:
                 self._handle_fold(payload)
 
@@ -605,6 +696,43 @@ class WikiMaintenanceCoordinator:
                     s,
                     errors=s.errors + 1,
                     last_error=s.last_error or "the unfold run failed",
+                ),
+            )
+        self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
+
+    def _handle_correct(self, payload, *, triggered_by: str) -> None:
+        """#397: apply a user's reported correction to the wiki. There's no source
+        doc — the directive (with any snapshotted reference + target page) rides the
+        payload and becomes the corrector's user-turn instruction; the corrector
+        config's prompt tells it to locate + fix the affected pages. Page edits are
+        credited to the submitter (the job's creator), like an unfold."""
+        cid = payload.collection_id
+        self._update_state(
+            cid, lambda s: msgspec.structs.replace(s, current="a correction", phase="identifying")
+        )
+        try:
+            with self._wiki_store.acting_as(triggered_by):
+                asyncio.run(
+                    run_wiki_maintainer(
+                        self._runner,
+                        wiki_store=self._wiki_store,
+                        wiki_sources=SpecstarWikiSources(self._spec, cid),
+                        collection_id=cid,
+                        new_source="",  # a correction has no new source to fold
+                        agent_config=self._maintainer_config(cid, self._corrector_config),
+                        max_turns=self._maintainer_max_turns,
+                        on_event=self._phase_tracker(cid),
+                        instruction=_correction_instruction(payload),
+                    )
+                )
+        except Exception:
+            _LOGGER.exception("wiki correction run failed for %s", cid)
+            self._update_state(
+                cid,
+                lambda s: msgspec.structs.replace(
+                    s,
+                    errors=s.errors + 1,
+                    last_error=s.last_error or "the correction run failed",
                 ),
             )
         self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
