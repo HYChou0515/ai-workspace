@@ -36,6 +36,16 @@ class Embedder(Protocol):
         width."""
         ...
 
+    @property
+    def identity(self) -> str:
+        """A stable string that changes iff the DOCUMENT vectors this embedder
+        produces could change — the model (or hash width) plus the doc-side
+        instruction prefix. The #390 index cache keys on it so a cache hit
+        guarantees the reused vectors live in the same space; swapping the
+        embedder model (or its doc prefix) yields a fresh identity → a miss →
+        a real re-embed, never a stale cross-space vector."""
+        ...
+
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         """Embed a batch of documents (applying the document-side prefix);
         returns one `dim`-length vector per input, in order."""
@@ -76,6 +86,11 @@ class HashEmbedder(_PrefixedEmbedder):
     @property
     def dim(self) -> int:
         return self._dim
+
+    @property
+    def identity(self) -> str:
+        # doc_prefix changes the stored vector; query_prefix does not (search-only).
+        return f"hash-{self._dim}\x00{self._doc_prefix}"
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         return [self._vec(t) for t in texts]
@@ -141,6 +156,12 @@ class LitellmEmbedder(_PrefixedEmbedder):
     @property
     def dim(self) -> int:
         return self._dim
+
+    @property
+    def identity(self) -> str:
+        # model determines the vector space (and dim); doc_prefix also shifts the
+        # stored vector. query_prefix is search-only and deliberately excluded.
+        return f"litellm-{self._model}\x00{self._doc_prefix}"
 
     def _embed(self, texts: list[str]) -> list[list[float]]:
         # A big document yields many chunks — send them in bounded batches so one
