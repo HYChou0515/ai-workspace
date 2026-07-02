@@ -152,6 +152,18 @@ async def test_create_provisions_workspace_uid_cgroup_and_acl(isolated):
     assert isolated.acl_calls == [_acl_argv(ws, os.getuid())]
 
 
+async def test_create_provisions_per_sandbox_home_writable_by_uid(isolated):
+    """#393: create must provision a per-sandbox `.home` (a workspace sibling,
+    in the infra area) owned by the sandbox uid + 0700 — so the dropped uid can
+    write the carrier launcher's HOME/caches and a `pip --user` install there,
+    isolated from other sandboxes on the pod."""
+    h = await isolated.create(SandboxSpec())
+    home = isolated._require(h) / ".home"
+    st = home.stat()
+    assert st.st_uid == os.getuid()
+    assert st.st_mode & 0o777 == 0o700
+
+
 async def test_kill_frees_identity_and_reaps_cgroup(isolated):
     h = await isolated.create(SandboxSpec())
     ident = isolated._identities[h.id]

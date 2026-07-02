@@ -25,7 +25,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .local_process import LocalProcessSandbox
+from .local_process import _HOME, LocalProcessSandbox
 from .protocol import SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
@@ -211,6 +211,12 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         os.chown(workspace, uid, -1)
         os.chmod(workspace, 0o700)
         self._acl_runner(_acl_argv(workspace, uid))
+        # #393: the per-sandbox HOME (a workspace sibling) must be writable by
+        # the dropped uid so the carrier launcher's HOME/caches + a user's `pip
+        # --user` install land there. No default ACL — only the uid writes here.
+        home = workspace.parent / _HOME
+        os.chown(home, uid, -1)
+        os.chmod(home, 0o700)
 
     async def kill(self, handle: SandboxHandle) -> None:
         ident = self._identities.pop(handle.id, None)
