@@ -37,9 +37,14 @@ _LAUNCH = """\
 #!/bin/sh
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
-# Caches go to /tmp (writable, outside the workspace, never synced) — the tool
-# dir may be a read-only mount, and ~/.cache would otherwise pollute the workspace.
-export HOME=/tmp XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/.config/matplotlib
+# HOME (caches + any `pip --user` fallback) goes to a per-sandbox dir the exec
+# path passes as SANDBOX_HOME — NOT a shared /tmp. The unset fallback is a
+# fresh PRIVATE `mktemp -d`, never the shared pod /tmp: forgetting to set it
+# degrades to non-persistent, it can never leak to a location other sandboxes
+# see (#393). HOME must be writable + outside the workspace (the tool dir may
+# be read-only, and ~/.cache would otherwise pollute the synced workspace).
+export HOME="${{SANDBOX_HOME:-$(mktemp -d)}}"
+export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$here/.venv/bin/{tool}" "$@"
 """
@@ -64,7 +69,17 @@ _PYTHON_LAUNCH = """\
 self=$(readlink -f "$0" 2>/dev/null || echo "$0")
 here=$(CDPATH= cd -- "$(dirname -- "$self")" && pwd)
 export PYTHONPATH="$here/.venv/lib/python{ver}/site-packages${{PYTHONPATH:+:$PYTHONPATH}}"
-export HOME=/tmp XDG_CACHE_HOME=/tmp/.cache MPLCONFIGDIR=/tmp/.config/matplotlib
+# HOME (caches + any `pip --user` install fallback) → a per-sandbox dir the exec
+# path passes as SANDBOX_HOME. A user's `pip install --break-system-packages X`
+# can't write the root-owned carrier venv, so pip defaults to `--user` = $HOME/
+# .local; pointing HOME at a per-sandbox dir keeps that install (and matplotlib
+# caches) private to this sandbox and reaped with it. The unset fallback is a
+# PRIVATE `mktemp -d`, NEVER the shared pod /tmp — so a caller that forgets to
+# set SANDBOX_HOME degrades to non-persistent, never leaks across sandboxes
+# (#393). In the userns jail the exec path passes SANDBOX_HOME=/tmp explicitly,
+# where /tmp is a per-exec ephemeral tmpfs (safe there).
+export HOME="${{SANDBOX_HOME:-$(mktemp -d)}}"
+export XDG_CACHE_HOME="$HOME/.cache" MPLCONFIGDIR="$HOME/.config/matplotlib"
 ld=$(ls /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1 2>/dev/null | head -n1)
 exec "$ld" "$here/python/bin/python{ver}" "$@"
 """
@@ -156,9 +171,10 @@ def build_package(*, name: str, source: Path, dst: Path, force: bool = False) ->
         # Use the venv's console_script entrypoint as the "launch" for
         # schema-dumping.
         _dump_schemas(venv / "bin" / name, dst)
-    # Record the source content-hash so the next prebuild can tell whether
-    # anything actually changed (mtime is unreliable; see _should_rebuild).
-    (dst / ".built").write_text(_source_hash(source))
+    # Record the build stamp (source content-hash + launcher-template
+    # fingerprint) so the next prebuild can tell whether anything actually
+    # changed (mtime is unreliable; see _should_rebuild).
+    (dst / ".built").write_text(_build_stamp(source))
 
 
 # uv-run debug launchers (#63): no bundled python/venv. The package source is
@@ -270,19 +286,44 @@ def _source_hash(source: Path) -> str:
     return h.hexdigest()
 
 
+def _builder_fingerprint() -> str:
+    """A digest of the launch templates baked INTO each bundle at build time.
+
+    Folded into the ``.built`` stamp so that editing a launcher template
+    (`_LAUNCH` / `_PYTHON_LAUNCH`) forces a rebuild of already-built bundles.
+    `_source_hash(source)` cannot see such an edit — the template is builder
+    code, not package source, yet it is written into the bundle's `launch`.
+    Without this, changing `_PYTHON_LAUNCH` (e.g. #393's `SANDBOX_HOME`
+    routing) would silently keep the stale `launch` in every cached bundle,
+    the same stale-cache class as #64's version-keyed wheel."""
+    h = hashlib.sha256()
+    for tpl in (_LAUNCH, _PYTHON_LAUNCH):
+        h.update(tpl.encode())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
+def _build_stamp(source: Path) -> str:
+    """The value recorded in ``dst/.built``: the source content hash AND the
+    builder fingerprint. A rebuild fires when EITHER changes."""
+    return f"{_source_hash(source)}\n{_builder_fingerprint()}"
+
+
 def _should_rebuild(source: Path, dst: Path) -> bool:
-    """True iff ``dst`` is missing its build marker or ``source``'s
-    content hash differs from the one recorded at the last build.
+    """True iff ``dst`` is missing its build marker or its recorded stamp
+    differs from the current one — i.e. the ``source`` content OR the launch
+    templates baked into the bundle changed since the last build.
 
     Content-hash, not mtime (#64): uv caches built wheels keyed by
     version, so a same-version edit could land the stale wheel; the old
     mtime check made it worse by not even noticing edits whose mtime
     didn't advance. Hashing the tree triggers a rebuild on any content
-    change. The build itself then forces uv to refresh the local wheel."""
+    change. The build itself then forces uv to refresh the local wheel.
+    The builder fingerprint (#393) extends this to launcher-template edits."""
     marker = dst / ".built"
     if not marker.exists():
         return True
-    return marker.read_text().strip() != _source_hash(source)
+    return marker.read_text().strip() != _build_stamp(source).strip()
 
 
 def _dump_schemas(launch: Path, dst: Path) -> None:
