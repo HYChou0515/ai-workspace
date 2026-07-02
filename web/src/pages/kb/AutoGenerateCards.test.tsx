@@ -4,9 +4,15 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
+import { qk } from "../../api/queryKeys";
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
-import { QueryWrap } from "../../test/queryWrapper";
+import {
+  makeTestQueryClient,
+  QueryWrap,
+  renderWithQuery,
+} from "../../test/queryWrapper";
 import { AutoGenerateCards } from "./AutoGenerateCards";
+import { fetchAllDocs } from "./KbDocIde";
 
 const renderModal = (onClose: () => void = () => {}) =>
   render(
@@ -35,6 +41,28 @@ describe("AutoGenerateCards (#175)", () => {
 
     expect(await screen.findByTestId("cardgen-committed")).toBeInTheDocument();
     expect(await mockKbApi.listContextCards("col-1")).toHaveLength(1);
+  });
+
+  it("keeps the picker populated when the shared documents cache already holds a bare array (#394)", async () => {
+    // The collection page's index-status strip is always live and writes the
+    // shared qk.kb.documents(cid) key as a bare KbDocument[] (via fetchAllDocs).
+    // The picker must read through that same shape — not a {items} page — or it
+    // shows "No documents." even though the collection is full. Priming the key
+    // exactly as the strip would reproduces #394.
+    await mockKbApi.uploadDocument("col-1", new File(["x"], "shared.md"));
+    const client = makeTestQueryClient();
+    client.setQueryData(
+      qk.kb.documents("col-1"),
+      await fetchAllDocs(mockKbApi, "col-1"),
+    );
+
+    renderWithQuery(
+      <AutoGenerateCards collectionId="col-1" client={mockKbApi} onClose={() => {}} />,
+      client,
+    );
+
+    expect(await screen.findByText("shared.md")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox")).toBeInTheDocument();
   });
 
   it("offers a todo.md bulk view of the proposals", async () => {
