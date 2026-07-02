@@ -8,6 +8,9 @@
 
 本計畫由 `/grill-me` 逐題鎖定(Q1–Q16),見 §1。實作走 `/tdd`,flat phase(見 §5)。
 
+> **進度**:P1–P5 全部 TDD 完成、每 phase 一 commit。後端單元測試綠、ruff/ty
+> 全專案清、FE vitest + tsc + build 綠。P6(DoD gate + PR)進行中。
+
 ---
 
 ## 1 · 鎖定的決策(grilling Q1–Q16)

@@ -171,6 +171,46 @@ async def test_submit_correction_on_a_non_wiki_collection_is_rejected():
         await coord.submit_correction("no-such-collection", instruction="x is wrong")
 
 
+async def test_bare_correction_directive_omits_target_and_reference():
+    # No target page + no reference → the corrector directive carries just the
+    # correction (covers _correction_instruction's skip branches).
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    runner = _CorrectionRunner()
+    coord = WikiMaintenanceCoordinator(spec, runner)
+    await coord.submit_correction(cid, instruction="the widget count is wrong")
+    await coord.aclose()
+    directive = "\n".join(runner.prompts)
+    assert "the widget count is wrong" in directive
+    assert "on (or near) this page" not in directive  # no target page named
+    assert "Reference document" not in directive  # no reference provided
+
+
+async def test_correction_run_failure_is_recorded_on_the_build_state():
+    # A corrector that raises must not wedge the partition — the error is caught
+    # and surfaced on the build state (like fold/unfold).
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+
+    class _Boom:
+        async def run(self, prompt, ctx):
+            raise RuntimeError("corrector exploded")
+            yield  # pragma: no cover — unreachable, makes this an async generator
+
+    coord = WikiMaintenanceCoordinator(spec, _Boom())
+    await coord.submit_correction(cid, instruction="fix it")
+    await coord.aclose()
+    assert coord.status(cid).errors >= 1  # the failure was recorded, not swallowed
+
+
 async def test_corrector_cannot_clobber_the_immune_corrections_page():
     """#397: the corrector agent edits live pages but must NOT overwrite the immune
     /corrections/ record (MaintainerWikiStore guards the folder)."""

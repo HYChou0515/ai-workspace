@@ -86,3 +86,11 @@ def test_ask_without_questions_becomes_a_draft():
     llm = _FakeLlm('{"action": "ask", "questions": []}')
     out = draft_correction(llm, question="q", answer="a")
     assert out.action == "draft"
+
+
+def test_malformed_json_object_falls_back_to_a_best_effort_draft():
+    # Braces present but not valid JSON → DecodeError → best-effort draft.
+    llm = _FakeLlm("{not: valid json,}")
+    out = draft_correction(llm, question="q", answer="a")
+    assert out.action == "draft"
+    assert out.instruction == "{not: valid json,}"

@@ -44,6 +44,12 @@ async def test_repeated_corrections_to_the_same_page_merge():
     assert "first fix" in page and "second fix" in page  # both survive on one file
 
 
+def test_correction_page_path_collapses_repeated_separators():
+    # A target with consecutive non-word chars slugs to a single dash between
+    # segments (no empty "--" runs, no leading/trailing dash).
+    assert correction_page_path("/entities//foo.md") == CORRECTIONS_DIR + "entities-foo.md"
+
+
 async def test_untargeted_correction_falls_to_general():
     spec = make_spec(default_user="u")
     store = WikiFileStore(spec)

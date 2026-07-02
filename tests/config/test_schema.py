@@ -255,8 +255,13 @@ def test_bundled_presets_include_qwen3_claude_openai_and_kb_default():
     assert presets["kb-default"].model == "ollama_chat/qwen3:14b"
     # kb-default ships kb_search so the KB chat works out of the box, plus
     # lookup_glossary (#106) so an unknown term resolves from the glossary
-    # before the slow kb_search.
-    assert presets["kb-default"].allowed_tools == ["kb_search", "lookup_glossary"]
+    # before the slow kb_search, plus request_wiki_update (#397) so the user can
+    # report a wrong answer for the wiki to correct.
+    assert presets["kb-default"].allowed_tools == [
+        "kb_search",
+        "lookup_glossary",
+        "request_wiki_update",
+    ]
 
 
 def test_bundled_kb_retrieval_preset_has_only_model():
