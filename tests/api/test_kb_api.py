@@ -492,7 +492,10 @@ def _set_quality(spec, doc_id, *, score, rationale="", breakdown=None):
 
 def test_list_documents_exposes_quality_score():
     # #105: the per-doc quality score rides the list row so the FE can draw a
-    # quality badge + sort. Un-scored docs report null (neutral).
+    # quality badge + sort. Un-scored docs report null (neutral). #395: the
+    # rationale intentionally does NOT ride the row any more — it is shown only
+    # for the opened doc, whose `render_document` response carries it (covered
+    # by test_render_document_exposes_quality_rationale_and_breakdown).
     client, spec = _client_and_spec()
     cid = _new_collection(client)
     _upload(client, cid, "a.md")
@@ -500,11 +503,10 @@ def test_list_documents_exposes_quality_score():
     doc_id = encode_doc_id(cid, "a.md")
     row = next(d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"])
     assert row["quality_score"] is None  # un-scored = neutral
-    assert row["quality_rationale"] == ""
     _set_quality(spec, doc_id, score=73, rationale="Clear and complete.")
     row = next(d for d in client.get(f"/kb/collections/{cid}/documents").json()["items"])
     assert row["quality_score"] == 73
-    assert row["quality_rationale"] == "Clear and complete."
+    assert "quality_rationale" not in row
 
 
 def test_list_documents_can_sort_by_quality_worst_first():
@@ -1422,6 +1424,114 @@ def test_list_documents_counts_chunks_via_aggregate_pushdown_not_materialisation
     }
     assert {d["path"]: d["chunks"] for d in items} == truth  # counts correct ...
     assert agg_calls >= 1  # ... reached via the GROUP BY push-down, not a loop.
+
+
+def test_list_documents_serves_rows_from_metas_never_the_data_blobs(monkeypatch):
+    # #395: the documents list is a METAS-ONLY read — one indexed search whose
+    # `indexed_data` already carries every rendered field. WHY this guard: the
+    # rows look identical if a refactor re-introduces `list_resources`, but
+    # that path fetches every row's full data blob (the multi-KB extracted
+    # `text` included) one SELECT at a time — which IS the #395 slowness. So we
+    # pin the MECHANISM: the SourceDoc manager may only be reached through
+    # `search_resources` / `count_resources`; any data-blob read blows up. The
+    # same applies to the per-doc `IndexRunStore.get` point-reads the old row
+    # loop made for indexing docs (Batch A replaced them with one
+    # collection-scoped metas search).
+    from workspace_app.kb.index_run import IndexRunStore
+
+    client, spec = _client_and_spec()
+    cid = _upload_two_chunky_docs(client)
+
+    drm = spec.get_resource_manager(SourceDoc)
+    searches = 0
+    real_search = drm.search_resources
+
+    def _spy(*a, **k):
+        nonlocal searches
+        searches += 1
+        return real_search(*a, **k)
+
+    def _boom(*a, **k):
+        raise AssertionError("the documents list touched the data table")
+
+    monkeypatch.setattr(drm, "search_resources", _spy)
+    for blob_read in ("list_resources", "get_partial", "get_resource_revision", "get"):
+        monkeypatch.setattr(drm, blob_read, _boom)
+    monkeypatch.setattr(IndexRunStore, "get", _boom)
+
+    items = client.get(f"/kb/collections/{cid}/documents").json()["items"]
+
+    assert searches >= 1  # served from the meta index ...
+    by_path = {d["path"]: d for d in items}
+    assert set(by_path) == {"a.md", "b.md"}  # ... with the rows still whole:
+    for row in by_path.values():
+        assert row["status"] == "ready"
+        assert row["content_type"].startswith("text/")  # the sniffed MIME rides the index
+        assert row["file_id"]  # sibling-image/download URLs build from the row (#87)
+        assert row["size"] > 0
+        assert row["chunks"] > 0
+
+
+def test_list_documents_shows_pre_migrate_rows_as_ready(tmp_path):
+    # #395: a doc written before the v6 backfill has no `status` in its
+    # indexed_data. The list surfaces it as "ready" (the overwhelmingly common
+    # terminal state for old rows) rather than crashing or hiding it — the
+    # operator closes the window with POST /source-doc/migrate/execute.
+    from specstar import BackendBinding, BackendConfig, ConnectionProfile
+    from specstar.types import Binary, IndexableField
+
+    from workspace_app.resources.kb import Collection
+
+    backend = BackendConfig(
+        connections={"local": ConnectionProfile(type="disk", options={"rootdir": str(tmp_path)})},
+        meta=BackendBinding(use="local"),
+        resource=BackendBinding(use="local"),
+        blob=BackendBinding(use="local"),
+    )
+    # Pre-#395 registration: the v5-era index set (no status/status_detail/...).
+    old = SpecStar()
+    old.configure(default_user="u", backend=backend)
+    old.add_model(Collection)
+    old.add_model(
+        SourceDoc,
+        indexed_fields=[
+            "collection_id",
+            IndexableField("content.size", int, index_key="content_size"),
+            IndexableField("path", str),
+        ],
+    )
+    cid = old.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    old.get_resource_manager(SourceDoc).create(
+        SourceDoc(
+            collection_id=cid,
+            path="old.md",
+            content=Binary(data=b"# old", content_type="text/markdown"),
+            status="error",  # stored on the blob, but invisible to the meta index
+            status_detail="boom",
+        )
+    )
+
+    app = create_app(
+        spec=make_spec(backend=backend),
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        kb_embedder=HashEmbedder(dim=EMBED_DIM),
+        kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
+    )
+    row = TestClient(app).get(f"/kb/collections/{cid}/documents").json()["items"][0]
+    assert row["path"] == "old.md"
+    assert row["status"] == "ready"  # the documented pre-backfill window
+    assert row["status_detail"] == ""
+
+
+def test_list_documents_accepts_a_fetch_all_sized_limit():
+    # #395: the doc IDE fetches the whole collection in ONE request; the old
+    # `le=500` cap forced ⌈N/200⌉ serial round-trips.
+    client = _client()
+    cid = _new_collection(client)
+    r = client.get(f"/kb/collections/{cid}/documents?limit=2000")
+    assert r.status_code == 200
 
 
 def _chunk_ids(spec: SpecStar, doc_id: str) -> set[str]:

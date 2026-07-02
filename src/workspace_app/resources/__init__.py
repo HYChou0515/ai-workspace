@@ -225,13 +225,15 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # decodes to `None`, the neutral default) and only become countable in the
     # new index after `POST /source-doc/migrate/execute` re-extracts them; they
     # are never penalised in search while un-scored.
-    # #395: `status` + `status_detail` + `content.content_type` indexed so the
-    # document list is servable from search METAS alone — the old
-    # `list_resources` path fetched every row's full data blob (including the
-    # multi-KB extracted `text`) one SELECT at a time, only to keep a dozen
-    # small fields. These three were the only list-rendered fields not already
-    # in `indexed_data`; with them the list/status endpoints never touch the
-    # data table (blobs are read exclusively by the open-a-document path).
+    # #395: `status` + `status_detail` + `content.content_type` +
+    # `content.file_id` indexed so the document list is servable from search
+    # METAS alone — the old `list_resources` path fetched every row's full data
+    # blob (including the multi-KB extracted `text`) one SELECT at a time, only
+    # to keep a dozen small fields. These four were the only list-rendered
+    # fields not already in `indexed_data` (`file_id` is how the FE builds
+    # sibling-image / download blob URLs straight from a row, #87/#247); with
+    # them the list/status endpoints never touch the data table (blobs are
+    # read exclusively by the open-a-document path).
     # `status_detail` is display data, not a filter key — indexing it is a
     # deliberate projection trade-off (its writer caps it at 240 chars).
     # Bumped v5 → v6 with a no-op reindex step; pre-#395 rows surface a missing
@@ -254,6 +256,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("status", str),
             IndexableField("status_detail", str),
             IndexableField("content.content_type", str, index_key="content_type"),
+            IndexableField("content.file_id", str, index_key="file_id"),
         ],
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the

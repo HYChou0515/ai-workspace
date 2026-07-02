@@ -42,7 +42,6 @@ from ..kb.findability import (
     doc_passages_in_top_k,
     probe_findability,
 )
-from ..kb.index_run import IndexRunStore
 from ..kb.ingest import Ingestor
 from ..kb.links import rewrite_md_links
 from ..kb.llm import ILlm
@@ -50,7 +49,7 @@ from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
-from ..resources.kb import Collection, DocChunk, SourceDoc
+from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
 from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
 from .notifications import notify
 
@@ -364,16 +363,12 @@ class DocumentRow(BaseModel):
     units_total: int = 0
     # #105: the AI's quality grade (0–100) for this doc as a knowledge source, or
     # null when un-scored (no rubric / not yet judged) — the FE draws a quality
-    # badge from it and can sort the list by it. The short `quality_rationale`
-    # rides the row too so the doc IDE's status bar can show "why" without a
-    # per-doc render call; the (larger) per-dimension breakdown stays on the
-    # `render_document` detail.
+    # badge from it and can sort the list by it. #395: the `quality_rationale`
+    # and the #356 `parser_guidance_override` no longer ride the row — they are
+    # only ever shown for the OPENED document, whose `render_document` response
+    # already carries both; keeping them off the list keeps the row servable
+    # from `indexed_data` alone.
     quality_score: int | None = None
-    quality_rationale: str = ""
-    # #356: this doc's per-doc parser-guidance override (the Tune-parsing escape
-    # hatch). "" ⇒ inherits the collection guidance. Rides the row so the modal
-    # prefills its editor without a separate render call.
-    parser_guidance_override: str = ""
 
 
 class CollectionImported(BaseModel):
@@ -425,6 +420,12 @@ class UploadCheckHintOut(BaseModel):
 
 def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
+
+
+def _opt_int(v: object) -> int | None:
+    """Narrow an `indexed_data` value to the optional int it was written as
+    (`bool` is an `int` subclass — exclude it)."""
+    return v if isinstance(v, int) and not isinstance(v, bool) else None
 
 
 def _granted_user_ids(perm: Permission | None) -> set[str]:
@@ -1095,7 +1096,7 @@ def register_kb_routes(
     async def list_documents(
         collection_id: str,
         offset: int = Query(0, ge=0),
-        limit: int = Query(50, ge=1, le=500),
+        limit: int = Query(50, ge=1, le=5000),
         sort: str = Query("recent"),
     ) -> DocumentsPage:
         """Paged list of a collection's documents. `collection_id` is the
@@ -1104,6 +1105,14 @@ def register_kb_routes(
         full collection just to slice it (see
         `feedback_specstar_indexed_queries`). `total` is computed via the
         same filter — counts only, no row materialisation.
+
+        #395: a METAS-ONLY read. Every rendered field rides `indexed_data`
+        (see the v6 index list in `resources/__init__`), so the whole page is
+        one meta search + two count push-downs + one IndexRun metas search —
+        the data table (whose per-row blob embeds the multi-KB extracted
+        `text`) is never touched here; only the open-a-document path reads it.
+        The `le=5000` cap lets the doc IDE's fetch-all arrive in one request
+        for any realistic collection instead of ⌈N/200⌉ serial round-trips.
 
         `sort` (#105): `recent` (default) = newest first; `quality` = worst
         quality first (the indexed `quality_score` ascending) so the FE's "sort
@@ -1127,13 +1136,11 @@ def register_kb_routes(
             if sort == "quality"
             else q.sort(QB.created_time().desc(), QB.resource_id().asc())
         )
-        items: list[DocumentRow] = []
-        data_page = list(rm.list_resources(ordering.offset(offset).limit(limit).build()))
-        # `r.info.resource_id` (NOT `r.meta.*`) is the resource_id stored on
-        # `DocChunk.source_doc_id` / on a `CitationEvent.document_id` at ingest —
-        # the IN filters keyed below must use the SAME attribute, and the lookups
-        # further down read back by it.
-        ids = [r.info.resource_id for r in data_page]  # ty: ignore[unresolved-attribute]
+        metas = rm.search_resources(ordering.offset(offset).limit(limit).build())
+        # `meta.resource_id` is the id stored on `DocChunk.source_doc_id` / on a
+        # `CitationEvent.document_id` at ingest — the IN filters keyed below use
+        # the SAME id, and the lookups further down read back by it.
+        ids = [m.resource_id for m in metas]
         # Per-page counts for THIS page's docs only. Both are scoped, indexed
         # `... IN (ids)` `Count` GROUP BY push-downs returning {doc_id: n}: no
         # global group-by over the whole log, and — crucially for #103 — no
@@ -1143,50 +1150,54 @@ def register_kb_routes(
         cited = doc_cited_for_ids(spec, ids)
         chunk_counts = doc_chunks_for_ids(spec, ids)
 
-        # #248: unit progress for the docs still fanning out on this page. The run
-        # is keyed by doc id and only exists for an in-flight (or just-finished)
-        # fan-out, so this is a bounded per-indexing-doc lookup, never a scan.
-        runs = IndexRunStore(spec)
-        for r in data_page:
-            data = r.data
-            assert isinstance(data, SourceDoc)
-            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-            chunks = chunk_counts.get(rid, 0)
-            run = runs.get(rid) if data.status == "indexing" else None
-            units_done = run.units_done if run is not None else 0
-            units_total = run.units_total if run is not None else 0
-            # specstar computes the blob size on store; updated_time is the
-            # current revision's timestamp (epoch ms for the wire).
-            size = data.content.size
-            assert isinstance(size, int)
-            updated = r.info.updated_time  # ty: ignore[unresolved-attribute]
-            # specstar's StoredBlob.content_type is `str | UnsetType` — narrow
-            # here rather than relying on a runtime sentinel further down. An
-            # un-set content_type is a half-ingested doc, treat it as opaque.
-            ct = data.content.content_type
-            fid = data.content.file_id
+        # #248/#395: unit progress for the docs still fanning out — ONE
+        # collection-scoped metas search over the in-flight runs (their
+        # `units_*` ride IndexRun's indexed_data, live under the CAS bumps),
+        # NOT a per-indexing-doc point get in the row loop: that read was an
+        # N+1 exactly when a fresh upload had the whole page indexing.
+        run_rm = spec.get_resource_manager(IndexRun)
+        run_q = (QB["collection_id"] == collection_id) & (QB["status"] == "running")
+        runs_by_doc: dict[str, dict[str, object]] = {
+            m.resource_id: m.indexed_data
+            for m in run_rm.search_resources(run_q.build())
+            if isinstance(m.indexed_data, dict)
+        }
+
+        items: list[DocumentRow] = []
+        for m in metas:
+            indexed = m.indexed_data if isinstance(m.indexed_data, dict) else {}
+            rid = m.resource_id
+            # A row written before the v6 migrate has no `status` in its
+            # indexed_data yet; surface it as "ready" (the overwhelmingly
+            # common terminal state) until the operator backfill runs — see
+            # the #395 note in `resources/__init__`.
+            status = indexed.get("status") or "ready"
+            run = runs_by_doc.get(rid) if status == "indexing" else None
+            size = indexed.get("content_size")
+            ct = indexed.get("content_type")
+            fid = indexed.get("file_id")
+            units_done = run.get("units_done") if run is not None else 0
+            units_total = run.get("units_total") if run is not None else 0
             items.append(
                 DocumentRow(
                     resource_id=rid,
-                    path=data.path,
+                    path=str(indexed.get("path") or ""),
                     content_type=ct if isinstance(ct, str) else "application/octet-stream",
                     file_id=fid if isinstance(fid, str) else "",
                     # The OWNER is the resource-level creator (the first
                     # uploader), NOT the latest revision's author — so a shared
                     # doc that someone else overwrote still shows its original
-                    # owner (`r.info.created_by` would be the last writer).
-                    created_by=r.meta.created_by,  # ty: ignore[unresolved-attribute]
-                    status=data.status,
-                    status_detail=data.status_detail,
-                    chunks=chunks,
+                    # owner (the revision-level author would be the last writer).
+                    created_by=m.created_by,
+                    status=str(status),
+                    status_detail=str(indexed.get("status_detail") or ""),
+                    chunks=chunk_counts.get(rid, 0),
                     cited=cited.get(rid, 0),
-                    size=size,
-                    updated_at=_ms(updated),
-                    units_done=units_done,
-                    units_total=units_total,
-                    quality_score=data.quality_score,
-                    quality_rationale=data.quality_rationale,
-                    parser_guidance_override=data.parser_guidance_override,
+                    size=size if isinstance(size, int) else 0,
+                    updated_at=_ms(m.updated_time),
+                    units_done=units_done if isinstance(units_done, int) else 0,
+                    units_total=units_total if isinstance(units_total, int) else 0,
+                    quality_score=_opt_int(indexed.get("quality_score")),
                 )
             )
         return DocumentsPage(
