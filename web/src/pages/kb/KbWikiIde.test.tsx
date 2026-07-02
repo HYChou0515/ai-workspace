@@ -39,6 +39,13 @@ describe("KbWikiIde (#D editable wiki)", () => {
     expect(screen.queryByTitle(/upload/i)).not.toBeInTheDocument();
   });
 
+  it("offers a page filter and a resizable tree pane (#402)", async () => {
+    _seedWikiMock("c1", { "/index.md": "# Wiki\n", "/entities/reflow.md": "# Reflow\n" });
+    renderWithQuery(<KbWikiIde collectionId="c1" client={mockKbApi} />);
+    expect(await screen.findByPlaceholderText(/filter files/i)).toBeInTheDocument();
+    expect(screen.getByRole("separator")).toBeInTheDocument();
+  });
+
   it("auto-opens the index page and renders it (preview)", async () => {
     _seedWikiMock("c2", { "/index.md": "# Welcome\n\nThe home page.\n" });
     renderWithQuery(<KbWikiIde collectionId="c2" client={mockKbApi} />);

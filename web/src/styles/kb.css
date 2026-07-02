@@ -2237,12 +2237,17 @@
   background: var(--white);
 }
 .kb-ide__main {
-  display: grid;
-  grid-template-columns: minmax(180px, 260px) 1fr;
+  /* #402: flex (not grid) so the tree column can be resized by a ResizeDivider.
+     The tree width is an inline style set from usePersistentNumber; the pane
+     takes the rest. */
+  display: flex;
   flex: 1;
   min-height: 0;
 }
 .kb-ide__tree {
+  /* Width comes from the inline `style.width` (draggable, #402); default 260. */
+  width: 260px;
+  flex-shrink: 0;
   overflow: auto;
   padding: 10px 0;
   border-right: 1px solid var(--paper-3);
@@ -2254,6 +2259,7 @@
 }
 .kb-ide__pane {
   display: flex;
+  flex: 1;
   min-width: 0;
   min-height: 0;
 }

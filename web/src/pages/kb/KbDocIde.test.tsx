@@ -97,6 +97,19 @@ describe("KbDocIde", () => {
     expect(await screen.findByText(/upload markdown, text, or an archive/i)).toBeInTheDocument();
   });
 
+  it("offers a file filter and a resizable tree pane (#402)", async () => {
+    renderWithQuery(
+      <KbDocIde
+        collectionId="c1"
+        client={stubClient([doc({ path: "/notes.md" }), doc({ path: "/data.csv" })])}
+      />,
+    );
+    // the FileTree filter box (searchable wired on the KB doc IDE)
+    expect(await screen.findByPlaceholderText(/filter files/i)).toBeInTheDocument();
+    // a drag handle to resize the tree width
+    expect(screen.getByRole("separator")).toBeInTheDocument();
+  });
+
   it("shows an empty folder from its .gitkeep, hiding the placeholder itself", async () => {
     renderWithQuery(
       <KbDocIde
