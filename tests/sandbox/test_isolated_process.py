@@ -226,6 +226,18 @@ async def test_create_provisions_workspace_uid_cgroup_and_acl(isolated):
     assert isolated.acl_calls == [_acl_argv(ws, os.getuid())]
 
 
+async def test_create_provisions_per_sandbox_home_writable_by_uid(isolated):
+    """#393: create must provision a per-sandbox `.home` (a workspace sibling,
+    in the infra area) owned by the item uid + 0700 — so the dropped uid can
+    write the carrier launcher's HOME/caches and a `pip --user` install there,
+    isolated from other sandboxes on the pod."""
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    home = isolated._require(h) / ".home"
+    st = home.stat()
+    assert st.st_uid == os.getuid()
+    assert st.st_mode & 0o777 == 0o700
+
+
 async def test_create_is_idempotent_for_a_shared_item(isolated):
     # Re-creating the same item id re-attaches (no raise) — the shared-dir model.
     h1 = await isolated.create(SandboxSpec(), sandbox_id="item-1")

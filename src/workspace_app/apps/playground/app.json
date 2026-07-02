@@ -19,9 +19,9 @@
     "prompt_file": "prompts/system.md",
     "tools": [
       "exec", "read_file", "read_image", "write_file", "edit_file", "list_files", "exists",
-      "delete_file", "ask_knowledge_base", "make_deck", "sci-plot", "python-stack", "save_skill"
+      "delete_file", "ask_knowledge_base", "make_deck", "sci-plot", "python-stack", "save_skill", "save_workflow"
     ],
-    "skills": ["author-skill"],
+    "skills": ["author-skill", "author-workflow"],
     "picker": [{ "preset": "qwen3-local", "name": "Playground · Qwen3 (local)" }],
     "suggestions": [
       { "label": "List files", "prompt": "List the files in the workspace." },

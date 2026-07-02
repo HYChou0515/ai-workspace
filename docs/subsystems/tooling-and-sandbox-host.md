@@ -118,7 +118,10 @@ flowchart TD
     host 要 root（setuid/chown 到外部 uid）+ 一塊被 delegate 的 cgroup v2 subtree。當 cgroup v2 不在或不可寫，`check_cgroup_ready` 會在 boot 與 `/readyz` 兩處 fail loud — **絕不在無隔離下開服**。
 
 !!! note "jail 裡 workspace 是 /root，工具在 sibling /.tools"
-    provisioned tools 在 `/.tools`（`/root` 的 sibling，在 workspace 之外），所以永遠不會被 walk、sync、或出現在檔案樹。`launch` 的 `HOME`/caches 指到 `/tmp`，read-only 工具掛載與 workspace 都保持乾淨。
+    provisioned tools 在 `/.tools`（`/root` 的 sibling，在 workspace 之外），所以永遠不會被 walk、sync、或出現在檔案樹。read-only 工具掛載與 workspace 都保持乾淨。
+
+!!! note "launcher 的 HOME 是 per-sandbox，不是共用 /tmp（#393）"
+    `launch` 的 `HOME`（caches + 使用者 `pip install --break-system-packages` 的 `--user` 退路）由 exec path 以 `SANDBOX_HOME` 傳入：**unjailed（線上 pod，無 namespace）指到 per-sandbox 的 `.home`**（workspace 的 sibling，回收即刪），**jail 明著傳 `/tmp`**（jail 的 `/tmp` 是每次 exec 的 ephemeral tmpfs，隔離的）。launcher 沒收到 `SANDBOX_HOME` 時的 fallback 是一個私有 `mktemp -d`（0700），**絕不是共用 `/tmp`** — 預設不能是會出事的東西。原本寫死 `HOME=/tmp` 在無 jail 的 pod 上把使用者 `pip --user` 安裝洩漏到全 pod 共用的 `/tmp/.local`（每個 sandbox 的 carrier python 都 import 得到）。
 
 !!! warning "sticky per-handle 路由"
     `create` 回 `advertise_url`（來自 POD_IP）+ `remote_id`；client 必須把兩者一起編碼，讓之後每個操作都路由回**擁有該 local handle 的同一個 pod**。因此 pod-split sandboxing 需要 sticky per-handle 路由，而不是共用後端。
@@ -133,6 +136,8 @@ flowchart TD
 | 工具定義在 app、執行在 host、交接 = 不透明 `/.tools` bundle 目錄 | host 不 import workspace_app 任何東西，保持精簡隔離服務；加工具只要編輯 `PACKAGES` + 重 prebuild，host 不需 registry metadata | `sandbox-host/Dockerfile` 頭註 + `packages.py`；`docs/plan-skills-and-tools.md`、`docs/plan-http-sandbox.md` |
 | `discover_packages` 嚴格 fail-fast（不 silent-skip 半成品） | May-30 事故：3 個半成品套件 → discover 回 `[]` → agent 零工具運作至 LLM 回覆才被發現；改成啟動時就炸 | `registry.py:discover_packages` docstring |
 | content-hash 重建 + `uv --reinstall/--refresh-package` | uv 以 (name,version) 快取 wheel，同版本編輯會靜默保留舊 wheel；mtime 檢查也漏編輯 | `prebuild.py:_should_rebuild`（#64） |
+| `.built` stamp 也 fold 進 launcher 模板的 fingerprint | `_source_hash(source)` 看不到 launcher 模板編輯（它是 builder 碼、烤進 bundle，不是套件 source）；不 fold 就會靜默保留舊 `launch`（#64 同類的 stale-cache） | `prebuild.py:_builder_fingerprint`/`_build_stamp`（#393） |
+| launcher HOME 走 per-sandbox `SANDBOX_HOME`，fallback 是私有 mktemp 不是共用 /tmp | hosted 無 jail（只有 uid+cgroup），寫死 `HOME=/tmp` 讓使用者 `pip install --break-system-packages` 的 `--user` 退路落在全 pod 共用的 `/tmp/.local` → 跨 sandbox 洩漏；fail-safe 預設不能是會出事的 `/tmp` | `prebuild.py:_PYTHON_LAUNCH` + `local_process.py:_exec_argv`/`_HOME` + `isolated_process._provision`（#393） |
 | 隔離 = pooled uid/gid + cgroup v2，無 namespace；image 忽略 | 這是在他們 pod 裡可行的模型；HTTP host 無法 honour 任意 container image，故 toolchain 烤進單一 image | `isolated_process.py` 模組 docstring + `protocol.py` SandboxSpec 註 |
 | venv carrier（python-stack）取代 host site-packages / per-image 安裝 | agent 的 raw `exec(['python', ...])` 直接看到 pandas/numpy/scipy/matplotlib + office stack，不污染 host deps；jail 把 python shim 到 carrier launcher | `python-stack/pyproject.toml` + `local_process.py:_JAIL_BOOTSTRAP`（#252） |
 | AT_SECURE / 顯式動態載入器 launch wrapper | glibc 的 AT_SECURE 在 userns chroot jail 裡會剝掉 `$ORIGIN`/RPATH/`LD_LIBRARY_PATH`，弄壞 relocatable venv；顯式呼 `ld-linux` 還原 | `prebuild.py` `_LAUNCH`/`_PYTHON_LAUNCH` 註解 |

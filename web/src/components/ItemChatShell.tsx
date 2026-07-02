@@ -17,6 +17,7 @@ import {
   useSteerRun,
   useWorkflowProfiles,
 } from "../hooks/useWorkflow";
+import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { AgentPanel } from "../pages/investigation/AgentPanel";
 import { CardDiffReview } from "./CardDiffReview";
 import { SteerConfirmCard } from "./SteerConfirmCard";
@@ -94,7 +95,18 @@ export function ItemChatShell({
   const qc = useQueryClient();
   const { chats, isLoading, createFreeChat, renameChat, deleteChat } = useItemChats(slug, itemId);
   const profilesQ = useWorkflowProfiles(slug);
-  const workflows = profilesQ.data?.find((p) => p.name === profile)?.workflows ?? [];
+  const wsWorkflowsQ = useWorkspaceWorkflows(slug, itemId);
+  // The launch list = the profile's package workflows PLUS the ones the user
+  // co-authored in THIS workspace (#323 `.workflows/`, surfaced for launch by #400),
+  // so a just-authored workflow is runnable from the same chat that made it. A
+  // workspace def shadows a same-id package one — the run resolver does the same.
+  const workflows = useMemo<WorkflowManifestDTO[]>(() => {
+    const byId = new Map<string, WorkflowManifestDTO>();
+    for (const w of profilesQ.data?.find((p) => p.name === profile)?.workflows ?? [])
+      byId.set(w.id, w);
+    for (const w of wsWorkflowsQ.data ?? []) byId.set(w.id, { input_json: "", ...w });
+    return [...byId.values()];
+  }, [profilesQ.data, wsWorkflowsQ.data, profile]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [managing, setManaging] = useState(false);
   // #283: a workflow launch opens the pre-flight dialog first; the real start (which
