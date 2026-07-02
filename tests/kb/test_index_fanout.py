@@ -350,6 +350,10 @@ class _FailEmbedder:
     def dim(self) -> int:
         return self._dim
 
+    @property
+    def identity(self) -> str:
+        return f"fail-{self._dim}"
+
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         self.calls += 1
         raise self._error

@@ -1495,7 +1495,7 @@ def test_reindex_document_invalidates_the_cache_then_repopulates():
     client.post(f"/kb/collections/{cid}/documents", files={"file": ("a.md", body, "text/markdown")})
     _drain(client)
     doc_id = encode_doc_id(cid, "a.md")
-    ingestor = client.app.state.index_coordinator._ingestor  # noqa: SLF001
+    ingestor = client.app.state.index_coordinator._ingestor  # noqa: SLF001  # ty: ignore[unresolved-attribute]
     key = ingestor.cache_key(doc_id)
     store = IndexCacheStore(spec)
     assert store.get(key) is not None  # cached after the first index
@@ -1517,7 +1517,7 @@ def test_reindex_collection_invalidates_the_cache():
     client.post(f"/kb/collections/{cid}/documents", files={"file": ("a.md", body, "text/markdown")})
     _drain(client)
     doc_id = encode_doc_id(cid, "a.md")
-    ingestor = client.app.state.index_coordinator._ingestor  # noqa: SLF001
+    ingestor = client.app.state.index_coordinator._ingestor  # noqa: SLF001  # ty: ignore[unresolved-attribute]
     key = ingestor.cache_key(doc_id)
     store = IndexCacheStore(spec)
     assert store.get(key) is not None

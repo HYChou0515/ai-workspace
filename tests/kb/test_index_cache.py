@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import msgspec
 from specstar import QB, SpecStar
 
@@ -17,6 +19,12 @@ def _new_collection(spec: SpecStar) -> str:
     return spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
 
 
+def _store(ing: Ingestor, cid: str, path: str, data: bytes) -> str:
+    doc_id = ing.store_file(collection_id=cid, user="u", path=path, data=data)
+    assert doc_id is not None  # fresh path → a real id, never a no-op
+    return doc_id
+
+
 def _chunk_view(spec: SpecStar, doc_id: str) -> list[tuple]:
     rm = spec.get_resource_manager(DocChunk)
     rs = [r.data for r in rm.list_resources((QB["source_doc_id"] == doc_id).build())]
@@ -25,15 +33,19 @@ def _chunk_view(spec: SpecStar, doc_id: str) -> list[tuple]:
     return [(c.seq, c.start, c.end, c.text, tuple(c.embedding or ())) for c in rs]
 
 
-def _key(**over):
-    base = dict(
-        content_file_id="hashA",
-        guidance="",
-        configs={},
-        embedder_identity="litellm-m\x00",
+def _key(
+    *,
+    content_file_id: str = "hashA",
+    guidance: str = "",
+    configs: dict[str, dict[str, Any]] | None = None,
+    embedder_identity: str = "litellm-m\x00",
+) -> str:
+    return compute_cache_key(
+        content_file_id=content_file_id,
+        guidance=guidance,
+        configs=configs or {},
+        embedder_identity=embedder_identity,
     )
-    base.update(over)
-    return compute_cache_key(**base)
 
 
 def test_cache_key_is_deterministic_and_slash_free():
@@ -107,8 +119,8 @@ def test_cache_roundtrip_reuses_chunks_across_paths(
     [doc1] = ing.ingest(collection_id=cid, user="u", filename="a.md", data=data)
     ing.write_cache(doc1)
 
-    doc2 = ing.store_file(collection_id=cid, user="u", path="b.md", data=data)
-    assert doc2 is not None and doc2 != doc1
+    doc2 = _store(ing, cid, "b.md", data)
+    assert doc2 != doc1
     assert _chunk_view(spec, doc2) == []  # stored, not indexed yet
 
     assert ing.copy_from_cache(doc2) is True
@@ -122,7 +134,7 @@ def test_cache_roundtrip_reuses_chunks_across_paths(
 def test_copy_from_cache_miss_returns_false(spec, chunker, embedder):
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
-    doc = ing.store_file(collection_id=cid, user="u", path="x.md", data=b"never cached")
+    doc = _store(ing, cid, "x.md", b"never cached")
     assert ing.copy_from_cache(doc) is False
 
 
@@ -136,14 +148,14 @@ def test_invalidate_drops_the_entry_and_is_noop_when_absent(spec, chunker, embed
     ing.write_cache(doc1)
     ing.invalidate_cache(doc1)  # drops the entry
 
-    doc2 = ing.store_file(collection_id=cid, user="u", path="c.md", data=data)
+    doc2 = _store(ing, cid, "c.md", data)
     assert ing.copy_from_cache(doc2) is False
 
 
 def test_cache_key_reflects_effective_guidance_and_configs(spec, chunker, embedder):
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
-    doc = ing.store_file(collection_id=cid, user="u", path="a.md", data=b"body text here")
+    doc = _store(ing, cid, "a.md", b"body text here")
     k0 = ing.cache_key(doc)
 
     # per-doc guidance override + configs both feed the key
