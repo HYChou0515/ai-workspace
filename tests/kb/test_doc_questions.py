@@ -16,7 +16,11 @@ from workspace_app.kb.doc_questions import (
     open_questions_for_collections,
     plan_doc_questions,
 )
-from workspace_app.kb.wiki.store import CLARIFICATIONS_PATH, WikiFileStore
+from workspace_app.kb.wiki.store import (
+    CLARIFICATIONS_DIR,
+    WikiFileStore,
+    clarification_page_path,
+)
 from workspace_app.resources import make_spec
 from workspace_app.resources.kb import Collection, ContextCard, DocQuestion
 
@@ -272,19 +276,23 @@ async def test_land_description_answer_appends_to_the_clarification_page():
     path = await land_description_answer(
         spec, qid, answer="The M4 stack is already clean.", wiki_store=store
     )
-    assert path == CLARIFICATIONS_PATH
+    # #397 Q14: one clarification page per question, under the reserved folder.
+    assert path == clarification_page_path(qid)
+    assert path.startswith(CLARIFICATIONS_DIR)
 
     q = _get(spec, qid)
     assert q.status == "answered"
     assert q.answer == "The M4 stack is already clean."
-    assert q.result_ref == CLARIFICATIONS_PATH
+    assert q.result_ref == path
 
-    page = (await store.read(cid, CLARIFICATIONS_PATH)).decode()
+    page = (await store.read(cid, path)).decode()
     assert "uses M4 then CMP" in page  # the quoted passage, faithfully
     assert "The M4 stack is already clean." in page  # the human's answer
 
 
-async def test_land_description_answer_appends_without_dropping_prior_entries():
+async def test_land_description_answer_keeps_each_question_on_its_own_page():
+    # #397 Q14: distinct questions land on distinct pages (was one growing file), so
+    # answering a second question never touches the first.
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     store = WikiFileStore(spec)
@@ -294,12 +302,15 @@ async def test_land_description_answer_appends_without_dropping_prior_entries():
     q2 = add_description_question(
         spec, collection_id=cid, source_doc_id="d1", quote="quote two", question_text="q2?"
     )
-    await land_description_answer(spec, q1, answer="answer one", wiki_store=store)
-    await land_description_answer(spec, q2, answer="answer two", wiki_store=store)
+    p1 = await land_description_answer(spec, q1, answer="answer one", wiki_store=store)
+    p2 = await land_description_answer(spec, q2, answer="answer two", wiki_store=store)
 
-    page = (await store.read(cid, CLARIFICATIONS_PATH)).decode()
-    assert "answer one" in page and "answer two" in page  # both entries survive
-    assert "quote one" in page and "quote two" in page
+    assert p1 != p2  # separate pages
+    page1 = (await store.read(cid, p1)).decode()
+    page2 = (await store.read(cid, p2)).decode()
+    assert "answer one" in page1 and "quote one" in page1
+    assert "answer two" in page2 and "quote two" in page2
+    assert "answer two" not in page1  # first page untouched by the second answer
 
 
 def test_discarded_term_is_re_asked_when_raised_again():
@@ -341,8 +352,8 @@ async def test_clarification_entry_omits_a_blank_question_and_quote():
         .create(DocQuestion(collection_id=cid, kind="description", source_doc_id="d1"))
         .resource_id
     )
-    await land_description_answer(spec, qid, answer="just the answer", wiki_store=store)
-    page = (await store.read(cid, CLARIFICATIONS_PATH)).decode()
+    path = await land_description_answer(spec, qid, answer="just the answer", wiki_store=store)
+    page = (await store.read(cid, path)).decode()
     assert "just the answer" in page
 
 

@@ -38,19 +38,64 @@ from ...resources import WikiPage
 
 _SLASH = "∕"  # division-slash look-alike (same convention as kb/doc_id.py)
 
-# #377: the reserved wiki page where human answers to description questions land,
-# one section per Q&A. It is human-owned: the wiki maintainer/unfolder agent is
-# denied write/delete on it (see MaintainerWikiStore) so a rebuild can't clobber
-# the answers. The WikiBrowser + the answer-landing path use the raw store and
-# can write it.
-CLARIFICATIONS_PATH = "/clarifications.md"
+# Builder-immune ground truth (#377/#397). These pages hold human-authored truth —
+# answers to the digest's questions (#377) and user corrections to the wiki (#397).
+# They are human-owned: the wiki maintainer/unfolder/corrector agent is denied
+# write/delete on them (see MaintainerWikiStore) so a rebuild can't clobber them.
+# The WikiBrowser + the answer/correction landing paths use the raw store and can
+# write them.
+#
+# #397 (Q5/Q6/Q14): the ground truth is now TWO folders, not one growing file —
+# ``/clarifications/*.md`` (#377 answers, one file per question) and
+# ``/corrections/*.md`` (user wiki corrections, one file per target page). The old
+# single ``/clarifications.md`` file stays readable for backward compatibility.
+CLARIFICATIONS_PATH = "/clarifications.md"  # legacy single file (#377, pre-#397)
+CLARIFICATIONS_DIR = "/clarifications/"  # #397: one clarification page per question
+CORRECTIONS_DIR = "/corrections/"  # #397: one correction page per target wiki page
+
+_RESERVED_DIRS = (CLARIFICATIONS_DIR, CORRECTIONS_DIR)
+
+
+def _norm_path(path: str) -> str:
+    """Normalize the ``/x`` / ``x`` / ``./x`` forms the file tools accept
+    interchangeably to a single leading-slash form."""
+    return "/" + path.lstrip("./")
 
 
 def _is_reserved(path: str) -> bool:
-    """Whether ``path`` is the reserved clarification page, tolerating the
-    ``/clarifications.md`` / ``clarifications.md`` / ``./clarifications.md`` forms
-    the file tools accept interchangeably."""
-    return path.lstrip("./") == CLARIFICATIONS_PATH.lstrip("/")
+    """Whether ``path`` is a builder-immune ground-truth page (#377/#397): any page
+    under the reserved ``/clarifications/`` or ``/corrections/`` folders, or the
+    legacy single ``/clarifications.md`` file."""
+    p = _norm_path(path)
+    return p == CLARIFICATIONS_PATH or any(p.startswith(d) for d in _RESERVED_DIRS)
+
+
+def _slug(text: str) -> str:
+    """A filesystem-safe slug for a reserved-folder filename: keep alnum / dash /
+    underscore, collapse every other run of characters to a single dash."""
+    out: list[str] = []
+    for ch in text:
+        if ch.isalnum() or ch in "-_":
+            out.append(ch)
+        elif not out or out[-1] != "-":
+            out.append("-")
+    return "".join(out).strip("-") or "x"
+
+
+def clarification_page_path(qid: str) -> str:
+    """The reserved clarification page a description answer lands on (#397 Q14):
+    one file per question under ``/clarifications/`` (was a single growing file)."""
+    return CLARIFICATIONS_DIR + _slug(qid) + ".md"
+
+
+def correction_page_path(target_page: str | None) -> str:
+    """The reserved corrections page a directive about ``target_page`` lands on
+    (#397 Q15): one file per target wiki page (repeated corrections merge into it),
+    or ``general.md`` when no page is named."""
+    if not target_page or not target_page.strip():
+        return CORRECTIONS_DIR + "general.md"
+    stem = _norm_path(target_page).removesuffix(".md")
+    return CORRECTIONS_DIR + _slug(stem) + ".md"
 
 
 def _rid(collection_id: str, path: str) -> str:
