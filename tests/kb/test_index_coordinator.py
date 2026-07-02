@@ -19,11 +19,15 @@ from workspace_app.resources import Collection, SourceDoc, make_spec
 class _FakeIngestor:
     def __init__(self) -> None:
         self.indexed: list[str] = []
+        self.cached: list[str] = []
 
     def index(
         self, doc_id: str, *, source_doc_rm: object | None = None, reraise: bool = False
     ) -> None:
         self.indexed.append(doc_id)
+
+    def write_cache(self, doc_id: str) -> None:
+        self.cached.append(doc_id)
 
 
 class _FakeWiki:
@@ -58,6 +62,41 @@ async def test_enqueued_doc_is_indexed_then_handed_to_the_wiki():
 
     assert ing.indexed == [doc_id]  # the worker indexed it (off the request path)
     assert wiki.hooked == [doc_id]  # …then chained the index → wiki hook
+
+
+async def test_successful_index_writes_the_result_cache():
+    # #390: after a real index completes, the coordinator snapshots the result
+    # into the cross-path cache so a later move / re-upload reuses it.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+    ing = _FakeIngestor()
+    coord = IndexCoordinator(spec, ing)  # ty: ignore[invalid-argument-type]
+
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    assert ing.indexed == [doc_id]
+    assert ing.cached == [doc_id]  # the result was cached after indexing
+
+
+async def test_cache_write_failure_does_not_fail_the_index_job():
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc_id = _doc(spec, cid)
+
+    class _CacheBoom(_FakeIngestor):
+        def write_cache(self, doc_id: str) -> None:
+            raise RuntimeError("cache backend down")
+
+    wiki = _FakeWiki()
+    coord = IndexCoordinator(spec, _CacheBoom(), wiki_coordinator=wiki)  # ty: ignore[invalid-argument-type]
+    coord.enqueue(doc_id, cid)
+    await coord.aclose()
+
+    # The cache-write ran BEFORE the wiki hook; its blip was swallowed, so the
+    # run still completed downstream — best-effort, never fails the index job.
+    assert wiki.hooked == [doc_id]
 
 
 class _FakeQuality:
@@ -260,6 +299,9 @@ async def test_a_failing_doc_does_not_wedge_the_queue():
             if doc_id == d1:
                 raise RuntimeError("embed crashed")
 
+        def write_cache(self, doc_id: str) -> None:
+            pass
+
     ing = _BoomOnFirst()
     coord = IndexCoordinator(spec, ing, wiki_coordinator=None)  # ty: ignore[invalid-argument-type]
     coord.enqueue(d1, cid)
@@ -294,6 +336,10 @@ class _FlakyEmbedder:
     @property
     def dim(self) -> int:
         return self._dim
+
+    @property
+    def identity(self) -> str:
+        return f"flaky-{self._dim}"
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         self.calls += 1

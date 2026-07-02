@@ -393,6 +393,7 @@ class IndexCoordinator:
                 doc_id, updater, status="error", detail=f"{type(exc).__name__}: {exc!s}"[:240]
             )
             return
+        self._cache_hook(doc_id)
         self._wiki_hook(doc_id, requester)
         self._quality_hook(doc_id, updater)
         self._digest_hook(doc_id, updater)
@@ -501,6 +502,7 @@ class IndexCoordinator:
         # ready/error verdict. `error` keeps the failed batches visible for ops.
         self._runs.finish(doc_id, status="error" if run.failed else "done")
         if status == "ready":
+            self._cache_hook(doc_id)
             self._wiki_hook(doc_id, requester)
             self._quality_hook(doc_id, updater)
             self._digest_hook(doc_id, updater)
@@ -555,6 +557,16 @@ class IndexCoordinator:
                 self._enqueue_finalize(doc_id, run.collection_id, requester)
                 acted.append(doc_id)
         return acted
+
+    def _cache_hook(self, doc_id: str) -> None:
+        # #390: snapshot the freshly-indexed result into the cross-path cache so a
+        # later move / re-upload of the same content reuses it (no re-embed). Runs
+        # only after a successful index. Best-effort — a cache-write blip must
+        # never fail the index job (the doc is already ready).
+        try:
+            self._ingestor.write_cache(doc_id)
+        except Exception:  # noqa: BLE001 — a cache-write failure must not fail the index job
+            _LOGGER.exception("IndexCoordinator: cache write failed for %s", doc_id)
 
     def _wiki_hook(self, doc_id: str, requester: str) -> None:
         if self._wiki is None:
