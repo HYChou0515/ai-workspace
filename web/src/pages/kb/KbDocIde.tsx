@@ -21,7 +21,9 @@ import { kbFileService, normPath } from "../../api/kbFileService";
 import { qk } from "../../api/queryKeys";
 import { DialogProvider } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { ResizeDivider } from "../../components/ResizeDivider";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
+import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -210,6 +212,11 @@ export function KbDocIde({
     },
     [docs, docByPath, client, refetch],
   );
+  // #402: draggable tree width, persisted + clamped. Shared key with the wiki
+  // IDE so the two KB trees remember one width. `treeStart` snapshots the width
+  // at drag start; ResizeDivider reports the signed delta from there.
+  const [treeW, setTreeW] = usePersistentNumber("kb:ide:treeWidth", 260, 160, 560);
+  const treeStart = useRef(treeW);
   if (docsQuery.isPending) {
     return (
       <p className="kb-cols__empty" role="status" aria-live="polite">
@@ -234,7 +241,7 @@ export function KbDocIde({
           <DialogProvider>
             <div className="kb-ide">
               <div className="kb-ide__main">
-                <div className="kb-ide__tree">
+                <div className="kb-ide__tree" style={{ width: treeW, flexShrink: 0 }}>
                   <FileTree
                     files={files}
                     dirs={dirs}
@@ -242,6 +249,7 @@ export function KbDocIde({
                     onOpen={openPath}
                     onChanged={refetch}
                     onReindex={(paths) => void reindexPaths(paths)}
+                    searchable
                     decorate={(path) => (
                       <>
                         <QualityBadge score={docByPath.get(path)?.quality_score} />
@@ -250,6 +258,14 @@ export function KbDocIde({
                     )}
                   />
                 </div>
+                <ResizeDivider
+                  orientation="vertical"
+                  ariaLabel="Resize file tree"
+                  onResizeStart={() => {
+                    treeStart.current = treeW;
+                  }}
+                  onResize={(d) => setTreeW(treeStart.current + d)}
+                />
                 <div className="kb-ide__pane">
                   {activePath ? (
                     <KbEditorPane

@@ -12,7 +12,7 @@ import type { FileInfo } from "../../api/types";
 import { useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
-import { buildFileTree, type TreeNode } from "./fileTree";
+import { buildFileTree, pruneTree, type TreeNode } from "./fileTree";
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
 import { extractClipboardFiles, readTransferEntries } from "./transfer";
@@ -26,6 +26,9 @@ const isExternalDrag = (e: React.DragEvent): boolean =>
 type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
 type Menu = { node: TreeNode | null; x: number; y: number };
+
+// Stable empty set for the no-filter case, so we don't re-alloc every render.
+const NO_FORCE_OPEN: ReadonlySet<string> = new Set();
 
 const uploadMenuItem: React.CSSProperties = {
   display: "block",
@@ -46,6 +49,7 @@ export function FileTree({
   onChanged,
   onReindex,
   decorate,
+  searchable = false,
 }: {
   files: FileInfo[];
   dirs?: string[];
@@ -59,11 +63,22 @@ export function FileTree({
   /** Optional trailing badge per file row (e.g. KB indexing / unsaved dot).
    * Omitted → no badges (the investigation workspace looks unchanged). */
   decorate?: (path: string) => React.ReactNode;
+  /** #402: show a client-side name/path filter in the header. Opt-in — the KB
+   * doc + wiki IDEs pass it; the investigation workspace (which has its own
+   * content SearchPanel) leaves it off and looks unchanged. */
+  searchable?: boolean;
 }) {
   const svc = useFileService();
   const caps = svc.caps;
   const dialog = useDialog();
-  const tree = buildFileTree(files, dirs);
+  const [query, setQuery] = useState("");
+  const fullTree = buildFileTree(files, dirs);
+  // While a filter is active, `pruneTree` returns only the matching branches
+  // plus the ancestor dirs to force open; an empty term is a no-op (full tree,
+  // nothing forced) so the user's own collapse state is preserved (#402).
+  const { tree, expand } = searchable
+    ? pruneTree(fullTree, query)
+    : { tree: fullTree, expand: NO_FORCE_OPEN };
   const collapsed = usePersistentSet(`rca:tree-collapsed:${svc.scopeId}`);
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
@@ -74,7 +89,8 @@ export function FileTree({
   // last-clicked node — new file/folder is born relative to it.
   const [sel, setSel] = useState<SelState>({ selected: [], anchor: null });
   const selectedSet = new Set(sel.selected);
-  const order = visibleOrder(tree, (p) => collapsed.has(p));
+  // A force-open (filter) ancestor counts as expanded for navigation order too.
+  const order = visibleOrder(tree, (p) => collapsed.has(p) && !expand.has(p));
   const [rootDrop, setRootDrop] = useState(false);
   const [uploadMenu, setUploadMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -338,9 +354,56 @@ export function FileTree({
           padding: "0 10px 4px 14px",
         }}
       >
-        <span className="caps" style={{ flex: 1 }}>
+        <span className="caps" style={{ flex: searchable ? undefined : 1 }}>
           Files
         </span>
+        {searchable && (
+          <div
+            style={{
+              flex: 1,
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+              margin: "0 6px",
+              padding: "1px 6px",
+              minWidth: 0,
+              border: "1px solid var(--paper-3)",
+              borderRadius: "var(--radius-chip, 6px)",
+              background: "var(--white)",
+            }}
+          >
+            <Icon name="search" size={12} color="var(--text-paper-d)" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setQuery("");
+              }}
+              placeholder="Filter files…"
+              aria-label="Filter files"
+              style={{
+                flex: 1,
+                minWidth: 0,
+                border: "none",
+                outline: "none",
+                background: "transparent",
+                fontSize: pxToRem(12),
+                color: "var(--text-paper)",
+              }}
+            />
+            {query && (
+              <button
+                type="button"
+                aria-label="clear filter"
+                title="Clear filter"
+                onClick={() => setQuery("")}
+                style={{ color: "var(--text-paper-d)", padding: 0, lineHeight: 1 }}
+              >
+                <Icon name="x" size={12} />
+              </button>
+            )}
+          </div>
+        )}
         <button
           type="button"
           title="Refresh files"
@@ -551,6 +614,7 @@ export function FileTree({
             selectedSet={selectedSet}
             multi={sel.selected.length > 1}
             collapsed={collapsed}
+            forceOpen={expand}
             creating={creating}
             renaming={renaming}
             onOpen={onOpen}
@@ -669,6 +733,7 @@ function TreeRow({
   selectedSet,
   multi,
   collapsed,
+  forceOpen,
   creating,
   renaming,
   onOpen,
@@ -692,6 +757,8 @@ function TreeRow({
   selectedSet: Set<string>;
   multi: boolean;
   collapsed: ReturnType<typeof usePersistentSet>;
+  /** #402: dirs the active filter forces open, overriding `collapsed`. */
+  forceOpen: ReadonlySet<string>;
   creating: Creating;
   renaming: string | null;
   onOpen: OpenFn;
@@ -708,7 +775,8 @@ function TreeRow({
   readDragFile: (e: React.DragEvent) => { paths: string[] } | null;
 }) {
   const indent = 8 + depth * 12;
-  const isCollapsed = collapsed.has(node.path);
+  // A filter match forces this dir open even if the user had collapsed it (#402).
+  const isCollapsed = collapsed.has(node.path) && !forceOpen.has(node.path);
   const [dropOver, setDropOver] = useState(false);
   const [dragging, setDragging] = useState(false);
   // Drag move/copy only when the service supports relocation (KB v1 doesn't).
@@ -815,6 +883,7 @@ function TreeRow({
                 selectedSet={selectedSet}
                 multi={multi}
                 collapsed={collapsed}
+                forceOpen={forceOpen}
                 creating={creating}
                 renaming={renaming}
                 onOpen={onOpen}

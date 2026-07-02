@@ -20,8 +20,10 @@ import { normPath } from "../../api/kbFileService";
 import { wikiFileService } from "../../api/wikiFileService";
 import { MonacoEditor } from "../../components/MonacoEditor";
 import { DialogProvider } from "../../components/Dialog";
+import { ResizeDivider } from "../../components/ResizeDivider";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import { FileBufferProvider, FileBufferStore, useFileBuffer, useIsDirty } from "../../hooks/fileBuffer";
+import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { FileTree } from "../investigation/FileTree";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { stem, WikiPageBody } from "./WikiPageBody";
@@ -115,6 +117,10 @@ export function KbWikiIde({
     [visiblePages, openPath],
   );
 
+  // #402: draggable tree width, shared persisted key with the doc IDE.
+  const [treeW, setTreeW] = usePersistentNumber("kb:ide:treeWidth", 260, 160, 560);
+  const treeStart = useRef(treeW);
+
   if (pagesQuery.isPending) {
     return (
       <p className="kb-cols__empty" role="status" aria-live="polite">
@@ -130,15 +136,24 @@ export function KbWikiIde({
           <DialogProvider>
             <div className="kb-ide">
               <div className="kb-ide__main">
-                <div className="kb-ide__tree">
+                <div className="kb-ide__tree" style={{ width: treeW, flexShrink: 0 }}>
                   <FileTree
                     files={files}
                     dirs={dirs}
                     activePath={activePath}
                     onOpen={openPath}
                     onChanged={refetch}
+                    searchable
                   />
                 </div>
+                <ResizeDivider
+                  orientation="vertical"
+                  ariaLabel="Resize page tree"
+                  onResizeStart={() => {
+                    treeStart.current = treeW;
+                  }}
+                  onResize={(d) => setTreeW(treeStart.current + d)}
+                />
                 <div className="kb-ide__pane">
                   {activePath ? (
                     <WikiEditorPane
