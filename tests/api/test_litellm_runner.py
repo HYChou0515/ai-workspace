@@ -554,9 +554,10 @@ def test_agent_for_without_system_prompt():
     agent = _agent_for(cfg)
     assert isinstance(agent.instructions, str)
     assert agent.instructions.startswith("## Tools available")
-    # The 9 default workspace tools all appear under the inventory.
+    # The default workspace tools all appear under the inventory (as slim
+    # bullets — #107 dropped the per-tool schema blocks).
     for name in ("exec", "read_file", "write_file", "ask_knowledge_base"):
-        assert f"### `{name}`" in agent.instructions
+        assert f"- `{name}`" in agent.instructions
 
 
 def test_agent_for_with_explicit_empty_allowed_tools_registers_zero_tools():
@@ -621,23 +622,25 @@ def test_agent_for_extra_instructions_with_no_base_prompt():
 def test_agent_for_appends_tool_inventory_section_to_instructions():
     """B.10 regression: every tool registered on the agent appears in
     the auto-rendered `## Tools available` section the LLM sees in its
-    system prompt — name, description, JSON args schema. Small models
-    misread function tools as shell binaries without this; large
-    models can rely on the tool_choice payload alone, but we still
-    want it for parity + debugging."""
+    system prompt — as a slim name+summary bullet (#107 dropped the
+    per-tool JSON schema blocks: the schemas ride the native `tools`
+    param, and echoing them as fenced JSON primed the model to print
+    tool calls as text). Small models misread function tools as shell
+    binaries without the name inventory."""
     from workspace_app.api.litellm_runner import _agent_for
 
     cfg = AgentConfig(name="ws", system_prompt="anchor")
     agent = _agent_for(cfg)
     instructions = agent.instructions
     assert isinstance(instructions, str)
-    # the section header includes the "DO NOT exec a tool name" warning
-    # that's the whole point of B.10.
-    assert "Each entry below is a **function tool**" in instructions
+    # the section header keeps the "DO NOT exec a tool name" warning
+    # (the whole point of B.10) + the #107 "never print a call" rule.
     assert "Do NOT" in instructions
-    # every registered tool's name + JSON schema block is there
+    assert "NEVER write a tool call" in instructions
+    # every registered tool is listed; no schema blocks leak in.
     for t in agent.tools:
-        assert f"### `{t.name}`" in instructions, f"tool {t.name} missing from prompt"
+        assert f"- `{t.name}`" in instructions, f"tool {t.name} missing from prompt"
+    assert "```json" not in instructions
 
 
 # ---- diagnose_error ----

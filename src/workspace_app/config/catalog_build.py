@@ -199,4 +199,8 @@ def resolve_usage(
         frequency_penalty=llm.get("frequency_penalty"),
         presence_penalty=llm.get("presence_penalty"),
         repetition_penalty=llm.get("repetition_penalty"),
+        # #107 request hygiene: sampling/output knobs (None = param not sent).
+        temperature=llm.get("temperature"),
+        top_p=llm.get("top_p"),
+        max_tokens=llm.get("max_tokens"),
     )

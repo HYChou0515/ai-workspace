@@ -142,6 +142,34 @@ def test_preset_llm_sampling_penalties_flow_to_agent_config(tmp_path: Path):
     assert kb.repetition_penalty == 1.1  # ty: ignore[unresolved-attribute]
 
 
+def test_preset_llm_sampling_knobs_flow_to_agent_config(tmp_path: Path):
+    """#107 request hygiene: temperature / top_p / max_tokens set under a
+    preset's `llm:` block reach the resolved AgentConfig. Omitted knobs stay
+    None (= param not sent; the server-side model default wins)."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(
+        "agents:\n"
+        "  presets:\n"
+        "    my-rca:\n"
+        '      model: "openai/glm-5.1"\n'
+        '      prompt_file: "pkg:workspace_app.kb.prompts/system.md"\n'
+        "      llm:\n"
+        "        temperature: 0.55\n"
+        "        top_p: 1.0\n"
+        "        max_tokens: 32000\n"
+        "  kb_chat:\n"
+        "    preset: my-rca\n"
+        "    allowed_tools: [kb_search]\n",
+        encoding="utf-8",
+    )
+    settings = load(config_path=cfg_file, env={})
+    kb = build_catalog(settings, config_dir=tmp_path).kb_chat()
+    assert kb.temperature == 0.55  # ty: ignore[unresolved-attribute]
+    assert kb.top_p == 1.0  # ty: ignore[unresolved-attribute]
+    assert kb.max_tokens == 32000  # ty: ignore[unresolved-attribute]
+    assert kb.frequency_penalty is None  # ty: ignore[unresolved-attribute]
+
+
 def test_usage_entry_overrides_take_precedence_over_preset(tmp_path: Path):
     """A usage entry that overrides allowed_tools wins over its preset's
     value (list-replace semantics from Q5). Tested on kb_chat — the override
