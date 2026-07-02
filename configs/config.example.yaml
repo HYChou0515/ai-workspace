@@ -294,6 +294,24 @@
 #   # no_repeat_ngram_size is intentionally NOT wired: it hard-bans repeated
 #   # n-grams (open-ended-only — it wrecks legitimate term/table repetition in
 #   # diagnosis/JSON), and this tool has no open-ended surface (#146).
+#   #
+#   # ⚠ #107: penalties are POISON for long tool arguments. Additive penalties
+#   # accumulate per occurrence over the whole output — in a multi-KB JSON arg
+#   # the structural tokens (`":`, `",`, indentation, escapes) repeat hundreds
+#   # of times, get penalised into unsamplability, and the model breaks out of
+#   # the tool-call format. If agents write long content via write_file/
+#   # edit_file, leave ALL penalties unset on those presets.
+#   #
+#   # #107 request hygiene knobs (per-preset, same `llm:` block). Omit = the
+#   # param is NOT sent, so the server-side model default wins — on vLLM the
+#   # model's tuned generation_config.json values (an explicit 1.0 here would
+#   # clobber them). Set only to pin a value:
+#   # temperature: 0.55           # opencode pins 0.55 for its qwen entries
+#   # top_p: 1.0
+#   # max_tokens: 32000           # omit = vLLM grants the full remaining
+#                                 # context (SAFE for long tool args — a small
+#                                 # cap truncates the call mid-JSON); set a
+#                                 # LARGE value only to bound runaways.
 
 # ─── read_file caps (sandbox tool) ────────────── [OPT] ─────────────
 # read_file:
