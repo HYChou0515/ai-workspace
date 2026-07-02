@@ -25,8 +25,13 @@ import type {
 let seq = 0;
 const nextId = (prefix: string) => `${prefix}-${(++seq).toString(36)}`;
 
+/** The mock's internal doc row keeps the open-a-document fields (#395 moved
+ * them off the list wire) so renderDocument can serve them; listDocuments
+ * strips them to mirror the real BE. */
+type MockDoc = KbDocument & { quality_rationale?: string; parser_guidance_override?: string };
+
 const collections = new Map<string, KbCollection>();
-const documents = new Map<string, KbDocument[]>();
+const documents = new Map<string, MockDoc[]>();
 const docChunks = new Map<string, KbDocChunk[]>();
 const chats = new Map<string, KbChatDetail>();
 // #357: monotonic "revision time" per chat, bumped on create / rename / send —
@@ -183,13 +188,34 @@ export const mockKbApi: KbApi = {
     const sorted = [...all].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
     const offset = page?.offset ?? 0;
     const limit = page?.limit ?? 50;
-    const items = sorted.slice(offset, offset + limit);
+    // #395: rows are metas-only on the real BE — the open-a-document fields
+    // stay off the list wire.
+    const items = sorted
+      .slice(offset, offset + limit)
+      .map(({ quality_rationale: _qr, parser_guidance_override: _pg, ...row }) => row);
     return {
       items,
       total: sorted.length,
       offset,
       limit,
       has_more: offset + items.length < sorted.length,
+    };
+  },
+  async documentsStatus(collectionId) {
+    const all = documents.get(collectionId) ?? [];
+    const counts: Record<string, number> = {};
+    for (const d of all) counts[d.status] = (counts[d.status] ?? 0) + 1;
+    const runs: Record<string, { units_done: number; units_total: number }> = {};
+    for (const d of all) {
+      if (d.status === "indexing" && (d.units_total ?? 0) > 0) {
+        runs[d.resource_id] = { units_done: d.units_done ?? 0, units_total: d.units_total ?? 0 };
+      }
+    }
+    return {
+      total: all.length,
+      counts,
+      runs,
+      latest_ms: all.reduce((m, d) => Math.max(m, d.updated_at ?? 0), 0),
     };
   },
   async uploadDocument(collectionId, file, path) {
@@ -319,6 +345,10 @@ export const mockKbApi: KbApi = {
       created_by: doc?.created_by ?? "me",
       updated_at: doc?.updated_at ?? Date.now(),
       status: doc?.status ?? "ready",
+      // #395: the open-a-document fields ride the render response, not the row.
+      quality_score: doc?.quality_score,
+      quality_rationale: doc?.quality_rationale,
+      parser_guidance_override: doc?.parser_guidance_override,
     };
   },
   async getDocChunks(documentId) {
