@@ -26,10 +26,11 @@ from llama_index.core.schema import Document
 from specstar import QB, SpecStar
 from specstar.types import Binary, ResourceIDNotFoundError
 
-from ..resources.kb import Collection, DocChunk, SourceDoc
+from ..resources.kb import CachedChunk, Collection, DocChunk, IndexCache, SourceDoc
 from .chunker import Chunker
 from .doc_id import canonical_path, encode_doc_id
 from .embedder import Embedder
+from .index_cache import IndexCacheStore, compute_cache_key
 from .parser_config import effective_config
 from .parsers import IParser, MaterialisedParserInput, ParserRegistry
 from .parsers.chat_export_parser import ChatExportParser
@@ -814,6 +815,119 @@ class Ingestor:
         coll = self._spec.get_resource_manager(Collection).get(collection_id).data
         assert isinstance(coll, Collection)
         return coll.embedder_id != 0
+
+    # ── index-result cache (#390) ────────────────────────────────────
+    def cache_key(self, doc_id: str) -> str:
+        """The :class:`IndexCache` id for this doc's CURRENT content + extraction
+        settings + embedder — the three things that fully determine its chunks +
+        vectors. Cheap: reads the doc + collection (``content.file_id`` needs no
+        blob load), never parses. The guidance/config fold mirrors what the index
+        path actually applies (``_parse_guidance_for`` / the per-parser
+        ``effective_config`` merge) so a hit can't serve chunks parsed under
+        different settings."""
+        doc = self._spec.get_resource_manager(SourceDoc).get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        coll = self._spec.get_resource_manager(Collection).get(doc.collection_id).data
+        assert isinstance(coll, Collection)
+        embedder = self._code_embedder if coll.embedder_id != 0 else self._embedder
+        assert embedder is not None, "collection selects the alt embedder but none is wired"
+        # effective guidance: per-doc override REPLACES the collection's (#356).
+        guidance = doc.parser_guidance_override or coll.parser_guidance
+        # merged parser configs: collection overlaid by per-doc override, per knob.
+        configs: dict[str, dict[str, Any]] = {
+            pid: dict(knobs) for pid, knobs in coll.parser_configs.items()
+        }
+        for pid, knobs in doc.parser_config_overrides.items():
+            configs.setdefault(pid, {}).update(knobs)
+        content_file_id = doc.content.file_id  # always set on a persisted Binary
+        assert isinstance(content_file_id, str)
+        return compute_cache_key(
+            content_file_id=content_file_id,
+            guidance=guidance,
+            configs=configs,
+            embedder_identity=embedder.identity,
+        )
+
+    def copy_from_cache(self, doc_id: str) -> bool:
+        """Producer-side fast-path (#390): if this doc's content+settings were
+        already indexed (any path / collection), rebuild its chunks by COPYING
+        the cached result — no parse, no embed — and flip it to ``ready``. Returns
+        True on a hit (the doc is now fully indexed), False on a miss (the caller
+        enqueues a real index). Deliberately does NOT run the wiki / quality hooks:
+        a cache hit is identical content, and re-running them is pure waste (a
+        moved doc stays unscored until a manual reindex — the accepted trade)."""
+        entry = IndexCacheStore(self._spec).get(self.cache_key(doc_id))
+        if entry is None:
+            return False
+        drm = self._spec.get_resource_manager(SourceDoc)
+        doc = drm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        self._delete_chunks(doc_id)  # clear any partial chunks before the copy
+        chrm = self._spec.get_resource_manager(DocChunk)
+        for c in entry.chunks:
+            chrm.create(
+                DocChunk(
+                    collection_id=doc.collection_id,
+                    source_doc_id=doc_id,
+                    seq=c.seq,
+                    start=c.start,
+                    end=c.end,
+                    text=c.text,
+                    parser_id=c.parser_id,
+                    provenance=dict(c.provenance),
+                    embedding=c.embedding,
+                    embedding_alt=c.embedding_alt,
+                )
+            )
+        drm.update(
+            doc_id,
+            msgspec.structs.replace(
+                doc,
+                status="ready",
+                status_detail="",
+                text=entry.text,
+                preview=entry.preview,
+                token_count=count_tokens(entry.text or ""),
+            ),
+        )
+        return True
+
+    def write_cache(self, doc_id: str) -> None:
+        """Snapshot a freshly-indexed doc's result (chunks incl. vectors + text +
+        preview) into the :class:`IndexCache` under its current key, so a later
+        move / re-upload of the same content reuses it. Called at index completion
+        (cache-miss path)."""
+        drm = self._spec.get_resource_manager(SourceDoc)
+        doc = drm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        chrm = self._spec.get_resource_manager(DocChunk)
+        rows = [r.data for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build())]
+        chunks = sorted((c for c in rows if isinstance(c, DocChunk)), key=lambda c: c.seq)
+        entry = IndexCache(
+            chunks=[
+                CachedChunk(
+                    seq=c.seq,
+                    start=c.start,
+                    end=c.end,
+                    text=c.text,
+                    parser_id=c.parser_id,
+                    provenance=dict(c.provenance),
+                    embedding=c.embedding,
+                    embedding_alt=c.embedding_alt,
+                )
+                for c in chunks
+            ],
+            text=doc.text,
+            preview=doc.preview,
+        )
+        IndexCacheStore(self._spec).put(self.cache_key(doc_id), entry)
+
+    def invalidate_cache(self, doc_id: str) -> None:
+        """Drop the cache entry for this doc's current key — the ``reindex``
+        button's force path (#390): after invalidation the recompute misses and
+        repopulates, refreshing the shared entry (e.g. after a parser/prompt
+        change the key doesn't capture)."""
+        IndexCacheStore(self._spec).delete(self.cache_key(doc_id))
 
     # ── fan-out (#227): split a large index into per-unit-range process jobs ──
     def fanout_units(self, doc_id: str) -> tuple[int, str]:

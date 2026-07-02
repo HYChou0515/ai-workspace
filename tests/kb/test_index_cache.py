@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
-from workspace_app.kb.index_cache import compute_cache_key
+import msgspec
+from specstar import QB, SpecStar
+
+from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.embedder import HashEmbedder
+from workspace_app.kb.index_cache import IndexCacheStore, compute_cache_key
+from workspace_app.kb.ingest import Ingestor
 from workspace_app.resources import IndexCache
-from workspace_app.resources.kb import CachedChunk
+from workspace_app.resources.kb import CachedChunk, Collection, DocChunk, SourceDoc
+
+
+def _new_collection(spec: SpecStar) -> str:
+    return spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+
+
+def _chunk_view(spec: SpecStar, doc_id: str) -> list[tuple]:
+    rm = spec.get_resource_manager(DocChunk)
+    rs = [r.data for r in rm.list_resources((QB["source_doc_id"] == doc_id).build())]
+    rs = [c for c in rs if isinstance(c, DocChunk)]
+    rs.sort(key=lambda c: c.seq)
+    return [(c.seq, c.start, c.end, c.text, tuple(c.embedding or ())) for c in rs]
 
 
 def _key(**over):
@@ -72,3 +90,78 @@ def test_index_cache_resource_roundtrips(spec):
     assert c.provenance == {"page": 2}
     assert c.embedding == [0.1, 0.2, 0.3]
     assert c.embedding_alt is None
+
+
+def test_store_get_returns_none_on_miss(spec):
+    assert IndexCacheStore(spec).get("no-such-key") is None
+
+
+def test_cache_roundtrip_reuses_chunks_across_paths(
+    spec, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # Index a doc, cache its result, then a SECOND doc with the SAME bytes at a
+    # DIFFERENT path reuses those chunks via the cache — no re-index needed.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"hello world one two three four five"
+    [doc1] = ing.ingest(collection_id=cid, user="u", filename="a.md", data=data)
+    ing.write_cache(doc1)
+
+    doc2 = ing.store_file(collection_id=cid, user="u", path="b.md", data=data)
+    assert doc2 is not None and doc2 != doc1
+    assert _chunk_view(spec, doc2) == []  # stored, not indexed yet
+
+    assert ing.copy_from_cache(doc2) is True
+    view1, view2 = _chunk_view(spec, doc1), _chunk_view(spec, doc2)
+    assert view2 and view2 == view1  # identical chunks + vectors, reused
+    doc = spec.get_resource_manager(SourceDoc).get(doc2).data
+    assert isinstance(doc, SourceDoc) and doc.status == "ready"
+    assert doc.text == data.decode()
+
+
+def test_copy_from_cache_miss_returns_false(spec, chunker, embedder):
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    doc = ing.store_file(collection_id=cid, user="u", path="x.md", data=b"never cached")
+    assert ing.copy_from_cache(doc) is False
+
+
+def test_invalidate_drops_the_entry_and_is_noop_when_absent(spec, chunker, embedder):
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"payload alpha beta gamma delta"
+    [doc1] = ing.ingest(collection_id=cid, user="u", filename="a.md", data=data)
+
+    ing.invalidate_cache(doc1)  # nothing cached yet → no-op, must not raise
+    ing.write_cache(doc1)
+    ing.invalidate_cache(doc1)  # drops the entry
+
+    doc2 = ing.store_file(collection_id=cid, user="u", path="c.md", data=data)
+    assert ing.copy_from_cache(doc2) is False
+
+
+def test_cache_key_reflects_effective_guidance_and_configs(spec, chunker, embedder):
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    doc = ing.store_file(collection_id=cid, user="u", path="a.md", data=b"body text here")
+    k0 = ing.cache_key(doc)
+
+    # per-doc guidance override + configs both feed the key
+    drm = spec.get_resource_manager(SourceDoc)
+    d = drm.get(doc).data
+    assert isinstance(d, SourceDoc)
+    drm.update(
+        doc,
+        msgspec.structs.replace(
+            d, parser_guidance_override="be terse", parser_config_overrides={"P": {"k": 1}}
+        ),
+    )
+    k1 = ing.cache_key(doc)
+    assert k1 != k0
+
+    # a collection-level parser config also shifts the key
+    crm = spec.get_resource_manager(Collection)
+    c = crm.get(cid).data
+    assert isinstance(c, Collection)
+    crm.update(cid, msgspec.structs.replace(c, parser_configs={"Q": {"m": 2}}))
+    assert ing.cache_key(doc) != k1

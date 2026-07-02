@@ -17,11 +17,16 @@ invalidates the entry). See issue #390's grill for the rationale.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Mapping
 from typing import Any
 
 import xxhash
+from specstar import SpecStar
+from specstar.types import ResourceIDNotFoundError
+
+from ..resources.kb import IndexCache
 
 
 def compute_cache_key(
@@ -47,3 +52,29 @@ def compute_cache_key(
         default=str,
     )
     return xxhash.xxh3_128_hexdigest(payload.encode())
+
+
+class IndexCacheStore:
+    """Point get / put / delete for :class:`IndexCache` rows, keyed by the
+    composite id from :func:`compute_cache_key`. A thin seam so the cache's
+    persistence lives in one place; the Ingestor orchestrates on top of it."""
+
+    def __init__(self, spec: SpecStar) -> None:
+        self._rm = spec.get_resource_manager(IndexCache)
+
+    def get(self, key: str) -> IndexCache | None:
+        """The cached entry, or ``None`` on a miss."""
+        try:
+            entry = self._rm.get(key).data
+        except ResourceIDNotFoundError:
+            return None
+        assert isinstance(entry, IndexCache)
+        return entry
+
+    def put(self, key: str, entry: IndexCache) -> None:
+        self._rm.create_or_update(key, entry)
+
+    def delete(self, key: str) -> None:
+        """Drop the entry if present (idempotent — a miss is a no-op)."""
+        with contextlib.suppress(ResourceIDNotFoundError):
+            self._rm.permanently_delete(key)
