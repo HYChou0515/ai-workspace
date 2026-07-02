@@ -7,6 +7,7 @@ import { api } from "../api";
 import { itemChatApi, type ItemChat, type ItemChatSummary } from "../api/itemChats";
 import { kbApi } from "../api/kb";
 import { workflowApi, type ProfileDTO, type WorkflowRunDTO } from "../api/workflows";
+import { workspaceWorkflowsApi } from "../api/workspaceWorkflows";
 import type { FileContent } from "../api/types";
 import { renderWithQuery } from "../test/queryWrapper";
 import { ItemChatShell } from "./ItemChatShell";
@@ -98,6 +99,7 @@ function stubCollectionsFile(body?: string) {
 
 beforeEach(() => {
   vi.spyOn(workflowApi, "listProfiles").mockResolvedValue(PROFILES);
+  vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([]);
   stubCollectionsFile();
 });
 
@@ -223,6 +225,30 @@ describe("ItemChatShell", () => {
     await waitFor(() =>
       expect(start).toHaveBeenCalledWith("topic-hub", "it", "collections", "conversation:c1"),
     );
+  });
+
+  it("lists a user-authored workspace workflow alongside package ones in the in-chat launch menu (#400)", async () => {
+    // A free chat with no active run offers the in-chat launch menu; it must surface
+    // the workflow the user co-authored here (`.workflows/`) next to the package ones.
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true, run_id: null })]);
+    vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([
+      { id: "my-flow", title: "My hand-made flow", phases: [] },
+    ]);
+    render({ chatSwitcher: "auto", showCollections: false });
+    fireEvent.click(await screen.findByTestId("launch-in-chat-button"));
+    expect(await screen.findByTestId("launch-in-chat-workflow-collections")).toBeInTheDocument();
+    expect(await screen.findByTestId("launch-in-chat-workflow-my-flow")).toBeInTheDocument();
+    expect(screen.getByText("My hand-made flow")).toBeInTheDocument();
+  });
+
+  it("lists a user-authored workspace workflow in the + New picker too (#400)", async () => {
+    stubChatApi([summary({ chat_id: "conversation:c1", is_default: true })]);
+    vi.spyOn(workspaceWorkflowsApi, "list").mockResolvedValue([
+      { id: "my-flow", title: "My hand-made flow", phases: [] },
+    ]);
+    render();
+    fireEvent.click(await screen.findByTestId("new-item-button"));
+    expect(await screen.findByTestId("new-item-workflow-my-flow")).toBeInTheDocument();
   });
 
   it("hides the in-chat launch entry while the chat's run is active (#343)", async () => {
