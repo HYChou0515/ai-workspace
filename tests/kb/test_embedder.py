@@ -32,6 +32,37 @@ def test_litellm_embedder_constructs_and_reports_its_dim():
     assert e._timeout == 60.0 and e._batch_size == 64  # defaults
 
 
+def test_hash_embedder_identity_is_stable_and_dim_specific():
+    # #390: `identity` is the cache-key component that says "which embedder made
+    # these vectors". Stable across instances, and it changes iff the produced
+    # DOC vectors could change — here, the dim.
+    assert HashEmbedder(dim=64).identity == HashEmbedder(dim=64).identity
+    assert HashEmbedder(dim=64).identity != HashEmbedder(dim=128).identity
+
+
+def test_identity_tracks_doc_prefix_not_query_prefix():
+    # The cache stores DOCUMENT embeddings, so the doc-side prefix is part of the
+    # identity (it changes the stored vector); the query prefix only affects
+    # search-time embeds and must NOT invalidate cached doc vectors.
+    base = HashEmbedder(dim=64)
+    assert HashEmbedder(dim=64, doc_prefix="D: ").identity != base.identity
+    assert HashEmbedder(dim=64, query_prefix="Q: ").identity == base.identity
+
+
+def test_litellm_identity_is_model_plus_doc_prefix():
+    assert LitellmEmbedder("m", dim=8).identity != LitellmEmbedder("n", dim=8).identity
+    assert (
+        LitellmEmbedder("m", dim=8, doc_prefix="D: ").identity
+        != LitellmEmbedder("m", dim=8).identity
+    )
+    assert (
+        LitellmEmbedder("m", dim=8, query_prefix="Q: ").identity
+        == LitellmEmbedder("m", dim=8).identity
+    )
+    # A hash embedder and a litellm one never collide.
+    assert LitellmEmbedder("m", dim=8).identity != HashEmbedder(dim=8).identity
+
+
 def test_litellm_embedder_batches_requests_and_preserves_order(monkeypatch):
     # A large doc → many chunks; we must NOT send them all in one request.
     e = LitellmEmbedder("m", dim=2, batch_size=2)

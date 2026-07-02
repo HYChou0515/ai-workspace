@@ -164,6 +164,7 @@ def test_index_marks_doc_error_when_embedding_fails(
 ):
     class _BoomEmbedder:
         dim = EMBED_DIM
+        identity = "boom"
 
         def embed_documents(self, texts: list[str]) -> list[list[float]]:
             raise RuntimeError("model down")

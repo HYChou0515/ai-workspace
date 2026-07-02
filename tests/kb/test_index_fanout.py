@@ -88,6 +88,11 @@ async def test_large_csv_fans_out_then_finalizes_to_ready():
 
     assert wiki.hooked == [doc_id]  # the wiki hook ran exactly once, after finalize
 
+    # #390: finalize snapshotted the fanned-out result into the cross-path cache.
+    from workspace_app.kb.index_cache import IndexCacheStore
+
+    assert IndexCacheStore(spec).get(ingestor.cache_key(doc_id)) is not None
+
 
 async def test_fanout_jobs_and_chunks_are_credited_to_the_requester():
     """#186: a large doc fans out into process + finalize IndexJobs created BY the
@@ -344,6 +349,10 @@ class _FailEmbedder:
     @property
     def dim(self) -> int:
         return self._dim
+
+    @property
+    def identity(self) -> str:
+        return f"fail-{self._dim}"
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
         self.calls += 1
