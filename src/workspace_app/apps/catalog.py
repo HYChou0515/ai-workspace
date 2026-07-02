@@ -26,7 +26,7 @@ from msgspec import UNSET
 from ..resources import AgentConfig
 from .manifest import AppManifest, load_app_manifest
 from .profiles import load_profile, load_profile_appendix
-from .skills import SkillMeta, merged_profile_skills
+from .skills import SkillMeta, effective_item_skills
 
 if TYPE_CHECKING:
     from ..config.schema import Preset
@@ -201,6 +201,7 @@ class AppCatalog:
         profile: str,
         attached_preset: str | None = None,
         tool_prefs: Mapping[str, bool] | None = None,
+        skill_prefs: Mapping[str, bool] | None = None,
     ) -> AgentConfig:
         manifest = load_app_manifest(app_slug)
         prof = load_profile(app_slug, profile)
@@ -242,10 +243,27 @@ class AppCatalog:
             )
         preset = self._presets[chosen]
 
+        # skills — single source: `effective_item_skills` computes each available
+        # skill's default_on (the profile's `skills` gates the declared shared set)
+        # + effective (the per-item tri-state `skill_prefs` applied on top: True
+        # forces ON even a default-off skill, False OFF, absent follows the
+        # default). The prompt advertises only the effective ones. Workspace skills
+        # are added per-turn (chat_send), so resolve passes none. The subset check
+        # keeps a `skills` typo a loud config error, not a silently dropped skill.
+        if prof.skills is not UNSET:
+            _subset_or_raise(
+                prof.skills, manifest.agent.skills, kind="skills", app=app_slug, profile=profile
+            )
+        skill_metas = [
+            SkillMeta(name=s.name, description=s.description)
+            for s in effective_item_skills(app_slug, profile, skill_prefs or {}, [])
+            if s.effective
+        ]
+
         system_prompt = _compose_prompt(
             _read_app_text(app_slug, manifest.agent.prompt_file),
             load_profile_appendix(app_slug, profile),
-            merged_profile_skills(app_slug, profile, manifest.agent.skills),
+            skill_metas,
             preamble=_read_base_preamble() if manifest.function.workspace else "",
             sandbox_preamble=_read_sandbox_preamble() if manifest.function.sandbox else "",
         )

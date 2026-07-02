@@ -56,6 +56,7 @@ export function AgentPanel({
   onNewChat,
   onSteer,
   onSaveToolPrefs,
+  onSaveSkillPrefs,
   uploadDir = "uploads",
 }: {
   investigationId: string;
@@ -94,6 +95,10 @@ export function AgentPanel({
   /** #322: persist this item's per-tool override (`attached_tool_prefs`). Threaded
    * to the header's Tools picker; absent → no picker button. */
   onSaveToolPrefs?: (prefs: Record<string, boolean>) => void;
+  /** #380: persist this item's per-skill override (`attached_skill_prefs`). Threaded
+   * to the header's Skills picker; absent → the picker still lists + applies skills
+   * but its Save is a no-op (surfaces with no item to persist onto). */
+  onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void;
   /** #198: the folder the composer's attach stages files into — the item's profile's
    * `upload_dir` (default `uploads/`), the same folder its workflows glob. */
   uploadDir?: string;
@@ -155,6 +160,13 @@ export function AgentPanel({
   // so the agent can read_image it) + an object-URL `url` for the thumbnail.
   const [imageChips, setImageChips] = useState<{ id: string; path: string; url: string }[]>([]);
   const chipSeq = useRef(0);
+  // #380: skills the user queued from the Skills panel to APPLY this turn — a one-shot
+  // set surfaced as accent chips near the composer and cleared once the message sends.
+  const [appliedSkills, setAppliedSkills] = useState<string[]>([]);
+  const toggleApplySkill = (name: string) =>
+    setAppliedSkills((prev) =>
+      prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name],
+    );
   // #51 P6: replay diagnostic for one past entry (assistant / tool).
   const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
   // Handoff 3.0 composer model picker. Picking a model here CHANGES THE item's
@@ -306,7 +318,10 @@ export function AgentPanel({
     const body = imagePaths.length ? [attachPrompt(imagePaths), text].filter(Boolean).join("\n\n") : text;
     setDraft("");
     clearImageChips();
-    void send(body);
+    // #380: hand this turn's queued skills to `send`, then clear them — apply is
+    // one-shot (the next turn starts with an empty apply set).
+    void send(body, { applySkills: appliedSkills });
+    setAppliedSkills([]);
   };
 
   const onChip = (label: string) => {
@@ -356,6 +371,9 @@ export function AgentPanel({
         appColor={appColor}
         onNewChat={onNewChat}
         onSaveToolPrefs={onSaveToolPrefs}
+        onSaveSkillPrefs={onSaveSkillPrefs}
+        appliedSkills={appliedSkills}
+        onToggleApplySkill={toggleApplySkill}
       />
 
       <div
@@ -620,6 +638,55 @@ export function AgentPanel({
             ))}
           </div>
         )}
+        {appliedSkills.length > 0 && (
+          // #380: the queued-for-this-turn skills. Accent-filled so they read as a
+          // distinct kind of chip from the outlined @mention chips, the image
+          // thumbnails, and the suggestion prompt chips — this is "the agent will
+          // follow these skills this turn", one-shot, removable.
+          <div
+            data-testid="applied-skill-chips"
+            style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}
+          >
+            <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+              {t("skills.applied")}
+            </span>
+            {appliedSkills.map((name) => (
+              <span
+                key={name}
+                data-testid="applied-skill-chip"
+                title={t("skills.appliedTip")}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "2px 8px",
+                  borderRadius: "var(--radius-chip)",
+                  background: "var(--accent)",
+                  color: "var(--white)",
+                  fontSize: pxToRem(12),
+                }}
+              >
+                <Icon name="sparkle" size={11} />
+                {name}
+                <button
+                  type="button"
+                  aria-label={`Remove ${name}`}
+                  onClick={() => toggleApplySkill(name)}
+                  style={{
+                    background: "transparent",
+                    border: "none",
+                    color: "var(--white)",
+                    lineHeight: 0,
+                    padding: 0,
+                    cursor: "pointer",
+                  }}
+                >
+                  <Icon name="x" size={10} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <textarea
           ref={composerRef}
           value={draft}
@@ -810,6 +877,9 @@ export function AgentHeader({
   appColor,
   onNewChat,
   onSaveToolPrefs,
+  onSaveSkillPrefs,
+  appliedSkills = [],
+  onToggleApplySkill,
 }: {
   streaming: boolean;
   investigationId: string;
@@ -828,6 +898,13 @@ export function AgentHeader({
    * parent's read-modify-PUT. Present → the Tools picker button shows; absent →
    * no picker (e.g. surfaces with no item to persist onto). */
   onSaveToolPrefs?: (prefs: Record<string, boolean>) => void;
+  /** #380: persist this item's per-skill override (`attached_skill_prefs`). Absent →
+   * the Skills panel still lists + applies, but its Save is a no-op. */
+  onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void;
+  /** #380: skills queued (composer-owned) to apply this turn — lit in the panel. */
+  appliedSkills?: string[];
+  /** #380: toggle a skill in this turn's apply set (composer state lives in AgentPanel). */
+  onToggleApplySkill?: (name: string) => void;
 }) {
   const t = useT();
   const [exportError, setExportError] = useState<string | null>(null);
@@ -854,6 +931,9 @@ export function AgentHeader({
           itemId={investigationId}
           fileService={fileService}
           onClose={() => setShowSkills(false)}
+          onSaveSkillPrefs={onSaveSkillPrefs}
+          appliedSkills={appliedSkills}
+          onToggleApply={onToggleApplySkill}
         />
       )}
       {showWorkflows && (

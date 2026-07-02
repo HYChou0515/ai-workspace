@@ -50,6 +50,14 @@ class ItemLocator:
         found = find_work_item(self._spec, item_id)
         return found[1].profile if found is not None else "default"
 
+    def skill_prefs_of(self, item_id: str) -> dict[str, bool]:
+        """The item's per-item tri-state skill override (``attached_skill_prefs``,
+        #380) — drives the skills picker's ``effective`` state + the read_skill
+        gate. Empty when the id maps to no registered App's item (every skill
+        follows its profile/App default)."""
+        found = find_work_item(self._spec, item_id)
+        return dict(found[1].attached_skill_prefs) if found is not None else {}
+
     def slug_of(self, item_id: str) -> str | None:
         """The App slug owning an item — pairs with `profile_of` so the
         runner can read the profile's `.skill/` dir. None for an unknown id."""

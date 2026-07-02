@@ -922,6 +922,16 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
         workspace_skill_metas,
     )
 
+    # #380: a skill the item toggled OFF (skill_prefs False) is not readable —
+    # it's also absent from the advertised index, so refusing here is defense in
+    # depth against a model that guessed the name. A skill *applied this turn*
+    # overrides the toggle (its body is preloaded anyway), so it stays readable.
+    if ctx.context.skill_prefs.get(name) is False and name not in ctx.context.applied_skills:
+        return (
+            f"error: skill {name!r} is turned off for this item. "
+            f"Enable it in the skills picker to use it."
+        )
+
     # #298: a user+AI co-created skill in this workspace shadows any package
     # skill of the same name. Read live (uncached) — it may have just been saved.
     files = ctx.context.files

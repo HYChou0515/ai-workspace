@@ -58,6 +58,25 @@ def test_app_exposes_read_skill_and_save_skill_tools(slug: str):
     assert "read_skill" in names
 
 
+def test_skills_endpoint_reports_the_tristate_pref_label():
+    """A stored ``attached_skill_prefs`` value surfaces on the picker as its
+    ``on`` / ``off`` label (and flips ``effective``) — the twin of the tool
+    picker's forced-off row (#380). ``follow`` is the absent-key case the
+    across-sources test already covers."""
+    from tests.api.conftest import register_rca_item
+
+    app, spec = _app(_Capture())
+    client = TestClient(app)
+    off = register_rca_item(spec, attached_skill_prefs={"author-skill": False})
+    on = register_rca_item(spec, attached_skill_prefs={"author-skill": True})
+    off_row = {s["name"]: s for s in client.get(f"/a/rca/items/{off}/skills").json()["skills"]}
+    on_row = {s["name"]: s for s in client.get(f"/a/rca/items/{on}/skills").json()["skills"]}
+    assert off_row["author-skill"]["pref"] == "off"
+    assert off_row["author-skill"]["effective"] is False
+    assert on_row["author-skill"]["pref"] == "on"
+    assert on_row["author-skill"]["effective"] is True
+
+
 def test_workspace_skill_is_advertised_to_the_agent_each_turn():
     """A skill saved into the workspace `.skill/` shows up in the next turn's
     prompt (the "Skills in this workspace" block), read live like context_files
@@ -76,9 +95,11 @@ def test_workspace_skill_is_advertised_to_the_agent_each_turn():
     assert "hello" in cap.prompt
 
 
-def test_skills_endpoint_lists_workspace_skills():
-    """GET .../skills returns the workspace's co-created skills (name+description),
-    skipping a malformed one — the Skills panel's data source (#298 P5)."""
+def test_skills_endpoint_returns_picker_state_across_sources():
+    """GET .../skills returns the per-item skills picker state (#380): the App's
+    declared shared skills + the workspace's co-created ones, each with its
+    source / default_on / pref / effective. A malformed workspace skill is
+    skipped (the loader stays lenient)."""
     app, _spec = _app(_Capture())
     client = TestClient(app)
     iid = client.post("/a/playground/items", json={"title": "scratch"}).json()["resource_id"]
@@ -88,7 +109,17 @@ def test_skills_endpoint_lists_workspace_skills():
     # name/dir mismatch → skipped (the loader is lenient; this never lists)
     client.put(f"{base}/bad/SKILL.md", content=b"---\nname: other\ndescription: x\n---\n\nbody")
     out = client.get(f"/a/playground/items/{iid}/skills").json()
-    assert out == [
-        {"name": "alpha", "description": "a"},
-        {"name": "zeta", "description": "z"},
-    ]
+    by = {s["name"]: s for s in out["skills"]}
+    assert by["alpha"] == {
+        "name": "alpha",
+        "description": "a",
+        "source": "workspace",
+        "default_on": True,
+        "pref": "follow",
+        "effective": True,
+    }
+    assert by["zeta"]["source"] == "workspace"
+    assert "other" not in by  # malformed → skipped
+    # the App's declared shared skill is offered too (default-on in playground)
+    assert by["author-skill"]["source"] == "shared"
+    assert by["author-skill"]["effective"] is True

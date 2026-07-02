@@ -137,7 +137,7 @@ export function useItemChat({
   });
 
   const send = useCallback(
-    async (content: string) => {
+    async (content: string, opts?: { applySkills?: string[] }) => {
       const trimmed = content.trim();
       if (!trimmed) return;
       // Flip into "streaming" eagerly so the composer locks; the user message +
@@ -156,6 +156,8 @@ export function useItemChat({
           // Knowledge-search depth + the "Search the wiki" toggle → this turn's
           // ask_knowledge_base lookups (same sticky selection useAgent sends).
           enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
+          // #380: skills queued in the Skills panel to apply THIS turn (one-shot).
+          applySkills: opts?.applySkills,
         });
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;

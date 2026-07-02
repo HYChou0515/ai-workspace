@@ -27,6 +27,11 @@ class _MessageBody(BaseModel):
     # ask_knowledge_base call in the turn — #334 Q6). None → operator default;
     # a concrete value is clamped to [0, kb.max_searches_ceiling] (0 = don't search).
     max_kb_searches: int | None = None
+    # #380: skills the user chose to APPLY this turn (the skills picker's "apply"
+    # button). Each named skill's full body is hard-preloaded into the turn with a
+    # "use these now" instruction — a one-shot that overrides a disabled toggle and
+    # is never persisted into history. Empty / None → nothing preloaded.
+    apply_skills: list[str] | None = None
 
 
 class _UndoOut(BaseModel):
@@ -47,13 +52,24 @@ class _FileEntry(BaseModel):
     read_only: bool
 
 
-class _SkillEntry(BaseModel):
-    """One co-created skill in a workspace (#298) — `.skill/<name>/SKILL.md`. The
-    FE Skills panel lists these (the IDE tree hides the dot-folder) so the user can
-    see, download, and reuse what they built with the agent."""
+class _ItemSkillState(BaseModel):
+    """One available skill's per-item state in the skills picker (#380), the skill
+    sibling of ``ItemToolState``. ``source`` is where it comes from (``shared`` /
+    ``profile`` / ``workspace``); ``default_on`` is its profile/App default;
+    ``pref`` is the stored tri-state override (``follow`` → tracks the default,
+    ``on`` / ``off`` forced); ``effective`` is the resolved result — and, for a
+    ``workspace`` skill, whether the download control shows."""
 
     name: str
     description: str
+    source: str
+    default_on: bool
+    pref: Literal["follow", "on", "off"]
+    effective: bool
+
+
+class _ItemSkills(BaseModel):
+    skills: list[_ItemSkillState]
 
 
 class _WorkspaceUsage(BaseModel):

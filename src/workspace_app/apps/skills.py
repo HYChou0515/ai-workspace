@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from functools import cache
 from importlib import resources
 from importlib.resources.abc import Traversable
@@ -205,9 +206,143 @@ def workspace_skills_block(metas: list[SkillMeta]) -> str:
     return "\n".join(lines)
 
 
-async def build_workspace_skills_block(files: WorkspaceFiles, workspace_id: str) -> str:
-    """Read the workspace's `.skill/` live and render the index block (or ``""``)."""
-    return workspace_skills_block(await workspace_skill_metas(files, workspace_id))
+async def build_workspace_skills_block(
+    files: WorkspaceFiles, workspace_id: str, prefs: Mapping[str, bool] | None = None
+) -> str:
+    """Read the workspace's `.skill/` live and render the index block (or ``""``).
+    A workspace skill the item toggled OFF (`prefs[name]` is False, #380) is
+    dropped — the agent isn't told about a skill the user turned off (workspace
+    skills are default-on, so only an explicit False hides one)."""
+    metas = await workspace_skill_metas(files, workspace_id)
+    if prefs:
+        metas = [m for m in metas if prefs.get(m.name) is not False]
+    return workspace_skills_block(metas)
+
+
+class SkillState(msgspec.Struct, frozen=True):
+    """#380: one skill's per-item picker state — its ``source`` (``shared`` /
+    ``profile`` / ``workspace``), the profile/App ``default_on`` before any
+    override, and the ``effective`` result after the item's tri-state
+    ``skill_prefs`` is applied. The API layer adds the ``follow``/``on``/``off``
+    ``pref`` label from the raw prefs."""
+
+    name: str
+    description: str
+    source: str
+    default_on: bool
+    effective: bool
+
+
+def effective_item_skills(
+    app_slug: str,
+    profile: str,
+    prefs: Mapping[str, bool],
+    workspace_metas: list[SkillMeta],
+) -> list[SkillState]:
+    """The item's full skills picker state (#380), one row per available skill
+    across all three sources — the App's declared shared skills, the profile's
+    package ``.skill/`` skills, and the co-created workspace skills — sorted by
+    name. Deduped with priority ``workspace > profile > shared`` (a workspace or
+    package skill shadows a shared one of the same name, matching read_skill).
+
+    ``default_on``: package + workspace skills are on by default; a shared skill
+    is on only if the profile's ``skills`` opts it in (or the profile leaves
+    ``skills`` unset → all declared shared are on). ``effective`` applies the
+    per-item tri-state ``prefs`` on top (``True`` on, ``False`` off, absent →
+    ``default_on``). Single source for the picker endpoint AND the turn's prompt
+    index (``AppCatalog.resolve``), so the two can't drift."""
+    from msgspec import UNSET
+
+    from .manifest import load_app_manifest
+    from .profiles import load_profile
+    from .shared_skills import shared_skill_metas
+
+    declared = list(load_app_manifest(app_slug).agent.skills)
+    prof_skills = load_profile(app_slug, profile).skills
+    default_shared = set(declared if prof_skills is UNSET else prof_skills)
+    # name → (meta, source, default_on); later writes shadow earlier ones.
+    rows: dict[str, tuple[SkillMeta, str, bool]] = {}
+    for m in shared_skill_metas(declared):
+        rows[m.name] = (m, "shared", m.name in default_shared)
+    for m in list_skills(app_slug, profile):
+        rows[m.name] = (m, "profile", True)
+    for m in workspace_metas:
+        rows[m.name] = (m, "workspace", True)
+    out: list[SkillState] = []
+    for name in sorted(rows):
+        meta, source, default_on = rows[name]
+        pinned = prefs.get(name)
+        effective = pinned if pinned is not None else default_on
+        out.append(
+            SkillState(
+                name=name,
+                description=meta.description,
+                source=source,
+                default_on=default_on,
+                effective=effective,
+            )
+        )
+    return out
+
+
+async def resolve_skill_body(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    name: str,
+) -> str | None:
+    """A skill's body across the three sources in read_skill's precedence —
+    workspace ``.skill/`` first (the user's own shadows), then a shared registry
+    skill, then the profile package skill. ``None`` when no source has it. Raises
+    ``SkillError`` only on a body over the cap. #380: the apply-this-turn preload
+    resolves the body IGNORING the enable/disable toggle (apply overrides off)."""
+    from .shared_skills import SHARED_SKILLS, load_shared_skill
+
+    body = await load_workspace_skill(files, workspace_id, name)
+    if body is not None:
+        return body
+    if name in SHARED_SKILLS:
+        return load_shared_skill(name)
+    if app_slug is not None and profile is not None:
+        try:
+            return load_skill(app_slug, profile, name)
+        except SkillError:
+            return None
+    return None
+
+
+async def build_applied_skills_block(
+    files: WorkspaceFiles,
+    workspace_id: str,
+    app_slug: str | None,
+    profile: str | None,
+    names: list[str],
+) -> str:
+    """Render the per-turn "apply these skills now" block (#380) — each named
+    skill's full body under its own heading, preceded by an instruction to apply
+    them this turn. A name whose body can't be resolved (unknown, or over the cap)
+    is skipped with a short note so the turn still proceeds. ``""`` when nothing
+    resolves. Injected like the workspace block: transient, never persisted."""
+    sections: list[str] = []
+    for name in names:
+        try:
+            body = await resolve_skill_body(files, workspace_id, app_slug, profile, name)
+        except SkillError as e:
+            sections.append(f"### {name}\n\n(could not load: {e})")
+            continue
+        if body is None:
+            sections.append(f"### {name}\n\n(skill not found — skipped)")
+        else:
+            sections.append(f"### {name}\n\n{body}")
+    if not sections:
+        return ""
+    header = (
+        "## Apply these skills now\n\n"
+        "The user selected the following skill(s) to apply THIS turn. Read them and "
+        "follow them as you answer."
+    )
+    return "\n\n".join([header, *sections])
 
 
 def merged_profile_skills(

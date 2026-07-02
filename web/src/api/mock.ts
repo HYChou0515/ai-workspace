@@ -640,6 +640,28 @@ export const mockApi: ApiClient = {
     ];
   },
 
+  async getItemSkills(_slug: string, _itemId: string) {
+    await delay(10);
+    return [
+      {
+        name: "author-skill",
+        description: "Co-author a reusable skill with the user.",
+        source: "shared",
+        default_on: true,
+        pref: "follow" as const,
+        effective: true,
+      },
+      {
+        name: "report-format",
+        description: "How to structure the final report.",
+        source: "profile",
+        default_on: true,
+        pref: "on" as const,
+        effective: true,
+      },
+    ];
+  },
+
   async listAppItems(_resourceRoute: string): Promise<AppItem[]> {
     await delay(10);
     return _mockAppItems;

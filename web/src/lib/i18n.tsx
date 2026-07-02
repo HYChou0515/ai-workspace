@@ -401,13 +401,13 @@ export const messages = {
   // #298 — the Skills panel (co-created skills in a workspace).
   "skills.button": { "zh-TW": "技能", en: "Skills" },
   "skills.tip": {
-    "zh-TW": "查看與重用你和助理一起做的技能",
-    en: "See and reuse the skills you built with the assistant",
+    "zh-TW": "查看技能、開啟關閉，或讓助理這回合套用",
+    en: "See skills, turn them on or off, or apply one for this turn",
   },
-  "skills.title": { "zh-TW": "這個工作區的技能", en: "Skills in this workspace" },
+  "skills.title": { "zh-TW": "技能", en: "Skills" },
   "skills.intro": {
-    "zh-TW": "技能是你和助理一起定下的做事方法；下次助理會照著做。",
-    en: "A skill captures how you want a task done, so the assistant follows your way next time.",
+    "zh-TW": "開啟或關閉助理能用的技能，或選「套用」讓它這回合照著某個技能做。",
+    en: "Turn the assistant's skills on or off, or Apply one to have it follow that skill this turn.",
   },
   "skills.empty": {
     "zh-TW": "還沒有技能。在對話中請助理「幫我做一個技能」就能一起做一個。",
@@ -420,6 +420,17 @@ export const messages = {
     en: "Pick a skill folder to add it to this workspace",
   },
   "skills.close": { "zh-TW": "關閉", en: "Close" },
+  "skills.apply": { "zh-TW": "套用", en: "Apply" },
+  "skills.applyTip": {
+    "zh-TW": "這回合讓助理套用此技能",
+    en: "Apply this skill for the assistant's next turn",
+  },
+  "skills.save": { "zh-TW": "儲存", en: "Save" },
+  "skills.applied": { "zh-TW": "這回合套用：", en: "Applying:" },
+  "skills.appliedTip": {
+    "zh-TW": "助理這回合會照這個技能做（送出後自動移除）",
+    en: "The assistant follows this skill this turn (removed after you send)",
+  },
   // #323 — the Workflows panel (co-created workflows in a workspace).
   "workflows.button": { "zh-TW": "工作流程", en: "Workflows" },
   "workflows.tip": {

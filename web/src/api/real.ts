@@ -29,6 +29,7 @@ import type {
   SearchParams,
   ExecuteCellArgs,
   FileInfo,
+  ItemSkillState,
   ItemToolState,
   ToolCatalogEntry,
   WorkspaceUsage,
@@ -152,6 +153,15 @@ export const realApi: ApiClient = {
       ),
     );
     return r.tools;
+  },
+
+  async getItemSkills(slug: string, itemId: string) {
+    const r = await json<{ skills: ItemSkillState[] }>(
+      await apiFetch(
+        `/a/${encodeURIComponent(slug)}/items/${encodeURIComponent(itemId)}/skills`,
+      ),
+    );
+    return r.skills;
   },
 
   async listAppItems(resourceRoute: string, params?: SearchParams) {
@@ -458,6 +468,7 @@ export const realApi: ApiClient = {
           reasoning_effort: args.reasoningEffort,
           enhancements: args.enhancements,
           max_kb_searches: args.maxKbSearches,
+          apply_skills: args.applySkills,
         }),
         signal: args.signal,
       },

@@ -1,37 +1,89 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 
+import { api } from "../api";
 import type { FileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
+import type { ApiClient, ItemSkillState, ToolPref } from "../api/types";
 import { skillDir } from "../api/workspaceSkills";
-import { useWorkspaceSkills } from "../hooks/useWorkspaceSkills";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
 
 /**
- * The Skills panel (#298) — lists the skills the user co-created with the agent in
- * THIS workspace (`.skill/<name>/SKILL.md`), since the IDE tree hides the dot-folder.
- * Each skill downloads as a folder zip (reuse it elsewhere, or hand it to the team to
- * bake into the starting profile); a skill folder imports back via the file routes.
- * Creating a skill is a conversation — the empty state points the user at the agent.
+ * The Skills panel (#298 + #380). Lists every skill available to this item —
+ * the App's declared shared skills, the profile's package skills, and the ones
+ * the user co-created in THIS workspace (`.skill/<name>/SKILL.md`, hidden from the
+ * IDE tree). Each row carries a persistent tri-state toggle (Default / On / Off,
+ * stored in `attached_skill_prefs`, mirroring the tool picker) and a one-shot
+ * "Apply" that loads the skill into the assistant's next turn. Workspace skills
+ * additionally download as a folder zip; a folder imports back via the file routes.
  */
 export function SkillsModal({
   slug,
   itemId,
   fileService,
   onClose,
+  onSaveSkillPrefs,
+  appliedSkills = [],
+  onToggleApply,
+  client = api,
 }: {
   slug: string;
   itemId: string;
   fileService: FileService;
   onClose: () => void;
+  /** Persist the tri-state override (`attached_skill_prefs`) — wired to the item. */
+  onSaveSkillPrefs?: (prefs: Record<string, boolean>) => void | Promise<void>;
+  /** Skills the user has queued to apply this turn (composer-owned, one-shot). */
+  appliedSkills?: string[];
+  /** Toggle a skill in this turn's apply set. */
+  onToggleApply?: (name: string) => void;
+  client?: Pick<ApiClient, "getItemSkills">;
 }) {
   const t = useT();
   const qc = useQueryClient();
-  const skills = useWorkspaceSkills(slug, itemId);
+  const skillsQ = useQuery({
+    queryKey: qk.itemSkills(slug, itemId),
+    queryFn: () => client.getItemSkills(slug, itemId),
+  });
   const importRef = useRef<HTMLInputElement | null>(null);
   const [busy, setBusy] = useState(false);
+  const [prefs, setPrefs] = useState<Record<string, boolean> | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  // Seed the editable sparse override once the resolved state loads (present
+  // on/off entries only — an absent key follows the profile/App default).
+  useEffect(() => {
+    if (prefs === null && skillsQ.data) setPrefs(overrideFromSkills(skillsQ.data));
+  }, [prefs, skillsQ.data]);
+
+  const list = skillsQ.data ?? [];
+  const applied = new Set(appliedSkills);
+
+  const stateOf = (name: string): ToolPref =>
+    prefs && name in prefs ? (prefs[name] ? "on" : "off") : "follow";
+
+  const setState = (name: string, next: ToolPref) => {
+    setPrefs((prev) => {
+      const out = { ...(prev ?? {}) };
+      if (next === "follow") delete out[name];
+      else out[name] = next === "on";
+      return out;
+    });
+  };
+
+  const save = async () => {
+    if (prefs === null || saving) return;
+    setSaving(true);
+    try {
+      await onSaveSkillPrefs?.(prefs);
+      await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const download = async (name: string) => {
     const prefix = skillDir(name);
@@ -49,19 +101,16 @@ export function SkillsModal({
     try {
       for (const f of Array.from(files)) {
         // The picked folder's name becomes the skill name; `webkitRelativePath`
-        // already carries it as the first segment (e.g. `my-skill/SKILL.md`), so
-        // the skill lands at `.skill/my-skill/…`.
+        // already carries it as the first segment (e.g. `my-skill/SKILL.md`).
         const rel = f.webkitRelativePath || f.name;
         await fileService.writeFile(`.skill/${rel}`, await f.arrayBuffer());
       }
-      await qc.invalidateQueries({ queryKey: qk.workspaceSkills(slug, itemId) });
+      await qc.invalidateQueries({ queryKey: qk.itemSkills(slug, itemId) });
       await qc.invalidateQueries({ queryKey: qk.files(itemId) });
     } finally {
       setBusy(false);
     }
   };
-
-  const list = skills.data ?? [];
 
   return (
     <div
@@ -84,7 +133,7 @@ export function SkillsModal({
         data-testid="skills-modal"
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: 480,
+          width: 520,
           maxWidth: "92vw",
           maxHeight: "82vh",
           background: "var(--white)",
@@ -115,7 +164,9 @@ export function SkillsModal({
           {t("skills.intro")}
         </p>
 
-        <div style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 6 }}>
+        <div
+          style={{ overflowY: "auto", display: "flex", flexDirection: "column", gap: 4, flex: 1 }}
+        >
           {list.length === 0 ? (
             <p
               data-testid="skills-empty"
@@ -125,34 +176,15 @@ export function SkillsModal({
             </p>
           ) : (
             list.map((s) => (
-              <div
+              <SkillRow
                 key={s.name}
-                data-testid="skill-row"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  padding: "6px 8px",
-                  border: "1px solid var(--paper-3)",
-                  borderRadius: "var(--radius-btn)",
-                }}
-              >
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>{s.name}</div>
-                  <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-                    {s.description}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  data-testid={`skill-download-${s.name}`}
-                  aria-label={`${t("skills.download")} ${s.name}`}
-                  onClick={() => void download(s.name)}
-                  style={pillBtn}
-                >
-                  <Icon name="download" size={12} /> {t("skills.download")}
-                </button>
-              </div>
+                skill={s}
+                state={stateOf(s.name)}
+                onSetState={(next) => setState(s.name, next)}
+                applied={applied.has(s.name)}
+                onToggleApply={() => onToggleApply?.(s.name)}
+                onDownload={s.source === "workspace" ? () => void download(s.name) : undefined}
+              />
             ))
           )}
         </div>
@@ -167,9 +199,23 @@ export function SkillsModal({
           >
             <Icon name="upload" size={12} /> {t("skills.import")}
           </button>
-          <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+          <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", flex: 1 }}>
             {t("skills.importHint")}
           </span>
+          <button
+            type="button"
+            data-testid="skills-save"
+            disabled={saving || prefs === null}
+            onClick={() => void save()}
+            style={{
+              ...pillBtn,
+              background: "var(--accent)",
+              color: "var(--white)",
+              borderColor: "var(--accent)",
+            }}
+          >
+            {t("skills.save")}
+          </button>
           <input
             ref={(el) => {
               importRef.current = el;
@@ -190,6 +236,140 @@ export function SkillsModal({
       </div>
     </div>
   );
+}
+
+function SkillRow({
+  skill,
+  state,
+  onSetState,
+  applied,
+  onToggleApply,
+  onDownload,
+}: {
+  skill: ItemSkillState;
+  state: ToolPref;
+  onSetState: (next: ToolPref) => void;
+  applied: boolean;
+  onToggleApply: () => void;
+  onDownload?: () => void;
+}) {
+  const t = useT();
+  return (
+    <div
+      data-testid={`skill-row-${skill.name}`}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "6px 6px",
+        borderRadius: "var(--radius-btn)",
+        fontSize: pxToRem(13),
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontWeight: 600 }}>{skill.name}</span>
+          <span
+            data-testid={`skill-source-${skill.name}`}
+            style={{
+              fontSize: pxToRem(10),
+              color: "var(--text-paper-d)",
+              border: "1px solid var(--paper-3)",
+              borderRadius: 999,
+              padding: "0 6px",
+            }}
+          >
+            {skill.source}
+          </span>
+        </div>
+        <div
+          style={{
+            fontSize: pxToRem(11),
+            color: "var(--text-paper-d)",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {skill.description}
+        </div>
+      </div>
+
+      <button
+        type="button"
+        data-testid={`skill-apply-${skill.name}`}
+        aria-pressed={applied}
+        title={t("skills.applyTip")}
+        onClick={onToggleApply}
+        style={{
+          ...pillBtn,
+          height: 24,
+          background: applied ? "var(--accent)" : "var(--white)",
+          color: applied ? "var(--white)" : "var(--text-paper)",
+          borderColor: applied ? "var(--accent)" : "var(--paper-3)",
+        }}
+      >
+        <Icon name="sparkle" size={11} /> {t("skills.apply")}
+      </button>
+
+      {onDownload && (
+        <button
+          type="button"
+          data-testid={`skill-download-${skill.name}`}
+          aria-label={`${t("skills.download")} ${skill.name}`}
+          onClick={onDownload}
+          style={{ ...pillBtn, height: 24 }}
+        >
+          <Icon name="download" size={12} />
+        </button>
+      )}
+
+      <div
+        role="group"
+        style={{
+          display: "flex",
+          border: "1px solid var(--paper-3)",
+          borderRadius: "var(--radius-btn)",
+          overflow: "hidden",
+        }}
+      >
+        {(["follow", "on", "off"] as ToolPref[]).map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            data-testid={`skill-${skill.name}-${opt}`}
+            aria-pressed={state === opt}
+            onClick={() => onSetState(opt)}
+            style={segBtn(state === opt)}
+          >
+            {t(opt === "follow" ? "tools.follow" : opt === "on" ? "tools.on" : "tools.off")}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function overrideFromSkills(skills: ItemSkillState[]): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  for (const s of skills) {
+    if (s.pref === "on") out[s.name] = true;
+    else if (s.pref === "off") out[s.name] = false;
+  }
+  return out;
+}
+
+function segBtn(active: boolean): React.CSSProperties {
+  return {
+    height: 24,
+    padding: "0 10px",
+    fontSize: pxToRem(12),
+    border: "none",
+    borderRight: "1px solid var(--paper-3)",
+    background: active ? "var(--accent)" : "var(--white)",
+    color: active ? "var(--white)" : "var(--text-paper)",
+    cursor: "pointer",
+  };
 }
 
 const pillBtn: React.CSSProperties = {
