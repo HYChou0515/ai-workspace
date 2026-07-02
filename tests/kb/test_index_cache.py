@@ -2,8 +2,43 @@
 
 from __future__ import annotations
 
+from workspace_app.kb.index_cache import compute_cache_key
 from workspace_app.resources import IndexCache
 from workspace_app.resources.kb import CachedChunk
+
+
+def _key(**over):
+    base = dict(
+        content_file_id="hashA",
+        guidance="",
+        configs={},
+        embedder_identity="litellm-m\x00",
+    )
+    base.update(over)
+    return compute_cache_key(**base)
+
+
+def test_cache_key_is_deterministic_and_slash_free():
+    # A specstar resource id can't contain '/', and the key must be stable across
+    # calls so the same content resolves the same entry.
+    k = _key()
+    assert k == _key()
+    assert "/" not in k and k  # non-empty, slash-free
+
+
+def test_cache_key_changes_with_each_component():
+    base = _key()
+    assert _key(content_file_id="hashB") != base  # different bytes
+    assert _key(guidance="be terse") != base  # different prompt
+    assert _key(embedder_identity="litellm-n\x00") != base  # different model
+    assert _key(configs={"PdfParser": {"k": 1}}) != base  # different parser config
+
+
+def test_cache_key_ignores_config_dict_ordering():
+    # Two dicts that differ only in key insertion order are the SAME settings.
+    a = _key(configs={"A": {"x": 1, "y": 2}, "B": {"z": 3}})
+    b = _key(configs={"B": {"z": 3}, "A": {"y": 2, "x": 1}})
+    assert a == b
 
 
 def test_index_cache_resource_roundtrips(spec):
