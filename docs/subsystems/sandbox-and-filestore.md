@@ -25,7 +25,7 @@
 | 路徑 | 角色 |
 | --- | --- |
 | `src/workspace_app/sandbox/protocol.py` | `Sandbox` Protocol（14 個方法）+ `SandboxHandle` / `SandboxSpec` / `ExecResult` / `FileEntry` dataclass + `SandboxNotFound`。定義 mirror 用來 diff 的不透明 `FileEntry.version` 變更戳，以及 `/`-rooted 路徑、非零退出不丟例外等全後端共通約定。 |
-| `src/workspace_app/sandbox/local_process.py` | `LocalProcessSandbox` — 受信任單機/VM 部署的預設。有 unprivileged user namespace 時用 `unshare --user --mount` + chroot 牢籠（`_JAIL_BOOTSTRAP`）跑每個 exec；否則退回工作子目錄裡的純 subprocess。擁有雙逾時 exec pump、process-group SIGKILL、與 host 子類覆寫的 `_exec_argv` hook。 |
+| `src/workspace_app/sandbox/local_process.py` | `LocalProcessSandbox` — 受信任單機/VM 部署的預設。有 unprivileged user namespace 時用 `unshare --user --mount` + chroot 牢籠（`_JAIL_BOOTSTRAP`）跑每個 exec；否則退回工作子目錄裡的純 subprocess。擁有雙逾時 exec pump、process-group SIGKILL、與 host 子類覆寫的 `_exec_argv` hook。每個 sandbox 的 infra 兄弟目錄（workspace `root/` 之外、不被 walk/sync、回收即刪）：`.tools`（工具）、`.jailbin`（`python` shim，#350）、`.ready`（readiness marker，#366）、`.home`（per-sandbox HOME，#393——unjailed exec 以 `SANDBOX_HOME` 傳給 carrier launcher，讓使用者 `pip --user` 安裝落在自己 sandbox 而非共用 `/tmp`）。 |
 | `src/workspace_app/sandbox/http_client.py` | `HttpSandbox` — 第 4 種後端（#60），把 14 個方法忠實 marshal 到獨立的 sandbox-host pod。把 `(pod_url, remote_id)` 打包進不透明 handle，讓任何 app replica 直連擁有該 sandbox 的 pod（stateless / HPA-ready）；死 pod / 傳輸錯誤映成 `SandboxNotFound`。`exec` 走 NDJSON 串流；`expose_port` v1 丟 `NotImplementedError`。 |
 | `src/workspace_app/sandbox/mock.py` | `MockSandbox` — 給測試的記憶體內 `dict[path]->bytes` 後端；content-hash 版本戳；`mkdir` 是 validate-and-no-op（扁平 store 無可觀測的空目錄）。 |
 | `src/workspace_app/sandbox/docker.py` | `DockerSandbox` — **已棄用**（#252）：一個 handle 一個 container；仍可本機一次性用，但不再維護，由 `sandbox.kind: http` 取代。 |

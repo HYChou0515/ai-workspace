@@ -30,7 +30,7 @@ from pathlib import Path
 
 import xxhash
 
-from .local_process import LocalProcessSandbox, _validate_sandbox_id
+from .local_process import _HOME, LocalProcessSandbox, _validate_sandbox_id
 from .protocol import SandboxHandle, SandboxSpec
 
 # cgroup v2 cpu.max uses a fixed 100ms accounting period.
@@ -248,6 +248,13 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
         os.chown(workspace, uid, -1)
         os.chmod(workspace, 0o700)
         self._acl_runner(_acl_argv(workspace, uid))
+        # #393: the per-sandbox HOME (a workspace sibling) must be writable by
+        # the item uid so the carrier launcher's HOME/caches + a user's `pip
+        # --user` install land there. No default ACL — only the uid writes here.
+        # Idempotent — a re-create chowns to the same derived uid (a no-op).
+        home = workspace.parent / _HOME
+        os.chown(home, uid, -1)
+        os.chmod(home, 0o700)
 
     async def kill(self, handle: SandboxHandle) -> None:
         # The cgroup path is DERIVED from the id (no per-pod identity map), so a

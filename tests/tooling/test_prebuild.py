@@ -22,7 +22,11 @@ from pathlib import Path
 
 import pytest
 
-from workspace_app.tooling.prebuild import _dump_schemas, _should_rebuild, _source_hash
+from workspace_app.tooling.prebuild import (
+    _build_stamp,
+    _dump_schemas,
+    _should_rebuild,
+)
 
 
 def _fake_launch(path: Path, commands: dict[str, dict]) -> None:
@@ -128,7 +132,7 @@ def test_should_rebuild_false_when_content_unchanged(tmp_path: Path):
     (src / "foo.py").write_text("x")
     dst = tmp_path / "dst"
     dst.mkdir()
-    (dst / ".built").write_text(_source_hash(src))
+    (dst / ".built").write_text(_build_stamp(src))
     assert _should_rebuild(src, dst) is False
 
 
@@ -144,7 +148,7 @@ def test_should_rebuild_true_when_content_changed_even_with_same_mtime(tmp_path:
     os.utime(foo, (1000.0, 1000.0))
     dst = tmp_path / "dst"
     dst.mkdir()
-    (dst / ".built").write_text(_source_hash(src))
+    (dst / ".built").write_text(_build_stamp(src))
     # Edit content but pin mtime back to the original — mtime-based skip
     # would say "unchanged", content-hash must say "rebuild".
     foo.write_text("new code")
@@ -160,11 +164,33 @@ def test_should_rebuild_ignores_dot_subdirs_in_src(tmp_path: Path):
     (src / "foo.py").write_text("x")
     dst = tmp_path / "dst"
     dst.mkdir()
-    (dst / ".built").write_text(_source_hash(src))
+    (dst / ".built").write_text(_build_stamp(src))
     # Drop a dotfile/dir in src that must NOT change the hash.
     (src / ".venv").mkdir()
     (src / ".venv" / "something").write_text("recent")
     assert _should_rebuild(src, dst) is False
+
+
+def test_should_rebuild_true_when_builder_templates_change(tmp_path: Path, monkeypatch):
+    """#393: editing a launcher TEMPLATE (builder code, not package source)
+    must force a rebuild of an already-built bundle. `_source_hash(source)`
+    can't see it — the template is baked INTO the bundle at build time, not
+    read from the source — so the `.built` stamp folds in a builder
+    fingerprint. Same stale-cache class as #64: without this, a changed
+    `_PYTHON_LAUNCH` silently keeps the old `launch` in every cached bundle."""
+    from workspace_app.tooling import prebuild
+
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "foo.py").write_text("x")
+    dst = tmp_path / "dst"
+    dst.mkdir()
+    (dst / ".built").write_text(prebuild._build_stamp(src))
+    # Baseline: source AND builder unchanged → up to date.
+    assert prebuild._should_rebuild(src, dst) is False
+    # Simulate a launcher-template edit; the source is untouched.
+    monkeypatch.setattr(prebuild, "_PYTHON_LAUNCH", prebuild._PYTHON_LAUNCH + "\n# edited\n")
+    assert prebuild._should_rebuild(src, dst) is True
 
 
 # ─── end-to-end build (real uv) ────────────────────────────────────────
@@ -187,7 +213,7 @@ def test_build_package_short_circuits_when_source_unchanged(tmp_path: Path, monk
     dst = tmp_path / "dst"
     dst.mkdir()
     # Marker holds the current source hash → unchanged → skip.
-    (dst / ".built").write_text(prebuild._source_hash(src))
+    (dst / ".built").write_text(prebuild._build_stamp(src))
 
     # If subprocess.run gets called the test fails — short-circuit means
     # uv venv / uv sync never run.
@@ -208,7 +234,7 @@ def test_build_package_force_rebuilds_even_when_source_unchanged(tmp_path: Path,
     (src / "uv.lock").write_text("# fake")
     dst = tmp_path / "dst"
     dst.mkdir()
-    (dst / ".built").write_text(prebuild._source_hash(src))  # unchanged
+    (dst / ".built").write_text(prebuild._build_stamp(src))  # unchanged
 
     invocations: list[list[str]] = []
     monkeypatch.setattr(prebuild.subprocess, "run", lambda cmd, **kw: invocations.append(list(cmd)))
@@ -787,3 +813,88 @@ def test_build_package_venv_carrier_launcher_does_not_dispatch_a_command(tmp_pat
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "2"
+
+
+def _build_bare_carrier(tmp_path: Path) -> Path:
+    """Build a tiny dep-less venv carrier and return its `launch` path."""
+    import subprocess
+
+    src = tmp_path / "src" / "carrier"
+    src.mkdir(parents=True)
+    (src / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "carrier"\n'
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.10"\n'
+        "dependencies = []\n"
+        "\n"
+        "[build-system]\n"
+        'requires = ["hatchling"]\n'
+        'build-backend = "hatchling.build"\n'
+        "\n"
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["src/carrier"]\n'
+    )
+    pkg = src / "src" / "carrier"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("")
+    subprocess.run(["uv", "lock", "--directory", str(src)], check=True)
+
+    from workspace_app.tooling.prebuild import build_package
+
+    dst = tmp_path / "dst"
+    build_package(name="carrier", source=src, dst=dst)
+    return dst / "launch"
+
+
+def _launch_home(launch: Path, env: dict[str, str]) -> dict[str, str]:
+    """Run the carrier launcher and report the HOME/XDG it exports."""
+    import subprocess
+
+    result = subprocess.run(
+        [
+            str(launch),
+            "-c",
+            "import os, json; print(json.dumps({"
+            "'HOME': os.environ.get('HOME'),"
+            "'XDG': os.environ.get('XDG_CACHE_HOME')}))",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout.strip())
+
+
+@pytest.mark.skipif(not _has_uv(), reason="uv not available")
+@pytest.mark.integration
+def test_carrier_launcher_routes_home_to_sandbox_home(tmp_path: Path):
+    """#393: the carrier launcher must route HOME (and its caches) to the
+    per-sandbox dir the exec path passes as `SANDBOX_HOME` — so a user's
+    `pip install --user` fallback lands there, private to the sandbox,
+    instead of a shared location."""
+    launch = _build_bare_carrier(tmp_path)
+    home = tmp_path / "sandboxhome"
+    home.mkdir()
+    reported = _launch_home(launch, {**os.environ, "SANDBOX_HOME": str(home)})
+    assert reported["HOME"] == str(home)
+    assert reported["XDG"] == str(home / ".cache")
+
+
+@pytest.mark.skipif(not _has_uv(), reason="uv not available")
+@pytest.mark.integration
+def test_carrier_launcher_home_is_private_not_shared_tmp_when_unset(tmp_path: Path):
+    """#393 fail-safe: with SANDBOX_HOME unset the launcher must NOT fall
+    back to the shared pod `/tmp`. A caller that forgets to set it degrades
+    to a fresh PRIVATE dir (mktemp -d, 0700) — non-persistent, but never a
+    location other sandboxes can read/write. The default must not be the
+    footgun."""
+    launch = _build_bare_carrier(tmp_path)
+    env = {k: v for k, v in os.environ.items() if k != "SANDBOX_HOME"}
+    reported = _launch_home(launch, env)
+    home = reported["HOME"]
+    assert home != "/tmp"  # never the shared pod /tmp
+    assert os.path.isdir(home)
+    # A private per-invocation dir: mktemp -d creates it 0700 (owner-only).
+    assert oct(os.stat(home).st_mode & 0o777) == "0o700"
