@@ -22,6 +22,7 @@ import type {
   NotebookRef,
   SearchMatch,
   SearchOptions,
+  SearchParams,
   SearchResult,
   SendMessageArgs,
 } from "./types";
@@ -640,8 +641,18 @@ export const mockApi: ApiClient = {
     ];
   },
 
-  async listAppItems(_resourceRoute: string): Promise<AppItem[]> {
+  async listAppItems(_resourceRoute: string, params?: SearchParams): Promise<AppItem[]> {
     await delay(10);
+    // #383: mirror specstar's updated_time-desc meta sort so the offline
+    // preview orders items the same way the real backend does.
+    if (params?.sorts?.includes('"key":"updated_time"')) {
+      const desc = params.sorts.includes('"direction":"-"');
+      return [..._mockAppItems].sort((a, b) => {
+        const at = a.updated_time ?? a.created_time;
+        const bt = b.updated_time ?? b.created_time;
+        return desc ? bt.localeCompare(at) : at.localeCompare(bt);
+      });
+    }
     return _mockAppItems;
   },
 

@@ -6,6 +6,13 @@ import type { ActivityEntry, AppItem, AppManifest, AppSummary } from "../api/typ
 
 const STATIC = Number.POSITIVE_INFINITY;
 
+/** #383: default the homepage item list to most-recently-updated first.
+ * `updated_time` is specstar auto-tracked meta (sortable without an index);
+ * without an explicit `sorts` the autocrud list returns creation order. */
+const APP_ITEMS_SORTS = JSON.stringify([
+  { type: "meta", key: "updated_time", direction: "-" },
+]);
+
 /** Platform Apps for the launcher (#89). Near-static → cached indefinitely. */
 export function useApps(): AppSummary[] {
   const { data } = useQuery({
@@ -39,7 +46,7 @@ export function useAppItems(
 ): { items: AppItem[]; isPending: boolean } {
   const { data, isPending } = useQuery({
     queryKey: qk.appItems(slug),
-    queryFn: () => api.listAppItems(resourceRoute as string),
+    queryFn: () => api.listAppItems(resourceRoute as string, { sorts: APP_ITEMS_SORTS }),
     enabled: !!resourceRoute,
   });
   return { items: data ?? [], isPending };
