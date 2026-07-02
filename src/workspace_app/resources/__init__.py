@@ -225,18 +225,35 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # decodes to `None`, the neutral default) and only become countable in the
     # new index after `POST /source-doc/migrate/execute` re-extracts them; they
     # are never penalised in search while un-scored.
+    # #395: `status` + `status_detail` + `content.content_type` indexed so the
+    # document list is servable from search METAS alone — the old
+    # `list_resources` path fetched every row's full data blob (including the
+    # multi-KB extracted `text`) one SELECT at a time, only to keep a dozen
+    # small fields. These three were the only list-rendered fields not already
+    # in `indexed_data`; with them the list/status endpoints never touch the
+    # data table (blobs are read exclusively by the open-a-document path).
+    # `status_detail` is display data, not a filter key — indexing it is a
+    # deliberate projection trade-off (its writer caps it at 240 chars).
+    # Bumped v5 → v6 with a no-op reindex step; pre-#395 rows surface a missing
+    # `status` until the operator runs `POST /source-doc/migrate/execute`
+    # (the list treats that window as "ready" — the overwhelmingly common
+    # terminal state).
     spec.add_model(
-        Schema(SourceDoc, "v5")
+        Schema(SourceDoc, "v6")
         .step(None, _reindex_only, to="v3", source_type=SourceDoc)
         .step("v2", _reindex_only, to="v3", source_type=SourceDoc)
         .step("v3", _backfill_token_count, to="v4", source_type=SourceDoc)
-        .step("v4", _reindex_only, to="v5", source_type=SourceDoc),
+        .step("v4", _reindex_only, to="v5", source_type=SourceDoc)
+        .step("v5", _reindex_only, to="v6", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
             IndexableField("content.size", int, index_key="content_size"),
             IndexableField("path", str),
             IndexableField("token_count", int),
             IndexableField("quality_score", int),
+            IndexableField("status", str),
+            IndexableField("status_detail", str),
+            IndexableField("content.content_type", str, index_key="content_type"),
         ],
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the
@@ -278,7 +295,22 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #227: fan-out join state, one row per doc (id = doc id). `status` indexed
     # so the safety sweep can find runs still "running" with no live jobs; the
     # per-doc active-run guard is a point get by id.
-    spec.add_model(IndexRun, indexed_fields=["status"])
+    # #395: `collection_id` + unit progress indexed so the document list joins
+    # progress via ONE collection-scoped metas search instead of a per-indexing-
+    # doc point get in the row loop (an N+1 exactly when a fresh upload has the
+    # whole page indexing). The CAS batch writes re-extract indexed_data on
+    # every bump, so the metas read is live. Runs are short-lived join state —
+    # rows from before this index simply miss the progress join (a brief 0/0
+    # bar) and need no Schema/migrate ceremony.
+    spec.add_model(
+        IndexRun,
+        indexed_fields=[
+            "status",
+            "collection_id",
+            IndexableField("units_done", int),
+            IndexableField("units_total", int),
+        ],
+    )
     # #281 P4: code-wiki build fan-out join state, one row per collection (id =
     # collection id). `status` indexed so a future safety sweep can find runs
     # still "running"; the active-run coalescing guard is a point get by id.
