@@ -14,6 +14,7 @@ from .tools import (
     mention_user_impl,
     read_file_impl,
     read_image_impl,
+    request_wiki_update_impl,
     resolve_collection_impl,
     update_context_card_impl,
     write_file_impl,
@@ -39,4 +40,5 @@ __all__ = [
     "lookup_glossary_impl",
     "update_context_card_impl",
     "create_context_card_impl",
+    "request_wiki_update_impl",
 ]

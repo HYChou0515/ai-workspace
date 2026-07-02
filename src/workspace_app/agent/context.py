@@ -279,6 +279,15 @@ class AgentToolContext:
     wiki_new_source: str | None = None
     wiki_cite_sources: bool = False
 
+    # #397: the `request_wiki_update` tool submits a user's wiki correction
+    # through this — bound to WikiMaintenanceCoordinator.submit_correction by the
+    # API layer on turns that scope a wiki-enabled collection (chat + kb_chat),
+    # None otherwise (the tool then reports it's unavailable). Args:
+    # (collection_id, *, instruction, target_page, reference, requested_by) →
+    # the corrections page path. Mirrors the run_subagent/mention callback pattern
+    # so agent/ stays decoupled from kb/wiki/.
+    submit_wiki_correction: Callable[..., Awaitable[str]] | None = None
+
     async def ensure_sandbox(self) -> SandboxHandle:
         assert self.sandbox is not None  # file/exec tools imply an RCA context
         if self.handle is None:

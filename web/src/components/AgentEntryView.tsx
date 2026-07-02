@@ -115,6 +115,7 @@ export function EntryView({
   onOpenCitation,
   onReplay,
   onUndo,
+  onReportWiki,
   fileUrl,
 }: {
   entry: AgentEntry;
@@ -126,6 +127,9 @@ export function EntryView({
   /** #38: undo this user turn and everything after it — provided only
    * for user messages by surfaces that support undo; absent → none. */
   onUndo?: () => void;
+  /** #397: report this assistant answer as a wiki error — provided only for
+   * assistant messages by wiki-backed surfaces (KB chat); absent → no button. */
+  onReportWiki?: () => void;
   /** #285: resolve a workspace-relative path to a content URL so a tool card
    * can render the charts it wrote inline. Provided by item-scoped surfaces
    * (RCA / Playground AgentPanel); absent on KB chat → no inline images. */
@@ -171,6 +175,7 @@ export function EntryView({
       onOpenCitation={onOpenCitation}
       onReplay={onReplay}
       onUndo={onUndo}
+      onReportWiki={onReportWiki}
     />
   );
 }
@@ -200,6 +205,35 @@ function ReplayButton({ onReplay }: { onReplay: () => void }) {
       }}
     >
       <Icon name="refresh" size={11} />
+    </button>
+  );
+}
+
+/** #397: report a wrong answer so the wiki gets corrected (on assistant
+ * messages when the chat's collection has a wiki). */
+function ReportWikiButton({ onReport }: { onReport: () => void }) {
+  const t = useT();
+  return (
+    <button
+      type="button"
+      aria-label={t("entry.reportWiki")}
+      title={t("entry.reportWiki")}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onReport();
+      }}
+      style={{
+        border: "none",
+        background: "none",
+        padding: 2,
+        cursor: "pointer",
+        color: "var(--text-paper-d2)",
+        display: "inline-flex",
+        alignItems: "center",
+      }}
+    >
+      <Icon name="bug" size={11} />
     </button>
   );
 }
@@ -368,11 +402,13 @@ function MessageBlock({
   onOpenCitation,
   onReplay,
   onUndo,
+  onReportWiki,
 }: {
   message: Message;
   onOpenCitation?: (c: MessageCitation) => void;
   onReplay?: () => void;
   onUndo?: () => void;
+  onReportWiki?: () => void;
 }) {
   const t = useT();
   // #221: resolve the answer body's `[n]` markers against this message's
@@ -461,6 +497,7 @@ function MessageBlock({
           </span>
           <span>{message.author ?? "Agent"}</span>
           {onReplay && <ReplayButton onReplay={onReplay} />}
+          {onReportWiki && <ReportWikiButton onReport={onReportWiki} />}
         </div>
         {message.reasoning && (
           <ReasoningBlock text={message.reasoning} answered={message.content.trim().length > 0} />

@@ -1221,6 +1221,92 @@ def create_context_card_impl(
     return f"Created glossary card {card_id}."
 
 
+def _wiki_enabled(spec, collection_id: str) -> bool:
+    """Whether ``collection_id`` exists and has its LLM wiki on (#397) — the tool
+    only offers to correct collections that actually have a wiki."""
+    from specstar.types import ResourceIDNotFoundError
+
+    from ..resources.kb import Collection
+
+    try:
+        coll = spec.get_resource_manager(Collection).get(collection_id).data
+    except ResourceIDNotFoundError:
+        return False
+    return isinstance(coll, Collection) and coll.use_wiki
+
+
+async def request_wiki_update_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    instruction: str,
+    target_page: str = "",
+    reference: str = "",
+    collection: str = "",
+) -> str:
+    """Ask the wiki maintainer to CORRECT the knowledge wiki (#397) — use this
+    instead of editing wiki pages yourself. Describe what is wrong and how it
+    should read; the maintainer then finds and fixes the affected page(s). The
+    corrected fact is recorded so a later rebuild can't reintroduce the error.
+
+    `instruction` (required): the correction in plain language — what the wiki
+    currently gets wrong and what it should say. `target_page` (optional): the
+    wiki page path at fault (e.g. `/entities/foo.md`) if you know it; leave blank
+    to let the maintainer locate it. `reference` (optional): a short reference
+    document or passage to follow for the fix — its text is used for THIS
+    correction only. `collection` (optional): the collection to correct, by name
+    or id — required only when more than one wiki-enabled collection is in scope.
+
+    Returns a confirmation, or an `error:` note (e.g. no wiki to correct). The fix
+    runs in the background; you don't wait for it."""
+    from ..kb.wiki.corrections import WikiNotEnabledError
+
+    submit = ctx.context.submit_wiki_correction
+    if submit is None:
+        return (
+            "error: request_wiki_update isn't available here (no wiki-enabled collection in scope)"
+        )
+    spec = ctx.context.spec
+    if spec is None:
+        return "error: request_wiki_update needs a collection-scoped context (no spec on this turn)"
+    if not instruction.strip():
+        return "error: describe what's wrong in `instruction` — it can't be empty"
+
+    in_scope = ctx.context.collection_ids
+    if collection.strip():
+        from ..workflow.capabilities import CollectionNotFound, resolve_collection_id
+
+        try:
+            cid = resolve_collection_id(spec, collection)
+        except CollectionNotFound:
+            return f"error: unknown collection {collection!r}"
+        if cid not in in_scope:
+            return f"error: collection {collection!r} isn't in scope for this chat"
+    else:
+        wiki_cids = [c for c in in_scope if _wiki_enabled(spec, c)]
+        if not wiki_cids:
+            return "error: no wiki-enabled collection is in scope to correct"
+        if len(wiki_cids) > 1:
+            return (
+                "error: more than one wiki-enabled collection is in scope — pass `collection` "
+                "(a name or id) to say which wiki to correct"
+            )
+        cid = wiki_cids[0]
+
+    try:
+        await submit(
+            cid,
+            instruction=instruction,
+            target_page=target_page,
+            reference=reference,
+            requested_by=ctx.context.acting_user,
+        )
+    except WikiNotEnabledError:
+        return "error: that collection has no wiki to correct"
+    return (
+        "Submitted your wiki correction. It's on record and the wiki is being "
+        "updated to reflect it."
+    )
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -1241,6 +1327,10 @@ _IMPLS = {
     "lookup_glossary": lookup_glossary_impl,
     "update_context_card": update_context_card_impl,
     "create_context_card": create_context_card_impl,
+    # #397: submit a wiki correction (tell the maintainer what's wrong instead of
+    # editing pages directly). In _WORKSPACE_TOOLS + the kb_chat presets; no-ops
+    # with a friendly error on turns that scope no wiki-enabled collection.
+    "request_wiki_update": request_wiki_update_impl,
     # Wiki agent tools (#50). Opt-in via the wiki presets' allowed_tools;
     # not in _WORKSPACE_TOOLS (they need a wiki context).
     "search_wiki": search_wiki_impl,
@@ -1273,6 +1363,7 @@ _WORKSPACE_TOOLS = [
     "exists",
     "delete_file",
     "ask_knowledge_base",
+    "request_wiki_update",
     "infer_modules",
     "mention_user",
     "lookup_user",

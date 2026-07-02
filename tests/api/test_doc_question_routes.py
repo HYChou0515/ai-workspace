@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from workspace_app.api.doc_question_routes import register_doc_question_routes
 from workspace_app.kb.answer_formatter import VerbatimAnswerFormatter
 from workspace_app.kb.doc_questions import add_description_question, open_or_merge_term_question
-from workspace_app.kb.wiki.store import CLARIFICATIONS_PATH, WikiFileStore
+from workspace_app.kb.wiki.store import CLARIFICATIONS_DIR, WikiFileStore
 from workspace_app.resources import Collection, ContextCard, DocQuestion, make_spec
 
 
@@ -62,7 +62,7 @@ def test_answering_a_description_question_targets_the_clarification_page():
     )
     r = _client(spec).post(f"/kb/doc-questions/{qid}/answer", json={"answer": "already clean"})
     assert r.status_code == 200
-    assert r.json()["result_ref"] == CLARIFICATIONS_PATH
+    assert r.json()["result_ref"].startswith(CLARIFICATIONS_DIR)  # #397: per-question page
     assert spec.get_resource_manager(DocQuestion).get(qid).data.status == "answered"
 
 

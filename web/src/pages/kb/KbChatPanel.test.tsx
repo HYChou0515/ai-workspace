@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { KbApi, KbChatSummary, KbCollection } from "../../api/kb";
@@ -173,5 +174,51 @@ describe("KbChatPanel collection picker (#271)", () => {
     await waitFor(() => expect(createChat).toHaveBeenCalled());
     const ids = createChat.mock.calls[0][1];
     expect([...ids].sort()).toEqual(["c1", "c2", "c3", "c4", "c5", "c6"]);
+  });
+});
+
+// #397: the "回報有誤" button + dialog on a wiki-backed assistant answer.
+describe("KbChatPanel wiki correction (#397)", () => {
+  const msg = (role: "user" | "assistant", content: string) => ({
+    role,
+    content,
+    reasoning: null,
+    tool_name: null,
+    tool_args: null,
+    tool_call_id: null,
+    created_at: 0,
+    citations: [],
+  });
+  const chatWith = (messages: ReturnType<typeof msg>[]) => ({
+    resource_id: "c1",
+    title: "",
+    collection_ids: ["c1"],
+    owner: "default-user",
+    shared_with: [],
+    messages,
+  });
+
+  it("shows 回報有誤 on an assistant answer when the collection has a wiki, and opens the dialog", async () => {
+    const client = panelClient([coll({ resource_id: "c1", name: "C1", use_wiki: true })], [], {
+      getChat: async () => chatWith([msg("user", "When founded?"), msg("assistant", "In 1989.")]),
+    });
+    render(
+      <KbChatPanel chatId="c1" collectionIds={["c1"]} hideCollectionPicker client={client} />,
+    );
+    const btn = await screen.findByRole("button", { name: /回報有誤/ });
+    await userEvent.click(btn);
+    // the drafting dialog opens
+    expect(await screen.findByRole("dialog", { name: /回報 wiki 有誤/ })).toBeInTheDocument();
+  });
+
+  it("hides 回報有誤 when the collection has no wiki (Q13)", async () => {
+    const client = panelClient([coll({ resource_id: "c1", name: "C1", use_wiki: false })], [], {
+      getChat: async () => chatWith([msg("user", "q"), msg("assistant", "a")]),
+    });
+    render(
+      <KbChatPanel chatId="c1" collectionIds={["c1"]} hideCollectionPicker client={client} />,
+    );
+    await screen.findByText("a"); // the assistant answer rendered
+    expect(screen.queryByRole("button", { name: /回報有誤/ })).not.toBeInTheDocument();
   });
 });

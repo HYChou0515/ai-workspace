@@ -614,7 +614,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
         # `lookup_glossary` (#106) is the deterministic context-card path beside
         # kb_search: an unknown TERM resolves instantly from the glossary, only
         # a QUESTION needing document facts falls through to the slow RAG search.
-        "allowed_tools": ["kb_search", "lookup_glossary"],
+        "allowed_tools": ["kb_search", "lookup_glossary", "request_wiki_update"],
     },
     # Bundled hosted KB-chat options — same KB system prompt + tool set
     # as `kb-default`, just a different model so the FE picker shows
@@ -633,7 +633,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "Summarize what we know on this topic",
             "Find related past findings",
         ],
-        "allowed_tools": ["kb_search", "lookup_glossary"],
+        "allowed_tools": ["kb_search", "lookup_glossary", "request_wiki_update"],
     },
     "kb-openai": {
         "model": "openai/gpt-4o-mini",
@@ -644,7 +644,7 @@ _BUNDLED_PRESETS: dict[str, dict[str, Any]] = {
             "Summarize what we know on this topic",
             "Find related past findings",
         ],
-        "allowed_tools": ["kb_search", "lookup_glossary"],
+        "allowed_tools": ["kb_search", "lookup_glossary", "request_wiki_update"],
     },
     # `infer-modules-default` — the sub-agent the RCA agent's
     # `infer_modules` tool delegates to. KB-retrieval-flavoured (same

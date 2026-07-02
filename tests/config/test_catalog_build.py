@@ -104,12 +104,17 @@ def test_bundled_kb_chat_has_the_expected_kb_prompt_invariants():
     """Locks in the contract previously asserted by the old
     `default_kb_agent_config` test: the kb_chat config must carry
     a knowledge-base prompt with the `[n]` citation convention,
-    `kb_search` plus the `lookup_glossary` (#106) context-card tool, and
-    non-empty quick-prompt suggestions."""
+    `kb_search` plus the `lookup_glossary` (#106) context-card tool and the
+    `request_wiki_update` (#397) correction tool, and non-empty quick-prompt
+    suggestions."""
     settings = load(config_path=None, env={})
     cat = build_catalog(settings, config_dir=None)
     kb = cat.kb_chat()
-    assert kb.allowed_tools == ["kb_search", "lookup_glossary"]  # ty: ignore[unresolved-attribute]
+    assert kb.allowed_tools == [  # ty: ignore[unresolved-attribute]
+        "kb_search",
+        "lookup_glossary",
+        "request_wiki_update",
+    ]
     assert "knowledge base" in kb.system_prompt.lower()  # ty: ignore[unresolved-attribute]
     assert "[n]" in kb.system_prompt  # ty: ignore[unresolved-attribute]
     assert kb.suggestions  # quick-prompt chips ship with the config  # ty: ignore

@@ -18,7 +18,7 @@ from specstar import QB
 from ..resources.kb import ContextCard, DocQuestion
 from .card_gen import DescriptionQuestionDraft, TermQuestionDraft
 from .context_cards import derive_norm_keys, find_cards_by_key, norm
-from .wiki.store import CLARIFICATIONS_PATH
+from .wiki.store import clarification_page_path
 
 if TYPE_CHECKING:
     from specstar import SpecStar
@@ -211,24 +211,23 @@ def _render_clarification(question_text: str, quote: str, answer: str) -> str:
 async def land_description_answer(
     spec: SpecStar, qid: str, *, answer: str, wiki_store: WikiFileStore
 ) -> str:
-    """Land a human's answer to a DESCRIPTION question by appending a faithful
-    Q&A section (quote + answer, no AI rewriting) to the collection's reserved
-    clarification wiki page, and mark the question answered (#377 Q9/Q10). Returns
-    the page path (also stored as ``result_ref``). The page is builder-immune (see
-    ``MaintainerWikiStore``), so a wiki rebuild can't clobber it."""
+    """Land a human's answer to a DESCRIPTION question as a faithful Q&A page
+    (quote + answer, no AI rewriting) under the collection's reserved clarification
+    folder, and mark the question answered (#377 Q9/Q10). Returns the page path
+    (also stored as ``result_ref``).
+
+    #397 Q14: one page per question (``/clarifications/<qid>.md``) instead of a
+    single growing file, so an unbounded collection of answers doesn't live in one
+    document. The folder is builder-immune (see ``MaintainerWikiStore``), so a wiki
+    rebuild can't clobber it."""
     rm = spec.get_resource_manager(DocQuestion)
     q = rm.get(qid).data
     assert isinstance(q, DocQuestion)  # narrow Struct|Unset for ty
-    cid = q.collection_id
-    entry = _render_clarification(q.question_text, q.quote, answer)
-    prior = (
-        await wiki_store.read(cid, CLARIFICATIONS_PATH)
-        if await wiki_store.exists(cid, CLARIFICATIONS_PATH)
-        else _CLARIFICATIONS_HEADER.encode()
-    )
-    await wiki_store.write(cid, CLARIFICATIONS_PATH, prior + entry.encode())
-    answer_question(spec, qid, answer=answer, result_ref=CLARIFICATIONS_PATH)
-    return CLARIFICATIONS_PATH
+    path = clarification_page_path(qid)
+    entry = _CLARIFICATIONS_HEADER + _render_clarification(q.question_text, q.quote, answer)
+    await wiki_store.write(q.collection_id, path, entry.encode())
+    answer_question(spec, qid, answer=answer, result_ref=path)
+    return path
 
 
 def _existing_description(

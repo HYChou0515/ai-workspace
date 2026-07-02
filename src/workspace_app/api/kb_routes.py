@@ -205,6 +205,50 @@ class WikiStatusOut(BaseModel):
     last_error: str | None = None
 
 
+class _CorrectionBody(BaseModel):
+    """POST /kb/collections/:id/wiki/corrections — a user's wiki correction
+    (#397): what's wrong / how it should read, an optional target page, and an
+    optional reference document (used for this fix only, never stored)."""
+
+    instruction: str
+    target_page: str = ""
+    reference: str = ""
+
+
+class CorrectionSubmittedOut(BaseModel):
+    """Result of submitting a wiki correction — the immune corrections page it
+    was recorded on. The fix itself runs in the background (a corrector job)."""
+
+    path: str
+
+
+class _QAItem(BaseModel):
+    question: str
+    answer: str
+
+
+class _CorrectionDraftBody(BaseModel):
+    """POST /kb/collections/:id/wiki/corrections/draft — the flagged Q&A the AI
+    drafts a correction from (#397 Q12). ``answered`` carries prior mini-grill
+    rounds' answers so the draft folds them in."""
+
+    question: str
+    answer: str
+    wiki_pages: list[str] = []
+    answered: list[_QAItem] = []
+
+
+class CorrectionDraftOut(BaseModel):
+    """The AI drafting step's result (#397 Q12): ``action="draft"`` with a
+    ready-to-edit instruction (+ optional target page), or ``action="ask"`` with
+    1–3 clarifying questions to put to the user."""
+
+    action: str
+    instruction: str = ""
+    target_page: str = ""
+    questions: list[str] = []
+
+
 class ReindexOut(BaseModel):
     """Result of scheduling a (re)index — how many docs were queued."""
 
@@ -1090,6 +1134,58 @@ def register_kb_routes(
         from ..kb.wiki.store import WikiFileStore
 
         return WikiClearedOut(cleared=await WikiFileStore(spec).clear(collection_id))
+
+    @app.post("/kb/collections/{collection_id}/wiki/corrections")
+    async def submit_wiki_correction_route(
+        collection_id: str, body: _CorrectionBody
+    ) -> CorrectionSubmittedOut:
+        # #397: the FE "回報有誤" path — record the correction on the immune page and
+        # queue the corrector. Converges with the request_wiki_update agent tool on
+        # coordinator.submit_correction. 400 when the collection has no wiki (Q13).
+        from ..kb.wiki.corrections import WikiNotEnabledError
+
+        if wiki_coordinator is None:
+            raise HTTPException(status_code=400, detail="this collection has no wiki to correct")
+        if not body.instruction.strip():
+            raise HTTPException(status_code=422, detail="the correction can't be empty")
+        try:
+            path = await wiki_coordinator.submit_correction(
+                collection_id,
+                instruction=body.instruction,
+                target_page=body.target_page,
+                reference=body.reference,
+                requested_by=get_user_id(),
+            )
+        except WikiNotEnabledError as exc:
+            raise HTTPException(
+                status_code=400, detail="this collection has no wiki to correct"
+            ) from exc
+        return CorrectionSubmittedOut(path=path)
+
+    @app.post("/kb/collections/{collection_id}/wiki/corrections/draft")
+    async def draft_wiki_correction_route(
+        collection_id: str, body: _CorrectionDraftBody
+    ) -> CorrectionDraftOut:
+        # #397 Q12: one-click AI drafting for the "回報有誤" dialog — adaptive
+        # (drafts if it can tell what's wrong, else asks 1–3 questions). The LLM
+        # streams under the hood; run it off the event loop.
+        from ..kb.wiki.correction_draft import QA, draft_correction
+
+        answered = [QA(question=x.question, answer=x.answer) for x in body.answered]
+        draft = await asyncio.to_thread(
+            draft_correction,
+            answer_llm,
+            question=body.question,
+            answer=body.answer,
+            wiki_pages=body.wiki_pages,
+            answered=answered,
+        )
+        return CorrectionDraftOut(
+            action=draft.action,
+            instruction=draft.instruction,
+            target_page=draft.target_page,
+            questions=draft.questions,
+        )
 
     @app.get("/kb/collections/{collection_id}/documents")
     async def list_documents(
