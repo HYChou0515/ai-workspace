@@ -177,12 +177,19 @@ export const mockKbApi: KbApi = {
     );
   },
   async listDocuments(collectionId, page) {
+    const offset = page?.offset ?? 0;
+    const limit = page?.limit ?? 50;
+    // Mirror the BE's Query() bounds (kb_routes.py list_documents: limit ge=1
+    // le=500, offset ge=0) so a caller that oversteps fails here too, instead of
+    // only in production. Without this the mock silently masked #394's limit=1000
+    // → 422 bug.
+    if (limit < 1 || limit > 500)
+      throw new Error(`list documents: limit ${limit} out of range (1..500)`);
+    if (offset < 0) throw new Error(`list documents: offset ${offset} out of range`);
     const all = documents.get(collectionId) ?? [];
     // Mirror the BE sort (most-recent first) so paging looks the same as
     // production. Use updated_at when present; fall back to insertion order.
     const sorted = [...all].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-    const offset = page?.offset ?? 0;
-    const limit = page?.limit ?? 50;
     const items = sorted.slice(offset, offset + limit);
     return {
       items,
