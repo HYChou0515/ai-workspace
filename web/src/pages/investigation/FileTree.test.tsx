@@ -2,7 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type FileService, FileServiceProvider, investigationFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
@@ -446,6 +446,70 @@ describe("<FileTree /> external drop + paste (#364)", () => {
     await waitFor(() => expect(moveFile).toHaveBeenCalled());
     expect(moveFile.mock.calls[0]![0]).toBe("/notes.md");
     expect(moveFile.mock.calls[0]![1]).toBe("/dst/notes.md");
+  });
+});
+
+describe("<FileTree /> filter (#402)", () => {
+  const tree: FileInfo[] = [
+    { path: "/reports/q1.md", size: 1 },
+    { path: "/reports/q2.md", size: 1 },
+    { path: "/notes/todo.txt", size: 1 },
+  ];
+  function renderSearchable(searchable: boolean) {
+    render(
+      <FileServiceProvider value={investigationFileService("rca", "inv")}>
+        <DialogProvider>
+          <FileTree
+            files={tree}
+            dirs={[]}
+            activePath={null}
+            onOpen={vi.fn()}
+            searchable={searchable}
+          />
+        </DialogProvider>
+      </FileServiceProvider>,
+    );
+  }
+
+  // Collapse state persists in localStorage under the shared scope — clear it
+  // so the force-open test can't leak a collapsed folder into its neighbours.
+  beforeEach(() => localStorage.clear());
+
+  it("shows a filter box only when searchable (workspace unaffected)", () => {
+    renderSearchable(false);
+    expect(screen.queryByPlaceholderText(/filter files/i)).toBeNull();
+    cleanup();
+    renderSearchable(true);
+    expect(screen.getByPlaceholderText(/filter files/i)).toBeInTheDocument();
+  });
+
+  it("prunes to matches + ancestors and restores the full tree on clear", async () => {
+    const user = userEvent.setup();
+    renderSearchable(true);
+    expect(screen.getByText("q1.md")).toBeInTheDocument();
+    expect(screen.getByText("todo.txt")).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText(/filter files/i), "q1");
+    expect(screen.getByText("q1.md")).toBeInTheDocument();
+    expect(screen.queryByText("q2.md")).toBeNull();
+    expect(screen.queryByText("todo.txt")).toBeNull();
+    expect(screen.queryByText("notes")).toBeNull(); // non-matching folder pruned
+    expect(screen.getByText("reports")).toBeInTheDocument(); // ancestor kept
+
+    await user.click(screen.getByRole("button", { name: /clear filter/i }));
+    expect(screen.getByText("q2.md")).toBeInTheDocument();
+    expect(screen.getByText("todo.txt")).toBeInTheDocument();
+  });
+
+  it("reveals a match inside a folder the user had collapsed", async () => {
+    const user = userEvent.setup();
+    renderSearchable(true);
+    // collapse /reports → its children disappear
+    await user.click(screen.getByText("reports"));
+    expect(screen.queryByText("q1.md")).toBeNull();
+    // filtering force-opens the ancestor so the match is visible again
+    await user.type(screen.getByPlaceholderText(/filter files/i), "q1");
+    expect(screen.getByText("q1.md")).toBeInTheDocument();
   });
 });
 
