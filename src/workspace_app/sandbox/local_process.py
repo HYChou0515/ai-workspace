@@ -181,6 +181,12 @@ _TOOLS = ".tools"
 # so walk/sync never see it) and prepend it to PATH in `_exec_argv`. MUST stay
 # outside the workspace.
 _JAILBIN = ".jailbin"
+# #393: per-sandbox HOME for the carrier launcher (caches + any `pip --user`
+# install fallback). A sibling of the workspace, OUTSIDE it — so walk/sync never
+# see it and it is reaped with the sandbox. The unjailed `_exec_argv` passes it
+# as SANDBOX_HOME; this replaces the launcher's old shared-/tmp HOME that leaked
+# a user's `pip install --break-system-packages` across sandboxes.
+_HOME = ".home"
 # Shim every flavour name the agent or a tool launcher might spell — matching
 # the jail bootstrap. A bare `python` shim alone would let `python3` fall
 # through to the host interpreter.
@@ -255,6 +261,9 @@ class LocalProcessSandbox:
         # exist_ok=True so a re-create reattaches; the first create still makes
         # the workspace subdir (and the sandbox/infra root parent).
         (path / _WORKSPACE).mkdir(parents=True, exist_ok=True)
+        # #393: the per-sandbox HOME dir (a workspace sibling, in the infra area).
+        # IsolatedProcessSandbox._provision chowns it to the sandbox uid.
+        (path / _HOME).mkdir(exist_ok=True)
         # Unjailed: expose the shared tools dir via a symlink (jailed uses a
         # read-only bind-mount, set up per-exec in the bootstrap instead).
         # Guard on existence so a re-create doesn't raise FileExistsError.
@@ -346,11 +355,21 @@ class LocalProcessSandbox:
             # workspace) when set.
             if self._tools_dir is not None:
                 env["SANDBOX_TOOLS_DIR"] = str(self._tools_dir)
+            # #393: the jail keeps the launcher's HOME on its per-exec ephemeral
+            # /tmp (a fresh isolated tmpfs mounted by the bootstrap — safe there).
+            # Passed EXPLICITLY, not left to the launcher's fail-safe default, so
+            # jail behavior stays byte-identical.
+            env["SANDBOX_HOME"] = "/tmp"
         else:
             # No chroot: run directly in the workspace subdir, HOME → workspace.
             argv = cmd
             sub_cwd = ws
             env["HOME"] = str(ws)
+            # #393: route the carrier launcher's HOME (caches + any `pip --user`
+            # install fallback) to the per-sandbox `.home` (a workspace sibling,
+            # reaped with the sandbox), NOT a shared /tmp. Survives the `setpriv`
+            # wrap (no `--reset-env`) so the dropped uid's launcher reads it.
+            env["SANDBOX_HOME"] = str(root / _HOME)
             # (Re)build + prepend the `python` shim so `python`/`python3*` route
             # to the python-stack carrier (or /usr/bin/python3), never the host's
             # own venv that heads the inherited PATH (#350). The jail path does

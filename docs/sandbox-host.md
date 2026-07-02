@@ -92,6 +92,11 @@ sandbox **內部**,否則 `exec(["python", …])` 與工具指令都會失敗。
 - **沒有 namespace。** PID 清單與網路在同一個 pod 上的 sandbox 之間共享
   (跨 uid 的 *kill/ptrace* 與 *檔案讀取* 仍被擋住);`/tmp` 透過 `TMPDIR` 對每個 handle
   各自映射。要更強的隔離,就讓每個 pod 跑更少的 sandbox。
+- **per-sandbox HOME(#393)。** 因為沒有 namespace,共用的 `/tmp` 不是隔離的。carrier
+  launcher 的 `HOME`(caches + 使用者 `pip install --break-system-packages` 的 `--user`
+  退路)因此由 exec path 以 `SANDBOX_HOME` 導到 **per-sandbox 的 `.home`**(workspace
+  sibling、回收即刪),而不是共用 `/tmp`——否則一個使用者裝的套件會落在全 pod 共用的
+  `/tmp/.local`,被同 pod 每個 sandbox 看到。
 - **v1 不支援 `expose_port`**(沒有 sandbox 內網路服務的路徑)。
 - 不支援互動式 TUI(`vim`、`top`)——`exec` 是一次性的(stdin=`/dev/null`);打轉的
   程序由 cpu cap + idle timeout 來設限。人類透過 IDE 編輯,不是透過終端機。
