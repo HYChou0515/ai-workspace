@@ -255,8 +255,9 @@ def test_build_tools_returns_the_workspace_set_by_default():
     tools = build_tools()
     names = {t.name for t in tools}
     # file/exec tools + the two sub-agent bridges (`ask_knowledge_base` for
-    # KB lookups, `infer_modules` for process-module classification); NOT
-    # `kb_search`, which is the sub-agents' OWN opt-in tool.
+    # KB lookups, `infer_modules` for process-module classification) +
+    # `request_wiki_update` (#397); NOT `kb_search`, which is the sub-agents'
+    # OWN opt-in tool.
     assert names == {
         "exec",
         "read_file",
@@ -266,6 +267,7 @@ def test_build_tools_returns_the_workspace_set_by_default():
         "exists",
         "delete_file",
         "ask_knowledge_base",
+        "request_wiki_update",
         "infer_modules",
         "mention_user",
         "lookup_user",

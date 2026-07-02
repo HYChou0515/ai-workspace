@@ -30,6 +30,7 @@ from ..kb.cited import record_citations
 from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections
 from ..kb.context_cards import match as match_cards
 from ..kb.retriever import Enhancements, Retriever
+from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 from ..resources import AgentConfig
 from ..resources.kb import Citation, KbChat, KbMessage
 from ..users.protocol import UserDirectory
@@ -292,6 +293,8 @@ def register_kb_chat_routes(
     # #334: upper bound a per-message pick (`_MsgBody.max_kb_searches`) may
     # request — the composer's value is clamped to [0, this].
     max_searches_ceiling: int = 10,
+    # #397: lets the KB chat's request_wiki_update tool submit a wiki correction.
+    wiki_coordinator: WikiMaintenanceCoordinator | None = None,
 ) -> None:
     """Register the KB chat surface.
 
@@ -498,6 +501,14 @@ def register_kb_chat_routes(
             # #242: who the agent is replying to (here, always the owner — shares
             # are read-only). Feeds the per-turn "you are replying to …" note.
             speaker=users.get(get_user_id()),
+            # #111/#397: the acting user tools stamp on writes (context cards,
+            # wiki corrections).
+            acting_user=get_user_id(),
+            # #397: the request_wiki_update tool submits a wiki correction through
+            # this (None ⇒ the tool reports it's unavailable).
+            submit_wiki_correction=(
+                wiki_coordinator.submit_correction if wiki_coordinator else None
+            ),
             # Per-message reasoning effort from the UI selector.
             reasoning_effort=body.reasoning_effort,
             kb_enhancements=caller_enh,
