@@ -1,0 +1,8 @@
+{
+  "skills": ["author-skill", "author-workflow"],
+  "suggestions": [
+    { "label": "New issue", "prompt": "Create an issue for " },
+    { "label": "Overdue", "prompt": "List the overdue issues." },
+    { "label": "Milestone status", "prompt": "How is the current milestone tracking?" }
+  ]
+}

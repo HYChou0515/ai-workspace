@@ -36,10 +36,11 @@ from .steps import agent_step, agent_write_step, sandbox_node
 # The capability calls a user DSL may invoke (manual §22, Q4). Each maps to a
 # ``WorkflowHandle`` method that runs under the captured user's authz; a ``sandbox``
 # step gets no credential, so reliable side-effects only ever go through these.
-CAPABILITIES = ("ingest_to_collection", "upsert_context_card")
+CAPABILITIES = ("ingest_to_collection", "upsert_context_card", "create_entity")
 _CAP_REQUIRED: dict[str, tuple[str, ...]] = {
     "ingest_to_collection": ("collection", "path"),
     "upsert_context_card": ("collection", "keys"),
+    "create_entity": ("type_name",),
 }
 # The deterministic gate builders a check spec may name (manual §6).
 _CHECKS = ("file_nonempty", "choice_in", "collection_has")
@@ -105,6 +106,9 @@ class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
     keys: list[str] = field(default_factory=list)
     title: str = ""
     body: str = ""
+    # #419 create_entity: which entity type + the field args (values may interpolate).
+    type_name: str = ""
+    args: dict[str, Any] = field(default_factory=dict)
 
 
 class MapStep(Struct, tag="map", forbid_unknown_fields=True):
@@ -263,6 +267,12 @@ async def _exec_capability(wf: WorkflowHandle, step: CapabilityStep, ns: dict[st
             await _resolve(step.path, ns, wf),
             phase=step.phase,
         )
+    elif step.call == "create_entity":  # #419 — same numbering pipeline, no raw write
+        resolved = {
+            k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
+            for k, v in step.args.items()
+        }
+        await wf.create_entity(await _resolve(step.type_name, ns, wf), resolved, phase=step.phase)
     else:  # upsert_context_card (the only other allowed call; validated upstream)
         await wf.upsert_context_card(
             await _resolve(step.collection, ns, wf),

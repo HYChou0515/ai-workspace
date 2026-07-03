@@ -1,0 +1,9 @@
+path: issues
+fields:
+  title: { role: text, required: true }
+  status: { role: status, values: [open, in_progress, blocked, done] }
+  assignee: { role: actor }
+  due: { role: date }
+  span: { role: daterange }
+  progress: { role: progress }
+  milestone: { role: ref, to: milestone }

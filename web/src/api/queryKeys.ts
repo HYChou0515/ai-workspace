@@ -47,6 +47,18 @@ export const qk = {
   workspaceWorkflows: (slug: string, itemId: string) =>
     ["workspaceWorkflows", slug, itemId] as const,
 
+  // #419: the file-first entity framework. `catalog` = one item's entity types
+  // (schema + quick-create form); `list` = one type's projected records. A
+  // create / update invalidates the matching `list` (and the catalog is stable,
+  // so it rarely needs invalidating). Hierarchical so a type's records refresh
+  // by prefix without knowing which page is loaded.
+  entities: {
+    catalog: (slug: string, itemId: string) =>
+      ["entities", slug, itemId, "catalog"] as const,
+    list: (slug: string, itemId: string, type: string) =>
+      ["entities", slug, itemId, "list", type] as const,
+  },
+
   // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.
   itemChats: (slug: string, itemId: string) => ["itemChats", slug, itemId] as const,
   itemChat: (slug: string, itemId: string, chatId: string) =>
