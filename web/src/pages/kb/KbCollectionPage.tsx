@@ -32,10 +32,13 @@ import { qk } from "../../api/queryKeys";
 import { mergeBlocked, screenFiles, type BlockedUpload } from "../../kb/uploadChecks";
 import { UploadBlockedList } from "./UploadBlockedList";
 import { Icon, type IconName } from "../../components/Icon";
+import { PermissionDialog } from "../../components/PermissionDialog";
 import { Popover } from "../../components/Popover";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { type MsgKey, useT } from "../../lib/i18n";
+import type { CollectionPermission } from "../../lib/permission";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
 import { CodeConnectionEditor } from "./CodeConnectionEditor";
 import { CodeSyncStatus } from "./CodeSyncStatus";
@@ -108,6 +111,10 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const [editingDesc, setEditingDesc] = useState(false);
   const [descDraft, setDescDraft] = useState("");
   const [confirmDel, setConfirmDel] = useState(false);
+  // #310: the share/permission dialog (owner-only). The current access state is
+  // fetched lazily when it opens; Save PUTs the full desired state.
+  const me = useCurrentUser();
+  const [sharing, setSharing] = useState(false);
   // #101: a zip staged for "import into this collection", held until the user
   // picks how a path collision resolves (overwrite | skip). null ⇒ no dialog.
   const [importFile, setImportFile] = useState<File | null>(null);
@@ -176,6 +183,23 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
       use_wiki?: boolean;
     }) => client.updateCollection(cid as string, patch),
     onSuccess: () => void qc.invalidateQueries({ queryKey: qk.kb.collections }),
+  });
+
+  // #310: the collection's current access state — fetched only while the share
+  // dialog is open, so the pre-fill is fresh each time it's reopened.
+  const permQuery = useQuery({
+    queryKey: qk.kb.collectionPermission(cid ?? ""),
+    queryFn: () => client.getCollectionPermission(cid as string),
+    enabled: sharing && !!cid,
+  });
+  const setPermMut = useMutation({
+    mutationFn: (perm: CollectionPermission) =>
+      client.setCollectionPermission(cid as string, perm),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.kb.collections });
+      void qc.invalidateQueries({ queryKey: qk.kb.collectionPermission(cid ?? "") });
+      setSharing(false);
+    },
   });
 
   const deleteMut = useMutation({
@@ -546,6 +570,11 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                 <button type="button" role="menuitem" className="kb-menu__item" onClick={() => { close(); importIntoRef.current?.click(); }}>
                   <Icon name="upload" size={14} color="var(--text-paper-d)" /> Import into this collection
                 </button>
+                {selected.owner === me ? (
+                  <button type="button" role="menuitem" className="kb-menu__item" data-testid="manage-access" onClick={() => { close(); setSharing(true); }}>
+                    <Icon name="users" size={14} color="var(--text-paper-d)" /> Manage access
+                  </button>
+                ) : null}
                 <div className="kb-menu__divider" />
                 <button type="button" role="menuitem" className="kb-menu__item kb-menu__item--danger" onClick={() => { close(); setConfirmDel(true); }}>
                   <Icon name="x" size={14} /> Delete collection
@@ -583,6 +612,17 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                 Cancel
               </button>
             </div>
+          )}
+
+          {sharing && permQuery.data && (
+            <PermissionDialog
+              resourceName={selected.name}
+              owner={selected.owner}
+              value={permQuery.data}
+              busy={setPermMut.isPending}
+              onSubmit={(perm) => setPermMut.mutate(perm)}
+              onClose={() => setSharing(false)}
+            />
           )}
 
           {importFile && (

@@ -6,6 +6,7 @@
  */
 
 import type { AgentEvent } from "../events";
+import type { CollectionPermission } from "../lib/permission";
 import type {
   KbApi,
   KbCardGenStatus,
@@ -31,6 +32,22 @@ const nextId = (prefix: string) => `${prefix}-${(++seq).toString(36)}`;
 type MockDoc = KbDocument & { quality_rationale?: string; parser_guidance_override?: string };
 
 const collections = new Map<string, KbCollection>();
+/** #310: per-collection access state (absent ⇒ public with no grants). */
+const collectionPerms = new Map<string, CollectionPermission>();
+
+const defaultPermission = (): CollectionPermission => ({
+  visibility: "public",
+  read_meta: [],
+  write_meta: [],
+  read_content: [],
+  add_content: [],
+  edit_content: [],
+  read_chat: [],
+  converse: [],
+  execute: [],
+  use_terminal: [],
+  change_permission: [],
+});
 const documents = new Map<string, MockDoc[]>();
 const docChunks = new Map<string, KbDocChunk[]>();
 const chats = new Map<string, KbChatDetail>();
@@ -428,6 +445,13 @@ export const mockKbApi: KbApi = {
   },
   async deleteChat(chatId) {
     chats.delete(chatId);
+  },
+  async getCollectionPermission(id) {
+    return collectionPerms.get(id) ?? defaultPermission();
+  },
+  async setCollectionPermission(id, perm) {
+    collectionPerms.set(id, perm);
+    return { visibility: perm.visibility, notified: [] };
   },
   async shareChat(chatId, userIds) {
     const chat = chats.get(chatId);

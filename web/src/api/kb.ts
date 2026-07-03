@@ -9,6 +9,7 @@
 
 import type { AgentEvent } from "../events";
 import type { UploadCheckHint } from "../kb/uploadChecks";
+import type { CollectionPermission } from "../lib/permission";
 import { API_PREFIX, apiFetch } from "./http";
 import { mockKbApi } from "./kbMock";
 import { parseSseStream } from "./sse";
@@ -500,6 +501,15 @@ export interface KbApi {
   ): Promise<void>;
   /** Permanently delete — specstar's native DELETE /collection/{id}/permanently. */
   deleteCollection(id: string): Promise<void>;
+  /** #310 — the collection's CURRENT access state, for the share dialog to
+   * pre-fill (`GET /kb/collections/{id}/permission`). */
+  getCollectionPermission(id: string): Promise<CollectionPermission>;
+  /** #310 — replace a collection's access control (`PUT …/permission`, the full
+   * desired state). Returns the newly-granted user ids that were notified. */
+  setCollectionPermission(
+    id: string,
+    perm: CollectionPermission,
+  ): Promise<{ visibility: string; notified: string[] }>;
   /** Re-chunk + re-embed documents in the collection (recovers `error` docs
    * after an embedder fix). Each re-queued doc flips back to `indexing`.
    * `{ only: "failed" }` re-queues ONLY docs stuck in `error` (issue #223);
@@ -1071,6 +1081,24 @@ export const realKbApi: KbApi = {
       await apiFetch(`/kb/chats/${encodeURIComponent(chatId)}`, { method: "DELETE" }),
       "delete chat",
     );
+  },
+  async getCollectionPermission(id) {
+    const resp = await ok(
+      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/permission`),
+      "get collection permission",
+    );
+    return (await resp.json()) as CollectionPermission;
+  },
+  async setCollectionPermission(id, perm) {
+    const resp = await ok(
+      await apiFetch(`/kb/collections/${encodeURIComponent(id)}/permission`, {
+        method: "PUT",
+        headers: jsonHeaders,
+        body: JSON.stringify(perm),
+      }),
+      "set collection permission",
+    );
+    return (await resp.json()) as { visibility: string; notified: string[] };
   },
   async shareChat(chatId, userIds) {
     await ok(

@@ -237,6 +237,42 @@ def test_set_permission_unknown_collection_is_404():
     )
 
 
+def test_get_permission_returns_the_current_state():
+    """#310 — the share dialog pre-fills from `GET …/permission` (the full grant
+    lists so it can map each grantee to a role)."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "x"}).json()["resource_id"]
+    _set_permission(
+        spec,
+        cid,
+        Permission(visibility="restricted", read_meta=["user:alice"], read_content=["user:alice"]),
+    )
+    state = client.get(f"/kb/collections/{cid}/permission").json()
+    assert state["visibility"] == "restricted"
+    assert state["read_meta"] == ["user:alice"]
+    assert state["read_content"] == ["user:alice"]
+    assert state["edit_content"] == []
+
+
+def test_get_permission_defaults_to_public_when_absent():
+    holder = {"id": "bob"}
+    client, _ = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "x"}).json()["resource_id"]
+    state = client.get(f"/kb/collections/{cid}/permission").json()
+    assert state["visibility"] == "public"
+    assert state["read_meta"] == []
+
+
+def test_get_permission_is_hidden_from_a_non_owner():
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "secret"}).json()["resource_id"]
+    _set_permission(spec, cid, Permission(visibility="private"))
+    holder["id"] = "alice"
+    assert client.get(f"/kb/collections/{cid}/permission").status_code == 404
+
+
 # ─────────────────── item 3: content-route guards ───────────────────
 
 

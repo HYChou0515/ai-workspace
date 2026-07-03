@@ -104,6 +104,8 @@ export const qk = {
       ["kb", "documents-status", collectionId] as const,
     chats: ["kb", "chats"] as const,
     chat: (id: string) => ["kb", "chat", id] as const,
+    // #310: a collection's current access state (share dialog pre-fill).
+    collectionPermission: (id: string) => ["kb", "collection-permission", id] as const,
     agent: ["kb", "agent"] as const,
     doc: (id: string) => ["kb", "doc", id] as const,
     docChunks: (id: string) => ["kb", "doc-chunks", id] as const,
