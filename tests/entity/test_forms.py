@@ -31,6 +31,40 @@ def test_form_spec_derives_only_arg_fields_with_role_widgets() -> None:
     assert body.required is False  # `{{arg.body?}}` is optional
 
 
+def test_ref_and_daterange_args_get_their_own_widgets() -> None:
+    """A `ref` field is settable at create time (you pick the target record), so
+    it enters the form with a `ref` widget; a `daterange` gets a `daterange`
+    widget — both distinct from a plain text box."""
+    schema = EntitySchema(
+        fields=[
+            FieldSpec(name="milestone", role=Role.REF, to="milestone"),
+            FieldSpec(name="span", role=Role.DATERANGE),
+        ]
+    )
+    entity_type = EntityType(
+        name="issue",
+        schema=schema,
+        skeleton="milestone: {{arg.milestone?}}\nspan: {{arg.span?}}\n",
+        records_path="issues",
+    )
+    widgets = {f.name: f.widget for f in form_spec(entity_type)}
+    assert widgets == {"milestone": "ref", "span": "daterange"}
+
+
+def test_compute_on_read_arg_degrades_to_text_instead_of_crashing() -> None:
+    """A skeleton that (mistakenly) exposes a compute-on-read role as an `{{arg}}`
+    must not crash form derivation — the fault-tolerance rule (§E) says degrade,
+    so an unmapped role falls back to a plain text widget."""
+    schema = EntitySchema(fields=[FieldSpec(name="progress", role=Role.ROLLUP, agg="avg")])
+    entity_type = EntityType(
+        name="m",
+        schema=schema,
+        skeleton="progress: {{arg.progress}}\n",
+        records_path="m",
+    )
+    assert form_spec(entity_type)[0].widget == "text"
+
+
 def test_duplicate_arg_placeholder_is_deduped() -> None:
     entity_type = EntityType(
         name="t",

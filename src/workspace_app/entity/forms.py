@@ -17,12 +17,17 @@ from .schema import Role
 
 _ARG = re.compile(r"\{\{\s*arg\.([A-Za-z0-9_]+)(\?)?\s*\}\}")
 
+# Settable roles → their widget. Relational compute-on-read roles (BACKREF /
+# ROLLUP) are never authored as `{{arg}}` slots, so they're absent here and fall
+# back to a plain text box via `_WIDGET.get(...)` rather than crashing (§E).
 _WIDGET: dict[Role, str] = {
     Role.TEXT: "text",
     Role.STATUS: "select",
     Role.ACTOR: "actor",
     Role.DATE: "date",
+    Role.DATERANGE: "daterange",
     Role.PROGRESS: "progress",
+    Role.REF: "ref",
 }
 
 
@@ -42,7 +47,7 @@ def form_spec(entity_type: EntityType) -> list[FormField]:
             continue
         seen.add(name)
         spec = entity_type.schema.field(name)
-        widget = _WIDGET[spec.role] if spec else "text"
+        widget = _WIDGET.get(spec.role, "text") if spec else "text"
         values = spec.values if spec and spec.role is Role.STATUS else None
         out.append(FormField(name=name, widget=widget, required=not optional, values=values))
     return out
