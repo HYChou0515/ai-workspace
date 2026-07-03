@@ -84,3 +84,21 @@ class AgentConfig(Struct):
     tokens. Sent via ``extra_body`` (litellm forwards it). ``None`` = inherit.
     Same Ollama caveat. Don't crank it on reasoning models — it can *cause*
     loops; prefer modest values (~1.05–1.1)."""
+
+    temperature: float | None = None
+    """#107 request hygiene. ``None`` = don't send the param, so the
+    server-side default wins — on vLLM that's the model's tuned
+    ``generation_config.json`` values, which an explicit client 1.0 would
+    clobber. Set only to pin a specific value (opencode pins 0.55 for its
+    qwen-family entries)."""
+
+    top_p: float | None = None
+    """#107 request hygiene. Same ``None``-inherits contract as
+    ``temperature``."""
+
+    max_tokens: int | None = None
+    """#107 request hygiene. ``None`` = omit — vLLM then grants the full
+    remaining context, which is the SAFE choice for long tool args (a
+    smallish explicit cap truncates the call mid-JSON and turns every long
+    write into a parse failure). Set a large value (opencode sends
+    min(model limit, 32000)) only to bound runaway generations."""

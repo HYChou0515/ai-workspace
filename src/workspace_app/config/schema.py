@@ -475,6 +475,12 @@ class PresetLlmSettings:
     frequency_penalty: float | None = None
     presence_penalty: float | None = None
     repetition_penalty: float | None = None
+    # #107 request hygiene: per-preset sampling/output knobs. None = don't
+    # send the param (the server-side model default wins — on vLLM the
+    # model's tuned generation_config.json values).
+    temperature: float | None = None
+    top_p: float | None = None
+    max_tokens: int | None = None
 
 
 @dataclass(frozen=True)

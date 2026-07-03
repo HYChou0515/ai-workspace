@@ -309,6 +309,11 @@ def _agent_for(
         if config.repetition_penalty is not None
         else {}
     )
+    # #107 request hygiene: per-preset sampling/output knobs. All default
+    # None = the param is NOT sent, so the server-side model default wins
+    # (on vLLM the tuned generation_config.json values — an explicit client
+    # 1.0 would clobber them).
+    temp, top_p, max_tok = config.temperature, config.top_p, config.max_tokens
     if reasoning_effort == "none":
         from ..agent.reasoning import reasoning_off_kwargs
 
@@ -319,6 +324,9 @@ def _agent_for(
             extra_body={**(off.get("extra_body") or {}), **rep_body} or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            temperature=temp,
+            top_p=top_p,
+            max_tokens=max_tok,
         )
     elif reasoning_effort:
         # effort is validated to low/medium/high by the request body.
@@ -327,12 +335,18 @@ def _agent_for(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            temperature=temp,
+            top_p=top_p,
+            max_tokens=max_tok,
         )
     else:
         model_settings = ModelSettings(
             extra_body=rep_body or None,
             frequency_penalty=freq,
             presence_penalty=pres,
+            temperature=temp,
+            top_p=top_p,
+            max_tokens=max_tok,
         )
     # Per-config LLM endpoint (new schema's agents.presets.<x>.llm) wins
     # over the runner's constructor default — empty strings mean
