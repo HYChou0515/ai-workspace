@@ -108,6 +108,25 @@ class PermissionOut(BaseModel):
     notified: list[str]  # users newly granted access who got a `share` notification
 
 
+class PermissionState(BaseModel):
+    """#310 — the CURRENT access state the share dialog pre-fills from (the read
+    side of the setter). Full grant lists so the dialog can map each grantee back
+    to a role (viewer / collaborator / editor) and expand to raw verbs. An absent
+    `Permission` reads as `public` with empty grants (back-compat)."""
+
+    visibility: str = "public"
+    read_meta: list[str] = []
+    write_meta: list[str] = []
+    read_content: list[str] = []
+    add_content: list[str] = []
+    edit_content: list[str] = []
+    read_chat: list[str] = []
+    converse: list[str] = []
+    execute: list[str] = []
+    use_terminal: list[str] = []
+    change_permission: list[str] = []
+
+
 class CollectionOut(BaseModel):
     """A collection as the card grid needs it — its own fields plus aggregates
     derived from its documents (count / total bytes / latest update)."""
@@ -691,6 +710,28 @@ def register_kb_routes(
         )
         rows = [r for r in rows if _can_read_meta(r)]
         return [_collection_out(r, cited) for r in rows]
+
+    @app.get("/kb/collections/{collection_id}/permission")
+    async def get_collection_permission(collection_id: str) -> PermissionState:
+        """#310 — the current access state for the share dialog to pre-fill. Gated
+        on `read_meta` (404 if you can't see the collection); the FE only offers the
+        editor to a manager, and the PUT re-checks `change_permission` regardless.
+        An absent `Permission` reads as public with empty grants."""
+        coll, _ = _authorize_collection(collection_id, "read_meta")
+        perm = coll.permission or Permission()
+        return PermissionState(
+            visibility=perm.visibility,
+            read_meta=perm.read_meta,
+            write_meta=perm.write_meta,
+            read_content=perm.read_content,
+            add_content=perm.add_content,
+            edit_content=perm.edit_content,
+            read_chat=perm.read_chat,
+            converse=perm.converse,
+            execute=perm.execute,
+            use_terminal=perm.use_terminal,
+            change_permission=perm.change_permission,
+        )
 
     @app.put("/kb/collections/{collection_id}/permission")
     async def set_collection_permission(collection_id: str, body: _PermissionBody) -> PermissionOut:
