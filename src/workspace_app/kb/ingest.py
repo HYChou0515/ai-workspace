@@ -28,6 +28,7 @@ from specstar.types import Binary, ResourceIDNotFoundError
 
 from ..resources.kb import CachedChunk, Collection, DocChunk, IndexCache, SourceDoc
 from .chunker import Chunker
+from .code_lang import is_code_file
 from .doc_id import canonical_path, encode_doc_id
 from .embedder import Embedder
 from .index_cache import IndexCacheStore, compute_cache_key
@@ -91,11 +92,11 @@ class ConvertResult(NamedTuple):
 # md sniffs as text/plain on libmagic; both accepted.
 _TEXT_MIMES = {"text/plain", "text/markdown"}
 _ARCHIVE_MIMES = {"application/zip", "application/x-tar", "application/gzip"}
-# Source-code files we accept by extension when a pipeline is wired. libmagic
-# usually classifies these as `text/x-script.python`, `text/x-c`, etc. — not
-# in `_TEXT_MIMES`. The pipeline's DispatchSplitter routes them to LI's
-# CodeSplitter (tree-sitter, function-boundary aware).
-_CODE_EXTENSIONS = {".py", ".ts", ".tsx", ".js", ".jsx"}
+# Source-code files are recognised by EXTENSION (`kb/code_lang.is_code_file`),
+# never mime: libmagic mislabels `.go`/`.java`/`.rs` as `text/x-c` (dropped) or
+# `text/plain` (SentenceSplitter-shredded). Extension is the authority so the
+# pipeline's DispatchSplitter can route every supported language to LI's
+# CodeSplitter (tree-sitter, function-boundary aware) — issue #389.
 
 # Issue #254: the splitter-node metadata keys that describe WHERE a chunk lives
 # (vs. ``filename`` / ``mime`` / ``content_format``, which are routing hints, and
@@ -339,7 +340,7 @@ class Ingestor:
         result tells the caller to file. ``on_progress`` forwards a long parser's (VLM) status
         to the caller (no SourceDoc to write it onto here)."""
         mime = magic.from_buffer(data, mime=True)
-        is_code = any(path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
+        is_code = is_code_file(path)
         texts: list[str] = []
         with MaterialisedParserInput(data, filename=path) as source:
             parsers = self._parser_registry.all_matching(filename=path, mime=mime, source=source)
@@ -607,7 +608,7 @@ class Ingestor:
         PDF; last hand-back wins if several parsers offer one)."""
         assert self._pipeline is not None
         mime = magic.from_buffer(data, mime=True)
-        is_code = any(path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
+        is_code = is_code_file(path)
 
         def on_progress(message: str) -> None:
             self._set_status_detail(doc_id, message)
@@ -770,7 +771,7 @@ class Ingestor:
         raw = drm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)
         mime = magic.from_buffer(raw, mime=True)
-        is_code = any(doc.path.lower().endswith(ext) for ext in _CODE_EXTENSIONS)
+        is_code = is_code_file(doc.path)
         use_alt = self._should_use_alt_embedder(doc.collection_id)
         packets: list[tuple[str, list[Document]]] = []
         with MaterialisedParserInput(raw, filename=doc.path) as source:

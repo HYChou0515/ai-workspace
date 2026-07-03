@@ -29,6 +29,7 @@ from __future__ import annotations
 import io
 import logging
 
+from .code_lang import is_code_file
 from .ingest import normalize_text
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,6 @@ _MAX_XLSX_ROWS_PER_SHEET = 100
 # Types the FE renders natively from `/blobs/{file_id}` — no text body.
 _BLOB_NATIVE_MIMES = {"application/pdf", "text/html"}
 _BLOB_NATIVE_EXTENSIONS = (".pdf", ".html", ".htm")
-
-_CODE_EXTENSIONS = (".py", ".ts", ".tsx", ".js", ".jsx")
 
 # Structured-data text the FE renders itself (#361): the doc viewer projects
 # these into a collapsible tree / data grid, so the BE returns verbatim text.
@@ -73,7 +72,7 @@ def preview_markdown(*, path: str, content_type: str, raw: bytes) -> str:
         return _xlsx_preview(raw)
     if p.endswith(".docx"):
         return _docx_preview(raw)
-    if ct.startswith("text/") or p.endswith(_CODE_EXTENSIONS):
+    if ct.startswith("text/") or is_code_file(p):
         return normalize_text(raw.decode("utf-8", errors="replace"))
     # Undisplayable binary (pptx, unknown) — FE shows the download notice.
     return ""

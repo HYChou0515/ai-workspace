@@ -22,19 +22,9 @@ from llama_index.core.node_parser import (
 )
 from llama_index.core.schema import BaseNode, TextNode, TransformComponent
 
+from .code_lang import code_language_for
 from .embedder import Embedder
 from .markdown_table import find_markdown_tables, row_as_col_value
-
-# Map source-file extension → tree-sitter language name expected by
-# LI's CodeSplitter (which delegates to the `tree_sitter_languages` pack).
-# Kept tight to the P3.0 starter set; expand as more languages get demand.
-_CODE_LANG_BY_EXT: dict[str, str] = {
-    ".py": "python",
-    ".ts": "typescript",
-    ".tsx": "tsx",
-    ".js": "javascript",
-    ".jsx": "javascript",
-}
 
 
 class DispatchSplitter(TransformComponent):
@@ -96,7 +86,7 @@ class DispatchSplitter(TransformComponent):
             # `content_format`. It wins over mime/extension: a PNG's Markdown
             # description must split on headings, not as raw token windows.
             content_format = str(node.metadata.get("content_format", "")).lower()
-            code_lang = _code_language_for(filename)
+            code_lang = code_language_for(filename)
             if content_format == "markdown" or mime == "text/markdown" or filename.endswith(".md"):
                 out.extend(self._split_markdown(node))
             elif mime == "application/json" or filename.endswith((".json", ".jsonl")):
@@ -191,15 +181,6 @@ def _fold_section(node: BaseNode) -> None:
     if node.get_content().startswith(section):
         return
     node.text = f"{section}\n\n{node.get_content()}"
-
-
-def _code_language_for(filename: str) -> str | None:
-    """Tree-sitter language name for a code file, or None if not supported."""
-    f = filename.lower()
-    for ext, lang in _CODE_LANG_BY_EXT.items():
-        if f.endswith(ext):
-            return lang
-    return None
 
 
 def _heading_breadcrumb(node: BaseNode) -> str:

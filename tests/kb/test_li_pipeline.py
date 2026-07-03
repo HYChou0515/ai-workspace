@@ -69,6 +69,43 @@ def test_dispatch_splitter_routes_python_to_code_splitter(spec: SpecStar, embedd
     assert any(s.startswith(("def", "class")) for s in starts), starts
 
 
+def test_dispatch_splitter_routes_non_starter_languages_to_code_splitter():
+    """Issue #389: a `.go` file (libmagic mislabels it `text/x-c`) must route
+    through the tree-sitter CodeSplitter on its EXTENSION, not fall to the
+    SentenceSplitter. Splitting a multi-function file keeps definitions intact
+    rather than cutting mid-token."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    funcs = "\n\n".join(
+        f"func Handler{i}(x int) int {{\n\ty := x + {i}\n\treturn y * 2\n}}" for i in range(60)
+    )
+    go_src = "package main\n\n" + funcs + "\n"
+    doc = Document(text=go_src, metadata={"filename": "svc.go", "mime": "text/x-c"})
+    nodes = DispatchSplitter()([doc])
+    assert len(nodes) >= 2, "CodeSplitter should split a large multi-function .go file"
+    # Boundaries land on `func` declarations — SentenceSplitter would cut mid-line.
+    assert any(n.get_content().lstrip().startswith("func") for n in nodes)
+
+
+def test_ingest_previously_dropped_language_produces_code_chunks(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    """Issue #389 regression: `.rb` sniffed as `text/x-ruby` used to be dropped
+    (chunks=0, silently unsearchable). It must now be code-split into chunks."""
+    cid = _new_collection(spec)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder)
+
+    rb_src = ("def alpha(x)\n  x + 1\nend\n\ndef beta(y)\n  y * 2\nend\n\n" * 8).encode()
+    ids = ingestor.ingest(collection_id=cid, user="alice", filename="model.rb", data=rb_src)
+    chunks = _chunks_of(spec, ids[0])
+    assert len(chunks) >= 1, "a .rb file must produce chunks, not be silently dropped"
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
+    assert any("def alpha" in c.text or "def beta" in c.text for c in chunks)
+
+
 def test_markdown_chunks_carry_heading_breadcrumb_in_text(spec: SpecStar, embedder: HashEmbedder):
     """A markdown doc with H1/H2 → chunks whose `text` (what gets embedded)
     includes the heading hierarchy as a prefix. This is the headline P1
