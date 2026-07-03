@@ -35,6 +35,7 @@ from ..kb.collection_export import (
 )
 from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
+from ..kb.doc_permission import collection_mirror_fields, push_mirror_to_docs
 from ..kb.findability import (
     ProbeResult,
     ProbeSide,
@@ -723,6 +724,27 @@ def register_kb_routes(
         # delegate need not hold — and `change_permission` was just verified here.
         with rm.using(created_by):
             rm.update(collection_id, msgspec.structs.replace(coll, permission=new_perm))
+        # #303: the collection's read-visibility is denormalized onto its docs so
+        # the auto-CRUD `GET /source-doc/{id}` (no route-guard covers it) inherits
+        # the change. Re-push the mirror ONLY when the fields the doc access_scope
+        # reads (visibility / read_meta) actually moved — a read_content-only edit
+        # is route-guarded live and needs no fan-out. The collection row is already
+        # persisted (so it is 404 immediately); the per-doc loop runs off the event
+        # loop but is AWAITED, so a shutdown can't drop it and leave docs stale-
+        # visible. A durable background JobType is a clean follow-up if the
+        # permission-change latency on a very large collection ever matters.
+        old_perm = coll.permission if coll.permission is not None else Permission()
+        if old_perm.visibility != new_perm.visibility or list(old_perm.read_meta) != list(
+            new_perm.read_meta
+        ):
+            await asyncio.to_thread(
+                push_mirror_to_docs,
+                spec,
+                collection_id,
+                visibility=new_perm.visibility,
+                read_meta=new_perm.read_meta,
+                created_by=created_by,
+            )
         # Notify users NEWLY granted any access (the actor + already-granted users
         # are not re-notified). Mirrors kb_chat_routes.share_chat.
         me = get_user_id()
@@ -890,12 +912,11 @@ def register_kb_routes(
         zip build (restore every blob + compress) is blocking, so it runs off
         the event loop. Stale temp files from abandoned prepares are reaped here.
         404 when the collection is unknown."""
-        rm = spec.get_resource_manager(Collection)
-        try:
-            coll = rm.get(collection_id).data
-        except ResourceIDNotFoundError as e:
-            raise HTTPException(status_code=404, detail="collection not found") from e
-        assert isinstance(coll, Collection)
+        # #303: export reads every doc's content — gate on the collection's
+        # read_content (a route-guard: 404 hides a collection the caller can't
+        # see, 403 blocks an in-scope member without content access), not just a
+        # not-found check.
+        coll, _ = _authorize_collection(collection_id, "read_content")
         download_id, size = await prepare_zip(
             lambda out: build_collection_zip(spec, collection_id, out)
         )
@@ -912,12 +933,11 @@ def register_kb_routes(
         path = prepared_path(download_id)
         if path is None:
             raise HTTPException(status_code=404, detail="download not found")
-        rm = spec.get_resource_manager(Collection)
-        try:
-            coll = rm.get(collection_id).data
-        except ResourceIDNotFoundError as e:
-            raise HTTPException(status_code=404, detail="collection not found") from e
-        assert isinstance(coll, Collection)
+        # #303: export reads every doc's content — gate on the collection's
+        # read_content (a route-guard: 404 hides a collection the caller can't
+        # see, 403 blocks an in-scope member without content access), not just a
+        # not-found check.
+        coll, _ = _authorize_collection(collection_id, "read_content")
         return stream_prepared_zip(path, collection_zip_filename(coll.name))
 
     # ── Issue #247: raw folder/root download (no manifest) ────────────────
@@ -926,12 +946,11 @@ def register_kb_routes(
         """Build a plain ZIP of the raw bytes of every doc under `prefix`
         (`prefix=""` = the whole collection), entries re-rooted at the folder.
         404 when the collection is unknown."""
-        rm = spec.get_resource_manager(Collection)
-        try:
-            coll = rm.get(collection_id).data
-        except ResourceIDNotFoundError as e:
-            raise HTTPException(status_code=404, detail="collection not found") from e
-        assert isinstance(coll, Collection)
+        # #303: export reads every doc's content — gate on the collection's
+        # read_content (a route-guard: 404 hides a collection the caller can't
+        # see, 403 blocks an in-scope member without content access), not just a
+        # not-found check.
+        coll, _ = _authorize_collection(collection_id, "read_content")
         folder = prefix.strip("/").rsplit("/", 1)[-1] or coll.name
         download_id, size = await prepare_zip(
             lambda out: build_kb_subtree_zip(spec, collection_id, prefix, out)
@@ -951,12 +970,11 @@ def register_kb_routes(
         path = prepared_path(download_id)
         if path is None:
             raise HTTPException(status_code=404, detail="download not found")
-        rm = spec.get_resource_manager(Collection)
-        try:
-            coll = rm.get(collection_id).data
-        except ResourceIDNotFoundError as e:
-            raise HTTPException(status_code=404, detail="collection not found") from e
-        assert isinstance(coll, Collection)
+        # #303: export reads every doc's content — gate on the collection's
+        # read_content (a route-guard: 404 hides a collection the caller can't
+        # see, 403 blocks an in-scope member without content access), not just a
+        # not-found check.
+        coll, _ = _authorize_collection(collection_id, "read_content")
         folder = prefix.strip("/").rsplit("/", 1)[-1] or coll.name
         return stream_prepared_zip(path, safe_zip_filename(folder))
 
@@ -1269,6 +1287,9 @@ def register_kb_routes(
         quality first (the indexed `quality_score` ascending) so the FE's "sort
         by quality" surfaces the docs that drag retrieval down. `resource_id` is
         the total-order tiebreak in both."""
+        # #303: browsing a collection's document list inherits its read_content —
+        # a non-member is 404, an in-scope member without content access is 403.
+        _authorize_collection(collection_id, "read_content")
         rm = spec.get_resource_manager(SourceDoc)
         q = QB["collection_id"] == collection_id
         total = rm.count_resources(q.build())
@@ -1399,6 +1420,12 @@ def register_kb_routes(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         doc = rev.data
         assert isinstance(doc, SourceDoc)
+        # #303: reading a doc's CONTENT inherits the collection's read_content —
+        # gate on the LIVE collection permission (a route-guard, not the doc's
+        # denormalized mirror, so a tightened collection is enforced before its
+        # fan-out completes). 404 hides a doc whose collection is invisible; 403
+        # blocks an in-scope member who lacks read_content.
+        _authorize_collection(doc.collection_id, "read_content")
         # The owner is the resource-level creator (first uploader), not the
         # latest revision's author.
         user = rm.get_meta(doc_id).created_by
@@ -1571,6 +1598,10 @@ def register_kb_routes(
             path=to,
             content=Binary(data=raw),
             status="indexing",
+            # #303: a move re-creates the doc in the SAME collection — carry the
+            # collection's read-visibility mirror so the moved doc doesn't reset to
+            # the public default inside a restricted collection.
+            **collection_mirror_fields(spec, old.collection_id),
         )
         with rm.using(user=creator):
             rm.create(new_doc, resource_id=new_id)
@@ -1589,6 +1620,18 @@ def register_kb_routes(
     async def list_doc_chunks(doc_id: str = Query(alias="id")) -> list[dict]:
         """A document's indexed chunks + their cited counts — the chunks debug
         view behind the doc preview's toggle."""
+        # #303: chunks expose the doc's text — gate on the collection's live
+        # read_content when the doc exists. A missing doc (deleted / unknown) has
+        # no chunks and nothing to protect, so it stays the pre-#303 "empty list"
+        # contract; a doc that DOES exist in a collection the caller can't see is
+        # still hidden (its _authorize_collection 404s), so this leaks no existence.
+        sdrm = spec.get_resource_manager(SourceDoc)
+        try:
+            sd = sdrm.get(doc_id).data
+        except ResourceIDNotFoundError:
+            return []
+        assert isinstance(sd, SourceDoc)
+        _authorize_collection(sd.collection_id, "read_content")
         chrm = spec.get_resource_manager(DocChunk)
         cited = chunk_cited(spec, doc_id)
         rows: list[dict] = []
