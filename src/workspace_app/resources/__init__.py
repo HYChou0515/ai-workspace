@@ -23,6 +23,7 @@ from specstar.types import IndexableField
 from ..kb.chat_permission import kbchat_permission_event_handler
 from ..perm.checker import collection_permission_event_handler
 from ..perm.scope import (
+    GroupsProvider,
     collection_access_scope,
     kbchat_access_scope,
     source_doc_access_scope,
@@ -32,6 +33,7 @@ from .agent_config import AgentConfig
 from .check_run import CheckRun
 from .citation_event import CitationEvent
 from .conversation import Conversation, Message
+from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
     CodeWikiBuildRun,
@@ -67,6 +69,7 @@ __all__ = [
     "CustomSanityQuestion",
     "DocChunk",
     "DocQuestion",
+    "Group",
     "IndexCache",
     "IndexRun",
     "IndexUnitText",
@@ -156,6 +159,14 @@ def make_spec(
     return spec
 
 
+def _groups_provider(spec: SpecStar) -> GroupsProvider:
+    """#307 — a `user -> groups` resolver bound to THIS spec, fed to the access
+    scope + write checker so a `group:<id>` grant resolves to its members. A thin
+    closure so `perm/` needn't import the `Group` resource (dependency direction:
+    resources → perm)."""
+    return lambda user: groups_of(spec, user)
+
+
 def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> None:
     """Register every workspace_app resource on ``spec``. Internal to
     ``make_spec`` — callers don't (and shouldn't) call this directly.
@@ -185,6 +196,16 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # scan. (#89: was investigation_id + a typed Ref; now an opaque key so one
     # Conversation table serves every App's items.)
     spec.add_model(Conversation, indexed_fields=["item_id"])
+    # #307: a flat, owner-managed logical Group. `members` indexed so resolving a
+    # user → the groups they're in (`groups_of`) is a `members.contains(user)`
+    # query, not a scan. No access_scope / permission (owner-managed via routes),
+    # so resolving groups can't recurse into a permission check.
+    spec.add_model(Group, indexed_fields=["members"])
+    # #307: the user → groups resolver every #262 access_scope + write checker
+    # folds in (so a `group:<id>` grant covers its members). Injected here — it
+    # needs `spec` to query the Group model, which keeps `perm/` free of a resource
+    # import. Closed over THIS spec so tests with isolated specs stay isolated.
+    groups = _groups_provider(spec)
     # #262: `permission.read_meta` / `.visibility` drive the access_scope (row-
     # level visibility) — see perm.scope. Indexed so the scope filters at storage.
     # #262: `permission_checker=` is SHADOWED by specstar's spec-level AllowAll
@@ -196,8 +217,8 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     spec.add_model(
         Collection,
         indexed_fields=[("permission.visibility", str), ("permission.read_meta", list)],
-        access_scope=collection_access_scope(superusers),
-        event_handlers=[collection_permission_event_handler(superusers)],
+        access_scope=collection_access_scope(superusers, groups),
+        event_handlers=[collection_permission_event_handler(superusers, groups)],
     )
     # A newly-added index only covers rows written AFTER it exists — specstar
     # extracts indexed_data at write time and does NOT auto-backfill pre-existing

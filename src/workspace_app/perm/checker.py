@@ -50,6 +50,7 @@ from specstar.types import ResourceAction
 
 from .authorize import Actor, authorize
 from .model import Permission
+from .scope import GroupsProvider
 
 # Write actions gated by ``write_meta`` (a permission rewrite escalates to
 # ``change_permission``); they carry the would-be new data + the stored snapshot.
@@ -108,10 +109,15 @@ class CollectionPermissionChecker(IPermissionChecker):
     def __init__(
         self,
         superusers: frozenset[str] = frozenset(),
+        groups_provider: GroupsProvider | None = None,
         *,
         absent_permission: Callable[[Any], Permission | None] | None = None,
     ) -> None:
         self._superusers = superusers
+        # #307: resolve the acting user → their group ids so a `group:<id>` grant
+        # authorizes the write. Injected at registration (needs a SpecStar); `None`
+        # ⇒ pre-groups behaviour (the user's own subject only).
+        self._groups_provider = groups_provider
         # How to interpret a row whose ``permission`` field is absent (``None``).
         # Default (``None``) ⇒ passthrough: ``authorize`` treats an absent
         # permission as ``public`` (Collection / WorkItem back-compat). A resource
@@ -120,6 +126,10 @@ class CollectionPermissionChecker(IPermissionChecker):
         # stored row (e.g. its legacy ``shared_with``), so the write ACL matches
         # its ``access_scope`` instead of silently falling back to world-writable.
         self._absent_permission = absent_permission
+
+    def _actor(self, user: str) -> Actor:
+        groups = self._groups_provider(user) if self._groups_provider is not None else frozenset()
+        return Actor.human(user, groups=groups)
 
     def _effective(self, snap: Any) -> Permission | None:
         """The permission to authorize against: the stored one, or — when absent
@@ -166,7 +176,7 @@ class CollectionPermissionChecker(IPermissionChecker):
             return PermissionResult.deny
         created_by = snap.meta.created_by
         stored = self._effective(snap)
-        actor = Actor.human(_context_user(context))
+        actor = self._actor(_context_user(context))
         if self._rewrites_permission(context, stored) and not authorize(
             actor, "change_permission", stored, created_by=created_by, superusers=self._superusers
         ):
@@ -188,11 +198,13 @@ class CollectionPermissionChecker(IPermissionChecker):
 
 def collection_permission_event_handler(
     superusers: frozenset[str] = frozenset(),
+    groups_provider: GroupsProvider | None = None,
 ) -> PermissionEventHandler:
     """Wrap the Collection write ACL in specstar's ``PermissionEventHandler`` for
     the per-model ``event_handlers`` slot (the ``permission_checker`` slot is
-    shadowed — see module docstring)."""
-    return PermissionEventHandler(CollectionPermissionChecker(superusers))
+    shadowed — see module docstring). `groups_provider` (#307) resolves the acting
+    user's groups so a `group:<id>` write grant is honoured."""
+    return PermissionEventHandler(CollectionPermissionChecker(superusers, groups_provider))
 
 
 def work_item_permission_event_handler(

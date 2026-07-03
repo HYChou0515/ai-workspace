@@ -548,6 +548,11 @@ def create_app(
         answer_llm=kb_answer_llm,
         answer_system_prompt=default_kb_agent_config.system_prompt,
     )
+    # #307: logical Group management (owner-managed membership). Granting
+    # `group:<id>` on a resource then covers every member (see resources.groups).
+    from .group_routes import register_group_routes
+
+    register_group_routes(api, spec, get_user_id, superusers=superusers)
     # #106: the exposed deterministic context-card lookup (read route, post-apply).
     register_context_card_routes(api, spec)
     # #230: the /help endpoint — the Help collection id + its documents for the
