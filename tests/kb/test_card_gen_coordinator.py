@@ -8,6 +8,7 @@ tested separately against a fake ``ILlm``.
 
 from __future__ import annotations
 
+import msgspec
 from specstar import QB
 from specstar.types import Binary, TaskStatus
 
@@ -144,6 +145,98 @@ async def test_generates_a_new_card_proposal_from_a_document():
     assert p.provenance[0].path == "spec.md"
     assert p.provenance[0].doc_id == doc
     assert p.provenance[0].snippet == "The reflow zone uses RZ3 heating."
+
+
+def _cards(spec, cid: str):
+    rm = spec.get_resource_manager(ContextCard)
+    return rm.list_resources((QB["collection_id"] == cid).build())
+
+
+async def test_a_finalized_run_is_listed_for_review_then_leaves_the_queue_on_commit():
+    """#415: once finalized, a run is a 'done' item in the collection's 待審核
+    queue; committing its accepted proposals writes cards and resolves the run
+    (status 'committed') so it drops out of the queue."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    pending = coord.pending_runs(cid)
+    assert [s.run_id for s in pending] == [jid]
+    assert pending[0].proposal_count == 1
+
+    accepted = [
+        msgspec.structs.replace(p, decision="accepted") for p in coord.proposals(jid).proposals
+    ]
+    coord.save_review(jid, accepted)
+    coord.commit(jid)
+
+    assert coord.pending_runs(cid) == []
+    assert len(_cards(spec, cid)) == 1
+
+
+async def test_dismiss_removes_a_run_from_review_without_writing_cards():
+    """#415: dismissing a run resolves it (status 'dismissed') so it leaves the
+    queue, and writes no cards."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 body")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert coord.pending_runs(cid)
+    coord.dismiss(jid)
+    assert coord.pending_runs(cid) == []
+    assert _cards(spec, cid) == []
+
+
+async def test_review_resolution_is_idempotent():
+    """Resolving a run is a one-way, at-most-once transition (#415): once
+    committed, a re-commit writes no second card and a later dismiss can't yank
+    it back — both are no-ops from a non-``done`` state."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    accepted = [
+        msgspec.structs.replace(p, decision="accepted") for p in coord.proposals(jid).proposals
+    ]
+    coord.save_review(jid, accepted)
+    coord.commit(jid)  # done → committed, writes one card
+    coord.commit(jid)  # committed run: guarded no-op, no second card
+    coord.dismiss(jid)  # committed run: mark_dismissed is a no-op (not 'done')
+
+    assert len(_cards(spec, cid)) == 1
+    assert coord.pending_runs(cid) == []
+
+
+async def test_pending_runs_are_scoped_to_their_collection():
+    """The 待審核 queue shows only THIS collection's runs (#415)."""
+    spec = make_spec(default_user="u")
+    c1, c2 = _collection(spec), _collection(spec)
+    d1 = _add_source(spec, c1, "a.md", "RZ3 body")
+    d2 = _add_source(spec, c2, "b.md", "RZ4 body")
+    drafter = _FakeDrafter(
+        {
+            "a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")],
+            "b.md": [CardDraft(keys=["RZ4"], title="RZ4", snippet="s")],
+        }
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    j1 = coord.enqueue(c1, [d1])
+    coord.enqueue(c2, [d2])
+    await coord.aclose()
+
+    assert [s.run_id for s in coord.pending_runs(c1)] == [j1]
 
 
 async def test_a_selected_wiki_page_is_read_and_drafted_like_a_document():

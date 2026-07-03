@@ -49,7 +49,12 @@ const docQuestions = new Map<string, KbDocQuestion>();
 // synchronously (status "completed") with one proposal per selected document.
 const cardGenJobs = new Map<
   string,
-  { collectionId: string; status: KbCardGenStatus["status"]; proposals: KbProposedCard[] }
+  {
+    collectionId: string;
+    status: KbCardGenStatus["status"];
+    proposals: KbProposedCard[];
+    resolved?: boolean; // #415: committed / dismissed → out of the 待審核 queue
+  }
 >();
 
 /** Faithful mirror of the BE `norm()` — NFKC, casefold, collapse whitespace —
@@ -617,7 +622,21 @@ export const mockKbApi: KbApi = {
         created++;
       }
     }
+    if (j) j.resolved = true; // reviewed → leaves the 待審核 queue (#415)
     return { created, updated, skipped };
+  },
+  async listCardGenRuns(collectionId) {
+    return [...cardGenJobs.entries()]
+      .filter(([, j]) => j.collectionId === collectionId && j.status === "completed" && !j.resolved)
+      .map(([run_id, j]) => ({
+        run_id,
+        collection_id: collectionId,
+        proposal_count: j.proposals.length,
+      }));
+  },
+  async dismissCardGen(jobId) {
+    const j = cardGenJobs.get(jobId);
+    if (j) j.resolved = true;
   },
 
   async getDocQuestions() {

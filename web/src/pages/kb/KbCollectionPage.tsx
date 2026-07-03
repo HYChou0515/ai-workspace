@@ -39,6 +39,7 @@ import { type MsgKey, useT } from "../../lib/i18n";
 import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionFormat";
 import { CodeConnectionEditor } from "./CodeConnectionEditor";
 import { CodeSyncStatus } from "./CodeSyncStatus";
+import { CollectionReviewTab } from "./CollectionReviewTab";
 import { ContextCardsTab } from "./ContextCardsTab";
 import { KbDocIde } from "./KbDocIde";
 import { useCollectionDocs } from "./useCollectionDocs";
@@ -53,10 +54,14 @@ import { pxToRem } from "../../lib/pxToRem";
 // three at once instead of only the active tab (#162's per-tab blurb hid the
 // rest). No system nouns (chunk / embed / index internals) — describe the
 // outcome. Keyed into the i18n catalog so the strip is bilingual.
-const TAB_HELP: Record<"documents" | "cards" | "wiki", { label: MsgKey; blurb: MsgKey }> = {
+const TAB_HELP: Record<
+  "documents" | "cards" | "wiki" | "review",
+  { label: MsgKey; blurb: MsgKey }
+> = {
   documents: { label: "kb.tab.documents", blurb: "kb.tab.documents.blurb" },
   cards: { label: "kb.tab.cards", blurb: "kb.tab.cards.blurb" },
   wiki: { label: "kb.tab.wiki", blurb: "kb.tab.wiki.blurb" },
+  review: { label: "kb.tab.review", blurb: "kb.tab.review.blurb" },
 };
 
 /** What the collection layout shares with its routed tab children: the open
@@ -367,17 +372,22 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     ["Updated", fmtDate(selected.updated_at)],
   ];
   // Documents + Context Cards (#106) are always available; the Wiki tab only
-  // exists for collections that build one.
+  // exists for collections that build one; the 待審核 tab (#415, right of Wiki)
+  // is always present — it holds generated card proposals awaiting review.
   const tabIds = (
-    selected.use_wiki ? ["documents", "cards", "wiki"] : ["documents", "cards"]
-  ) as ("documents" | "cards" | "wiki")[];
+    selected.use_wiki
+      ? ["documents", "cards", "wiki", "review"]
+      : ["documents", "cards", "review"]
+  ) as ("documents" | "cards" | "wiki" | "review")[];
   // Which tab is open (the URL is the source of truth, #93) — drives the
   // Documents-only affordances (Re-index action + drag-drop upload, #172).
-  const activeTab: "documents" | "cards" | "wiki" = pathname.endsWith("/cards")
+  const activeTab: "documents" | "cards" | "wiki" | "review" = pathname.endsWith("/cards")
     ? "cards"
     : pathname.endsWith("/wiki")
       ? "wiki"
-      : "documents";
+      : pathname.endsWith("/review")
+        ? "review"
+        : "documents";
 
   return (
     <section className="kb-colpage" aria-label="Collection">
@@ -894,6 +904,11 @@ export function DocumentsTab() {
 export function CardsTab() {
   const { collection, client } = useCollectionOutlet();
   return <ContextCardsTab collectionId={collection.resource_id} client={client} />;
+}
+
+export function ReviewTab() {
+  const { collection, client } = useCollectionOutlet();
+  return <CollectionReviewTab collectionId={collection.resource_id} client={client} />;
 }
 
 export function WikiTab() {

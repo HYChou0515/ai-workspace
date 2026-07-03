@@ -444,6 +444,9 @@ export type KbCardGenStatus = {
 /** #175 — the tallies returned by committing a run's accepted proposals. */
 export type KbCardGenCommit = { created: number; updated: number; skipped: number };
 
+/** #415: one row of a collection's 待審核 queue — a finalized run awaiting review. */
+export type KbCardGenRun = { run_id: string; collection_id: string; proposal_count: number };
+
 /** #377 — one open clarification question in the global inbox. A `term` question
  * carries `term` + `source_doc_ids` (deduped across docs) and becomes a context
  * card when answered; a `description` question carries `source_doc_id` + `quote`
@@ -628,6 +631,10 @@ export interface KbApi {
   reviewCardGen(jobId: string, proposals: KbProposedCard[]): Promise<KbCardGenStatus>;
   /** Commit the run's accepted proposals to real cards; returns the tallies. */
   commitCardGen(jobId: string): Promise<KbCardGenCommit>;
+  /** #415: the collection's 待審核 queue — finalized runs awaiting review. */
+  listCardGenRuns(collectionId: string): Promise<KbCardGenRun[]>;
+  /** #415: discard a run's proposals — it leaves the queue, writing no cards. */
+  dismissCardGen(jobId: string): Promise<void>;
 
   /** #377: the global "待釐清" inbox — every open clarification question the
    * digest raised across collections. */
@@ -996,6 +1003,14 @@ export const realKbApi: KbApi = {
   async commitCardGen(jobId) {
     const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}/commit`;
     return (await ok(await apiFetch(url, { method: "POST" }), "commit card gen")).json();
+  },
+  async listCardGenRuns(collectionId) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/context-card-gen`;
+    return (await ok(await apiFetch(url), "list card gen runs")).json();
+  },
+  async dismissCardGen(jobId) {
+    const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}/dismiss`;
+    await ok(await apiFetch(url, { method: "POST" }), "dismiss card gen");
   },
 
   async getDocQuestions() {

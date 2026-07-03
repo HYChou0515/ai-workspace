@@ -8,7 +8,7 @@
 import { Navigate, Route, useSearchParams } from "react-router-dom";
 
 import { kbApi, type KbApi } from "../../api/kb";
-import { CardsTab, DocumentsTab, KbCollectionPage, WikiTab } from "./KbCollectionPage";
+import { CardsTab, DocumentsTab, KbCollectionPage, ReviewTab, WikiTab } from "./KbCollectionPage";
 import { KbChatsSurface } from "./KbChatsSurface";
 import { KbCollectionsGrid } from "./KbCollectionsGrid";
 import { KbHome } from "./KbHome";
@@ -35,6 +35,7 @@ export function kbRoutes(client: KbApi = kbApi) {
         <Route path="cards" element={<CardsTab />} />
         <Route path="cards/:cardId" element={<CardsTab />} />
         <Route path="wiki/*" element={<WikiTab />} />
+        <Route path="review" element={<ReviewTab />} />
       </Route>
       {/* The open conversation is the URL too (#93). `:chatId === "new"` is the
           unsaved composer; both paths render the same surface so the new→real-id

@@ -534,6 +534,11 @@ export const messages = {
     "zh-TW": "AI 自動整理、互相連結的全集摘要；上傳新文件會跟著更新。",
     en: "An AI-built, cross-linked summary; updates as you upload.",
   },
+  "kb.tab.review": { "zh-TW": "待審核", en: "Review" },
+  "kb.tab.review.blurb": {
+    "zh-TW": "自動生成的卡片提案等你審核；套用後才會進入詞彙表。",
+    en: "Auto-generated card proposals awaiting your review; applied ones join the glossary.",
+  },
   // Glossary (Context Cards) tab empty states.
   "kb.cards.empty.none": {
     "zh-TW": "還沒有詞彙卡。詞彙表讓你定義 AI 該照字面使用的詞——例如「COGS 一律指 Cost of Goods Sold」。用左側「＋ 新增」開始。",

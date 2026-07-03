@@ -50,6 +50,7 @@ from .card_gen import (
     CardGenArtifact,
     CardGenJob,
     CardGenPayload,
+    CardGenRunSummary,
     CardGenUnit,
     CommitResult,
     DocDigest,
@@ -79,6 +80,9 @@ _RUN_STATUS = {
     "running": TaskStatus.PROCESSING,
     "done": TaskStatus.COMPLETED,
     "error": TaskStatus.FAILED,
+    # #415 review-resolution terminals — both are past COMPLETED to the poller.
+    "committed": TaskStatus.COMPLETED,
+    "dismissed": TaskStatus.COMPLETED,
 }
 
 
@@ -196,8 +200,8 @@ class CardGenCoordinator:
         generation falls back to a create. Proposals the reviewer didn't accept —
         and any with no usable key — are skipped. Returns the tallies."""
         run = self._runs.get(run_id)
-        if run is None:
-            return CommitResult()
+        if run is None or run.status != "done":
+            return CommitResult()  # gone, or already reviewed — no double card-write
         cid = run.collection_id
         cardrm = self._spec.get_resource_manager(ContextCard)
         result = CommitResult()
@@ -222,7 +226,24 @@ class CardGenCoordinator:
                     # New card — or the update target vanished since generation.
                     cardrm.create(card)
                     result.created += 1
+        # #415: the run is reviewed — resolve it out of the 待審核 queue.
+        self._runs.mark_committed(run_id)
         return result
+
+    def dismiss(self, run_id: str) -> None:
+        """#415: discard a run's proposals without writing any card — it leaves the
+        待審核 queue (status ``dismissed``)."""
+        self._runs.mark_dismissed(run_id)
+
+    def pending_runs(self, collection_id: str) -> list[CardGenRunSummary]:
+        """The collection's finalized-but-unreviewed runs — the 待審核 queue rows
+        (#415), newest first. The FE lazy-loads each run's proposals on expand."""
+        return [
+            CardGenRunSummary(
+                run_id=rid, collection_id=collection_id, proposal_count=len(run.proposals)
+            )
+            for rid, run in self._runs.pending_for_collection(collection_id)
+        ]
 
     # ── consume (handler — runs in the queue's consumer thread) ──────
     def _handle(self, job) -> None:  # job: Resource[CardGenJob]

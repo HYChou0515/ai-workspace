@@ -69,6 +69,14 @@ class CommitOut(BaseModel):
     skipped: int
 
 
+class PendingRunOut(BaseModel):
+    """One row of a collection's 待審核 queue (#415): a finalized, unreviewed run."""
+
+    run_id: str
+    collection_id: str
+    proposal_count: int
+
+
 def _to_io(p: ProposedCard) -> ProposedCardIO:
     return ProposedCardIO(**msgspec.to_builtins(p))
 
@@ -103,3 +111,15 @@ def register_card_gen_routes(app: FastAPI | APIRouter, coordinator: CardGenCoord
     def commit_context_card_gen(job_id: str) -> CommitOut:
         r = coordinator.commit(job_id)
         return CommitOut(created=r.created, updated=r.updated, skipped=r.skipped)
+
+    @app.get("/kb/collections/{collection_id}/context-card-gen")
+    def list_pending_card_gen(collection_id: str) -> list[PendingRunOut]:
+        """The collection's 待審核 queue — finalized runs awaiting review (#415)."""
+        return [
+            PendingRunOut(**msgspec.to_builtins(s)) for s in coordinator.pending_runs(collection_id)
+        ]
+
+    @app.post("/kb/context-card-gen/{job_id}/dismiss")
+    def dismiss_context_card_gen(job_id: str) -> None:
+        """Discard a run's proposals — it leaves the queue without writing cards."""
+        coordinator.dismiss(job_id)

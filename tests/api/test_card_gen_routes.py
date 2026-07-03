@@ -120,6 +120,49 @@ def test_generate_review_commit_roundtrip():
     assert card.body == "The third reflow zone."
 
 
+def test_pending_queue_lists_a_finalized_run_and_commit_removes_it():
+    """#415: a finalized run is a row in the collection's 待審核 queue; committing
+    it (via the existing commit route) resolves it out of the queue."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    client = ApiTestClient(app)
+
+    job_id = client.post(
+        f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]}
+    ).json()["job_id"]
+    asyncio.run(app.state.card_gen_coordinator.aclose())
+
+    pending = client.get(f"/kb/collections/{cid}/context-card-gen")
+    assert pending.status_code == 200
+    assert pending.json() == [{"run_id": job_id, "collection_id": cid, "proposal_count": 1}]
+
+    prop = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]
+    prop["decision"] = "accepted"
+    client.post(f"/kb/context-card-gen/{job_id}/review", json={"proposals": [prop]})
+    client.post(f"/kb/context-card-gen/{job_id}/commit")
+
+    assert client.get(f"/kb/collections/{cid}/context-card-gen").json() == []
+
+
+def test_dismiss_route_removes_a_run_from_the_queue():
+    """#415: dismissing a run drops it from the queue and writes no card."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    client = ApiTestClient(app)
+
+    job_id = client.post(
+        f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]}
+    ).json()["job_id"]
+    asyncio.run(app.state.card_gen_coordinator.aclose())
+
+    assert client.get(f"/kb/collections/{cid}/context-card-gen").json()
+    assert client.post(f"/kb/context-card-gen/{job_id}/dismiss").status_code == 200
+    assert client.get(f"/kb/collections/{cid}/context-card-gen").json() == []
+    assert _list_cards(spec, cid) == []
+
+
 def test_generate_with_no_drafter_llm_completes_with_no_proposals():
     """With no card-drafting LLM wired the feature stays mounted but proposes
     nothing — the run still completes (the FE shows '沒有新卡片可建議')."""

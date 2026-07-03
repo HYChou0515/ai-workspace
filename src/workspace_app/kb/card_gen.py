@@ -209,6 +209,15 @@ class CommitResult(msgspec.Struct):
     skipped: int = 0
 
 
+class CardGenRunSummary(msgspec.Struct):
+    """One row of a collection's 待審核 queue (#415): a finalized run awaiting
+    review. The FE lists these and lazy-loads each run's proposals on expand."""
+
+    run_id: str
+    collection_id: str
+    proposal_count: int
+
+
 # ── deterministic core ───────────────────────────────────────────────────────
 
 
