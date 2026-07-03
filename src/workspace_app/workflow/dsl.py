@@ -130,6 +130,11 @@ class MapStep(Struct, tag="map", forbid_unknown_fields=True):
     as_: str = field(name="as", default="item")
     do: list[Step] = field(default_factory=list)
     key_by: str = ""
+    # #428 §5: a named map collects its designated inner step's fields into
+    # ``{steps.<name>.outputs}`` (a per-element list). ``collect`` picks that inner step
+    # when more than one declares ``outputs``.
+    name: str = ""
+    collect: str = ""
 
 
 class SwitchStep(Struct, tag="switch", forbid_unknown_fields=True):
@@ -374,6 +379,64 @@ async def _map_elements(
     return [(p, _safe_key(p)) for p in await wf.glob(resolved)]  # glob form
 
 
+def _named_steps_in(steps: list[Step]) -> dict[str, Step]:
+    """All ``name``-bearing agent/sandbox steps reachable in ``steps`` — recursing into a
+    switch's cases (#428 §5), so a collect target nested under a switch is still found."""
+    found: dict[str, Step] = {}
+    for s in steps:
+        if isinstance(s, AgentStep | SandboxStep) and s.name:
+            found[s.name] = s
+        elif isinstance(s, SwitchStep):
+            seqs = list(s.cases.values()) + ([s.default] if s.default is not None else [])
+            for seq in seqs:
+                found.update(_named_steps_in(seq))
+    return found
+
+
+def _collect_name(step: MapStep) -> str:
+    """Which inner step's fields ``{steps.<map>.outputs}`` collects (#428 §5.1): the
+    explicit ``collect``; else the unique ``outputs``-declaring step; else (none declares
+    outputs) the unique named step. ``""`` when ambiguous — a named map then fails static
+    validation."""
+    if step.collect:
+        return step.collect
+    named = _named_steps_in(step.do)
+    with_outputs = [n for n, s in named.items() if getattr(s, "outputs", None)]
+    if len(with_outputs) == 1:
+        return with_outputs[0]
+    if not with_outputs and len(named) == 1:
+        return next(iter(named))
+    return ""
+
+
+def _collected_value(result: Any) -> Any:
+    """One element's contribution to ``.outputs``: its collected step's ``fields`` (an
+    ``outputs`` step), else its ``out`` path (a write step), else ``None`` (§5.1 degrade)."""
+    if not isinstance(result, dict):
+        return None
+    if "fields" in result:
+        return result["fields"]
+    return result.get("out")
+
+
+async def _collect_map_outputs(
+    wf: WorkflowHandle, step: MapStep, elements: list[tuple[Any, str]]
+) -> list[Any]:
+    """Gather the collected step's per-element output into an ordered list (#428 §5.2) —
+    ``None`` where the element never reached that step (a switch routed away, or it
+    failed), so positions stay aligned for a downstream ``map over .outputs``."""
+    cname = _collect_name(step)
+    collected: list[Any] = []
+    for _value, ekey in elements:
+        path = _artifact_path(wf, cname, ekey)
+        if cname and await wf.exists(path):
+            rec = await wf.read_json(path)
+            collected.append(_collected_value(rec.get("result") if isinstance(rec, dict) else None))
+        else:
+            collected.append(None)
+    return collected
+
+
 async def _build_check(spec: dict[str, Any], ns: dict[str, Any], wf: WorkflowHandle) -> Check:
     ((name, args),) = spec.items()
     if name == "file_nonempty":
@@ -440,6 +503,12 @@ async def _exec_step(
                 await _exec_step(wf, inner, sub, ekey, failures)
 
         failures.extend(await wf.map(_one, elements))
+        if step.name:  # #428 §5: fan-in — publish the collected outputs as this map's field
+            collected = await _collect_map_outputs(wf, step, elements)
+            await wf.write_json(
+                _artifact_path(wf, step.name, key),
+                {"hash": "", "result": {"fields": {"outputs": collected}}},
+            )
         return
     if isinstance(step, SwitchStep):
         # #428 §3: pure control flow — resolve ``on``, run the one matching case (or
@@ -690,6 +759,15 @@ def _validate_step(
             top=False,
             depth=depth,
         )
+        if step.name:  # #428 §5.1: a named map must have one identifiable collect step
+            cname = _collect_name(step)
+            if not cname:
+                errs.append(
+                    f"{where}: named map {step.name!r} has no single output step to collect — "
+                    "declare 'outputs' on exactly one inner step or set 'collect'"
+                )
+            elif cname not in _named_steps_in(step.do):
+                errs.append(f"{where}: map 'collect' names unknown step {cname!r}")
         return
     if isinstance(step, SwitchStep):
         _validate_switch(
@@ -847,16 +925,22 @@ def _validate_switch(
 def _register_step(
     step: Step, steps_seen: dict[str, dict[str, Any]], where: str, errs: list[str]
 ) -> None:
-    """After a step is validated, record its ``name`` → declared output field names so a
-    later sibling can reference it (#428 §1.5). Names are unique within a scope."""
-    if not isinstance(step, AgentStep | SandboxStep) or not step.name:
+    """After a step is validated, record its ``name`` → declared output fields so a later
+    sibling can reference it (#428 §1.5). A named map exposes only ``.outputs`` (§5.3).
+    Names are unique within a scope."""
+    name = getattr(step, "name", "")
+    if not name:
         return
-    if step.name in steps_seen:
-        errs.append(f"{where}: duplicate step name {step.name!r}")
-    else:
+    if name in steps_seen:
+        errs.append(f"{where}: duplicate step name {name!r}")
+    elif isinstance(step, MapStep):
+        # #428 §5.3: from outside, only the fan-in ``.outputs`` (a list) is referenceable.
+        steps_seen[name] = {"outputs": "list"}
+    else:  # a named AgentStep / SandboxStep (only these three step kinds carry a name)
+        assert isinstance(step, AgentStep | SandboxStep)
         # #428 §1.5/§3.4: keep the whole ``outputs`` declaration so a reference can be
         # checked for field existence AND a switch can check its cases against an enum.
-        steps_seen[step.name] = dict(step.outputs)
+        steps_seen[name] = dict(step.outputs)
 
 
 def _validate_steps(

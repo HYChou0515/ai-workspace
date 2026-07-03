@@ -1498,6 +1498,311 @@ async def test_run_map_key_by_missing_field_errors():
         await build_run(d)(wf, None)
 
 
+# ─── P5: fan-in {steps.<map>.outputs} ────────────────────────────────────────
+
+
+async def test_run_fan_in_collects_named_map_outputs():
+    """A named map collects its outputs-declaring inner step's fields into
+    ``{steps.<map>.outputs}``, consumed by a downstream map (§5)."""
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        # classify each upload → a {collection} field
+        return json.dumps({"collection": "notes"})
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, drive_turn=drive_turn, run_sandbox=run_sandbox)
+    await wf.write("/uploads/a.txt", "x")
+    await wf.write("/uploads/b.txt", "y")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "map",
+                        "name": "classify",
+                        "over": "uploads/*",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {
+                                "type": "agent",
+                                "name": "one",
+                                "phase": "p",
+                                "outputs": {"collection": "str"},
+                                "prompt": "classify {f}",
+                            }
+                        ],
+                    },
+                    {
+                        "type": "map",
+                        "over": "{steps.classify.outputs}",
+                        "as": "p",
+                        "phase": "p",
+                        "do": [
+                            {"type": "sandbox", "run": "file into {p.collection}", "phase": "p"}
+                        ],
+                    },
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["file into notes", "file into notes"]
+
+
+def test_validate_fan_in_multiple_outputs_needs_collect():
+    errs = _errs(
+        [
+            {
+                "type": "map",
+                "name": "m",
+                "over": "u/*",
+                "as": "f",
+                "phase": "p",
+                "do": [
+                    {
+                        "type": "agent",
+                        "name": "a",
+                        "phase": "p",
+                        "outputs": {"x": "str"},
+                        "prompt": "p",
+                    },
+                    {
+                        "type": "agent",
+                        "name": "b",
+                        "phase": "p",
+                        "outputs": {"y": "str"},
+                        "prompt": "p",
+                    },
+                ],
+            }
+        ]
+    )
+    assert any("collect" in e for e in errs)
+
+
+async def test_run_fan_in_collect_selects_step():
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"v": "B"}) if "second" in prompt else json.dumps({"v": "A"})
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, drive_turn=drive_turn, run_sandbox=run_sandbox)
+    await wf.write("/uploads/a.txt", "x")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "map",
+                        "name": "m",
+                        "over": "uploads/*",
+                        "as": "f",
+                        "collect": "second",
+                        "phase": "p",
+                        "do": [
+                            {
+                                "type": "agent",
+                                "name": "first",
+                                "phase": "p",
+                                "outputs": {"v": "str"},
+                                "prompt": "first {f}",
+                            },
+                            {
+                                "type": "agent",
+                                "name": "second",
+                                "phase": "p",
+                                "outputs": {"v": "str"},
+                                "prompt": "second {f}",
+                            },
+                        ],
+                    },
+                    {
+                        "type": "map",
+                        "over": "{steps.m.outputs}",
+                        "as": "p",
+                        "phase": "p",
+                        "do": [{"type": "sandbox", "run": "got {p.v}", "phase": "p"}],
+                    },
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["got B"]  # collected the 'second' step, not 'first'
+
+
+def test_validate_fan_in_map_referencing_inner_step_from_outside():
+    # from outside the map only .outputs is referenceable, not an inner element step
+    errs = _errs(
+        [
+            {
+                "type": "map",
+                "name": "m",
+                "over": "u/*",
+                "as": "f",
+                "phase": "p",
+                "do": [
+                    {
+                        "type": "agent",
+                        "name": "inner",
+                        "phase": "p",
+                        "outputs": {"x": "str"},
+                        "prompt": "p",
+                    }
+                ],
+            },
+            {"type": "sandbox", "run": "do {steps.inner.x}", "phase": "p"},
+        ]
+    )
+    assert any("unknown step 'inner'" in e for e in errs)
+
+
+def test_validate_fan_in_map_bad_field():
+    errs = _errs(
+        [
+            {
+                "type": "map",
+                "name": "m",
+                "over": "u/*",
+                "as": "f",
+                "phase": "p",
+                "do": [
+                    {
+                        "type": "agent",
+                        "name": "a",
+                        "phase": "p",
+                        "outputs": {"x": "str"},
+                        "prompt": "p",
+                    }
+                ],
+            },
+            {"type": "sandbox", "run": "do {steps.m.bogus}", "phase": "p"},
+        ]
+    )
+    assert any("no output field 'bogus'" in e for e in errs)
+
+
+async def test_run_fan_in_switch_skip_is_null():
+    store = MemoryFileStore()
+    collected: list[Any] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    await wf.write("/uploads/a.txt", "x")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"mode": "off"},
+                "steps": [
+                    {
+                        "type": "map",
+                        "name": "m",
+                        "over": "uploads/*",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {
+                                "type": "switch",
+                                "on": "{config.mode}",
+                                "phase": "p",
+                                "cases": {
+                                    "on": [
+                                        {
+                                            "type": "agent",
+                                            "name": "prod",
+                                            "phase": "p",
+                                            "outputs": {"v": "str"},
+                                            "prompt": "p",
+                                        }
+                                    ]
+                                },
+                                "default": [],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    # the collect step 'prod' never ran (mode=off) → its .outputs entry is null
+    rec = await wf.read_json("/.workflow/_default/step_m/main.json")
+    collected.append(rec["result"]["fields"]["outputs"])
+    assert collected == [[None]]
+
+
+async def test_run_fan_in_degrades_to_out_paths():
+    """No inner step declares ``outputs`` → ``.outputs`` collects the write step's out
+    path (§5.1 degrade). An unnamed sibling is skipped by the collect resolver."""
+    store = MemoryFileStore()
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return "content"
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    await wf.write("/uploads/a.txt", "x")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "map",
+                        "name": "m",
+                        "over": "uploads/*",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {"type": "agent", "out": "log/note.md", "phase": "p", "prompt": "log"},
+                            {
+                                "type": "agent",
+                                "name": "w",
+                                "out": "report/out.md",
+                                "phase": "p",
+                                "prompt": "write {f}",
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    rec = await wf.read_json("/.workflow/_default/step_m/main.json")
+    assert rec["result"]["fields"]["outputs"] == ["report/out.md"]
+
+
+def test_collected_value_non_dict_is_none():
+    from workspace_app.workflow.dsl import _collected_value
+
+    assert _collected_value(None) is None
+    assert _collected_value("x") is None
+
+
 def test_validate_create_entity_requires_type_name() -> None:
     errs = _errs([{"type": "capability", "call": "create_entity", "phase": "p"}])
     assert any("type_name" in e for e in errs)

@@ -14,22 +14,22 @@
   "steps": [
     {
       "type": "map",
+      "name": "classify",
       "over": "uploads/*",
       "as": "file",
       "phase": "classify",
       "do": [
         {
           "type": "agent",
+          "name": "plan",
           "prompt": "Read {file}. Choose a collection from {config.collections} and write a one-line digest. Reply with a JSON object holding keys collection, digest, and source (set source to {file}).",
           "phase": "classify",
           "out": "plan/{file}.json",
           "tools": ["read_file"],
-          "check": {
-            "choice_in": {
-              "path": "plan/{file}.json",
-              "key": "collection",
-              "allowed": "{config.collections}"
-            }
+          "outputs": {
+            "collection": { "type": "str", "enum": ["notes"] },
+            "digest": "str",
+            "source": "str"
           },
           "retries": 2
         }
@@ -44,7 +44,7 @@
     },
     {
       "type": "map",
-      "over": "plan/*.json",
+      "over": "{steps.classify.outputs}",
       "as": "p",
       "phase": "commit",
       "do": [
