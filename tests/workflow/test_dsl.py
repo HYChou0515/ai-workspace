@@ -21,6 +21,7 @@ from workspace_app.workflow.dsl import (
     parse_def,
     validate_def,
 )
+from workspace_app.workflow.engine import StepFailed
 from workspace_app.workflow.gate import record_decision
 from workspace_app.workflow.handle import WorkflowHandle
 
@@ -560,6 +561,254 @@ async def test_run_gate_summary_reads_text_and_json():
 def test_agentstep_struct_defaults():
     s = AgentStep(prompt="p", phase="p")
     assert s.out == "" and s.tools == [] and s.retries == 0 and s.check is None
+
+
+# ─── P1: unified reference model {steps.<name>.<field>} ──────────────────────
+
+
+async def test_run_steps_ref_resolves_named_agent_fields():
+    """A named agent step that declares ``outputs`` replies with JSON; the engine
+    parses it into ``result.fields`` and a downstream ``{steps.x.field}`` resolves it."""
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"kind": "latency"})
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, drive_turn=drive_turn, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "classify",
+                        "phase": "p",
+                        "outputs": {"kind": "str"},
+                        "prompt": "classify it",
+                    },
+                    {
+                        "type": "sandbox",
+                        "name": "act",
+                        "phase": "p",
+                        "run": "handle {steps.classify.kind}",
+                    },
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["handle latency"]
+
+
+def test_validate_steps_ref_unknown_step():
+    errs = _errs(
+        [{"type": "sandbox", "run": "do {steps.nope.x}", "phase": "p"}],
+    )
+    assert any("unknown step 'nope'" in e for e in errs)
+
+
+def test_validate_steps_ref_unknown_field():
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "name": "cls",
+                "phase": "p",
+                "outputs": {"kind": "str"},
+                "prompt": "c",
+            },
+            {"type": "sandbox", "run": "do {steps.cls.bogus}", "phase": "p"},
+        ]
+    )
+    assert any("step 'cls' has no output field 'bogus'" in e for e in errs)
+
+
+def test_validate_steps_ref_forward_reference():
+    errs = _errs(
+        [
+            {"type": "sandbox", "run": "do {steps.later.x}", "phase": "p"},
+            {
+                "type": "agent",
+                "name": "later",
+                "phase": "p",
+                "outputs": {"x": "str"},
+                "prompt": "c",
+            },
+        ]
+    )
+    assert any("unknown step 'later'" in e for e in errs)  # not yet declared at ref site
+
+
+def test_validate_duplicate_step_name():
+    errs = _errs(
+        [
+            {"type": "agent", "name": "dup", "phase": "p", "outputs": {"x": "str"}, "prompt": "a"},
+            {"type": "agent", "name": "dup", "phase": "p", "outputs": {"y": "str"}, "prompt": "b"},
+        ]
+    )
+    assert any("duplicate step name 'dup'" in e for e in errs)
+
+
+def test_validate_steps_ref_valid_passes():
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "name": "cls",
+                "phase": "p",
+                "outputs": {"kind": "str"},
+                "prompt": "c",
+            },
+            {"type": "sandbox", "run": "do {steps.cls.kind}", "phase": "p"},
+        ]
+    )
+    assert errs == []
+
+
+def test_validate_steps_ref_bare_no_name():
+    errs = _errs([{"type": "sandbox", "run": "do {steps}", "phase": "p"}])
+    assert any("needs a step name" in e for e in errs)
+
+
+async def test_run_sandbox_outputs_fields_referenceable():
+    """A sandbox step with ``outputs`` parses its stdout JSON into result.fields (§1.2),
+    referenceable downstream."""
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        if cmd == "measure":
+            return 0, json.dumps({"dropped": 7})
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "sandbox",
+                        "name": "measure",
+                        "phase": "p",
+                        "run": "measure",
+                        "outputs": {"dropped": "int"},
+                    },
+                    {
+                        "type": "sandbox",
+                        "name": "report",
+                        "phase": "p",
+                        "run": "report {steps.measure.dropped}",
+                    },
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["report 7"]
+
+
+async def test_run_agent_outputs_non_json_fails_its_gate():
+    """An ``outputs`` step whose reply isn't a JSON object fails its implicit gate."""
+    store = MemoryFileStore()
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return "not json at all"
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "c",
+                        "phase": "p",
+                        "outputs": {"k": "str"},
+                        "prompt": "c",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(StepFailed):
+        await build_run(d)(wf, None)
+
+
+async def test_lookup_step_bare_and_missing_fields():
+    wf = make_wf()
+    with pytest.raises(DslError, match="needs a step name"):
+        await _resolve("{steps}", {"__key__": ""}, wf)
+    # a step that ran but recorded no output fields cannot be field-referenced
+    await wf.write_json(
+        "/.workflow/_default/step_x/main.json", {"hash": "h", "result": {"out": "o", "bytes": 1}}
+    )
+    with pytest.raises(DslError, match="no output fields"):
+        await _resolve("{steps.x.k}", {"__key__": ""}, wf)
+
+
+async def test_run_map_inner_steps_ref_uses_element_key():
+    """Inside a map, ``{steps.x.f}`` resolves at the current element's key (§1.1)."""
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"kind": "big"})
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, drive_turn=drive_turn, run_sandbox=run_sandbox)
+    await wf.write("/uploads/a.txt", "x")
+    await wf.write("/uploads/b.txt", "y")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": "uploads/*",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {
+                                "type": "agent",
+                                "name": "cls",
+                                "phase": "p",
+                                "outputs": {"kind": "str"},
+                                "prompt": "classify {f}",
+                            },
+                            {
+                                "type": "sandbox",
+                                "name": "act",
+                                "phase": "p",
+                                "run": "handle {f} as {steps.cls.kind}",
+                            },
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert sorted(ran) == ["handle /uploads/a.txt as big", "handle /uploads/b.txt as big"]
 
 
 def test_validate_create_entity_requires_type_name() -> None:

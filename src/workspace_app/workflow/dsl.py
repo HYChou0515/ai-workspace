@@ -27,7 +27,7 @@ import msgspec
 from msgspec import Struct, field
 
 from .checks import choice_in, collection_has, file_nonempty
-from .engine import Check
+from .engine import Check, CheckResult, _artifact_path
 from .gate import human_gate
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
@@ -73,6 +73,10 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     check: dict[str, Any] | None = None
     retries: int = 0
     name: str = ""
+    # #428 §1/§2: declared output fields (name → type). When set, the agent replies with
+    # a JSON object; the step parses + records it as ``result.fields``, referenceable
+    # downstream as ``{steps.<name>.<field>}``. The type values gain meaning in P2.
+    outputs: dict[str, Any] = field(default_factory=dict)
 
 
 class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
@@ -83,6 +87,9 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
     phase: str
     check: dict[str, Any] | None = None
     name: str = ""
+    # #428 §1/§2: like AgentStep — when set, the script prints a JSON object to stdout
+    # which the step parses into ``result.fields`` (referenceable downstream).
+    outputs: dict[str, Any] = field(default_factory=dict)
 
 
 class GateStep(Struct, tag="gate", forbid_unknown_fields=True):
@@ -188,14 +195,48 @@ async def _index(val: Any, seg: str, wf: WorkflowHandle) -> Any:
     raise DslError(f"cannot read field {seg!r} from a {type(val).__name__}")
 
 
+async def _lookup_step(parts: list[str], ns: dict[str, Any], wf: WorkflowHandle) -> Any:
+    """Resolve ``{steps.<name>.<field>}`` (#428 §1.1) — read the named step's journal
+    entry at the *current scope key* (top-level ⇒ ``""``, a map element ⇒ its key) and
+    index ``result.fields``. Same-file-as-journal: no parallel store."""
+    if len(parts) < 2:
+        raise DslError("{steps} needs a step name")
+    name = parts[1]
+    record = await wf.read_json(_artifact_path(wf, name, ns.get("__key__", "")))
+    result = record.get("result") if isinstance(record, dict) else None
+    fields = result.get("fields") if isinstance(result, dict) else None
+    if not isinstance(fields, dict):
+        raise DslError(f"step {name!r} has no output fields to reference")
+    val: Any = fields
+    for seg in parts[2:]:
+        val = await _index(val, seg, wf)
+    return val
+
+
 async def _lookup(expr: str, ns: dict[str, Any], wf: WorkflowHandle) -> Any:
     parts = expr.split(".")
+    if parts[0] == "steps":  # #428 §1: the named-output reference namespace
+        return await _lookup_step(parts, ns, wf)
     if parts[0] not in ns:
         raise DslError(f"unknown variable {{{expr}}}")
     val: Any = ns[parts[0]]
     for seg in parts[1:]:
         val = await _index(val, seg, wf)
     return val
+
+
+def _outputs_check(outputs: dict[str, Any]) -> Check:
+    """The implicit gate for a step that declares ``outputs`` (#428 §1.2): the reply
+    must parse into a JSON object (``result.fields`` is a dict). P2 tightens this to
+    field-level type/enum validation."""
+
+    async def check(_wf: WorkflowHandle, result: Any) -> CheckResult:
+        fields = result.get("fields") if isinstance(result, dict) else None
+        if not isinstance(fields, dict):
+            return CheckResult(False, f"reply must be a JSON object with keys {sorted(outputs)}")
+        return CheckResult(True)
+
+    return check
 
 
 async def _resolve(template: Any, ns: dict[str, Any], wf: WorkflowHandle) -> Any:
@@ -294,7 +335,8 @@ async def _exec_step(
         paths = await wf.glob(await _resolve(step.over, ns, wf))
 
         async def _one(path: str) -> None:
-            sub = {**ns, step.as_: path}
+            # #428 §1.1: an inner ``{steps.x.f}`` resolves at this element's key.
+            sub = {**ns, step.as_: path, "__key__": _safe_key(path)}
             for inner in step.do:
                 await _exec_step(wf, inner, sub, _safe_key(path), failures)
 
@@ -315,7 +357,12 @@ async def _exec_step(
         await _exec_capability(wf, step, ns)
         return
     if isinstance(step, SandboxStep):
-        check = await _build_check(step.check, ns, wf) if step.check else None
+        # #428 §1.2: ``outputs`` ⇒ parse stdout JSON into result.fields, gated on it.
+        check = (
+            _outputs_check(step.outputs)
+            if step.outputs
+            else (await _build_check(step.check, ns, wf) if step.check else None)
+        )
         await sandbox_node(
             wf,
             run=await _resolve(step.run, ns, wf),
@@ -323,23 +370,32 @@ async def _exec_step(
             check=check,
             name=step.name or None,
             key=key,
+            outputs=step.outputs or None,
         )
         return
     # AgentStep
     prompt = await _resolve(step.prompt, ns, wf)
-    check = await _build_check(step.check, ns, wf) if step.check else None
     tools = step.tools or None
-    if step.out:
+    # #428 §1.2: an ``outputs`` step parses its reply into result.fields, gated on it;
+    # otherwise fall back to the author's ``check``.
+    if step.outputs:
+        check: Check | None = _outputs_check(step.outputs)
+    elif step.check:
+        check = await _build_check(step.check, ns, wf)
+    else:
+        check = None
+    if step.out or step.outputs:
         await agent_write_step(
             wf,
             prompt=prompt,
             phase=step.phase,
-            out=await _resolve(step.out, ns, wf),
+            out=await _resolve(step.out, ns, wf) if step.out else "",
             tools=tools,
             name=step.name or None,
             key=key,
             retries=step.retries,
             check=check,
+            outputs=step.outputs or None,
         )
     else:  # plain agent_step — ``check`` is required (validate_def guarantees it)
         assert check is not None
@@ -360,7 +416,11 @@ def build_run(d: WorkflowDef):
     existing step primitives — the orchestrator runs it exactly like a hand-written one."""
 
     async def run(wf: WorkflowHandle, inputs: Any) -> dict[str, Any]:
-        ns: dict[str, Any] = {"config": d.config, "inputs": inputs if inputs is not None else {}}
+        ns: dict[str, Any] = {
+            "config": d.config,
+            "inputs": inputs if inputs is not None else {},
+            "__key__": "",  # #428 §1.1: the current scope key for {steps.x.f}
+        }
         failures: list[dict[str, str]] = []
         try:
             for step in d.steps:
@@ -378,25 +438,58 @@ def build_run(d: WorkflowDef):
 # ─── static validation (manual §22, Q8) ──────────────────────────────────────
 
 
-def _check_interp(value: Any, scope: set[str], where: str, errs: list[str]) -> None:
+def _check_step_ref(
+    expr: str, steps_seen: dict[str, set[str]], where: str, errs: list[str]
+) -> None:
+    """Validate a ``{steps.<name>.<field>}`` reference (#428 §1.5): the step must be
+    declared *earlier in the same scope* (``steps_seen`` accumulates in order, so a
+    forward reference is simply not-yet-seen ⇒ 'unknown step'), and the field must be
+    one it declares in ``outputs``."""
+    parts = expr.split(".")
+    if len(parts) < 2:
+        errs.append(f"{where}: {{{expr}}} needs a step name")
+        return
+    name = parts[1]
+    if name not in steps_seen:
+        errs.append(f"{where}: {{{expr}}} references unknown step {name!r}")
+        return
+    if len(parts) >= 3 and parts[2] not in steps_seen[name]:
+        errs.append(f"{where}: {{{expr}}} — step {name!r} has no output field {parts[2]!r}")
+
+
+def _check_interp(
+    value: Any,
+    scope: set[str],
+    where: str,
+    errs: list[str],
+    steps_seen: dict[str, set[str]] | None = None,
+) -> None:
     """Flag any ``{root...}`` whose root variable isn't in scope (catches typos at save
-    time). Recurses into the lists/dicts a check spec carries."""
+    time). When ``steps_seen`` is given, also resolve ``{steps.x.f}`` references against
+    it (#428 §1.5). Recurses into the lists/dicts a check spec carries."""
     if isinstance(value, str):
         for m in _TOKEN.finditer(value):
-            root = m.group(1).strip().split(".")[0]
+            expr = m.group(1).strip()
+            root = expr.split(".")[0]
             if root not in scope:
-                errs.append(
-                    f"{where}: {{{m.group(1).strip()}}} references unknown variable {root!r}"
-                )
+                errs.append(f"{where}: {{{expr}}} references unknown variable {root!r}")
+            elif root == "steps" and steps_seen is not None:
+                _check_step_ref(expr, steps_seen, where, errs)
     elif isinstance(value, list):
         for v in value:
-            _check_interp(v, scope, where, errs)
+            _check_interp(v, scope, where, errs, steps_seen)
     elif isinstance(value, dict):
         for v in value.values():
-            _check_interp(v, scope, where, errs)
+            _check_interp(v, scope, where, errs, steps_seen)
 
 
-def _validate_check(spec: dict[str, Any], scope: set[str], where: str, errs: list[str]) -> None:
+def _validate_check(
+    spec: dict[str, Any],
+    scope: set[str],
+    where: str,
+    errs: list[str],
+    steps_seen: dict[str, set[str]] | None = None,
+) -> None:
     if len(spec) != 1:
         errs.append(f"{where}: a check must name exactly one of {list(_CHECKS)}")
         return
@@ -410,7 +503,7 @@ def _validate_check(spec: dict[str, Any], scope: set[str], where: str, errs: lis
     for req in _CHECK_REQUIRED[name]:
         if req not in args:
             errs.append(f"{where}: check {name!r} is missing {req!r}")
-    _check_interp(args, scope, where, errs)
+    _check_interp(args, scope, where, errs, steps_seen)
 
 
 def _validate_step(
@@ -421,9 +514,16 @@ def _validate_step(
     tool_ceiling: set[str] | None,
     capabilities: tuple[str, ...],
     errs: list[str],
+    steps_seen: dict[str, set[str]],
     *,
     top: bool,
 ) -> None:
+    # Q7 (P1): a map's ``do`` is a single-level, gate-free loop body. A map or gate
+    # nested there is rejected before any other check (#428 §3 generalises this to the
+    # A/B context rule in P3; ``not top`` ⟺ inside a map for now).
+    if not top and isinstance(step, MapStep | GateStep):
+        errs.append(f"{where}: a {step.__struct_config__.tag} cannot be nested in a map (Q7)")
+        return
     if step.phase not in declared:
         errs.append(f"{where}: phase {step.phase!r} is not declared in 'phases'")
     if isinstance(step, MapStep):
@@ -433,32 +533,26 @@ def _validate_step(
             errs.append(f"{where}: map needs a non-empty 'as'")
         if not step.do:
             errs.append(f"{where}: map 'do' is empty")
-        _check_interp(step.over, scope, where, errs)
-        inner_scope = scope | {step.as_}
-        for j, inner in enumerate(step.do):
-            if isinstance(inner, MapStep | GateStep):
-                kind = inner.__struct_config__.tag
-                errs.append(f"{where}.do[{j}]: a {kind} cannot be nested in a map (Q7)")
-            else:
-                _validate_step(
-                    inner,
-                    f"{where}.do[{j}]",
-                    declared,
-                    inner_scope,
-                    tool_ceiling,
-                    capabilities,
-                    errs,
-                    top=False,
-                )
+        _check_interp(step.over, scope, where, errs, steps_seen)
+        # #428 §5.3: a map's ``do`` is its own naming subdomain — a fresh steps_seen so an
+        # inner ``{steps.x.f}`` can only reference a sibling declared earlier in the loop.
+        _validate_steps(
+            step.do,
+            f"{where}.do",
+            declared,
+            scope | {step.as_},
+            tool_ceiling,
+            capabilities,
+            errs,
+            top=False,
+        )
         return
     if isinstance(step, GateStep):
-        if not top:
-            errs.append(f"{where}: a gate must be a top-level step")
         if not step.title:
             errs.append(f"{where}: gate needs a 'title'")
         if not step.allow:
             errs.append(f"{where}: gate 'allow' is empty")
-        _check_interp(step.title, scope, where, errs)
+        _check_interp(step.title, scope, where, errs, steps_seen)
         return
     if isinstance(step, CapabilityStep):
         if step.call not in capabilities:
@@ -470,22 +564,27 @@ def _validate_step(
                 if not getattr(step, req):
                     errs.append(f"{where}: capability {step.call!r} needs {req!r}")
         _check_interp(
-            [step.collection, step.path, step.title, step.body, step.keys], scope, where, errs
+            [step.collection, step.path, step.title, step.body, step.keys, step.args],
+            scope,
+            where,
+            errs,
+            steps_seen,
         )
         return
     if isinstance(step, SandboxStep):
         if not step.run:
             errs.append(f"{where}: sandbox needs a non-empty 'run'")
-        _check_interp(step.run, scope, where, errs)
+        _check_interp(step.run, scope, where, errs, steps_seen)
         if step.check is not None:
-            _validate_check(step.check, scope, where, errs)
+            _validate_check(step.check, scope, where, errs, steps_seen)
         return
     # AgentStep
     if not step.prompt:
         errs.append(f"{where}: agent needs a 'prompt'")
-    if not step.out and step.check is None:
+    if not step.out and not step.outputs and step.check is None:
         errs.append(
-            f"{where}: an agent step without 'out' needs a 'check' (a gate is mandatory, §5.1)"
+            f"{where}: an agent step without 'out' needs a 'check' or 'outputs' "
+            "(a gate is mandatory, §5.1)"
         )
     if step.retries < 0:
         errs.append(f"{where}: retries cannot be negative")
@@ -493,9 +592,45 @@ def _validate_step(
         for t in step.tools:
             if t not in tool_ceiling:
                 errs.append(f"{where}: tool {t!r} is outside the profile's allowed tools")
-    _check_interp([step.prompt, step.out, step.tools], scope, where, errs)
+    _check_interp([step.prompt, step.out, step.tools], scope, where, errs, steps_seen)
     if step.check is not None:
-        _validate_check(step.check, scope, where, errs)
+        _validate_check(step.check, scope, where, errs, steps_seen)
+
+
+def _register_step(
+    step: Step, steps_seen: dict[str, set[str]], where: str, errs: list[str]
+) -> None:
+    """After a step is validated, record its ``name`` → declared output field names so a
+    later sibling can reference it (#428 §1.5). Names are unique within a scope."""
+    if not isinstance(step, AgentStep | SandboxStep) or not step.name:
+        return
+    if step.name in steps_seen:
+        errs.append(f"{where}: duplicate step name {step.name!r}")
+    else:
+        steps_seen[step.name] = set(step.outputs)
+
+
+def _validate_steps(
+    steps: list[Step],
+    where_prefix: str,
+    declared: set[str],
+    scope: set[str],
+    tool_ceiling: set[str] | None,
+    capabilities: tuple[str, ...],
+    errs: list[str],
+    *,
+    top: bool,
+) -> None:
+    """Validate an ordered step list in one naming scope: each step is checked against
+    the names declared *before* it (``steps_seen`` accumulates in order), then registers
+    its own name (#428 §1.5)."""
+    steps_seen: dict[str, set[str]] = {}
+    for i, step in enumerate(steps):
+        where = f"{where_prefix}[{i}]"
+        _validate_step(
+            step, where, declared, scope, tool_ceiling, capabilities, errs, steps_seen, top=top
+        )
+        _register_step(step, steps_seen, where, errs)
 
 
 def validate_def(
@@ -518,15 +653,14 @@ def validate_def(
         errs.append("a phase is missing its 'id'")
     if not d.steps:
         errs.append("workflow has no steps")
-    for i, step in enumerate(d.steps):
-        _validate_step(
-            step,
-            f"steps[{i}]",
-            declared,
-            {"config", "inputs"},
-            tool_ceiling,
-            capabilities,
-            errs,
-            top=True,
-        )
+    _validate_steps(
+        d.steps,
+        "steps",
+        declared,
+        {"config", "inputs", "steps"},  # #428 §1: the named-output reference namespace
+        tool_ceiling,
+        capabilities,
+        errs,
+        top=True,
+    )
     return errs

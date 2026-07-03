@@ -10,12 +10,24 @@ LLM-driven and **must** be gated; a deterministic node is author code with no LL
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 from .checks import file_nonempty
 from .engine import Check, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
+
+
+def _parse_fields(text: str) -> Any:
+    """Parse an agent reply / sandbox stdout as a JSON object → ``result.fields``
+    (#428 §1.2). Returns ``None`` on unparseable / non-object output so the step's
+    gate can flag it (and retry with feedback) rather than crashing the run."""
+    try:
+        parsed = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    return parsed
 
 
 def _retry_prompt(prompt: str, feedback: str | None) -> str:
@@ -76,13 +88,14 @@ async def agent_write_step(
     *,
     prompt: str,
     phase: str,
-    out: str,
+    out: str = "",
     name: str | None = None,
     key: str = "",
     tools: list[str] | None = None,
     retries: int = 0,
     cache: bool = True,
     check: Check | None = None,
+    outputs: dict[str, Any] | None = None,
 ) -> Any:
     """Decision/action content step (issue #107): the agent PRODUCES the file's
     content as its message output — it does NOT call ``write_file`` — then a
@@ -110,15 +123,19 @@ async def agent_write_step(
                 raise StepFailed(
                     f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
                 ) from exc
-        await wf.write(out, text)
-        return {"out": out, "bytes": len(text)}
+        result: dict[str, Any] = {"out": out, "bytes": len(text)}
+        if out:
+            await wf.write(out, text)
+        if outputs is not None:  # #428 §1.2: expose the reply's JSON as result.fields
+            result["fields"] = _parse_fields(text)
+        return result
 
     return await run_step(
         wf,
         name=name or phase,
         key=key,
         phase=phase,
-        args={"prompt": prompt, "tools": tools, "out": out, "phase": phase},
+        args={"prompt": prompt, "tools": tools, "out": out, "outputs": outputs, "phase": phase},
         execute=execute,
         check=check or file_nonempty(out),
         retries=retries,
@@ -135,6 +152,7 @@ async def sandbox_node(
     name: str | None = None,
     key: str = "",
     cache: bool = True,
+    outputs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run one deterministic node — a command in the sandbox, no LLM (manual §5.2).
     Journals ``{exit_code, stdout}``; an optional ``check`` gates it (a deterministic
@@ -157,14 +175,17 @@ async def sandbox_node(
             )
 
         exit_code, stdout = await run_sandbox(run, on_output)
-        return {"exit_code": exit_code, "stdout": stdout}
+        result: dict[str, Any] = {"exit_code": exit_code, "stdout": stdout}
+        if outputs is not None:  # #428 §1.2: parse stdout JSON into result.fields
+            result["fields"] = _parse_fields(stdout)
+        return result
 
     return await run_step(
         wf,
         name=name or phase,
         key=key,
         phase=phase,
-        args={"run": run, "phase": phase},
+        args={"run": run, "phase": phase, "outputs": outputs},
         execute=execute,
         check=check,
         cache=cache,
