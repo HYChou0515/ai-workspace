@@ -64,17 +64,26 @@ class SpecstarWikiSources(IWikiSources):
         self._rm = spec.get_resource_manager(SourceDoc)
         self._cid = collection_id
 
-    def _resources(self):
-        return [
-            r
-            for r in self._rm.list_resources((QB["collection_id"] == self._cid).build())
-            if isinstance(r.data, SourceDoc)
-        ]
-
     def list(self) -> builtins.list[str]:
         # A path is one shared doc in the collection, so display labels are just
         # the bare paths (no per-uploader disambiguation needed any more).
-        return sorted(r.data.path for r in self._resources())
+        #
+        # Metadata-only (#411): read the paths from the meta table via
+        # `search_resources` — `SourceDoc.path` is indexed (#263), the same
+        # metas-only read `list_documents` serves the doc list from — NEVER
+        # `list_resources`, which pulls every doc's full blob (the multi-KB
+        # extracted `text` included) just to read a path. `list_sources` is a hot
+        # wiki reader / maintainer / code-wiki tool, so the old scan streamed the
+        # whole collection's text into memory on every listing. A row written
+        # before the #263 path index (un-migrated) has no indexed path and is
+        # skipped — the same field-by-field degradation `list_documents` accepts.
+        out: builtins.list[str] = []
+        for m in self._rm.search_resources((QB["collection_id"] == self._cid).build()):
+            indexed = m.indexed_data if isinstance(m.indexed_data, dict) else {}
+            path = indexed.get("path")
+            if isinstance(path, str) and path:
+                out.append(path)
+        return sorted(out)
 
     def read(self, path: str) -> str | None:
         ref = self.ref(path)
