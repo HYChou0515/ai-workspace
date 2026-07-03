@@ -64,14 +64,38 @@ function doc(partial: Partial<KbDocument> & { path: string }): KbDocument {
 }
 
 function stubClient(items: KbDocument[], over: Partial<KbApi> = {}): KbApi {
+  const counts: Record<string, number> = {};
+  for (const d of items) counts[d.status] = (counts[d.status] ?? 0) + 1;
   return {
     listDocuments: async () => ({
       items,
       total: items.length,
       offset: 0,
-      limit: 200,
+      limit: 2000,
       has_more: false,
     }),
+    // #395: the IDE polls this summary (not the list) while docs index.
+    documentsStatus: async () => ({ total: items.length, counts, runs: {}, latest_ms: 0 }),
+    // #395: the open-a-document fields (rationale / parser guidance) come from
+    // the render call, not the list row.
+    renderDocument: async (id: string) => {
+      const d = items.find((x) => x.resource_id === id);
+      return {
+        document_id: id,
+        filename: d?.path.split("/").pop() ?? id,
+        collection_id: "c1",
+        markdown: "",
+        file_id: "fid",
+        content_type: d?.content_type ?? "text/markdown",
+        size: d?.size ?? 0,
+        chunks: d?.chunks ?? 0,
+        cited: d?.cited ?? 0,
+        created_by: d?.created_by ?? "me",
+        updated_at: d?.updated_at ?? 0,
+        status: d?.status ?? "ready",
+        quality_score: d?.quality_score,
+      };
+    },
     ...over,
   } as unknown as KbApi;
 }
@@ -147,20 +171,44 @@ describe("KbDocIde", () => {
     expect(badge.className).toContain("kb-quality--bad");
   });
 
-  it("shows the quality verdict (score + rationale) in the status bar (#105)", async () => {
+  it("shows the quality verdict in the status bar, rationale from the render call (#105/#395)", async () => {
+    // #395: the rationale no longer rides the list row — opening the doc
+    // fetches it (renderDocument), the sanctioned touch-the-blob-on-click path.
     const user = userEvent.setup();
+    const base = stubClient([doc({ path: "/bad.md", quality_score: 22 })]);
+    const renderDocument = vi.fn(async (id: string) => ({
+      ...(await (base.renderDocument as (i: string) => Promise<object>)(id)),
+      quality_rationale: "OCR soup, no structure.",
+    }));
     renderWithQuery(
       <KbDocIde
         collectionId="c1"
-        client={stubClient([
-          doc({ path: "/bad.md", quality_score: 22, quality_rationale: "OCR soup, no structure." }),
-        ])}
+        client={{ ...base, renderDocument } as unknown as KbApi}
       />,
     );
     await user.click(await screen.findByText("bad.md"));
     const verdict = await screen.findByTestId("kb-ide-quality");
     expect(within(verdict).getByTestId("kb-quality-badge")).toHaveTextContent("22");
-    expect(verdict).toHaveTextContent("OCR soup, no structure.");
+    await within(verdict).findByText("OCR soup, no structure.");
+    expect(renderDocument).toHaveBeenCalledWith("id:/bad.md");
+  });
+
+  it("prefills the Tune-parsing modal from the render call's override (#356/#395)", async () => {
+    const user = userEvent.setup();
+    const base = stubClient([doc({ path: "/tuned.md" })]);
+    const client = {
+      ...base,
+      renderDocument: async (id: string) => ({
+        ...(await (base.renderDocument as (i: string) => Promise<object>)(id)),
+        parser_guidance_override: "treat tables as JSON",
+      }),
+      listCollections: async () => [],
+    } as unknown as KbApi;
+    renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
+    await user.click(await screen.findByText("tuned.md"));
+    await user.click(await screen.findByRole("button", { name: "調整解析" }));
+    const editor = await screen.findByLabelText("解析 prompt");
+    expect(editor).toHaveValue("treat tables as JSON");
   });
 
   it("shows the active doc's path + status + chunks/cited in the bottom status bar", async () => {

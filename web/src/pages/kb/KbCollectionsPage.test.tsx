@@ -545,15 +545,20 @@ describe("KbCollectionsPage", () => {
   });
 
   it("badges an indexing doc in the tree and clears it on poll", async () => {
+    // #395: the 1.5s tick polls the cheap status summary; when its stamp moves
+    // (the doc flipped), the LIST is refetched once and the badge clears.
     let status = "indexing";
+    let statusTicks = 0;
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
-      listDocuments: async () => {
-        const s = status;
-        status = "ready"; // next poll returns ready
-        return page([
-          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: s },
-        ]);
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status },
+        ]),
+      documentsStatus: async () => {
+        statusTicks += 1;
+        if (statusTicks > 1) status = "ready"; // the doc finishes before the 2nd tick
+        return { total: 1, counts: { [status]: 1 }, runs: {}, latest_ms: statusTicks };
       },
     } as unknown as Client;
 
@@ -796,15 +801,20 @@ describe("KbCollectionsPage", () => {
   });
 
   it("flashes an all-set confirmation when the last indexing doc finishes with no errors (#170)", async () => {
+    // #395: the strip's counts come from the polled status summary; the flip
+    // to ready arrives on its 2nd tick.
     let status = "indexing";
+    let statusTicks = 0;
     const client = {
       listCollections: async () => [col({ resource_id: "c1", name: "kb" })],
-      listDocuments: async () => {
-        const s = status;
-        status = "ready"; // the next 1.5s poll returns ready
-        return page([
-          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: s },
-        ]);
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status },
+        ]),
+      documentsStatus: async () => {
+        statusTicks += 1;
+        if (statusTicks > 1) status = "ready"; // the next 1.5s poll returns ready
+        return { total: 1, counts: { [status]: 1 }, runs: {}, latest_ms: statusTicks };
       },
     } as unknown as Client;
     renderKb(client);

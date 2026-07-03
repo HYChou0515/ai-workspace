@@ -84,6 +84,10 @@ export const qk = {
     // prefix-match, so callers don't need to know which pages are loaded.
     documentsPage: (collectionId: string, offset: number, limit: number) =>
       ["kb", "documents", collectionId, offset, limit] as const,
+    // #395: the cheap indexing-poll summary (deliberately NOT under the
+    // "documents" prefix, so invalidating the list doesn't re-tick the poll).
+    documentsStatus: (collectionId: string) =>
+      ["kb", "documents-status", collectionId] as const,
     chats: ["kb", "chats"] as const,
     chat: (id: string) => ["kb", "chat", id] as const,
     agent: ["kb", "agent"] as const,

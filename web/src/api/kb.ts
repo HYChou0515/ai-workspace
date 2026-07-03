@@ -222,14 +222,10 @@ export type KbDocument = {
   updated_at?: number;
   /** #105: the AI quality grade (0–100) of this doc as a knowledge source, or
    * null/absent when un-scored (no rubric / not yet judged). Drives the quality
-   * badge + the "sort by quality" control. `quality_rationale` ("why good/bad")
-   * rides the row so the doc IDE's status bar shows it without a render call;
-   * the per-dimension breakdown stays on `KbRenderedDoc`. */
+   * badge + the "sort by quality" control. #395: the rationale and the #356
+   * parser-guidance override do NOT ride the row — both are only shown for the
+   * OPENED document and live on `KbRenderedDoc`. */
   quality_score?: number | null;
-  quality_rationale?: string;
-  /** #356: this doc's per-doc parser-guidance override (the Tune-parsing escape
-   * hatch). "" / absent ⇒ the doc inherits the collection guidance. */
-  parser_guidance_override?: string;
 };
 
 /** One page of documents inside a collection. The BE pages through specstar's
@@ -243,6 +239,24 @@ export type KbDocumentsPage = {
   offset: number;
   limit: number;
   has_more: boolean;
+};
+
+/** #248 unit progress of one in-flight fan-out (e.g. PDF pages done/total). */
+export type KbDocUnitProgress = { units_done: number; units_total: number };
+
+/** #395: the few-hundred-byte summary polled while docs are indexing, instead
+ * of refetching the whole document list every tick. `counts` + `total` +
+ * `latest_ms` form the change stamp — when none moved, the list is unchanged
+ * and the poll skips the refetch; `runs` advances the progress bars by
+ * client-side merge. */
+export type KbDocumentsStatus = {
+  total: number;
+  /** status → doc count, e.g. `{ ready: 12, indexing: 3 }`. */
+  counts: Record<string, number>;
+  /** doc id → in-flight fan-out progress. */
+  runs: Record<string, KbDocUnitProgress>;
+  /** Newest doc update in the collection (epoch ms), 0 when empty. */
+  latest_ms: number;
 };
 
 export type KbDocChunk = {
@@ -492,6 +506,8 @@ export interface KbApi {
     collectionId: string,
     page?: { offset?: number; limit?: number; sort?: "recent" | "quality" },
   ): Promise<KbDocumentsPage>;
+  /** #395: the cheap indexing-poll target — see KbDocumentsStatus. */
+  documentsStatus(collectionId: string): Promise<KbDocumentsStatus>;
   /** Multipart upload; returns the ingested document ids (one per archive
    * member). `path` overrides the stored filename — used for folder uploads to
    * preserve each file's relative path. */
@@ -738,6 +754,10 @@ export const realKbApi: KbApi = {
     const url = qs.size ? `${path}?${qs.toString()}` : path;
     const resp = await apiFetch(url);
     return (await ok(resp, "list documents")).json();
+  },
+  async documentsStatus(collectionId) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/documents/status`;
+    return (await ok(await apiFetch(url), "documents status")).json();
   },
   async uploadDocument(collectionId, file, path) {
     const form = new FormData();

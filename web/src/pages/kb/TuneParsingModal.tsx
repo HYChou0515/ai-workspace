@@ -82,6 +82,9 @@ export function TuneParsingModal({
   const invalidateDoc = () => {
     void qc.invalidateQueries({ queryKey: qk.kb.collections });
     void qc.invalidateQueries({ queryKey: qk.kb.documents(collectionId) });
+    // #395: the override now arrives via the doc's render — refresh it too so
+    // reopening Tune shows what was just saved.
+    void qc.invalidateQueries({ queryKey: qk.kb.doc(docId) });
   };
   const saveDocMut = useMutation({
     mutationFn: () => client.setDocumentGuidance(docId, guidance),

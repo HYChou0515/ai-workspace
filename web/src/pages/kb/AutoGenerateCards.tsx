@@ -23,7 +23,7 @@ import {
 } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { parseTodo, serializeTodo } from "./cardGenTodo";
-import { fetchAllDocs } from "./KbDocIde";
+import { fetchAllDocs } from "./useCollectionDocs";
 
 type Step = "select" | "generating" | "review";
 

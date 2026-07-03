@@ -12,7 +12,7 @@ import {
   renderWithQuery,
 } from "../../test/queryWrapper";
 import { AutoGenerateCards } from "./AutoGenerateCards";
-import { fetchAllDocs } from "./KbDocIde";
+import { fetchAllDocs } from "./useCollectionDocs";
 
 const renderModal = (onClose: () => void = () => {}) =>
   render(

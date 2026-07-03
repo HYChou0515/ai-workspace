@@ -27,7 +27,6 @@ import {
   type KbApi,
   type KbCitation,
   type KbCollection,
-  type KbDocument,
 } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { mergeBlocked, screenFiles, type BlockedUpload } from "../../kb/uploadChecks";
@@ -41,7 +40,8 @@ import { fmtBytes, fmtDate, ICON_OPTIONS, uploadDocPath } from "./collectionForm
 import { CodeConnectionEditor } from "./CodeConnectionEditor";
 import { CodeSyncStatus } from "./CodeSyncStatus";
 import { ContextCardsTab } from "./ContextCardsTab";
-import { fetchAllDocs, KbDocIde } from "./KbDocIde";
+import { KbDocIde } from "./KbDocIde";
+import { useCollectionDocs } from "./useCollectionDocs";
 import { useKbOutlet } from "./KbHome";
 import { QualityRubricEditor } from "./QualityRubricEditor";
 import { RetrievalToggles } from "./RetrievalToggles";
@@ -124,21 +124,16 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
     queryFn: () => client.listCollections(),
   });
 
-  // Open collection's doc statuses, for the index-status strip (#162). Shares
-  // the exact query (key + fetcher) KbDocIde uses, so the two dedupe into one
-  // fetch + one poll; this observer keeps the strip live even on the Cards/Wiki
-  // tabs where KbDocIde isn't mounted.
-  const docStatusQuery = useQuery({
-    queryKey: qk.kb.documents(cid ?? "__none__"),
+  // Open collection's doc statuses, for the index-status strip (#162/#395).
+  // Shares the same queries (keys + fetchers) KbDocIde uses, so the two dedupe;
+  // this observer keeps the strip live even on the Cards/Wiki tabs where
+  // KbDocIde isn't mounted. The 1.5s tick is the few-hundred-byte status
+  // summary — the full list is fetched once and refetched only when the
+  // summary's stamp moves, so the old poll-the-whole-collection-per-tick
+  // behaviour is gone on every tab.
+  const { docs: statusDocs, indexingCount } = useCollectionDocs(cid ?? "__none__", client, {
     enabled: cid != null,
-    queryFn: () => fetchAllDocs(client, cid as string),
-    refetchInterval: (q) =>
-      (q.state.data as KbDocument[] | undefined)?.some((d) => d.status === "indexing")
-        ? 1500
-        : false,
   });
-  const statusDocs = (docStatusQuery.data ?? []) as KbDocument[];
-  const indexingCount = statusDocs.filter((d) => d.status === "indexing").length;
   const erroredDocs = statusDocs.filter((d) => d.status === "error");
   const erroredCount = erroredDocs.length;
 
@@ -198,7 +193,11 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
   const reindexFailedMut = useMutation({
     mutationFn: () => client.reindexCollection(cid as string, { only: "failed" }),
     onSuccess: () => {
-      if (cid) void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
+      if (cid) {
+        void qc.invalidateQueries({ queryKey: qk.kb.documents(cid) });
+        // #395: reopen the summary poll gate — the retried docs are indexing.
+        void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(cid) });
+      }
     },
   });
 

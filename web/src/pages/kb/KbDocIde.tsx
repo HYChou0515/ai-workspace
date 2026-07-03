@@ -39,24 +39,7 @@ import { docHref } from "./kbLinks";
 import { QualityBadge } from "./QualityBadge";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { pxToRem } from "../../lib/pxToRem";
-
-/** Page through the (paged) documents endpoint into one flat list — the tree
- * needs every path, not a slice. `collection_id` is indexed on the BE, so this
- * is cheap even for a large collection. Exported so the collection page can
- * share the SAME query (key + fetcher) for its index-status strip (#162). */
-export async function fetchAllDocs(
-  client: Pick<KbApi, "listDocuments">,
-  collectionId: string,
-): Promise<KbDocument[]> {
-  const out: KbDocument[] = [];
-  const limit = 200;
-  for (let offset = 0; ; offset += limit) {
-    const page = await client.listDocuments(collectionId, { offset, limit });
-    out.push(...page.items);
-    if (!page.has_more || page.items.length === 0) break;
-  }
-  return out;
-}
+import { useCollectionDocs } from "./useCollectionDocs";
 
 /** The empty-collection greeting (#172): a drop-zone-styled call to action so
  * uploading is obvious from the first screen. The actual drop is handled by the
@@ -114,20 +97,16 @@ export function KbDocIde({
   uploading?: boolean;
 }) {
   const qc = useQueryClient();
-  const docsQuery = useQuery({
-    queryKey: qk.kb.documents(collectionId),
-    queryFn: () => fetchAllDocs(client, collectionId),
-    // Poll while anything is indexing so the tree badge + status clear live.
-    refetchInterval: (q) =>
-      (q.state.data as KbDocument[] | undefined)?.some((d) => d.status === "indexing")
-        ? 1500
-        : false,
-  });
-  const docs = useMemo(() => docsQuery.data ?? [], [docsQuery.data]);
+  // #395: one-request fetch-all + a cheap status poll while anything indexes
+  // (progress merges in client-side; the list refetches only on real change).
+  const { docs, docsQuery } = useCollectionDocs(collectionId, client);
   // #328/#356: the doc whose Tune-parsing modal is open (null = closed).
   const [tuneDoc, setTuneDoc] = useState<KbDocument | null>(null);
   const refetch = useCallback(() => {
     void qc.invalidateQueries({ queryKey: qk.kb.documents(collectionId) });
+    // A mutation (upload / move / reindex) can start an indexing wave — nudge
+    // the summary too so its poll gate reopens without waiting for the list.
+    void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(collectionId) });
   }, [qc, collectionId]);
 
   const service = useMemo(
@@ -161,6 +140,15 @@ export function KbDocIde({
   // in, and reading its bytes early throws "unknown KB document"; until then we
   // show the empty pane and let the poll/refetch promote it.
   const activePath = urlPath && docByPath.has(urlPath) ? urlPath : null;
+  // #395: the open doc's render — the sanctioned touch-the-blob-on-open read.
+  // It feeds the status bar's quality rationale and the Tune modal's per-doc
+  // override, which no longer ride the (metas-only) list rows.
+  const activeDoc = activePath ? docByPath.get(activePath) : undefined;
+  const renderedQuery = useQuery({
+    queryKey: qk.kb.doc(activeDoc?.resource_id ?? "__none__"),
+    enabled: activeDoc != null,
+    queryFn: () => client.renderDocument((activeDoc as KbDocument).resource_id),
+  });
   // `.gitkeep` is the hidden placeholder that keeps an otherwise-empty folder
   // alive — drop it from the file list, but surface its directory so the empty
   // folder still shows in the tree.
@@ -279,13 +267,19 @@ export function KbDocIde({
                   )}
                 </div>
               </div>
-              <KbStatusBar doc={activePath ? docByPath.get(activePath) : undefined} />
+              <KbStatusBar doc={activeDoc} rationale={renderedQuery.data?.quality_rationale} />
               {tuneDoc && (
                 <TuneParsingModal
                   collectionId={collectionId}
                   docId={tuneDoc.resource_id}
                   docPath={tuneDoc.path}
-                  docGuidance={tuneDoc.parser_guidance_override}
+                  // Tune opens from the editor header, so the tuned doc IS the
+                  // open one — its render (above) carries the override.
+                  docGuidance={
+                    tuneDoc.resource_id === activeDoc?.resource_id
+                      ? renderedQuery.data?.parser_guidance_override
+                      : undefined
+                  }
                   onClose={() => setTuneDoc(null)}
                   client={client}
                 />
@@ -305,8 +299,10 @@ function fmtBytes(n: number): string {
 }
 
 /** VSCode-style bottom status bar: the open doc's path + index status, plus the
- * per-doc chunks / cited / size that used to live in the table column. */
-function KbStatusBar({ doc }: { doc?: KbDocument }) {
+ * per-doc chunks / cited / size that used to live in the table column.
+ * `rationale` (#105 "why good/bad") arrives from the open doc's render call —
+ * #395 moved it off the list row. */
+function KbStatusBar({ doc, rationale }: { doc?: KbDocument; rationale?: string }) {
   const t = useT();
   if (!doc) {
     return <div className="kb-ide__status kb-ide__status--empty" data-testid="kb-ide-status" />;
@@ -356,9 +352,9 @@ function KbStatusBar({ doc }: { doc?: KbDocument }) {
         <span className="kb-ide__status-quality" data-testid="kb-ide-quality">
           <span className="kb-ide__status-quality-label">{t("kb.quality.heading")}</span>
           <QualityBadge score={doc.quality_score} />
-          {doc.quality_rationale ? (
-            <span className="kb-ide__status-quality-why" title={doc.quality_rationale}>
-              {doc.quality_rationale}
+          {rationale ? (
+            <span className="kb-ide__status-quality-why" title={rationale}>
+              {rationale}
             </span>
           ) : null}
         </span>
