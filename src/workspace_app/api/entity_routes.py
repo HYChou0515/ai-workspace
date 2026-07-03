@@ -18,7 +18,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from ..entity.catalog import EntityCatalog, discover_catalog
 from ..entity.forms import form_spec
 from ..entity.parser import ParsedEntity
-from ..entity.store import EntityStore
+from ..entity.store import EntityConflict, EntityStore
 from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
 from .locator import ItemLocator
@@ -49,6 +49,7 @@ def _entity_out(entity: ParsedEntity) -> _EntityOut:
         fields=entity.fields,
         body=entity.body,
         diagnostics=_diag(entity),
+        version=entity.version,
     )
 
 
@@ -144,7 +145,11 @@ def register_entity_routes(
         _iid, store = await _store(slug, item_id)
         _require_type(store.catalog, type_name)
         try:
-            updated = await store.update(type_name, number, body.patch)
+            updated = await store.update(
+                type_name, number, body.patch, expected_version=body.expected_version
+            )
         except FileNotFound as e:
             raise HTTPException(status_code=404, detail=f"no {type_name} #{number}") from e
+        except EntityConflict as e:
+            raise HTTPException(status_code=409, detail=str(e)) from e
         return _entity_out(updated)

@@ -288,6 +288,7 @@ class _EntityOut(BaseModel):
     fields: dict[str, Any]
     body: str
     diagnostics: list[_EntityDiagnostic]
+    version: str = ""  # §C6 optimistic-concurrency token — echo on update
 
 
 class _EntityListOut(BaseModel):
@@ -301,3 +302,4 @@ class _EntityCreateBody(BaseModel):
 
 class _EntityUpdateBody(BaseModel):
     patch: dict[str, Any] = Field(default_factory=dict)
+    expected_version: str | None = None  # §C6 — reject if the record moved on

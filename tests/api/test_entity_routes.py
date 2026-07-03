@@ -43,6 +43,28 @@ def test_entity_crud_end_to_end(harness: Harness) -> None:
     assert updated.json()["fields"]["status"] == "done"
 
 
+def test_update_rejects_a_stale_version_with_409(harness: Harness) -> None:
+    """§C6: the update route echoes a `version`; a PUT carrying a stale
+    `expected_version` (the record moved on) is a 409, not a silent overwrite."""
+    _ship_issue_schema(harness)
+    c = harness.client
+
+    created = c.post(harness.wpath("/entities/issue"), json={"args": {"title": "A"}}).json()
+    stale = created["version"]
+    assert stale
+    # a concurrent edit (no expected_version → unconditional) bumps the version
+    c.put(harness.wpath("/entities/issue/1"), json={"patch": {"status": "done"}})
+
+    conflict = c.put(
+        harness.wpath("/entities/issue/1"),
+        json={"patch": {"status": "open"}, "expected_version": stale},
+    )
+    assert conflict.status_code == 409, conflict.text
+    # the concurrent edit stands
+    listing = c.get(harness.wpath("/entities/issue")).json()
+    assert listing["entities"][0]["fields"]["status"] == "done"
+
+
 def test_unknown_type_and_number_are_404(harness: Harness) -> None:
     _ship_issue_schema(harness)
     c = harness.client

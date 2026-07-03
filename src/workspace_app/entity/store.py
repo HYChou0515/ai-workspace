@@ -22,6 +22,12 @@ from .schema import Role
 from .skeleton import render_skeleton
 
 
+class EntityConflict(Exception):
+    """Raised by `update` when `expected_version` doesn't match the record's
+    current content — the record changed since the caller read it (§C6). The
+    caller re-reads and retries with the fresh version."""
+
+
 class QueryResult(msgspec.Struct):
     entities: list[ParsedEntity]
     """Records that parsed cleanly — the projection the views render."""
@@ -77,14 +83,34 @@ class EntityStore:
         raw = await self._fs.read(self._ws, self._record_path(entity_type.records_path, number))
         return parse_entity(raw, number, type_name, entity_type.schema)
 
-    async def update(self, type_name: str, number: int, patch: dict[str, Any]) -> ParsedEntity:
+    async def update(
+        self,
+        type_name: str,
+        number: int,
+        patch: dict[str, Any],
+        *,
+        expected_version: str | None = None,
+    ) -> ParsedEntity:
+        """Merge `patch` into the record's fields and write it back. When
+        `expected_version` is given (the `version` the caller read), the write is
+        rejected with `EntityConflict` if the record changed since — the
+        optimistic check (§C6). The read-check-write runs under the per-type lock
+        so it's atomic against a racing create/update on this pod (N5).
+        `expected_version=None` skips the check (the UI's last-write default)."""
         entity_type = self._catalog.get(type_name)
         path = self._record_path(entity_type.records_path, number)
-        current = parse_entity(
-            await self._fs.read(self._ws, path), number, type_name, entity_type.schema
-        )
-        text = serialize_entity({**current.fields, **patch}, current.body)
-        await self._fs.write(self._ws, path, text.encode())
+        lock = self._locks.setdefault(f"{self._ws}:{type_name}", asyncio.Lock())
+        async with lock:
+            current = parse_entity(
+                await self._fs.read(self._ws, path), number, type_name, entity_type.schema
+            )
+            if expected_version is not None and expected_version != current.version:
+                raise EntityConflict(
+                    f"{type_name} #{number} changed since you read it "
+                    f"(expected {expected_version}, now {current.version})"
+                )
+            text = serialize_entity({**current.fields, **patch}, current.body)
+            await self._fs.write(self._ws, path, text.encode())
         return parse_entity(text.encode(), number, type_name, entity_type.schema)
 
     async def _parse_type(self, type_name: str) -> list[ParsedEntity]:

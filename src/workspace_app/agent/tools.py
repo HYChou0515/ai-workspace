@@ -1370,19 +1370,31 @@ async def create_entity_impl(
 
 
 async def update_entity_impl(
-    ctx: RunContextWrapper[AgentToolContext], type_name: str, number: int, patch: dict[str, Any]
+    ctx: RunContextWrapper[AgentToolContext],
+    type_name: str,
+    number: int,
+    patch: dict[str, Any],
+    expected_version: str = "",
 ) -> str:
     """Change fields on an existing record. `patch` carries only the fields to
     change (others keep their current value) — e.g. `{"status": "done"}` or
-    `{"progress": 60}`. Identify the record by its `type_name` + `number`.
-    Returns a confirmation (and any lint warnings)."""
+    `{"progress": 60}`. Identify the record by its `type_name` + `number`. Pass
+    `expected_version` (the `version` query_entity reported for the record) to be
+    told, instead of silently overwriting, if the record changed since you read
+    it — then re-read and retry. Returns a confirmation (and any lint warnings)."""
+    from ..entity.store import EntityConflict
+
     store, err = await _entity_store(ctx, type_name)
     if store is None:
         return err
     try:
-        updated = await store.update(type_name, number, patch)
+        updated = await store.update(
+            type_name, number, patch, expected_version=expected_version or None
+        )
     except FileNotFound:
         return f"error: no {type_name} #{number} in this workspace"
+    except EntityConflict as e:
+        return f"error: {e} — re-read it with query_entity and retry"
     return f"Updated {type_name} #{number}.{_entity_diag_suffix(updated)}"
 
 
@@ -1396,7 +1408,9 @@ async def query_entity_impl(ctx: RunContextWrapper[AgentToolContext], type_name:
         return err
     result = await store.query(type_name)
     payload = {
-        "entities": [{"number": e.number, "fields": e.fields} for e in result.entities],
+        "entities": [
+            {"number": e.number, "version": e.version, "fields": e.fields} for e in result.entities
+        ],
         "invalid": [e.number for e in result.invalid],
     }
     return json.dumps(payload, ensure_ascii=False, default=str)

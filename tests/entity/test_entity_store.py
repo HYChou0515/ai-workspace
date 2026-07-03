@@ -89,6 +89,40 @@ async def test_update_patches_one_field_and_preserves_body_and_number() -> None:
     assert got.body.strip() == "repro steps"
 
 
+async def test_update_with_current_version_succeeds() -> None:
+    """§C6: passing the `version` you just read lets the write through — nothing
+    changed in between."""
+    store = _store()
+    created = await store.create("issue", {"title": "A"}, actor="alice", now="2026-07-03")
+
+    updated = await store.update("issue", 1, {"status": "done"}, expected_version=created.version)
+
+    assert updated.fields["status"] == "done"
+    assert updated.version != created.version  # the content moved, so the token flips
+
+
+async def test_update_against_a_stale_version_conflicts_and_does_not_write() -> None:
+    """§C6: a write against the version read BEFORE a concurrent edit is rejected
+    with `EntityConflict`, and the concurrent edit is preserved (no lost update)."""
+    import pytest
+
+    from workspace_app.entity.store import EntityConflict
+
+    store = _store()
+    created = await store.create("issue", {"title": "A"}, actor="alice", now="2026-07-03")
+    stale = created.version
+    # a concurrent writer changes the record → its version moves on
+    await store.update("issue", 1, {"status": "done"})
+
+    with pytest.raises(EntityConflict):
+        await store.update("issue", 1, {"title": "clobbered"}, expected_version=stale)
+
+    # the concurrent edit survived; the rejected patch never landed
+    got = await store.get("issue", 1)
+    assert got.fields["status"] == "done"
+    assert got.fields["title"] == "A"
+
+
 async def test_status_outside_closed_vocab_lints_but_is_not_blocked() -> None:
     """A `status` outside the schema's closed values is written anyway (§C7
     lint-not-block) and surfaces a *warning* — not an error, so it still

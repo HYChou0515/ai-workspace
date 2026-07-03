@@ -77,6 +77,9 @@ export type EntityInstance = {
   fields: Record<string, unknown>;
   body: string;
   diagnostics: EntityDiagnostic[];
+  /** §C6 optimistic-concurrency token — echo as `expected_version` on update to
+   * be told (409) instead of silently clobbering a concurrent edit. */
+  version?: string;
 };
 
 export type EntityList = {

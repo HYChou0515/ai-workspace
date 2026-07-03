@@ -85,6 +85,24 @@ async def test_link_entity_sets_a_reference() -> None:
     assert payload["entities"][0]["fields"]["milestone"] == 3
 
 
+async def test_query_reports_a_version_that_update_can_guard_on() -> None:
+    """§C6: query_entity surfaces each record's `version`; passing a stale one to
+    update_entity is reported as a conflict (re-read) instead of silently
+    clobbering a concurrent edit."""
+    ctx, _fs = await _ctx_with_issue_schema()
+    await create_entity_impl(ctx, "issue", {"title": "A"})
+    stale = json.loads(await query_entity_impl(ctx, "issue"))["entities"][0]["version"]
+    assert stale  # a non-empty token
+    await update_entity_impl(ctx, "issue", 1, {"status": "done"})  # concurrent edit bumps it
+
+    out = await update_entity_impl(ctx, "issue", 1, {"title": "B"}, expected_version=stale)
+    assert out.startswith("error:") and "re-read" in out
+    # a fresh read + update goes through
+    fresh = json.loads(await query_entity_impl(ctx, "issue"))["entities"][0]["version"]
+    ok = await update_entity_impl(ctx, "issue", 1, {"title": "B"}, expected_version=fresh)
+    assert ok.startswith("Updated")
+
+
 async def test_update_entity_on_missing_record_returns_error_not_raise() -> None:
     ctx, _fs = await _ctx_with_issue_schema()
     out = await update_entity_impl(ctx, "issue", 99, {"status": "done"})
