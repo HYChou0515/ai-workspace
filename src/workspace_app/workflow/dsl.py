@@ -119,14 +119,17 @@ class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
 
 
 class MapStep(Struct, tag="map", forbid_unknown_fields=True):
-    """The one loop (manual §11): bind ``as`` to each path matched by the ``over`` glob
-    (sorted ⇒ deterministic step identity, §9) and run ``do`` per element. One level —
-    ``do`` may not contain a ``map`` or a ``gate`` (Q7), enforced by ``validate_def``."""
+    """The one loop (manual §11): bind ``as`` to each element of ``over`` and run ``do``
+    per element. One level — ``do`` may not contain a ``map`` or a ``gate`` (Q7). ``over``
+    is a glob string (sorted paths), a list-value reference like ``{steps.x.items}`` (array
+    order), or ``{"range": <interp>}`` (indices ``0..n-1``) — #428 §4. ``key_by`` names the
+    field to key list-of-object elements by (else the array position)."""
 
-    over: str
+    over: str | dict[str, Any]
     phase: str
     as_: str = field(name="as", default="item")
     do: list[Step] = field(default_factory=list)
+    key_by: str = ""
 
 
 class SwitchStep(Struct, tag="switch", forbid_unknown_fields=True):
@@ -330,6 +333,47 @@ def _safe_key(path: str) -> str:
     return path.lstrip("/").replace("/", "_")
 
 
+def _keyed_list(step: MapStep, items: list[Any]) -> list[tuple[Any, str]]:
+    """Materialise a list-value ``over`` into ``(element, key)`` pairs in array order
+    (#428 §4.2): keyed by ``key_by`` field (must be an object with that field) else the
+    array position. A ``key_by`` collision is loud — never a silent cache-skip."""
+    elements: list[tuple[Any, str]] = []
+    for i, item in enumerate(items):
+        if step.key_by:
+            if not isinstance(item, dict) or step.key_by not in item:
+                raise StepFailed(
+                    f"map key_by {step.key_by!r} needs object elements carrying that field"
+                )
+            key = _safe_key(str(item[step.key_by]))
+        else:
+            key = str(i)
+        elements.append((item, key))
+    keys = [k for _, k in elements]
+    if len(set(keys)) != len(keys):
+        raise StepFailed(f"map key_by {step.key_by!r} is not unique across elements")
+    return elements
+
+
+async def _map_elements(
+    step: MapStep, ns: dict[str, Any], wf: WorkflowHandle
+) -> list[tuple[Any, str]]:
+    """Resolve ``over`` into ``(element, key)`` pairs (#428 §4): a ``{"range": n}`` object
+    ⇒ indices ``0..n-1``; a value that resolves to a list ⇒ array order; anything else is a
+    glob string ⇒ sorted matched paths."""
+    over = step.over
+    if isinstance(over, dict):  # range form
+        raw = await _resolve(over.get("range", ""), ns, wf)
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            raise StepFailed(f"map 'over' range must be an integer, got {raw!r}") from None
+        return [(i, str(i)) for i in range(n)]
+    resolved = await _resolve(over, ns, wf)
+    if isinstance(resolved, list):  # list-value form
+        return _keyed_list(step, resolved)
+    return [(p, _safe_key(p)) for p in await wf.glob(resolved)]  # glob form
+
+
 async def _build_check(spec: dict[str, Any], ns: dict[str, Any], wf: WorkflowHandle) -> Check:
     ((name, args),) = spec.items()
     if name == "file_nonempty":
@@ -386,15 +430,16 @@ async def _exec_step(
     failures: list[dict[str, str]],
 ) -> None:
     if isinstance(step, MapStep):
-        paths = await wf.glob(await _resolve(step.over, ns, wf))
+        elements = await _map_elements(step, ns, wf)
 
-        async def _one(path: str) -> None:
+        async def _one(elem: tuple[Any, str]) -> None:
+            value, ekey = elem
             # #428 §1.1: an inner ``{steps.x.f}`` resolves at this element's key.
-            sub = {**ns, step.as_: path, "__key__": _safe_key(path)}
+            sub = {**ns, step.as_: value, "__key__": ekey}
             for inner in step.do:
-                await _exec_step(wf, inner, sub, _safe_key(path), failures)
+                await _exec_step(wf, inner, sub, ekey, failures)
 
-        failures.extend(await wf.map(_one, paths))
+        failures.extend(await wf.map(_one, elements))
         return
     if isinstance(step, SwitchStep):
         # #428 §3: pure control flow — resolve ``on``, run the one matching case (or
@@ -618,13 +663,20 @@ def _validate_step(
     if step.phase not in declared:
         errs.append(f"{where}: phase {step.phase!r} is not declared in 'phases'")
     if isinstance(step, MapStep):
-        if not step.over:
+        # #428 §4: ``over`` is a glob string, a list-value reference, or {"range": <ref>}.
+        if isinstance(step.over, dict):
+            if set(step.over) != {"range"} or not isinstance(step.over.get("range"), str):
+                errs.append(f"{where}: map 'over' object must be {{'range': <reference>}}")
+            else:
+                _check_interp(step.over["range"], scope, where, errs, steps_seen)
+        elif not step.over:
             errs.append(f"{where}: map needs a non-empty 'over' glob")
+        else:
+            _check_interp(step.over, scope, where, errs, steps_seen)
         if not step.as_:
             errs.append(f"{where}: map needs a non-empty 'as'")
         if not step.do:
             errs.append(f"{where}: map 'do' is empty")
-        _check_interp(step.over, scope, where, errs, steps_seen)
         # #428 §5.3: a map's ``do`` is its own naming subdomain — a fresh steps_seen so an
         # inner ``{steps.x.f}`` can only reference a sibling declared earlier in the loop.
         _validate_steps(

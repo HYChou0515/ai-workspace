@@ -1290,6 +1290,214 @@ def test_validate_switch_depth_limit():
     assert any("nesting too deep" in e for e in errs)
 
 
+# ─── P4: map `over` list value / range ───────────────────────────────────────
+
+
+async def test_run_map_over_list_value_keeps_array_order():
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"items": ["z", "a", "m"]},
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": "{config.items}",
+                        "as": "x",
+                        "phase": "p",
+                        "do": [{"type": "sandbox", "run": "do {x}", "phase": "p"}],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["do z", "do a", "do m"]  # array order, NOT sorted
+
+
+async def test_run_map_over_list_of_objects_field_access():
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"items": [{"id": "b", "v": 1}, {"id": "a", "v": 2}]},
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": "{config.items}",
+                        "as": "x",
+                        "key_by": "id",
+                        "phase": "p",
+                        "do": [{"type": "sandbox", "run": "v={x.v} id={x.id}", "phase": "p"}],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["v=1 id=b", "v=2 id=a"]
+
+
+async def test_run_map_over_range():
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"n": 3},
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": {"range": "{config.n}"},
+                        "as": "i",
+                        "phase": "p",
+                        "do": [{"type": "sandbox", "run": "n={i}", "phase": "p"}],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["n=0", "n=1", "n=2"]
+
+
+async def test_run_map_key_by_collision_errors():
+    store = MemoryFileStore()
+    wf = make_wf(store, run_sandbox=lambda c, o: None)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"items": [{"id": "x"}, {"id": "x"}]},
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": "{config.items}",
+                        "as": "e",
+                        "key_by": "id",
+                        "phase": "p",
+                        "do": [{"type": "sandbox", "run": "do", "phase": "p"}],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    with pytest.raises(StepFailed, match="not unique"):
+        await build_run(d)(wf, None)
+
+
+async def test_run_map_over_range_non_integer_errors():
+    store = MemoryFileStore()
+    wf = make_wf(store, run_sandbox=lambda c, o: None)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"n": "abc"},
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": {"range": "{config.n}"},
+                        "as": "i",
+                        "phase": "p",
+                        "do": [{"type": "sandbox", "run": "x", "phase": "p"}],
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(StepFailed, match="range"):
+        await build_run(d)(wf, None)
+
+
+def test_validate_map_over_range_checks_interp():
+    errs = _errs(
+        [
+            {
+                "type": "map",
+                "over": {"range": "{bogus}"},
+                "as": "i",
+                "phase": "p",
+                "do": [{"type": "sandbox", "run": "x", "phase": "p"}],
+            }
+        ]
+    )
+    assert any("unknown variable 'bogus'" in e for e in errs)
+
+
+def test_validate_map_over_range_bad_shape():
+    errs = _errs(
+        [
+            {
+                "type": "map",
+                "over": {"nope": "1"},
+                "as": "i",
+                "phase": "p",
+                "do": [{"type": "sandbox", "run": "x", "phase": "p"}],
+            }
+        ]
+    )
+    assert any("map 'over' object must be" in e for e in errs)
+
+
+async def test_run_map_key_by_missing_field_errors():
+    store = MemoryFileStore()
+    wf = make_wf(store, run_sandbox=lambda c, o: None)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"items": ["not-an-object"]},
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": "{config.items}",
+                        "as": "e",
+                        "key_by": "id",
+                        "phase": "p",
+                        "do": [{"type": "sandbox", "run": "do", "phase": "p"}],
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(StepFailed, match="key_by"):
+        await build_run(d)(wf, None)
+
+
 def test_validate_create_entity_requires_type_name() -> None:
     errs = _errs([{"type": "capability", "call": "create_entity", "phase": "p"}])
     assert any("type_name" in e for e in errs)
