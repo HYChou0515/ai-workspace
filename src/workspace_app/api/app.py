@@ -606,6 +606,8 @@ def create_app(
         history_max_context_tokens=history_max_context_tokens,
         max_searches_per_turn=kb_max_searches_per_turn,
         max_searches_ceiling=kb_max_searches_ceiling,
+        # #397: KB chat's request_wiki_update tool submits corrections through this.
+        wiki_coordinator=wiki_coordinator,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
@@ -662,6 +664,8 @@ def create_app(
         infer_modules_parallelism=infer_modules_parallelism,
         history_max_messages=history_max_messages,
         history_max_context_tokens=history_max_context_tokens,
+        # #397: lets the request_wiki_update tool submit a user's wiki correction.
+        wiki_coordinator=wiki_coordinator,
     )
 
     # ── replay diagnostics (#51 P4) ──────────────────────────────────

@@ -5,7 +5,13 @@ rebuild can't clobber them, while reads stay open."""
 
 from __future__ import annotations
 
-from workspace_app.kb.wiki.store import CLARIFICATIONS_PATH, MaintainerWikiStore, WikiFileStore
+from workspace_app.kb.wiki.store import (
+    CLARIFICATIONS_DIR,
+    CLARIFICATIONS_PATH,
+    CORRECTIONS_DIR,
+    MaintainerWikiStore,
+    WikiFileStore,
+)
 from workspace_app.resources import make_spec
 
 
@@ -16,6 +22,23 @@ async def test_guard_ignores_agent_writes_to_the_reserved_page():
     await inner.write("c", CLARIFICATIONS_PATH, b"human answers")  # authored via raw store
     await guarded.write("c", CLARIFICATIONS_PATH, b"AGENT CLOBBER")  # agent try → ignored
     assert (await inner.read("c", CLARIFICATIONS_PATH)) == b"human answers"
+
+
+async def test_guard_ignores_agent_writes_under_the_reserved_folders():
+    # #397: the immune ground truth is now two folders, not one file. The maintainer
+    # must not overwrite ANY page under /clarifications/ or /corrections/.
+    spec = make_spec(default_user="u")
+    inner = WikiFileStore(spec)
+    guarded = MaintainerWikiStore(inner)
+    clar = f"{CLARIFICATIONS_DIR}q1.md"
+    corr = f"{CORRECTIONS_DIR}entities-foo.md"
+    await inner.write("c", clar, b"human answer")
+    await inner.write("c", corr, b"human correction")
+    await guarded.write("c", clar, b"CLOBBER")  # ignored
+    await guarded.write("c", corr, b"CLOBBER")  # ignored
+    await guarded.delete("c", corr)  # ignored
+    assert (await inner.read("c", clar)) == b"human answer"
+    assert (await inner.read("c", corr)) == b"human correction"
 
 
 async def test_guard_allows_agent_writes_to_normal_pages():

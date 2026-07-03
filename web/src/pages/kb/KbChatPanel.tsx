@@ -23,10 +23,22 @@ import { useKbChat } from "../../hooks/useKbChat";
 import { useStickToBottom } from "../../hooks/useStickToBottom";
 import { TurnStatus } from "../../components/TurnStatus";
 import { KbCollectionsModal } from "./KbCollectionsModal";
+import { WikiCorrectionDialog } from "./WikiCorrectionDialog";
+import type { AgentEntry } from "../investigation/agentLog";
 
 /** How many ranked collections to surface as quick-pick pills (#271); the rest
  * live behind the "more" modal. */
 const PILL_COUNT = 6;
+
+/** #397: the nearest preceding USER message before entry `i` — the question the
+ * flagged assistant answer was replying to (drafting context). "" if none. */
+function nearestUserQuestion(entries: AgentEntry[], i: number): string {
+  for (let j = i - 1; j >= 0; j--) {
+    const e = entries[j];
+    if (e.kind === "message" && e.message.role === "user") return e.message.content;
+  }
+  return "";
+}
 
 export function KbChatPanel({
   chatId = null,
@@ -55,6 +67,12 @@ export function KbChatPanel({
   const [pickerOpen, setPickerOpen] = useState(false);
   // #51 P6: replay diagnostic for one past entry (answer / kb_search).
   const [replayReq, setReplayReq] = useState<ReplayRequest | null>(null);
+  // #397: the "回報有誤" dialog for one flagged assistant answer.
+  const [reportReq, setReportReq] = useState<{
+    collectionId: string;
+    question: string;
+    answer: string;
+  } | null>(null);
 
   const collectionsQ = useQuery({
     queryKey: qk.kb.collections,
@@ -99,6 +117,12 @@ export function KbChatPanel({
   const collectionIds = useMemo(
     () => (locked ? fixedCollectionIds! : [...selected]),
     [locked, fixedCollectionIds, selected],
+  );
+  // #397: the in-scope collection whose wiki a correction would target (Q13:
+  // only when a wiki is actually on). First wiki collection when several.
+  const wikiCollectionId = useMemo(
+    () => collections.find((c) => collectionIds.includes(c.resource_id) && c.use_wiki)?.resource_id,
+    [collections, collectionIds],
   );
   const { log, send, cancel } = useKbChat({ collectionIds, chatId, client, onChatCreated });
   // Follow the conversation as it streams; back off when the user scrolls up.
@@ -145,6 +169,21 @@ export function KbChatPanel({
                 (entry.kind === "message" && entry.message.role === "assistant"))
                 ? () =>
                     setReplayReq({ kind: "turn", source: "kb", threadId: chatId, messageIndex: i })
+                : undefined
+            }
+            // #397: "回報有誤" on a completed assistant answer, only when the
+            // scope has a wiki to correct (Q13).
+            onReportWiki={
+              wikiCollectionId != null &&
+              !log.streaming &&
+              entry.kind === "message" &&
+              entry.message.role === "assistant"
+                ? () =>
+                    setReportReq({
+                      collectionId: wikiCollectionId,
+                      question: nearestUserQuestion(log.entries, i),
+                      answer: entry.message.role === "assistant" ? entry.message.content : "",
+                    })
                 : undefined
             }
           />
@@ -254,6 +293,16 @@ export function KbChatPanel({
         />
       )}
       {replayReq && <ReplayDialog request={replayReq} onClose={() => setReplayReq(null)} />}
+      {reportReq && (
+        <WikiCorrectionDialog
+          collectionId={reportReq.collectionId}
+          question={reportReq.question}
+          answer={reportReq.answer}
+          wikiPages={[]}
+          client={client}
+          onClose={() => setReportReq(null)}
+        />
+      )}
     </div>
   );
 }

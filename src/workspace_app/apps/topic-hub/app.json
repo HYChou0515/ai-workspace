@@ -30,6 +30,7 @@
       "create_context_card",
       "update_context_card",
       "ask_knowledge_base",
+      "request_wiki_update",
       "save_skill",
       "save_workflow"
     ],

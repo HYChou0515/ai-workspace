@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from ..filestore.protocol import FileStore
     from ..kb.retriever import Enhancements
     from ..kb.vlm import IVlm, VlmDescriber
+    from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
     from ..resources import AgentConfig, Message
     from ..resources.kb import Citation
     from ..tooling.registry import PackageInfo
@@ -78,6 +79,7 @@ class TurnContextBuilder:
         infer_modules_parallelism: int,
         history_max_messages: int,
         history_max_context_tokens: int,
+        wiki_coordinator: WikiMaintenanceCoordinator | None = None,
     ) -> None:
         self._sandbox = sandbox
         self._filestore = filestore
@@ -98,6 +100,7 @@ class TurnContextBuilder:
         self._infer_modules_parallelism = infer_modules_parallelism
         self._history_max_messages = history_max_messages
         self._history_max_context_tokens = history_max_context_tokens
+        self._wiki_coordinator = wiki_coordinator
 
     def _common(
         self,
@@ -193,6 +196,12 @@ class TurnContextBuilder:
             # #380: skills applied this turn — read_skill exempts them from the
             # disable gate (their bodies are already preloaded into the prompt).
             applied_skills=apply_skills or [],
+            # #397: the request_wiki_update tool submits a user's wiki correction
+            # through this. Bound to the coordinator when one is wired; None ⇒ the
+            # tool reports it's unavailable (it also no-ops for non-wiki scopes).
+            submit_wiki_correction=(
+                self._wiki_coordinator.submit_correction if self._wiki_coordinator else None
+            ),
         )
 
     async def build_workflow_turn(

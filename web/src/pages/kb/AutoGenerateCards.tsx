@@ -23,6 +23,7 @@ import {
 } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { parseTodo, serializeTodo } from "./cardGenTodo";
+import { fetchAllDocs } from "./useCollectionDocs";
 
 type Step = "select" | "generating" | "review";
 
@@ -46,17 +47,22 @@ export function AutoGenerateCards({
   const [committed, setCommitted] = useState<KbCardGenCommit | null>(null);
 
   // ── step 1: pick documents, newest first ───────────────────────────────
-  const { data: docPage } = useQuery({
+  // Share the SAME key + fetcher as the collection page's index-status strip
+  // (fetchAllDocs, #162): it returns a bare KbDocument[] and pages within the
+  // BE's limit≤500. Using our own {items} fetch under this shared key would (a)
+  // read the strip's bare array as `undefined` items and (b) 422 on limit=1000
+  // — the two bugs behind #394's empty picker.
+  const { data: docList } = useQuery({
     queryKey: qk.kb.documents(collectionId),
-    queryFn: () => client.listDocuments(collectionId, { limit: 1000 }),
+    queryFn: () => fetchAllDocs(client, collectionId),
     enabled: step === "select",
   });
   const docs = useMemo(() => {
-    const items = [...(docPage?.items ?? [])];
+    const items = [...(docList ?? [])];
     items.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
     const term = search.trim().toLowerCase();
     return term ? items.filter((d) => d.path.toLowerCase().includes(term)) : items;
-  }, [docPage, search]);
+  }, [docList, search]);
 
   const toggle = (id: string) =>
     setSelected((prev) => {

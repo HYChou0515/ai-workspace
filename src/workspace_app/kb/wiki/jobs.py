@@ -32,17 +32,28 @@ class WikiJobPayload(msgspec.Struct):
     - ``unfold``: a source was DELETED; scrub its traces from the wiki. The doc
       row is gone by run time, so the removed source's display label
       (``removed_label``) + extracted text (``removed_text``) are SNAPSHOTTED
-      here at enqueue time for the remove-pass to grep + scrub."""
+      here at enqueue time for the remove-pass to grep + scrub.
+    - ``correct`` (#397): a user reported the wiki is wrong. The corrector agent
+      applies ``correction`` (what's wrong / how it should read) to the affected
+      pages, optionally guided by a snapshotted ``reference`` document and/or a
+      named ``target_page``. The corrected fact is also recorded on the immune
+      ``/corrections/`` page at enqueue time (regression-proof across rebuilds)."""
 
     collection_id: str
     source_path: str
     doc_id: str = ""
-    # fold | unfold | code_sync | code_split | code_card | code_finalize.
+    # fold | unfold | correct | code_sync | code_split | code_card | code_finalize.
     # #355: code_sync clones the collection's git_url + ingests it (off the API,
     # on the wiki worker), then chains to code_split — the head of the build.
     op: str = "fold"
     removed_label: str = ""
     removed_text: str = ""
+    # #397 correct: the user's correction directive + the transient reference
+    # snapshot + the optional target page. The reference full text rides here
+    # (this pass only), never onto the immune /corrections/ page (Q9).
+    correction: str = ""
+    reference: str = ""
+    target_page: str = ""
     # #281 P4 code-wiki fan-out: a ``code_card`` job builds the cards for ONE
     # batch (``batch_paths``) and records ``batch_index`` in the CodeWikiBuildRun
     # CAS join. ``code_split`` / ``code_finalize`` carry neither.

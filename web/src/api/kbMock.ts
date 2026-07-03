@@ -182,12 +182,19 @@ export const mockKbApi: KbApi = {
     );
   },
   async listDocuments(collectionId, page) {
+    const offset = page?.offset ?? 0;
+    const limit = page?.limit ?? 50;
+    // Mirror the BE's Query() bounds (kb_routes.py list_documents: limit ge=1
+    // le=5000 since #395, offset ge=0) so a caller that oversteps fails here
+    // too, instead of only in production. Without this the mock silently
+    // masked #394's limit=1000 → 422 bug.
+    if (limit < 1 || limit > 5000)
+      throw new Error(`list documents: limit ${limit} out of range (1..5000)`);
+    if (offset < 0) throw new Error(`list documents: offset ${offset} out of range`);
     const all = documents.get(collectionId) ?? [];
     // Mirror the BE sort (most-recent first) so paging looks the same as
     // production. Use updated_at when present; fall back to insertion order.
     const sorted = [...all].sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-    const offset = page?.offset ?? 0;
-    const limit = page?.limit ?? 50;
     // #395: rows are metas-only on the real BE — the open-a-document fields
     // stay off the list wire.
     const items = sorted
@@ -501,6 +508,20 @@ export const mockKbApi: KbApi = {
     const sha = "0".repeat(40);
     if (c) collections.set(collectionId, { ...c, git_last_sha: sha, git_last_pulled_at: Date.now() });
     return { status: "queued", git_last_sha: c?.git_last_sha ?? null };
+  },
+  async submitWikiCorrection(_collectionId, body) {
+    // #397: pretend the correction landed on a per-target immune page.
+    const slug = (body.target_page || "general").replace(/[^\w-]+/g, "-").replace(/^-+|-+$/g, "");
+    return { path: `/corrections/${slug || "general"}.md` };
+  },
+  async draftWikiCorrection(_collectionId, body) {
+    // #397 Q12: a deterministic stand-in — echo the flagged answer as a draft.
+    return {
+      action: "draft",
+      instruction: `The answer "${body.answer}" is wrong; please correct it.`,
+      target_page: body.wiki_pages?.[0] ?? "",
+      questions: [],
+    };
   },
   async listContextCards(collectionId) {
     return [...(contextCards.get(collectionId) ?? [])];
