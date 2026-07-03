@@ -57,6 +57,9 @@ export const qk = {
       ["entities", slug, itemId, "catalog"] as const,
     list: (slug: string, itemId: string, type: string) =>
       ["entities", slug, itemId, "list", type] as const,
+    // §E3 project-health — every parser/lint finding across the item's types.
+    health: (slug: string, itemId: string) =>
+      ["entities", slug, itemId, "health"] as const,
   },
 
   // topic-hub §3: an item's chats (free + workflow) + one chat's hydrated thread.

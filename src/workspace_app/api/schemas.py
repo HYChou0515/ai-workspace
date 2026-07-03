@@ -296,6 +296,20 @@ class _EntityListOut(BaseModel):
     invalid: list[_EntityOut]
 
 
+class _EntityHealthFinding(BaseModel):
+    """One parser/lint finding for the project-health view (§E3)."""
+
+    type_name: str
+    number: int
+    level: str
+    message: str
+    field: str | None = None
+
+
+class _EntityHealthOut(BaseModel):
+    findings: list[_EntityHealthFinding]
+
+
 class _EntityCreateBody(BaseModel):
     args: dict[str, Any] = Field(default_factory=dict)
 

@@ -139,6 +139,28 @@ async def test_status_outside_closed_vocab_lints_but_is_not_blocked() -> None:
     assert [e.number for e in result.entities] == [1]
 
 
+async def test_health_flattens_warnings_and_errors_across_types() -> None:
+    """§E3: `health` collects every finding — a lint warning on a projecting
+    record and a parse error on a dropped one — flattened for the health view."""
+    fs = MemoryFileStore()
+    store = _store(fs)
+    await store.create("issue", {"title": "A"}, actor="a", now="d")
+    await store.update("issue", 1, {"status": "frozen"})  # outside vocab → warning
+    await fs.write("ws1", "/issues/2.md", b"broken, no frontmatter")  # → error
+
+    findings = await store.health()
+
+    seen = {(f.number, f.level) for f in findings}
+    assert (1, "warning") in seen
+    assert (2, "error") in seen
+
+
+async def test_health_is_empty_when_every_record_is_clean() -> None:
+    store = _store()
+    await store.create("issue", {"title": "A"}, actor="a", now="d")
+    assert await store.health() == []
+
+
 async def test_hard_delete_of_top_record_never_reissues_its_number() -> None:
     """Users can hard-delete an entity file; the high-water counter in
     `.readonly/` still advances, so a deleted top number is never reissued

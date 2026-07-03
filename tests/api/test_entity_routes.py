@@ -72,6 +72,20 @@ def test_unknown_type_and_number_are_404(harness: Harness) -> None:
     assert c.put(harness.wpath("/entities/issue/99"), json={"patch": {}}).status_code == 404
 
 
+def test_entity_health_lists_findings_across_the_item(harness: Harness) -> None:
+    """§E3: the health route flattens parser findings. A hand-edited broken record
+    (the escape hatch) surfaces as an error finding — the health view's input."""
+    _ship_issue_schema(harness)
+    c = harness.client
+    c.post(harness.wpath("/entities/issue"), json={"args": {"title": "A"}})  # clean
+    ok = c.put(harness.wpath("/files/issues/2.md"), content=b"no frontmatter here")
+    assert ok.status_code in (200, 201, 204), ok.text
+
+    health = c.get(harness.wpath("/entity_health")).json()
+    seen = {(f["number"], f["level"]) for f in health["findings"]}
+    assert (2, "error") in seen
+
+
 def test_item_without_entity_schema_lists_no_types(harness: Harness) -> None:
     """Opt-in: an item that shipped no `.entity/` dir has an empty catalog."""
     out = harness.client.get(harness.wpath("/entities")).json()

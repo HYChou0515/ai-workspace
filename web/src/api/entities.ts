@@ -87,6 +87,17 @@ export type EntityList = {
   invalid: EntityInstance[];
 };
 
+/** One parser/lint finding for the project-health view (§E3). */
+export type EntityHealthFinding = {
+  type_name: string;
+  number: number;
+  level: "error" | "warning";
+  message: string;
+  field?: string | null;
+};
+
+export type EntityHealth = { findings: EntityHealthFinding[] };
+
 const base = (slug: string, itemId: string) =>
   `/a/${enc(slug)}/items/${enc(itemId)}/entities`;
 
@@ -100,6 +111,14 @@ export const entitiesApi = {
   async list(slug: string, itemId: string, type: string): Promise<EntityList> {
     const resp = await apiFetch(`${base(slug, itemId)}/${enc(type)}`);
     if (!resp.ok) throw new Error(`entity list failed: ${resp.status}`);
+    return resp.json();
+  },
+
+  async health(slug: string, itemId: string): Promise<EntityHealth> {
+    const resp = await apiFetch(
+      `/a/${enc(slug)}/items/${enc(itemId)}/entity_health`,
+    );
+    if (!resp.ok) throw new Error(`entity health failed: ${resp.status}`);
     return resp.json();
   },
 

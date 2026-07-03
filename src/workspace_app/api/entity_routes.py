@@ -28,6 +28,8 @@ from .schemas import (
     _EntityDiagnostic,
     _EntityFieldSpec,
     _EntityFormField,
+    _EntityHealthFinding,
+    _EntityHealthOut,
     _EntityListOut,
     _EntityOut,
     _EntityTypeOut,
@@ -115,6 +117,26 @@ def register_entity_routes(
                 _EntityDiagnostic(level=d.level, message=d.message, field=d.field)
                 for d in diagnostics
             ],
+        )
+
+    @app.get("/a/{slug}/items/{item_id}/entity_health")
+    async def entity_health(slug: str, item_id: str) -> _EntityHealthOut:
+        """The project-health view's data (§E3) — every parser/lint finding across
+        all of the item's entity types. A distinct path (not `entities/health`) so
+        it can't be mistaken for a type named "health"."""
+        _iid, store = await _store(slug, item_id)
+        findings = await store.health()
+        return _EntityHealthOut(
+            findings=[
+                _EntityHealthFinding(
+                    type_name=f.type_name,
+                    number=f.number,
+                    level=f.level,
+                    message=f.message,
+                    field=f.field,
+                )
+                for f in findings
+            ]
         )
 
     @app.get("/a/{slug}/items/{item_id}/entities/{type_name}")

@@ -3,10 +3,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { EntityInstance, EntityType } from "../../api/entities";
+import type { EntityHealthFinding, EntityInstance, EntityType } from "../../api/entities";
 import {
   EntityViewBody,
   fieldText,
+  HealthView,
   parseSpan,
   parseViewSpec,
   type ViewSpec,
@@ -45,8 +46,30 @@ describe("parseViewSpec", () => {
   it("rejects an unknown view kind", () => {
     expect(parseViewSpec("view: pie\nentity: issue\n")).toBeNull();
   });
-  it("rejects a spec with no entity", () => {
+  it("rejects a record-bound spec with no entity", () => {
     expect(parseViewSpec("view: table\n")).toBeNull();
+  });
+  it("accepts a health spec with no entity (it's cross-type)", () => {
+    expect(parseViewSpec("view: health\ntitle: Health\n")).toMatchObject({ view: "health" });
+  });
+});
+
+describe("HealthView", () => {
+  const findings: EntityHealthFinding[] = [
+    { type_name: "issue", number: 2, level: "error", message: "no frontmatter" },
+    { type_name: "issue", number: 3, level: "warning", message: "status off", field: "status" },
+  ];
+
+  it("lists findings with their level, record, and message", () => {
+    render(<HealthView title="Health" findings={findings} />);
+    expect(screen.getByText(/1 error, 1 warning/)).toBeInTheDocument();
+    expect(screen.getByText("no frontmatter")).toBeInTheDocument();
+    expect(screen.getByText(/status off/)).toBeInTheDocument();
+  });
+
+  it("shows an all-clear when there are no findings", () => {
+    render(<HealthView findings={[]} />);
+    expect(screen.getByText(/All records are healthy/)).toBeInTheDocument();
   });
 });
 

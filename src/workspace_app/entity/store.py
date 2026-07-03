@@ -28,6 +28,17 @@ class EntityConflict(Exception):
     caller re-reads and retries with the fresh version."""
 
 
+class HealthFinding(msgspec.Struct):
+    """One parser/lint finding on a record, flattened across every type — the
+    input to the project-health view (§E3)."""
+
+    type_name: str
+    number: int
+    level: str  # "error" (dropped from projection) | "warning" (still projects)
+    message: str
+    field: str | None = None
+
+
 class QueryResult(msgspec.Struct):
     entities: list[ParsedEntity]
     """Records that parsed cleanly — the projection the views render."""
@@ -129,6 +140,20 @@ class EntityStore:
         for name in self._catalog.names():
             corpus[name] = {e.number: e for e in await self._parse_type(name) if e.ok}
         return corpus
+
+    async def health(self) -> list[HealthFinding]:
+        """Every parser/lint finding across all types, flattened (§E3). Errors
+        (a record dropped from projection) and warnings (a lint on a record that
+        still projects) both surface here, so the health view is the one place an
+        operator sees what needs a hand-edit fix — ordered by type then number."""
+        out: list[HealthFinding] = []
+        for name in self._catalog.names():
+            for entity in await self._parse_type(name):
+                out.extend(
+                    HealthFinding(name, entity.number, d.level, d.message, d.field)
+                    for d in entity.diagnostics
+                )
+        return out
 
     async def query(self, type_name: str) -> QueryResult:
         entity_type = self._catalog.get(type_name)

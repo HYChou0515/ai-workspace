@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   type EntityCatalog,
+  type EntityHealth,
   type EntityInstance,
   type EntityList,
   entitiesApi,
@@ -20,6 +21,14 @@ export function useEntityCatalog(slug: string, itemId: string) {
     queryKey: qk.entities.catalog(slug, itemId),
     queryFn: () => entitiesApi.catalog(slug, itemId),
     enabled: !!slug && !!itemId,
+  });
+}
+
+export function useEntityHealth(slug: string, itemId: string, enabled: boolean) {
+  return useQuery<EntityHealth>({
+    queryKey: qk.entities.health(slug, itemId),
+    queryFn: () => entitiesApi.health(slug, itemId),
+    enabled: enabled && !!slug && !!itemId,
   });
 }
 

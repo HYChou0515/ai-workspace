@@ -17,10 +17,16 @@ import { useState } from "react";
 
 import { load as parseYaml } from "js-yaml";
 
-import type { EntityFieldSpec, EntityFormField, EntityInstance, EntityType } from "../../api/entities";
+import type {
+  EntityFieldSpec,
+  EntityFormField,
+  EntityHealthFinding,
+  EntityInstance,
+  EntityType,
+} from "../../api/entities";
 import { pxToRem } from "../../lib/pxToRem";
 
-export type ViewKind = "table" | "board" | "gantt";
+export type ViewKind = "table" | "board" | "gantt" | "health";
 
 export type ViewSpec = {
   view: ViewKind;
@@ -34,7 +40,8 @@ export type ViewSpec = {
 };
 
 /** Parse a `views/*.ai.yaml` doc into a `ViewSpec`, or `null` when it isn't a
- * well-formed view (bad YAML, missing/unknown `view`, or no `entity`). Never
+ * well-formed view (bad YAML, missing/unknown `view`, or — for the record-bound
+ * kinds — no `entity`). The cross-type `health` view needs no `entity`. Never
  * throws — the container degrades to the raw text editor on `null` (§E). */
 export function parseViewSpec(text: string): ViewSpec | null {
   let doc: unknown;
@@ -46,9 +53,9 @@ export function parseViewSpec(text: string): ViewSpec | null {
   if (!doc || typeof doc !== "object") return null;
   const o = doc as Record<string, unknown>;
   const { view, entity } = o;
-  if (view !== "table" && view !== "board" && view !== "gantt") return null;
-  if (typeof entity !== "string" || !entity) return null;
-  return { ...(o as ViewSpec), view, entity };
+  if (view !== "table" && view !== "board" && view !== "gantt" && view !== "health") return null;
+  if (view !== "health" && (typeof entity !== "string" || !entity)) return null;
+  return { ...(o as ViewSpec), view: view as ViewKind, entity: (entity as string) ?? "" };
 }
 
 export type EntityViewProps = {
@@ -436,6 +443,55 @@ export function EntityViewBody(props: EntityViewProps) {
         <BoardView {...props} />
       ) : (
         <GanttView {...props} />
+      )}
+    </div>
+  );
+}
+
+// ── health (§E3) ─────────────────────────────────────────────────────────────
+
+/** The project-health view — a cross-type list of parser/lint findings. Not
+ * part of `EntityViewBody` (it isn't bound to one entity type); the container
+ * feeds it the health endpoint's findings directly. */
+export function HealthView({ title, findings }: { title?: string; findings: EntityHealthFinding[] }) {
+  const errors = findings.filter((f) => f.level === "error").length;
+  const warnings = findings.length - errors;
+  return (
+    <div style={{ padding: 12 }}>
+      <h3 style={{ margin: "0 0 10px" }}>{title ?? "Health"}</h3>
+      {findings.length === 0 ? (
+        <div style={{ color: "var(--ok, #2e7d32)" }}>All records are healthy — no findings.</div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 8, fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
+            {errors} error{errors === 1 ? "" : "s"}, {warnings} warning{warnings === 1 ? "" : "s"}
+          </div>
+          <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            {findings.map((f, i) => (
+              <li
+                key={`${f.type_name}-${f.number}-${i}`}
+                style={{ display: "flex", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--line, #eee)" }}
+              >
+                <span
+                  style={{
+                    color: f.level === "error" ? "var(--err, #c62828)" : "var(--warn, #b8860b)",
+                    fontWeight: 600,
+                    minWidth: 64,
+                  }}
+                >
+                  {f.level}
+                </span>
+                <span style={{ minWidth: 90 }}>
+                  {f.type_name} #{f.number}
+                </span>
+                <span>
+                  {f.message}
+                  {f.field ? ` (${f.field})` : ""}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
