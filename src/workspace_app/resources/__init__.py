@@ -20,10 +20,6 @@ from specstar import BackendConfig, Schema, SpecStar
 from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
-# #414: the card-gen fan-out's run + staging structs live in kb.card_gen (next to
-# ProposedCard/DocDigest, so they can carry those typed fields without a resources
-# ↔ kb.context_cards import cycle). Registered below like IndexRun/IndexUnitText.
-from ..kb.card_gen import CardGenRun, CardGenUnit
 from ..perm.checker import collection_permission_event_handler
 from ..perm.scope import collection_access_scope
 from ..workflow.run import WorkflowRun
@@ -327,7 +323,12 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     spec.add_model(IndexUnitText, indexed_fields=["doc_id"])
     # #414: card-gen fan-out join state, one row per run (id = the id enqueue
     # returns + the FE polls). `status` indexed so a future safety sweep can find
-    # runs still "running"; the per-run reads are point gets by id.
+    # runs still "running"; the per-run reads are point gets by id. The run +
+    # staging structs live in kb.card_gen (next to ProposedCard/DocDigest, so they
+    # carry those typed fields directly); imported LAZILY here — a top-level import
+    # would cycle (resources → kb.card_gen → kb.context_cards → resources).
+    from ..kb.card_gen import CardGenRun, CardGenUnit
+
     spec.add_model(CardGenRun, indexed_fields=["status"])
     # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
     # to merge + raise questions from). Transient; deleted at finalize.
