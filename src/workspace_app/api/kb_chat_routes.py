@@ -15,28 +15,39 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from specstar import QB, SpecStar
+from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+if TYPE_CHECKING:
+    # The concrete manager's `using(..., apply_access_scope=True)` (the storage-
+    # layer read scope for a hand-written list) isn't on the `IResourceManager`
+    # Protocol `get_resource_manager` returns — a specstar type-stub gap. We cast
+    # to the concrete type only for that call.
+    from specstar.resource_manager.core import ResourceManager
+
 from ..agent.context import AgentToolContext, KbSearchBudget
+from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
 from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections
 from ..kb.context_cards import match as match_cards
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
+from ..perm import Actor, Permission, authorize
+from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
 from ..resources.kb import Citation, KbChat, KbMessage
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
 from .events import AgentEvent, MessageDelta, RunError, ToolEnd, ToolLog, ToolStart
 from .notifications import notify
+from .permission_body import PermissionBody, PermissionOut, build_permission, granted_user_ids
 from .runner import AgentRunner
 from .timeutil import dt_ms
 from .turns import ChatTurnEngine, TurnMessage, history_items
@@ -295,6 +306,8 @@ def register_kb_chat_routes(
     max_searches_ceiling: int = 10,
     # #397: lets the KB chat's request_wiki_update tool submit a wiki correction.
     wiki_coordinator: WikiMaintenanceCoordinator | None = None,
+    # #304: superusers bypass the per-verb chat ACL (must match make_spec's set).
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     """Register the KB chat surface.
 
@@ -318,11 +331,32 @@ def register_kb_chat_routes(
     def _load(chat_id: str) -> KbChat:
         return _load_rev(chat_id)[0]
 
-    def _require_owner(chat_id: str) -> tuple[KbChat, str]:
+    def _authorize_chat(chat_id: str, verb: Verb) -> tuple[KbChat, str]:
+        """#304 — gate a hand-written chat route. Loads the chat (`_load_rev` 404s
+        if missing), then sequences the two checks the auto-CRUD layer composes:
+        `read_meta` first — a caller who can't see the chat gets a uniform 404 (no
+        existence leak) — then `verb` → 403. Authorizes against the EFFECTIVE
+        permission (a pre-#304 row with no `permission` is read from its legacy
+        `shared_with`, so `authorize`'s "None ≡ public" never wrongly opens a
+        private chat)."""
         chat, owner = _load_rev(chat_id)
-        if owner != get_user_id():
-            raise HTTPException(status_code=403, detail="only the owner can do that")
+        perm = effective_permission(chat.permission, chat.shared_with)
+        actor = Actor.human(get_user_id())
+        if not authorize(actor, "read_meta", perm, created_by=owner, superusers=superusers):
+            raise HTTPException(status_code=404, detail="chat not found")
+        if not authorize(actor, verb, perm, created_by=owner, superusers=superusers):
+            raise HTTPException(status_code=403, detail=f"not authorized to {verb}")
         return chat, owner
+
+    def _shared_user_ids(chat: KbChat, owner: str) -> list[str]:
+        """The concrete users a chat is shared with, for the summary/`shared_with`
+        field the FE renders. Derived from the effective permission's read_chat
+        grants (so it survives the shared_with→permission migration), minus the
+        owner and the `all`/`group:` non-user subjects."""
+        perm = effective_permission(chat.permission, chat.shared_with)
+        return sorted(
+            {u[len("user:") :] for u in perm.read_chat if u.startswith("user:")} - {owner}
+        )
 
     def _summary(r: Any) -> KbChatSummary:
         """Build a list/rename summary row from a fetched chat revision (#357):
@@ -335,7 +369,7 @@ def register_kb_chat_routes(
             collection_ids=data.collection_ids,
             message_count=len(data.messages),
             owner=r.info.created_by,
-            shared_with=data.shared_with,
+            shared_with=_shared_user_ids(data, r.info.created_by),
             name_hint=first_user_snippet(data.messages),
             updated_ms=dt_ms(r.info.updated_time),
         )
@@ -363,7 +397,15 @@ def register_kb_chat_routes(
 
     @app.post("/kb/chats")
     async def create_chat(body: _ChatBody) -> KbChatSummary:
-        rev = chat_rm.create(KbChat(title=body.title, collection_ids=body.collection_ids))
+        # #304: a new chat is PRIVATE (owner-only) by default — unlike a collection,
+        # an unshared chat is not open to everyone. Sharing is an explicit later act.
+        rev = chat_rm.create(
+            KbChat(
+                title=body.title,
+                collection_ids=body.collection_ids,
+                permission=Permission(visibility="private"),
+            )
+        )
         return KbChatSummary(
             resource_id=rev.resource_id,
             title=body.title,
@@ -373,31 +415,31 @@ def register_kb_chat_routes(
 
     @app.get("/kb/chats")
     async def list_chats() -> list[KbChatSummary]:
-        """Only the current user's chats: ones they own + ones shared with them.
-        Two indexed queries (owner = created_by meta; shared_with contains me),
-        merged + deduped — not a full scan. Each row carries `name_hint` (first
-        user message) so an unnamed chat is still tellable apart, and `updated_ms`
-        (specstar revision time) as the recency-sort key (#357)."""
+        """Only the chats the current user may see — owned, public, restricted-and-
+        granted, or (a pre-#304 row) still in the legacy `shared_with`. #304 pushes
+        this down to the storage layer: one `access_scope`-applied list, no manual
+        owner/shared queries. Each row carries `name_hint` (first user message) so an
+        unnamed chat is still tellable apart, and `updated_ms` as the recency-sort
+        key (#357)."""
         me = get_user_id()
-        owned = chat_rm.list_resources((QB.created_by() == me).build())
-        shared = chat_rm.list_resources((QB["shared_with"].contains(me)).build())
-        # owned ∩ shared is empty by construction (the share endpoint forbids
-        # the owner being in their own shared_with), so concatenation is enough.
-        return [_summary(r) for r in [*owned, *shared]]
+        scoped = cast("ResourceManager[KbChat]", chat_rm)
+        with scoped.using(user=me, apply_access_scope=True) as op:
+            rows = op.list_resources()
+        return [_summary(r) for r in rows]
 
     @app.get("/kb/chats/{chat_id}")
     async def get_chat(chat_id: str) -> dict:
-        data, owner = _load_rev(chat_id)
-        me = get_user_id()
-        if owner != me and me not in data.shared_with:
-            raise HTTPException(status_code=403, detail="not shared with you")
+        # #304: viewing the full thread (its messages) needs `read_chat` — 404 if
+        # the caller can't even see the chat (read_meta), 403 if they can see it but
+        # not read the conversation.
+        data, owner = _authorize_chat(chat_id, "read_chat")
         return {
             "resource_id": chat_id,
             "title": data.title,
             "collection_ids": data.collection_ids,
             "messages": [_message_dict(m) for m in data.messages],
             "owner": owner,
-            "shared_with": data.shared_with,
+            "shared_with": _shared_user_ids(data, owner),
             # #357: same fallback label the list uses, so the chat-view header can
             # show a meaningful title for an unnamed thread instead of "Chat".
             "name_hint": first_user_snippet(data.messages),
@@ -405,30 +447,59 @@ def register_kb_chat_routes(
 
     @app.patch("/kb/chats/{chat_id}")
     async def rename_chat(chat_id: str, body: _RenameBody) -> KbChatSummary:
-        """Owner renames the thread (#357) — set its display title. "" clears the
-        name so the chat drops back to its name_hint label. Owner-only; 404 if
-        missing."""
-        chat, _ = _require_owner(chat_id)
-        chat_rm.update(chat_id, msgspec.structs.replace(chat, title=body.title))
+        """Rename the thread (#357) — set its display title. "" clears the name so
+        the chat drops back to its name_hint label. #304: gated on `write_meta`
+        (404 if you can't see it, 403 if you can't write it); the update runs AS THE
+        OWNER so the auto-CRUD write handler (which re-checks write_meta) passes for
+        a write_meta-granted collaborator who isn't the owner."""
+        chat, owner = _authorize_chat(chat_id, "write_meta")
+        with chat_rm.using(user=owner) as op:
+            op.update(chat_id, msgspec.structs.replace(chat, title=body.title))
         return _summary(chat_rm.get(chat_id))
 
     @app.delete("/kb/chats/{chat_id}", status_code=204)
     async def delete_chat(chat_id: str) -> Response:
-        _require_owner(chat_id)
+        # #304: deleting a chat is owner-only (a read/write collaborator can't
+        # destroy it). read_meta first → 404 hides a chat the caller can't see; then
+        # the owner/superuser check → 403.
+        _, owner = _authorize_chat(chat_id, "read_meta")
+        if owner != get_user_id() and get_user_id() not in superusers:
+            raise HTTPException(status_code=403, detail="only the owner can delete this chat")
         chat_rm.permanently_delete(chat_id)
         await engine.forget(chat_id)
         return Response(status_code=204)
 
+    def _write_permission(chat_id: str, chat: KbChat, owner: str, new_perm: Permission) -> None:
+        """Persist a chat's new `permission` AS THE OWNER (so the auto-CRUD write
+        handler — which re-checks write_meta + change_permission — passes for a
+        change_permission-only delegate) and clear the legacy `shared_with` (this
+        write migrates a pre-#304 row: its access_scope now runs off `permission`,
+        and the `shared_with` fallback clause goes inert)."""
+        with chat_rm.using(user=owner) as op:
+            op.update(chat_id, msgspec.structs.replace(chat, permission=new_perm, shared_with=[]))
+
     @app.post("/kb/chats/{chat_id}/share", status_code=204)
     async def share_chat(chat_id: str, body: _ShareBody) -> Response:
-        """Owner shares the thread read-only with users → they're added to
-        `shared_with` and each newly-added user gets a `share` notification."""
-        chat, _ = _require_owner(chat_id)
-        new = [u for u in body.user_ids if u not in chat.shared_with and u != get_user_id()]
+        """Share the thread read-only with users → each gets a `read_meta` +
+        `read_chat` grant (a viewer, not a sender) and a `share` notification. #304:
+        gated on `change_permission` (owner or a change_permission-grantee), and the
+        grants live on the chat's `Permission` now, not the legacy `shared_with`."""
+        chat, owner = _authorize_chat(chat_id, "change_permission")
+        perm = effective_permission(chat.permission, chat.shared_with)
+        new = [u for u in body.user_ids if u != owner and user_subject(u) not in perm.read_chat]
         if new:
-            chat_rm.update(
-                chat_id, msgspec.structs.replace(chat, shared_with=[*chat.shared_with, *new])
+            subs = [user_subject(u) for u in new]
+            # A private chat ignores its grant lists, so sharing must bump it to
+            # `restricted` for the new viewers to actually gain access; a public
+            # chat is already world-readable, so leave its visibility as-is.
+            visibility = "restricted" if perm.visibility == "private" else perm.visibility
+            updated = msgspec.structs.replace(
+                perm,
+                visibility=visibility,
+                read_meta=[*perm.read_meta, *(s for s in subs if s not in perm.read_meta)],
+                read_chat=[*perm.read_chat, *(s for s in subs if s not in perm.read_chat)],
             )
+            _write_permission(chat_id, chat, owner, updated)
             for uid in new:
                 notify(
                     spec,
@@ -442,26 +513,60 @@ def register_kb_chat_routes(
 
     @app.delete("/kb/chats/{chat_id}/share/{user_id}", status_code=204)
     async def unshare_chat(chat_id: str, user_id: str) -> Response:
-        chat, _ = _require_owner(chat_id)
-        if user_id in chat.shared_with:
-            chat_rm.update(
-                chat_id,
-                msgspec.structs.replace(
-                    chat, shared_with=[u for u in chat.shared_with if u != user_id]
-                ),
+        """Revoke a user's access entirely — drop them from every grant list
+        (read_meta / read_chat / converse). #304: gated on `change_permission`."""
+        chat, owner = _authorize_chat(chat_id, "change_permission")
+        perm = effective_permission(chat.permission, chat.shared_with)
+        subj = user_subject(user_id)
+        if any(subj in perm.grants(v) for v in ("read_meta", "read_chat", "converse")):
+            updated = msgspec.structs.replace(
+                perm,
+                read_meta=[s for s in perm.read_meta if s != subj],
+                read_chat=[s for s in perm.read_chat if s != subj],
+                converse=[s for s in perm.converse if s != subj],
             )
+            _write_permission(chat_id, chat, owner, updated)
         return Response(status_code=204)
+
+    @app.put("/kb/chats/{chat_id}/permission")
+    async def set_chat_permission(chat_id: str, body: PermissionBody) -> PermissionOut:
+        """#304 — set a chat's access control (the FE share UI's backend, #310).
+        Only the owner / a superuser / a `change_permission` grantee may call it
+        (404 if you can't see it, 403 if you can't change it). Persists the full
+        desired state AS THE OWNER (PUT = replace); newly-granted users get a
+        `share` notification."""
+        chat, owner = _authorize_chat(chat_id, "change_permission")
+        before = effective_permission(chat.permission, chat.shared_with)
+        new_perm = build_permission(body)
+        _write_permission(chat_id, chat, owner, new_perm)
+        me = get_user_id()
+        notified = sorted(granted_user_ids(new_perm) - granted_user_ids(before) - {me})
+        for uid in notified:
+            notify(
+                spec,
+                recipient=uid,
+                kind="share",
+                title=f'Shared a chat: "{chat.title}"',
+                link=f"/kb/chats/{chat_id}",
+                actor=me,
+            )
+        return PermissionOut(resource_id=chat_id, visibility=new_perm.visibility, notified=notified)
 
     @app.post("/kb/chats/{chat_id}/messages")
     async def send_message(chat_id: str, body: _MsgBody) -> StreamingResponse:
-        chat, owner = _load_rev(chat_id)
-        if owner != get_user_id():
-            # Shares are read-only — only the owner drives the thread.
-            raise HTTPException(status_code=403, detail="this chat is read-only for you")
+        # #304: sending a message needs `converse` — 404 if you can't see the chat,
+        # 403 if you can see/read it but aren't allowed to drive it (a read-only
+        # share). The owner always holds converse; a collaborator needs the grant.
+        chat, owner = _authorize_chat(chat_id, "converse")
         chat.messages.append(
             KbMessage(role="user", content=body.content, author=get_user_id(), created_at=_now_ms())
         )
-        chat_rm.update(chat_id, chat)
+        # Persist AS THE OWNER: the write mechanically an `update`, so the auto-CRUD
+        # write handler re-checks write_meta — which a converse-only collaborator
+        # need not hold (converse was already verified at the route). The message
+        # itself records the real sender via `author`.
+        with chat_rm.using(user=owner) as op:
+            op.update(chat_id, chat)
 
         # Issue #32: resolve the picker selection. Default = first
         # entry; explicit unknown name → 422 (not a silent fallback).
@@ -556,7 +661,10 @@ def register_kb_chat_routes(
                         cited_by=get_user_id(),
                     )
                 fresh.messages.append(km)
-            chat_rm.update(chat_id, fresh)
+            # Same owner-acting write as the user-message append above (#304): the
+            # assistant reply persists through the write handler as the chat owner.
+            with chat_rm.using(user=owner) as op:
+                op.update(chat_id, fresh)
 
         # #106: deterministic context-card pre-scan. Inject any cards whose keys
         # appear in the message so a covered term is answered straight away,

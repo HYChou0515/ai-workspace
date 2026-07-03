@@ -94,6 +94,31 @@ def source_doc_access_scope(
     )
 
 
+def kbchat_access_scope(
+    superusers: frozenset[str] = frozenset(),
+) -> AccessScope:
+    """#304 — KbChat read/list visibility. UNLIKE collections, a chat with no
+    ``Permission`` is PRIVATE (owner-only), not public — a chat isn't open to
+    everyone. Visible iff: owner, a superuser, ``public``, ``restricted`` +
+    granted read_meta, OR (a pre-#304 row with no permission yet) still in the
+    legacy ``shared_with`` — the fallback that keeps old shares readable until an
+    operator migrates them (then ``shared_with`` is cleared and this clause goes
+    inert)."""
+
+    def scope(user: str) -> ConditionBuilder | _Unrestricted:
+        if user in superusers:
+            return UNRESTRICTED
+        granted = QB["permission.read_meta"].contains_any(subjects_of(user))
+        return (
+            (QB.created_by() == user)  # the owner — absent-permission ≡ private
+            | (QB["permission.visibility"] == "public")
+            | ((QB["permission.visibility"] == "restricted") & granted)
+            | (QB["permission.visibility"].is_null() & QB["shared_with"].contains(user))
+        )
+
+    return scope
+
+
 def work_item_access_scope(
     superusers: frozenset[str] = frozenset(),
 ) -> AccessScope:
