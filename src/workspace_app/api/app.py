@@ -46,6 +46,7 @@ from .chat_routes import register_chat_routes
 from .chat_send import ChatSendService
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .doc_question_routes import register_doc_question_routes
+from .entity_routes import register_entity_routes
 from .file_routes import register_file_routes
 from .health_routes import (
     register_health_routes,
@@ -842,6 +843,10 @@ def create_app(
         workspace_quota=workspace_quota,
         max_file_size=max_file_size,
     )
+
+    # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema
+    # dir yields an empty catalog, so these routes are safe no-ops there.
+    register_entity_routes(api, files=files, locator=locator, get_user_id=get_user_id)
 
     # #177: now that EVERY route (specstar CRUD + all hand-written) is on the
     # /api router, include it onto the app exactly once. Mounting the SPA at "/"
