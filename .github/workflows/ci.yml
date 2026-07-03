@@ -10,7 +10,9 @@ on:
   pull_request:
 
 jobs:
-  backend-test:
+  # Lint / format / type — split out of the test matrix so it runs ONCE, not
+  # once per shard. It's fast (seconds), so it never gates wall-clock time.
+  backend-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,23 +38,68 @@ jobs:
       - name: Ruff format
         run: uv run ruff format --check
 
+      # ty is run unscoped (CI checks tests/ too — a file-scoped run once missed a
+      # test-helper type error).
       - name: Type check
         run: uv run ty check
 
-      # CI runs UNIT tests only (`-m "not integration"`), parallelised with
-      # xdist. Integration tests (real docker / subprocess sandbox / jupyter
-      # kernel / uv) are excluded — on a CI runner they fill the disk and take
-      # ~90 min. COVERAGE_PROCESS_START + PYTHONPATH let sitecustomize start
-      # coverage in each xdist worker subprocess; `coverage combine` merges them.
-      # The authoritative 100% gate is the FULL local suite (see CLAUDE.md);
-      # CI's coverage is the lower unit-only number (~97%), uploaded to Codecov
-      # for the badge — NOT gated here.
+  # The unit suite is SHARDED across parallel runners. On one runner the backend
+  # pytest step was ~75 min (it dwarfs frontend ~4 min / sandbox-host ~1 min), so
+  # the whole CI wall clock was that one step. Each shard runs a slice: the heavy,
+  # app-building dirs (api / workflow) get their own shard so no single runner
+  # carries them all. The `rest` shard runs EVERYTHING the others don't name — via
+  # --ignore, NOT an allowlist — so a newly added test dir is never silently
+  # dropped from CI. Coverage is uploaded per shard under the same `backend` flag;
+  # Codecov merges the shards' partial reports into one number for the badge.
+  backend-test:
+    name: backend-test (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            paths: tests/api
+          - name: kb
+            paths: tests/kb
+          - name: workflow-agent-apps
+            paths: tests/workflow tests/agent tests/apps
+          - name: rest
+            paths: >-
+              --ignore=tests/api --ignore=tests/kb --ignore=tests/workflow
+              --ignore=tests/agent --ignore=tests/apps tests
+    steps:
+      - uses: actions/checkout@v4
+
+      # libmagic is needed by the tabular/magic-sniff parser path.
+      - name: Install libmagic
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmagic1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      # --all-extras pulls the process-sandbox extra (pandera/scipy/sklearn/seaborn);
+      # a bare sync leaves test_infer_modules failing.
+      - name: Sync dependencies
+        run: uv sync --all-extras --frozen
+
+      # CI runs UNIT tests only (`-m "not integration"`), parallelised with xdist.
+      # Integration tests (real docker / subprocess sandbox / jupyter kernel / uv)
+      # are excluded — on a CI runner they fill the disk and take ~90 min.
+      # COVERAGE_PROCESS_START + PYTHONPATH let sitecustomize start coverage in
+      # each xdist worker subprocess; `coverage combine` merges them. The
+      # authoritative 100% gate is the FULL local suite (see CLAUDE.md); CI's
+      # coverage is the lower unit-only number and is per-shard PARTIAL here —
+      # uploaded to Codecov under one flag, which merges the shards. NOT gated.
       - name: Tests + coverage (unit only, parallel)
         env:
           COVERAGE_PROCESS_START: pyproject.toml
           PYTHONPATH: .
         run: |
-          uv run pytest -m "not integration" -n auto
+          uv run pytest -m "not integration" -n auto ${{ matrix.paths }}
           uv run coverage combine
           uv run coverage report
           uv run coverage xml
