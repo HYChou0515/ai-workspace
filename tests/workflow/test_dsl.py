@@ -560,3 +560,39 @@ async def test_run_gate_summary_reads_text_and_json():
 def test_agentstep_struct_defaults():
     s = AgentStep(prompt="p", phase="p")
     assert s.out == "" and s.tools == [] and s.retries == 0 and s.check is None
+
+
+def test_validate_create_entity_requires_type_name() -> None:
+    errs = _errs([{"type": "capability", "call": "create_entity", "phase": "p"}])
+    assert any("type_name" in e for e in errs)
+
+
+async def test_run_create_entity_capability() -> None:
+    """A user-authored workflow.json can mint an entity through the SAME numbering
+    pipeline (#419 workflow接軌) — no raw wf.write."""
+    store = MemoryFileStore()
+    await store.write(
+        "ws", "/.entity/task/schema.yaml", b"path: tasks\nfields:\n  title: {role: text}\n"
+    )
+    await store.write("ws", "/.entity/task/skeleton.md", b"---\ntitle: {{arg.title}}\n---\n")
+    wf = make_wf(store)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "capability",
+                        "call": "create_entity",
+                        "phase": "p",
+                        "type_name": "task",
+                        "args": {"title": "Ship it"},
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert "title: Ship it" in (await store.read("ws", "/tasks/1.md")).decode()

@@ -22,7 +22,11 @@ from specstar.types import IndexableField
 
 from ..kb.chat_permission import kbchat_permission_event_handler
 from ..perm.checker import collection_permission_event_handler
-from ..perm.scope import collection_access_scope, kbchat_access_scope
+from ..perm.scope import (
+    collection_access_scope,
+    kbchat_access_scope,
+    source_doc_access_scope,
+)
 from ..workflow.run import WorkflowRun
 from .agent_config import AgentConfig
 from .check_run import CheckRun
@@ -260,13 +264,24 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # `status` until the operator runs `POST /source-doc/migrate/execute`
     # (the list treats that window as "ready" — the overwhelmingly common
     # terminal state).
+    #
+    # #303: `collection_visibility` + `collection_read_meta` + `collection_created_by`
+    # indexed so the `source_doc` access_scope filters a doc by its (denormalized)
+    # collection visibility at the storage layer (hiding even the auto-CRUD
+    # `GET /source-doc/{id}`). Bumped v6 → v7 with a no-op reindex step: the three
+    # fields carry a "public" / empty default, so a pre-#303 row decodes to
+    # public (its legacy "anyone can read" state) and needs no data change — the
+    # migrate route only re-extracts indexed_data. The actual per-collection
+    # values are backfilled by the fan-out (doc-create + the collection permission
+    # setter), NOT by migrate (a migrate step can't load the parent collection).
     spec.add_model(
-        Schema(SourceDoc, "v6")
+        Schema(SourceDoc, "v7")
         .step(None, _reindex_only, to="v3", source_type=SourceDoc)
         .step("v2", _reindex_only, to="v3", source_type=SourceDoc)
         .step("v3", _backfill_token_count, to="v4", source_type=SourceDoc)
         .step("v4", _reindex_only, to="v5", source_type=SourceDoc)
-        .step("v5", _reindex_only, to="v6", source_type=SourceDoc),
+        .step("v5", _reindex_only, to="v6", source_type=SourceDoc)
+        .step("v6", _reindex_only, to="v7", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
             IndexableField("content.size", int, index_key="content_size"),
@@ -277,7 +292,11 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("status_detail", str),
             IndexableField("content.content_type", str, index_key="content_type"),
             IndexableField("content.file_id", str, index_key="file_id"),
+            IndexableField("collection_visibility", str),
+            IndexableField("collection_read_meta", list),
+            IndexableField("collection_created_by", str),
         ],
+        access_scope=source_doc_access_scope(superusers),
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the
     # retriever's per-collection lookup) is a query — a non-indexed filter would

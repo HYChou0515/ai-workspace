@@ -42,3 +42,35 @@ async def test_upload_dir_is_injectable():
 
     h = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", upload_dir="docs")
     assert h.upload_dir == "docs"
+
+
+async def test_create_entity_uses_framework_numbering_and_is_idempotent() -> None:
+    """`wf.create_entity` mints entities through the SAME EntityStore path as the
+    UI/agent (framework numbering, no raw wf.write), and is journaled so a re-run
+    with the same args never duplicates (#419 §C, workflow接軌)."""
+    import pytest
+
+    from workspace_app.entity.store import EntityStore  # noqa: F401  (import parity)
+    from workspace_app.filestore.memory import MemoryFileStore
+    from workspace_app.workflow.engine import StepFailed
+
+    store = MemoryFileStore()
+    await store.write(
+        "ws", "/.entity/issue/schema.yaml", b"path: issues\nfields:\n  title: {role: text}\n"
+    )
+    await store.write("ws", "/.entity/issue/skeleton.md", b"---\ntitle: {{arg.title}}\n---\n")
+    wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
+
+    n1 = await wf.create_entity("issue", {"title": "A"})
+    n2 = await wf.create_entity("issue", {"title": "B"})
+    assert (n1, n2) == (1, 2)
+    assert "title: A" in (await store.read("ws", "/issues/1.md")).decode()
+
+    # re-run with the same args → journaled skip, no duplicate file
+    again = await wf.create_entity("issue", {"title": "A"})
+    assert again == 1
+    assert not await store.exists("ws", "/issues/3.md")
+
+    # unknown type fails loudly (before journaling)
+    with pytest.raises(StepFailed):
+        await wf.create_entity("nope", {"title": "X"})
