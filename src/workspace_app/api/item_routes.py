@@ -26,6 +26,13 @@ from .registry import InvestigationRegistry
 from .schemas import _CloseItemBody
 from .turns import ChatTurnEngine
 
+# asyncio holds only a WEAK reference to a bare ``create_task()`` result, so an
+# un-referenced fire-and-forget task can be garbage-collected mid-flight — the
+# background promote then vanishes before it writes the insight, surfacing as a
+# flaky "no insight written" under GC pressure on a loaded CI runner. Keep a
+# strong reference until each task finishes, discarding it on completion.
+_promote_tasks: set[asyncio.Task[list[str]]] = set()
+
 
 def register_item_routes(
     app: FastAPI | APIRouter,
@@ -141,7 +148,7 @@ def register_item_routes(
             # pipeline is wired (LLM available).
             if kb_chat_pipeline is not None:
                 _, conv_for_promote = locator.conversation_for(item_id)
-                asyncio.create_task(
+                task = asyncio.create_task(
                     promote_chat_to_kb(
                         ingestor=ingestor,
                         insights_collection_id=insights_collection_id,
@@ -151,6 +158,8 @@ def register_item_routes(
                         messages=conv_for_promote.messages,
                     )
                 )
+                _promote_tasks.add(task)
+                task.add_done_callback(_promote_tasks.discard)
             # Notify the owner + watchers (members are Tier-2 / opt-in), except
             # whoever did it.
             actor = get_user_id()

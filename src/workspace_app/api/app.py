@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from typing import Any, cast
 
 from agents.tracing import set_trace_processors
 from fastapi import APIRouter, FastAPI
@@ -847,14 +848,25 @@ def create_app(
     # fallback, so a refreshed client route can't be shadowed by an API route.
     app.include_router(api)
 
-    # Re-customize the OpenAPI schema now that *all* custom routes are
-    # registered. specstar.apply(app) ran earlier and cached a schema that
-    # only saw the routes existing at that moment; without this second
-    # pass the custom `/investigations/*/messages|files|notebooks|close`
-    # routes wouldn't appear in /openapi.json (the routes themselves
-    # still work — they're in app.routes — but FE / Swagger discovery
-    # would be incomplete).
-    spec.openapi(app)
+    # Defer specstar's OpenAPI customisation until first access. Building the
+    # schema walks every registered route (~1600) and is ~3.5s — the single
+    # biggest cost inside create_app. The running server needs it only when
+    # /openapi.json or /docs is hit, and the test suite builds an app per test,
+    # so paying it eagerly here dominated CI wall time. FastAPI serves the schema
+    # through app.openapi(); wrap that hook so specstar's customize runs once, on
+    # first request, and caches into app.openapi_schema. `spec.apply(...,
+    # auto_include=False)` above deliberately skipped the eager build, and by now
+    # EVERY route (specstar CRUD + all hand-written) is on the app, so the lazily
+    # built schema is complete — the custom workspace routes stay discoverable in
+    # /openapi.json (FE / Swagger), just without the per-boot / per-test cost.
+    def _openapi() -> dict[str, Any]:
+        if app.openapi_schema is None:
+            spec.openapi(app)  # customises + caches into app.openapi_schema
+        return cast("dict[str, Any]", app.openapi_schema)
+
+    # FastAPI's documented override hook; ty models app.openapi as the unbound
+    # method, so the no-self replacement trips invalid-assignment.
+    app.openapi = _openapi  # ty: ignore[invalid-assignment]
 
     # Mount the built SPA last so API routes registered above take precedence
     # over the catch-all static handler. If no build exists, skip silently —

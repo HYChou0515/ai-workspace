@@ -281,11 +281,12 @@ async def test_close_app_item_schedules_background_promote():
     resp = client.post(f"/a/rca/items/{item_id}/close", json={"status": "resolved"})
     assert resp.status_code == 204
     # Poll the background promote with a generous, bounded budget. The insight
-    # write runs on a background task, and a heavily-loaded CI runner can be ~7x
-    # slower than local, so the old ~1s budget (20 * 0.05s) flaked under CI load
-    # even though the write always lands. 10s still breaks early on success and
-    # fails fast enough when the promote is genuinely broken.
-    for _ in range(200):
+    # write runs on a fire-and-forget background task (now GC-safe — item_routes
+    # holds a strong ref, so it can no longer vanish mid-flight), but a sharded,
+    # heavily-loaded 2-core CI runner schedules that task's thread slowly, so the
+    # old 10s budget still flaked. 30s absorbs the scheduling latency, breaks
+    # early on success, and fails fast enough when the promote is genuinely broken.
+    for _ in range(600):
         ids = [
             r.info.resource_id  # ty: ignore[unresolved-attribute]
             for r in spec.get_resource_manager(SourceDoc).list_resources(
