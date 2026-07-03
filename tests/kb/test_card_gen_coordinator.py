@@ -19,6 +19,7 @@ from workspace_app.kb.card_gen import (
     TermQuestionDraft,
 )
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
+from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.doc_questions import open_questions_for_collections
@@ -240,24 +241,25 @@ async def test_pending_runs_are_scoped_to_their_collection():
 
 
 async def test_a_selected_wiki_page_is_read_and_drafted_like_a_document():
-    """#415: the picker can pick an LLM wiki page as a source. Its ``WikiPage`` id
-    misses the SourceDoc lookup, so ``CardGenSources`` reads the page markdown and
-    it drafts a card cited by the page path — mixed into the same ``doc_ids``."""
+    """#415: the picker can pick an LLM wiki page as a source. It's submitted with
+    the ``wiki:`` type-tag (so a same-path doc stays distinct), so
+    ``CardGenSources`` reads the page markdown and it drafts a card cited by the
+    page path — mixed into the same ``doc_ids``."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
-    wiki_id = _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
+    tagged_id = WIKI_ID_PREFIX + _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
     drafter = _FakeDrafter(
         {"/index.md": [CardDraft(keys=["RZ3"], title="RZ3", body="Third zone.", snippet="RZ3…")]}
     )
     coord = CardGenCoordinator(spec, drafter)
-    jid = coord.enqueue(cid, [wiki_id])
+    jid = coord.enqueue(cid, [tagged_id])
     await coord.aclose()
 
     art = coord.proposals(jid)
     assert len(art.proposals) == 1
     assert art.proposals[0].keys == ["RZ3"]
     assert art.proposals[0].provenance[0].path == "/index.md"
-    assert art.proposals[0].provenance[0].doc_id == wiki_id
+    assert art.proposals[0].provenance[0].doc_id == tagged_id
 
 
 async def test_a_draft_already_fully_covered_by_an_existing_card_is_skipped():

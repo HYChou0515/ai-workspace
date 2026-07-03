@@ -56,7 +56,7 @@ describe("AutoGenerateCards picker (#415)", () => {
     expect(screen.queryByTestId("cardgen-proposal")).not.toBeInTheDocument();
   });
 
-  it("submits a selected wiki page by its wiki-page id, mixed into the same list", async () => {
+  it("submits a selected wiki page by its TYPE-TAGGED id, mixed into the same list", async () => {
     await mockKbApi.writeWikiPage("col-1", "/index.md", "# Index");
     const spy = vi.spyOn(mockKbApi, "generateContextCards");
     const user = userEvent.setup();
@@ -64,7 +64,8 @@ describe("AutoGenerateCards picker (#415)", () => {
 
     await user.click(await screen.findByRole("checkbox", { name: "index.md" }));
     await user.click(screen.getByRole("button", { name: /自動生成/ }));
-    expect(spy).toHaveBeenCalledWith("col-1", ["col-1∕index.md"]);
+    // `wiki:` tag keeps this distinct from a same-path document's id.
+    expect(spy).toHaveBeenCalledWith("col-1", ["wiki:col-1∕index.md"]);
   });
 
   it("search narrows the tree and select-all picks only the matches", async () => {
