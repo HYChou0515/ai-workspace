@@ -24,6 +24,17 @@ def test_recent_returns_persisted_events_in_order_filtered_and_limited():
     assert [e["n"] for e in m.recent(limit=1)] == [3]
 
 
+def test_recent_filters_by_kind():
+    # #407: kind is indexed, so the summary can read just its own event types
+    # (mirror/restore/ws_census) without scanning the agent-trace history.
+    m = SpecstarMonitor(_spec())
+    m.record({"kind": "mirror", "n": 1})
+    m.record({"kind": "restore", "n": 2})
+    m.record({"kind": "mirror", "n": 3})
+    assert [e["n"] for e in m.recent(kind="mirror")] == [1, 3]
+    assert [e["n"] for e in m.recent(kind="restore")] == [2]
+
+
 def test_events_survive_a_new_monitor_over_the_same_spec():
     spec = _spec()
     SpecstarMonitor(spec).record({"kind": "span_end", "group_id": "inv-1", "n": 7})

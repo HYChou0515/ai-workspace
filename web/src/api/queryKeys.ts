@@ -63,6 +63,8 @@ export const qk = {
     ["workflowPreview", slug, itemId, workflowId] as const,
   health: ["health"] as const,
   monitor: ["monitor"] as const,
+  // #407: the distilled durable-store cost summary (p95 mirror/restore + row trend).
+  monitorSummary: ["monitor", "summary"] as const,
 
   sanity: {
     meta: ["sanity", "meta"] as const,

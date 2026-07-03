@@ -4,11 +4,20 @@ import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 
-import type { MonitorApi } from "../api/monitor";
+import type { MonitorApi, MonitorSummary } from "../api/monitor";
 import { QueryWrap } from "../test/queryWrapper";
 import { TelemetryPanel } from "./TelemetryPanel";
 
 const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: QueryWrap });
+
+const emptySummary: MonitorSummary = {
+  p95_n_files: null,
+  p95_restore_ms: null,
+  total_rows_trend: [],
+  n_mirror_samples: 0,
+  n_restore_samples: 0,
+  window_days: null,
+};
 
 const withTrace: MonitorApi = {
   getMonitor: async () => [
@@ -24,6 +33,7 @@ const withTrace: MonitorApi = {
   ],
   // biome-ignore lint/correctness/useYield: an empty live feed for the test
   async *streamMonitor() {},
+  getSummary: async () => emptySummary,
 };
 
 describe("TelemetryPanel", () => {
@@ -45,8 +55,40 @@ describe("TelemetryPanel", () => {
       getMonitor: async () => [],
       // biome-ignore lint/correctness/useYield: empty feed
       async *streamMonitor() {},
+      getSummary: async () => emptySummary,
     };
     render(<TelemetryPanel client={empty} />);
     expect(await screen.findByText(/No activity yet/i)).toBeInTheDocument();
+  });
+
+  it("shows the durable-store summary card (#407)", async () => {
+    const client: MonitorApi = {
+      getMonitor: async () => [],
+      // biome-ignore lint/correctness/useYield: empty feed
+      async *streamMonitor() {},
+      getSummary: async (): Promise<MonitorSummary> => ({
+        p95_n_files: 19,
+        p95_restore_ms: 42,
+        total_rows_trend: [
+          { t: 1000, rows: 5 },
+          { t: 2000, rows: 8 },
+        ],
+        n_mirror_samples: 20,
+        n_restore_samples: 20,
+        window_days: null,
+      }),
+    };
+    render(<TelemetryPanel client={client} />);
+    expect(await screen.findByText("19")).toBeInTheDocument(); // p95 files-per-mirror (awaits query)
+    expect(screen.getByText("42 ms")).toBeInTheDocument(); // p95 cold-wake restore
+    expect(screen.getByText("8")).toBeInTheDocument(); // latest WorkspaceFile rows
+    expect(screen.getByText(/20 mirror/)).toBeInTheDocument(); // sample counts
+    expect(screen.getByText("Durable store")).toBeInTheDocument();
+  });
+
+  it("renders placeholders when there are no durable-store samples", async () => {
+    render(<TelemetryPanel client={withTrace} />); // withTrace uses emptySummary
+    expect(await screen.findByText("Durable store")).toBeInTheDocument();
+    expect(screen.getAllByText("—").length).toBeGreaterThanOrEqual(3);
   });
 });

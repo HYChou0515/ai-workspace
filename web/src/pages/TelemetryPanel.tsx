@@ -15,6 +15,7 @@ import {
   type MonitorApi,
   type MonitorEvent,
   monitorApi,
+  type RowsPoint,
   type Trace,
   type TraceSpan,
 } from "../api/monitor";
@@ -147,6 +148,78 @@ function TraceRow({ trace }: { trace: Trace }) {
   );
 }
 
+function Stat({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 96 }}>
+      <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>{label}</span>
+      <span style={{ fontSize: "var(--text-body)", fontWeight: 600, fontFamily: "var(--font-mono)" }}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/** A dependency-free sparkline of the WorkspaceFile row-count trend (#407). */
+function Sparkline({ points }: { points: RowsPoint[] }) {
+  if (points.length < 2) return null;
+  const rows = points.map((p) => p.rows);
+  const min = Math.min(...rows);
+  const span = Math.max(...rows) - min || 1;
+  const w = 120;
+  const h = 26;
+  const d = points
+    .map((p, i) => {
+      const x = (i / (points.length - 1)) * w;
+      const y = h - ((p.rows - min) / span) * h;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={w} height={h} role="img" aria-label="WorkspaceFile rows trend" style={{ overflow: "visible" }}>
+      <path d={d} fill="none" stroke="var(--accent-h)" strokeWidth={1.5} />
+    </svg>
+  );
+}
+
+/** #407: the durable-store cost card — the numbers the "archive vs keep the
+ * per-file model" call (#376) is made on. Always shown, even with no samples. */
+function DurableStoreCard({ client }: { client: MonitorApi }) {
+  const { data: s } = useQuery({
+    queryKey: qk.monitorSummary,
+    queryFn: () => client.getSummary(),
+  });
+  const dash = "—";
+  const latestRows = s?.total_rows_trend.at(-1)?.rows;
+  return (
+    <section
+      aria-label="Durable store telemetry"
+      style={{
+        border: "1px solid var(--paper-3)",
+        borderRadius: 8,
+        padding: "12px 14px",
+        margin: "6px 0 0",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: "var(--text-body-sm)", fontWeight: 600 }}>Durable store</span>
+        <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>#407</span>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 20 }}>
+        <Stat label="Files / mirror (p95)" value={s?.p95_n_files != null ? String(s.p95_n_files) : dash} />
+        <Stat
+          label="Cold-wake restore (p95)"
+          value={s?.p95_restore_ms != null ? `${s.p95_restore_ms} ms` : dash}
+        />
+        <Stat label="WorkspaceFile rows" value={latestRows != null ? String(latestRows) : dash} />
+        <Sparkline points={s?.total_rows_trend ?? []} />
+      </div>
+      <p style={{ margin: "10px 0 0", fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
+        {s?.n_mirror_samples ?? 0} mirror · {s?.n_restore_samples ?? 0} restore samples
+      </p>
+    </section>
+  );
+}
+
 export function TelemetryPanel({ client = monitorApi }: { client?: MonitorApi }) {
   const [live, setLive] = useState<MonitorEvent[]>([]);
   const { data: history = [] } = useQuery({
@@ -170,24 +243,25 @@ export function TelemetryPanel({ client = monitorApi }: { client?: MonitorApi })
 
   const traces = useMemo(() => foldTraces([...history, ...live]), [history, live]);
 
-  if (traces.length === 0) {
-    return (
-      <p
-        className="kb-cols__empty"
-        role="status"
-        style={{ marginTop: 24, color: "var(--text-paper-d)", fontSize: "var(--text-body-sm)" }}
-      >
-        No activity yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls
-        appear here live.
-      </p>
-    );
-  }
-
   return (
-    <ul style={{ listStyle: "none", margin: "18px 0 0", padding: 0 }}>
-      {traces.map((t) => (
-        <TraceRow key={t.traceId} trace={t} />
-      ))}
-    </ul>
+    <>
+      <DurableStoreCard client={client} />
+      {traces.length === 0 ? (
+        <p
+          className="kb-cols__empty"
+          role="status"
+          style={{ marginTop: 24, color: "var(--text-paper-d)", fontSize: "var(--text-body-sm)" }}
+        >
+          No activity yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls
+          appear here live.
+        </p>
+      ) : (
+        <ul style={{ listStyle: "none", margin: "18px 0 0", padding: 0 }}>
+          {traces.map((t) => (
+            <TraceRow key={t.traceId} trace={t} />
+          ))}
+        </ul>
+      )}
+    </>
   );
 }

@@ -26,7 +26,7 @@ from typing import Any, cast
 from urllib.parse import quote
 
 from msgspec import Struct, field
-from specstar import QB, Schema, SpecStar, Sum
+from specstar import QB, Count, Schema, SpecStar, Sum
 from specstar.types import Binary, IndexableField, ResourceIDNotFoundError, RevisionStatus
 
 from .protocol import FileExists, FileNotFound, dir_ancestors
@@ -151,6 +151,14 @@ class SpecstarFileStore:
         file doesn't exist."""
         return await asyncio.to_thread(self._file_size_sync, workspace_id, path)
 
+    async def census(self) -> dict[str, int]:
+        """#407: a whole-table census — total rows, distinct workspaces, and the
+        largest single workspace's file count — via ONE group-by push-down (no
+        rows materialised). Feeds the ws_census telemetry trend so we can watch
+        the durable per-file cardinality grow before deciding whether it needs a
+        cheaper (archive) storage model."""
+        return await asyncio.to_thread(self._census_sync)
+
     async def delete(self, workspace_id: str, path: str) -> None:
         await asyncio.to_thread(self._delete_sync, workspace_id, path)
 
@@ -244,6 +252,19 @@ class SpecstarFileStore:
         # None — it under-counts as 0 until the operator runs migrate/execute.
         used = rows[0]["used"] if rows else None
         return int(used) if used is not None else 0
+
+    def _census_sync(self) -> dict[str, int]:
+        rows = self._files.exp_aggregate_by(  # ty: ignore[unresolved-attribute]
+            by=QB["workspace_id"],
+            aggregates={"n": Count()},
+            query=QB.all().build(),
+        )
+        counts = [int(r["n"]) for r in rows]
+        return {
+            "total_workspacefile_rows": sum(counts),
+            "n_workspaces": len(counts),
+            "max_files_per_ws": max(counts, default=0),
+        }
 
     def _file_size_sync(self, workspace_id: str, path: str) -> int | None:
         try:

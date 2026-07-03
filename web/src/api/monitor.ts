@@ -99,9 +99,24 @@ export function foldTraces(events: MonitorEvent[]): Trace[] {
   return [...byId.values()].sort((a, b) => b._seq - a._seq);
 }
 
+/** One point on the durable-store WorkspaceFile row-count trend (#407). */
+export type RowsPoint = { t: number; rows: number };
+
+/** #407: distilled durable-store cost (GET /monitor/summary). `p95_*` are null
+ * when there are no samples in the window. */
+export type MonitorSummary = {
+  p95_n_files: number | null;
+  p95_restore_ms: number | null;
+  total_rows_trend: RowsPoint[];
+  n_mirror_samples: number;
+  n_restore_samples: number;
+  window_days: number | null;
+};
+
 export interface MonitorApi {
   getMonitor(opts?: { groupId?: string; limit?: number }): Promise<MonitorEvent[]>;
   streamMonitor(opts?: { groupId?: string; signal?: AbortSignal }): AsyncGenerator<MonitorEvent>;
+  getSummary(): Promise<MonitorSummary>;
 }
 
 export const realMonitorApi: MonitorApi = {
@@ -119,6 +134,11 @@ export const realMonitorApi: MonitorApi = {
     const r = await apiFetch(`/monitor/stream${qs}`, { signal });
     if (!r.ok || !r.body) throw new Error(`monitor stream failed: ${r.status}`);
     yield* parseSseStream<MonitorEvent>(r.body);
+  },
+  async getSummary() {
+    const r = await apiFetch("/monitor/summary");
+    if (!r.ok) throw new Error(`monitor summary failed: ${r.status}`);
+    return r.json();
   },
 };
 
@@ -150,6 +170,20 @@ export const mockMonitorApi: MonitorApi = {
   },
   async *streamMonitor() {
     // The mock feed is the history; nothing live arrives.
+  },
+  async getSummary() {
+    return {
+      p95_n_files: 12,
+      p95_restore_ms: 34,
+      total_rows_trend: [
+        { t: 1, rows: 40 },
+        { t: 2, rows: 55 },
+        { t: 3, rows: 61 },
+      ],
+      n_mirror_samples: 8,
+      n_restore_samples: 5,
+      window_days: null,
+    };
   },
 };
 

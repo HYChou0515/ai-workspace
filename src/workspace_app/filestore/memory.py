@@ -76,6 +76,17 @@ class MemoryFileStore:
             files = self._files.get(workspace_id, {})
             return len(files[path]) if path in files else None
 
+    async def census(self) -> dict[str, int]:
+        """#407: total files, distinct (non-empty) workspaces, and the largest
+        workspace's file count — the same shape SpecstarFileStore reports."""
+        async with self._lock:
+            counts = [len(files) for files in self._files.values() if files]
+        return {
+            "total_workspacefile_rows": sum(counts),
+            "n_workspaces": len(counts),
+            "max_files_per_ws": max(counts, default=0),
+        }
+
     async def delete(self, workspace_id: str, path: str) -> None:
         async with self._lock:
             files = self._files.get(workspace_id)

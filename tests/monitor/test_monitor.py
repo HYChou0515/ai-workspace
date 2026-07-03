@@ -18,6 +18,16 @@ def test_recent_buffers_and_filters_by_group():
     assert [e["n"] for e in m.recent(limit=1)] == [3]
 
 
+def test_recent_filters_by_kind():
+    # #407: the summary endpoint reads only its own event kinds, not agent traces.
+    m = InMemoryMonitor()
+    m.record({"kind": "mirror", "n": 1})
+    m.record({"kind": "restore", "n": 2})
+    m.record({"kind": "mirror", "n": 3})
+    assert [e["n"] for e in m.recent(kind="mirror")] == [1, 3]
+    assert [e["n"] for e in m.recent(kind="restore")] == [2]
+
+
 def test_capacity_drops_oldest():
     m = InMemoryMonitor(capacity=2)
     for i in range(3):

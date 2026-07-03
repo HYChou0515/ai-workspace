@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import contextlib
 import datetime as dt
+import time
+from typing import TYPE_CHECKING
 
 from msgspec import Struct
 from specstar import SpecStar
@@ -30,6 +32,9 @@ from specstar.types import (
     ResourceIDNotFoundError,
     RevisionStatus,
 )
+
+if TYPE_CHECKING:
+    from ..monitor import IMonitor
 
 _LEASE_ID = "blob-gc"
 
@@ -85,13 +90,35 @@ def run_blob_gc(
     t2: str,
     ttl_ms: int,
     now: dt.datetime | None = None,
+    monitor: IMonitor | None = None,
 ):
     """Run one ``reconcile`` pass IFF this pod wins the lease, else a no-op
     (returns None). Returns specstar's ``GcStats`` on a run. ``now`` is
-    injectable for deterministic tests + scheduling."""
+    injectable for deterministic tests + scheduling.
+
+    #407: when a ``monitor`` is wired, the pod that actually runs the reconcile
+    emits one ``blob_gc`` telemetry event (GcStats + wall-clock) — the global
+    GC-cost / blob-cardinality signal. A pod that loses the lease records
+    nothing (it did no work)."""
     if now is None:
         now = dt.datetime.now(dt.UTC)
     now_ms = int(now.timestamp() * 1000)
     if not try_claim_gc(spec, now_ms=now_ms, ttl_ms=ttl_ms):
         return None
-    return spec.gc(mode="reconcile", t1=t1, t2=t2, now=now)
+    started = time.monotonic()
+    stats = spec.gc(mode="reconcile", t1=t1, t2=t2, now=now)
+    if monitor is not None:
+        monitor.record(
+            {
+                "kind": "blob_gc",
+                "t": int(time.time() * 1000),  # wall-clock, for the summary's time window
+                "mode": stats.mode,
+                "quarantined": stats.quarantined,
+                "restored": stats.restored,
+                "deleted": stats.deleted,
+                "live": stats.live,
+                "scan_complete": stats.scan_complete,
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+            }
+        )
+    return stats

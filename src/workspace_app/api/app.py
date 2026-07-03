@@ -314,7 +314,12 @@ def create_app(
     default_infer_modules_config = catalog.infer_modules() or _bundled.infer_modules()
     assert default_infer_modules_config  # bundled always populates infer_modules
 
-    sync = SandboxSync(filestore=filestore, sandbox=sandbox)
+    # Live telemetry monitor (issue #11), resolved here — before SandboxSync —
+    # so the durable-sync telemetry (#407: one summary event per mirror/restore)
+    # lands in the same sink as the agent/LLM traces. The trace-processor is
+    # registered a few lines down once the app-level wiring is complete.
+    monitor = monitor if monitor is not None else InMemoryMonitor()
+    sync = SandboxSync(filestore=filestore, sandbox=sandbox, monitor=monitor)
     # #345: only the local process sandbox keeps an item's working dir on a
     # shared volume across pods, so only it needs the GLOBAL activity heartbeat
     # that lets the idle reaper recycle a dir solely when no pod is using it.
@@ -347,11 +352,10 @@ def create_app(
     files = WorkspaceFiles(filestore, sandbox, registry.peek_handle)
     kernels = KernelService()
     activity = ActivityLog()
-    # Live telemetry monitor, fed by the OpenAI Agents SDK's own tracing — every
-    # run's LLM generations (with token usage), tool calls and agent steps flow
-    # through MonitorProcessor in real time (issue #11). Registering replaces
-    # the SDK's default (OpenAI-backend) exporter, which we don't use locally.
-    monitor = monitor if monitor is not None else InMemoryMonitor()
+    # Feed the monitor (resolved above) from the OpenAI Agents SDK's own tracing
+    # — every run's LLM generations (with token usage), tool calls and agent
+    # steps flow through MonitorProcessor in real time (issue #11). Registering
+    # replaces the SDK's default (OpenAI-backend) exporter, which we don't use.
     set_trace_processors([MonitorProcessor(monitor)])
 
     # Issue #51: the sanity-check service — latest results in memory,
@@ -377,6 +381,8 @@ def create_app(
         spec=spec,
         kernels=kernels,
         health_service=health_service,
+        filestore=filestore,
+        monitor=monitor,
         run_consumers=run_consumers,
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,

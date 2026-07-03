@@ -13,11 +13,12 @@ from asgi_lifespan import LifespanManager
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.monitor import InMemoryMonitor
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 
 
-def _app(*, gc_interval):
+def _app(*, gc_interval, monitor=None):
     spec = make_spec(default_user="u")
     return create_app(
         spec=spec,
@@ -25,6 +26,7 @@ def _app(*, gc_interval):
         filestore=SpecstarFileStore(spec),
         runner=ScriptedAgentRunner([]),
         gc_interval=gc_interval,
+        monitor=monitor,
     )
 
 
@@ -42,6 +44,26 @@ async def test_sweeper_ticks_run_blob_gc_when_interval_set(monkeypatch):
                 break
             await asyncio.sleep(0.05)
     assert ticked.is_set()
+
+
+async def test_sweeper_emits_blob_gc_and_ws_census_telemetry():
+    # #407: each durable-maintenance tick emits the generic blob_gc GC stats AND
+    # a WorkspaceFile ws_census snapshot into the monitor, so both durable-store
+    # signals accumulate over time. Run the real run_blob_gc (cheap on the
+    # in-memory backend) so the wiring is exercised end to end.
+    mon = InMemoryMonitor()
+    app = _app(gc_interval=timedelta(seconds=0.05), monitor=mon)
+    async with LifespanManager(app):
+        for _ in range(200):
+            kinds = {e.get("kind") for e in mon.recent()}
+            if "blob_gc" in kinds and "ws_census" in kinds:
+                break
+            await asyncio.sleep(0.05)
+    kinds = {e.get("kind") for e in mon.recent()}
+    assert "blob_gc" in kinds
+    census = next(e for e in mon.recent() if e.get("kind") == "ws_census")
+    assert census["total_workspacefile_rows"] == 0  # nothing written this run
+    assert "t" in census  # a timestamp for the trend axis
 
 
 async def test_no_sweeper_when_interval_none(monkeypatch):

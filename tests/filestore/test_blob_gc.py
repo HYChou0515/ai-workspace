@@ -15,6 +15,7 @@ from workspace_app.filestore.blob_gc import (
     try_claim_gc,
 )
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.monitor import InMemoryMonitor
 from workspace_app.resources import make_spec
 
 _HOUR_MS = 3_600_000
@@ -65,6 +66,39 @@ def test_run_blob_gc_defaults_now_to_wall_clock():
     spec = make_spec()
     register_gc_lease(spec)
     assert run_blob_gc(spec, t1="1h", t2="24h", ttl_ms=_HOUR_MS) is not None
+
+
+def test_run_blob_gc_records_a_telemetry_event_when_it_runs():
+    # #407: a pod that wins the lease and runs the reconcile emits one blob_gc
+    # summary event (GcStats + elapsed) — the global GC-cost / cardinality signal.
+    spec = make_spec()
+    register_gc_lease(spec)
+    mon = InMemoryMonitor()
+    now = dt.datetime(2026, 6, 27, 12, 0, tzinfo=dt.UTC)
+    stats = run_blob_gc(spec, t1="1h", t2="24h", ttl_ms=_HOUR_MS, now=now, monitor=mon)
+    assert stats is not None
+    events = [e for e in mon.recent() if e.get("kind") == "blob_gc"]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["mode"] == "reconcile"
+    assert ev["deleted"] == stats.deleted
+    assert ev["quarantined"] == stats.quarantined
+    assert ev["restored"] == stats.restored
+    assert ev["live"] == stats.live
+    assert ev["scan_complete"] == stats.scan_complete
+    assert ev["elapsed_ms"] >= 0
+
+
+def test_run_blob_gc_records_nothing_when_lease_lost():
+    # The pod that loses the lease returns before the reconcile, so it emits no
+    # event — only the one pod that actually ran does.
+    spec = make_spec()
+    register_gc_lease(spec)
+    mon = InMemoryMonitor()
+    now = dt.datetime(2026, 6, 27, 12, 0, tzinfo=dt.UTC)
+    run_blob_gc(spec, t1="1h", t2="24h", ttl_ms=_HOUR_MS, now=now, monitor=mon)  # wins → 1
+    run_blob_gc(spec, t1="1h", t2="24h", ttl_ms=_HOUR_MS, now=now, monitor=mon)  # lost lease
+    assert len([e for e in mon.recent() if e.get("kind") == "blob_gc"]) == 1
 
 
 def test_try_claim_loses_a_concurrent_cas(monkeypatch):

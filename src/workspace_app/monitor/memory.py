@@ -19,7 +19,16 @@ class InMemoryMonitor(IMonitor):
         self._publish(event)
 
     def recent(
-        self, *, limit: int | None = None, group_id: str | None = None
+        self,
+        *,
+        limit: int | None = None,
+        group_id: str | None = None,
+        kind: str | None = None,
     ) -> list[MonitorEvent]:
-        items = [e for e in self._recent if group_id is None or e.get("group_id") == group_id]
+        items = [
+            e
+            for e in self._recent
+            if (group_id is None or e.get("group_id") == group_id)
+            and (kind is None or e.get("kind") == kind)
+        ]
         return items if limit is None else items[-limit:]

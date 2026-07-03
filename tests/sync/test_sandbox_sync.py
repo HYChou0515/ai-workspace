@@ -1,6 +1,7 @@
 import pytest
 
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
+from workspace_app.monitor import InMemoryMonitor
 from workspace_app.resources import make_spec
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxSpec
@@ -126,6 +127,57 @@ async def test_mirror_propagates_deletions_on_a_ready_sandbox(
     n = await sync.mirror("ws", h)
     assert n == 1  # one deletion
     assert await fs.exists("ws", "/gone.txt") is False
+
+
+# ---- telemetry (#407): mirror/restore emit one summary event per call ----
+
+
+async def test_mirror_records_a_telemetry_event(fs: SpecstarFileStore, sandbox: MockSandbox):
+    mon = InMemoryMonitor()
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox, monitor=mon)
+    await sandbox.upload(h, b"hello", "/a.txt")
+    await sync.mirror("ws", h)
+    events = [e for e in mon.recent() if e.get("kind") == "mirror"]
+    assert len(events) == 1  # exactly one summary event per mirror call (not per file)
+    ev = events[0]
+    assert ev["group_id"] == "ws"
+    assert ev["n_files"] == 1
+    assert ev["n_uploaded"] == 1
+    assert ev["n_deleted"] == 0
+    assert ev["bytes"] == 5
+    assert ev["elapsed_ms"] >= 0
+
+
+async def test_restore_records_a_telemetry_event(fs: SpecstarFileStore, sandbox: MockSandbox):
+    mon = InMemoryMonitor()
+    await fs.write("ws", "/a.txt", b"A")
+    await fs.write("ws", "/sub/b.txt", b"BB")
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox, monitor=mon)
+    await sync.restore("ws", h)
+    events = [e for e in mon.recent() if e.get("kind") == "restore"]
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["group_id"] == "ws"
+    assert ev["n_files"] == 2
+    assert ev["bytes"] == 3  # 1 + 2 bytes
+    assert ev["elapsed_ms"] >= 0
+
+
+async def test_mirror_event_counts_deletions(fs: SpecstarFileStore, sandbox: MockSandbox):
+    mon = InMemoryMonitor()
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox, monitor=mon)
+    await sandbox.mark_ready(h)
+    await sandbox.upload(h, b"x", "/gone.txt")
+    await sync.mirror("ws", h)
+    await sandbox.delete(h, "/gone.txt")
+    await sync.mirror("ws", h)
+    ev = [e for e in mon.recent() if e.get("kind") == "mirror"][-1]  # the deletion mirror
+    assert ev["n_files"] == 0  # workspace now empty
+    assert ev["n_uploaded"] == 0
+    assert ev["n_deleted"] == 1
 
 
 # ---- ignore list ----
