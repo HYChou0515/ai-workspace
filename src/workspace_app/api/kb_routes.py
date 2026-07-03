@@ -49,6 +49,7 @@ from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
+from ..resources.groups import groups_of
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
 from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
 from .notifications import notify
@@ -631,13 +632,19 @@ def register_kb_routes(
             use_wiki=use_wiki,
         )
 
+    def _actor() -> Actor:
+        """#307 — the current human with their groups resolved, so a `group:<id>`
+        grant on a collection is honoured by every collection route check."""
+        me = get_user_id()
+        return Actor.human(me, groups=groups_of(spec, me))
+
     def _can_read_meta(row) -> bool:
         """#262 — a collection stays in the list only if the caller may see it
         (`read_meta`). `permission is None` ≡ public (back-compat)."""
         data = row.resource.data
         assert isinstance(data, Collection)
         return authorize(
-            Actor.human(get_user_id()),
+            _actor(),
             "read_meta",
             data.permission,
             created_by=row.resource.meta.created_by,
@@ -658,7 +665,7 @@ def register_kb_routes(
             raise HTTPException(status_code=404, detail="collection not found") from exc
         assert isinstance(coll, Collection)
         created_by = rm.get_meta(collection_id).created_by
-        actor = Actor.human(get_user_id())
+        actor = _actor()
         if not authorize(
             actor, "read_meta", coll.permission, created_by=created_by, superusers=superusers
         ):
