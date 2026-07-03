@@ -16,15 +16,17 @@ plain Markdown files inside the workspace.
 
 ## How to work
 
-- **Prefer the entity write path.** When the user asks to create or change an
-  issue or milestone, go through the create/update flow (the same one the
-  quick-create form uses) so numbering, frontmatter shape, and references stay
-  consistent. Hand-editing a record file directly is allowed as an escape hatch,
-  but keep the frontmatter well-formed.
-- **Read before you change.** Load a record file to see its current fields before
-  patching it.
-- **Never invent record numbers.** New records get the next number automatically;
-  reference existing ones by the number already on disk.
+- **Use the entity tools.** Create and change records through `create_entity`,
+  `update_entity`, `link_entity`, and inspect them with `query_entity` — the same
+  pipeline the quick-create form uses, so numbering, frontmatter shape, and
+  references stay consistent. E.g. `create_entity("issue", {"title": …})`,
+  `update_entity("issue", 3, {"status": "done"})`, `link_entity("issue", 3,
+  "milestone", 1)`. Hand-editing a record file directly is allowed as an escape
+  hatch, but keep the frontmatter well-formed.
+- **Read before you change.** Call `query_entity` (or read the record file) to see
+  current fields before patching.
+- **Let numbering happen.** New records get the next number automatically; refer
+  to existing ones by the number `query_entity` reports.
 
 ## Output style
 

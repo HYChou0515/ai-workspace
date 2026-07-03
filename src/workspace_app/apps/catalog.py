@@ -40,6 +40,10 @@ _FILE_TOOLS = frozenset(
 # Tools that need a compute sandbox. Package tools (data-fetch, …) also run in
 # the sandbox, but their names are deploy-specific; `exec` is the universal one.
 _SANDBOX_TOOLS = frozenset({"exec"})
+# #419 entity tools — they read/write the item's workspace files (through the
+# same `EntityStore` as the UI), so they need `function.workspace` just like the
+# file tools.
+_ENTITY_TOOLS = frozenset({"create_entity", "update_entity", "query_entity", "link_entity"})
 
 
 def _subset_or_raise(
@@ -93,6 +97,11 @@ def validate_function_coherence(manifest: AppManifest) -> None:
     if not fn.workspace and (tools & _FILE_TOOLS):
         raise ValueError(
             f"app {manifest.slug!r}: file tools {sorted(tools & _FILE_TOOLS)} need "
+            f"function.workspace but it is false"
+        )
+    if not fn.workspace and (tools & _ENTITY_TOOLS):
+        raise ValueError(
+            f"app {manifest.slug!r}: entity tools {sorted(tools & _ENTITY_TOOLS)} need "
             f"function.workspace but it is false"
         )
     if manifest.layout.primary_surface == "ide" and not fn.workspace:
