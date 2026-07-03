@@ -20,6 +20,10 @@ from specstar import BackendConfig, Schema, SpecStar
 from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
+# #414: the card-gen fan-out's run + staging structs live in kb.card_gen (next to
+# ProposedCard/DocDigest, so they can carry those typed fields without a resources
+# ↔ kb.context_cards import cycle). Registered below like IndexRun/IndexUnitText.
+from ..kb.card_gen import CardGenRun, CardGenUnit
 from ..perm.checker import collection_permission_event_handler
 from ..perm.scope import collection_access_scope
 from ..workflow.run import WorkflowRun
@@ -321,6 +325,13 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #227: per-batch staged text (doc_id indexed so finalize lists a doc's
     # batches to rejoin into SourceDoc.text). Transient; deleted at finalize.
     spec.add_model(IndexUnitText, indexed_fields=["doc_id"])
+    # #414: card-gen fan-out join state, one row per run (id = the id enqueue
+    # returns + the FE polls). `status` indexed so a future safety sweep can find
+    # runs still "running"; the per-run reads are point gets by id.
+    spec.add_model(CardGenRun, indexed_fields=["status"])
+    # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
+    # to merge + raise questions from). Transient; deleted at finalize.
+    spec.add_model(CardGenUnit, indexed_fields=["run_id"])
     # Issue #50: collection_id indexed so a wiki's pages list (WikiFileStore.ls)
     # is a query, not a full scan.
     spec.add_model(WikiPage, indexed_fields=["collection_id"])
