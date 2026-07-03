@@ -58,6 +58,7 @@ from .card_gen import (
     merge_drafts,
 )
 from .card_gen_run import CardGenRunStore
+from .card_gen_sources import CardGenSources
 from .context_cards import cards_with_ids_for_collections, derive_norm_keys
 from .doc_questions import (
     add_description_question,
@@ -65,7 +66,6 @@ from .doc_questions import (
     plan_doc_questions,
 )
 from .job_audit import preserve_job_creator
-from .wiki.sources import SpecstarWikiSources
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -246,7 +246,7 @@ class CardGenCoordinator:
         run_id, cid, doc_ids = payload.run_id, payload.collection_id, payload.doc_ids
         self._runs.begin(run_id)
         if len(doc_ids) <= 1:
-            sources = SpecstarWikiSources(self._spec, cid)
+            sources = CardGenSources(self._spec, cid)
             for doc_index, doc_id in enumerate(doc_ids):
                 self._process_one(run_id, doc_index, doc_id, sources)
             self._finalize(run_id)
@@ -278,13 +278,13 @@ class CardGenCoordinator:
         if run is None:
             return  # run cascaded away (collection deleted between split and run)
         doc_id = run.doc_ids[payload.doc_index]
-        sources = SpecstarWikiSources(self._spec, payload.collection_id)
+        sources = CardGenSources(self._spec, payload.collection_id)
         self._process_one(payload.run_id, payload.doc_index, doc_id, sources)
         if self._runs.claim_finalize(payload.run_id):
             self._enqueue_finalize(payload.run_id, payload.collection_id, requester)
 
     def _process_one(
-        self, run_id: str, doc_index: int, doc_id: str, sources: SpecstarWikiSources
+        self, run_id: str, doc_index: int, doc_id: str, sources: CardGenSources
     ) -> None:
         """Digest one document and record its outcome on the run. A deleted doc is
         digested to nothing (``done``, not a failure — matches the pre-fan-out

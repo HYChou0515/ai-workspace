@@ -21,7 +21,8 @@ from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.doc_questions import open_questions_for_collections
-from workspace_app.resources import Collection, ContextCard, SourceDoc, make_spec
+from workspace_app.kb.wiki.store import _rid
+from workspace_app.resources import Collection, ContextCard, SourceDoc, WikiPage, make_spec
 
 
 def _add_source(spec, collection_id: str, path: str, text: str) -> str:
@@ -38,6 +39,17 @@ def _add_source(spec, collection_id: str, path: str, text: str) -> str:
         resource_id=encode_doc_id(collection_id, path),
     )
     return rev.resource_id
+
+
+def _add_wiki(spec, collection_id: str, path: str, text: str) -> str:
+    """An LLM wiki page with its real ``_rid`` id — what the picker submits when a
+    reviewer picks a wiki page as a card-gen source (#415)."""
+    rm = spec.get_resource_manager(WikiPage)
+    rm.create(
+        WikiPage(collection_id=collection_id, path=path, content=Binary(data=text.encode())),
+        resource_id=_rid(collection_id, path),
+    )
+    return _rid(collection_id, path)
 
 
 def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
@@ -132,6 +144,27 @@ async def test_generates_a_new_card_proposal_from_a_document():
     assert p.provenance[0].path == "spec.md"
     assert p.provenance[0].doc_id == doc
     assert p.provenance[0].snippet == "The reflow zone uses RZ3 heating."
+
+
+async def test_a_selected_wiki_page_is_read_and_drafted_like_a_document():
+    """#415: the picker can pick an LLM wiki page as a source. Its ``WikiPage`` id
+    misses the SourceDoc lookup, so ``CardGenSources`` reads the page markdown and
+    it drafts a card cited by the page path — mixed into the same ``doc_ids``."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    wiki_id = _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
+    drafter = _FakeDrafter(
+        {"/index.md": [CardDraft(keys=["RZ3"], title="RZ3", body="Third zone.", snippet="RZ3…")]}
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [wiki_id])
+    await coord.aclose()
+
+    art = coord.proposals(jid)
+    assert len(art.proposals) == 1
+    assert art.proposals[0].keys == ["RZ3"]
+    assert art.proposals[0].provenance[0].path == "/index.md"
+    assert art.proposals[0].provenance[0].doc_id == wiki_id
 
 
 async def test_a_draft_already_fully_covered_by_an_existing_card_is_skipped():
