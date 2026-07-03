@@ -105,6 +105,16 @@ def _rid(collection_id: str, path: str) -> str:
     return f"{collection_id}{path}".replace("/", _SLASH)
 
 
+def _path_from_rid(collection_id: str, rid: str) -> str:
+    """The exact inverse of ``_rid`` — recover a page's path from its resource
+    id WITHOUT touching the page blob (#411). ``_rid`` concatenates the
+    slash-free ``collection_id`` (untouched by the ``/``→U+2215 swap) with the
+    path, so every id starts with the collection id: strip that prefix and swap
+    the division-slashes back. This is what lets ``_paths`` list pages from the
+    meta table alone (no ``path`` index, no migration)."""
+    return rid[len(collection_id) :].replace(_SLASH, "/")
+
+
 class WikiFileStore:
     """FileStore over per-page ``WikiPage`` resources. ``workspace_id`` is
     the collection id."""
@@ -123,10 +133,15 @@ class WikiFileStore:
 
     # ── reads ────────────────────────────────────────────────────────
     def _paths(self, collection_id: str) -> list[str]:
+        # Metadata-only (#411): read page paths from the meta table via
+        # `search_resources` (one SQL, no data), NEVER `list_resources` — which
+        # fetches every page's full markdown blob (a 16-thread N+1 fan-out) just
+        # to read `.path`. Unbounded on the wiki tree / reader `list_files` /
+        # `search_wiki` grep; the #395 antipattern. The path is recovered from
+        # each resource id (`_path_from_rid`), so we need no `path` index.
         return [
-            r.data.path
-            for r in self._rm.list_resources((QB["collection_id"] == collection_id).build())
-            if isinstance(r.data, WikiPage)  # narrows Struct|Unset for ty
+            _path_from_rid(collection_id, m.resource_id)
+            for m in self._rm.search_resources((QB["collection_id"] == collection_id).build())
         ]
 
     async def read(self, workspace_id: str, path: str) -> bytes:
@@ -241,9 +256,12 @@ class WikiFileStore:
         return await asyncio.to_thread(self._clear_sync, workspace_id)
 
     def _clear_sync(self, workspace_id: str) -> int:
+        # Metadata-only (#411): the ids come from the meta table via
+        # `search_resources`, not `list_resources` — deleting a page needs only
+        # its id, never its blob.
         n = 0
-        for r in self._rm.list_resources((QB["collection_id"] == workspace_id).build()):
-            self._rm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+        for m in self._rm.search_resources((QB["collection_id"] == workspace_id).build()):
+            self._rm.permanently_delete(m.resource_id)
             n += 1
         return n
 
