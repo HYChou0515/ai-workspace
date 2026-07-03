@@ -2479,6 +2479,11 @@
 .kb-cardgen__docs, .kb-cardgen__proposals { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; max-height: 48vh; overflow: auto; }
 .kb-cardgen__docs label { display: flex; gap: 8px; align-items: center; cursor: pointer; font-size: 0.8125rem; }
 .kb-cardgen__none { color: var(--text-paper-d2); padding: 12px; }
+/* #415 source picker: a search/select-all toolbar over a scrollable filetree. */
+.kb-cardgen__pickbar { display: flex; gap: 8px; align-items: center; }
+.kb-cardgen__pickbar input { flex: 1; padding: 6px 8px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); color: var(--text-paper); font: inherit; }
+.kb-cardgen__pickbar button { padding: 5px 12px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); cursor: pointer; color: var(--text-paper); white-space: nowrap; }
+.kb-cardgen__tree { max-height: 48vh; overflow: auto; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); --filetree-header-bg: var(--white); }
 .kb-cardgen__viewtoggle { display: flex; gap: 6px; }
 .kb-cardgen__viewtoggle button { padding: 3px 10px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: transparent; cursor: pointer; color: var(--text-paper-d); }
 .kb-cardgen__viewtoggle button[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
