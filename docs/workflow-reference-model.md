@@ -253,15 +253,17 @@ case，case 內各步靠自己的 journal skip。**這只在 `on` 跨 replay 穩
 
 ### 6.2 機制——interpreter-owned `_Revise` re-drive（不新增 replay）
 
-1. gate 是具名步；它記錄的 `Decision.input` 以 **`{steps.<gate>.feedback}`** 曝光
-   （無 revise 時預設 `""`）。
+1. gate 是具名步；每次它拿到 decision 就把 `Decision.input` 寫進**自己的 journal 條目
+   `result.fields.feedback`**（沿用 §1 統一模型，非另立 ns 命名空間），於是
+   **`{steps.<gate>.feedback}`** 走既有 `_lookup_step` 讀得到。gate 尚未跑到（或還沒 revise 過）
+   時該 journal 不存在——`_lookup_step` 對這條**唯一合法向前引用**特例回傳 `""`。
 2. 人在 gate 按 `revise` ＋一句話 → `record_decision` 寫 `decision.json {choice:revise,input}`。
-3. 重跑 **pass①**：走到 gate 讀到 revise → **持存 feedback**、**刪掉這個 gate 的
-   `decision.json`**、raise `_Revise`。
-4. `build_run` 用 `while True` 包 step loop：`_Revise` → `continue` 重跑 **pass②**。pass② 在
-   seed 時把持存的 feedback 載進 ns → `revise_to` 步的 prompt 含 `{steps.<gate>.feedback}` →
-   **args-hash 變 → §9 自動重跑該步**，下游靠 hash-chaining 連鎖重跑；走到 gate 時 `decision.json`
-   已刪 → `AwaitingHuman` → run 再次暫停成 `awaiting_human` 供**重審新草稿**。
+3. 重跑 **pass①**：走到 gate 讀到 revise → **把 feedback 寫進 gate 的 `result.fields`**、
+   **刪掉這個 gate 的 `decision.json`**、raise `_Revise`。
+4. `build_run` 用 `while True` 包 step loop：`_Revise` → `continue` 重跑 **pass②**。pass② 裡
+   `revise_to` 步的 prompt 含 `{steps.<gate>.feedback}` → 從 gate 的 journal 讀到剛寫入的 feedback →
+   **resolved prompt 變 → args-hash 變 → §9 自動重跑該步**，下游靠 hash-chaining 連鎖重跑；走到
+   gate 時 `decision.json` 已刪 → `AwaitingHuman` → run 再次暫停成 `awaiting_human` 供**重審新草稿**。
 5. **有界保證**：每次 revise 都需人按一次；`_Revise` 一定收在下一次 gate 的 `AwaitingHuman`
    （re-pause），機器不會自迴圈。這是圖上「唯一的環」被人閘住的合法有界環。
 
@@ -311,10 +313,13 @@ hash-chain 裡，不清就被自己的 journal skip 掉 → 無限 revise）。
 
 ### 6.6 dsl.py 觸點
 
-- `GateStep` 增 `revise`（於 `allow`）、新增 `revise_to:str`。
-- `_exec_step` 的 gate 分支：`revise` → 持存 feedback + 刪 `decision.json` + raise `_Revise`。
-- `build_run`：`while True` 包 step loop、seed 時載入各 gate 的持存 feedback。
-- `validate_def`：§6.4 五約束 + §6.3 forward-ref 特例。
+- `GateStep` 增 `revise`（於 `allow`）、新增 `name:str` + `revise_to:str`。
+- `_exec_step` 的 gate 分支：具名 gate 拿到 decision 就寫 `result.fields.{feedback,choice}`；
+  `revise`＋`revise_to` → 刪 `decision.json` + raise `_Revise`；其餘非 approve → `_Stop`。
+- `_lookup_step`：journal 不存在且引用 `.feedback` → 回 `""`（唯一合法向前引用）。
+- `build_run`：`while True` 包 step loop、`_Revise` → `continue` 重跑。
+- `validate_def`：pre-seed 頂層具名 gate（讓 target 的向前 feedback 引用過關）+ `_validate_revise`
+  §6.4 五約束；`revise_to` 只允許於頂層 gate（switch case 內 depth>0 靜態擋）。
 
 **相依**：#1（feedback 走統一引用）。
 

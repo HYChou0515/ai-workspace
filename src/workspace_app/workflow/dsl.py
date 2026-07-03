@@ -28,7 +28,7 @@ from msgspec import Struct, field
 
 from .checks import choice_in, collection_has, file_nonempty
 from .engine import Check, CheckResult, StepFailed, _artifact_path
-from .gate import human_gate
+from .gate import _decision_path, human_gate
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
 from .steps import agent_step, agent_write_step, sandbox_node
@@ -93,14 +93,22 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
 
 
 class GateStep(Struct, tag="gate", forbid_unknown_fields=True):
-    """A human gate (manual §10). The interpreter continues only on ``approve``; any
-    other terminal choice (e.g. ``reject``) ends the run as ``{"status": choice}`` — no
-    revise-loop in v1 (Q7). ``summary_from`` is a glob whose matched files are shown."""
+    """A human gate (manual §10). The interpreter continues only on ``approve``; a
+    terminal choice (e.g. ``reject``) ends the run as ``{"status": choice}``.
+    ``summary_from`` is a glob whose matched files are shown.
+
+    #428 §6: a named gate whose ``allow`` holds ``revise`` bounces the run back to
+    ``revise_to`` (a top-level step declared before it) carrying the human's feedback,
+    exposed as ``{steps.<name>.feedback}`` — the one legal forward reference. The re-drive
+    is data-driven: the feedback folds into the target's input-hash so §9 re-runs it (and
+    everything downstream) with no per-run bookkeeping."""
 
     phase: str
     title: str
     summary_from: str = ""
     allow: list[str] = field(default_factory=lambda: ["approve", "reject"])
+    name: str = ""
+    revise_to: str = ""
 
 
 class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
@@ -223,7 +231,15 @@ async def _lookup_step(parts: list[str], ns: dict[str, Any], wf: WorkflowHandle)
     if len(parts) < 2:
         raise DslError("{steps} needs a step name")
     name = parts[1]
-    record = await wf.read_json(_artifact_path(wf, name, ns.get("__key__", "")))
+    path = _artifact_path(wf, name, ns.get("__key__", ""))
+    if not await wf.exists(path):
+        # #428 §6: a gate's feedback is the one legal forward reference — before the gate
+        # has run (or before any revise) it resolves to "". Every other reference is to a
+        # step that already ran (validate_def rejects non-gate forward references).
+        if parts[2:] == ["feedback"]:
+            return ""
+        raise DslError(f"step {name!r} has not produced output fields to reference yet")
+    record = await wf.read_json(path)
     result = record.get("result") if isinstance(record, dict) else None
     fields = result.get("fields") if isinstance(result, dict) else None
     if not isinstance(fields, dict):
@@ -331,6 +347,13 @@ class _Stop(Exception):
     def __init__(self, status: str) -> None:
         super().__init__(status)
         self.status = status
+
+
+class _Revise(Exception):
+    """A gate chose ``revise`` (#428 §6) — caught by ``build_run`` to re-drive the run
+    from the top. The gate has already recorded its feedback (so ``{steps.<gate>.feedback}``
+    now resolves) and cleared its own decision; the re-drive re-runs the ``revise_to``
+    target via §9 hash-chaining and re-pauses at the gate."""
 
 
 def _safe_key(path: str) -> str:
@@ -533,9 +556,27 @@ async def _exec_step(
             summary=await _gate_summary(wf, step, ns),
             allow=step.allow,
         )
-        if decision.choice != "approve":
-            raise _Stop(decision.choice)
-        return
+        if step.name:  # #428 §6: expose the decision's feedback as {steps.<name>.feedback}
+            await wf.write_json(
+                _artifact_path(wf, step.name, key),
+                {
+                    "hash": "",
+                    "result": {
+                        "fields": {
+                            "feedback": decision.input,
+                            "choice": decision.choice,
+                        }
+                    },
+                },
+            )
+        if decision.choice == "approve":
+            return
+        if decision.choice == "revise" and step.revise_to:
+            # Data-driven invalidation: clear only this gate's decision so it re-pauses;
+            # the feedback (now journaled above) re-runs revise_to via §9 hash-chaining.
+            await wf.delete(_decision_path(wf, step.phase))
+            raise _Revise
+        raise _Stop(decision.choice)
     if isinstance(step, CapabilityStep):
         await _exec_capability(wf, step, ns)
         return
@@ -599,21 +640,24 @@ def build_run(d: WorkflowDef):
     existing step primitives — the orchestrator runs it exactly like a hand-written one."""
 
     async def run(wf: WorkflowHandle, inputs: Any) -> dict[str, Any]:
-        ns: dict[str, Any] = {
-            "config": d.config,
-            "inputs": inputs if inputs is not None else {},
-            "__key__": "",  # #428 §1.1: the current scope key for {steps.x.f}
-        }
-        failures: list[dict[str, str]] = []
-        try:
-            for step in d.steps:
-                await _exec_step(wf, step, ns, "", failures)
-        except _Stop as stop:
-            return {"status": stop.status}
-        result: dict[str, Any] = {"status": "done"}
-        if failures:
-            result["failures"] = failures
-        return result
+        while True:  # #428 §6: a gate `revise` re-drives from the top; else runs once
+            ns: dict[str, Any] = {
+                "config": d.config,
+                "inputs": inputs if inputs is not None else {},
+                "__key__": "",  # #428 §1.1: the current scope key for {steps.x.f}
+            }
+            failures: list[dict[str, str]] = []
+            try:
+                for step in d.steps:
+                    await _exec_step(wf, step, ns, "", failures)
+            except _Stop as stop:
+                return {"status": stop.status}
+            except _Revise:
+                continue  # feedback recorded + decision cleared → replay reruns the target
+            result: dict[str, Any] = {"status": "done"}
+            if failures:
+                result["failures"] = failures
+            return result
 
     return run
 
@@ -788,6 +832,10 @@ def _validate_step(
             errs.append(f"{where}: gate needs a 'title'")
         if not step.allow:
             errs.append(f"{where}: gate 'allow' is empty")
+        # #428 §6: revise bounces to a top-level target, so revise_to only makes sense on
+        # a direct top-level gate (depth 0); a gate inside a switch case (depth>0) can't.
+        if step.revise_to and depth > 0:
+            errs.append(f"{where}: 'revise_to' is only allowed on a top-level gate (§6)")
         _check_interp(step.title, scope, where, errs, steps_seen)
         return
     if isinstance(step, CapabilityStep):
@@ -922,12 +970,63 @@ def _validate_switch(
         )
 
 
+def _references_feedback(step: Step, gatename: str) -> bool:
+    """Does ``step``'s prompt / run text reference ``{steps.<gatename>.feedback}`` (#428
+    §6)? The revise target must, or the feedback would be threaded nowhere."""
+    text = getattr(step, "prompt", "") or getattr(step, "run", "")
+    return any(
+        m.group(1).strip().split(".") == ["steps", gatename, "feedback"]
+        for m in _TOKEN.finditer(text)
+    )
+
+
+def _validate_revise(steps: list[Step], errs: list[str]) -> None:
+    """#428 §6: enforce the five constraints that keep a gate's ``revise`` back-edge sound.
+    ``revise`` in ``allow`` ⇔ ``revise_to`` is set; the gate is named (its feedback is the
+    forward reference); ``revise_to`` is a top-level step declared *before* the gate; the
+    target references ``{steps.<gate>.feedback}``; and no other gate sits between them (so
+    the re-drive can't skip past an intervening, still-pending decision)."""
+    index_by_name: dict[str, int] = {}
+    for i, s in enumerate(steps):
+        nm = getattr(s, "name", "")
+        if nm and nm not in index_by_name:
+            index_by_name[nm] = i
+    for j, s in enumerate(steps):
+        if not isinstance(s, GateStep):
+            continue
+        where = f"steps[{j}]"
+        if ("revise" in s.allow) != bool(s.revise_to):
+            errs.append(f"{where}: gate 'revise' in allow and 'revise_to' must be set together")
+        if not s.revise_to:
+            continue
+        if not s.name:
+            errs.append(f"{where}: a gate with 'revise_to' needs a 'name' (for its feedback)")
+        target_i = index_by_name.get(s.revise_to)
+        if target_i is None or target_i >= j:
+            errs.append(
+                f"{where}: 'revise_to' must name a top-level step before this gate, "
+                f"got {s.revise_to!r}"
+            )
+            continue
+        if any(isinstance(steps[k], GateStep) for k in range(target_i + 1, j)):
+            errs.append(f"{where}: another gate lies between the 'revise_to' target and this gate")
+        if s.name and not _references_feedback(steps[target_i], s.name):
+            errs.append(
+                f"{where}: the 'revise_to' target {s.revise_to!r} must reference "
+                f"{{steps.{s.name}.feedback}}"
+            )
+
+
 def _register_step(
     step: Step, steps_seen: dict[str, dict[str, Any]], where: str, errs: list[str]
 ) -> None:
     """After a step is validated, record its ``name`` → declared output fields so a later
     sibling can reference it (#428 §1.5). A named map exposes only ``.outputs`` (§5.3).
     Names are unique within a scope."""
+    if isinstance(step, GateStep):
+        # #428 §6: top-level gates are pre-seeded (their feedback is a forward reference);
+        # a nested gate is not referenceable, so neither is registered here.
+        return
     name = getattr(step, "name", "")
     if not name:
         return
@@ -954,11 +1053,14 @@ def _validate_steps(
     *,
     top: bool,
     depth: int = 0,
+    seed: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Validate an ordered step list in one naming scope: each step is checked against
     the names declared *before* it (``steps_seen`` accumulates in order), then registers
-    its own name (#428 §1.5). ``depth`` bounds nested switches (§3.2)."""
-    steps_seen: dict[str, dict[str, Any]] = {}
+    its own name (#428 §1.5). ``depth`` bounds nested switches (§3.2). ``seed`` pre-loads
+    names visible from the first step — used for the one legal forward reference, a gate's
+    feedback (§6)."""
+    steps_seen: dict[str, dict[str, Any]] = dict(seed) if seed else {}
     for i, step in enumerate(steps):
         where = f"{where_prefix}[{i}]"
         _validate_step(
@@ -996,6 +1098,15 @@ def validate_def(
         errs.append("a phase is missing its 'id'")
     if not d.steps:
         errs.append("workflow has no steps")
+    # #428 §6: pre-register top-level gates so a revise target's {steps.<gate>.feedback}
+    # (the one legal forward reference) resolves during validation; a gate exposes only
+    # its feedback + choice.
+    gate_seed: dict[str, dict[str, Any]] = {}
+    for s in d.steps:
+        if isinstance(s, GateStep) and s.name:
+            if s.name in gate_seed:
+                errs.append(f"steps: duplicate gate name {s.name!r}")
+            gate_seed[s.name] = {"feedback": "str", "choice": "str"}
     _validate_steps(
         d.steps,
         "steps",
@@ -1005,5 +1116,7 @@ def validate_def(
         capabilities,
         errs,
         top=True,
+        seed=gate_seed,
     )
+    _validate_revise(d.steps, errs)
     return errs

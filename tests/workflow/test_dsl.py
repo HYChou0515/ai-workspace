@@ -1808,6 +1808,243 @@ def test_validate_create_entity_requires_type_name() -> None:
     assert any("type_name" in e for e in errs)
 
 
+# ─── P6: gate revise (bounce back to a target with feedback) ─────────────────
+
+
+def _revise_def(*, revise_to: str = "draft", allow: Any = None, prompt: str | None = None) -> Any:
+    """A minimal draft → gate(revise) workflow keyed for the P6 tests."""
+    return {
+        "id": "wf",
+        "phases": [{"id": "draft"}, {"id": "review"}],
+        "steps": [
+            {
+                "type": "agent",
+                "name": "draft",
+                "phase": "draft",
+                "out": "report.md",
+                "prompt": prompt
+                if prompt is not None
+                else "Write a report. Notes: {steps.review.feedback}",
+            },
+            {
+                "type": "gate",
+                "name": "review",
+                "phase": "review",
+                "title": "ok?",
+                "allow": allow if allow is not None else ["approve", "revise", "reject"],
+                "revise_to": revise_to,
+            },
+        ],
+    }
+
+
+async def test_run_gate_revise_reruns_target_with_feedback():
+    """`revise` bounces the run back to `revise_to`, re-running it with the human's
+    feedback threaded into its prompt (via {steps.<gate>.feedback}); the gate then
+    re-pauses. approve after that completes the run (§6)."""
+    from workspace_app.workflow.gate import AwaitingHuman
+
+    store = MemoryFileStore()
+    drafts: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        drafts.append(prompt)
+        return "a draft"
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(json.dumps(_revise_def()))
+    assert validate_def(d) == []
+    # first reach: no decision → pauses; draft ran once with empty feedback
+    with pytest.raises(AwaitingHuman):
+        await build_run(d)(wf, None)
+    assert drafts == ["Write a report. Notes: "]
+    # human revises → re-drive redoes the draft carrying the feedback, then re-pauses
+    await record_decision(wf, phase="review", choice="revise", input="make it shorter")
+    with pytest.raises(AwaitingHuman):
+        await build_run(d)(wf, None)
+    assert "Write a report. Notes: make it shorter" in drafts
+    # human approves → completes (draft skips: same resolved prompt as the re-drive)
+    await record_decision(wf, phase="review", choice="approve")
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert drafts == ["Write a report. Notes: ", "Write a report. Notes: make it shorter"]
+
+
+async def test_run_gate_reject_stops_even_with_revise_available():
+    """A named gate that *offers* revise still ends the run on a terminal ``reject``."""
+    store = MemoryFileStore()
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return "a draft"
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(json.dumps(_revise_def()))
+    await record_decision(wf, phase="review", choice="reject")
+    assert await build_run(d)(wf, None) == {"status": "reject"}
+
+
+async def test_run_step_ref_before_run_errors():
+    """A reference to a non-gate step that has not run yet raises a clear DslError
+    (validation blocks this statically; the interpreter guards it too, §6)."""
+    wf = make_wf(MemoryFileStore(), drive_turn=lambda p, t: "x")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "a",
+                        "phase": "p",
+                        "prompt": "hi",
+                        "out": "{steps.b.x}.txt",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(DslError, match="has not produced output fields"):
+        await build_run(d)(wf, None)
+
+
+def test_validate_revise_needs_revise_in_allow():
+    # revise_to set but 'revise' not in allow → mismatch
+    errs = validate_def(parse_def(json.dumps(_revise_def(allow=["approve", "reject"]))))
+    assert any("must be set together" in e for e in errs)
+
+
+def test_validate_revise_in_allow_needs_revise_to():
+    # 'revise' in allow but no revise_to → mismatch
+    errs = validate_def(parse_def(json.dumps(_revise_def(revise_to=""))))
+    assert any("must be set together" in e for e in errs)
+
+
+def test_validate_revise_to_unknown_target():
+    errs = validate_def(parse_def(json.dumps(_revise_def(revise_to="ghost"))))
+    assert any("must name a top-level step before this gate" in e for e in errs)
+
+
+def test_validate_revise_to_target_after_gate():
+    # revise_to points at a step declared *after* the gate → rejected
+    d = {
+        "id": "wf",
+        "phases": [{"id": "p"}],
+        "steps": [
+            {
+                "type": "gate",
+                "name": "g",
+                "phase": "p",
+                "title": "t",
+                "allow": ["approve", "revise"],
+                "revise_to": "later",
+            },
+            {
+                "type": "agent",
+                "name": "later",
+                "phase": "p",
+                "prompt": "{steps.g.feedback}",
+                "out": "o.md",
+            },
+        ],
+    }
+    errs = validate_def(parse_def(json.dumps(d)))
+    assert any("before this gate" in e for e in errs)
+
+
+def test_validate_revise_gate_between_target_and_gate():
+    d = {
+        "id": "wf",
+        "phases": [{"id": "p"}],
+        "steps": [
+            {
+                "type": "agent",
+                "name": "draft",
+                "phase": "p",
+                "prompt": "{steps.g2.feedback}",
+                "out": "o.md",
+            },
+            {"type": "gate", "name": "g1", "phase": "p", "title": "t"},
+            {
+                "type": "gate",
+                "name": "g2",
+                "phase": "p",
+                "title": "t",
+                "allow": ["approve", "revise"],
+                "revise_to": "draft",
+            },
+        ],
+    }
+    errs = validate_def(parse_def(json.dumps(d)))
+    assert any("another gate lies between" in e for e in errs)
+
+
+def test_validate_revise_target_must_reference_feedback():
+    # target prompt does NOT mention {steps.review.feedback}
+    errs = validate_def(parse_def(json.dumps(_revise_def(prompt="Write a report."))))
+    assert any("must reference {steps.review.feedback}" in e for e in errs)
+
+
+def test_validate_revise_gate_needs_name():
+    d = {
+        "id": "wf",
+        "phases": [{"id": "p"}],
+        "steps": [
+            {"type": "agent", "name": "draft", "phase": "p", "prompt": "x", "out": "o.md"},
+            {
+                "type": "gate",
+                "phase": "p",
+                "title": "t",
+                "allow": ["approve", "revise"],
+                "revise_to": "draft",
+            },
+        ],
+    }
+    errs = validate_def(parse_def(json.dumps(d)))
+    assert any("needs a 'name'" in e for e in errs)
+
+
+def test_validate_revise_to_rejected_on_nested_gate():
+    d = {
+        "id": "wf",
+        "phases": [{"id": "p"}],
+        "steps": [
+            {
+                "type": "switch",
+                "on": "{config.mode}",
+                "phase": "p",
+                "cases": {
+                    "a": [
+                        {
+                            "type": "gate",
+                            "name": "g",
+                            "phase": "p",
+                            "title": "t",
+                            "allow": ["approve", "revise"],
+                            "revise_to": "draft",
+                        },
+                    ]
+                },
+            },
+        ],
+        "config": {"mode": "a"},
+    }
+    errs = validate_def(parse_def(json.dumps(d)))
+    assert any("only allowed on a top-level gate" in e for e in errs)
+
+
+def test_validate_duplicate_gate_name():
+    d = {
+        "id": "wf",
+        "phases": [{"id": "p"}],
+        "steps": [
+            {"type": "gate", "name": "g", "phase": "p", "title": "t"},
+            {"type": "gate", "name": "g", "phase": "p", "title": "t"},
+        ],
+    }
+    errs = validate_def(parse_def(json.dumps(d)))
+    assert any("duplicate gate name" in e for e in errs)
+
+
 async def test_run_create_entity_capability() -> None:
     """A user-authored workflow.json can mint an entity through the SAME numbering
     pipeline (#419 workflow接軌) — no raw wf.write."""
