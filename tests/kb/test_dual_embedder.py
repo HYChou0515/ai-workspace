@@ -170,10 +170,13 @@ def test_prose_and_code_split_across_vector_fields_in_one_collection(spec: SpecS
 
     prose = _chunks_of(spec, encode_doc_id(cid, "README.md"))
     code = _chunks_of(spec, encode_doc_id(cid, "app.py"))
-    assert prose and all(len(c.embedding) == EMBED_DIM and not c.embedding_alt for c in prose)  # ty: ignore[invalid-argument-type]
-    assert code and all(
-        c.embedding is None and len(c.embedding_alt) == CODE_EMBED_DIM for c in code
-    )  # ty: ignore[invalid-argument-type]
+    assert prose and code
+    for c in prose:  # prose → text embedder on the default field
+        assert len(c.embedding) == EMBED_DIM  # ty: ignore[invalid-argument-type]
+        assert not c.embedding_alt
+    for c in code:  # code → code embedder on the alt field
+        assert c.embedding is None
+        assert len(c.embedding_alt) == CODE_EMBED_DIM  # ty: ignore[invalid-argument-type]
 
 
 def test_code_file_degrades_to_text_embedder_when_no_code_embedder(spec: SpecStar):

@@ -93,6 +93,21 @@ def test_dispatch_splitter_routes_non_starter_languages_to_code_splitter():
     assert any("func Handler" in n.get_content() for n in nodes)
 
 
+def test_dispatch_splitter_reuses_cached_code_splitter_across_docs():
+    """The per-instance CodeSplitter is cached by language and reused across
+    docs — a second `.py` doc hits the cache instead of rebuilding a splitter
+    (instantiating a tree-sitter grammar is not free)."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    ds = DispatchSplitter()
+    ds([Document(text="def a():\n    return 1\n", metadata={"filename": "a.py", "mime": "x"})])
+    cached = ds.code_splitters["python"]  # built on first use
+    ds([Document(text="def b():\n    return 2\n", metadata={"filename": "b.py", "mime": "x"})])
+    assert ds.code_splitters["python"] is cached  # cache hit, not rebuilt
+
+
 def test_code_chunks_carry_path_and_symbol_breadcrumb_span_excludes_it():
     """Issue #389: each code chunk's embedded text leads with a
     `path > Class > method` breadcrumb (the strongest retrieval signal a raw
@@ -102,14 +117,11 @@ def test_code_chunks_carry_path_and_symbol_breadcrumb_span_excludes_it():
 
     from workspace_app.kb.li_pipeline import DispatchSplitter
 
-    src = (
-        "class Validator:\n"
-        + "".join(
-            f"    def check_{i}(self, payload):\n"
-            f"        # rule {i}\n"
-            f"        return payload.get('k{i}') is not None\n\n"
-            for i in range(40)
-        )
+    src = "class Validator:\n" + "".join(
+        f"    def check_{i}(self, payload):\n"
+        f"        # rule {i}\n"
+        f"        return payload.get('k{i}') is not None\n\n"
+        for i in range(40)
     )
     doc = Document(text=src, metadata={"filename": "kb/auth.py", "mime": "text/x-script.python"})
     nodes = DispatchSplitter()([doc])

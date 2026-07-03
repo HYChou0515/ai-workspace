@@ -163,24 +163,28 @@ class DispatchSplitter(TransformComponent):
 
         A raw code chunk embeds poorly — the file path and the enclosing symbol
         chain are the strongest retrieval signals, and they're exactly what a
-        char-window loses. The breadcrumb is folded into `text` (what the
-        embedder + BM25 see) while the char span keeps pointing at the
-        breadcrumb-free code, so citations still slice the canonical source —
-        the same contract as the Markdown heading / outline-section folds."""
+        char-window loses. Prepending that locating context before embedding is
+        the lightweight "contextual retrieval" the literature recommends
+        (Anthropic, *Introducing Contextual Retrieval*, 2024) — here recovered
+        deterministically from the AST instead of via an LLM. The breadcrumb is
+        folded into `text` (what the embedder + BM25 see) while the char span
+        keeps pointing at the breadcrumb-free code, so citations still slice the
+        canonical source — the same contract as the Markdown heading /
+        outline-section folds."""
         splitter = self.code_splitters.get(language)
         if splitter is None:
             splitter = CodeSplitter(language=language)
             self.code_splitters[language] = splitter
         chunks = splitter.get_nodes_from_documents([node])
         source = node.get_content()
+        # `_split_code` is only reached for a filename that `code_language_for`
+        # matched, so `path` is always a non-empty code filename.
         path = str(node.metadata.get("filename", "")).strip()
         for n in chunks:
-            if not isinstance(n, TextNode):  # pragma: no cover — CodeSplitter emits TextNodes
-                continue
+            assert isinstance(n, TextNode)  # CodeSplitter only emits TextNodes
             symbols = symbol_path(language, source, n.start_char_idx or 0)
-            crumb = " > ".join([p for p in (path, *symbols) if p])
-            if crumb:
-                n.text = f"{crumb}\n\n{n.get_content()}"
+            crumb = f"{path} > {' > '.join(symbols)}" if symbols else path
+            n.text = f"{crumb}\n\n{n.get_content()}"
         return chunks
 
 
