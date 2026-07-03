@@ -106,6 +106,26 @@ class SpecstarFileStore:
     async def write(self, workspace_id: str, path: str, data: bytes) -> None:
         await asyncio.to_thread(self._write_sync, workspace_id, path, data)
 
+    async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
+        """Create-if-absent (#419 N1 numbering arbiter): raise `FileExists` if a
+        record already occupies `path`, else create it. `create` with the fixed
+        `resource_id` is create-only (it can't overwrite), so the durable store
+        rejects a duplicate number even across pods."""
+        await asyncio.to_thread(self._create_exclusive_sync, workspace_id, path, data)
+
+    def _create_exclusive_sync(self, workspace_id: str, path: str, data: bytes) -> None:
+        rid = _fid(workspace_id, path)
+        if self._files.exists(rid):
+            raise FileExists(f"{workspace_id}:{path}")
+        self._files.create(
+            WorkspaceFile(workspace_id=workspace_id, path=path, content=Binary(data=data)),
+            status=RevisionStatus.draft,
+            resource_id=rid,
+        )
+        ancestors = dir_ancestors(path)
+        if ancestors:
+            self._add_dirs(workspace_id, ancestors)
+
     async def write_from_path(
         self, workspace_id: str, path: str, source: Path, content_type: str | None
     ) -> None:

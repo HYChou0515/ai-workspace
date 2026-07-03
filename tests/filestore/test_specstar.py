@@ -1,7 +1,7 @@
 import pytest
 from specstar import BackendBinding, BackendConfig, ConnectionProfile
 
-from workspace_app.filestore.protocol import FileNotFound
+from workspace_app.filestore.protocol import FileExists, FileNotFound
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.resources import make_spec
 
@@ -39,6 +39,16 @@ async def test_second_instance_on_the_same_store_sees_the_files():
 async def test_write_then_read_returns_same_bytes(store: SpecstarFileStore):
     await store.write("ws1", "/a.txt", b"hello")
     assert await store.read("ws1", "/a.txt") == b"hello"
+
+
+async def test_create_exclusive_is_create_only(store: SpecstarFileStore):
+    """#419 N1 arbiter: a create-only claim on the durable store rejects a
+    duplicate path (the `create` with a fixed resource_id can't overwrite), so
+    the same entity number can't be issued twice — even across pods."""
+    await store.create_exclusive("ws", "/issues/1.md", b"one")
+    with pytest.raises(FileExists):
+        await store.create_exclusive("ws", "/issues/1.md", b"two")
+    assert await store.read("ws", "/issues/1.md") == b"one"
 
 
 async def test_read_missing_path_raises_file_not_found(store: SpecstarFileStore):

@@ -5,6 +5,8 @@ and reads it back — internals (schema/parser/numbering) stay swappable."""
 
 from __future__ import annotations
 
+import asyncio
+
 from workspace_app.entity.catalog import EntityCatalog, EntityType
 from workspace_app.entity.schema import EntitySchema, FieldSpec, Role
 from workspace_app.entity.store import EntityStore
@@ -174,6 +176,26 @@ async def test_hard_delete_of_top_record_never_reissues_its_number() -> None:
     created = await store.create("issue", {"title": "y"}, actor="a", now="d")
 
     assert created.number == 4
+
+
+async def test_concurrent_creates_never_collide_via_exclusive_create() -> None:
+    """§N1: numbering's anti-collision arbiter is the FS exclusive-create, not the
+    in-process lock. Two stores with SEPARATE lock registries (standing in for two
+    pods) racing on ONE shared store still get distinct, contiguous numbers — a
+    loser walks to the next free slot on `FileExists`."""
+    fs = MemoryFileStore()
+    catalog = EntityCatalog({"issue": _issue_type()})
+    pod_a = EntityStore(fs, "ws1", catalog, locks={})
+    pod_b = EntityStore(fs, "ws1", catalog, locks={})
+
+    created = await asyncio.gather(
+        *[
+            (pod_a if i % 2 == 0 else pod_b).create("issue", {"title": f"t{i}"}, actor="a", now="d")
+            for i in range(12)
+        ]
+    )
+
+    assert sorted(e.number for e in created) == list(range(1, 13))  # 12 distinct, no reuse
 
 
 async def test_non_numeric_files_in_records_dir_are_ignored() -> None:

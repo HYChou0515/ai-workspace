@@ -28,6 +28,16 @@ async def test_read_missing_raises(fs: MemoryFileStore):
         await fs.read("ws-1", "/nope")
 
 
+async def test_create_exclusive_creates_then_rejects_a_duplicate(fs: MemoryFileStore):
+    """#419 N1 arbiter: create-if-absent lands the first write and raises
+    `FileExists` on a second claim of the same path, leaving the winner intact."""
+    await fs.create_exclusive("ws-1", "/issues/1.md", b"one")
+    assert await fs.read("ws-1", "/issues/1.md") == b"one"
+    with pytest.raises(FileExists):
+        await fs.create_exclusive("ws-1", "/issues/1.md", b"two")
+    assert await fs.read("ws-1", "/issues/1.md") == b"one"
+
+
 async def test_ls_filters_by_prefix(fs: MemoryFileStore):
     await fs.write("ws-1", "/src/a.py", b"a")
     await fs.write("ws-1", "/src/b.py", b"b")

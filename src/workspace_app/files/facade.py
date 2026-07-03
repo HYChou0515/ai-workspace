@@ -23,7 +23,7 @@ from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from ..filestore.protocol import FileNotFound, FileStore
+from ..filestore.protocol import FileExists, FileNotFound, FileStore
 from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound
 
 # How many times an etag-guarded edit re-bases against a concurrent writer
@@ -94,6 +94,30 @@ class WorkspaceFiles:
             await sb.upload(h, data, path)
         else:
             await self._fs.write(workspace_id, path, data)
+
+    async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
+        """Create-if-absent (#419 N1 numbering arbiter): raise `FileExists` if
+        `path` is taken, else create it. Cold ⇒ the durable store's atomic
+        create-only (`SpecstarFileStore.create_exclusive`). Warm ⇒ exists-check +
+        upload against the live sandbox; that pair isn't a single atomic op, but a
+        warm sandbox is single-pod (§N5) so the caller's per-type lock already
+        serialises claimants there — the durable path is where cross-pod atomicity
+        matters, and it has it."""
+        path = _norm(path)
+        warm = await self._warm(workspace_id)
+        if warm is not None:
+            sb, h = warm
+            if await sb.exists(h, path):
+                raise FileExists(path)
+            await sb.upload(h, data, path)
+            return
+        native = getattr(self._fs, "create_exclusive", None)
+        if native is not None:
+            await native(workspace_id, path, data)
+            return
+        if await self._fs.exists(workspace_id, path):
+            raise FileExists(path)
+        await self._fs.write(workspace_id, path, data)
 
     async def write_from_path(
         self, workspace_id: str, path: str, source: Path, content_type: str | None = None

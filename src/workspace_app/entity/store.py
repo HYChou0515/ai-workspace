@@ -13,9 +13,9 @@ from typing import Any
 
 import msgspec
 
-from ..filestore.protocol import FileStore
+from ..filestore.protocol import FileExists, FileStore
 from .catalog import EntityCatalog
-from .numbering import allocate
+from .numbering import create_exclusive, next_number, record_high_water
 from .parser import ParsedEntity, parse_entity, serialize_entity
 from .projection import Corpus, compute_derived
 from .schema import Role
@@ -80,13 +80,26 @@ class EntityStore:
         self, type_name: str, args: dict[str, Any], *, actor: str = "", now: str = ""
     ) -> ParsedEntity:
         entity_type = self._catalog.get(type_name)
+        records_path = entity_type.records_path
         lock = self._locks.setdefault(f"{self._ws}:{type_name}", asyncio.Lock())
         async with lock:
-            number = await allocate(self._fs, self._ws, entity_type.records_path)
-            text = render_skeleton(entity_type.skeleton, args, number=number, now=now, actor=actor)
-            await self._fs.write(
-                self._ws, self._record_path(entity_type.records_path, number), text.encode()
-            )
+            number = await next_number(self._fs, self._ws, records_path)
+            # Claim the record file by exclusive create; a loser (another pod/
+            # process that grabbed this number first) walks to the next free one
+            # (N1). The lock makes this a no-op fast path on a single pod; the
+            # exclusive create is the correctness backstop when it isn't.
+            while True:
+                text = render_skeleton(
+                    entity_type.skeleton, args, number=number, now=now, actor=actor
+                )
+                try:
+                    await create_exclusive(
+                        self._fs, self._ws, self._record_path(records_path, number), text.encode()
+                    )
+                    break
+                except FileExists:
+                    number += 1
+            await record_high_water(self._fs, self._ws, records_path, number)
         return parse_entity(text.encode(), number, type_name, entity_type.schema)
 
     async def get(self, type_name: str, number: int) -> ParsedEntity:

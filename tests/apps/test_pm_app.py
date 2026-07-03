@@ -29,13 +29,13 @@ def _client() -> ApiTestClient:
     return ApiTestClient(app)
 
 
-def test_pm_manifest_is_coherent_and_ide_first():
+def test_pm_manifest_is_coherent_and_views_first():
     """The shipped app.json passes the startup function-coherence gate and opens
-    the workspace up front (its views are the main stage)."""
+    its declarative views as the main stage (§B5)."""
     m = load_app_manifest("pm")
     validate_function_coherence(m)  # raises if tools ↔ toggles disagree
     assert m.slug == "pm"
-    assert m.layout.primary_surface == "ide"
+    assert m.layout.primary_surface == "views"
     assert m.item.noun == "Project"
 
 
