@@ -615,6 +615,8 @@ def create_app(
         max_searches_ceiling=kb_max_searches_ceiling,
         # #397: KB chat's request_wiki_update tool submits corrections through this.
         wiki_coordinator=wiki_coordinator,
+        # #304: chat visibility/write ACL — a superuser bypasses the per-verb gate.
+        superusers=superusers,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
