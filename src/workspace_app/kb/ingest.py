@@ -30,6 +30,7 @@ from ..resources.kb import CachedChunk, Collection, DocChunk, IndexCache, Source
 from .chunker import Chunker
 from .code_lang import is_code_file
 from .doc_id import canonical_path, encode_doc_id
+from .doc_permission import collection_mirror_fields
 from .embedder import Embedder
 from .index_cache import IndexCacheStore, compute_cache_key
 from .parser_config import effective_config
@@ -479,6 +480,11 @@ class Ingestor:
             # safe there; this covers the re-upload-new-bytes path.)
             parser_config_overrides=(existing.parser_config_overrides if existing else {}),
             parser_guidance_override=(existing.parser_guidance_override if existing else ""),
+            # #303: denormalize the collection's read-visibility onto the doc so the
+            # source_doc access_scope can hide it at the storage layer. Read from
+            # the LIVE collection at create/re-upload — later collection permission
+            # changes are re-pushed by the fan-out.
+            **collection_mirror_fields(self._spec, collection_id),
         )
         if existing is None:
             drm.create(doc, resource_id=doc_id)
