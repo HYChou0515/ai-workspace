@@ -47,9 +47,9 @@ def test_read_meta_grant_is_not_enough_for_read_content():
 def test_superuser_reads_all():
     spec = make_spec(superusers=frozenset({"root"}))
     private = _new_collection(spec, by="bob", permission=Permission(visibility="private"))
-    assert readable_collection_ids(
-        spec, [private], "root", superusers=frozenset({"root"})
-    ) == [private]
+    assert readable_collection_ids(spec, [private], "root", superusers=frozenset({"root"})) == [
+        private
+    ]
 
 
 def test_unknown_id_is_dropped():
