@@ -1,0 +1,8 @@
+path: milestones
+fields:
+  title: { role: text, required: true }
+  status: { role: status, values: [planned, active, done] }
+  span: { role: daterange }
+  issues: { role: backref, from: issue.milestone }
+  progress: { role: rollup, over: issues, agg: avg, field: progress }
+  open_count: { role: rollup, over: issues, agg: count, where: { status: open } }

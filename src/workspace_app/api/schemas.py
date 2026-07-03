@@ -7,7 +7,7 @@ place. Pure data — no behaviour.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -225,3 +225,79 @@ class _PreflightPreviewOut(BaseModel):
     checks: list[_PreflightCheckOut]
     can_run: bool
     has_preflight: bool
+
+
+# ── #419 entity framework ────────────────────────────────────────────────────
+
+
+class _EntityDiagnostic(BaseModel):
+    """One parse/lint finding (§E). `error` drops the record from the projection;
+    `warning` still projects."""
+
+    level: str
+    message: str
+    field: str | None = None
+
+
+class _EntityFieldSpec(BaseModel):
+    """A schema field's role + relational wiring, for the FE view renderer."""
+
+    name: str
+    role: str
+    required: bool = False
+    values: list[str] | None = None
+    to: str | None = None
+    from_: str | None = Field(default=None, alias="from")
+    over: str | None = None
+    agg: str | None = None
+    field: str | None = None
+    where: dict[str, str] | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+class _EntityFormField(BaseModel):
+    """One quick-create form field derived from a `{{arg}}` placeholder (§D)."""
+
+    name: str
+    widget: str
+    required: bool
+    values: list[str] | None = None
+
+
+class _EntityTypeOut(BaseModel):
+    """One entity type in the item's catalog — its schema + quick-create form."""
+
+    name: str
+    records_path: str
+    fields: list[_EntityFieldSpec]
+    form: list[_EntityFormField]
+
+
+class _EntityCatalogOut(BaseModel):
+    types: list[_EntityTypeOut]
+    diagnostics: list[_EntityDiagnostic]
+
+
+class _EntityOut(BaseModel):
+    """A projected entity — raw frontmatter fields (plus resolved backref/rollup)
+    + body + per-record diagnostics."""
+
+    number: int
+    type_name: str
+    fields: dict[str, Any]
+    body: str
+    diagnostics: list[_EntityDiagnostic]
+
+
+class _EntityListOut(BaseModel):
+    entities: list[_EntityOut]
+    invalid: list[_EntityOut]
+
+
+class _EntityCreateBody(BaseModel):
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class _EntityUpdateBody(BaseModel):
+    patch: dict[str, Any] = Field(default_factory=dict)

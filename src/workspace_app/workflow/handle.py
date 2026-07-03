@@ -69,6 +69,12 @@ def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
     return f"{safe}_{digest}" if safe else digest
 
 
+def _args_digest(args: dict[str, Any]) -> str:
+    """A stable, short digest of a capability's args — folds them into the journal
+    key so a re-run with the SAME args skips (#419 create_entity idempotency)."""
+    return hashlib.sha1(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:12]
+
+
 def _abs(path: str) -> str:
     """Normalise to an absolute workspace-relative path (FileStore wants a leading
     ``/``); accept author-friendly relative paths like ``plan/f.json``."""
@@ -212,6 +218,46 @@ class WorkflowHandle:
             cache=cache,
         )
         return result["doc_id"]
+
+    async def create_entity(
+        self,
+        type_name: str,
+        args: dict[str, Any],
+        *,
+        phase: str = "commit",
+        cache: bool = True,
+    ) -> int:
+        """Create a file-first entity (#419) through the framework's numbering +
+        validation pipeline — the SAME ``EntityStore`` path the UI and the agent use,
+        never a raw ``wf.write`` with a hand-picked number (§C, "single write path").
+        Journaled + skipped on re-run (§9), keyed by (type + args), so a re-run never
+        mints a duplicate. Returns the permanent entity number."""
+        from datetime import UTC, datetime
+
+        from ..entity.catalog import discover_catalog
+        from ..entity.store import EntityStore
+
+        catalog, _diags = await discover_catalog(self._store, self._workspace_id)
+        if type_name not in catalog:
+            raise StepFailed(f"unknown entity type: {type_name!r}")
+        store = EntityStore(self._store, self._workspace_id, catalog)
+
+        async def execute(_feedback: str | None) -> dict[str, int]:
+            created = await store.create(
+                type_name, args, actor=self.user, now=datetime.now(UTC).date().isoformat()
+            )
+            return {"number": created.number}
+
+        result = await run_step(
+            self,
+            name="create_entity",
+            key=f"{type_name}_{_args_digest(args)}",
+            phase=phase,
+            args={"type": type_name, "args": args},
+            execute=execute,
+            cache=cache,
+        )
+        return result["number"]
 
     async def convert(
         self, src: str, dest: str, *, phase: str = "convert", cache: bool = True
