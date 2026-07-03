@@ -45,12 +45,19 @@ jobs:
 
   # The unit suite is SHARDED across parallel runners. On one runner the backend
   # pytest step was ~75 min (it dwarfs frontend ~4 min / sandbox-host ~1 min), so
-  # the whole CI wall clock was that one step. Each shard runs a slice: the heavy,
-  # app-building dirs (api / workflow) get their own shard so no single runner
-  # carries them all. The `rest` shard runs EVERYTHING the others don't name — via
-  # --ignore, NOT an allowlist — so a newly added test dir is never silently
-  # dropped from CI. Coverage is uploaded per shard under the same `backend` flag;
-  # Codecov merges the shards' partial reports into one number for the badge.
+  # the whole CI wall clock was that one step. Each shard runs a slice.
+  #
+  # Two shard flavours:
+  #   * `paths`     — an explicit set of dirs/args handed to pytest.
+  #   * `split_dir` — a single heavy dir whose SORTED test files are round-robined
+  #     across `split_total` runners (this file's slice = position % total). tests/api
+  #     is the outlier (~700 app-building tests, ~30 min alone even sharded off), so it
+  #     is split across 3 runners here.
+  # The `rest` shard runs EVERYTHING the named shards don't cover — via --ignore,
+  # NOT an allowlist — so a newly added test dir is never silently dropped from CI;
+  # likewise split_dir slices by `position % total`, so a new file in a split dir is
+  # auto-distributed, never dropped. Coverage is uploaded per shard under the same
+  # `backend` flag; Codecov merges the shards' partial reports for the badge.
   backend-test:
     name: backend-test (${{ matrix.name }})
     runs-on: ubuntu-latest
@@ -58,8 +65,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: api
-            paths: tests/api
+          - name: api-1
+            split_dir: tests/api
+            split_index: "0"
+            split_total: "3"
+          - name: api-2
+            split_dir: tests/api
+            split_index: "1"
+            split_total: "3"
+          - name: api-3
+            split_dir: tests/api
+            split_index: "2"
+            split_total: "3"
           - name: kb
             paths: tests/kb
           - name: workflow-agent-apps
@@ -99,7 +116,16 @@ jobs:
           COVERAGE_PROCESS_START: pyproject.toml
           PYTHONPATH: .
         run: |
-          uv run pytest -m "not integration" -n auto ${{ matrix.paths }}
+          # A shard either names explicit paths, or round-robin-slices a heavy
+          # dir's SORTED test files across N runners (this slice = file position
+          # % N). Every file lands in exactly one slice, so a newly added file is
+          # auto-distributed and never dropped.
+          if [ -n "${{ matrix.split_dir }}" ]; then
+            target=$(ls ${{ matrix.split_dir }}/test_*.py | sort | awk "NR % ${{ matrix.split_total }} == ${{ matrix.split_index }}")
+          else
+            target="${{ matrix.paths }}"
+          fi
+          uv run pytest -m "not integration" -n auto $target
           uv run coverage combine
           uv run coverage report
           uv run coverage xml
