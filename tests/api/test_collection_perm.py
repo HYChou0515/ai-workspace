@@ -246,9 +246,7 @@ def test_get_permission_returns_the_current_state():
     _set_permission(
         spec,
         cid,
-        Permission(
-            visibility="restricted", read_meta=["user:alice"], read_content=["user:alice"]
-        ),
+        Permission(visibility="restricted", read_meta=["user:alice"], read_content=["user:alice"]),
     )
     state = client.get(f"/kb/collections/{cid}/permission").json()
     assert state["visibility"] == "restricted"
