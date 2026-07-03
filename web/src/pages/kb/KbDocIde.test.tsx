@@ -76,8 +76,19 @@ function stubClient(items: KbDocument[], over: Partial<KbApi> = {}): KbApi {
     }),
     // #395: the IDE polls this summary (not the list) while docs index.
     documentsStatus: async () => ({ total: items.length, counts, runs: {}, latest_ms: 0 }),
-    // #395: the open-a-document fields (rationale / parser guidance) come from
-    // the render call, not the list row.
+    // The open-a-document fields (rationale / parser guidance) come from the
+    // cheap SourceDoc-envelope fetch, not the heavy render call nor the list row.
+    getSourceDocMeta: async (id: string) => {
+      const d = items.find((x) => x.resource_id === id) as
+        | (KbDocument & { quality_rationale?: string; parser_guidance_override?: string })
+        | undefined;
+      return {
+        quality_rationale: d?.quality_rationale,
+        parser_guidance_override: d?.parser_guidance_override,
+      };
+    },
+    // Still stubbed (the citation drawer uses it) — but the IDE must NOT call it
+    // on open; tests assert that.
     renderDocument: async (id: string) => {
       const d = items.find((x) => x.resource_id === id);
       return {
@@ -171,35 +182,37 @@ describe("KbDocIde", () => {
     expect(badge.className).toContain("kb-quality--bad");
   });
 
-  it("shows the quality verdict in the status bar, rationale from the render call (#105/#395)", async () => {
-    // #395: the rationale no longer rides the list row — opening the doc
-    // fetches it (renderDocument), the sanctioned touch-the-blob-on-click path.
+  it("shows the quality verdict in the status bar, rationale from the cheap doc-meta fetch (#105/#395)", async () => {
+    // Opening a doc fetches just {rationale, guidance} from the SourceDoc
+    // envelope (getSourceDocMeta) — NOT the heavy renderDocument, whose markdown
+    // body the IDE discards while it re-reads the blob + runs count queries.
     const user = userEvent.setup();
     const base = stubClient([doc({ path: "/bad.md", quality_score: 22 })]);
-    const renderDocument = vi.fn(async (id: string) => ({
-      ...(await (base.renderDocument as (i: string) => Promise<object>)(id)),
+    const getSourceDocMeta = vi.fn(async (_id: string) => ({
       quality_rationale: "OCR soup, no structure.",
     }));
+    const renderDocument = vi.fn(base.renderDocument);
     renderWithQuery(
       <KbDocIde
         collectionId="c1"
-        client={{ ...base, renderDocument } as unknown as KbApi}
+        client={{ ...base, getSourceDocMeta, renderDocument } as unknown as KbApi}
       />,
     );
     await user.click(await screen.findByText("bad.md"));
     const verdict = await screen.findByTestId("kb-ide-quality");
     expect(within(verdict).getByTestId("kb-quality-badge")).toHaveTextContent("22");
     await within(verdict).findByText("OCR soup, no structure.");
-    expect(renderDocument).toHaveBeenCalledWith("id:/bad.md");
+    expect(getSourceDocMeta).toHaveBeenCalledWith("id:/bad.md");
+    // the heavy render call is never made when merely opening a doc
+    expect(renderDocument).not.toHaveBeenCalled();
   });
 
-  it("prefills the Tune-parsing modal from the render call's override (#356/#395)", async () => {
+  it("prefills the Tune-parsing modal from the cheap doc-meta fetch (#356/#395)", async () => {
     const user = userEvent.setup();
     const base = stubClient([doc({ path: "/tuned.md" })]);
     const client = {
       ...base,
-      renderDocument: async (id: string) => ({
-        ...(await (base.renderDocument as (i: string) => Promise<object>)(id)),
+      getSourceDocMeta: async (_id: string) => ({
         parser_guidance_override: "treat tables as JSON",
       }),
       listCollections: async () => [],

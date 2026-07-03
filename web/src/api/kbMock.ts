@@ -363,6 +363,14 @@ export const mockKbApi: KbApi = {
       parser_guidance_override: doc?.parser_guidance_override,
     };
   },
+  async getSourceDocMeta(documentId) {
+    const collection_id = documentId.split("/")[0] ?? "";
+    const doc = (documents.get(collection_id) ?? []).find((d) => d.resource_id === documentId);
+    return {
+      quality_rationale: doc?.quality_rationale,
+      parser_guidance_override: doc?.parser_guidance_override,
+    };
+  },
   async getDocChunks(documentId) {
     return [...(docChunks.get(documentId) ?? [])].sort((a, b) => a.seq - b.seq);
   },

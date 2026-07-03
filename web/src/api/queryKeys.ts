@@ -106,6 +106,9 @@ export const qk = {
     chat: (id: string) => ["kb", "chat", id] as const,
     agent: ["kb", "agent"] as const,
     doc: (id: string) => ["kb", "doc", id] as const,
+    // The doc IDE's cheap open-a-doc metadata (rationale + parser guidance) —
+    // separate from `doc` (the heavy render, used by the citation drawer).
+    docMeta: (id: string) => ["kb", "doc-meta", id] as const,
     docChunks: (id: string) => ["kb", "doc-chunks", id] as const,
     // Issue #50: the LLM wiki browser.
     wikiPages: (collectionId: string) => ["kb", "wiki-pages", collectionId] as const,

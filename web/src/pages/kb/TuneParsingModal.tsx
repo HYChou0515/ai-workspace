@@ -82,8 +82,11 @@ export function TuneParsingModal({
   const invalidateDoc = () => {
     void qc.invalidateQueries({ queryKey: qk.kb.collections });
     void qc.invalidateQueries({ queryKey: qk.kb.documents(collectionId) });
-    // #395: the override now arrives via the doc's render — refresh it too so
-    // reopening Tune shows what was just saved.
+    // The just-saved override is read on open from TWO places — refresh both so
+    // reopening Tune shows it wherever the modal was launched: the doc IDE reads
+    // it from the cheap SourceDoc-envelope meta (docMeta), the citation drawer
+    // from the full render (doc).
+    void qc.invalidateQueries({ queryKey: qk.kb.docMeta(docId) });
     void qc.invalidateQueries({ queryKey: qk.kb.doc(docId) });
   };
   const saveDocMut = useMutation({

@@ -53,6 +53,20 @@ describe("KB api (mock client)", () => {
     expect(docs.items[0].chunks).toBe(chunks.length);
   });
 
+  it("reads a doc's open-a-doc meta (parser guidance) from the envelope, off the list wire", async () => {
+    const c = await kb.createCollection("kb");
+    const file = new File(["x"], "g.md", { type: "text/markdown" });
+    const [docId] = await kb.uploadDocument(c.resource_id, file);
+    await kb.setDocumentGuidance(docId, "treat tables as JSON");
+    const meta = await kb.getSourceDocMeta(docId);
+    expect(meta.parser_guidance_override).toBe("treat tables as JSON");
+    // the override stays OFF the metas-only list row
+    const docs = await kb.listDocuments(c.resource_id);
+    expect(
+      (docs.items[0] as { parser_guidance_override?: string }).parser_guidance_override,
+    ).toBeUndefined();
+  });
+
   it("creates a chat and lists it with a message count", async () => {
     const c = await kb.createCollection("kb");
     const chat = await kb.createChat("Reflow Q", [c.resource_id]);

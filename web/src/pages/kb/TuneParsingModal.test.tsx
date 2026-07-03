@@ -4,7 +4,8 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { KbProbeResult } from "../../api/kb";
-import { renderWithQuery } from "../../test/queryWrapper";
+import { qk } from "../../api/queryKeys";
+import { makeTestQueryClient, renderWithQuery } from "../../test/queryWrapper";
 import { TuneParsingModal } from "./TuneParsingModal";
 
 afterEach(cleanup);
@@ -136,6 +137,34 @@ describe("TuneParsingModal", () => {
     });
     // the saved-not-in-effect nudge + reindex button appear
     expect(await screen.findByRole("button", { name: /重新索引這份文件/ })).toBeInTheDocument();
+  });
+
+  it("saving doc-guidance refreshes the doc IDE's cached override (invalidates docMeta)", async () => {
+    // The doc IDE reads the per-doc override from the SourceDoc-envelope meta
+    // (qk.kb.docMeta), not the heavy render — so saving must invalidate THAT key
+    // or reopening Tune from the IDE would show the stale override.
+    const client = fakeClient();
+    const qc = makeTestQueryClient();
+    const spy = vi.spyOn(qc, "invalidateQueries");
+    renderWithQuery(
+      <TuneParsingModal
+        collectionId="c1"
+        docId="c1/u/a.pdf"
+        docPath="a.pdf"
+        onClose={vi.fn()}
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        client={client as any}
+      />,
+      qc,
+    );
+    await screen.findByDisplayValue("BASE GUIDANCE");
+    fireEvent.change(screen.getByLabelText("解析 prompt"), { target: { value: "doc-only steering" } });
+    fireEvent.click(screen.getByRole("button", { name: /只套用到這份文件/ }));
+    await waitFor(() => {
+      expect(spy).toHaveBeenCalledWith(
+        expect.objectContaining({ queryKey: qk.kb.docMeta("c1/u/a.pdf") }),
+      );
+    });
   });
 
   it("applies to the whole collection only after confirming the blast radius", async () => {

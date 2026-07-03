@@ -300,6 +300,15 @@ export type KbRenderedDoc = {
   parser_guidance_override?: string;
 };
 
+/** The two open-a-doc fields the doc IDE needs — the quality rationale (status
+ * bar) + the per-doc parser-guidance override (Tune modal). Fetched cheaply from
+ * the SourceDoc envelope so opening a doc never pays the heavy `renderDocument`
+ * (full blob re-read + count queries) for a markdown body the IDE discards. */
+export type KbDocMeta = {
+  quality_rationale?: string;
+  parser_guidance_override?: string;
+};
+
 /** A resolved [n] marker — points at a span of a source document. */
 export type KbCitation = {
   marker: number;
@@ -568,6 +577,10 @@ export interface KbApi {
   setDocumentGuidance(documentId: string, guidance: string): Promise<void>;
   /** Render a source document to markdown (kb:// links) for the citation viewer. */
   renderDocument(documentId: string): Promise<KbRenderedDoc>;
+  /** The doc IDE's cheap open-a-doc read: just {quality_rationale,
+   * parser_guidance_override} from the SourceDoc envelope (GET /source-doc/{id}),
+   * NOT the heavy renderDocument. */
+  getSourceDocMeta(documentId: string): Promise<KbDocMeta>;
   /** A document's indexed chunks + their cited counts (the chunks debug view). */
   getDocChunks(documentId: string): Promise<KbDocChunk[]>;
   /** Re-chunk + re-embed a single document (flips it back to `indexing`). */
@@ -842,6 +855,19 @@ export const realKbApi: KbApi = {
     // it round-trips a URL untouched.
     const url = `/kb/documents?id=${encodeURIComponent(documentId)}`;
     return (await ok(await apiFetch(url), "render document")).json();
+  },
+  async getSourceDocMeta(documentId) {
+    // The doc IDE only needs the quality rationale + parser-guidance override on
+    // open — both ride the SourceDoc envelope (metadata, no blob restore), so a
+    // point-get is far cheaper than renderDocument's blob re-read + count queries.
+    const url = `/source-doc/${encodeURIComponent(documentId)}`;
+    const env: { data: Partial<KbDocMeta> } = await (
+      await ok(await apiFetch(url), "read document meta")
+    ).json();
+    return {
+      quality_rationale: env.data.quality_rationale,
+      parser_guidance_override: env.data.parser_guidance_override,
+    };
   },
   async getDocChunks(documentId) {
     const url = `/kb/documents/chunks?id=${encodeURIComponent(documentId)}`;

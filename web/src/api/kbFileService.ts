@@ -91,12 +91,6 @@ export function kbFileService(
 
   const docFor = (path: string): KbDocument | undefined => byPath.get(normPath(path));
 
-  const docIdFor = (path: string): string => {
-    const doc = docFor(path);
-    if (!doc) throw new Error(`unknown KB document: ${path}`);
-    return doc.resource_id;
-  };
-
   // Every doc beneath a folder path (incl the hidden .gitkeep) — KB has no
   // atomic subtree op, so folder move/copy/delete fan out over these.
   const docsUnder = (dir: string): KbDocument[] => {
@@ -122,12 +116,16 @@ export function kbFileService(
     listDirs: async (): Promise<string[]> => [],
 
     async readFile(path: string): Promise<FileContent> {
-      const docId = docIdFor(path);
-      // 1. resolve the doc's current content blob id, 2. fetch its raw bytes.
-      // Raw (not the render projection) so every text type round-trips on edit
-      // and the renderers see real bytes (csv parses csv, an image rebuilds).
-      const env = await getEnvelope(docId);
-      const fileId = env.data.content.file_id;
+      const doc = docFor(path);
+      if (!doc) throw new Error(`unknown KB document: ${path}`);
+      const docId = doc.resource_id;
+      // The tree row already carries the content blob id (#87), so a plain open
+      // fetches the raw bytes directly — no extra serial GET /source-doc/{id}
+      // just to learn file_id. A just-uploaded / still-indexing row has none yet;
+      // fall back to the envelope to resolve the current one. Raw (not the render
+      // projection) so every text type round-trips on edit and the renderers see
+      // real bytes (csv parses csv, an image rebuilds).
+      const fileId = doc.file_id ?? (await getEnvelope(docId)).data.content.file_id;
       const resp = await apiFetch(
         `/source-doc/${encodeURIComponent(docId)}/blobs/${encodeURIComponent(fileId)}`,
       );
