@@ -8,7 +8,7 @@ import { kbApi } from "../../api/kb";
 import { DialogProvider } from "../../components/Dialog";
 import type { AgentState } from "../../hooks/useAgent";
 import { renderWithQuery } from "../../test/queryWrapper";
-import { AgentPanel } from "./AgentPanel";
+import { AgentPanel, CHAT_COLUMN_MAX_W } from "./AgentPanel";
 
 function stubAgent(): AgentState {
   return {
@@ -47,6 +47,27 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+});
+
+describe("AgentPanel content column width", () => {
+  // At wide / full-width chat the message text must not run edge-to-edge — the
+  // feed and composer content sit in a centred, capped reading column so there's
+  // left/right whitespace. At a narrow panel the cap never engages (RCA untouched).
+  it("caps and centres the message feed content", () => {
+    renderPanel();
+    const col = screen.getByTestId("chat-column");
+    expect(col.style.maxWidth).toBe(`${CHAT_COLUMN_MAX_W}px`);
+    expect(col.style.marginLeft).toBe("auto");
+    expect(col.style.marginRight).toBe("auto");
+  });
+
+  it("caps and centres the composer content to the same column", () => {
+    renderPanel();
+    const col = screen.getByTestId("composer-column");
+    expect(col.style.maxWidth).toBe(`${CHAT_COLUMN_MAX_W}px`);
+    expect(col.style.marginLeft).toBe("auto");
+    expect(col.style.marginRight).toBe("auto");
+  });
 });
 
 describe("AgentPanel attach (#198)", () => {
