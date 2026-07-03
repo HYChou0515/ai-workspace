@@ -672,7 +672,7 @@ class Ingestor:
         # Run each packet through the pipeline. seq is global across
         # packets so adjacency-merge in retrieval stays meaningful
         # (parser A's last chunk is seq N; parser B's first is N+1).
-        use_alt = self._should_use_alt_embedder(collection_id)
+        use_alt = self._use_alt_for(collection_id, path)
         seq_offset = 0
         for parser_id, docs in packets:
             seq_offset += self._emit_packet(
@@ -772,7 +772,7 @@ class Ingestor:
         assert isinstance(raw, bytes)
         mime = magic.from_buffer(raw, mime=True)
         is_code = is_code_file(doc.path)
-        use_alt = self._should_use_alt_embedder(doc.collection_id)
+        use_alt = self._use_alt_for(doc.collection_id, doc.path)
         packets: list[tuple[str, list[Document]]] = []
         with MaterialisedParserInput(raw, filename=doc.path) as source:
             parsers = self._parser_registry.all_matching(
@@ -817,6 +817,24 @@ class Ingestor:
         assert isinstance(coll, Collection)
         return coll.embedder_id != 0
 
+    def _use_alt_for(self, collection_id: str, path: str) -> bool:
+        """Whether THIS doc's chunks embed with the alt (code) embedder into
+        ``embedding_alt`` — the #389 per-file routing so one collection can hold
+        prose (text embedder) AND code (code embedder) side by side.
+
+        Two triggers:
+        - The Collection's ``embedder_id`` override forces the alt embedder for
+          EVERY doc (back-compat; still fail-loud downstream if none is wired —
+          the operator explicitly selected it).
+        - Otherwise a **code file** routes to the alt embedder — but only when a
+          code embedder is actually configured. With none wired, code degrades
+          to the text embedder (its `path > symbol` breadcrumb from #389 P2 is
+          the semantic anchor), never crashing an operator who hasn't set one up.
+        """
+        if self._should_use_alt_embedder(collection_id):
+            return True
+        return self._code_embedder is not None and is_code_file(path)
+
     # ── index-result cache (#390) ────────────────────────────────────
     def cache_key(self, doc_id: str) -> str:
         """The :class:`IndexCache` id for this doc's CURRENT content + extraction
@@ -830,7 +848,11 @@ class Ingestor:
         assert isinstance(doc, SourceDoc)
         coll = self._spec.get_resource_manager(Collection).get(doc.collection_id).data
         assert isinstance(coll, Collection)
-        embedder = self._code_embedder if coll.embedder_id != 0 else self._embedder
+        embedder = (
+            self._code_embedder
+            if self._use_alt_for(doc.collection_id, doc.path)
+            else self._embedder
+        )
         assert embedder is not None, "collection selects the alt embedder but none is wired"
         # effective guidance: per-doc override REPLACES the collection's (#356).
         guidance = doc.parser_guidance_override or coll.parser_guidance
@@ -983,7 +1005,7 @@ class Ingestor:
         raw = drm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)
         mime = magic.from_buffer(raw, mime=True)
-        use_alt = self._should_use_alt_embedder(doc.collection_id)
+        use_alt = self._use_alt_for(doc.collection_id, doc.path)
         with MaterialisedParserInput(raw, filename=doc.path) as source:
             parsers = self._parser_registry.all_matching(
                 filename=doc.path, mime=mime, source=source
