@@ -162,10 +162,15 @@ export type AppManifest = AppSummary & {
     form?: string[];
     /** Files the workspace opens on entry (filtered to those that exist). */
     default_tabs: string[];
-    /** #159: which surface leads when an item opens — "chat" (default) tucks the
-     * file IDE behind a `Workspace` toggle; "ide" opens the VS Code workspace up
-     * front. Ignored when `function.workspace` is false (no IDE to show). */
-    primary_surface: "chat" | "ide";
+    /** #419 §B5: the App's declarative views (`views/*.ai.yaml`) that form its
+     * main screen, ordered. When `primary_surface` is "views" these open up front
+     * as the main-stage tabs instead of `default_tabs`. */
+    views?: string[];
+    /** #159 / #419: which surface leads when an item opens — "chat" (default)
+     * tucks the file IDE behind a `Workspace` toggle; "ide" opens the VS Code
+     * workspace up front; "views" opens the App's `layout.views` as the main
+     * stage. Ignored when `function.workspace` is false (no files to show). */
+    primary_surface: "chat" | "ide" | "views";
     /** #200: how prominent the per-item multi-chat switcher is — "auto" (default)
      * hides it until a second chat exists (single-chat-leaning); "always" surfaces
      * it up front (Topic Hub). Every App is multichat-capable regardless. */

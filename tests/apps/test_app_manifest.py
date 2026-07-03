@@ -72,6 +72,33 @@ def test_layout_chat_switcher_defaults_to_auto():
     assert Layout().chat_switcher == "auto"
 
 
+def test_pm_declares_views_first_surface():
+    """#419 §B5: PM opens its declarative views (board / gantt / roadmap …) as the
+    main stage, so they aren't buried as files the user must hunt for."""
+    layout = load_app_manifest("pm").layout
+    assert layout.primary_surface == "views"
+    assert "/views/board.ai.yaml" in layout.views
+
+
+def test_views_primary_surface_requires_non_empty_views():
+    """A `primary_surface: 'views'` with no `layout.views` is incoherent (nothing
+    to show) and fails the startup gate."""
+    import msgspec
+    import pytest
+
+    from workspace_app.apps.catalog import validate_function_coherence
+
+    raw = b"""{
+      "slug": "x", "title": "X",
+      "agent": {"prompt_file": "p.md"},
+      "item": {"noun": "I", "noun_plural": "Is"},
+      "layout": {"primary_surface": "views"}
+    }"""
+    m = msgspec.json.decode(raw, type=AppManifest)
+    with pytest.raises(ValueError, match="layout.views"):
+        validate_function_coherence(m)
+
+
 def test_topic_hub_declares_always_chat_switcher():
     """#200: Topic Hub is multi-chat-first (cross-collection threads accumulate),
     so it opts into an always-visible switcher rather than the single-chat-leaning

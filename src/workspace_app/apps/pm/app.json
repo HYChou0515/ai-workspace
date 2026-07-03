@@ -44,8 +44,11 @@
     "statusbar": ["status"],
     "list": ["status"],
     "form": ["status"],
-    "default_tabs": ["/views/table.ai.yaml", "/views/board.ai.yaml", "/views/health.ai.yaml"],
-    "primary_surface": "ide"
+    "views": [
+      "/views/board.ai.yaml", "/views/table.ai.yaml", "/views/gantt.ai.yaml",
+      "/views/roadmap.ai.yaml", "/views/health.ai.yaml"
+    ],
+    "primary_surface": "views"
   },
   "lifecycle": { "status_field": "status", "closing_states": ["archived"] },
   "labels": { "status": "Status" },

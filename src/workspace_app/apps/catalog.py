@@ -104,10 +104,15 @@ def validate_function_coherence(manifest: AppManifest) -> None:
             f"app {manifest.slug!r}: entity tools {sorted(tools & _ENTITY_TOOLS)} need "
             f"function.workspace but it is false"
         )
-    if manifest.layout.primary_surface == "ide" and not fn.workspace:
+    if manifest.layout.primary_surface in ("ide", "views") and not fn.workspace:
         raise ValueError(
-            f"app {manifest.slug!r}: layout.primary_surface 'ide' requires "
-            f"function.workspace but it is false"
+            f"app {manifest.slug!r}: layout.primary_surface "
+            f"{manifest.layout.primary_surface!r} requires function.workspace but it is false"
+        )
+    if manifest.layout.primary_surface == "views" and not manifest.layout.views:
+        raise ValueError(
+            f"app {manifest.slug!r}: layout.primary_surface 'views' needs a non-empty "
+            f"layout.views (the main-screen view files)"
         )
     # #298 Q7: a declared shared skill must exist in the registry — a typo should
     # fail the boot loud, not silently drop the skill from the index.
