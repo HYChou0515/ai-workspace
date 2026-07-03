@@ -1,0 +1,55 @@
+{
+  "slug": "pm",
+  "title": "Project Management",
+  "description": "Plan work as file-first issues + milestones — board, gantt, roadmap.",
+  "icon": "kanban",
+  "color": "#3B82F6",
+  "onboarding": {
+    "version": "1",
+    "title": "Welcome to Project Management",
+    "intro": "Track work as plain-file issues and milestones — every record is a workspace file you (or the agent) can read, edit, and version.",
+    "points": [
+      { "title": "Create an issue", "body": "Use the quick-create form (or ask the agent) — each issue becomes `issues/N.md` with typed fields." },
+      { "title": "See it your way", "body": "The board groups issues by status, the gantt lays out their date spans, and the roadmap tracks milestones." },
+      { "title": "Roll up progress", "body": "Milestones back-reference their issues and roll up progress automatically — no manual bookkeeping." }
+    ]
+  },
+  "function": { "workspace": true, "sandbox": true, "terminal": true },
+  "agent": {
+    "prompt_file": "prompts/system.md",
+    "tools": [
+      "exec", "read_file", "write_file", "edit_file", "list_files", "exists",
+      "delete_file", "ask_knowledge_base", "lookup_user", "save_skill", "save_workflow"
+    ],
+    "skills": ["author-skill", "author-workflow"],
+    "picker": [
+      { "preset": "qwen3-local", "name": "PM · Qwen3 (local)" },
+      { "preset": "claude-opus", "name": "PM · Claude Opus" },
+      { "preset": "openai-mini", "name": "PM · GPT-4o-mini" }
+    ],
+    "suggestions": [
+      { "label": "New issue", "prompt": "Create an issue for " },
+      { "label": "This week", "prompt": "Which issues are due this week?" },
+      { "label": "Milestone status", "prompt": "How is the current milestone tracking?" }
+    ]
+  },
+  "item": {
+    "noun": "Project",
+    "noun_plural": "Projects",
+    "create_label": "New Project"
+  },
+  "layout": {
+    "breadcrumb": ["status"],
+    "statusbar": ["status"],
+    "list": ["status"],
+    "form": ["status"],
+    "default_tabs": ["/views/table.ai.yaml", "/views/board.ai.yaml"],
+    "primary_surface": "ide"
+  },
+  "lifecycle": { "status_field": "status", "closing_states": ["archived"] },
+  "labels": { "status": "Status" },
+  "field_styles": {
+    "status": { "active": "ok", "archived": "muted" }
+  },
+  "default_profile": "default"
+}

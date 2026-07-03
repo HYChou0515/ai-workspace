@@ -46,6 +46,7 @@ from .chat_routes import register_chat_routes
 from .chat_send import ChatSendService
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .doc_question_routes import register_doc_question_routes
+from .entity_routes import register_entity_routes
 from .file_routes import register_file_routes
 from .health_routes import (
     register_health_routes,
@@ -620,6 +621,8 @@ def create_app(
         max_searches_ceiling=kb_max_searches_ceiling,
         # #397: KB chat's request_wiki_update tool submits corrections through this.
         wiki_coordinator=wiki_coordinator,
+        # #304: chat visibility/write ACL — a superuser bypasses the per-verb gate.
+        superusers=superusers,
     )
 
     # Cached fallback configs per sub-agent purpose, used when the
@@ -642,6 +645,9 @@ def create_app(
         purpose_fallbacks=_purpose_fallbacks,
         get_user_id=get_user_id,
         max_searches=kb_max_searches_per_turn,
+        # #305: the sub-agent's collection scope is filtered to what the speaker
+        # can read_content; a superuser speaker bypasses (they could read directly).
+        superusers=superusers,
     )
     _run_subagent = subagent_bridge.run
 
@@ -814,6 +820,7 @@ def create_app(
         ingestor=ingestor,
         insights_collection_id=insights_collection_id,
         kb_chat_pipeline=kb_chat_pipeline,
+        superusers=superusers,
     )
 
     register_tools_routes(
@@ -846,6 +853,10 @@ def create_app(
         workspace_quota=workspace_quota,
         max_file_size=max_file_size,
     )
+
+    # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema
+    # dir yields an empty catalog, so these routes are safe no-ops there.
+    register_entity_routes(api, files=files, locator=locator, get_user_id=get_user_id)
 
     # #177: now that EVERY route (specstar CRUD + all hand-written) is on the
     # /api router, include it onto the app exactly once. Mounting the SPA at "/"

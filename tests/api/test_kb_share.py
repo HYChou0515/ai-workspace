@@ -51,13 +51,14 @@ def test_share_is_read_only_and_shows_under_shared_with_me():
     assert _has(c, cid)
     assert c.post(f"/kb/chats/{cid}/messages", json={"content": "hi"}).status_code == 403
 
-    # carol: no access at all
+    # carol: no access at all — #304 hides the chat entirely (404, no existence
+    # leak), rather than the old "you can see it exists but it's not yours" 403.
     holder["id"] = "carol"
-    assert c.get(f"/kb/chats/{cid}").status_code == 403
+    assert c.get(f"/kb/chats/{cid}").status_code == 404
     assert not _has(c, cid)
-    # and can't share or delete someone else's chat
-    assert c.post(f"/kb/chats/{cid}/share", json={"user_ids": ["dan"]}).status_code == 403
-    assert c.delete(f"/kb/chats/{cid}").status_code == 403
+    # and can't share or delete a chat she can't even see
+    assert c.post(f"/kb/chats/{cid}/share", json={"user_ids": ["dan"]}).status_code == 404
+    assert c.delete(f"/kb/chats/{cid}").status_code == 404
 
 
 def test_share_dedupes_and_skips_self():
@@ -78,6 +79,6 @@ def test_unshare():
     assert c.delete(f"/kb/chats/{cid}/share/ghost").status_code == 204  # not shared → no-op
     assert c.delete(f"/kb/chats/{cid}/share/bob").status_code == 204
 
-    holder["id"] = "bob"
-    assert c.get(f"/kb/chats/{cid}").status_code == 403
+    holder["id"] = "bob"  # revoked → the chat is hidden entirely (#304)
+    assert c.get(f"/kb/chats/{cid}").status_code == 404
     assert not _has(c, cid)

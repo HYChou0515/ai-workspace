@@ -307,14 +307,16 @@ def test_rename_sets_the_chat_title():
     assert match["title"] == "Q3 reflow review"
 
 
-def test_rename_is_owner_only_and_404s_for_a_missing_chat():
-    """#357: only the owner can rename their thread; a missing id is a 404."""
+def test_rename_hides_a_private_chat_from_a_stranger_and_404s_a_missing_chat():
+    """#357/#304: renaming needs write_meta. A stranger can't see alice's private
+    chat at all → 404 (no existence leak, not 403); a missing id is likewise 404.
+    The 403-for-an-in-scope-viewer path is covered in test_kb_chat_perm.py."""
     holder = {"id": "alice"}
     client = _holder_client(holder)
     cid = client.post("/kb/chats", json={"collection_ids": []}).json()["resource_id"]
 
-    holder["id"] = "bob"  # a share recipient (or stranger) cannot rename
-    assert client.patch(f"/kb/chats/{cid}", json={"title": "hijack"}).status_code == 403
+    holder["id"] = "bob"  # a stranger can't even see the private chat
+    assert client.patch(f"/kb/chats/{cid}", json={"title": "hijack"}).status_code == 404
 
     holder["id"] = "alice"
     assert client.patch("/kb/chats/ghost", json={"title": "x"}).status_code == 404

@@ -14,6 +14,7 @@
 import type { ComponentType } from "react";
 
 import { CsvRenderer } from "./CsvRenderer";
+import { AiYamlRenderer } from "./entity/AiYamlRenderer";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { ImageRenderer } from "./ImageRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -70,6 +71,16 @@ export const RENDERERS: RendererDef[] = [
   // jsonl renderer; `.yml`/`.yaml` parse to the same tree as JSON.
   { key: "json", match: ext("json"), Component: JsonRenderer, editToggle: true },
   { key: "jsonl", match: ext("jsonl", "ndjson"), Component: JsonlRenderer, editToggle: true },
+  // #419: a `*.ai.yaml` entity view (board / table / gantt) renders as the live
+  // projection, not raw YAML. Anchored on the double-suffix basename so it wins
+  // over the generic `yaml` entry below; `editToggle` flips to the byte editor
+  // so the spec file itself stays hand-editable.
+  {
+    key: "aiview",
+    match: (p) => /\.ai\.ya?ml$/i.test(p),
+    Component: AiYamlRenderer,
+    editToggle: true,
+  },
   { key: "yaml", match: ext("yaml", "yml"), Component: YamlRenderer, editToggle: true },
   // Catch-all — keep last. Plain text in the byte editor (any file is editable).
   { key: "text", match: () => true, Component: TextRenderer, rawEditor: true },

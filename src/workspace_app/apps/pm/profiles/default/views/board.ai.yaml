@@ -1,0 +1,7 @@
+view: board
+entity: issue
+title: Board
+group_by: status
+card:
+  title: title
+  badges: [assignee, due, progress]

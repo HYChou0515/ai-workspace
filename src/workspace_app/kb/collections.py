@@ -11,11 +11,14 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from specstar import QB
+from specstar.types import ResourceIDNotFoundError
 
 from ..filestore.protocol import FileNotFound
+from ..perm import Actor, authorize
 from ..resources.kb import Collection
 
 if TYPE_CHECKING:
@@ -68,6 +71,41 @@ def collection_tiers_from_json(data: Any) -> list[list[str]]:
         tier = raw_tier if isinstance(raw_tier, int) and not isinstance(raw_tier, bool) else 0
         by_tier.setdefault(tier, []).append(cid)
     return [by_tier[t] for t in sorted(by_tier)]
+
+
+def readable_collection_ids(
+    spec: SpecStar,
+    ids: Iterable[str],
+    user: str,
+    *,
+    superusers: frozenset[str] = frozenset(),
+) -> list[str]:
+    """#305 — the subset of ``ids`` the human ``user`` may ``read_content`` (input
+    order preserved). The transitive / converse-time gate: an AI consulting the KB
+    on the speaker's behalf (``ask_knowledge_base``) may only search collections the
+    speaker could read directly, so a private or since-tightened collection can't
+    leak through the sub-agent. An unknown id is dropped; ``permission is None`` ≡
+    public (back-compat). A point ``get`` per id (not a full scan) keeps the
+    infer_modules hot path — one pre-resolved collection — cheap."""
+    rm = spec.get_resource_manager(Collection)
+    actor = Actor.human(user)
+    out: list[str] = []
+    for cid in ids:
+        try:
+            rev = rm.get(cid)
+        except ResourceIDNotFoundError:
+            continue
+        data = rev.data
+        assert isinstance(data, Collection)  # the Collection manager yields Collection
+        if authorize(
+            actor,
+            "read_content",
+            data.permission,
+            created_by=rev.info.created_by,
+            superusers=superusers,
+        ):
+            out.append(cid)
+    return out
 
 
 def _all_collections(spec: SpecStar) -> list[tuple[str, Collection]]:

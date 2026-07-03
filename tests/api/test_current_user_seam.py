@@ -60,5 +60,7 @@ def test_a_different_user_is_still_excluded():
     cid = c.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
 
     holder["id"] = "bob"
-    assert c.get(f"/kb/chats/{cid}").status_code == 403
+    # #304: a stranger gets 404 (not owner-only 403) — the access scope hides
+    # a chat they can't read rather than confirming it exists.
+    assert c.get(f"/kb/chats/{cid}").status_code == 404
     assert not any(x["resource_id"] == cid for x in c.get("/kb/chats").json())
