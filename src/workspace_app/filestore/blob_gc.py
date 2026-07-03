@@ -111,6 +111,7 @@ def run_blob_gc(
         monitor.record(
             {
                 "kind": "blob_gc",
+                "t": int(time.time() * 1000),  # wall-clock, for the summary's time window
                 "mode": stats.mode,
                 "quarantined": stats.quarantined,
                 "restored": stats.restored,

@@ -6,6 +6,8 @@ over HTTP."""
 
 from __future__ import annotations
 
+import time
+
 from fastapi.responses import StreamingResponse
 from httpx import ASGITransport
 
@@ -43,6 +45,39 @@ async def test_monitor_snapshot_filters_by_group_and_limit():
         scoped = (await c.get("/monitor", params={"group_id": "inv-1"})).json()
         assert [e["n"] for e in scoped] == [1, 3]
         assert [e["n"] for e in (await c.get("/monitor", params={"limit": 1})).json()] == [3]
+
+
+async def test_monitor_summary_computes_p95_and_row_trend():
+    # #407: the summary distils the durable-store telemetry — p95 files-per-mirror,
+    # p95 cold-wake restore latency, and the WorkspaceFile row-count trend.
+    m = InMemoryMonitor()
+    for n in range(1, 21):  # 20 mirror samples, n_files = 1..20
+        m.record({"kind": "mirror", "n_files": n, "elapsed_ms": 0, "t": 1000})
+    for ms in range(1, 21):  # 20 restore samples, elapsed = 1..20 ms
+        m.record({"kind": "restore", "elapsed_ms": ms, "t": 1000})
+    m.record({"kind": "ws_census", "t": 1000, "total_workspacefile_rows": 5})
+    m.record({"kind": "ws_census", "t": 2000, "total_workspacefile_rows": 8})
+    async with AsyncClient(transport=ASGITransport(app=_app(m)), base_url="http://t") as c:
+        body = (await c.get("/monitor/summary")).json()
+    assert body["p95_n_files"] == 19  # nearest-rank p95 of 1..20
+    assert body["p95_restore_ms"] == 19
+    assert body["total_rows_trend"] == [{"t": 1000, "rows": 5}, {"t": 2000, "rows": 8}]
+    assert body["n_mirror_samples"] == 20
+    assert body["n_restore_samples"] == 20
+    assert body["window_days"] is None
+
+
+async def test_monitor_summary_days_window_filters_by_age():
+    m = InMemoryMonitor()
+    m.record({"kind": "mirror", "n_files": 5, "elapsed_ms": 0, "t": 1000})  # ancient → dropped
+    now_ms = int(time.time() * 1000)
+    m.record({"kind": "restore", "elapsed_ms": 7, "t": now_ms})  # recent → kept
+    async with AsyncClient(transport=ASGITransport(app=_app(m)), base_url="http://t") as c:
+        body = (await c.get("/monitor/summary", params={"days": 1})).json()
+    assert body["p95_n_files"] is None  # the only mirror sample aged out → no data
+    assert body["n_mirror_samples"] == 0
+    assert body["p95_restore_ms"] == 7  # the recent restore survived the 1-day window
+    assert body["window_days"] == 1
 
 
 async def test_monitor_stream_endpoint_returns_an_sse_response():

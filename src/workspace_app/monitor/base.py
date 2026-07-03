@@ -32,10 +32,16 @@ class IMonitor(abc.ABC):
 
     @abc.abstractmethod
     def recent(
-        self, *, limit: int | None = None, group_id: str | None = None
+        self,
+        *,
+        limit: int | None = None,
+        group_id: str | None = None,
+        kind: str | None = None,
     ) -> list[MonitorEvent]:
         """Recent events oldest→newest, optionally scoped to `group_id` (the
-        investigation a trace was tagged with) and capped to the last `limit`."""
+        investigation a trace was tagged with) and/or `kind` (the event type,
+        e.g. #407's ``mirror`` / ``restore`` / ``ws_census``), capped to the
+        last `limit`."""
         ...
 
     def _publish(self, event: MonitorEvent) -> None:

@@ -74,6 +74,7 @@ class SandboxSync:
             {
                 "kind": kind,
                 "group_id": group_id,
+                "t": int(time.time() * 1000),  # wall-clock, for the summary's time window
                 "elapsed_ms": int((time.monotonic() - started) * 1000),
                 **fields,
             }

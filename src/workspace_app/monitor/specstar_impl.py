@@ -13,6 +13,8 @@ pruning for very long runs.
 from __future__ import annotations
 
 import contextlib
+import operator
+from functools import reduce
 from typing import Any
 
 from msgspec import Struct, field
@@ -35,7 +37,7 @@ class SpecstarMonitor(IMonitor):
         # same spec (the events persist in the spec's storage either way).
         # group_id + seq are indexed so recent() can filter/sort/limit in-query.
         with contextlib.suppress(ValueError):
-            spec.add_model(TelemetryEvent, indexed_fields=["group_id", "seq"])
+            spec.add_model(TelemetryEvent, indexed_fields=["group_id", "seq", "kind"])
         self._rm = spec.get_resource_manager(TelemetryEvent)
         # Resume the order key past whatever's already persisted (append-only).
         self._seq = self._rm.count_resources(QB.all().build())
@@ -53,9 +55,18 @@ class SpecstarMonitor(IMonitor):
         self._publish(event)
 
     def recent(
-        self, *, limit: int | None = None, group_id: str | None = None
+        self,
+        *,
+        limit: int | None = None,
+        group_id: str | None = None,
+        kind: str | None = None,
     ) -> list[MonitorEvent]:
-        base = QB.all() if group_id is None else (QB["group_id"] == group_id)
+        conds = []
+        if group_id is not None:
+            conds.append(QB["group_id"] == group_id)
+        if kind is not None:
+            conds.append(QB["kind"] == kind)
+        base = reduce(operator.and_, conds) if conds else QB.all()
         if limit is None:
             query = base.sort("seq").build()  # oldest→newest, all
         else:

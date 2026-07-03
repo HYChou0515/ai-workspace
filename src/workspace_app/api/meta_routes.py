@@ -7,16 +7,49 @@ cleanly out of ``create_app``.
 from __future__ import annotations
 
 import contextlib
+import math
+import time
 from collections.abc import Callable
 from importlib import resources
 
 import msgspec
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 from ..monitor import IMonitor
 from ..users import UserDirectory
 from .activity import ActivityLog
+
+_MS_PER_DAY = 86_400_000
+
+
+class RowsPoint(BaseModel):
+    """One point on the durable-store WorkspaceFile row-count trend."""
+
+    t: int  # epoch ms
+    rows: int
+
+
+class MonitorSummary(BaseModel):
+    """#407: distilled durable-store cost from the mirror/restore/ws_census
+    telemetry — the numbers the 'archive vs keep the per-file model' call is
+    made on. p95_* are None when there are no samples in the window."""
+
+    p95_n_files: int | None
+    p95_restore_ms: int | None
+    total_rows_trend: list[RowsPoint]
+    n_mirror_samples: int
+    n_restore_samples: int
+    window_days: int | None
+
+
+def _p95(values: list[int]) -> int | None:
+    """Nearest-rank 95th percentile (returns an actual sample), None if empty."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(0.95 * len(ordered)) - 1)]
 
 
 def register_meta_routes(
@@ -127,3 +160,31 @@ def register_meta_routes(
     async def stream_monitor(group_id: str | None = None) -> StreamingResponse:
         """Live SSE feed of telemetry events as the SDK emits them."""
         return StreamingResponse(monitor.sse(group_id=group_id), media_type="text/event-stream")
+
+    @app.get("/monitor/summary")
+    async def monitor_summary(days: int | None = None) -> MonitorSummary:
+        """#407: durable-store cost summary from the mirror/restore/ws_census
+        telemetry — p95 files-per-mirror, p95 cold-wake restore latency, and the
+        WorkspaceFile row-count trend. Optional ``days`` bounds the window by
+        event age; omitted ⇒ every recorded sample (no baked-in window)."""
+        cutoff = None if days is None else int(time.time() * 1000) - days * _MS_PER_DAY
+
+        def _events(kind: str) -> list[dict]:
+            evs = monitor.recent(kind=kind)
+            if cutoff is not None:
+                evs = [e for e in evs if e.get("t", 0) >= cutoff]
+            return evs
+
+        mirrors = _events("mirror")
+        restores = _events("restore")
+        census = _events("ws_census")
+        return MonitorSummary(
+            p95_n_files=_p95([int(e["n_files"]) for e in mirrors]),
+            p95_restore_ms=_p95([int(e["elapsed_ms"]) for e in restores]),
+            total_rows_trend=[
+                RowsPoint(t=int(e["t"]), rows=int(e["total_workspacefile_rows"])) for e in census
+            ],
+            n_mirror_samples=len(mirrors),
+            n_restore_samples=len(restores),
+            window_days=days,
+        )
