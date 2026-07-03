@@ -381,6 +381,8 @@ def create_app(
         spec=spec,
         kernels=kernels,
         health_service=health_service,
+        filestore=filestore,
+        monitor=monitor,
         run_consumers=run_consumers,
         idle_timeout=idle_timeout,
         idle_check_interval=idle_check_interval,

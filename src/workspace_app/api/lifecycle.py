@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import timedelta
+from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
 from specstar import SpecStar
@@ -32,6 +34,10 @@ from ..observability.boot import boot_step
 from .registry import InvestigationRegistry
 from .sandbox_activity import register_sandbox_activity
 from .sandbox_address import register_sandbox_address
+
+if TYPE_CHECKING:
+    from ..filestore.protocol import FileStore
+    from ..monitor import IMonitor
 
 # #227: how often the background index-sweeper recovers stuck fan-out runs, and
 # how long a run may go without progress before its missing batches are declared
@@ -47,6 +53,8 @@ def build_lifespan(
     spec: SpecStar,
     kernels: KernelService,
     health_service: HealthService,
+    filestore: FileStore,
+    monitor: IMonitor,
     run_consumers: bool,
     idle_timeout: timedelta,
     idle_check_interval: timedelta,
@@ -146,7 +154,15 @@ def build_lifespan(
             while True:
                 await asyncio.sleep(gc_interval.total_seconds())
                 with contextlib.suppress(Exception):
-                    await asyncio.to_thread(run_blob_gc, spec, t1=gc_t1, t2=gc_t2, ttl_ms=ttl_ms)
+                    await asyncio.to_thread(
+                        run_blob_gc, spec, t1=gc_t1, t2=gc_t2, ttl_ms=ttl_ms, monitor=monitor
+                    )
+                    # #407: on the same durable-maintenance cadence, snapshot the
+                    # WorkspaceFile cardinality (total rows / distinct workspaces /
+                    # largest workspace) so the ws_census trend shows whether the
+                    # per-file model grows unbounded — the archive-vs-keep signal.
+                    census = await filestore.census()  # ty: ignore[unresolved-attribute]
+                    monitor.record({"kind": "ws_census", "t": int(time.time() * 1000), **census})
         except asyncio.CancelledError:
             return
 
