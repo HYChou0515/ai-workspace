@@ -73,7 +73,11 @@ class _CollectionBody(BaseModel):
     sync_interval_hours: int | None = None
     # Issue #50: retrieval pipeline toggles (chunk-RAG / LLM wiki).
     use_rag: bool = True
-    use_wiki: bool = False
+    # #389: `None` (the FE omits it when the user didn't toggle it) defaults a
+    # code collection (git_url set) to use_wiki=True — code's "understand it"
+    # answers live in the code-wiki, not the raw-code chunk index — while a plain
+    # document collection stays False. An explicit True/False always wins.
+    use_wiki: bool | None = None
 
 
 class _PermissionBody(BaseModel):
@@ -540,6 +544,10 @@ def register_kb_routes(
     @app.post("/kb/collections")
     async def create_collection(body: _CollectionBody) -> CollectionOut:
         rm = spec.get_resource_manager(Collection)
+        # #389: default a code collection to use_wiki=True (the wiki is where
+        # code's "understand it" answers live); a plain doc collection stays
+        # False. An explicit toggle from the FE always overrides this.
+        use_wiki = body.use_wiki if body.use_wiki is not None else body.git_url is not None
         rev = rm.create(
             Collection(
                 name=body.name,
@@ -551,7 +559,7 @@ def register_kb_routes(
                 embedder_id=body.embedder_id,
                 sync_interval_hours=body.sync_interval_hours,
                 use_rag=body.use_rag,
-                use_wiki=body.use_wiki,
+                use_wiki=use_wiki,
             )
         )
         return CollectionOut(
@@ -572,7 +580,7 @@ def register_kb_routes(
             embedder_id=body.embedder_id,
             sync_interval_hours=body.sync_interval_hours,
             use_rag=body.use_rag,
-            use_wiki=body.use_wiki,
+            use_wiki=use_wiki,
         )
 
     def _can_read_meta(row) -> bool:

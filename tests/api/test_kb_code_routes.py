@@ -91,6 +91,35 @@ def test_create_collection_accepts_git_url_and_embedder_id(app):
     assert "git_token" not in body or body["git_token"] is None
 
 
+def test_git_collection_defaults_use_wiki_on(app):
+    """#389: a code collection (git_url set) defaults use_wiki=True — code's
+    "understand it" answers live in the code-wiki, not the raw-code chunk
+    index — when the FE omits the toggle."""
+    client = TestClient(app)
+    body = client.post(
+        "/kb/collections",
+        json={"name": "repo", "git_url": "https://gitlab.example/g/r.git"},
+    ).json()
+    assert body["use_wiki"] is True
+
+
+def test_plain_collection_defaults_use_wiki_off(app):
+    """A plain document collection (no git_url) keeps use_wiki=False by default."""
+    client = TestClient(app)
+    body = client.post("/kb/collections", json={"name": "docs"}).json()
+    assert body["use_wiki"] is False
+
+
+def test_explicit_use_wiki_false_overrides_git_default(app):
+    """An explicit toggle always wins — a code collection can opt OUT of the wiki."""
+    client = TestClient(app)
+    body = client.post(
+        "/kb/collections",
+        json={"name": "repo", "git_url": "https://gitlab.example/g/r.git", "use_wiki": False},
+    ).json()
+    assert body["use_wiki"] is False
+
+
 def test_patch_collection_edits_git_branch_and_rotates_token(app):
     """#355 P6: the FE git-connection editor PATCHes the Collection's branch +
     token through specstar's native CRUD route. A partial PATCH updates only the
