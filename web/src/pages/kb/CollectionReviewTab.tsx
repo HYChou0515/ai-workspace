@@ -30,8 +30,12 @@ export function CollectionReviewTab({
     queryFn: () => client.getDocQuestions(collectionId),
   });
 
-  const onRunResolved = () =>
+  const onRunResolved = () => {
     qc.invalidateQueries({ queryKey: qk.kb.cardGenRuns(collectionId) });
+    // A committed run writes context cards — refresh the Cards view so the new
+    // cards aren't hidden behind the query cache (dismiss just no-op refetches).
+    qc.invalidateQueries({ queryKey: qk.kb.contextCards(collectionId) });
+  };
   const invalidateQuestions = () =>
     qc.invalidateQueries({ queryKey: qk.kb.docQuestionsFor(collectionId) });
   const answerMut = useMutation({

@@ -1,11 +1,13 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
+import { useQuery } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { _resetKbMock, _seedDocQuestionMock, mockKbApi } from "../../api/kbMock";
-import { QueryWrap } from "../../test/queryWrapper";
+import { qk } from "../../api/queryKeys";
+import { QueryWrap, makeTestQueryClient } from "../../test/queryWrapper";
 import { CollectionReviewTab } from "./CollectionReviewTab";
 
 const renderTab = () =>
@@ -43,6 +45,38 @@ describe("<CollectionReviewTab /> (#415)", () => {
 
     await waitFor(() => expect(screen.queryByTestId("review-run")).not.toBeInTheDocument());
     expect(await mockKbApi.listContextCards("col-1")).toHaveLength(1);
+  });
+
+  it("refreshes the collection's context cards after committing a run (#415)", async () => {
+    // Committing from the 待審核 tab must invalidate the Cards view — otherwise the
+    // just-written card stays hidden behind the query cache until it goes stale.
+    await seedRun();
+    const client = makeTestQueryClient();
+
+    // A probe standing in for the Cards tab, reading the SAME shared cache.
+    function CardsProbe() {
+      const { data = [] } = useQuery({
+        queryKey: qk.kb.contextCards("col-1"),
+        queryFn: () => mockKbApi.listContextCards("col-1"),
+      });
+      return <div data-testid="cards-count">{data.length}</div>;
+    }
+
+    const user = userEvent.setup();
+    render(
+      <QueryWrap client={client}>
+        <CollectionReviewTab collectionId="col-1" client={mockKbApi} />
+        <CardsProbe />
+      </QueryWrap>,
+    );
+    await waitFor(() => expect(screen.getByTestId("cards-count")).toHaveTextContent("0"));
+
+    await user.click(await screen.findByRole("button", { name: /張卡片提案/ }));
+    await user.click(await screen.findByRole("button", { name: "接受" }));
+    await user.click(screen.getByRole("button", { name: /套用已接受/ }));
+
+    // The card lands AND the Cards view reflects it with no manual refresh.
+    await waitFor(() => expect(screen.getByTestId("cards-count")).toHaveTextContent("1"));
   });
 
   it("dismisses a run so it leaves the queue without writing a card", async () => {
