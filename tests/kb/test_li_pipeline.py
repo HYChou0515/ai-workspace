@@ -63,10 +63,94 @@ def test_dispatch_splitter_routes_python_to_code_splitter(spec: SpecStar, embedd
     ids = ingestor.ingest(collection_id=cid, user="alice", filename="auth.py", data=py_src.encode())
     chunks = _chunks_of(spec, ids[0])
     assert len(chunks) >= 2, "CodeSplitter should produce multiple chunks for a multi-function file"
-    # Chunks land at function/class boundaries — text starts at a `def` or
-    # `class` line (not mid-statement like SentenceSplitter would).
-    starts = [c.text.lstrip()[:5] for c in chunks]
-    assert any(s.startswith(("def", "class")) for s in starts), starts
+    # Chunks land at function/class boundaries — the code body (after the #389
+    # `path > symbol` breadcrumb) starts at a `def`/`class` line, not
+    # mid-statement like SentenceSplitter would.
+    bodies = [c.text.split("\n\n", 1)[-1].lstrip()[:5] for c in chunks]
+    assert any(b.startswith(("def", "class")) for b in bodies), bodies
+
+
+def test_dispatch_splitter_routes_non_starter_languages_to_code_splitter():
+    """Issue #389: a `.go` file (libmagic mislabels it `text/x-c`) must route
+    through the tree-sitter CodeSplitter on its EXTENSION, not fall to the
+    SentenceSplitter. Splitting a multi-function file keeps definitions intact
+    rather than cutting mid-token."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    funcs = "\n\n".join(
+        f"func Handler{i}(x int) int {{\n\ty := x + {i}\n\treturn y * 2\n}}" for i in range(60)
+    )
+    go_src = "package main\n\n" + funcs + "\n"
+    doc = Document(text=go_src, metadata={"filename": "svc.go", "mime": "text/x-c"})
+    nodes = DispatchSplitter()([doc])
+    assert len(nodes) >= 2, "CodeSplitter should split a large multi-function .go file"
+    # Went through the code path (every chunk leads with the path breadcrumb)…
+    assert all(n.get_content().startswith("svc.go") for n in nodes)
+    # …and boundaries land on `func` declarations — SentenceSplitter would cut
+    # mid-line and never produce these definitions intact.
+    assert any("func Handler" in n.get_content() for n in nodes)
+
+
+def test_dispatch_splitter_reuses_cached_code_splitter_across_docs():
+    """The per-instance CodeSplitter is cached by language and reused across
+    docs — a second `.py` doc hits the cache instead of rebuilding a splitter
+    (instantiating a tree-sitter grammar is not free)."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    ds = DispatchSplitter()
+    ds([Document(text="def a():\n    return 1\n", metadata={"filename": "a.py", "mime": "x"})])
+    cached = ds.code_splitters["python"]  # built on first use
+    ds([Document(text="def b():\n    return 2\n", metadata={"filename": "b.py", "mime": "x"})])
+    assert ds.code_splitters["python"] is cached  # cache hit, not rebuilt
+
+
+def test_code_chunks_carry_path_and_symbol_breadcrumb_span_excludes_it():
+    """Issue #389: each code chunk's embedded text leads with a
+    `path > Class > method` breadcrumb (the strongest retrieval signal a raw
+    char-window loses), yet its char span still points at the breadcrumb-free
+    source so citations resolve — same contract as the Markdown/section folds."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    src = "class Validator:\n" + "".join(
+        f"    def check_{i}(self, payload):\n"
+        f"        # rule {i}\n"
+        f"        return payload.get('k{i}') is not None\n\n"
+        for i in range(40)
+    )
+    doc = Document(text=src, metadata={"filename": "kb/auth.py", "mime": "text/x-script.python"})
+    nodes = DispatchSplitter()([doc])
+    assert len(nodes) >= 2
+    # A chunk inside the class carries path + enclosing symbols as a prefix…
+    crumbed = [n for n in nodes if n.get_content().startswith("kb/auth.py > Validator")]
+    assert crumbed, [n.get_content()[:40] for n in nodes]
+    # …and every code chunk at least leads with the file path.
+    assert all(n.get_content().startswith("kb/auth.py") for n in nodes)
+    # The char span excludes the breadcrumb — it re-slices to real source code.
+    for n in nodes:
+        assert "kb/auth.py" not in src[n.start_char_idx : n.end_char_idx]
+
+
+def test_ingest_previously_dropped_language_produces_code_chunks(
+    spec: SpecStar, embedder: HashEmbedder
+):
+    """Issue #389 regression: `.rb` sniffed as `text/x-ruby` used to be dropped
+    (chunks=0, silently unsearchable). It must now be code-split into chunks."""
+    cid = _new_collection(spec)
+    pipeline = build_doc_pipeline(embedder=embedder)
+    ingestor = Ingestor(spec, pipeline=pipeline, embedder=embedder)
+
+    rb_src = ("def alpha(x)\n  x + 1\nend\n\ndef beta(y)\n  y * 2\nend\n\n" * 8).encode()
+    ids = ingestor.ingest(collection_id=cid, user="alice", filename="model.rb", data=rb_src)
+    chunks = _chunks_of(spec, ids[0])
+    assert len(chunks) >= 1, "a .rb file must produce chunks, not be silently dropped"
+    assert all(len(c.embedding) == EMBED_DIM for c in chunks)  # ty: ignore[invalid-argument-type]
+    assert any("def alpha" in c.text or "def beta" in c.text for c in chunks)
 
 
 def test_markdown_chunks_carry_heading_breadcrumb_in_text(spec: SpecStar, embedder: HashEmbedder):
