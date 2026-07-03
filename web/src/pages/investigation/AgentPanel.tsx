@@ -41,6 +41,24 @@ import { useT } from "../../lib/i18n";
 import { type AttachProgress, attachPrompt, runAttach, uploadPathFor } from "./attach";
 import { extractClipboardFiles, isImage, readTransferEntries } from "./transfer";
 
+/**
+ * Max width of the conversation reading column. When the chat pane is wider than
+ * this (a workspace=false App filling the row, the IDE collapsed, or the RCA side
+ * panel dragged wide), the feed + composer content stay in a centred column with
+ * left/right gutters instead of running edge-to-edge. At a narrow panel (RCA's
+ * default 380px) the cap never engages, so that layout is untouched. Matches the
+ * KB doc viewer's `.kb-docpage__body` cap for a consistent reading measure.
+ */
+export const CHAT_COLUMN_MAX_W = 860;
+
+/** The centred, capped reading column shared by the feed, chips row and composer. */
+const chatColumn: React.CSSProperties = {
+  width: "100%",
+  maxWidth: CHAT_COLUMN_MAX_W,
+  marginLeft: "auto",
+  marginRight: "auto",
+};
+
 export function AgentPanel({
   investigationId,
   agent: agentProp,
@@ -385,10 +403,17 @@ export function AgentPanel({
           padding: "14px 16px",
           display: "flex",
           flexDirection: "column",
-          gap: 14,
           minHeight: 0,
         }}
       >
+        {/* #108: keep the message column at a readable measure — when the pane is
+            wider than the reading column it centres with left/right gutters rather
+            than stretching the text edge-to-edge. The scrollbar stays at the pane
+            edge; only the content is capped. */}
+        <div
+          data-testid="chat-column"
+          style={{ ...chatColumn, display: "flex", flexDirection: "column", gap: 14 }}
+        >
         {log.entries.length === 0 && !log.streaming && (
           <div style={{ color: "var(--text-paper-d)", fontSize: pxToRem(13) }}>
             {chatEmptyHint(chips.length > 0)}
@@ -438,18 +463,12 @@ export function AgentPanel({
             {log.error}
           </div>
         )}
+        </div>
       </div>
 
       {chips.length > 0 && (
-        <div
-          style={{
-            padding: "8px 12px",
-            borderTop: "1px solid var(--paper-3)",
-            display: "flex",
-            gap: 6,
-            flexWrap: "wrap",
-          }}
-        >
+        <div style={{ padding: "8px 12px", borderTop: "1px solid var(--paper-3)" }}>
+          <div style={{ ...chatColumn, display: "flex", gap: 6, flexWrap: "wrap" }}>
           {chips.map((s) => (
           <button
             key={s.label}
@@ -474,6 +493,7 @@ export function AgentPanel({
             {s.label}
           </button>
           ))}
+          </div>
         </div>
       )}
 
@@ -503,7 +523,6 @@ export function AgentPanel({
           background: "var(--white)",
           display: "flex",
           flexDirection: "column",
-          gap: 6,
           position: "relative",
         }}
       >
@@ -528,6 +547,14 @@ export function AgentPanel({
             {t("kb.dropToUpload")}
           </div>
         )}
+        {/* The composer content shares the feed's centred reading column so a wide
+            pane doesn't put a full-width input under a narrow message column. The
+            drop overlay above stays a direct form child so it still covers the
+            whole bar. */}
+        <div
+          data-testid="composer-column"
+          style={{ ...chatColumn, display: "flex", flexDirection: "column", gap: 6 }}
+        >
         {/* #245: persistent storage usage gauge so the user sees they're filling up. */}
         <UsageBar slug={slug} itemId={investigationId} />
         {progress && (
@@ -861,6 +888,7 @@ export function AgentPanel({
               );
             })()
           )}
+        </div>
         </div>
       </form>
       {replayReq && <ReplayDialog request={replayReq} onClose={() => setReplayReq(null)} />}
