@@ -71,6 +71,64 @@ async def test_each_page_is_its_own_resource_scoped_by_collection():
     assert len(rows) == 2
 
 
+async def test_ls_lists_pages_without_materializing_page_content(monkeypatch):
+    """#411: listing a wiki's pages must read metadata ONLY — never fetch each
+    page's markdown blob (the #395 antipattern: ``list_resources`` pulls every
+    row's full BYTEA just to read ``.path``, an unbounded N+1 on the wiki tree /
+    reader ``list_files`` / ``search_wiki`` grep). The listing path must go
+    through ``search_resources`` (meta table, no data) and NOT the blob-fetching
+    ``list_resources``."""
+    spec, cid = _spec_with_collection()
+    store = WikiFileStore(spec)
+    await store.write(cid, "/index.md", b"# Index\n" + b"x" * 10_000)  # a fat page
+    await store.write(cid, "/entities/x.md", b"body")
+
+    rm = store._rm
+    calls = {"search": 0, "list": 0}
+    real_search, real_list = rm.search_resources, rm.list_resources
+
+    def spy_search(*a, **k):
+        calls["search"] += 1
+        return real_search(*a, **k)
+
+    def spy_list(*a, **k):
+        calls["list"] += 1
+        return real_list(*a, **k)
+
+    monkeypatch.setattr(rm, "search_resources", spy_search)
+    monkeypatch.setattr(rm, "list_resources", spy_list)
+
+    # Correctness is unchanged: ls still returns every page path.
+    assert sorted(await store.ls(cid)) == ["/entities/x.md", "/index.md"]
+    # …but the blob-fetching path was never taken (this is the whole fix).
+    assert calls["list"] == 0
+    assert calls["search"] >= 1
+
+
+async def test_clear_wipes_pages_without_materializing_content(monkeypatch):
+    """#411: clearing a wiki deletes every page by id — it must recover the ids
+    from the meta table, not fetch each page's full blob just to read its id for
+    deletion (the same ``list_resources`` N+1 as the listing path)."""
+    spec, cid = _spec_with_collection()
+    store = WikiFileStore(spec)
+    await store.write(cid, "/index.md", b"x" * 10_000)
+    await store.write(cid, "/entities/x.md", b"y")
+
+    rm = store._rm
+    calls = {"list": 0}
+    real_list = rm.list_resources
+
+    def spy_list(*a, **k):
+        calls["list"] += 1
+        return real_list(*a, **k)
+
+    monkeypatch.setattr(rm, "list_resources", spy_list)
+
+    assert await store.clear(cid) == 2  # both pages removed
+    assert calls["list"] == 0  # no blob-fetch path
+    assert await store.ls(cid) == []  # wiki is empty afterwards
+
+
 async def test_overwrite_uses_draft_modify_so_no_revision_bloat():
     """Repeated writes to the same page mutate in place (draft modify),
     so revision history stays flat — the high-churn maintainer edits
