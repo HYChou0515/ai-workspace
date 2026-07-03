@@ -637,6 +637,9 @@ def create_app(
         purpose_fallbacks=_purpose_fallbacks,
         get_user_id=get_user_id,
         max_searches=kb_max_searches_per_turn,
+        # #305: the sub-agent's collection scope is filtered to what the speaker
+        # can read_content; a superuser speaker bypasses (they could read directly).
+        superusers=superusers,
     )
     _run_subagent = subagent_bridge.run
 
