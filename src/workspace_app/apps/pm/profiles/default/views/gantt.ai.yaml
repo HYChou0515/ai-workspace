@@ -1,0 +1,6 @@
+view: gantt
+entity: issue
+title: Timeline
+span: span
+label: title
+group_by: milestone

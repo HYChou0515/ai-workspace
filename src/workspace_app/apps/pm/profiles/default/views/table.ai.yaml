@@ -1,0 +1,4 @@
+view: table
+entity: issue
+title: Issues
+columns: [title, status, assignee, due, progress, milestone]
