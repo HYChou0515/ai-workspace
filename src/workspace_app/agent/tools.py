@@ -1514,6 +1514,14 @@ _WORKSPACE_TOOLS = [
 _LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 
 
+# Tools whose args include a free-form `dict[str, Any]` (entity `args` / `patch`):
+# a strict JSON schema forbids the `additionalProperties` such an open object
+# needs, so they build as non-strict. Entity fields are open by design (the
+# schema lives in the workspace, not the tool signature), so this is correct, not
+# a workaround.
+_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
+
+
 def builtin_tool_descriptions() -> dict[str, str]:
     """Every built-in tool's registered name → its LLM-facing description (the
     impl's docstring). One source for the tool catalog (#322) so the web picker
@@ -1521,17 +1529,14 @@ def builtin_tool_descriptions() -> dict[str, str]:
     a hand-kept FE map that drifts. Package-command descriptions are read
     separately from the prebuilt bundles (``discover_packages``)."""
     return {
-        name: (function_tool(impl, name_override=name).description or "")
+        name: (
+            function_tool(
+                impl, name_override=name, strict_mode=name not in _NONSTRICT_TOOLS
+            ).description
+            or ""
+        )
         for name, impl in _IMPLS.items()
     }
-
-
-# Tools whose args include a free-form `dict[str, Any]` (entity `args` / `patch`):
-# a strict JSON schema forbids the `additionalProperties` such an open object
-# needs, so they build as non-strict. Entity fields are open by design (the
-# schema lives in the workspace, not the tool signature), so this is correct, not
-# a workaround.
-_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
 
 
 def build_tools(
