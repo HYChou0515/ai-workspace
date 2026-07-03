@@ -20,8 +20,13 @@ from specstar import BackendConfig, Schema, SpecStar
 from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
+from ..kb.chat_permission import kbchat_permission_event_handler
 from ..perm.checker import collection_permission_event_handler
-from ..perm.scope import collection_access_scope
+from ..perm.scope import (
+    collection_access_scope,
+    kbchat_access_scope,
+    source_doc_access_scope,
+)
 from ..workflow.run import WorkflowRun
 from .agent_config import AgentConfig
 from .check_run import CheckRun
@@ -99,6 +104,25 @@ def _backfill_token_count(record: Any) -> Any:
     return msgspec.structs.replace(record, token_count=count_tokens(record.text or ""))
 
 
+def _migrate_kbchat_shared_with(record: Any) -> Any:
+    """#304 one-off migration (``None`` → v2): fold each KbChat's legacy
+    ``shared_with`` list into a first-class ``Permission`` and clear the legacy
+    field so the ``kbchat_access_scope`` fallback goes inert.
+
+    The shared_with → Permission equivalence lives in ``kb.chat_permission``
+    (``permission_from_shared_with``) so a migrated and an un-migrated chat are
+    authorized identically. A row that already carries a ``permission`` (written
+    at v2) is left untouched."""
+    from ..kb.chat_permission import permission_from_shared_with
+
+    assert isinstance(record, KbChat)
+    if record.permission is not None:
+        return record
+    return msgspec.structs.replace(
+        record, permission=permission_from_shared_with(record.shared_with), shared_with=[]
+    )
+
+
 def make_spec(
     *,
     default_user: str | Callable[[], str] = "default-user",
@@ -156,7 +180,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # one-directional (apps → resources, not back).
     from ..apps.registry import register_apps
 
-    register_apps(spec)
+    register_apps(spec, superusers)
     # item_id indexed so the per-item conversation lookup is a query, not a full
     # scan. (#89: was investigation_id + a typed Ref; now an opaque key so one
     # Conversation table serves every App's items.)
@@ -240,13 +264,24 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # `status` until the operator runs `POST /source-doc/migrate/execute`
     # (the list treats that window as "ready" — the overwhelmingly common
     # terminal state).
+    #
+    # #303: `collection_visibility` + `collection_read_meta` + `collection_created_by`
+    # indexed so the `source_doc` access_scope filters a doc by its (denormalized)
+    # collection visibility at the storage layer (hiding even the auto-CRUD
+    # `GET /source-doc/{id}`). Bumped v6 → v7 with a no-op reindex step: the three
+    # fields carry a "public" / empty default, so a pre-#303 row decodes to
+    # public (its legacy "anyone can read" state) and needs no data change — the
+    # migrate route only re-extracts indexed_data. The actual per-collection
+    # values are backfilled by the fan-out (doc-create + the collection permission
+    # setter), NOT by migrate (a migrate step can't load the parent collection).
     spec.add_model(
-        Schema(SourceDoc, "v6")
+        Schema(SourceDoc, "v7")
         .step(None, _reindex_only, to="v3", source_type=SourceDoc)
         .step("v2", _reindex_only, to="v3", source_type=SourceDoc)
         .step("v3", _backfill_token_count, to="v4", source_type=SourceDoc)
         .step("v4", _reindex_only, to="v5", source_type=SourceDoc)
-        .step("v5", _reindex_only, to="v6", source_type=SourceDoc),
+        .step("v5", _reindex_only, to="v6", source_type=SourceDoc)
+        .step("v6", _reindex_only, to="v7", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
             IndexableField("content.size", int, index_key="content_size"),
@@ -257,7 +292,11 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("status_detail", str),
             IndexableField("content.content_type", str, index_key="content_type"),
             IndexableField("content.file_id", str, index_key="file_id"),
+            IndexableField("collection_visibility", str),
+            IndexableField("collection_read_meta", list),
+            IndexableField("collection_created_by", str),
         ],
+        access_scope=source_doc_access_scope(superusers),
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the
     # retriever's per-collection lookup) is a query — a non-indexed filter would
@@ -341,9 +380,26 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # the maintenance. The WikiMaintenanceJob model itself is registered by
     # the coordinator (it needs the runtime handler).
     spec.add_model(WikiBuildState)
-    # shared_with indexed so "chats shared with me" is a contains-query (owner
-    # filtering uses the built-in created_by meta index).
-    spec.add_model(KbChat, indexed_fields=["shared_with"])
+    # #304: a KbChat carries a first-class `Permission`; reads/lists are gated at
+    # the storage layer by `kbchat_access_scope` (absent-permission ≡ PRIVATE,
+    # unlike a collection's absent ≡ public) and auto-CRUD writes by the
+    # resource-agnostic permission event handler. `permission.visibility` +
+    # `permission.read_meta` are indexed so the "chats I can see" predicate is a
+    # query. The legacy `shared_with` index stays so pre-#304 rows remain visible
+    # to their shared users (the scope's fallback clause) until an operator runs
+    # `POST /kb-chat/migrate/execute`, which folds `shared_with` into `permission`
+    # and clears it (Schema `None` → v2, `_migrate_kbchat_shared_with`). New rows
+    # are written at v2 with a `permission` already set (create → private).
+    spec.add_model(
+        Schema(KbChat, "v2").step(None, _migrate_kbchat_shared_with, source_type=KbChat),
+        indexed_fields=[
+            "shared_with",
+            ("permission.visibility", str),
+            ("permission.read_meta", list),
+        ],
+        access_scope=kbchat_access_scope(superusers),
+        event_handlers=[kbchat_permission_event_handler(superusers)],
+    )
     # #106 context cards. collection_id indexed → list a collection's cards /
     # load the match() vocab is a query; norm_keys indexed → get(term)'s exact
     # element-membership lookup (same list-membership index as KbChat.shared_with).

@@ -305,6 +305,23 @@ class SourceDoc(Struct):  # → resource "source-doc"
     # override" resets it to "". Carried forward across a re-upload (see
     # `_store_source_doc`). Non-indexed → no migration (old rows decode empty).
     parser_guidance_override: str = ""
+    # Issue #303: a DENORMALIZED mirror of the parent collection's access-control
+    # fields, so a doc inherits the collection's READ visibility at the storage
+    # layer — the `source_doc` access_scope (perm.scope) reads these to hide a doc
+    # whose collection the caller can't see, covering even the auto-CRUD
+    # `GET /source-doc/{id}` (a route-guard can't). Only the fields the scope needs
+    # are mirrored: `visibility` + `read_meta` (existence/read_meta) + the
+    # collection's `created_by` (so the collection owner sees all its docs — the
+    # doc's OWN uploader is irrelevant to inheritance). `read_content` is NOT
+    # mirrored: content reads (render_document / chunks / export) are route-guarded
+    # against the collection's LIVE permission, so changing read_content needs no
+    # fan-out. Set from the collection at doc-create; re-pushed by a fan-out job
+    # when the collection's visibility/read_meta changes (see the collection
+    # permission setter). Absent on pre-#303 rows ⇒ the "public" default ≡ the
+    # legacy "anyone could read" behaviour, so no migration changes visibility.
+    collection_visibility: str = "public"
+    collection_read_meta: list[str] = []
+    collection_created_by: str = ""
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"
@@ -557,7 +574,19 @@ class KbChat(Struct):  # → resource "kb-chat"
     title: str = ""  # #357: "" = unnamed → FE labels it by name_hint (first msg)
     collection_ids: list[str] = field(default_factory=list)  # plain ids
     messages: list[KbMessage] = field(default_factory=list)
+    # #304: LEGACY read-only share list. Superseded by `permission` (below) — new
+    # shares write `permission.read_chat`; the migration backfills `permission`
+    # from this and clears it. Kept only so pre-#304 rows still decode + stay
+    # readable by their shared users via the access_scope's fallback until an
+    # operator runs `POST /kb-chat/migrate/execute`.
     shared_with: list[str] = field(default_factory=list)  # user ids (read-only)
+    # #304: access control — the SAME embedded `Permission` that governs
+    # collections / WorkItems, but KbChat INVERTS the default: absent ≡ PRIVATE
+    # (owner-only), not public (a chat is not open to everyone). `read_chat` = can
+    # read the thread; `converse` = can send. Set at create (private) + via the
+    # per-chat permission endpoint; enforced by `kbchat_access_scope` + the write
+    # checker. `None` only on un-migrated legacy rows (owner + `shared_with` fallback).
+    permission: Permission | None = None
 
 
 class RetrievedPassage(Struct, frozen=True):

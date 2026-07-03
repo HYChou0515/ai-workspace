@@ -26,6 +26,41 @@ def subjects_of(user: str) -> list[Subject]:
     return [user_subject(user), ALL]
 
 
+def _visibility_scope(
+    *,
+    visibility_field: str,
+    read_meta_field: str,
+    owner_field: str | None,
+    superusers: frozenset[str],
+) -> AccessScope:
+    """The shared read/list predicate behind every resource's access_scope.
+
+    A row is visible iff it is public, owned by the caller, or
+    restricted-and-granted — the storage-layer mirror of
+    `authorize(..., "read_meta", ...)`. `visibility_field`/`read_meta_field` name
+    the indexed columns carrying the (possibly denormalized) visibility +
+    read_meta grant list; `owner_field` is the indexed column the caller is
+    matched against for the owner branch — `None` means use specstar's own
+    `created_by` meta (the resource's real owner), a column name means a
+    denormalized owner (e.g. a doc mirroring its collection's owner). An absent
+    visibility ≡ public (legacy / un-backfilled rows). Superusers see everything.
+    """
+
+    def scope(user: str) -> ConditionBuilder | _Unrestricted:
+        if user in superusers:
+            return UNRESTRICTED  # the single greppable "see everything" path
+        owner = QB.created_by() == user if owner_field is None else QB[owner_field] == user
+        granted = QB[read_meta_field].contains_any(subjects_of(user))
+        return (
+            QB[visibility_field].is_null()  # absent visibility ≡ public
+            | (QB[visibility_field] == "public")
+            | owner
+            | ((QB[visibility_field] == "restricted") & granted)
+        )
+
+    return scope
+
+
 def collection_access_scope(
     superusers: frozenset[str] = frozenset(),
 ) -> AccessScope:
@@ -33,16 +68,63 @@ def collection_access_scope(
     `authorize(..., "read_meta", ...)`: a row is visible iff it is public,
     owned by the caller, or restricted-and-granted. No `permission` object ≡
     public (legacy rows, no migration). Superusers see everything."""
+    return _visibility_scope(
+        visibility_field="permission.visibility",
+        read_meta_field="permission.read_meta",
+        owner_field=None,  # the collection's own specstar `created_by`
+        superusers=superusers,
+    )
+
+
+def source_doc_access_scope(
+    superusers: frozenset[str] = frozenset(),
+) -> AccessScope:
+    """#303: a SourceDoc inherits its collection's read visibility. The doc
+    carries a DENORMALIZED mirror of the collection's visibility / read_meta /
+    created_by (`collection_*` fields, kept current by doc-create + a fan-out on
+    collection permission change), so the SAME predicate that hides a collection
+    hides its docs — at the storage layer, covering the auto-CRUD
+    `GET /source-doc/{id}`. Matched against the mirrored `collection_created_by`
+    (the collection owner), NOT the doc's own uploader."""
+    return _visibility_scope(
+        visibility_field="collection_visibility",
+        read_meta_field="collection_read_meta",
+        owner_field="collection_created_by",
+        superusers=superusers,
+    )
+
+
+def kbchat_access_scope(
+    superusers: frozenset[str] = frozenset(),
+) -> AccessScope:
+    """#304 — KbChat read/list visibility. UNLIKE collections, a chat with no
+    ``Permission`` is PRIVATE (owner-only), not public — a chat isn't open to
+    everyone. Visible iff: owner, a superuser, ``public``, ``restricted`` +
+    granted read_meta, OR (a pre-#304 row with no permission yet) still in the
+    legacy ``shared_with`` — the fallback that keeps old shares readable until an
+    operator migrates them (then ``shared_with`` is cleared and this clause goes
+    inert)."""
 
     def scope(user: str) -> ConditionBuilder | _Unrestricted:
         if user in superusers:
-            return UNRESTRICTED  # the single greppable "see everything" path
+            return UNRESTRICTED
         granted = QB["permission.read_meta"].contains_any(subjects_of(user))
         return (
-            QB["permission.visibility"].is_null()  # absent Permission ≡ public
+            (QB.created_by() == user)  # the owner — absent-permission ≡ private
             | (QB["permission.visibility"] == "public")
-            | (QB.created_by() == user)
             | ((QB["permission.visibility"] == "restricted") & granted)
+            | (QB["permission.visibility"].is_null() & QB["shared_with"].contains(user))
         )
 
     return scope
+
+
+def work_item_access_scope(
+    superusers: frozenset[str] = frozenset(),
+) -> AccessScope:
+    """#306 — an App WorkItem carries the SAME embedded ``Permission`` as a
+    collection (``permission.visibility`` / ``permission.read_meta`` + the real
+    ``created_by`` owner), so its read/list visibility is the identical predicate.
+    A thin delegate keeps that logic written once (plan-permissions.md: "written
+    once, generically")."""
+    return collection_access_scope(superusers)

@@ -40,6 +40,7 @@ as the collection owner (see ``kb.code_repo``) so it passes ``write_meta``.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from msgspec import UNSET
@@ -104,8 +105,30 @@ class CollectionPermissionChecker(IPermissionChecker):
     """Allow-by-default checker enforcing the per-verb write/lifecycle ACL on a
     Collection. See the module docstring for the verb mapping + wiring rationale."""
 
-    def __init__(self, superusers: frozenset[str] = frozenset()) -> None:
+    def __init__(
+        self,
+        superusers: frozenset[str] = frozenset(),
+        *,
+        absent_permission: Callable[[Any], Permission | None] | None = None,
+    ) -> None:
         self._superusers = superusers
+        # How to interpret a row whose ``permission`` field is absent (``None``).
+        # Default (``None``) ⇒ passthrough: ``authorize`` treats an absent
+        # permission as ``public`` (Collection / WorkItem back-compat). A resource
+        # whose absent-permission default is NOT public (a KbChat is owner-only)
+        # injects a factory that synthesises the effective ``Permission`` from the
+        # stored row (e.g. its legacy ``shared_with``), so the write ACL matches
+        # its ``access_scope`` instead of silently falling back to world-writable.
+        self._absent_permission = absent_permission
+
+    def _effective(self, snap: Any) -> Permission | None:
+        """The permission to authorize against: the stored one, or — when absent
+        and a resource-specific default is configured — the synthesised effective
+        permission for this row (see ``absent_permission``)."""
+        stored = _stored_permission(snap)
+        if stored is None and self._absent_permission is not None:
+            return self._absent_permission(snap.data)
+        return stored
 
     def check_permission(self, context: Any) -> PermissionResult:
         action = getattr(context, "action", None)
@@ -142,7 +165,7 @@ class CollectionPermissionChecker(IPermissionChecker):
         if snap is None:
             return PermissionResult.deny
         created_by = snap.meta.created_by
-        stored = _stored_permission(snap)
+        stored = self._effective(snap)
         actor = Actor.human(_context_user(context))
         if self._rewrites_permission(context, stored) and not authorize(
             actor, "change_permission", stored, created_by=created_by, superusers=self._superusers
@@ -169,4 +192,20 @@ def collection_permission_event_handler(
     """Wrap the Collection write ACL in specstar's ``PermissionEventHandler`` for
     the per-model ``event_handlers`` slot (the ``permission_checker`` slot is
     shadowed — see module docstring)."""
+    return PermissionEventHandler(CollectionPermissionChecker(superusers))
+
+
+def work_item_permission_event_handler(
+    superusers: frozenset[str] = frozenset(),
+) -> PermissionEventHandler:
+    """#306 — an App WorkItem's write ACL is the SAME per-verb mapping as a
+    collection (``update`` / ``modify`` / ``patch`` → ``write_meta``, incl. the
+    lifecycle *close* which is an update; ``delete`` / ``switch`` / ``restore`` →
+    owner-only) and reads the same embedded ``permission`` off the row, so it
+    reuses the resource-agnostic ``CollectionPermissionChecker``. Attached via the
+    per-model ``event_handlers`` slot for the same reason the collection one is —
+    the ``permission_checker`` slot is shadowed by specstar's spec-level default
+    (see module docstring). Fires on EVERY WorkItem write, incl. programmatic ones
+    (item create → ``allow``; the lifecycle close runs as the acting user, who
+    needs ``write_meta``)."""
     return PermissionEventHandler(CollectionPermissionChecker(superusers))

@@ -15,6 +15,7 @@ from ..files import WorkspaceFiles
 from ..filestore.protocol import FileNotFound
 from ..sandbox.protocol import ExecResult
 from .context import AgentToolContext
+from .tool_authz import authorize_tool
 
 if TYPE_CHECKING:
     from ..resources.conversation import Citation
@@ -99,6 +100,8 @@ async def exec_impl(ctx: RunContextWrapper[AgentToolContext], cmd: list[str]) ->
     snapshot into it, so any file writes the agent made while cold are present;
     from here on the sandbox IS the source of truth and the file tools route to
     it directly (no flush needed)."""
+    if (denied := authorize_tool(ctx.context, "execute")) is not None:
+        return denied
     assert ctx.context.sandbox is not None
     handle = await ctx.context.ensure_sandbox()
     # Stream stdout live (when the runner wired a sink) so a long-running
@@ -130,6 +133,8 @@ async def read_file_impl(
     1-based first line (default 1), `limit` the number of lines (default: the
     configured cap). A large file is truncated — by line count and by a total
     character budget — with a notice; page through it with `offset`/`limit`."""
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     try:
         data = await fs.read(inv, path)
@@ -169,6 +174,8 @@ async def read_image_impl(
     in this screenshot?"); omit it for a full description of everything
     visible.
     """
+    if (denied := authorize_tool(ctx.context, "read_content")) is not None:
+        return denied
     describer = ctx.context.describer
     if describer is None:
         return (
@@ -222,6 +229,8 @@ async def make_deck_impl(
     tool isn't configured. Building runs several render+review passes, so it
     takes a while; its progress streams as it works.
     """
+    if (denied := authorize_tool(ctx.context, "execute")) is not None:
+        return denied
     from .deck.tool import run_make_deck
 
     fs, inv = _workspace(ctx)
@@ -265,6 +274,8 @@ async def write_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str, c
     is rejected and the current content is returned — use `edit_file` to change
     an existing file (so you always state what you expect to replace). This is
     what stops blind writes."""
+    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     current = await fs.create(inv, path, content.encode("utf-8"))
     if current is None:
@@ -285,6 +296,8 @@ async def edit_file_impl(
     the edit is rejected and the current content is returned, so re-read it and
     try again. To rewrite a whole file, pass its entire current content as
     `old_string`."""
+    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     current = await fs.edit(inv, path, old_string, new_string)
     if current is None:
@@ -310,6 +323,8 @@ async def exists_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> bo
 
 async def delete_file_impl(ctx: RunContextWrapper[AgentToolContext], path: str) -> str:
     """Delete a file from the workspace file store."""
+    if (denied := authorize_tool(ctx.context, "edit_content")) is not None:
+        return denied
     fs, inv = _workspace(ctx)
     try:
         await fs.delete(inv, path)
