@@ -121,11 +121,24 @@ class ProposedCard(msgspec.Struct):
 
 
 class CardGenPayload(msgspec.Struct):
-    """One generation run: draft cards for ``doc_ids`` (the documents the user
-    selected by updated time, #175 Q2) within ``collection_id``."""
+    """One step of a generation run (#414 fan-out). ``kind`` routes the handler:
+
+      - ``split`` (the enqueued job): plan the run — fan ``doc_ids`` out into one
+        ``process`` job per doc (or, for ≤1 doc, run it inline);
+      - ``process``: digest ONE doc (``doc_index`` into the run's ordered doc set)
+        and stage it, then win the finalize gate if it's the last;
+      - ``finalize``: merge + classify the staged digests into the run's proposals
+        and raise the questions, exactly once.
+
+    ``run_id`` is the :class:`CardGenRun` every step drives (its id is what
+    ``enqueue`` returns + the FE polls); ``collection_id`` is carried so the split
+    job's ``partition_key`` serialises a collection's runs across consumers."""
 
     collection_id: str
     doc_ids: list[str] = msgspec.field(default_factory=list)
+    kind: str = "split"  # split | process | finalize
+    run_id: str = ""
+    doc_index: int = -1  # process: which doc in the run's ordered doc set
 
 
 class CardGenArtifact(msgspec.Struct):
@@ -135,10 +148,13 @@ class CardGenArtifact(msgspec.Struct):
 
 
 class CardGenJob(Job[CardGenPayload, CardGenArtifact]):
-    """A queued context-card generation run. ``partition_key`` is set to the
-    collection id at enqueue time so a collection's generation runs serialise
-    across consumers (cross-pod, the framework's guarantee); ``status`` drives
-    the live progress UI and ``artifact`` carries the proposals to review."""
+    """A queued step of a context-card generation run (#414 fan-out). The enqueued
+    ``split`` job carries ``partition_key = collection_id`` so a collection's runs
+    serialise across consumers; the fanned-out ``process`` jobs carry
+    ``partition_key = None`` so they parallelise freely across worker pods (the CAS
+    join on :class:`CardGenRun`, not the queue, guards correctness). The reviewable
+    output lives on the run (``CardGenRun.proposals``), NOT on the job artifact —
+    the split job returns before any proposal exists."""
 
 
 class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"

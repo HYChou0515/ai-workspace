@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from specstar.types import PreconditionFailedError
 
-from workspace_app.kb.card_gen import ProposedCard
+from workspace_app.kb.card_gen import CardGenRun, ProposedCard
 from workspace_app.kb.card_gen_run import CardGenRunStore
 from workspace_app.resources import Collection, make_spec
 
@@ -20,6 +20,13 @@ def _spec_with_collection():
     spec = make_spec(default_user="u")
     cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
     return spec, cid
+
+
+def _get(store: CardGenRunStore, run_id: str) -> CardGenRun:
+    """The run, asserted present (narrows ``CardGenRun | None`` for ty)."""
+    run = store.get(run_id)
+    assert run is not None
+    return run
 
 
 def test_start_seeds_a_pending_run_and_returns_its_id():
@@ -54,10 +61,10 @@ def test_begin_flips_pending_to_running_and_is_idempotent():
     store = CardGenRunStore(spec)
     run_id = store.start(cid, ["d1", "d2"])
     store.begin(run_id)
-    assert store.get(run_id).status == "running"
+    assert _get(store, run_id).status == "running"
     store.mark_done(run_id, 0)
     store.begin(run_id)  # redelivered split — must not reset
-    run = store.get(run_id)
+    run = _get(store, run_id)
     assert run.status == "running"
     assert run.done == [0]
 
@@ -69,7 +76,7 @@ def test_mark_done_is_idempotent():
     store.mark_done(run_id, 1)
     store.mark_done(run_id, 1)  # redelivery of the same process job
     store.mark_done(run_id, 0)
-    run = store.get(run_id)
+    run = _get(store, run_id)
     assert sorted(run.done) == [0, 1]  # 1 recorded once, not twice
 
 
@@ -79,7 +86,7 @@ def test_mark_failed_is_idempotent():
     run_id = store.start(cid, ["d1", "d2", "d3"])
     store.mark_failed(run_id, 2)
     store.mark_failed(run_id, 2)  # redelivery of the same dead-lettered doc
-    assert store.get(run_id).failed == [2]  # recorded once, not twice
+    assert _get(store, run_id).failed == [2]  # recorded once, not twice
 
 
 def test_finalize_gate_opens_only_when_all_docs_accounted_for():
@@ -107,10 +114,10 @@ def test_set_proposals_replaces_the_run_proposals():
     store = CardGenRunStore(spec)
     run_id = store.start(cid, ["d1"])
     store.set_proposals(run_id, [ProposedCard(keys=["RZ3"], title="t")])
-    (p,) = store.get(run_id).proposals
+    (p,) = _get(store, run_id).proposals
     assert p.keys == ["RZ3"] and p.title == "t"
     store.set_proposals(run_id, [ProposedCard(keys=["M4"], title="m")])  # wholesale replace
-    (p,) = store.get(run_id).proposals
+    (p,) = _get(store, run_id).proposals
     assert p.keys == ["M4"]
 
 
@@ -119,7 +126,7 @@ def test_finish_sets_terminal_status():
     store = CardGenRunStore(spec)
     run_id = store.start(cid, ["d1"])
     store.finish(run_id, status="done")
-    assert store.get(run_id).status == "done"
+    assert _get(store, run_id).status == "done"
 
 
 def test_cas_on_a_vanished_run_is_a_noop():
@@ -153,4 +160,4 @@ def test_cas_retries_when_a_concurrent_writer_wins_the_race(monkeypatch):
     monkeypatch.setattr(store._rm, "modify", flaky)  # noqa: SLF001
     store.mark_done(run_id, 0)
     assert calls["n"] == 2  # retried once, then succeeded
-    assert store.get(run_id).done == [0]
+    assert _get(store, run_id).done == [0]
