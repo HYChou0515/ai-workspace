@@ -7,14 +7,15 @@
 
 import { useRef, useState } from "react";
 
-import { type FileCaps, useFileService } from "../../api/fileService";
+import { type FileCaps, type FileService, useOptionalFileService } from "../../api/fileService";
 import type { FileInfo } from "../../api/types";
-import { useDialog } from "../../components/Dialog";
+import { useOptionalDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { usePersistentSet } from "../../hooks/usePersistentSet";
 import { buildFileTree, pruneTree, type TreeNode } from "./fileTree";
 import { basename } from "./renderer";
 import { nextSelection, type SelState, topLevel, visibleOrder } from "./treeSelection";
+import { folderState, toggleSubtree } from "./treeCheckbox";
 import { extractClipboardFiles, readTransferEntries } from "./transfer";
 import { pxToRem } from "../../lib/pxToRem";
 
@@ -27,8 +28,54 @@ type OpenFn = (path: string, opts?: { preview?: boolean }) => void;
 
 type Menu = { node: TreeNode | null; x: number; y: number };
 
+/** Opt-in controlled multi-select mode (#415 card-gen picker): the tree becomes
+ * a read-only checkbox picker over its leaf files. `selected` is the set of
+ * checked leaf paths (folders are a derived tri-state); toggling any row (leaf
+ * or a whole folder subtree) calls `onChange` with the next set. */
+export type SelectMode = {
+  selected: ReadonlySet<string>;
+  onChange: (next: Set<string>) => void;
+};
+
 // Stable empty set for the no-filter case, so we don't re-alloc every render.
 const NO_FORCE_OPEN: ReadonlySet<string> = new Set();
+
+// A service-less tree (select mode) can't mutate — every action is hidden.
+const NO_CAPS: FileCaps = {
+  write: false,
+  create: false,
+  upload: false,
+  delete: false,
+  move: false,
+  copy: false,
+  folders: false,
+  download: false,
+};
+
+// Stand-in service for a tree rendered without a <FileServiceProvider> (select
+// mode). Its NO_CAPS hide every mutation control, so these methods are never
+// reached — the shell just needs a non-null service to read caps/scopeId from.
+const NO_SERVICE: FileService = {
+  scopeId: "",
+  caps: NO_CAPS,
+  listFiles: async () => [],
+  listDirs: async () => [],
+  readFile: async () => {
+    throw new Error("no file service");
+  },
+  writeFile: async () => {},
+  deleteFile: async () => {},
+  moveFile: async () => {},
+  copyFile: async () => {},
+  mkdir: async () => {},
+  refreshFiles: async () => {},
+  fileUrl: () => "",
+  fileDownloadUrl: () => "",
+  prepareDirDownload: async () => {
+    throw new Error("no file service");
+  },
+  dirDownloadUrl: () => "",
+};
 
 const uploadMenuItem: React.CSSProperties = {
   display: "block",
@@ -50,6 +97,8 @@ export function FileTree({
   onReindex,
   decorate,
   searchable = false,
+  select,
+  scopeId,
 }: {
   files: FileInfo[];
   dirs?: string[];
@@ -67,10 +116,21 @@ export function FileTree({
    * doc + wiki IDEs pass it; the investigation workspace (which has its own
    * content SearchPanel) leaves it off and looks unchanged. */
   searchable?: boolean;
+  /** #415: opt-in controlled multi-select — turns the tree into a read-only
+   * checkbox picker over its leaf files. Omitted → the normal open/edit tree. */
+  select?: SelectMode;
+  /** Collapse-state persistence scope when there's no FileService in context
+   * (select mode feeds its own list). Ignored when a service is present. */
+  scopeId?: string;
 }) {
-  const svc = useFileService();
+  // Select mode (the card-gen picker) runs WITHOUT a writable service — it feeds
+  // its own file list and never mutates — so the service is optional and its
+  // capabilities collapse to none (every mutation action hides).
+  const svc = useOptionalFileService() ?? NO_SERVICE;
   const caps = svc.caps;
-  const dialog = useDialog();
+  // Select mode has no confirm prompts (they're on caps-gated mutations), so a
+  // no-op stands in when there's no <DialogProvider>.
+  const dialog = useOptionalDialog() ?? { confirm: async () => null };
   const [query, setQuery] = useState("");
   const fullTree = buildFileTree(files, dirs);
   // While a filter is active, `pruneTree` returns only the matching branches
@@ -79,7 +139,7 @@ export function FileTree({
   const { tree, expand } = searchable
     ? pruneTree(fullTree, query)
     : { tree: fullTree, expand: NO_FORCE_OPEN };
-  const collapsed = usePersistentSet(`rca:tree-collapsed:${svc.scopeId}`);
+  const collapsed = usePersistentSet(`rca:tree-collapsed:${svc.scopeId || scopeId || "default"}`);
   const [menu, setMenu] = useState<Menu | null>(null);
   // Inline creator (VSCode-style): type the name straight in the tree.
   const [creating, setCreating] = useState<{ kind: "file" | "folder"; dir: string } | null>(null);
@@ -613,6 +673,7 @@ export function FileTree({
             activePath={activePath}
             selectedSet={selectedSet}
             multi={sel.selected.length > 1}
+            select={select}
             collapsed={collapsed}
             forceOpen={expand}
             creating={creating}
@@ -732,6 +793,7 @@ function TreeRow({
   activePath,
   selectedSet,
   multi,
+  select,
   collapsed,
   forceOpen,
   creating,
@@ -756,6 +818,7 @@ function TreeRow({
   activePath: string | null;
   selectedSet: Set<string>;
   multi: boolean;
+  select?: SelectMode;
   collapsed: ReturnType<typeof usePersistentSet>;
   /** #402: dirs the active filter forces open, overriding `collapsed`. */
   forceOpen: ReadonlySet<string>;
@@ -795,8 +858,52 @@ function TreeRow({
   }
 
   if (node.isDir) {
+    const fstate = select ? folderState(node, select.selected) : "unchecked";
     return (
       <div>
+        {select ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+              width: "100%",
+              padding: `4px 14px 4px ${indent}px`,
+              fontSize: pxToRem(12),
+              color: "var(--text-paper-d)",
+            }}
+          >
+            <input
+              type="checkbox"
+              aria-label={node.name}
+              checked={fstate === "checked"}
+              ref={(el) => {
+                if (el) el.indeterminate = fstate === "indeterminate";
+              }}
+              onChange={() => select.onChange(toggleSubtree(node, select.selected))}
+            />
+            <button
+              type="button"
+              onClick={() => collapsed.toggle(node.path)}
+              aria-label={`${isCollapsed ? "expand" : "collapse"} ${node.name}`}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                flex: 1,
+                minWidth: 0,
+                textAlign: "left",
+                background: "transparent",
+                color: "inherit",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            >
+              <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={13} />
+              <span>{node.name}</span>
+            </button>
+          </div>
+        ) : (
         <button
           type="button"
           draggable={canDrag}
@@ -862,6 +969,7 @@ function TreeRow({
           <Icon name={isCollapsed ? "chev_r" : "chev_d"} size={13} />
           <span>{node.name}</span>
         </button>
+        )}
         {!isCollapsed && (
           <>
             {creating && creating.dir === node.path && (
@@ -882,6 +990,7 @@ function TreeRow({
                 activePath={activePath}
                 selectedSet={selectedSet}
                 multi={multi}
+                select={select}
                 collapsed={collapsed}
                 forceOpen={forceOpen}
                 creating={creating}
@@ -903,6 +1012,39 @@ function TreeRow({
           </>
         )}
       </div>
+    );
+  }
+
+  // Select mode: a leaf file is a checkbox row (no open/drag/context menu).
+  if (select) {
+    const checked = select.selected.has(node.path);
+    return (
+      <label
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          padding: `4px 14px 4px ${indent}px`,
+          cursor: "pointer",
+          fontSize: pxToRem(12),
+          color: "var(--text-paper)",
+          background: checked ? "var(--paper-2)" : "transparent",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          aria-label={node.name}
+          onChange={() => select.onChange(toggleSubtree(node, select.selected))}
+        />
+        <span
+          style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >
+          {basename(node.path)}
+        </span>
+        {decorate?.(node.path)}
+      </label>
     );
   }
 

@@ -137,3 +137,10 @@ export function useDialog(): DialogContextValue {
   if (!ctx) throw new Error("useDialog must be used inside <DialogProvider>");
   return ctx;
 }
+
+/** The dialog in context, or `null` when there's no provider. The read-only
+ * FileTree select mode (#415 card-gen picker) has no confirm prompts (they're
+ * all on caps-gated mutations), so it reads the dialog optionally. */
+export function useOptionalDialog(): DialogContextValue | null {
+  return useContext(DialogContext);
+}
