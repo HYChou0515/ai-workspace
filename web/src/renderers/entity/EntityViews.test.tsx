@@ -1,0 +1,175 @@
+// @vitest-environment happy-dom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import type { EntityInstance, EntityType } from "../../api/entities";
+import {
+  EntityViewBody,
+  fieldText,
+  parseSpan,
+  parseViewSpec,
+  type ViewSpec,
+} from "./EntityViews";
+
+const issueType: EntityType = {
+  name: "issue",
+  records_path: "issues",
+  fields: [
+    { name: "title", role: "text", required: true },
+    { name: "status", role: "status", values: ["open", "in_progress", "done"] },
+    { name: "progress", role: "progress" },
+    { name: "span", role: "daterange" },
+  ],
+  form: [
+    { name: "title", widget: "text", required: true },
+    { name: "status", widget: "select", required: false, values: ["open", "done"] },
+  ],
+};
+
+function issue(number: number, fields: Record<string, unknown>): EntityInstance {
+  return { number, type_name: "issue", fields, body: "", diagnostics: [] };
+}
+
+const tableSpec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status", "progress"] };
+
+afterEach(cleanup);
+
+describe("parseViewSpec", () => {
+  it("parses a well-formed view", () => {
+    expect(parseViewSpec("view: table\nentity: issue\n")).toMatchObject({ view: "table", entity: "issue" });
+  });
+  it("rejects malformed YAML", () => {
+    expect(parseViewSpec("view: [unclosed")).toBeNull();
+  });
+  it("rejects an unknown view kind", () => {
+    expect(parseViewSpec("view: pie\nentity: issue\n")).toBeNull();
+  });
+  it("rejects a spec with no entity", () => {
+    expect(parseViewSpec("view: table\n")).toBeNull();
+  });
+});
+
+describe("parseSpan", () => {
+  it("parses a `start/end` string", () => {
+    expect(parseSpan("2026-01-01/2026-02-01")).toEqual({
+      start: Date.parse("2026-01-01"),
+      end: Date.parse("2026-02-01"),
+    });
+  });
+  it("parses a two-element list and a {start,end} object", () => {
+    expect(parseSpan(["2026-01-01", "2026-02-01"])).not.toBeNull();
+    expect(parseSpan({ start: "2026-01-01", end: "2026-02-01" })).not.toBeNull();
+  });
+  it("returns null for junk or a reversed range", () => {
+    expect(parseSpan("nope")).toBeNull();
+    expect(parseSpan("2026-02-01/2026-01-01")).toBeNull();
+  });
+});
+
+describe("fieldText", () => {
+  it("joins arrays and blanks nullish", () => {
+    expect(fieldText([1, 2])).toBe("1, 2");
+    expect(fieldText(null)).toBe("");
+    expect(fieldText("x")).toBe("x");
+  });
+});
+
+describe("TableView", () => {
+  it("renders a column per spec column plus the record number", () => {
+    render(
+      <EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "Login broken", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
+    );
+    expect(screen.getByRole("columnheader", { name: "title" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "status" })).toBeInTheDocument();
+    // scalar cells are inline-editable inputs — the value lives on the input.
+    expect(screen.getByLabelText("title")).toHaveValue("Login broken");
+  });
+
+  it("commits a status change through onPatch (the update write path)", () => {
+    const onPatch = vi.fn();
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { status: "open" })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
+    expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
+  });
+
+  it("commits an edited numeric cell as a number on blur", () => {
+    const onPatch = vi.fn();
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { progress: 0 })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    const cell = screen.getByLabelText("progress");
+    fireEvent.change(cell, { target: { value: "40" } });
+    fireEvent.blur(cell);
+    expect(onPatch).toHaveBeenCalledWith(1, { progress: 40 });
+  });
+
+  it("shows the empty state when there are no records", () => {
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.getByText(/No issue records yet/)).toBeInTheDocument();
+  });
+});
+
+describe("QuickCreate", () => {
+  it("opens the form and creates with only the filled args", () => {
+    const onCreate = vi.fn();
+    // entities=[] so the only `title` input in the DOM is the create form's.
+    render(<EntityViewBody spec={tableSpec} type={issueType} entities={[]} onCreate={onCreate} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    fireEvent.change(screen.getByLabelText("title"), { target: { value: "Bug" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create" }));
+    expect(onCreate).toHaveBeenCalledWith({ title: "Bug" });
+  });
+});
+
+describe("BoardView", () => {
+  const boardSpec: ViewSpec = { view: "board", entity: "issue", group_by: "status", card: { title: "title", badges: ["progress"] } };
+
+  it("renders a column per status value (including empty ones) and moves a card via its select", () => {
+    const onPatch = vi.fn();
+    render(<EntityViewBody spec={boardSpec} type={issueType} entities={[issue(1, { title: "A", status: "open" })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    // empty columns still render (from the field's closed vocabulary)
+    expect(screen.getByTestId("col-in_progress")).toBeInTheDocument();
+    expect(screen.getByTestId("col-done")).toBeInTheDocument();
+    expect(screen.getByText("A")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("status"), { target: { value: "done" } });
+    expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
+  });
+});
+
+describe("GanttView", () => {
+  const ganttSpec: ViewSpec = { view: "gantt", entity: "issue", span: "span", label: "title" };
+
+  it("draws a bar only for records that have a parseable span", () => {
+    render(
+      <EntityViewBody
+        spec={ganttSpec}
+        type={issueType}
+        entities={[issue(1, { title: "A", span: "2026-01-01/2026-02-01" }), issue(2, { title: "B" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("bar-1")).toBeInTheDocument();
+    expect(screen.queryByTestId("bar-2")).not.toBeInTheDocument();
+  });
+
+  it("shows a friendly note when no record has a date range", () => {
+    render(<EntityViewBody spec={ganttSpec} type={issueType} entities={[issue(1, { title: "A" })]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.getByText(/No records with a date range/)).toBeInTheDocument();
+  });
+});
+
+describe("invalid records", () => {
+  it("warns that unparseable records are hidden", () => {
+    render(
+      <EntityViewBody
+        spec={tableSpec}
+        type={issueType}
+        entities={[issue(1, { title: "A" })]}
+        invalid={[issue(2, {})]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/1 record couldn't be parsed/)).toBeInTheDocument();
+  });
+});
