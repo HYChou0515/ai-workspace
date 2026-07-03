@@ -1,6 +1,6 @@
 # Plan — #419 PM app + `entity`(file-first 結構化記錄)框架擴充
 
-> 狀態:grill-me 鎖定,待 /tdd。flat integer phases(P1、P2…)。
+> 狀態:P1–P4 + FE 已合併(PR #423)。剩項於 P5–P10 補齊(見文末 follow-up phases)。flat integer phases(P1、P2…)。
 > 背景:現有 app(RCA / topic hub / playground)的 item 內都是自由內容(chat + 檔案),
 > **沒有「一筆筆帶 schema、可篩選、可畫成表/圖」的結構化記錄**。#419 引入 `entity` 層,
 > 並以 PM app(管 issue / milestone / gantt / 報表)當第一個消費者。
@@ -146,6 +146,28 @@
 
 - 出貨 `apps/pm/`:`app.json` + issue / milestone 的 `schema.yaml` / `skeleton.md` + board / gantt / table / roadmap views +
   prompt + picker。**純宣告式 bundle**,疊在 P1–P3 的框架上 —— app owner 體感等同做 RCA。
+
+## 完成剩項的 follow-up phases(P5–P10;P1–P4 已合併 PR #423)
+
+初版交付(PR #423)完成了端到端迴圈與 PM app,但以下 plan 明列項目當時**未做**,於此批補齊(每 phase 一 commit、綠燈才進下一個):
+
+### Phase 5 — agent 端 entity 工具(補 C1/C2/C3 的「AI 備援」寫入路徑)
+chat agent 目前只能用通用 `write_file` 直接寫 `issues/N.md`、**繞過**配號+驗證管線。補上 LLM-callable 的 `create_entity` / `update_entity` / `query_entity`(schema-agnostic:吃 `type_name` 參數,不 hardcode slug),全走 `EntityStore`。接進 tool catalog + function-coherence 驗證,PM `app.json` 開通。
+
+### Phase 6 — 樂觀版本檢查(C6)+ `link_entity`(C3)
+`update` 讀出帶版本(etag/mtime)、寫回比對不符要求重讀(復用 FileStore `read_with_etag`/`write_cas` 接縫)。`link_entity(type, number, field, target)` = 設 ref 欄(建在 update 管線上)。
+
+### Phase 7 — 專案健康度 view(E3 / B2 的第四種 view kind)
+新 view kind `health`:匯總全 type 的 parser diagnostics(含 invalid 記錄)成一面板。後端補 diagnostics 匯總、FE 補 `health` renderer;PM 出貨 `views/health.ai.yaml`。
+
+### Phase 8 — views-first 主畫面(B5 規格)
+`AppManifest.layout` 增 `views: list[str]` + `primary_surface` 增 `"views"` 字面量;FE 依 `layout.views` 渲成命名導覽 tab(Board / Gantt / Roadmap)。PM 由 `primary_surface: ide` + `default_tabs` 改為 `primary_surface: views` + `layout.views`。
+
+### Phase 9 — 協作(F1–F3 / P3 後半)
+entity 檔變更 → 活動流(復用既有 SSE / activity log);actor role 值 + 指派 + `@` 提及走既有 `UserDirectory`。權限已由 route 的 `require_item`(item 成員)免費涵蓋。
+
+### Phase 10 — exclusive-create 配號(N1 規格)
+把「`.readonly` 計數器覆寫 + in-process asyncio lock」換成 N1 定案的 **exclusive-create（O_EXCL 搶 `records/N.md`,EEXIST → 重算重試）** 當防撞仲裁(高水位計數器續管永不回填);需在 FileStore protocol 補 create-exclusive 原語。移除對「單 pod 單 process」的隱性依賴。
 
 ## Roadmap(不進這批 phase,需框架新原語)
 
