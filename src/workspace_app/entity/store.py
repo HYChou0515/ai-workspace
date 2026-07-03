@@ -36,11 +36,25 @@ def _record_number(path: str) -> int | None:
 
 
 class EntityStore:
-    def __init__(self, filestore: FileStore, workspace_id: str, catalog: EntityCatalog) -> None:
+    def __init__(
+        self,
+        filestore: FileStore,
+        workspace_id: str,
+        catalog: EntityCatalog,
+        *,
+        locks: dict[str, asyncio.Lock] | None = None,
+    ) -> None:
         self._fs = filestore
         self._ws = workspace_id
         self._catalog = catalog
-        self._locks: dict[str, asyncio.Lock] = {}
+        # Numbering must serialize per (item, type). Pass a shared registry when
+        # constructing per-request stores (the API) so racing creates on one item
+        # can't both claim a number; the default is fine for a single store.
+        self._locks = locks if locks is not None else {}
+
+    @property
+    def catalog(self) -> EntityCatalog:
+        return self._catalog
 
     def _record_path(self, records_path: str, number: int) -> str:
         return f"/{records_path}/{number}.md"
@@ -49,7 +63,7 @@ class EntityStore:
         self, type_name: str, args: dict[str, Any], *, actor: str = "", now: str = ""
     ) -> ParsedEntity:
         entity_type = self._catalog.get(type_name)
-        lock = self._locks.setdefault(type_name, asyncio.Lock())
+        lock = self._locks.setdefault(f"{self._ws}:{type_name}", asyncio.Lock())
         async with lock:
             number = await allocate(self._fs, self._ws, entity_type.records_path)
             text = render_skeleton(entity_type.skeleton, args, number=number, now=now, actor=actor)
