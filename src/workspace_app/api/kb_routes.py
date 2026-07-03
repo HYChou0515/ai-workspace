@@ -49,10 +49,13 @@ from ..kb.llm import ILlm
 from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
-from ..perm import VERBS, Actor, Permission, Verb, Visibility, authorize
+from ..perm import Actor, Permission, Verb, Visibility, authorize
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
 from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
 from .notifications import notify
+from .permission_body import PermissionBody as _PermissionBody
+from .permission_body import PermissionOut
+from .permission_body import granted_user_ids as _granted_user_ids
 
 if TYPE_CHECKING:
     from ..kb.index_coordinator import IndexCoordinator
@@ -78,35 +81,6 @@ class _CollectionBody(BaseModel):
     # answers live in the code-wiki, not the raw-code chunk index — while a plain
     # document collection stays False. An explicit True/False always wins.
     use_wiki: bool | None = None
-
-
-class _PermissionBody(BaseModel):
-    """#262 — body of `PUT /kb/collections/{id}/permission`: the full desired
-    access state (PUT = replace). `visibility` decides whether the grant lists are
-    enforced; the lists always persist, so toggling public↔restricted↔private never
-    loses settings. Each grant entry is a subject token (`user:<id>` / `group:<id>`
-    / `all`)."""
-
-    visibility: str  # public | restricted | private (validated against Permission)
-    read_meta: list[str] = []
-    write_meta: list[str] = []
-    read_content: list[str] = []
-    add_content: list[str] = []
-    edit_content: list[str] = []
-    read_chat: list[str] = []
-    converse: list[str] = []
-    execute: list[str] = []
-    use_terminal: list[str] = []
-    change_permission: list[str] = []
-
-
-class PermissionOut(BaseModel):
-    """The persisted permission after a set — the FE refreshes the collection
-    card from it (and re-reads the list, since visibility may now hide it)."""
-
-    resource_id: str
-    visibility: str
-    notified: list[str]  # users newly granted access who got a `share` notification
 
 
 class CollectionOut(BaseModel):
@@ -524,19 +498,9 @@ def _running_unit_progress(spec: SpecStar, collection_id: str) -> dict[str, DocU
     return out
 
 
-def _granted_user_ids(perm: Permission | None) -> set[str]:
-    """The set of concrete user ids that appear in ANY of a permission's grant
-    lists (the `group:` namespace + the `all` wildcard are not addressable
-    recipients, so they're skipped). Used to diff old→new for share notifications."""
-    if perm is None:
-        return set()
-    prefix = "user:"
-    return {
-        subj[len(prefix) :]
-        for verb in VERBS
-        for subj in perm.grants(verb)
-        if subj.startswith(prefix)
-    }
+# `_PermissionBody` / `PermissionOut` / `_granted_user_ids` moved to
+# `api.permission_body` (#306) so the collection / WorkItem / KbChat setters share
+# one HTTP shape. Aliased here to keep the collection setter's call sites unchanged.
 
 
 def register_kb_routes(

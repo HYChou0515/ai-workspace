@@ -16,11 +16,15 @@ from fastapi import APIRouter, FastAPI, HTTPException, Response, status
 from specstar import SpecStar
 from specstar.types import ResourceIDNotFoundError
 
+from ..apps.base import WorkItemBase
 from ..filestore.protocol import FileStore
 from ..kb.ingest import Ingestor
+from ..perm import Actor, authorize
+from ..perm.model import Verb
 from .activity import ActivityLog
 from .locator import ItemLocator
 from .notifications import notify
+from .permission_body import PermissionBody, PermissionOut, build_permission, granted_user_ids
 from .promote import promote_chat_to_kb
 from .registry import InvestigationRegistry
 from .schemas import _CloseItemBody
@@ -47,8 +51,30 @@ def register_item_routes(
     ingestor: Ingestor,
     insights_collection_id: str,
     kb_chat_pipeline: object | None,
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     """Mount the App work-item create / close routes onto ``app``."""
+
+    def _authorize_item(model: type, item_id: str, verb: Verb) -> tuple[WorkItemBase, str]:
+        """#306 — gate a hand-written WorkItem route. Loads the item (`rm.get` is
+        NOT access-scoped), then sequences the two checks the auto-CRUD layer
+        composes: `read_meta` first — an actor who can't see the item gets a
+        uniform 404 (no existence leak) — then `verb` → 403. Returns the item + its
+        owner. `permission is None` ≡ public (back-compat)."""
+        rm = spec.get_resource_manager(model)
+        try:
+            item = rm.get(item_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        assert isinstance(item, WorkItemBase)
+        created_by = rm.get_meta(item_id).created_by
+        perm = item.permission
+        actor = Actor.human(get_user_id())
+        if not authorize(actor, "read_meta", perm, created_by=created_by, superusers=superusers):
+            raise HTTPException(status_code=404, detail="item not found")
+        if not authorize(actor, verb, perm, created_by=created_by, superusers=superusers):
+            raise HTTPException(status_code=403, detail=f"not authorized to {verb}")
+        return item, created_by
 
     @app.post("/a/{slug}/items")
     async def create_app_item(slug: str, body: dict) -> dict:
@@ -100,6 +126,39 @@ def register_item_routes(
             "seeded": seeded,
         }
 
+    @app.put("/a/{slug}/items/{item_id}/permission")
+    async def set_item_permission(slug: str, item_id: str, body: PermissionBody) -> PermissionOut:
+        """#306 — set an App item's access control (the FE share UI's backend).
+        Only the owner / a superuser / a `change_permission` grantee may call it
+        (404 if you can't see it, 403 if you can't change it). Mirrors the
+        collection setter: persists AS THE OWNER (the per-verb write checker gates
+        item updates on write_meta, which a change_permission-only delegate need
+        not hold — and change_permission was just verified). Newly-granted users
+        get a `share` notification."""
+        from ..apps.catalog import discover_app_slugs
+        from ..apps.registry import app_model
+
+        if slug not in discover_app_slugs():
+            raise HTTPException(status_code=404, detail=f"unknown app: {slug!r}")
+        model = app_model(slug)
+        item, created_by = _authorize_item(model, item_id, "change_permission")
+        new_perm = build_permission(body)
+        rm = spec.get_resource_manager(model)
+        with rm.using(created_by):
+            rm.update(item_id, msgspec.structs.replace(item, permission=new_perm))
+        me = get_user_id()
+        notified = sorted(granted_user_ids(new_perm) - granted_user_ids(item.permission) - {me})
+        for uid in notified:
+            notify(
+                spec,
+                recipient=uid,
+                kind="share",
+                title=f'Shared an item: "{item.title}"',
+                link=f"/a/{slug}/{item_id}",
+                actor=me,
+            )
+        return PermissionOut(resource_id=item_id, visibility=new_perm.visibility, notified=notified)
+
     @app.post(
         "/a/{slug}/items/{item_id}/close",
         status_code=status.HTTP_204_NO_CONTENT,
@@ -110,7 +169,6 @@ def register_item_routes(
         `lifecycle.closing_states` and is set onto `lifecycle.status_field`;
         null leaves the item's status untouched. Either way the workspace
         session is torn down."""
-        from ..apps.base import WorkItemBase
         from ..apps.catalog import discover_app_slugs
         from ..apps.manifest import load_app_manifest
         from ..apps.registry import app_model
@@ -120,11 +178,11 @@ def register_item_routes(
         manifest = load_app_manifest(slug)
         model = app_model(slug)
         rm = spec.get_resource_manager(model)
-        try:
-            current = rm.get(item_id).data
-        except ResourceIDNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        assert isinstance(current, WorkItemBase)
+        # #306: closing is a lifecycle write — gate on write_meta (404 hides an
+        # item the caller can't see, 403 blocks an in-scope member). Explicit here
+        # because the pure-close path does no rm.update, so the write checker never
+        # fires on it.
+        current, _ = _authorize_item(model, item_id, "write_meta")
         title = current.title
         if body.status is not None:
             lifecycle = manifest.lifecycle

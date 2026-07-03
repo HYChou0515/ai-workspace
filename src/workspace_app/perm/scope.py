@@ -92,3 +92,14 @@ def source_doc_access_scope(
         owner_field="collection_created_by",
         superusers=superusers,
     )
+
+
+def work_item_access_scope(
+    superusers: frozenset[str] = frozenset(),
+) -> AccessScope:
+    """#306 — an App WorkItem carries the SAME embedded ``Permission`` as a
+    collection (``permission.visibility`` / ``permission.read_meta`` + the real
+    ``created_by`` owner), so its read/list visibility is the identical predicate.
+    A thin delegate keeps that logic written once (plan-permissions.md: "written
+    once, generically")."""
+    return collection_access_scope(superusers)

@@ -17,6 +17,8 @@ from __future__ import annotations
 from msgspec import UNSET, Struct, UnsetType, field
 from specstar.types import IndexableField
 
+from ..perm.model import Permission
+
 # The type each App's `model.py` annotates its `INDEXED_FIELDS` with — matches
 # `SpecStar.add_model(indexed_fields=...)`. Declared here (not `list[str]`) so a
 # plain string list stays assignable through `list`'s invariance.
@@ -57,6 +59,15 @@ class WorkItemBase(Struct):
     a force-ON can re-add an available-but-default-off skill. Empty (the default)
     → every skill follows its default. Resolved by
     ``AppCatalog.resolve(skill_prefs=...)``; edited in the web skills picker."""
+
+    permission: Permission | None = None
+    """Tier 1 — access control (#306). The SAME embedded ``Permission`` that
+    governs collections / KbChat: ``visibility`` decides whether the per-verb grant
+    lists are enforced, ``owner`` is the resource's ``created_by`` (not the
+    ``owner`` field, which is a display/notify collaborator — kept SEPARATE, #306
+    grill Q4=B). Absent ≡ ``public`` (legacy items, no migration). Set via the
+    per-item permission endpoint; enforced by the App WorkItem's access_scope +
+    write checker (``apps.registry`` / ``perm``)."""
 
     members: list[str] | UnsetType = UNSET
     """Tier 2 (opt-in) — collaborators. Redeclare as ``list[str]`` in the App's
