@@ -132,3 +132,43 @@ async def test_non_numeric_files_in_records_dir_are_ignored() -> None:
     assert created.number == 1
     result = await store.query("issue")
     assert [e.number for e in result.entities] == [1]
+
+
+async def test_query_includes_computed_backref_and_rollup() -> None:
+    """A projected read resolves relational fields compute-on-read: the
+    milestone's backref `issues` and its `avg` rollup over their progress."""
+    issue = EntityType(
+        name="issue",
+        schema=EntitySchema(
+            fields=[
+                FieldSpec("milestone", Role.REF, to="milestone"),
+                FieldSpec("progress", Role.PROGRESS),
+            ]
+        ),
+        skeleton="---\nmilestone: {{arg.milestone}}\nprogress: {{arg.progress}}\n---\n",
+        records_path="issues",
+    )
+    milestone = EntityType(
+        name="milestone",
+        schema=EntitySchema(
+            fields=[
+                FieldSpec("title", Role.TEXT),
+                FieldSpec("issues", Role.BACKREF, from_="issue.milestone"),
+                FieldSpec("avg", Role.ROLLUP, over="issues", agg="avg", field="progress"),
+            ]
+        ),
+        skeleton="---\ntitle: {{arg.title}}\n---\n",
+        records_path="milestones",
+    )
+    store = EntityStore(
+        MemoryFileStore(), "ws1", EntityCatalog({"issue": issue, "milestone": milestone})
+    )
+    await store.create("milestone", {"title": "M1"}, actor="a", now="d")
+    await store.create("issue", {"milestone": 1, "progress": 50}, actor="a", now="d")
+    await store.create("issue", {"milestone": 1, "progress": 100}, actor="a", now="d")
+
+    result = await store.query("milestone")
+
+    milestone_row = result.entities[0]
+    assert milestone_row.fields["issues"] == [1, 2]
+    assert milestone_row.fields["avg"] == 75

@@ -68,12 +68,21 @@ def _load_type(
                 Diagnostic("warning", f"{name}.{fname}: unknown role, treated as text", str(fname))
             )
             role = Role.TEXT
+        where = spec.get("where")
         fields.append(
             FieldSpec(
                 name=str(fname),
                 role=role,
                 required=bool(spec.get("required", False)),
                 values=spec.get("values"),
+                to=spec.get("to"),
+                from_=spec.get("from"),
+                over=spec.get("over"),
+                agg=spec.get("agg"),
+                field=spec.get("field"),
+                where={str(k): str(v) for k, v in where.items()}
+                if isinstance(where, dict)
+                else None,
             )
         )
     records_path = str(doc.get("path", name))

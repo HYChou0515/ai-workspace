@@ -99,3 +99,37 @@ async def test_type_dir_without_schema_is_skipped() -> None:
 
     assert "orphan" not in catalog
     assert not catalog
+
+
+async def test_loads_relational_role_config() -> None:
+    """Relational roles (§A) carry their wiring: ref `to`, backref `from`,
+    rollup `over`/`agg`/`field`/`where`."""
+    fs = MemoryFileStore()
+    await fs.write(
+        "ws1",
+        "/.entity/milestone/schema.yaml",
+        b"path: milestones\n"
+        b"fields:\n"
+        b"  title: { role: text }\n"
+        b"  span: { role: daterange }\n"
+        b"  epic: { role: ref, to: epic }\n"
+        b"  issues: { role: backref, from: issue.milestone }\n"
+        b"  progress: { role: rollup, over: issues, agg: avg, field: progress }\n"
+        b"  done: { role: rollup, over: issues, agg: count, where: { status: done } }\n",
+    )
+
+    catalog, diagnostics = await discover_catalog(fs, "ws1")
+
+    schema = catalog.get("milestone").schema
+    span = schema.field("span")
+    assert span is not None and span.role.value == "daterange"
+    epic = schema.field("epic")
+    assert epic is not None and epic.to == "epic"
+    issues = schema.field("issues")
+    assert issues is not None and issues.from_ == "issue.milestone"
+    progress = schema.field("progress")
+    assert progress is not None
+    assert (progress.over, progress.agg, progress.field) == ("issues", "avg", "progress")
+    done = schema.field("done")
+    assert done is not None and done.where == {"status": "done"}
+    assert diagnostics == []

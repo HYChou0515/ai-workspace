@@ -17,6 +17,8 @@ from ..filestore.protocol import FileStore
 from .catalog import EntityCatalog
 from .numbering import allocate
 from .parser import ParsedEntity, parse_entity, serialize_entity
+from .projection import Corpus, compute_derived
+from .schema import Role
 from .skeleton import render_skeleton
 
 
@@ -71,15 +73,29 @@ class EntityStore:
         await self._fs.write(self._ws, path, text.encode())
         return parse_entity(text.encode(), number, type_name, entity_type.schema)
 
-    async def query(self, type_name: str) -> QueryResult:
+    async def _parse_type(self, type_name: str) -> list[ParsedEntity]:
         entity_type = self._catalog.get(type_name)
         paths = await self._fs.ls(self._ws, prefix=f"/{entity_type.records_path}/")
         numbered = sorted((n, p) for p in paths if (n := _record_number(p)) is not None)
-        parsed = [
+        return [
             parse_entity(await self._fs.read(self._ws, path), number, type_name, entity_type.schema)
             for number, path in numbered
         ]
-        return QueryResult(
-            entities=[e for e in parsed if e.ok],
-            invalid=[e for e in parsed if not e.ok],
-        )
+
+    async def _corpus(self) -> Corpus:
+        """Every type's clean records, keyed type → number → entity — the input
+        for compute-on-read relational projection (§A4)."""
+        corpus: Corpus = {}
+        for name in self._catalog.names():
+            corpus[name] = {e.number: e for e in await self._parse_type(name) if e.ok}
+        return corpus
+
+    async def query(self, type_name: str) -> QueryResult:
+        entity_type = self._catalog.get(type_name)
+        parsed = await self._parse_type(type_name)
+        ok = [e for e in parsed if e.ok]
+        if any(f.role in (Role.BACKREF, Role.ROLLUP) for f in entity_type.schema.fields):
+            corpus = await self._corpus()
+            for entity in ok:
+                entity.fields.update(compute_derived(entity, entity_type.schema, corpus))
+        return QueryResult(entities=ok, invalid=[e for e in parsed if not e.ok])
