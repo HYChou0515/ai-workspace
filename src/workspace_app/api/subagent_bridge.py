@@ -17,6 +17,7 @@ from specstar import QB, SpecStar
 from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import KbSearchBudget
 from ..kb.cited import record_citations
+from ..kb.collections import readable_collection_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..resources import AgentConfig
 from ..resources.kb import Citation, Collection
@@ -41,6 +42,7 @@ class SubagentBridge:
         purpose_fallbacks: dict[str, AgentConfig],
         get_user_id: Callable[[], str],
         max_searches: int | None,
+        superusers: frozenset[str] = frozenset(),
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -50,6 +52,7 @@ class SubagentBridge:
         self._purpose_fallbacks = purpose_fallbacks
         self._get_user_id = get_user_id
         self._max_searches = max_searches
+        self._superusers = superusers
 
     async def run(
         self,
@@ -96,6 +99,21 @@ class SubagentBridge:
                 r.info.resource_id  # ty: ignore[unresolved-attribute]
                 for r in coll_rm.list_resources(QB.all())  # ty: ignore[invalid-argument-type]
             ]
+
+        # #305 transitive gate: the sub-agent consults the KB on the SPEAKER's
+        # behalf, so it may only search collections the speaker could read
+        # directly (read_content). A private / since-tightened / unshared
+        # collection is filtered out here — the AI can't launder access to it
+        # through ask_knowledge_base. If there WERE candidate collections but the
+        # speaker can read NONE of them, don't run the sub-agent over an empty
+        # scope; say so (a tool result to the LLM, NOT a 403 — the turn
+        # continues). An already-empty scope (no collections exist) keeps its
+        # prior behaviour: run the agent, which reports it found nothing.
+        speaker = self._get_user_id()
+        readable = readable_collection_ids(self._spec, ids, speaker, superusers=self._superusers)
+        if ids and not readable:
+            return "No accessible knowledge sources for this query.", []
+        ids = readable
 
         def relay(ev: AgentEvent) -> None:
             if emit is None:
