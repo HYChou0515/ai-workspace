@@ -321,6 +321,18 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #227: per-batch staged text (doc_id indexed so finalize lists a doc's
     # batches to rejoin into SourceDoc.text). Transient; deleted at finalize.
     spec.add_model(IndexUnitText, indexed_fields=["doc_id"])
+    # #414: card-gen fan-out join state, one row per run (id = the id enqueue
+    # returns + the FE polls). `status` indexed so a future safety sweep can find
+    # runs still "running"; the per-run reads are point gets by id. The run +
+    # staging structs live in kb.card_gen (next to ProposedCard/DocDigest, so they
+    # carry those typed fields directly); imported LAZILY here — a top-level import
+    # would cycle (resources → kb.card_gen → kb.context_cards → resources).
+    from ..kb.card_gen import CardGenRun, CardGenUnit
+
+    spec.add_model(CardGenRun, indexed_fields=["status"])
+    # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
+    # to merge + raise questions from). Transient; deleted at finalize.
+    spec.add_model(CardGenUnit, indexed_fields=["run_id"])
     # Issue #50: collection_id indexed so a wiki's pages list (WikiFileStore.ls)
     # is a query, not a full scan.
     spec.add_model(WikiPage, indexed_fields=["collection_id"])

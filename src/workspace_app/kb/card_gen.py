@@ -26,9 +26,10 @@ documents always produce the same proposals.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Annotated, Protocol
 
 import msgspec
+from specstar import OnDelete, Ref
 from specstar.types import Job
 
 from .context_cards import derive_norm_keys, norm
@@ -120,11 +121,24 @@ class ProposedCard(msgspec.Struct):
 
 
 class CardGenPayload(msgspec.Struct):
-    """One generation run: draft cards for ``doc_ids`` (the documents the user
-    selected by updated time, #175 Q2) within ``collection_id``."""
+    """One step of a generation run (#414 fan-out). ``kind`` routes the handler:
+
+      - ``split`` (the enqueued job): plan the run — fan ``doc_ids`` out into one
+        ``process`` job per doc (or, for ≤1 doc, run it inline);
+      - ``process``: digest ONE doc (``doc_index`` into the run's ordered doc set)
+        and stage it, then win the finalize gate if it's the last;
+      - ``finalize``: merge + classify the staged digests into the run's proposals
+        and raise the questions, exactly once.
+
+    ``run_id`` is the :class:`CardGenRun` every step drives (its id is what
+    ``enqueue`` returns + the FE polls); ``collection_id`` is carried so the split
+    job's ``partition_key`` serialises a collection's runs across consumers."""
 
     collection_id: str
     doc_ids: list[str] = msgspec.field(default_factory=list)
+    kind: str = "split"  # split | process | finalize
+    run_id: str = ""
+    doc_index: int = -1  # process: which doc in the run's ordered doc set
 
 
 class CardGenArtifact(msgspec.Struct):
@@ -134,10 +148,57 @@ class CardGenArtifact(msgspec.Struct):
 
 
 class CardGenJob(Job[CardGenPayload, CardGenArtifact]):
-    """A queued context-card generation run. ``partition_key`` is set to the
-    collection id at enqueue time so a collection's generation runs serialise
-    across consumers (cross-pod, the framework's guarantee); ``status`` drives
-    the live progress UI and ``artifact`` carries the proposals to review."""
+    """A queued step of a context-card generation run (#414 fan-out). The enqueued
+    ``split`` job carries ``partition_key = collection_id`` so a collection's runs
+    serialise across consumers; the fanned-out ``process`` jobs carry
+    ``partition_key = None`` so they parallelise freely across worker pods (the CAS
+    join on :class:`CardGenRun`, not the queue, guards correctness). The reviewable
+    output lives on the run (``CardGenRun.proposals``), NOT on the job artifact —
+    the split job returns before any proposal exists."""
+
+
+class CardGenRun(msgspec.Struct):  # → resource "card-gen-run"
+    """Issue #414: the fan-out **join state** + FE-facing durable state for one
+    context-card generation run. Mirrors :class:`workspace_app.resources.IndexRun`.
+
+    A run over N documents is fanned out into N small ``CardGenJob(kind="process")``
+    jobs (one per doc) so they parallelise across worker pods. This row is how the
+    independent process jobs agree on "every doc is digested": the split job seeds
+    ``total`` (the doc count); each process job idempotently records its doc index
+    in ``done`` (or ``failed``); the finalize step runs exactly once, gated by the
+    CAS-claimed ``finalized`` flag (set only when ``done ∪ failed`` covers every
+    doc). Correctness rests on compare-and-swap against the etag, never on the
+    queue's partition_key (which the RabbitMQ backend ignores).
+
+    The split job cannot hold the reviewable output — it must return fast (it can't
+    block a consumer thread for the whole LLM pass), so it COMPLETEs before any
+    proposal exists. So this run — addressed by the id ``enqueue`` returns — is what
+    the FE polls for ``status`` + ``proposals`` (the finalize step writes them here,
+    and the resumable review state is re-saved here too). ``doc_ids`` is the ordered
+    doc set so finalize merges the staged per-doc digests deterministically."""
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    doc_ids: list[str] = msgspec.field(default_factory=list)
+    total: int = 0
+    done: list[int] = msgspec.field(default_factory=list)  # doc indices digested OK
+    failed: list[int] = msgspec.field(default_factory=list)  # doc indices that gave up
+    finalized: bool = False  # the exactly-once finalize gate (CAS-claimed)
+    status: str = "pending"  # pending | running | done | error
+    proposals: list[ProposedCard] = msgspec.field(default_factory=list)
+
+
+class CardGenUnit(msgspec.Struct):  # → resource "card-gen-unit"
+    """Issue #414 fan-out **staging**: one process job's digest of its document,
+    id ``{run_id}.u{doc_index}``. The finalize step reads these back in doc order,
+    merges + classifies their drafts into the run's proposals, and raises their
+    questions — then deletes them. Transient, alive only between a run's process
+    jobs and its finalize. Mirrors :class:`workspace_app.resources.IndexUnitText`."""
+
+    run_id: Annotated[str, Ref("card-gen-run", on_delete=OnDelete.cascade)]
+    doc_index: int
+    doc_id: str = ""
+    path: str = ""
+    digest: DocDigest = msgspec.field(default_factory=DocDigest)
 
 
 class CommitResult(msgspec.Struct):

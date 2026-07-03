@@ -63,14 +63,18 @@ class _FakeDrafter:
         *,
         term_qs: dict[str, list[TermQuestionDraft]] | None = None,
         desc_qs: dict[str, list[DescriptionQuestionDraft]] | None = None,
+        fail_paths: set[str] | None = None,
     ) -> None:
         self._by_path = by_path
         self._term_qs = term_qs or {}
         self._desc_qs = desc_qs or {}
+        self._fail_paths = fail_paths or set()
         self.seen: list[str] = []
 
     def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
         self.seen.append(doc_path)
+        if doc_path in self._fail_paths:
+            raise RuntimeError(f"drafter gave up on {doc_path}")  # a post-failover give-up
         return DocDigest(
             cards=self._by_path.get(doc_path, []),
             term_questions=self._term_qs.get(doc_path, []),
@@ -80,6 +84,17 @@ class _FakeDrafter:
 
 def _collection(spec, name: str = "c") -> str:
     return spec.get_resource_manager(Collection).create(Collection(name=name)).resource_id
+
+
+def _jobs(spec) -> list:
+    """Every queued CardGenJob, narrowed to the model type for ty."""
+    from workspace_app.kb.card_gen import CardGenJob
+
+    out = []
+    for r in spec.get_resource_manager(CardGenJob).list_resources(QB.all().build()):
+        assert isinstance(r.data, CardGenJob)
+        out.append(r.data)
+    return out
 
 
 async def test_generates_a_new_card_proposal_from_a_document():
@@ -247,21 +262,20 @@ async def test_a_document_deleted_before_the_run_is_skipped_cleanly():
     assert drafter.seen == []
 
 
-async def test_jobs_are_partitioned_by_collection():
-    """#58-style cross-pod serialisation: the collection id is stamped as the
-    job's partition_key (consumer NOT started, so we inspect the queued job)."""
-    from workspace_app.kb.card_gen import CardGenJob
-
+async def test_the_split_job_is_partitioned_by_collection():
+    """#58/#414 cross-pod serialisation: enqueue queues ONE ``split`` job stamped
+    with the collection id as its partition_key so a collection's runs serialise
+    across consumers (consumer NOT started, so we inspect the queued split job)."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "x")
     coord = CardGenCoordinator(spec, _FakeDrafter({}))
-    jid = coord.enqueue(cid, [doc])
-    job = spec.get_resource_manager(CardGenJob).get(jid).data
+    coord.enqueue(cid, [doc])
+    (job,) = _jobs(spec)
+    assert job.payload.kind == "split"
     assert job.partition_key == cid
     assert job.payload.collection_id == cid
     assert job.payload.doc_ids == [doc]
-    assert len(list(spec.get_resource_manager(CardGenJob).list_resources(QB.all().build()))) == 1
 
 
 async def test_an_uncertain_draft_keeps_its_confidence_flag():
@@ -305,6 +319,135 @@ async def test_status_is_pending_until_the_run_is_consumed():
     assert coord.proposals(jid).proposals == []
     await coord.aclose()
     assert coord.status(jid) == TaskStatus.COMPLETED
+
+
+# ── #414: fan-out (split → per-doc process → finalize) ───────────────────────
+
+
+async def test_a_multi_doc_run_fans_out_into_parallelisable_process_jobs():
+    """#414: a run over ≥2 documents fans out into one ``process`` job per doc
+    (partition_key=None → free cross-pod parallelism) plus a split + a single
+    finalize (partition_key=collection so a collection's runs serialise)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    docs = [_add_source(spec, cid, f"{i}.md", "x") for i in range(3)]
+    coord = CardGenCoordinator(
+        spec, _FakeDrafter({f"{i}.md": [CardDraft(keys=[f"K{i}"], snippet="s")] for i in range(3)})
+    )
+    coord.enqueue(cid, docs)
+    await coord.aclose()  # drain split → 3 process → finalize
+
+    jobs = _jobs(spec)
+    by_kind: dict[str, list] = {"split": [], "process": [], "finalize": []}
+    for j in jobs:
+        by_kind[j.payload.kind].append(j)
+    assert len(by_kind["split"]) == 1
+    assert len(by_kind["process"]) == 3  # one per document — the parallelism unit
+    assert len(by_kind["finalize"]) == 1
+    # the process jobs carry NO partition_key so they parallelise across pods…
+    assert all(p.partition_key is None for p in by_kind["process"])
+    assert {p.payload.doc_index for p in by_kind["process"]} == {0, 1, 2}
+    # …while split + finalize serialise per collection.
+    assert by_kind["split"][0].partition_key == cid
+    assert by_kind["finalize"][0].partition_key == cid
+
+
+async def test_a_single_doc_run_short_circuits_without_fanning_out():
+    """#414: a ≤1-doc run digests inline in the split job — no process / finalize
+    jobs — so the common auto-trigger path (one job per indexed doc) stays cheap."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    jobs = _jobs(spec)
+    assert [j.payload.kind for j in jobs] == ["split"]  # split only — ran inline
+    assert coord.status(jid) == TaskStatus.COMPLETED
+    (p,) = coord.proposals(jid).proposals
+    assert p.keys == ["X"]
+
+
+async def test_a_doc_whose_digest_fails_does_not_sink_the_run():
+    """#414 partial tolerance: one document the drafter gives up on is recorded
+    failed, but the surviving documents' proposals still land and the run
+    COMPLETEs — one bad doc no longer fails the whole run (was all-or-nothing)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "x")
+    d2 = _add_source(spec, cid, "b.md", "y")
+    drafter = _FakeDrafter(
+        {"a.md": [CardDraft(keys=["RZ3"], title="t", snippet="s")]}, fail_paths={"b.md"}
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [d1, d2])
+    await coord.aclose()
+
+    assert coord.status(jid) == TaskStatus.COMPLETED
+    (p,) = coord.proposals(jid).proposals
+    assert p.keys == ["RZ3"]  # a.md survived; b.md's failure did not sink the run
+
+
+async def test_a_run_whose_every_doc_fails_is_marked_failed():
+    """#414: when NO document could be digested the run has no proposals to show,
+    so it ends FAILED (not a COMPLETED-with-nothing) — an honest failure signal."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "x")
+    d2 = _add_source(spec, cid, "b.md", "y")
+    coord = CardGenCoordinator(spec, _FakeDrafter({}, fail_paths={"a.md", "b.md"}))
+    jid = coord.enqueue(cid, [d1, d2])
+    await coord.aclose()
+
+    assert coord.status(jid) == TaskStatus.FAILED
+    assert coord.proposals(jid).proposals == []
+
+
+async def test_reads_on_an_unknown_run_are_empty():
+    """A bogus / vanished run id reads as an empty PENDING run and commits
+    nothing — the routes never blow up on a stale id the FE still holds."""
+    spec = make_spec(default_user="u")
+    coord = CardGenCoordinator(spec, _FakeDrafter({}))
+    assert coord.status("nope") == TaskStatus.PENDING
+    assert coord.proposals("nope").proposals == []
+    r = coord.commit("nope")
+    assert (r.created, r.updated, r.skipped) == (0, 0, 0)
+
+
+async def test_a_run_deleted_mid_fanout_is_skipped_by_its_process_jobs():
+    """The run vanishing between split and the process jobs (a collection delete
+    cascades it away) leaves nothing to digest — each process job finds no run and
+    returns cleanly, draining without a crash or a stuck queue."""
+    from workspace_app.kb.card_gen import CardGenRun
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    docs = [_add_source(spec, cid, f"{i}.md", "x") for i in range(2)]
+    drafter = _FakeDrafter({f"{i}.md": [CardDraft(keys=[f"K{i}"], snippet="s")] for i in range(2)})
+    coord = CardGenCoordinator(spec, drafter)
+    rid = coord.enqueue(cid, docs)
+    spec.get_resource_manager(CardGenRun).permanently_delete(rid)  # e.g. collection cascade
+    await coord.aclose()  # split fans out; the process jobs find no run and skip
+
+    assert coord.proposals(rid).proposals == []
+
+
+async def test_a_single_doc_run_whose_run_vanished_finalizes_cleanly():
+    """The inline (short-circuit) finalize on a run that vanished mid-flight
+    returns without writing proposals — the deleted-run race is a clean no-op."""
+    from workspace_app.kb.card_gen import CardGenRun
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    rid = coord.enqueue(cid, [doc])
+    spec.get_resource_manager(CardGenRun).permanently_delete(rid)  # e.g. collection cascade
+    await coord.aclose()
+
+    assert coord.proposals(rid).proposals == []  # run gone → nothing to show, no crash
 
 
 # ── Phase 2: review-state persistence + commit ───────────────────────────────
@@ -516,8 +659,10 @@ async def test_start_consuming_is_idempotent_and_takes_an_explicit_queue_factory
         _FakeDrafter({"a.md": [CardDraft(keys=["X"], title="X", snippet="s")]}),
         message_queue_factory=SimpleMessageQueueFactory(),
     )
+    assert coord.consuming is False
     coord.start_consuming()
     coord.start_consuming()  # idempotent — already consuming
+    assert coord.consuming is True
     jid = coord.enqueue(cid, [doc])
     await coord.aclose()
     assert coord.status(jid) == TaskStatus.COMPLETED
