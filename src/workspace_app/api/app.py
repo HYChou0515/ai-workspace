@@ -809,6 +809,7 @@ def create_app(
         ingestor=ingestor,
         insights_collection_id=insights_collection_id,
         kb_chat_pipeline=kb_chat_pipeline,
+        superusers=superusers,
     )
 
     register_tools_routes(

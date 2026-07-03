@@ -170,3 +170,19 @@ def collection_permission_event_handler(
     the per-model ``event_handlers`` slot (the ``permission_checker`` slot is
     shadowed — see module docstring)."""
     return PermissionEventHandler(CollectionPermissionChecker(superusers))
+
+
+def work_item_permission_event_handler(
+    superusers: frozenset[str] = frozenset(),
+) -> PermissionEventHandler:
+    """#306 — an App WorkItem's write ACL is the SAME per-verb mapping as a
+    collection (``update`` / ``modify`` / ``patch`` → ``write_meta``, incl. the
+    lifecycle *close* which is an update; ``delete`` / ``switch`` / ``restore`` →
+    owner-only) and reads the same embedded ``permission`` off the row, so it
+    reuses the resource-agnostic ``CollectionPermissionChecker``. Attached via the
+    per-model ``event_handlers`` slot for the same reason the collection one is —
+    the ``permission_checker`` slot is shadowed by specstar's spec-level default
+    (see module docstring). Fires on EVERY WorkItem write, incl. programmatic ones
+    (item create → ``allow``; the lifecycle close runs as the acting user, who
+    needs ``write_meta``)."""
+    return PermissionEventHandler(CollectionPermissionChecker(superusers))

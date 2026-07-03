@@ -156,7 +156,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # one-directional (apps → resources, not back).
     from ..apps.registry import register_apps
 
-    register_apps(spec)
+    register_apps(spec, superusers)
     # item_id indexed so the per-item conversation lookup is a query, not a full
     # scan. (#89: was investigation_id + a typed Ref; now an opaque key so one
     # Conversation table serves every App's items.)

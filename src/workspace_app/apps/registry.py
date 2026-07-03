@@ -19,6 +19,8 @@ from importlib import import_module, resources
 
 from specstar import SpecStar
 
+from ..perm.checker import work_item_permission_event_handler
+from ..perm.scope import work_item_access_scope
 from .base import IndexedFields, WorkItemBase
 
 
@@ -78,7 +80,25 @@ def resource_route(slug: str) -> str:
     return "/" + re.sub(r"(?<!^)(?=[A-Z])", "-", app_model(slug).__name__).lower()
 
 
-def register_apps(spec: SpecStar) -> None:
-    """`add_model` every discovered App's WorkItem resource with its indexes."""
+def register_apps(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> None:
+    """`add_model` every discovered App's WorkItem resource with its indexes.
+
+    #306: every WorkItem also gets the shared `Permission` enforcement — the
+    `permission.visibility` / `permission.read_meta` indexes the `access_scope`
+    filters on (row-level read/list visibility → 404) plus the per-verb write ACL
+    (403) via the `event_handlers` slot (the `permission_checker` slot is shadowed;
+    see `perm.checker`). Appended to EVERY App's indexes here, so an App's
+    `model.py` needs no permission boilerplate. A legacy item written before the
+    index has no `permission` → `visibility` is null → treated public (the scope's
+    `is_null` branch), so no migration changes visibility."""
+    perm_indexes: IndexedFields = [
+        ("permission.visibility", str),
+        ("permission.read_meta", list),
+    ]
     for model, indexed_fields in _app_models().values():
-        spec.add_model(model, indexed_fields=indexed_fields)
+        spec.add_model(
+            model,
+            indexed_fields=[*indexed_fields, *perm_indexes],
+            access_scope=work_item_access_scope(superusers),
+            event_handlers=[work_item_permission_event_handler(superusers)],
+        )
