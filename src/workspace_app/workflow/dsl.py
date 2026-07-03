@@ -27,7 +27,7 @@ import msgspec
 from msgspec import Struct, field
 
 from .checks import choice_in, collection_has, file_nonempty
-from .engine import Check, CheckResult, _artifact_path
+from .engine import Check, CheckResult, StepFailed, _artifact_path
 from .gate import human_gate
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
@@ -129,7 +129,20 @@ class MapStep(Struct, tag="map", forbid_unknown_fields=True):
     do: list[Step] = field(default_factory=list)
 
 
-Step = AgentStep | SandboxStep | GateStep | CapabilityStep | MapStep
+class SwitchStep(Struct, tag="switch", forbid_unknown_fields=True):
+    """A data-driven branch (#428 §3): resolve ``on`` to a value, run the one ``cases``
+    sequence keyed by it (else ``default``). ``default`` present (even ``[]``) ⇒ other
+    values are a no-op; ``default`` absent ⇒ an unmatched value is a loud runtime error.
+    ``on`` must be a single *stable* reference (config / inputs / a named step's field);
+    the switch itself is pure control flow and is never journaled (§3.3)."""
+
+    on: str
+    phase: str
+    cases: dict[str, list[Step]] = field(default_factory=dict)
+    default: list[Step] | None = None
+
+
+Step = AgentStep | SandboxStep | GateStep | CapabilityStep | MapStep | SwitchStep
 
 
 class WorkflowDef(Struct, forbid_unknown_fields=True):
@@ -383,6 +396,21 @@ async def _exec_step(
 
         failures.extend(await wf.map(_one, paths))
         return
+    if isinstance(step, SwitchStep):
+        # #428 §3: pure control flow — resolve ``on``, run the one matching case (or
+        # ``default``); no journal, so replay re-picks the same case from stable inputs.
+        case_key = _stringify(await _resolve(step.on, ns, wf))
+        if case_key in step.cases:
+            seq = step.cases[case_key]
+        elif step.default is not None:
+            seq = step.default
+        else:  # §3.4: unmatched + no default ⇒ loud (element-level inside a map)
+            raise StepFailed(
+                f"switch on {step.on} got {case_key!r}: no matching case and no default"
+            )
+        for inner in seq:
+            await _exec_step(wf, inner, ns, key, failures)
+        return
     if isinstance(step, GateStep):
         decision = await human_gate(
             wf,
@@ -480,7 +508,7 @@ def build_run(d: WorkflowDef):
 
 
 def _check_step_ref(
-    expr: str, steps_seen: dict[str, set[str]], where: str, errs: list[str]
+    expr: str, steps_seen: dict[str, dict[str, Any]], where: str, errs: list[str]
 ) -> None:
     """Validate a ``{steps.<name>.<field>}`` reference (#428 §1.5): the step must be
     declared *earlier in the same scope* (``steps_seen`` accumulates in order, so a
@@ -503,7 +531,7 @@ def _check_interp(
     scope: set[str],
     where: str,
     errs: list[str],
-    steps_seen: dict[str, set[str]] | None = None,
+    steps_seen: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Flag any ``{root...}`` whose root variable isn't in scope (catches typos at save
     time). When ``steps_seen`` is given, also resolve ``{steps.x.f}`` references against
@@ -551,7 +579,7 @@ def _validate_check(
     scope: set[str],
     where: str,
     errs: list[str],
-    steps_seen: dict[str, set[str]] | None = None,
+    steps_seen: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     if len(spec) != 1:
         errs.append(f"{where}: a check must name exactly one of {list(_CHECKS)}")
@@ -577,13 +605,13 @@ def _validate_step(
     tool_ceiling: set[str] | None,
     capabilities: tuple[str, ...],
     errs: list[str],
-    steps_seen: dict[str, set[str]],
+    steps_seen: dict[str, dict[str, Any]],
     *,
     top: bool,
+    depth: int = 0,
 ) -> None:
-    # Q7 (P1): a map's ``do`` is a single-level, gate-free loop body. A map or gate
-    # nested there is rejected before any other check (#428 §3 generalises this to the
-    # A/B context rule in P3; ``not top`` ⟺ inside a map for now).
+    # Q7 / #428 §3.2: in a map-element context (``not top``) a map or gate is rejected —
+    # the ban propagates through a nested switch (whose cases inherit ``top``).
     if not top and isinstance(step, MapStep | GateStep):
         errs.append(f"{where}: a {step.__struct_config__.tag} cannot be nested in a map (Q7)")
         return
@@ -608,6 +636,21 @@ def _validate_step(
             capabilities,
             errs,
             top=False,
+            depth=depth,
+        )
+        return
+    if isinstance(step, SwitchStep):
+        _validate_switch(
+            step,
+            where,
+            declared,
+            scope,
+            tool_ceiling,
+            capabilities,
+            errs,
+            steps_seen,
+            top=top,
+            depth=depth,
         )
         return
     if isinstance(step, GateStep):
@@ -662,8 +705,95 @@ def _validate_step(
     _validate_outputs(step.outputs, where, errs)
 
 
+_SWITCH_MAX_DEPTH = 32  # #428 §3.2: a defensive cap on nested switches (not expressivity)
+
+
+def _validate_switch_enum(
+    step: SwitchStep, steps_seen: dict[str, dict[str, Any]], where: str, errs: list[str]
+) -> None:
+    """When ``on`` addresses a named step's ``enum`` field (#428 §3.4): every case must be
+    a member of the enum, and (with no ``default``) every enum value must be covered —
+    else an unmatched value would fail loudly at run time."""
+    m = _TOKEN.fullmatch(step.on.strip())
+    parts = m.group(1).strip().split(".") if m else []
+    if len(parts) < 3 or parts[0] != "steps":
+        return
+    name, fieldname = parts[1], parts[2]
+    if name not in steps_seen or fieldname not in steps_seen[name]:
+        return  # existence already reported by _check_interp
+    _, enum = _spec_type_enum(steps_seen[name][fieldname])
+    if enum is None:
+        return
+    allowed = {_stringify(v) for v in enum}
+    for cval in step.cases:
+        if cval not in allowed:
+            errs.append(
+                f"{where}: switch case {cval!r} is not in the enum of {'.'.join(parts[1:])}"
+            )
+    if step.default is None:
+        missing = allowed - set(step.cases)
+        if missing:
+            errs.append(
+                f"{where}: switch does not cover enum value(s) {sorted(missing)} and has no "
+                "default (add the case(s) or a 'default')"
+            )
+
+
+def _validate_switch(
+    step: SwitchStep,
+    where: str,
+    declared: set[str],
+    scope: set[str],
+    tool_ceiling: set[str] | None,
+    capabilities: tuple[str, ...],
+    errs: list[str],
+    steps_seen: dict[str, dict[str, Any]],
+    *,
+    top: bool,
+    depth: int,
+) -> None:
+    if depth >= _SWITCH_MAX_DEPTH:
+        errs.append(f"{where}: switch nesting too deep (max {_SWITCH_MAX_DEPTH})")
+        return
+    if not step.on:
+        errs.append(f"{where}: switch needs a non-empty 'on'")
+    elif _TOKEN.fullmatch(step.on.strip()) is None:
+        errs.append(f"{where}: switch 'on' must be a single stable reference like {{steps.x.f}}")
+    else:
+        _check_interp(step.on, scope, where, errs, steps_seen)
+        _validate_switch_enum(step, steps_seen, where, errs)
+    if not step.cases:
+        errs.append(f"{where}: switch needs at least one case")
+    # #428 §3.2: a case sequence inherits the switch's context (``top``) — a top-level
+    # switch's cases may hold gate/map; a switch nested in a map propagates the ban.
+    for cval, seq in step.cases.items():
+        _validate_steps(
+            seq,
+            f"{where}.cases[{cval}]",
+            declared,
+            scope,
+            tool_ceiling,
+            capabilities,
+            errs,
+            top=top,
+            depth=depth + 1,
+        )
+    if step.default is not None:
+        _validate_steps(
+            step.default,
+            f"{where}.default",
+            declared,
+            scope,
+            tool_ceiling,
+            capabilities,
+            errs,
+            top=top,
+            depth=depth + 1,
+        )
+
+
 def _register_step(
-    step: Step, steps_seen: dict[str, set[str]], where: str, errs: list[str]
+    step: Step, steps_seen: dict[str, dict[str, Any]], where: str, errs: list[str]
 ) -> None:
     """After a step is validated, record its ``name`` → declared output field names so a
     later sibling can reference it (#428 §1.5). Names are unique within a scope."""
@@ -672,7 +802,9 @@ def _register_step(
     if step.name in steps_seen:
         errs.append(f"{where}: duplicate step name {step.name!r}")
     else:
-        steps_seen[step.name] = set(step.outputs)
+        # #428 §1.5/§3.4: keep the whole ``outputs`` declaration so a reference can be
+        # checked for field existence AND a switch can check its cases against an enum.
+        steps_seen[step.name] = dict(step.outputs)
 
 
 def _validate_steps(
@@ -685,15 +817,25 @@ def _validate_steps(
     errs: list[str],
     *,
     top: bool,
+    depth: int = 0,
 ) -> None:
     """Validate an ordered step list in one naming scope: each step is checked against
     the names declared *before* it (``steps_seen`` accumulates in order), then registers
-    its own name (#428 §1.5)."""
-    steps_seen: dict[str, set[str]] = {}
+    its own name (#428 §1.5). ``depth`` bounds nested switches (§3.2)."""
+    steps_seen: dict[str, dict[str, Any]] = {}
     for i, step in enumerate(steps):
         where = f"{where_prefix}[{i}]"
         _validate_step(
-            step, where, declared, scope, tool_ceiling, capabilities, errs, steps_seen, top=top
+            step,
+            where,
+            declared,
+            scope,
+            tool_ceiling,
+            capabilities,
+            errs,
+            steps_seen,
+            top=top,
+            depth=depth,
         )
         _register_step(step, steps_seen, where, errs)
 

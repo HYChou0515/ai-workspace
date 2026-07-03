@@ -969,6 +969,327 @@ def test_validate_outputs_bad_spec_shape():
     assert any("output 'x'" in e for e in errs)
 
 
+# ─── P3: switch conditional node ─────────────────────────────────────────────
+
+
+def _switch_def(steps: list[dict[str, Any]], phases: Any = None, config: Any = None) -> WorkflowDef:
+    body: dict[str, Any] = {"id": "wf", "phases": phases or [{"id": "p"}], "steps": steps}
+    if config is not None:
+        body["config"] = config
+    return parse_def(json.dumps(body))
+
+
+async def test_run_switch_routes_to_matching_case():
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"kind": "latency"})
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, drive_turn=drive_turn, run_sandbox=run_sandbox)
+    d = _switch_def(
+        [
+            {
+                "type": "agent",
+                "name": "cls",
+                "phase": "p",
+                "outputs": {"kind": {"type": "str", "enum": ["latency", "errors"]}},
+                "prompt": "c",
+            },
+            {
+                "type": "switch",
+                "on": "{steps.cls.kind}",
+                "phase": "p",
+                "cases": {
+                    "latency": [{"type": "sandbox", "run": "handle-latency", "phase": "p"}],
+                    "errors": [{"type": "sandbox", "run": "handle-errors", "phase": "p"}],
+                },
+            },
+        ]
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["handle-latency"]
+
+
+async def test_run_switch_falls_to_default():
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = _switch_def(
+        [
+            {
+                "type": "switch",
+                "on": "{config.mode}",
+                "phase": "p",
+                "cases": {"a": [{"type": "sandbox", "run": "A", "phase": "p"}]},
+                "default": [{"type": "sandbox", "run": "DEF", "phase": "p"}],
+            }
+        ],
+        config={"mode": "z"},
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["DEF"]
+
+
+async def test_run_switch_unmatched_no_default_raises():
+    wf = make_wf()
+    d = _switch_def(
+        [
+            {
+                "type": "switch",
+                "on": "{config.mode}",
+                "phase": "p",
+                "cases": {"a": [{"type": "sandbox", "run": "A", "phase": "p"}]},
+            }
+        ],
+        config={"mode": "z"},
+    )
+    assert validate_def(d) == []
+    with pytest.raises(StepFailed):
+        await build_run(d)(wf, None)
+
+
+async def test_run_switch_unmatched_in_map_is_element_failure():
+    store = MemoryFileStore()
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    await wf.write("/uploads/a.txt", "x")
+    await wf.write("/uploads/b.txt", "y")
+    d = _switch_def(
+        [
+            {
+                "type": "map",
+                "over": "uploads/*",
+                "as": "f",
+                "phase": "p",
+                "do": [
+                    {
+                        "type": "switch",
+                        "on": "{config.mode}",
+                        "phase": "p",
+                        "cases": {"a": [{"type": "sandbox", "run": "A", "phase": "p"}]},
+                    }
+                ],
+            }
+        ],
+        config={"mode": "z"},
+    )
+    assert validate_def(d) == []
+    result = await build_run(d)(wf, None)
+    assert result["status"] == "done"
+    assert len(result["failures"]) == 2  # each element's switch failed, collected
+
+
+async def test_run_gate_inside_top_level_switch_case():
+    store = MemoryFileStore()
+    wf = make_wf(store)
+    await record_decision(wf, phase="g", choice="approve")
+    d = _switch_def(
+        [
+            {
+                "type": "switch",
+                "on": "{config.mode}",
+                "phase": "p",
+                "cases": {
+                    "review": [{"type": "gate", "phase": "g", "title": "ok?"}],
+                },
+                "default": [],
+            }
+        ],
+        phases=[{"id": "p"}, {"id": "g"}],
+        config={"mode": "review"},
+    )
+    assert validate_def(d) == []  # a gate is allowed in a top-level switch case (context A)
+    assert await build_run(d)(wf, None) == {"status": "done"}
+
+
+def test_validate_gate_in_switch_inside_map_rejected():
+    # context B (map element) propagates through switch: a gate in the case is rejected
+    errs = _errs(
+        [
+            {
+                "type": "map",
+                "over": "u/*",
+                "as": "f",
+                "phase": "p",
+                "do": [
+                    {
+                        "type": "switch",
+                        "on": "{f}",
+                        "phase": "p",
+                        "cases": {"x": [{"type": "gate", "phase": "p", "title": "t"}]},
+                    }
+                ],
+            }
+        ]
+    )
+    assert any("cannot be nested in a map" in e for e in errs)
+
+
+def test_validate_switch_on_must_be_single_reference():
+    errs = _errs(
+        [{"type": "switch", "on": "prefix-{config.mode}", "phase": "p", "cases": {"a": []}}]
+    )
+    assert any("single stable reference" in e for e in errs)
+
+
+def test_validate_switch_needs_on_and_cases():
+    errs = _errs([{"type": "switch", "on": "", "phase": "p", "cases": {}}])
+    assert any("non-empty 'on'" in e for e in errs)
+    assert any("at least one case" in e for e in errs)
+
+
+def test_validate_switch_case_outside_enum():
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "name": "c",
+                "phase": "p",
+                "outputs": {"k": {"type": "str", "enum": ["a", "b"]}},
+                "prompt": "c",
+            },
+            {
+                "type": "switch",
+                "on": "{steps.c.k}",
+                "phase": "p",
+                "cases": {"a": [], "zzz": []},
+                "default": [],
+            },
+        ]
+    )
+    assert any("not in the enum" in e for e in errs)
+
+
+def test_validate_switch_missing_enum_value_no_default():
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "name": "c",
+                "phase": "p",
+                "outputs": {"k": {"type": "str", "enum": ["a", "b"]}},
+                "prompt": "c",
+            },
+            {"type": "switch", "on": "{steps.c.k}", "phase": "p", "cases": {"a": []}},
+        ]
+    )
+    assert any("does not cover enum value" in e for e in errs)
+
+
+async def test_run_switch_on_non_enum_step_field():
+    """A switch on a typed-but-not-enum step field routes without exhaustiveness checks."""
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"kind": "x"})
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, drive_turn=drive_turn, run_sandbox=run_sandbox)
+    d = _switch_def(
+        [
+            {"type": "agent", "name": "c", "phase": "p", "outputs": {"kind": "str"}, "prompt": "c"},
+            {
+                "type": "switch",
+                "on": "{steps.c.kind}",
+                "phase": "p",
+                "cases": {"x": [{"type": "sandbox", "run": "hit", "phase": "p"}]},
+                "default": [],
+            },
+        ]
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["hit"]
+
+
+def test_validate_switch_on_unknown_step_field():
+    errs = _errs(
+        [
+            {"type": "agent", "name": "c", "phase": "p", "outputs": {"k": "str"}, "prompt": "c"},
+            {
+                "type": "switch",
+                "on": "{steps.c.nofield}",
+                "phase": "p",
+                "cases": {"a": []},
+                "default": [],
+            },
+        ]
+    )
+    assert any("no output field" in e for e in errs)
+
+
+async def test_run_nested_switch_allowed():
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = _switch_def(
+        [
+            {
+                "type": "switch",
+                "on": "{config.a}",
+                "phase": "p",
+                "cases": {
+                    "x": [
+                        {
+                            "type": "switch",
+                            "on": "{config.b}",
+                            "phase": "p",
+                            "cases": {"y": [{"type": "sandbox", "run": "deep", "phase": "p"}]},
+                            "default": [],
+                        }
+                    ]
+                },
+                "default": [],
+            }
+        ],
+        config={"a": "x", "b": "y"},
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["deep"]
+
+
+def test_validate_switch_depth_limit():
+    # build a pathologically deep nested switch (> 32) and expect a defensive error
+    node: dict[str, Any] = {"type": "sandbox", "run": "x", "phase": "p"}
+    for _ in range(40):
+        node = {
+            "type": "switch",
+            "on": "{config.m}",
+            "phase": "p",
+            "cases": {"a": [node]},
+            "default": [],
+        }
+    errs = validate_def(
+        parse_def(json.dumps({"id": "wf", "phases": [{"id": "p"}], "steps": [node]}))
+    )
+    assert any("nesting too deep" in e for e in errs)
+
+
 def test_validate_create_entity_requires_type_name() -> None:
     errs = _errs([{"type": "capability", "call": "create_entity", "phase": "p"}])
     assert any("type_name" in e for e in errs)
