@@ -639,8 +639,10 @@ export const mockKbApi: KbApi = {
     if (j) j.resolved = true;
   },
 
-  async getDocQuestions() {
-    return [...docQuestions.values()].filter((q) => q.status === "open");
+  async getDocQuestions(collectionId) {
+    return [...docQuestions.values()].filter(
+      (q) => q.status === "open" && (!collectionId || q.collection_id === collectionId),
+    );
   },
   async answerDocQuestion(id, _answer) {
     const q = docQuestions.get(id);
@@ -719,6 +721,21 @@ function blankUser(content: string): KbChatMessage {
 /** Internal — seed a collection's wiki pages for tests. */
 export const _seedWikiMock = (collectionId: string, pages: Record<string, string>) => {
   wikiPages.set(collectionId, new Map(Object.entries(pages)));
+};
+
+/** Internal — seed an open clarification question (#377) for tests. */
+export const _seedDocQuestionMock = (q: Partial<KbDocQuestion> & { id: string }) => {
+  docQuestions.set(q.id, {
+    collection_id: "col-1",
+    kind: "term",
+    status: "open",
+    question_text: "",
+    term: "",
+    source_doc_ids: [],
+    source_doc_id: "",
+    quote: "",
+    ...q,
+  });
 };
 
 /** Internal — seed a collection's live build status for tests. */

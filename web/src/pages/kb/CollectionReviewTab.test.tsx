@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { _resetKbMock, mockKbApi } from "../../api/kbMock";
+import { _resetKbMock, _seedDocQuestionMock, mockKbApi } from "../../api/kbMock";
 import { QueryWrap } from "../../test/queryWrapper";
 import { CollectionReviewTab } from "./CollectionReviewTab";
 
@@ -54,5 +54,24 @@ describe("<CollectionReviewTab /> (#415)", () => {
 
     await waitFor(() => expect(screen.queryByTestId("review-run")).not.toBeInTheDocument());
     expect(await mockKbApi.listContextCards("col-1")).toHaveLength(0);
+  });
+
+  it("also lists the collection's open clarification questions (#377)", async () => {
+    _seedDocQuestionMock({ id: "q1", term: "M4", question_text: "「M4」是什麼？" });
+    renderTab();
+    expect(await screen.findByText("「M4」是什麼？")).toBeInTheDocument();
+    expect(screen.getByText("M4")).toBeInTheDocument();
+  });
+
+  it("answers a question and it leaves the inbox", async () => {
+    _seedDocQuestionMock({ id: "q1", term: "M4", question_text: "「M4」是什麼？" });
+    const user = userEvent.setup();
+    renderTab();
+    await screen.findByText("「M4」是什麼？");
+
+    await user.type(screen.getByRole("textbox"), "Metal 4");
+    await user.click(screen.getByRole("button", { name: "送出" }));
+
+    await waitFor(() => expect(screen.queryByText("「M4」是什麼？")).not.toBeInTheDocument());
   });
 });

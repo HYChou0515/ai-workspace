@@ -638,7 +638,7 @@ export interface KbApi {
 
   /** #377: the global "待釐清" inbox — every open clarification question the
    * digest raised across collections. */
-  getDocQuestions(): Promise<KbDocQuestion[]>;
+  getDocQuestions(collectionId?: string): Promise<KbDocQuestion[]>;
   /** #377: answer a question — a term becomes a context card, a description a
    * clarification-page section. Returns the produced result_ref. */
   answerDocQuestion(id: string, answer: string): Promise<string>;
@@ -1013,8 +1013,9 @@ export const realKbApi: KbApi = {
     await ok(await apiFetch(url, { method: "POST" }), "dismiss card gen");
   },
 
-  async getDocQuestions() {
-    return (await ok(await apiFetch("/kb/doc-questions"), "list doc questions")).json();
+  async getDocQuestions(collectionId) {
+    const q = collectionId ? `?collection_id=${encodeURIComponent(collectionId)}` : "";
+    return (await ok(await apiFetch(`/kb/doc-questions${q}`), "list doc questions")).json();
   },
   async answerDocQuestion(id, answer) {
     const resp = await ok(

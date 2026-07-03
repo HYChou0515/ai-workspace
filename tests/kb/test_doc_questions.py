@@ -222,6 +222,9 @@ def test_list_open_questions_spans_all_collections_and_excludes_resolved():
     answer_question(spec, resolved, answer="x", result_ref="context-card:z")
     ids = {qid for qid, _ in list_open_questions(spec)}
     assert ids == {qa, qb}  # both collections' open questions, resolved excluded
+    # #415: scoped to one collection for the 待審核 tab's inbox.
+    assert {qid for qid, _ in list_open_questions(spec, collection_id=a)} == {qa}
+    assert {qid for qid, _ in list_open_questions(spec, collection_id=b)} == {qb}
 
 
 def test_land_term_answer_creates_a_card_and_marks_answered():

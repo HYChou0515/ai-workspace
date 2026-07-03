@@ -107,6 +107,7 @@ export const qk = {
     cardGenRuns: (collectionId: string) => ["kb", "card-gen-runs", collectionId] as const,
     // #377: the global "待釐清" clarification-question inbox.
     docQuestions: ["kb", "doc-questions"] as const,
+    docQuestionsFor: (collectionId: string) => ["kb", "doc-questions", collectionId] as const,
     // #325: browser-runnable upload-check descriptors (platform-wide, rarely
     // changes — fetched once and reused to pre-block encrypted uploads).
     uploadChecks: ["kb", "upload-checks"] as const,

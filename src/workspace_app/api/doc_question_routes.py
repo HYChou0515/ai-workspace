@@ -83,8 +83,10 @@ def register_doc_question_routes(
         return q
 
     @app.get("/kb/doc-questions")
-    def list_doc_questions() -> list[DocQuestionIO]:
-        return [_to_io(qid, q) for qid, q in list_open_questions(spec)]
+    def list_doc_questions(collection_id: str | None = None) -> list[DocQuestionIO]:
+        # #415: `?collection_id=` scopes the inbox to the collection's 待審核 tab;
+        # omitted → the global "待釐清" inbox (#377).
+        return [_to_io(qid, q) for qid, q in list_open_questions(spec, collection_id=collection_id)]
 
     @app.post("/kb/doc-questions/{qid}/answer")
     async def answer_doc_question(qid: str, body: AnswerBody) -> AnswerOut:
