@@ -82,3 +82,17 @@ def test_issue_and_milestone_create_number_from_one_and_roll_up():
     assert beta["fields"]["issues"] == [1]
     assert beta["fields"]["progress"] == 40
     assert beta["fields"]["open_count"] == 1
+
+
+def test_date_and_daterange_fields_serialize_as_strings_for_the_frontend():
+    """YAML auto-parses `due: 2026-02-01` into a Python date; it must survive the
+    JSON response as a plain ISO string (not 500 the endpoint), and a daterange
+    stays the `start/end` string the gantt view parses."""
+    c = _client()
+    iid = c.post("/a/pm/items", json={"title": "Launch"}).json()["resource_id"]
+    created = c.post(
+        f"/a/pm/items/{iid}/entities/issue",
+        json={"args": {"title": "Ship", "due": "2026-02-01", "span": "2026-01-01/2026-02-01"}},
+    ).json()
+    assert created["fields"]["due"] == "2026-02-01"
+    assert created["fields"]["span"] == "2026-01-01/2026-02-01"
