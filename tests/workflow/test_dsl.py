@@ -811,6 +811,164 @@ async def test_run_map_inner_steps_ref_uses_element_key():
     assert sorted(ran) == ["handle /uploads/a.txt as big", "handle /uploads/b.txt as big"]
 
 
+# ─── P2: outputs schema (types + enum + validation) ──────────────────────────
+
+
+async def test_run_outputs_all_scalar_and_container_types_validate():
+    """Every declared type (str/int/float/bool/list/obj) accepts a matching value."""
+    store = MemoryFileStore()
+    ran: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        if cmd == "gen":
+            return 0, json.dumps({"s": "x", "i": 3, "f": 1.5, "b": True, "l": [1], "o": {"a": 1}})
+        ran.append(cmd)
+        return 0, ""
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "sandbox",
+                        "name": "gen",
+                        "phase": "p",
+                        "run": "gen",
+                        "outputs": {
+                            "s": "str",
+                            "i": "int",
+                            "f": "float",
+                            "b": "bool",
+                            "l": "list",
+                            "o": "obj",
+                        },
+                    },
+                    {"type": "sandbox", "name": "use", "phase": "p", "run": "use {steps.gen.i}"},
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ran == ["use 3"]
+
+
+async def test_run_agent_outputs_type_mismatch_retries_with_feedback():
+    store = MemoryFileStore()
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        if "did not pass" in prompt:  # _retry_prompt fed the failure back in
+            return json.dumps({"score": 0.9})
+        return json.dumps({"score": "high"})  # wrong: str, not float
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "rate",
+                        "phase": "p",
+                        "outputs": {"score": "float"},
+                        "prompt": "rate it",
+                        "retries": 1,
+                    }
+                ],
+            }
+        )
+    )
+    assert await build_run(d)(wf, None) == {"status": "done"}
+
+
+async def test_run_agent_outputs_enum_violation_fails():
+    store = MemoryFileStore()
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"kind": "weird"})
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "c",
+                        "phase": "p",
+                        "outputs": {"kind": {"type": "str", "enum": ["latency", "errors"]}},
+                        "prompt": "c",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(StepFailed):
+        await build_run(d)(wf, None)
+
+
+async def test_run_agent_outputs_missing_field_fails():
+    store = MemoryFileStore()
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"other": 1})  # missing declared 'kind'
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "c",
+                        "phase": "p",
+                        "outputs": {"kind": "str"},
+                        "prompt": "c",
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(StepFailed):
+        await build_run(d)(wf, None)
+
+
+def test_validate_outputs_bad_type():
+    errs = _errs(
+        [{"type": "agent", "name": "s", "phase": "p", "outputs": {"x": "weird"}, "prompt": "p"}]
+    )
+    assert any("unknown output type 'weird'" in e for e in errs)
+
+
+def test_validate_outputs_enum_only_on_scalars():
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "name": "s",
+                "phase": "p",
+                "outputs": {"x": {"type": "list", "enum": [1]}},
+                "prompt": "p",
+            }
+        ]
+    )
+    assert any("enum is only allowed on scalar" in e for e in errs)
+
+
+def test_validate_outputs_bad_spec_shape():
+    errs = _errs([{"type": "agent", "name": "s", "phase": "p", "outputs": {"x": 5}, "prompt": "p"}])
+    assert any("output 'x'" in e for e in errs)
+
+
 def test_validate_create_entity_requires_type_name() -> None:
     errs = _errs([{"type": "capability", "call": "create_entity", "phase": "p"}])
     assert any("type_name" in e for e in errs)

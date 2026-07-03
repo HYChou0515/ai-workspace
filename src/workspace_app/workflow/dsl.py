@@ -225,15 +225,56 @@ async def _lookup(expr: str, ns: dict[str, Any], wf: WorkflowHandle) -> Any:
     return val
 
 
+# #428 §2: the declarable output types. ``list``/``obj`` are shallow (no nested schema);
+# ``enum`` narrows a scalar's value set.
+_OUTPUT_TYPES = ("str", "int", "float", "bool", "list", "obj")
+
+
+def _spec_type_enum(spec: Any) -> tuple[Any, Any]:
+    """Split an ``outputs`` field spec into ``(type, enum)`` — a bare ``"str"`` or a
+    ``{"type": "str", "enum": [...]}`` object (#428 §2.1)."""
+    if isinstance(spec, dict):
+        return spec.get("type"), spec.get("enum")
+    return spec, None
+
+
+def _field_type_ok(value: Any, tname: Any) -> bool:
+    """Does ``value`` satisfy the declared type ``tname``? JSON ``true``/``false`` are
+    Python ``bool`` (a subclass of ``int``), so ``int``/``float`` explicitly exclude
+    ``bool`` and ``float`` accepts a whole number (#428 §2)."""
+    if tname == "str":
+        return isinstance(value, str)
+    if tname == "int":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if tname == "float":
+        return isinstance(value, int | float) and not isinstance(value, bool)
+    if tname == "bool":
+        return isinstance(value, bool)
+    if tname == "list":
+        return isinstance(value, list)
+    return isinstance(value, dict)  # obj
+
+
 def _outputs_check(outputs: dict[str, Any]) -> Check:
-    """The implicit gate for a step that declares ``outputs`` (#428 §1.2): the reply
-    must parse into a JSON object (``result.fields`` is a dict). P2 tightens this to
-    field-level type/enum validation."""
+    """The implicit gate for a step that declares ``outputs`` (#428 §1.2/§2.2): the reply
+    must parse into a JSON object whose declared fields are present and match their
+    type + optional ``enum``. A failure feeds its reason back into the step's retry."""
 
     async def check(_wf: WorkflowHandle, result: Any) -> CheckResult:
         fields = result.get("fields") if isinstance(result, dict) else None
         if not isinstance(fields, dict):
             return CheckResult(False, f"reply must be a JSON object with keys {sorted(outputs)}")
+        for name, spec in outputs.items():
+            if name not in fields:
+                return CheckResult(False, f"reply is missing field {name!r}")
+            tname, enum = _spec_type_enum(spec)
+            value = fields[name]
+            if not _field_type_ok(value, tname):
+                return CheckResult(
+                    False, f"field {name!r} must be {tname}, got {type(value).__name__}"
+                )
+            if enum is not None and value not in enum:
+                return CheckResult(False, f"field {name!r} must be one of {enum}, got {value!r}")
         return CheckResult(True)
 
     return check
@@ -483,6 +524,28 @@ def _check_interp(
             _check_interp(v, scope, where, errs, steps_seen)
 
 
+def _validate_outputs(outputs: dict[str, Any], where: str, errs: list[str]) -> None:
+    """Statically check an ``outputs`` declaration (#428 §2): each field spec is a valid
+    type string or ``{"type": ..., "enum": [...]}``; ``enum`` is scalar-only."""
+    for name, spec in outputs.items():
+        if isinstance(spec, str):
+            tname, enum = spec, None
+        elif isinstance(spec, dict) and "type" in spec:
+            tname, enum = spec.get("type"), spec.get("enum")
+        else:
+            errs.append(
+                f"{where}: output {name!r} must be a type string or {{'type': ..., 'enum': ...}}"
+            )
+            continue
+        if tname not in _OUTPUT_TYPES:
+            errs.append(
+                f"{where}: output {name!r} has unknown output type {tname!r} "
+                f"(one of {list(_OUTPUT_TYPES)})"
+            )
+        if enum is not None and tname in ("list", "obj"):
+            errs.append(f"{where}: output {name!r} enum is only allowed on scalar types")
+
+
 def _validate_check(
     spec: dict[str, Any],
     scope: set[str],
@@ -577,6 +640,7 @@ def _validate_step(
         _check_interp(step.run, scope, where, errs, steps_seen)
         if step.check is not None:
             _validate_check(step.check, scope, where, errs, steps_seen)
+        _validate_outputs(step.outputs, where, errs)
         return
     # AgentStep
     if not step.prompt:
@@ -595,6 +659,7 @@ def _validate_step(
     _check_interp([step.prompt, step.out, step.tools], scope, where, errs, steps_seen)
     if step.check is not None:
         _validate_check(step.check, scope, where, errs, steps_seen)
+    _validate_outputs(step.outputs, where, errs)
 
 
 def _register_step(
