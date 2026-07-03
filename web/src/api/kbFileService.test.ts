@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { apiFetch } from "./http";
 import type { KbDocument } from "./kb";
 
 // An in-memory specstar backend the mocked apiFetch serves: GET envelope,
@@ -164,6 +165,32 @@ describe("kbFileService", () => {
     const svc = kbFileService("col-1", docs, makeKb());
     const content = await svc.readFile("/notes.md");
     expect(content).toMatchObject({ kind: "text", path: "/notes.md", text: "# hello\nworld" });
+  });
+
+  it("readFile uses the list row's file_id and skips the envelope round-trip", async () => {
+    // The tree list already carries file_id per row (#87), so a plain open must
+    // NOT pay the extra serial GET /source-doc/{id} just to learn it.
+    backend.blobs.set("known-fid", "# direct");
+    const rowDocs: KbDocument[] = [
+      {
+        resource_id: "doc-9",
+        path: "/direct.md",
+        content_type: "text/markdown",
+        file_id: "known-fid",
+        created_by: "me",
+        status: "ready",
+        size: 8,
+      },
+    ];
+    const svc = kbFileService("col-1", rowDocs, makeKb());
+    const mock = vi.mocked(apiFetch);
+    const before = mock.mock.calls.length;
+    const content = await svc.readFile("/direct.md");
+    expect(content).toMatchObject({ kind: "text", path: "/direct.md", text: "# direct" });
+    const urls = mock.mock.calls.slice(before).map((c) => c[0] as string);
+    expect(urls).toContain("/source-doc/doc-9/blobs/known-fid");
+    // no bare-envelope GET /source-doc/{id}
+    expect(urls.some((u) => /^\/source-doc\/[^/]+$/.test(u))).toBe(false);
   });
 
   it("readFile throws for a path with no document", async () => {

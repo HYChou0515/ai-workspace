@@ -140,14 +140,16 @@ export function KbDocIde({
   // in, and reading its bytes early throws "unknown KB document"; until then we
   // show the empty pane and let the poll/refetch promote it.
   const activePath = urlPath && docByPath.has(urlPath) ? urlPath : null;
-  // #395: the open doc's render — the sanctioned touch-the-blob-on-open read.
-  // It feeds the status bar's quality rationale and the Tune modal's per-doc
-  // override, which no longer ride the (metas-only) list rows.
+  // The open doc's rationale (status bar) + parser-guidance override (Tune modal)
+  // no longer ride the (metas-only) list rows. Fetch JUST those two fields from
+  // the SourceDoc envelope — a cheap metadata point-get — NOT renderDocument,
+  // which re-reads the content blob and runs count queries to project a markdown
+  // body this IDE discards (that heavy path stays for the citation drawer).
   const activeDoc = activePath ? docByPath.get(activePath) : undefined;
-  const renderedQuery = useQuery({
-    queryKey: qk.kb.doc(activeDoc?.resource_id ?? "__none__"),
+  const docMetaQuery = useQuery({
+    queryKey: qk.kb.docMeta(activeDoc?.resource_id ?? "__none__"),
     enabled: activeDoc != null,
-    queryFn: () => client.renderDocument((activeDoc as KbDocument).resource_id),
+    queryFn: () => client.getSourceDocMeta((activeDoc as KbDocument).resource_id),
   });
   // `.gitkeep` is the hidden placeholder that keeps an otherwise-empty folder
   // alive — drop it from the file list, but surface its directory so the empty
@@ -267,17 +269,17 @@ export function KbDocIde({
                   )}
                 </div>
               </div>
-              <KbStatusBar doc={activeDoc} rationale={renderedQuery.data?.quality_rationale} />
+              <KbStatusBar doc={activeDoc} rationale={docMetaQuery.data?.quality_rationale} />
               {tuneDoc && (
                 <TuneParsingModal
                   collectionId={collectionId}
                   docId={tuneDoc.resource_id}
                   docPath={tuneDoc.path}
                   // Tune opens from the editor header, so the tuned doc IS the
-                  // open one — its render (above) carries the override.
+                  // open one — its doc-meta fetch (above) carries the override.
                   docGuidance={
                     tuneDoc.resource_id === activeDoc?.resource_id
-                      ? renderedQuery.data?.parser_guidance_override
+                      ? docMetaQuery.data?.parser_guidance_override
                       : undefined
                   }
                   onClose={() => setTuneDoc(null)}
