@@ -856,7 +856,15 @@ def create_app(
 
     # #419: file-first entity CRUD. Opt-in — an item with no `.entity/` schema
     # dir yields an empty catalog, so these routes are safe no-ops there.
-    register_entity_routes(api, files=files, locator=locator, get_user_id=get_user_id)
+    register_entity_routes(
+        api,
+        files=files,
+        locator=locator,
+        get_user_id=get_user_id,
+        activity=activity,
+        spec=spec,
+        users=users,
+    )
 
     # #177: now that EVERY route (specstar CRUD + all hand-written) is on the
     # /api router, include it onto the app exactly once. Mounting the SPA at "/"

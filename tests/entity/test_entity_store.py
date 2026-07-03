@@ -5,6 +5,8 @@ and reads it back — internals (schema/parser/numbering) stay swappable."""
 
 from __future__ import annotations
 
+import asyncio
+
 from workspace_app.entity.catalog import EntityCatalog, EntityType
 from workspace_app.entity.schema import EntitySchema, FieldSpec, Role
 from workspace_app.entity.store import EntityStore
@@ -89,6 +91,40 @@ async def test_update_patches_one_field_and_preserves_body_and_number() -> None:
     assert got.body.strip() == "repro steps"
 
 
+async def test_update_with_current_version_succeeds() -> None:
+    """§C6: passing the `version` you just read lets the write through — nothing
+    changed in between."""
+    store = _store()
+    created = await store.create("issue", {"title": "A"}, actor="alice", now="2026-07-03")
+
+    updated = await store.update("issue", 1, {"status": "done"}, expected_version=created.version)
+
+    assert updated.fields["status"] == "done"
+    assert updated.version != created.version  # the content moved, so the token flips
+
+
+async def test_update_against_a_stale_version_conflicts_and_does_not_write() -> None:
+    """§C6: a write against the version read BEFORE a concurrent edit is rejected
+    with `EntityConflict`, and the concurrent edit is preserved (no lost update)."""
+    import pytest
+
+    from workspace_app.entity.store import EntityConflict
+
+    store = _store()
+    created = await store.create("issue", {"title": "A"}, actor="alice", now="2026-07-03")
+    stale = created.version
+    # a concurrent writer changes the record → its version moves on
+    await store.update("issue", 1, {"status": "done"})
+
+    with pytest.raises(EntityConflict):
+        await store.update("issue", 1, {"title": "clobbered"}, expected_version=stale)
+
+    # the concurrent edit survived; the rejected patch never landed
+    got = await store.get("issue", 1)
+    assert got.fields["status"] == "done"
+    assert got.fields["title"] == "A"
+
+
 async def test_status_outside_closed_vocab_lints_but_is_not_blocked() -> None:
     """A `status` outside the schema's closed values is written anyway (§C7
     lint-not-block) and surfaces a *warning* — not an error, so it still
@@ -105,6 +141,28 @@ async def test_status_outside_closed_vocab_lints_but_is_not_blocked() -> None:
     assert [e.number for e in result.entities] == [1]
 
 
+async def test_health_flattens_warnings_and_errors_across_types() -> None:
+    """§E3: `health` collects every finding — a lint warning on a projecting
+    record and a parse error on a dropped one — flattened for the health view."""
+    fs = MemoryFileStore()
+    store = _store(fs)
+    await store.create("issue", {"title": "A"}, actor="a", now="d")
+    await store.update("issue", 1, {"status": "frozen"})  # outside vocab → warning
+    await fs.write("ws1", "/issues/2.md", b"broken, no frontmatter")  # → error
+
+    findings = await store.health()
+
+    seen = {(f.number, f.level) for f in findings}
+    assert (1, "warning") in seen
+    assert (2, "error") in seen
+
+
+async def test_health_is_empty_when_every_record_is_clean() -> None:
+    store = _store()
+    await store.create("issue", {"title": "A"}, actor="a", now="d")
+    assert await store.health() == []
+
+
 async def test_hard_delete_of_top_record_never_reissues_its_number() -> None:
     """Users can hard-delete an entity file; the high-water counter in
     `.readonly/` still advances, so a deleted top number is never reissued
@@ -118,6 +176,26 @@ async def test_hard_delete_of_top_record_never_reissues_its_number() -> None:
     created = await store.create("issue", {"title": "y"}, actor="a", now="d")
 
     assert created.number == 4
+
+
+async def test_concurrent_creates_never_collide_via_exclusive_create() -> None:
+    """§N1: numbering's anti-collision arbiter is the FS exclusive-create, not the
+    in-process lock. Two stores with SEPARATE lock registries (standing in for two
+    pods) racing on ONE shared store still get distinct, contiguous numbers — a
+    loser walks to the next free slot on `FileExists`."""
+    fs = MemoryFileStore()
+    catalog = EntityCatalog({"issue": _issue_type()})
+    pod_a = EntityStore(fs, "ws1", catalog, locks={})
+    pod_b = EntityStore(fs, "ws1", catalog, locks={})
+
+    created = await asyncio.gather(
+        *[
+            (pod_a if i % 2 == 0 else pod_b).create("issue", {"title": f"t{i}"}, actor="a", now="d")
+            for i in range(12)
+        ]
+    )
+
+    assert sorted(e.number for e in created) == list(range(1, 13))  # 12 distinct, no reuse
 
 
 async def test_non_numeric_files_in_records_dir_are_ignored() -> None:

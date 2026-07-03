@@ -31,6 +31,17 @@ class MemoryFileStore:
             self._files[workspace_id][path] = data
             self._dirs[workspace_id].update(dir_ancestors(path))
 
+    async def create_exclusive(self, workspace_id: str, path: str, data: bytes) -> None:
+        """Atomic create-if-absent (#419 N1 numbering arbiter): write `data` iff
+        `path` doesn't exist, else raise `FileExists`. Atomic because the whole
+        check+set runs under `self._lock` with no `await` inside — two racing
+        claimants can't both win one path."""
+        async with self._lock:
+            if path in self._files.get(workspace_id, {}):
+                raise FileExists(path)
+            self._files[workspace_id][path] = data
+            self._dirs[workspace_id].update(dir_ancestors(path))
+
     async def write_from_path(
         self, workspace_id: str, path: str, source: Path, content_type: str | None
     ) -> None:

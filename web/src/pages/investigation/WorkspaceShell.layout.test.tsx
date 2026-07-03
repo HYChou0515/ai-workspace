@@ -5,13 +5,15 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AppItem, AppManifest } from "../../api/types";
-import { TopBar, initialIdeCollapsed } from "./WorkspaceShell";
+import { TopBar, initialIdeCollapsed, mainSurfaceTabs } from "./WorkspaceShell";
 
 afterEach(cleanup);
 
 function manifest(over: {
   workspace?: boolean;
-  primary_surface?: "chat" | "ide";
+  primary_surface?: "chat" | "ide" | "views";
+  views?: string[];
+  default_tabs?: string[];
 }): AppManifest {
   return {
     slug: "x",
@@ -25,7 +27,8 @@ function manifest(over: {
       breadcrumb: [],
       statusbar: [],
       list: [],
-      default_tabs: [],
+      default_tabs: over.default_tabs ?? [],
+      views: over.views,
       primary_surface: over.primary_surface ?? "chat",
     },
     labels: {},
@@ -47,6 +50,30 @@ describe("initialIdeCollapsed (#159)", () => {
     expect(
       initialIdeCollapsed(manifest({ workspace: false, primary_surface: "ide" })),
     ).toBe(true);
+  });
+
+  it("opens the workspace up front for a views-first App (#419 §B5)", () => {
+    expect(initialIdeCollapsed(manifest({ primary_surface: "views", views: ["/views/board.ai.yaml"] }))).toBe(false);
+  });
+});
+
+describe("mainSurfaceTabs (#419 §B5)", () => {
+  it("opens layout.views for a views-first App instead of default_tabs", () => {
+    const m = manifest({
+      primary_surface: "views",
+      views: ["/views/board.ai.yaml", "/views/gantt.ai.yaml"],
+      default_tabs: ["/README.md"],
+    });
+    expect(mainSurfaceTabs(m)).toEqual(["/views/board.ai.yaml", "/views/gantt.ai.yaml"]);
+  });
+
+  it("falls back to default_tabs for a non-views App (or empty views)", () => {
+    expect(mainSurfaceTabs(manifest({ primary_surface: "ide", default_tabs: ["/SOP.md"] }))).toEqual([
+      "/SOP.md",
+    ]);
+    expect(mainSurfaceTabs(manifest({ primary_surface: "views", views: [], default_tabs: ["/x.md"] }))).toEqual([
+      "/x.md",
+    ]);
   });
 });
 

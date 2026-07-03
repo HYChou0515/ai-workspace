@@ -13,13 +13,30 @@ from typing import Any
 
 import msgspec
 
-from ..filestore.protocol import FileStore
+from ..filestore.protocol import FileExists, FileStore
 from .catalog import EntityCatalog
-from .numbering import allocate
+from .numbering import create_exclusive, next_number, record_high_water
 from .parser import ParsedEntity, parse_entity, serialize_entity
 from .projection import Corpus, compute_derived
 from .schema import Role
 from .skeleton import render_skeleton
+
+
+class EntityConflict(Exception):
+    """Raised by `update` when `expected_version` doesn't match the record's
+    current content — the record changed since the caller read it (§C6). The
+    caller re-reads and retries with the fresh version."""
+
+
+class HealthFinding(msgspec.Struct):
+    """One parser/lint finding on a record, flattened across every type — the
+    input to the project-health view (§E3)."""
+
+    type_name: str
+    number: int
+    level: str  # "error" (dropped from projection) | "warning" (still projects)
+    message: str
+    field: str | None = None
 
 
 class QueryResult(msgspec.Struct):
@@ -63,13 +80,26 @@ class EntityStore:
         self, type_name: str, args: dict[str, Any], *, actor: str = "", now: str = ""
     ) -> ParsedEntity:
         entity_type = self._catalog.get(type_name)
+        records_path = entity_type.records_path
         lock = self._locks.setdefault(f"{self._ws}:{type_name}", asyncio.Lock())
         async with lock:
-            number = await allocate(self._fs, self._ws, entity_type.records_path)
-            text = render_skeleton(entity_type.skeleton, args, number=number, now=now, actor=actor)
-            await self._fs.write(
-                self._ws, self._record_path(entity_type.records_path, number), text.encode()
-            )
+            number = await next_number(self._fs, self._ws, records_path)
+            # Claim the record file by exclusive create; a loser (another pod/
+            # process that grabbed this number first) walks to the next free one
+            # (N1). The lock makes this a no-op fast path on a single pod; the
+            # exclusive create is the correctness backstop when it isn't.
+            while True:
+                text = render_skeleton(
+                    entity_type.skeleton, args, number=number, now=now, actor=actor
+                )
+                try:
+                    await create_exclusive(
+                        self._fs, self._ws, self._record_path(records_path, number), text.encode()
+                    )
+                    break
+                except FileExists:
+                    number += 1
+            await record_high_water(self._fs, self._ws, records_path, number)
         return parse_entity(text.encode(), number, type_name, entity_type.schema)
 
     async def get(self, type_name: str, number: int) -> ParsedEntity:
@@ -77,14 +107,34 @@ class EntityStore:
         raw = await self._fs.read(self._ws, self._record_path(entity_type.records_path, number))
         return parse_entity(raw, number, type_name, entity_type.schema)
 
-    async def update(self, type_name: str, number: int, patch: dict[str, Any]) -> ParsedEntity:
+    async def update(
+        self,
+        type_name: str,
+        number: int,
+        patch: dict[str, Any],
+        *,
+        expected_version: str | None = None,
+    ) -> ParsedEntity:
+        """Merge `patch` into the record's fields and write it back. When
+        `expected_version` is given (the `version` the caller read), the write is
+        rejected with `EntityConflict` if the record changed since — the
+        optimistic check (§C6). The read-check-write runs under the per-type lock
+        so it's atomic against a racing create/update on this pod (N5).
+        `expected_version=None` skips the check (the UI's last-write default)."""
         entity_type = self._catalog.get(type_name)
         path = self._record_path(entity_type.records_path, number)
-        current = parse_entity(
-            await self._fs.read(self._ws, path), number, type_name, entity_type.schema
-        )
-        text = serialize_entity({**current.fields, **patch}, current.body)
-        await self._fs.write(self._ws, path, text.encode())
+        lock = self._locks.setdefault(f"{self._ws}:{type_name}", asyncio.Lock())
+        async with lock:
+            current = parse_entity(
+                await self._fs.read(self._ws, path), number, type_name, entity_type.schema
+            )
+            if expected_version is not None and expected_version != current.version:
+                raise EntityConflict(
+                    f"{type_name} #{number} changed since you read it "
+                    f"(expected {expected_version}, now {current.version})"
+                )
+            text = serialize_entity({**current.fields, **patch}, current.body)
+            await self._fs.write(self._ws, path, text.encode())
         return parse_entity(text.encode(), number, type_name, entity_type.schema)
 
     async def _parse_type(self, type_name: str) -> list[ParsedEntity]:
@@ -103,6 +153,20 @@ class EntityStore:
         for name in self._catalog.names():
             corpus[name] = {e.number: e for e in await self._parse_type(name) if e.ok}
         return corpus
+
+    async def health(self) -> list[HealthFinding]:
+        """Every parser/lint finding across all types, flattened (§E3). Errors
+        (a record dropped from projection) and warnings (a lint on a record that
+        still projects) both surface here, so the health view is the one place an
+        operator sees what needs a hand-edit fix — ordered by type then number."""
+        out: list[HealthFinding] = []
+        for name in self._catalog.names():
+            for entity in await self._parse_type(name):
+                out.extend(
+                    HealthFinding(name, entity.number, d.level, d.message, d.field)
+                    for d in entity.diagnostics
+                )
+        return out
 
     async def query(self, type_name: str) -> QueryResult:
         entity_type = self._catalog.get(type_name)

@@ -40,6 +40,10 @@ _FILE_TOOLS = frozenset(
 # Tools that need a compute sandbox. Package tools (data-fetch, …) also run in
 # the sandbox, but their names are deploy-specific; `exec` is the universal one.
 _SANDBOX_TOOLS = frozenset({"exec"})
+# #419 entity tools — they read/write the item's workspace files (through the
+# same `EntityStore` as the UI), so they need `function.workspace` just like the
+# file tools.
+_ENTITY_TOOLS = frozenset({"create_entity", "update_entity", "query_entity", "link_entity"})
 
 
 def _subset_or_raise(
@@ -95,10 +99,20 @@ def validate_function_coherence(manifest: AppManifest) -> None:
             f"app {manifest.slug!r}: file tools {sorted(tools & _FILE_TOOLS)} need "
             f"function.workspace but it is false"
         )
-    if manifest.layout.primary_surface == "ide" and not fn.workspace:
+    if not fn.workspace and (tools & _ENTITY_TOOLS):
         raise ValueError(
-            f"app {manifest.slug!r}: layout.primary_surface 'ide' requires "
+            f"app {manifest.slug!r}: entity tools {sorted(tools & _ENTITY_TOOLS)} need "
             f"function.workspace but it is false"
+        )
+    if manifest.layout.primary_surface in ("ide", "views") and not fn.workspace:
+        raise ValueError(
+            f"app {manifest.slug!r}: layout.primary_surface "
+            f"{manifest.layout.primary_surface!r} requires function.workspace but it is false"
+        )
+    if manifest.layout.primary_surface == "views" and not manifest.layout.views:
+        raise ValueError(
+            f"app {manifest.slug!r}: layout.primary_surface 'views' needs a non-empty "
+            f"layout.views (the main-screen view files)"
         )
     # #298 Q7: a declared shared skill must exist in the registry — a typo should
     # fail the boot loud, not silently drop the skill from the index.

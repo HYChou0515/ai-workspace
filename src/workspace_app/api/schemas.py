@@ -288,11 +288,26 @@ class _EntityOut(BaseModel):
     fields: dict[str, Any]
     body: str
     diagnostics: list[_EntityDiagnostic]
+    version: str = ""  # §C6 optimistic-concurrency token — echo on update
 
 
 class _EntityListOut(BaseModel):
     entities: list[_EntityOut]
     invalid: list[_EntityOut]
+
+
+class _EntityHealthFinding(BaseModel):
+    """One parser/lint finding for the project-health view (§E3)."""
+
+    type_name: str
+    number: int
+    level: str
+    message: str
+    field: str | None = None
+
+
+class _EntityHealthOut(BaseModel):
+    findings: list[_EntityHealthFinding]
 
 
 class _EntityCreateBody(BaseModel):
@@ -301,3 +316,4 @@ class _EntityCreateBody(BaseModel):
 
 class _EntityUpdateBody(BaseModel):
     patch: dict[str, Any] = Field(default_factory=dict)
+    expected_version: str | None = None  # §C6 — reject if the record moved on

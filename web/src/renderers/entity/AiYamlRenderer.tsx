@@ -16,11 +16,16 @@
 import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
-import { useEntities, useEntityCatalog, useEntityMutations } from "../../hooks/useEntities";
+import {
+  useEntities,
+  useEntityCatalog,
+  useEntityHealth,
+  useEntityMutations,
+} from "../../hooks/useEntities";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
 import { YamlTree } from "../YamlTree";
-import { EntityViewBody, parseViewSpec } from "./EntityViews";
+import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
 
 export function AiYamlRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
@@ -33,9 +38,11 @@ export function AiYamlRenderer({ path }: { path: string }) {
   // every hook below is still called unconditionally.
   const spec = entry.status === "ready" ? parseViewSpec(entry.text) : null;
   const entityName = spec?.entity ?? "";
+  const isHealth = spec?.view === "health";
 
   const catalogQ = useEntityCatalog(slug, itemId);
   const listQ = useEntities(slug, itemId, entityName);
+  const healthQ = useEntityHealth(slug, itemId, isHealth);
   const mut = useEntityMutations(slug, itemId, entityName);
 
   if (isEditing(path)) return <TextRenderer path={path} />;
@@ -46,6 +53,10 @@ export function AiYamlRenderer({ path }: { path: string }) {
     return <div style={{ color: "var(--err)" }}>{entry.error ?? "load failed"}</div>;
   }
   if (!spec) return <YamlTree text={entry.text} />;
+
+  if (spec.view === "health") {
+    return <HealthView title={spec.title} findings={healthQ.data?.findings ?? []} />;
+  }
 
   const type = catalogQ.data?.types.find((t) => t.name === spec.entity) ?? null;
   const list = listQ.data;

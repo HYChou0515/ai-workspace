@@ -72,6 +72,16 @@ export function initialIdeCollapsed(manifest: AppManifest): boolean {
   return manifest.layout.primary_surface === "chat";
 }
 
+/** #419 §B5: the paths the workspace opens on entry as the main stage. A
+ * "views"-first App (PM) opens its declarative `layout.views` (board / gantt /
+ * roadmap …); every other App opens `default_tabs`. Both are filtered to files
+ * that exist by the caller. */
+export function mainSurfaceTabs(manifest: AppManifest): string[] {
+  const { primary_surface, views, default_tabs } = manifest.layout;
+  if (primary_surface === "views" && views && views.length > 0) return views;
+  return default_tabs;
+}
+
 /** Provider shell: owns the shared file-buffer store + dialog/confirm
  * context, then renders the workspace body inside them. */
 export function WorkspaceShell({
@@ -151,11 +161,12 @@ function ShellBody({
     { label: item.title },
   ]);
   // The initial open tabs come from the App's manifest (#89 P7b), filtered to
-  // those that actually exist — not a hardcoded RCA design-view list.
-  const defaultTabs = manifest.layout.default_tabs;
+  // those that actually exist — not a hardcoded RCA design-view list. A
+  // "views"-first App (#419 §B5) opens its `layout.views` instead of default_tabs.
+  const surfaceTabs = mainSurfaceTabs(manifest);
   const initialPaths = useMemo(
-    () => defaultTabs.filter((p) => files.some((f) => f.path === p)),
-    [defaultTabs, files],
+    () => surfaceTabs.filter((p) => files.some((f) => f.path === p)),
+    [surfaceTabs, files],
   );
   const groups = useEditorGroups(initialPaths);
   const [activityMode, setActivityMode] = useState<ActivityMode>("evidence");

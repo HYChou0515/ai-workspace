@@ -8,6 +8,7 @@ falls back to `body` and the entity drops out of any structured projection.
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any
 
 import msgspec
@@ -16,7 +17,15 @@ import yaml
 from .diagnostics import Diagnostic
 from .schema import EntitySchema, Role
 
-__all__ = ["Diagnostic", "ParsedEntity", "parse_entity", "serialize_entity"]
+__all__ = ["Diagnostic", "ParsedEntity", "content_version", "parse_entity", "serialize_entity"]
+
+
+def content_version(raw: bytes) -> str:
+    """A short, stable token identifying a record's on-disk content — the basis
+    for the optimistic version check (§C6). Any byte change flips it; the same
+    bytes always hash the same, so a reader can echo it back on update to detect
+    a concurrent edit without a stateful etag store."""
+    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 class ParsedEntity(msgspec.Struct):
@@ -25,6 +34,9 @@ class ParsedEntity(msgspec.Struct):
     fields: dict[str, Any]
     body: str
     diagnostics: list[Diagnostic]
+    version: str = ""
+    """Content-derived version of the record's file (§C6) — echo it back on
+    `update` as `expected_version` to reject a write against a stale read."""
 
     @property
     def ok(self) -> bool:
@@ -64,22 +76,23 @@ def _lint(fields: dict[str, Any], schema: EntitySchema) -> list[Diagnostic]:
 
 def parse_entity(raw: bytes, number: int, type_name: str, schema: EntitySchema) -> ParsedEntity:
     text = raw.decode("utf-8", errors="replace")
+    version = content_version(raw)
     diagnostics: list[Diagnostic] = []
     front, body = _split_frontmatter(text)
     if front is None:
         diagnostics.append(Diagnostic("error", "no frontmatter — shown as body only"))
-        return ParsedEntity(number, type_name, {}, text, diagnostics)
+        return ParsedEntity(number, type_name, {}, text, diagnostics, version)
     try:
         loaded = yaml.safe_load(front)
     except yaml.YAMLError as e:
         diagnostics.append(Diagnostic("error", f"malformed frontmatter YAML: {e}"))
-        return ParsedEntity(number, type_name, {}, text, diagnostics)
+        return ParsedEntity(number, type_name, {}, text, diagnostics, version)
     if loaded is not None and not isinstance(loaded, dict):
         diagnostics.append(Diagnostic("error", "frontmatter is not a mapping"))
-        return ParsedEntity(number, type_name, {}, text, diagnostics)
+        return ParsedEntity(number, type_name, {}, text, diagnostics, version)
     fields = {str(k): v for k, v in (loaded or {}).items()}
     diagnostics.extend(_lint(fields, schema))
-    return ParsedEntity(number, type_name, fields, body, diagnostics)
+    return ParsedEntity(number, type_name, fields, body, diagnostics, version)
 
 
 def serialize_entity(fields: dict[str, Any], body: str) -> str:

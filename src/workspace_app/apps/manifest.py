@@ -74,12 +74,20 @@ class Layout(Struct):
     # Files the workspace opens on entry (filtered to those that exist). Replaces
     # the shell's old hardcoded `designViews`.
     default_tabs: list[str] = field(default_factory=list)
-    # #159: which surface leads when an item opens. "chat" (default) makes the
-    # agent chat the main stage and tucks the file IDE behind a `Workspace`
+    # #419 §B5: the App's declarative views (`views/*.ai.yaml`) that are its main
+    # screen, ordered — so they aren't buried as files the user must hunt for.
+    # When `primary_surface` is "views" the shell opens these up front as the
+    # main-stage tabs instead of `default_tabs`. Empty for apps with no views.
+    views: list[str] = field(default_factory=list)
+    # #159 / #419: which surface leads when an item opens. "chat" (default) makes
+    # the agent chat the main stage and tucks the file IDE behind a `Workspace`
     # toggle; "ide" opens the VS Code workspace up front (RCA's evidence/brief/
-    # notebook flow). Ignored when `function.workspace` is false (no IDE to
-    # show); "ide" requires workspace=true (validated at catalog build).
-    primary_surface: Literal["chat", "ide"] = "chat"
+    # notebook flow); "views" (#419 §B5) opens the App's `layout.views` as the
+    # main stage (PM's board / gantt / roadmap). Ignored when
+    # `function.workspace` is false (no files to show); "ide"/"views" require
+    # workspace=true, and "views" requires a non-empty `views` (validated at
+    # catalog build).
+    primary_surface: Literal["chat", "ide", "views"] = "chat"
     # #200: how prominent the per-item multi-chat switcher is. "auto" (default)
     # keeps the switcher hidden until a second chat exists, so a normal App feels
     # single-chat while staying multichat-capable — a wedged chat is never a dead

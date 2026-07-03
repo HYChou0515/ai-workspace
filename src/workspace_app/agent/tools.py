@@ -6,7 +6,7 @@ import io
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import magic
 from agents import FunctionTool, RunContextWrapper, function_tool
@@ -1322,6 +1322,136 @@ async def request_wiki_update_impl(
     )
 
 
+# ── entity tools (#419) ──────────────────────────────────────────────────────
+# The agent's write path into the file-first entity framework — the same
+# `EntityStore` pipeline the quick-create UI and workflows use (permanent
+# numbering + skeleton render + lint), so an AI-authored issue/milestone is
+# indistinguishable from a UI-authored one. Schema-agnostic: `type_name` selects
+# the entity type the workspace declares under `.entity/`, so one set of tools
+# serves any app's entities.
+
+# Process-wide numbering locks, keyed `"{workspace}:{type}"` — so two entity
+# creates racing across turns on one item can't claim the same number (mirrors
+# the API's shared lock registry; single-pod serialization, §N5).
+_ENTITY_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+async def _entity_store(ctx: RunContextWrapper[AgentToolContext], type_name: str):
+    """`(store, error)` — build an `EntityStore` for this item and confirm the
+    type exists. On an unknown/absent type, `store` is None and `error` is a
+    ready-to-return message listing the declared types."""
+    from ..entity.catalog import discover_catalog
+    from ..entity.store import EntityStore
+
+    files, ws = _workspace(ctx)
+    catalog, _diags = await discover_catalog(files, ws)
+    if type_name not in catalog:
+        declared = ", ".join(catalog.names()) or "none"
+        return (
+            None,
+            f"error: unknown entity type {type_name!r} (this workspace declares: {declared})",
+        )
+    return EntityStore(files, ws, catalog, locks=_ENTITY_LOCKS), None
+
+
+def _entity_diag_suffix(entity) -> str:
+    """A trailing ` Warnings: …` note for any lint diagnostics (§C7 lint-not-block
+    — the write still lands, the agent just hears what looked off)."""
+    if not entity.diagnostics:
+        return ""
+    return " Warnings: " + "; ".join(d.message for d in entity.diagnostics)
+
+
+async def create_entity_impl(
+    ctx: RunContextWrapper[AgentToolContext], type_name: str, args: dict[str, Any]
+) -> str:
+    """Create a structured record (an issue, a milestone, …) in this workspace.
+
+    `type_name` is the record type the workspace declares (call query_entity or
+    read `.entity/` to see which). `args` fills the type's create fields by name
+    (the same fields the quick-create form shows) — e.g.
+    `{"title": "Login broken", "status": "open"}`. The record gets the next
+    permanent number automatically; reference it later by that number. Returns
+    the new record's number (and any lint warnings)."""
+    store, err = await _entity_store(ctx, type_name)
+    if store is None:
+        return err
+    from datetime import UTC, datetime
+
+    created = await store.create(
+        type_name, args, actor=ctx.context.acting_user, now=datetime.now(UTC).date().isoformat()
+    )
+    return f"Created {type_name} #{created.number}.{_entity_diag_suffix(created)}"
+
+
+async def update_entity_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    type_name: str,
+    number: int,
+    patch: dict[str, Any],
+    expected_version: str = "",
+) -> str:
+    """Change fields on an existing record. `patch` carries only the fields to
+    change (others keep their current value) — e.g. `{"status": "done"}` or
+    `{"progress": 60}`. Identify the record by its `type_name` + `number`. Pass
+    `expected_version` (the `version` query_entity reported for the record) to be
+    told, instead of silently overwriting, if the record changed since you read
+    it — then re-read and retry. Returns a confirmation (and any lint warnings)."""
+    from ..entity.store import EntityConflict
+
+    store, err = await _entity_store(ctx, type_name)
+    if store is None:
+        return err
+    try:
+        updated = await store.update(
+            type_name, number, patch, expected_version=expected_version or None
+        )
+    except FileNotFound:
+        return f"error: no {type_name} #{number} in this workspace"
+    except EntityConflict as e:
+        return f"error: {e} — re-read it with query_entity and retry"
+    return f"Updated {type_name} #{number}.{_entity_diag_suffix(updated)}"
+
+
+async def query_entity_impl(ctx: RunContextWrapper[AgentToolContext], type_name: str) -> str:
+    """List every record of a type with its fields (relational fields like
+    back-references and roll-ups are resolved for you). Use this to see what
+    exists before creating or updating. Returns JSON: `entities` (the readable
+    records) plus `invalid` (numbers of records whose file couldn't be parsed)."""
+    store, err = await _entity_store(ctx, type_name)
+    if store is None:
+        return err
+    result = await store.query(type_name)
+    payload = {
+        "entities": [
+            {"number": e.number, "version": e.version, "fields": e.fields} for e in result.entities
+        ],
+        "invalid": [e.number for e in result.invalid],
+    }
+    return json.dumps(payload, ensure_ascii=False, default=str)
+
+
+async def link_entity_impl(
+    ctx: RunContextWrapper[AgentToolContext],
+    type_name: str,
+    number: int,
+    field: str,
+    target: int,
+) -> str:
+    """Point one record's reference field at another record. E.g. attach issue #3
+    to milestone #1 with `type_name="issue", number=3, field="milestone",
+    target=1`. `field` is the reference field on `type_name`; `target` is the
+    referenced record's number. Returns a confirmation."""
+    store, err = await _entity_store(ctx, type_name)
+    if store is None:
+        return err
+    try:
+        await store.update(type_name, number, {field: target})
+    except FileNotFound:
+        return f"error: no {type_name} #{number} in this workspace"
+    return f"Linked {type_name} #{number} {field} → #{target}."
+
+
 _IMPLS = {
     "exec": exec_impl,
     "read_file": read_file_impl,
@@ -1363,6 +1493,13 @@ _IMPLS = {
     # `save_workflow` (#323) — same shape: an opt-in tool the apps that ship the
     # `author-workflow` meta-skill grant. Validates + writes a workspace workflow.json.
     "save_workflow": save_workflow_impl,
+    # #419 entity tools — the AI write path into the file-first entity framework
+    # (same EntityStore pipeline as the quick-create UI + workflows). Opt-in per
+    # app; need `function.workspace` (they touch the item's files).
+    "create_entity": create_entity_impl,
+    "update_entity": update_entity_impl,
+    "query_entity": query_entity_impl,
+    "link_entity": link_entity_impl,
 }
 
 # The RCA workspace toolset — what `build_tools(None)` hands out. It includes
@@ -1392,6 +1529,14 @@ _WORKSPACE_TOOLS = [
 _LEGACY_TOOL_RENAMES = {"ls": "list_files"}
 
 
+# Tools whose args include a free-form `dict[str, Any]` (entity `args` / `patch`):
+# a strict JSON schema forbids the `additionalProperties` such an open object
+# needs, so they build as non-strict. Entity fields are open by design (the
+# schema lives in the workspace, not the tool signature), so this is correct, not
+# a workaround.
+_NONSTRICT_TOOLS = frozenset({"create_entity", "update_entity"})
+
+
 def builtin_tool_descriptions() -> dict[str, str]:
     """Every built-in tool's registered name → its LLM-facing description (the
     impl's docstring). One source for the tool catalog (#322) so the web picker
@@ -1399,7 +1544,12 @@ def builtin_tool_descriptions() -> dict[str, str]:
     a hand-kept FE map that drifts. Package-command descriptions are read
     separately from the prebuilt bundles (``discover_packages``)."""
     return {
-        name: (function_tool(impl, name_override=name).description or "")
+        name: (
+            function_tool(
+                impl, name_override=name, strict_mode=name not in _NONSTRICT_TOOLS
+            ).description
+            or ""
+        )
         for name, impl in _IMPLS.items()
     }
 
@@ -1422,7 +1572,11 @@ def build_tools(
     # commands (#21, #25), which the runner adds separately via
     # `workspace_app.tooling.registry.build_function_tools`. The colon syntax
     # entries (`pkg:cmd`) likewise aren't built-ins and fall through here.
-    tools = [function_tool(_IMPLS[n], name_override=n) for n in names if n in _IMPLS]
+    tools = [
+        function_tool(_IMPLS[n], name_override=n, strict_mode=n not in _NONSTRICT_TOOLS)
+        for n in names
+        if n in _IMPLS
+    ]
     if app_slug is not None and profile is not None:
         from ..apps.skills import merged_profile_skills
 
