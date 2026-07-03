@@ -1,19 +1,20 @@
 /**
  * The global "待釐清" inbox (#377) — every open clarification question the digest
- * raised while reading documents. Answer a term question and it becomes a
- * context card; answer a description question and it lands on the collection's
- * clarification wiki page. Discard drops a misclassified / irrelevant one. Reads
- * + writes go through the KB api; a `client` prop lets tests inject a fake.
+ * raised while reading documents, across all collections. Answer a term question
+ * and it becomes a context card; answer a description question and it lands on
+ * the collection's clarification wiki page; discard drops a misclassified one.
+ *
+ * #415: this is the global-scope instance of the shared ReviewInbox shell — the
+ * same chrome the per-collection 待審核 tab uses (with a `collection_id` scope),
+ * rendering the shared DocQuestionRow rows.
  */
-
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 
-import { kbApi, type KbApi, type KbDocQuestion } from "../api/kb";
+import { kbApi, type KbApi } from "../api/kb";
 import { qk } from "../api/queryKeys";
-import { Btn } from "../components/Btn";
-import { Skeleton } from "../components/Skeleton";
 import { useT } from "../lib/i18n";
+import { DocQuestionRow } from "./kb/DocQuestionRow";
+import { ReviewInbox } from "./kb/ReviewInbox";
 
 export function DocQuestionsPage({ client = kbApi }: { client?: KbApi }) {
   const t = useT();
@@ -34,77 +35,21 @@ export function DocQuestionsPage({ client = kbApi }: { client?: KbApi }) {
   });
 
   return (
-    <div className="docq">
-      <header className="docq__head">
-        <h1 className="docq__title">{t("docq.title")}</h1>
-        <p className="docq__sub">{t("docq.subtitle")}</p>
-      </header>
-      {isPending ? (
-        <div data-testid="docq-loading">
-          <Skeleton style={{ height: 96 }} />
-        </div>
-      ) : items.length === 0 ? (
-        <div className="docq__empty">{t("docq.empty")}</div>
-      ) : (
-        <ul className="docq__list">
-          {items.map((q) => (
-            <QuestionRow
-              key={q.id}
-              q={q}
-              onAnswer={(a) => answerMut.mutate({ id: q.id, answer: a })}
-              onDiscard={() => discardMut.mutate(q.id)}
-            />
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-function QuestionRow({
-  q,
-  onAnswer,
-  onDiscard,
-}: {
-  q: KbDocQuestion;
-  onAnswer: (answer: string) => void;
-  onDiscard: () => void;
-}) {
-  const t = useT();
-  const [answer, setAnswer] = useState("");
-  const kindLabel = q.kind === "term" ? t("docq.kind.term") : t("docq.kind.description");
-  return (
-    <li className="docq__item">
-      <div className="docq__meta">
-        <span className="docq__kind" data-kind={q.kind}>
-          {kindLabel}
-        </span>
-        {q.kind === "term" && q.term ? <span className="docq__term">{q.term}</span> : null}
-        {q.kind === "term" && q.source_doc_ids.length > 0 ? (
-          <span className="docq__sources">
-            {t("docq.sources", { n: String(q.source_doc_ids.length) })}
-          </span>
-        ) : null}
-      </div>
-      <p className="docq__q">{q.question_text}</p>
-      {q.kind === "description" && q.quote ? (
-        <blockquote className="docq__quote">{q.quote}</blockquote>
-      ) : null}
-      <textarea
-        className="docq__input"
-        aria-label={t("docq.answer")}
-        placeholder={t("docq.answerPlaceholder")}
-        value={answer}
-        onChange={(e) => setAnswer(e.target.value)}
-      />
-      <div className="docq__actions">
-        <Btn variant="primary" size="sm" disabled={!answer.trim()} onClick={() => onAnswer(answer)}>
-          {t("docq.answer")}
-        </Btn>
-        <Btn variant="ghost" size="sm" onClick={onDiscard}>
-          {t("docq.discard")}
-        </Btn>
-      </div>
-    </li>
+    <ReviewInbox
+      title={t("docq.title")}
+      subtitle={t("docq.subtitle")}
+      isLoading={isPending}
+      isEmpty={items.length === 0}
+      emptyText={t("docq.empty")}
+    >
+      {items.map((q) => (
+        <DocQuestionRow
+          key={q.id}
+          q={q}
+          onAnswer={(a) => answerMut.mutate({ id: q.id, answer: a })}
+          onDiscard={() => discardMut.mutate(q.id)}
+        />
+      ))}
+    </ReviewInbox>
   );
 }

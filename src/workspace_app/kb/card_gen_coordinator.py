@@ -50,6 +50,7 @@ from .card_gen import (
     CardGenArtifact,
     CardGenJob,
     CardGenPayload,
+    CardGenRunSummary,
     CardGenUnit,
     CommitResult,
     DocDigest,
@@ -58,6 +59,7 @@ from .card_gen import (
     merge_drafts,
 )
 from .card_gen_run import CardGenRunStore
+from .card_gen_sources import CardGenSources
 from .context_cards import cards_with_ids_for_collections, derive_norm_keys
 from .doc_questions import (
     add_description_question,
@@ -65,7 +67,6 @@ from .doc_questions import (
     plan_doc_questions,
 )
 from .job_audit import preserve_job_creator
-from .wiki.sources import SpecstarWikiSources
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -79,6 +80,9 @@ _RUN_STATUS = {
     "running": TaskStatus.PROCESSING,
     "done": TaskStatus.COMPLETED,
     "error": TaskStatus.FAILED,
+    # #415 review-resolution terminals — both are past COMPLETED to the poller.
+    "committed": TaskStatus.COMPLETED,
+    "dismissed": TaskStatus.COMPLETED,
 }
 
 
@@ -196,8 +200,8 @@ class CardGenCoordinator:
         generation falls back to a create. Proposals the reviewer didn't accept —
         and any with no usable key — are skipped. Returns the tallies."""
         run = self._runs.get(run_id)
-        if run is None:
-            return CommitResult()
+        if run is None or run.status != "done":
+            return CommitResult()  # gone, or already reviewed — no double card-write
         cid = run.collection_id
         cardrm = self._spec.get_resource_manager(ContextCard)
         result = CommitResult()
@@ -222,7 +226,24 @@ class CardGenCoordinator:
                     # New card — or the update target vanished since generation.
                     cardrm.create(card)
                     result.created += 1
+        # #415: the run is reviewed — resolve it out of the 待審核 queue.
+        self._runs.mark_committed(run_id)
         return result
+
+    def dismiss(self, run_id: str) -> None:
+        """#415: discard a run's proposals without writing any card — it leaves the
+        待審核 queue (status ``dismissed``)."""
+        self._runs.mark_dismissed(run_id)
+
+    def pending_runs(self, collection_id: str) -> list[CardGenRunSummary]:
+        """The collection's finalized-but-unreviewed runs — the 待審核 queue rows
+        (#415), newest first. The FE lazy-loads each run's proposals on expand."""
+        return [
+            CardGenRunSummary(
+                run_id=rid, collection_id=collection_id, proposal_count=len(run.proposals)
+            )
+            for rid, run in self._runs.pending_for_collection(collection_id)
+        ]
 
     # ── consume (handler — runs in the queue's consumer thread) ──────
     def _handle(self, job) -> None:  # job: Resource[CardGenJob]
@@ -246,7 +267,7 @@ class CardGenCoordinator:
         run_id, cid, doc_ids = payload.run_id, payload.collection_id, payload.doc_ids
         self._runs.begin(run_id)
         if len(doc_ids) <= 1:
-            sources = SpecstarWikiSources(self._spec, cid)
+            sources = CardGenSources(self._spec, cid)
             for doc_index, doc_id in enumerate(doc_ids):
                 self._process_one(run_id, doc_index, doc_id, sources)
             self._finalize(run_id)
@@ -278,13 +299,13 @@ class CardGenCoordinator:
         if run is None:
             return  # run cascaded away (collection deleted between split and run)
         doc_id = run.doc_ids[payload.doc_index]
-        sources = SpecstarWikiSources(self._spec, payload.collection_id)
+        sources = CardGenSources(self._spec, payload.collection_id)
         self._process_one(payload.run_id, payload.doc_index, doc_id, sources)
         if self._runs.claim_finalize(payload.run_id):
             self._enqueue_finalize(payload.run_id, payload.collection_id, requester)
 
     def _process_one(
-        self, run_id: str, doc_index: int, doc_id: str, sources: SpecstarWikiSources
+        self, run_id: str, doc_index: int, doc_id: str, sources: CardGenSources
     ) -> None:
         """Digest one document and record its outcome on the run. A deleted doc is
         digested to nothing (``done``, not a failure — matches the pre-fan-out

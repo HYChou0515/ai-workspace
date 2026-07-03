@@ -181,7 +181,6 @@ export function ContextCardsTab({
             collectionId={collectionId}
             client={client}
             onClose={() => setShowAutoGen(false)}
-            onCommitted={() => invalidate()}
           />
         )}
         <ul className="kb-cards__items">

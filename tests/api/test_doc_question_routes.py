@@ -40,6 +40,22 @@ def test_list_returns_the_open_questions():
     assert item["question_text"] == "What is M4?"
 
 
+def test_list_scopes_to_a_collection_with_the_query_param():
+    """#415: `?collection_id=` narrows the inbox to one collection's questions."""
+    spec = make_spec(default_user="u")
+    a, b = _collection(spec), _collection(spec)
+    qa = open_or_merge_term_question(
+        spec, collection_id=a, term="M4", source_doc_id="d1", question_text="?"
+    )
+    open_or_merge_term_question(
+        spec, collection_id=b, term="M5", source_doc_id="d1", question_text="?"
+    )
+    client = _client(spec)
+    assert len(client.get("/kb/doc-questions").json()) == 2  # global inbox
+    scoped = client.get("/kb/doc-questions", params={"collection_id": a}).json()
+    assert [q["id"] for q in scoped] == [qa]
+
+
 def test_answering_a_term_question_creates_a_card_and_resolves_it():
     spec = make_spec(default_user="u")
     cid = _collection(spec)

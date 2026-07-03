@@ -8,6 +8,7 @@ tested separately against a fake ``ILlm``.
 
 from __future__ import annotations
 
+import msgspec
 from specstar import QB
 from specstar.types import Binary, TaskStatus
 
@@ -18,10 +19,12 @@ from workspace_app.kb.card_gen import (
     TermQuestionDraft,
 )
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
+from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.doc_questions import open_questions_for_collections
-from workspace_app.resources import Collection, ContextCard, SourceDoc, make_spec
+from workspace_app.kb.wiki.store import _rid
+from workspace_app.resources import Collection, ContextCard, SourceDoc, WikiPage, make_spec
 
 
 def _add_source(spec, collection_id: str, path: str, text: str) -> str:
@@ -38,6 +41,17 @@ def _add_source(spec, collection_id: str, path: str, text: str) -> str:
         resource_id=encode_doc_id(collection_id, path),
     )
     return rev.resource_id
+
+
+def _add_wiki(spec, collection_id: str, path: str, text: str) -> str:
+    """An LLM wiki page with its real ``_rid`` id — what the picker submits when a
+    reviewer picks a wiki page as a card-gen source (#415)."""
+    rm = spec.get_resource_manager(WikiPage)
+    rm.create(
+        WikiPage(collection_id=collection_id, path=path, content=Binary(data=text.encode())),
+        resource_id=_rid(collection_id, path),
+    )
+    return _rid(collection_id, path)
 
 
 def _add_card(spec, collection_id: str, keys: list[str], body: str = "") -> str:
@@ -132,6 +146,120 @@ async def test_generates_a_new_card_proposal_from_a_document():
     assert p.provenance[0].path == "spec.md"
     assert p.provenance[0].doc_id == doc
     assert p.provenance[0].snippet == "The reflow zone uses RZ3 heating."
+
+
+def _cards(spec, cid: str):
+    rm = spec.get_resource_manager(ContextCard)
+    return rm.list_resources((QB["collection_id"] == cid).build())
+
+
+async def test_a_finalized_run_is_listed_for_review_then_leaves_the_queue_on_commit():
+    """#415: once finalized, a run is a 'done' item in the collection's 待審核
+    queue; committing its accepted proposals writes cards and resolves the run
+    (status 'committed') so it drops out of the queue."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    pending = coord.pending_runs(cid)
+    assert [s.run_id for s in pending] == [jid]
+    assert pending[0].proposal_count == 1
+
+    accepted = [
+        msgspec.structs.replace(p, decision="accepted") for p in coord.proposals(jid).proposals
+    ]
+    coord.save_review(jid, accepted)
+    coord.commit(jid)
+
+    assert coord.pending_runs(cid) == []
+    assert len(_cards(spec, cid)) == 1
+
+
+async def test_dismiss_removes_a_run_from_review_without_writing_cards():
+    """#415: dismissing a run resolves it (status 'dismissed') so it leaves the
+    queue, and writes no cards."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 body")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert coord.pending_runs(cid)
+    coord.dismiss(jid)
+    assert coord.pending_runs(cid) == []
+    assert _cards(spec, cid) == []
+
+
+async def test_review_resolution_is_idempotent():
+    """Resolving a run is a one-way, at-most-once transition (#415): once
+    committed, a re-commit writes no second card and a later dismiss can't yank
+    it back — both are no-ops from a non-``done`` state."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    accepted = [
+        msgspec.structs.replace(p, decision="accepted") for p in coord.proposals(jid).proposals
+    ]
+    coord.save_review(jid, accepted)
+    coord.commit(jid)  # done → committed, writes one card
+    coord.commit(jid)  # committed run: guarded no-op, no second card
+    coord.dismiss(jid)  # committed run: mark_dismissed is a no-op (not 'done')
+
+    assert len(_cards(spec, cid)) == 1
+    assert coord.pending_runs(cid) == []
+
+
+async def test_pending_runs_are_scoped_to_their_collection():
+    """The 待審核 queue shows only THIS collection's runs (#415)."""
+    spec = make_spec(default_user="u")
+    c1, c2 = _collection(spec), _collection(spec)
+    d1 = _add_source(spec, c1, "a.md", "RZ3 body")
+    d2 = _add_source(spec, c2, "b.md", "RZ4 body")
+    drafter = _FakeDrafter(
+        {
+            "a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")],
+            "b.md": [CardDraft(keys=["RZ4"], title="RZ4", snippet="s")],
+        }
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    j1 = coord.enqueue(c1, [d1])
+    coord.enqueue(c2, [d2])
+    await coord.aclose()
+
+    assert [s.run_id for s in coord.pending_runs(c1)] == [j1]
+
+
+async def test_a_selected_wiki_page_is_read_and_drafted_like_a_document():
+    """#415: the picker can pick an LLM wiki page as a source. It's submitted with
+    the ``wiki:`` type-tag (so a same-path doc stays distinct), so
+    ``CardGenSources`` reads the page markdown and it drafts a card cited by the
+    page path — mixed into the same ``doc_ids``."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    tagged_id = WIKI_ID_PREFIX + _add_wiki(spec, cid, "/index.md", "RZ3 is the third reflow zone.")
+    drafter = _FakeDrafter(
+        {"/index.md": [CardDraft(keys=["RZ3"], title="RZ3", body="Third zone.", snippet="RZ3…")]}
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    jid = coord.enqueue(cid, [tagged_id])
+    await coord.aclose()
+
+    art = coord.proposals(jid)
+    assert len(art.proposals) == 1
+    assert art.proposals[0].keys == ["RZ3"]
+    assert art.proposals[0].provenance[0].path == "/index.md"
+    assert art.proposals[0].provenance[0].doc_id == tagged_id
 
 
 async def test_a_draft_already_fully_covered_by_an_existing_card_is_skipped():

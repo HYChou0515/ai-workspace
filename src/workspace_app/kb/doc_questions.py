@@ -123,15 +123,19 @@ def open_questions_for_collections(
     return out
 
 
-def list_open_questions(spec: SpecStar) -> list[tuple[str, DocQuestion]]:
-    """Every ``open`` question across ALL collections — the global inbox's rows,
-    each with its id. One indexed ``status`` query, no scan. (Per-collection
-    scoping arrives with ACL; until then the inbox is shared, #377 Q13.)"""
+def list_open_questions(
+    spec: SpecStar, *, collection_id: str | None = None
+) -> list[tuple[str, DocQuestion]]:
+    """Every ``open`` question, each with its id — the inbox's rows. One indexed
+    ``status`` query, no scan. ``collection_id`` scopes it to a single
+    collection (the 待審核 tab, #415); omitted → the global "待釐清" inbox (#377)."""
     rm = spec.get_resource_manager(DocQuestion)
     out: list[tuple[str, DocQuestion]] = []
     for r in rm.list_resources((QB["status"] == "open").build()):
         data = r.data
         assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
+        if collection_id is not None and data.collection_id != collection_id:
+            continue
         out.append((r.info.resource_id, data))  # ty: ignore[unresolved-attribute]
     return out
 

@@ -26,9 +26,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from datetime import datetime
 
 import msgspec
-from specstar import SpecStar
+from specstar import QB, SpecStar
 from specstar.types import PreconditionFailedError, ResourceIDNotFoundError, RevisionStatus
 
 from .card_gen import CardGenRun, ProposedCard
@@ -114,6 +115,32 @@ class CardGenRunStore:
         — this is what flips the FE from PROCESSING to COMPLETED / FAILED."""
         self._cas(run_id, lambda run: msgspec.structs.replace(run, status=status))
 
+    # ── review resolution (#415: leave the 待審核 queue) ──────────────
+    def mark_committed(self, run_id: str) -> None:
+        """Resolve a reviewed run as ``committed`` — its accepted proposals were
+        written to cards, so it drops out of the review queue. Idempotent: only a
+        finalized (``done``) run resolves; re-committing is a no-op."""
+        self._cas(run_id, lambda run: _resolve(run, "committed"))
+
+    def mark_dismissed(self, run_id: str) -> None:
+        """Resolve a run as ``dismissed`` — the reviewer discarded its proposals;
+        it leaves the queue without writing cards. Idempotent (only from ``done``)."""
+        self._cas(run_id, lambda run: _resolve(run, "dismissed"))
+
+    def pending_for_collection(self, collection_id: str) -> list[tuple[str, CardGenRun]]:
+        """The collection's runs finalized and awaiting review — the 待審核 queue
+        (#415), newest first. Queries the indexed ``done`` status (bounded: only
+        unreviewed runs), then filters to the collection."""
+        rows: list[tuple[str, datetime, CardGenRun]] = []
+        for r in self._rm.list_resources((QB["status"] == "done").build()):
+            d = r.data
+            assert isinstance(d, CardGenRun)  # rm is CardGenRun-typed; narrows for ty
+            if d.collection_id != collection_id:
+                continue
+            rows.append((r.info.resource_id, r.info.created_time, d))  # ty: ignore[unresolved-attribute]
+        rows.sort(key=lambda t: t[1], reverse=True)  # newest first
+        return [(rid, d) for rid, _ct, d in rows]
+
     # ── machinery ────────────────────────────────────────────────────
     def _cas(
         self, run_id: str, mutate: Callable[[CardGenRun], CardGenRun | None]
@@ -150,6 +177,15 @@ def _to_running(run: CardGenRun) -> CardGenRun | None:
     if run.status != "pending":
         return None
     return msgspec.structs.replace(run, status="running")
+
+
+def _resolve(run: CardGenRun, status: str) -> CardGenRun | None:
+    """Resolve a finalized run to a terminal review state (``committed`` /
+    ``dismissed``). Only a ``done`` run resolves, so a double-commit / dismiss is
+    an idempotent no-op (and a still-running run is never yanked out)."""
+    if run.status != "done":
+        return None
+    return msgspec.structs.replace(run, status=status)
 
 
 def _with_index(run: CardGenRun, field_name: str, doc_index: int) -> CardGenRun | None:

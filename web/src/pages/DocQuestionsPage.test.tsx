@@ -53,14 +53,14 @@ describe("DocQuestionsPage (#377)", () => {
       getDocQuestions: () => new Promise<KbDocQuestion[]>(() => {}),
     } as typeof mockKbApi;
     renderWithQuery(<DocQuestionsPage client={client} />);
-    expect(screen.getByTestId("docq-loading")).toBeInTheDocument();
+    expect(screen.getByTestId("review-loading")).toBeInTheDocument();
     expect(screen.queryByText(/沒有待釐清/)).not.toBeInTheDocument();
   });
 
   it("shows the empty copy once the inbox resolves with no open questions", async () => {
     renderWithQuery(<DocQuestionsPage client={clientWith([])} />);
     expect(await screen.findByText(/沒有待釐清/)).toBeInTheDocument();
-    expect(screen.queryByTestId("docq-loading")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("review-loading")).not.toBeInTheDocument();
   });
 
   it("lists a term question with its term and how many documents raised it", async () => {

@@ -123,6 +123,14 @@ export function useFileService(): FileService {
   return svc;
 }
 
+/** The service in context, or `null` when there's no provider. The read-only
+ * FileTree select mode (the card-gen picker, #415) runs without a writable
+ * service — it feeds its own file list and never mutates — so it reads the
+ * service optionally and falls back to a no-caps shell. */
+export function useOptionalFileService(): FileService | null {
+  return useContext(FileServiceContext);
+}
+
 // ── derived hooks (read from whichever service is in context) ──────────────
 type FileListState =
   | { kind: "loading" }
