@@ -1,0 +1,85 @@
+"""`EntityStore` — the single write/read path for entities (#419 §C).
+
+The one interface the UI, the agent tools, and workflows all call. `create`
+allocates the permanent number, renders the skeleton, and writes the file;
+`get`/`query` scan-and-parse (no index — §S2). Numbering is serialized per
+(item, type) by an in-process lock (single-pod guarantee — N5).
+"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import Any
+
+import msgspec
+
+from ..filestore.protocol import FileStore
+from .catalog import EntityCatalog
+from .numbering import allocate
+from .parser import ParsedEntity, parse_entity, serialize_entity
+from .skeleton import render_skeleton
+
+
+class QueryResult(msgspec.Struct):
+    entities: list[ParsedEntity]
+    """Records that parsed cleanly — the projection the views render."""
+    invalid: list[ParsedEntity]
+    """Records dropped from the projection (an `error` diagnostic), kept so the
+    project-health view can list them (§E)."""
+
+
+def _record_number(path: str) -> int | None:
+    stem = path.rsplit("/", 1)[-1].removesuffix(".md")
+    return int(stem) if stem.isdigit() and path.endswith(".md") else None
+
+
+class EntityStore:
+    def __init__(self, filestore: FileStore, workspace_id: str, catalog: EntityCatalog) -> None:
+        self._fs = filestore
+        self._ws = workspace_id
+        self._catalog = catalog
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _record_path(self, records_path: str, number: int) -> str:
+        return f"/{records_path}/{number}.md"
+
+    async def create(
+        self, type_name: str, args: dict[str, Any], *, actor: str = "", now: str = ""
+    ) -> ParsedEntity:
+        entity_type = self._catalog.get(type_name)
+        lock = self._locks.setdefault(type_name, asyncio.Lock())
+        async with lock:
+            number = await allocate(self._fs, self._ws, entity_type.records_path)
+            text = render_skeleton(entity_type.skeleton, args, number=number, now=now, actor=actor)
+            await self._fs.write(
+                self._ws, self._record_path(entity_type.records_path, number), text.encode()
+            )
+        return parse_entity(text.encode(), number, type_name, entity_type.schema)
+
+    async def get(self, type_name: str, number: int) -> ParsedEntity:
+        entity_type = self._catalog.get(type_name)
+        raw = await self._fs.read(self._ws, self._record_path(entity_type.records_path, number))
+        return parse_entity(raw, number, type_name, entity_type.schema)
+
+    async def update(self, type_name: str, number: int, patch: dict[str, Any]) -> ParsedEntity:
+        entity_type = self._catalog.get(type_name)
+        path = self._record_path(entity_type.records_path, number)
+        current = parse_entity(
+            await self._fs.read(self._ws, path), number, type_name, entity_type.schema
+        )
+        text = serialize_entity({**current.fields, **patch}, current.body)
+        await self._fs.write(self._ws, path, text.encode())
+        return parse_entity(text.encode(), number, type_name, entity_type.schema)
+
+    async def query(self, type_name: str) -> QueryResult:
+        entity_type = self._catalog.get(type_name)
+        paths = await self._fs.ls(self._ws, prefix=f"/{entity_type.records_path}/")
+        numbered = sorted((n, p) for p in paths if (n := _record_number(p)) is not None)
+        parsed = [
+            parse_entity(await self._fs.read(self._ws, path), number, type_name, entity_type.schema)
+            for number, path in numbered
+        ]
+        return QueryResult(
+            entities=[e for e in parsed if e.ok],
+            invalid=[e for e in parsed if not e.ok],
+        )
