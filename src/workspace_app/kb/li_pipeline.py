@@ -22,7 +22,7 @@ from llama_index.core.node_parser import (
 )
 from llama_index.core.schema import BaseNode, TextNode, TransformComponent
 
-from .code_lang import code_language_for
+from .code_lang import code_language_for, symbol_path
 from .embedder import Embedder
 from .markdown_table import find_markdown_tables, row_as_col_value
 
@@ -157,13 +157,31 @@ class DispatchSplitter(TransformComponent):
         return out
 
     def _split_code(self, node: BaseNode, language: str) -> list[BaseNode]:
-        """Run LI's tree-sitter `CodeSplitter` for `language`, instantiating
-        on first use and caching per-instance."""
+        """Run LI's tree-sitter `CodeSplitter` for `language` (instantiated on
+        first use, cached per-instance), then prepend a `path > Class > func`
+        breadcrumb to each chunk (issue #389).
+
+        A raw code chunk embeds poorly — the file path and the enclosing symbol
+        chain are the strongest retrieval signals, and they're exactly what a
+        char-window loses. The breadcrumb is folded into `text` (what the
+        embedder + BM25 see) while the char span keeps pointing at the
+        breadcrumb-free code, so citations still slice the canonical source —
+        the same contract as the Markdown heading / outline-section folds."""
         splitter = self.code_splitters.get(language)
         if splitter is None:
             splitter = CodeSplitter(language=language)
             self.code_splitters[language] = splitter
-        return splitter.get_nodes_from_documents([node])
+        chunks = splitter.get_nodes_from_documents([node])
+        source = node.get_content()
+        path = str(node.metadata.get("filename", "")).strip()
+        for n in chunks:
+            if not isinstance(n, TextNode):  # pragma: no cover — CodeSplitter emits TextNodes
+                continue
+            symbols = symbol_path(language, source, n.start_char_idx or 0)
+            crumb = " > ".join([p for p in (path, *symbols) if p])
+            if crumb:
+                n.text = f"{crumb}\n\n{n.get_content()}"
+        return chunks
 
 
 def _fold_section(node: BaseNode) -> None:

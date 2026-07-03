@@ -63,10 +63,11 @@ def test_dispatch_splitter_routes_python_to_code_splitter(spec: SpecStar, embedd
     ids = ingestor.ingest(collection_id=cid, user="alice", filename="auth.py", data=py_src.encode())
     chunks = _chunks_of(spec, ids[0])
     assert len(chunks) >= 2, "CodeSplitter should produce multiple chunks for a multi-function file"
-    # Chunks land at function/class boundaries — text starts at a `def` or
-    # `class` line (not mid-statement like SentenceSplitter would).
-    starts = [c.text.lstrip()[:5] for c in chunks]
-    assert any(s.startswith(("def", "class")) for s in starts), starts
+    # Chunks land at function/class boundaries — the code body (after the #389
+    # `path > symbol` breadcrumb) starts at a `def`/`class` line, not
+    # mid-statement like SentenceSplitter would.
+    bodies = [c.text.split("\n\n", 1)[-1].lstrip()[:5] for c in chunks]
+    assert any(b.startswith(("def", "class")) for b in bodies), bodies
 
 
 def test_dispatch_splitter_routes_non_starter_languages_to_code_splitter():
@@ -85,8 +86,42 @@ def test_dispatch_splitter_routes_non_starter_languages_to_code_splitter():
     doc = Document(text=go_src, metadata={"filename": "svc.go", "mime": "text/x-c"})
     nodes = DispatchSplitter()([doc])
     assert len(nodes) >= 2, "CodeSplitter should split a large multi-function .go file"
-    # Boundaries land on `func` declarations — SentenceSplitter would cut mid-line.
-    assert any(n.get_content().lstrip().startswith("func") for n in nodes)
+    # Went through the code path (every chunk leads with the path breadcrumb)…
+    assert all(n.get_content().startswith("svc.go") for n in nodes)
+    # …and boundaries land on `func` declarations — SentenceSplitter would cut
+    # mid-line and never produce these definitions intact.
+    assert any("func Handler" in n.get_content() for n in nodes)
+
+
+def test_code_chunks_carry_path_and_symbol_breadcrumb_span_excludes_it():
+    """Issue #389: each code chunk's embedded text leads with a
+    `path > Class > method` breadcrumb (the strongest retrieval signal a raw
+    char-window loses), yet its char span still points at the breadcrumb-free
+    source so citations resolve — same contract as the Markdown/section folds."""
+    from llama_index.core.schema import Document
+
+    from workspace_app.kb.li_pipeline import DispatchSplitter
+
+    src = (
+        "class Validator:\n"
+        + "".join(
+            f"    def check_{i}(self, payload):\n"
+            f"        # rule {i}\n"
+            f"        return payload.get('k{i}') is not None\n\n"
+            for i in range(40)
+        )
+    )
+    doc = Document(text=src, metadata={"filename": "kb/auth.py", "mime": "text/x-script.python"})
+    nodes = DispatchSplitter()([doc])
+    assert len(nodes) >= 2
+    # A chunk inside the class carries path + enclosing symbols as a prefix…
+    crumbed = [n for n in nodes if n.get_content().startswith("kb/auth.py > Validator")]
+    assert crumbed, [n.get_content()[:40] for n in nodes]
+    # …and every code chunk at least leads with the file path.
+    assert all(n.get_content().startswith("kb/auth.py") for n in nodes)
+    # The char span excludes the breadcrumb — it re-slices to real source code.
+    for n in nodes:
+        assert "kb/auth.py" not in src[n.start_char_idx : n.end_char_idx]
 
 
 def test_ingest_previously_dropped_language_produces_code_chunks(

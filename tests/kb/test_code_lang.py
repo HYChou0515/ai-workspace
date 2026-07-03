@@ -67,3 +67,41 @@ def test_every_language_grammar_actually_loads():
 
     for lang in set(LANG_BY_EXT.values()):
         get_parser(lang)  # raises on an unknown grammar name
+
+
+# ── symbol_path: the generic tree-sitter breadcrumb (#389 P2) ──
+
+
+def test_symbol_path_walks_class_then_method_python():
+    from workspace_app.kb.code_lang import symbol_path
+
+    src = "class Validator:\n    def validate(self, payload):\n        return payload is not None\n"
+    off = src.index("return payload")
+    assert symbol_path("python", src, off) == ["Validator", "validate"]
+
+
+def test_symbol_path_generic_across_languages():
+    """The ancestor-walk is grammar-agnostic: it works for languages that were
+    never in the old 5-language set, and for name shapes without a `name`
+    field (rust `impl`, ruby `class`)."""
+    from workspace_app.kb.code_lang import symbol_path
+
+    go = "package main\nfunc Handler(x int) int {\n\treturn x + 1\n}\n"
+    assert symbol_path("go", go, go.index("return x")) == ["Handler"]
+
+    rust = "impl Repo {\n    fn find(&self) -> i32 {\n        42\n    }\n}\n"
+    assert symbol_path("rust", rust, rust.index("42")) == ["Repo", "find"]
+
+    ruby = "class Widget\n  def render\n    draw\n  end\nend\n"
+    assert symbol_path("ruby", ruby, ruby.index("draw")) == ["Widget", "render"]
+
+
+def test_symbol_path_empty_at_top_level_and_on_unparsable():
+    """Module-level code (between defs) has no enclosing symbol → []. An
+    unknown/unparsable grammar degrades to [] rather than raising."""
+    from workspace_app.kb.code_lang import symbol_path
+
+    src = "import os\n\ndef f():\n    pass\n"
+    assert symbol_path("python", src, src.index("import os")) == []
+    # A grammar name that isn't in the pack → degrade, never raise.
+    assert symbol_path("no_such_language", "whatever", 0) == []
