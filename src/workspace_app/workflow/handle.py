@@ -54,6 +54,11 @@ FindCardCapability = Callable[[str, list[str], str], Awaitable[dict[str, Any] | 
 # path, and returns where the caller files it (``None`` for an unreadable binary → skip).
 # Wired by the driver; faked in tests.
 ConvertCapability = Callable[[str, str], Awaitable[tuple[str | None, str]]]
+# The one-shot LLM classifier backing ``create_entity``'s M1-AI cross-origin dedup (#435
+# P3): prompt -> the model's text answer. Wired by the driver over the workflow's ILlm
+# (streamed under the hood); tests inject a fake. ``None`` ⇒ no cross-origin AI dedup
+# (journal-first self-dedup still works) — so it is inert until wired + live-checked (P6).
+AskLlm = Callable[[str], Awaitable[str]]
 
 
 def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
@@ -93,6 +98,7 @@ class WorkflowHandle:
         collection_checker: CollectionChecker | None = None,
         upsert_card: UpsertCardCapability | None = None,
         find_card: FindCardCapability | None = None,
+        ask_llm: AskLlm | None = None,
         credential: str = "",
         step_timeout_s: float | None = None,
     ) -> None:
@@ -133,6 +139,10 @@ class WorkflowHandle:
         """Wired by the orchestration driver — the read-only ``find_overwrite_target``
         capability (#205) backing the review "before" snapshot. None ⇒ no existing card
         is ever found (a fresh workspace), so the snapshot is empty."""
+        self.ask_llm = ask_llm
+        """Wired by the orchestration driver — the one-shot LLM classifier backing
+        ``create_entity``'s M1-AI cross-origin dedup (#435 P3). None ⇒ no cross-origin AI
+        match (journal-first self-dedup still works)."""
         self.credential = credential
         """The run-scoped credential (manual §15) — injected into a deterministic
         node's sandbox env so its script can auth capability HTTP calls. "" until
@@ -242,6 +252,12 @@ class WorkflowHandle:
 
         from ..entity.catalog import discover_catalog
         from ..entity.store import EntityConflict, EntityStore
+        from .entity_dedup import (
+            match_prompt,
+            parse_match,
+            render_contribution,
+            replace_fenced_block,
+        )
         from .nonidempotent import Result, Verdict, run_nonidempotent
 
         catalog, _diags = await discover_catalog(self._store, self._workspace_id)
@@ -260,17 +276,60 @@ class WorkflowHandle:
             alive = await self._store.exists(self._workspace_id, f"/{records_path}/{number}.md")
             return number if alive else None
 
+        async def _cross_match() -> int | None:
+            """M1-AI cross-origin dedup (决议2/8): does this new entity correspond to one
+            an OTHER origin already filed? Reversible act only (a non-destructive enrich),
+            so fail-open — any AI failure/hallucination → NEW (``None``). Inert when no
+            LLM is wired."""
+            if self.ask_llm is None:
+                return None
+            existing = (await store.query(type_name)).entities
+            candidates = [
+                {"number": e.number, "title": e.fields.get("title", "")} for e in existing
+            ]
+            if not candidates:
+                return None
+            try:
+                answer = await self.ask_llm(match_prompt(dict(args), candidates))
+            except Exception:  # noqa: BLE001 — fail-open (决议8): any AI failure → NEW
+                return None
+            return parse_match(answer, [c["number"] for c in candidates])
+
         async def decide(_feedback: str | None) -> Verdict:
             remembered = await _remembered_alive()  # journal-first self-dedup (决议2)
             if remembered is not None:
                 return Verdict(kind="duplicate", payload={"of": remembered, "origin": "self"})
+            matched = await _cross_match()  # M1-AI cross-origin (决议2, P3)
+            if matched is not None:
+                return Verdict(kind="duplicate", payload={"of": matched, "origin": "cross"})
             return Verdict(kind="new")
+
+        async def _cross_merge(number: int) -> None:
+            """Enrich an OTHER origin's entity non-destructively (决议3/5): fill only empty
+            frontmatter fields (never overwrite a human's non-empty value) and overwrite
+            the workflow-owned fenced block in the body (idempotent — no accumulation)."""
+            current = await store.get(type_name, number)
+            patch = {k: v for k, v in args.items() if not current.fields.get(k)}
+            new_body = replace_fenced_block(
+                current.body, name, render_contribution(name, dict(args))
+            )
+            try:
+                await store.update(
+                    type_name, number, patch, expected_version=current.version, body=new_body
+                )
+            except EntityConflict as exc:
+                raise StepFailed(str(exc)) from exc
 
         async def act(verdict: Verdict) -> Result:
             if verdict.kind == "duplicate":
                 number = int(verdict.payload["of"])
                 if on_duplicate == "skip":
                     return Result(fields={"number": number, "created": False, "action": "skip"})
+                if verdict.payload.get("origin") == "cross":  # someone else's entity — enrich
+                    await _cross_merge(number)
+                    return Result(
+                        fields={"number": number, "created": False, "action": "cross-merge"}
+                    )
                 current = await store.get(type_name, number)
                 try:  # self-merge overlays the declared fields; CAS guards a racing edit
                     await store.update(
