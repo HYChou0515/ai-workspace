@@ -1,6 +1,43 @@
 """The WorkflowHandle file/IO surface (manual §3) — json round-trip + glob."""
 
+from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.workflow.handle import WorkflowHandle
+
+
+async def test_sub_handle_gives_each_element_its_own_turn_lane() -> None:
+    """`wf.sub_handle(k)` yields a child that SHARES the workspace + journal but drives
+    its agent turns on a DISTINCT turn lane, so N map elements' turns don't serialize
+    behind one ChatTurnEngine key (#429 P5). Without a wired factory it degrades to the
+    parent's lane (serialized) — safe default."""
+    store = MemoryFileStore()
+    wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm")
+
+    # no factory wired → the child shares the parent's drive_turn (graceful degrade)
+    async def parent_turn(prompt, tools):
+        return "p"
+
+    wf.drive_turn = parent_turn
+    assert wf.sub_handle("a").drive_turn is parent_turn
+
+    # a wired factory binds a distinct lane per subkey
+    seen: list[str] = []
+
+    def factory(subkey: str):
+        async def drive(prompt, tools):
+            seen.append(subkey)
+            return "ok"
+
+        return drive
+
+    wf.sub_turn = factory
+    a, b = wf.sub_handle("a"), wf.sub_handle("b")
+    assert a.drive_turn is not b.drive_turn  # distinct lanes → concurrent
+    assert a.journal_dir == wf.journal_dir  # shared journal/workspace
+    await a.write("/shared.txt", "x")
+    assert await wf.read_text("/shared.txt") == "x"  # writes land in the same workspace
+    await a.drive_turn("p", None)
+    await b.drive_turn("p", None)
+    assert seen == ["a", "b"]
 
 
 async def test_read_write_json_and_text_round_trip(wf: WorkflowHandle):

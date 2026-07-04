@@ -165,6 +165,11 @@ class MapStep(Struct, tag="map", forbid_unknown_fields=True):
     # when more than one declares ``outputs``.
     name: str = ""
     collect: str = ""
+    # #429 P5: the author's requested parallelism for this map. The EFFECTIVE cap is
+    # ``min(request, wf.turn_concurrency)`` — a REQUEST throttled by the model backend's
+    # real concurrency (a single local model → ~1), not a guarantee. 0 ⇒ use the backend
+    # ceiling (or the engine default when unset).
+    concurrency: int = 0
 
 
 class SwitchStep(Struct, tag="switch", forbid_unknown_fields=True):
@@ -425,6 +430,21 @@ def _keyed_list(step: MapStep, items: list[Any]) -> list[tuple[Any, str]]:
     return elements
 
 
+_DEFAULT_MAP_CONCURRENCY = 8  # the engine default when neither author nor backend sets one
+
+
+def _map_concurrency(step: MapStep, wf: WorkflowHandle) -> int:
+    """The effective parallel-turn cap for a map (#429 P5): the author's ``concurrency``
+    request (or the backend/engine default when unset), throttled by the model backend's
+    real concurrency (``wf.turn_concurrency``). ``min(request, backend)`` — a REQUEST, not
+    a guarantee: a single local model (backend ≈ 1) degrades a ``concurrency: 8`` map to
+    serial without touching the workflow, while a hosted pool lets it run wide."""
+    request = step.concurrency or wf.turn_concurrency or _DEFAULT_MAP_CONCURRENCY
+    if wf.turn_concurrency is not None:
+        return min(request, wf.turn_concurrency)
+    return request
+
+
 async def _map_elements(
     step: MapStep, ns: dict[str, Any], wf: WorkflowHandle
 ) -> list[tuple[Any, str]]:
@@ -609,10 +629,14 @@ async def _exec_step(
             value, ekey = elem
             # #428 §1.1: an inner ``{steps.x.f}`` resolves at this element's key.
             sub = {**ns, step.as_: value, "__key__": ekey}
+            # #429 P5: run the element's steps on a per-element sub-handle so its agent
+            # turn drives its OWN turn lane (real parallel) instead of serializing; the
+            # sub-handle shares the workspace + journal, so artifacts land unchanged.
+            ewf = wf.sub_handle(ekey)
             for inner in step.do:
-                await _exec_step(wf, inner, sub, ekey, failures)
+                await _exec_step(ewf, inner, sub, ekey, failures)
 
-        failures.extend(await wf.map(_one, elements))
+        failures.extend(await wf.map(_one, elements, concurrency=_map_concurrency(step, wf)))
         if step.name:  # #428 §5: fan-in — publish the collected outputs as this map's field
             collected = await _collect_map_outputs(wf, step, elements)
             await wf.write_json(

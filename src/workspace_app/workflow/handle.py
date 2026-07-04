@@ -12,6 +12,7 @@ phases; this is the file/IO surface.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
@@ -26,6 +27,11 @@ from .engine import StepFailed, run_step
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
 # orchestration driver wires the real implementation (P4); tests inject a fake.
 DriveTurn = Callable[[str, list[str] | None], Awaitable[Any]]
+# A per-element turn-lane factory (#429 P5): subkey -> a DriveTurn bound to a DISTINCT
+# ChatTurnEngine key, so N map elements' agent turns run concurrently instead of
+# serializing behind one FIFO-per-key lane. Wired by the driver; None ⇒ sub-handles
+# share the parent's lane (serialized, the safe default).
+SubTurn = Callable[[str], DriveTurn]
 # A live-stdout sink (#178): called with each stdout byte chunk as it arrives, so a
 # long deterministic step shows movement instead of looking dead. Matches the sandbox
 # protocol's OutputSink (defined here to keep the workflow package decoupled).
@@ -101,6 +107,8 @@ class WorkflowHandle:
         find_card: FindCardCapability | None = None,
         credential: str = "",
         step_timeout_s: float | None = None,
+        sub_turn: SubTurn | None = None,
+        turn_concurrency: int | None = None,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -146,6 +154,15 @@ class WorkflowHandle:
         self.step_timeout_s = step_timeout_s
         """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
         Exceeding it aborts the step (and so the run) to ``error``."""
+        self.sub_turn = sub_turn
+        """#429 P5: a ``subkey → DriveTurn`` factory the driver wires so ``sub_handle``
+        can bind each map element its own turn lane (real parallel agent turns). None ⇒
+        sub-handles reuse the parent lane (serialized — the safe default / tests)."""
+        self.turn_concurrency = turn_concurrency
+        """#429 P5: the effective parallel-turn ceiling derived from the model backend's
+        concurrency (a single local model → ~1, a hosted/multi-replica pool → larger). It
+        is a REQUEST ceiling throttled by the backend, not a guarantee. None ⇒ unset (the
+        author's per-map ``concurrency`` stands alone)."""
 
     @property
     def journal_dir(self) -> str:
@@ -154,6 +171,19 @@ class WorkflowHandle:
         cluttering the workspace root. Legacy singular workflows (``workflow_id=""``)
         fall back to ``/.workflow/_default``."""
         return f"/.workflow/{self._workflow_id or '_default'}"
+
+    def sub_handle(self, subkey: str) -> WorkflowHandle:
+        """A per-element child handle (#429 P5) sharing this run's workspace, journal, and
+        capabilities, but whose agent turns run on a DISTINCT turn lane — so N map elements'
+        turns run concurrently instead of serializing behind one ChatTurnEngine key. The
+        driver wires ``sub_turn`` (a ``subkey → DriveTurn`` factory); without it the child
+        reuses the parent's ``drive_turn`` (graceful degrade to serialized). Everything else
+        (store, ``journal_dir``, capabilities, ``emit``) is shared, so per-element artifacts
+        land in the same journal keyed by the element key."""
+        child = copy.copy(self)
+        if self.sub_turn is not None:
+            child.drive_turn = self.sub_turn(subkey)
+        return child
 
     async def read(self, path: str) -> bytes:
         return await self._store.read(self._workspace_id, _abs(path))

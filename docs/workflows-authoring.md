@@ -238,7 +238,20 @@ await wf.glob(patterns, exclude=None) -> [paths]      # 已排序、deterministi
 
 ```python
 failures = await wf.map(fn, items, *, concurrency=8)  # 跳過+收集;回傳 [{item, error}]
+sub = wf.sub_handle(element_key)                       # #429 P5:每元素獨立 turn lane
 ```
+
+**真平行 agent turn(#429 P5)**:`wf.map` 的元素若含 agent turn,同一個 handle 上會被
+ChatTurnEngine 的 FIFO-per-key **序列化**。要真平行,對每個元素取一個 **sub-handle**
+——它**共用** workspace／journal／capabilities,但 agent turn 跑在**自己的 turn lane**上。DSL
+`map` 已經**自動**這麼做(每元素一個 `wf.sub_handle(ekey)`),所以 `workflow.json` 免改。
+
+`concurrency` 是**請求上限**,實際並發是 `min(concurrency, 模型後端的並發能力)`——**request,
+不是 guarantee**。單一本地模型(如 Ollama)後端並發≈1,同一份 workflow 會**自動退化成序列**
+(你在本地設 `concurrency: 8` 沒變快,是模型端在排隊,不是 bug);hosted／多 replica 才吃得到
+平行。**取消**時:停止派發新元素、砍掉 in-flight 的 agent turn;若某步的副作用已執行但**還沒落
+journal**,該步下一輪**重跑**——capabilities 都**冪等**(create-by-args／update-by-patch／
+ingest-by-doc-id／card-by-key),重做不重複,孤兒 side-effect 在 re-run 時**自癒**、不會靜默遺失。
 
 Context:`wf.config`（manifest 的 `config`)、`wf.user`(捕捉到的 actor)、
 `wf.upload_dir`（profile 的暫存資料夾,預設 `uploads`)、`wf.workflow_id`、

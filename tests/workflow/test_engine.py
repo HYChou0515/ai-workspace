@@ -1,6 +1,8 @@
 """The filesystem-as-journal step engine (manual §9) — run vs skip, input-hash
 auto-invalidation, cache=False, and retry-with-feedback then abort."""
 
+import asyncio
+
 import pytest
 
 from workspace_app.filestore.memory import MemoryFileStore
@@ -144,3 +146,31 @@ async def test_artifact_lives_under_per_workflow_dir():
     await run_step(wf, name="s", args={"a": 1}, execute=execute)
     assert await wf.exists("/.workflow/memory/step_s/main.json")
     assert not await wf.exists("/step_s/main.json")
+
+
+async def test_cancel_before_journal_reruns_and_idempotent_side_effects_self_heal():
+    """If a run is cancelled after a step's body ran but before it journals, the step has
+    NO receipt, so the next run re-executes it (#429 P5). That is safe because workflow
+    side-effects are idempotent (create-by-args / update-by-patch / ingest-by-doc-id /
+    card-by-key), so a re-do can't duplicate — the orphan self-heals on re-run rather than
+    being silently lost."""
+    wf = WorkflowHandle(store=MemoryFileStore(), workspace_id="ws", workflow_id="pm")
+    started = asyncio.Event()
+    ran = 0
+
+    async def execute(_feedback):
+        nonlocal ran
+        ran += 1
+        started.set()
+        await asyncio.sleep(0.05)  # body in flight when the cancel arrives
+        return {"n": ran}
+
+    task = asyncio.create_task(run_step(wf, name="commit", args={"a": 1}, execute=execute))
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not await wf.exists("/.workflow/pm/step_commit/main.json")  # no receipt → will re-run
+    # the re-run re-executes (the cancelled attempt left no journal) and now commits
+    assert await run_step(wf, name="commit", args={"a": 1}, execute=execute) == {"n": 2}
+    assert await wf.exists("/.workflow/pm/step_commit/main.json")

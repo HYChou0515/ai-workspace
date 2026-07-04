@@ -290,26 +290,50 @@ def upsert_context_card(
     title: str,
     body: str,
     user: str,
+    retries: int = 3,
 ) -> str:
     """Create-or-update a ``ContextCard`` by key (#111) — the workflow commit path's
     ‘有就更新、沒才新增’. Resolve the collection, then for the first usable key that
-    already names a card in it, overwrite that card (last-write-wins, no read guard);
-    if no key matches, create a new card. Idempotent by key, so a re-run updates rather
-    than duplicating. Returns the card id. (The *agent* surface keeps the stricter
-    create-refuses-on-conflict / update-with-read-guard pair; this is the deterministic
-    node's reliable commit.)"""
+    already names a card in it, overwrite that card; if no key matches, create a new one.
+    Idempotent by key, so a re-run updates rather than duplicating. Returns the card id.
+
+    #429 P5: OPTIMISTIC + conflict-retrying (the same shape as ``update_entity``) — it
+    reads the card's current body, overwrites with an ``expected_body`` guard, and on a
+    ``CardConflict`` (a *parallel run* moved the card between the read and the write)
+    re-reads and retries up to ``retries`` times. So two workflow runs upserting the same
+    card don't silently lost-update — consistency with the entity path, not a resource-by-
+    resource ‘entity is guarded but a card is last-write-wins’ split. (The *agent* surface
+    keeps its own create-refuses / update-with-read-guard pair.)"""
     from ..kb.context_cards import derive_norm_keys, find_cards_by_key
 
     collection_id = resolve_collection_id(spec, collection)
     eff_keys = list(keys)
     if not derive_norm_keys(eff_keys) and title.strip():
         eff_keys = [title]
-    for key in eff_keys:
-        existing = find_cards_by_key(spec, collection_id, key)
-        if existing:
-            return update_context_card(
-                spec, card_id=existing[0][0], keys=eff_keys, title=title, body=body, user=user
+    for _ in range(retries + 1):
+        target: tuple[str, ContextCard] | None = None
+        for key in eff_keys:
+            existing = find_cards_by_key(spec, collection_id, key)
+            if existing:
+                target = existing[0]
+                break
+        if target is None:  # no card names this key yet → create (no conflict possible)
+            return create_context_card(
+                spec, collection=collection_id, keys=eff_keys, title=title, body=body, user=user
             )
-    return create_context_card(
-        spec, collection=collection_id, keys=eff_keys, title=title, body=body, user=user
+        try:
+            return update_context_card(
+                spec,
+                card_id=target[0],
+                keys=eff_keys,
+                title=title,
+                body=body,
+                user=user,
+                expected_body=target[1].body,  # read-before-write guard
+            )
+        except CardConflict:
+            continue  # a parallel run moved it — re-read the current card + retry
+    raise CardConflict(
+        f"upsert_context_card for {eff_keys!r}: too many conflicts (retried {retries} times) "
+        "— a parallel run keeps moving the card"
     )

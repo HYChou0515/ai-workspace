@@ -137,6 +137,25 @@ async def test_sandbox_node_reads_reruns_on_declared_content_change(wf: Workflow
     assert len(runs) == 2  # re-ran because the declared file's content changed
 
 
+async def test_sandbox_node_reads_glob_reruns_when_a_matching_file_appears(wf: WorkflowHandle):
+    """A `reads` glob that matches NOTHING folds a stable 'absent' sentinel into the hash,
+    so a later missing→present transition re-runs the step (#429 P1) — declaring a
+    dependency on files that don't exist yet still works."""
+    runs: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output=None) -> tuple[int, str]:
+        runs.append(cmd)
+        return (0, "")
+
+    wf.run_sandbox = run_sandbox
+    await sandbox_node(wf, run="scan", phase="s", reads=["logs/*.log"])  # nothing matches
+    await sandbox_node(wf, run="scan", phase="s", reads=["logs/*.log"])  # still nothing → skip
+    assert len(runs) == 1
+    await wf.write("/logs/a.log", "x")  # a matching file appears
+    await sandbox_node(wf, run="scan", phase="s", reads=["logs/*.log"])
+    assert len(runs) == 2  # missing→present re-ran it
+
+
 async def test_sandbox_node_gate_fails_on_nonzero_exit(wf: WorkflowHandle):
     async def run_sandbox(cmd: str, on_output=None) -> tuple[int, str]:
         return (1, "boom")

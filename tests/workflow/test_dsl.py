@@ -4,6 +4,7 @@ step primitives (manual §22)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -587,6 +588,90 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
     assert ran == ['build ["a", "b"]'] and cards == [("a", ["k1", "k2"])]
 
 
+async def test_dsl_map_runs_each_element_on_its_own_turn_lane():
+    """The interpreter runs a map's inner steps on a per-element sub-handle (#429 P5), so
+    each element's agent turn drives its OWN turn lane (keyed by the element key) instead
+    of serializing behind one — the engine ability that makes `map` truly parallel."""
+    store = MemoryFileStore()
+    lanes: list[str] = []
+
+    def factory(subkey: str):
+        async def drive(prompt: str, tools: list[str] | None) -> str:
+            lanes.append(subkey)
+            return "note"
+
+        return drive
+
+    wf = make_wf(store)
+    wf.sub_turn = factory
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {"type": "map", "over": {"range": "3"}, "as": "i", "phase": "p",
+                     "do": [{"type": "agent", "prompt": "p {i}", "phase": "p", "out": "n_{i}.md"}]}
+                ],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    assert sorted(lanes) == ["0", "1", "2"]  # one distinct lane per element
+    assert await wf.read_text("/n_0.md") == "note"  # artifacts land in the shared workspace
+
+
+async def test_dsl_map_effective_concurrency_is_throttled_by_the_backend():
+    """`min(request, wf.turn_concurrency)` (#429 P5): a single local model (turn_concurrency
+    =1) serializes a `concurrency: 8` map — the same workflow.json runs wide on a hosted
+    pool and serial locally, no edit. cap is a REQUEST, not a guarantee."""
+
+    def _mapdef(req: int) -> Any:
+        return parse_def(
+            json.dumps(
+                {
+                    "id": "wf",
+                    "phases": [{"id": "p"}],
+                    "steps": [
+                        {"type": "map", "over": {"range": "4"}, "as": "i", "phase": "p",
+                         "concurrency": req,
+                         "do": [{"type": "agent", "prompt": "{i}", "phase": "p", "out": "n_{i}.md"}]}
+                    ],
+                }
+            )
+        )
+
+    def _peak_factory(peak: list[int]):
+        active = {"n": 0}
+
+        def factory(subkey: str):
+            async def drive(prompt: str, tools: list[str] | None) -> str:
+                active["n"] += 1
+                peak[0] = max(peak[0], active["n"])
+                await asyncio.sleep(0.01)
+                active["n"] -= 1
+                return "x"
+
+            return drive
+
+        return factory
+
+    # backend caps at 1 → serial despite concurrency: 8
+    peak = [0]
+    wf = make_wf(MemoryFileStore())
+    wf.sub_turn = _peak_factory(peak)
+    wf.turn_concurrency = 1
+    await build_run(_mapdef(8))(wf, None)
+    assert peak[0] == 1
+
+    # no backend cap → the requested parallelism actually overlaps
+    peak2 = [0]
+    wf2 = make_wf(MemoryFileStore())
+    wf2.sub_turn = _peak_factory(peak2)
+    await build_run(_mapdef(4))(wf2, None)
+    assert peak2[0] > 1
+
+
 async def test_map_prunes_orphan_element_artifacts_when_the_set_shrinks():
     """When a map's element set shrinks (a glob goes 2→1), the departed element's inner
     per-element journal artifact is pruned on the next run (#429 P4) — no accumulating
@@ -621,6 +706,41 @@ async def test_map_prunes_orphan_element_artifacts_when_the_set_shrinks():
     await build_run(d)(wf, None)
     assert await wf.exists(f"{jd}/step_proc/in_a.txt.json")  # still present → kept
     assert not await wf.exists(f"{jd}/step_proc/in_b.txt.json")  # departed → pruned
+
+
+async def test_map_gc_prunes_orphans_of_switch_nested_steps():
+    """The orphan GC (#429 P4) also reaches a named step nested inside a `switch` in the
+    map's `do` — `_inner_journal_names` recurses into switch cases, so its per-element
+    artifacts are pruned too when the set shrinks."""
+    store = MemoryFileStore()
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    await wf.write("/in/a.txt", "1")
+    await wf.write("/in/b.txt", "2")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"route": "go"},
+                "steps": [
+                    {"type": "map", "over": "in/*.txt", "as": "f", "phase": "p",
+                     "do": [{"type": "switch", "on": "{config.route}", "phase": "p",
+                             "cases": {"go": [{"type": "sandbox", "run": "x {f}", "phase": "p",
+                                              "name": "proc"}]}}]}
+                ],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    jd = wf.journal_dir.lstrip("/")
+    assert await wf.exists(f"{jd}/step_proc/in_b.txt.json")
+    await wf.delete("/in/b.txt")
+    await build_run(d)(wf, None)
+    assert not await wf.exists(f"{jd}/step_proc/in_b.txt.json")  # switch-nested orphan pruned
 
 
 async def test_dsl_update_entity_capability_merges_patch():
