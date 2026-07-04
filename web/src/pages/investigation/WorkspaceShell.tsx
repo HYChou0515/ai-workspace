@@ -4,6 +4,7 @@
  * owns the file/tab state shared between them.
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -24,7 +25,13 @@ import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
-import { FileBufferProvider, FileBufferStore, bufferIO, useIsDirty } from "../../hooks/fileBuffer";
+import {
+  FileBufferProvider,
+  FileBufferStore,
+  bufferIO,
+  reactQueryContentCache,
+  useIsDirty,
+} from "../../hooks/fileBuffer";
 import {
   type EditorGroup,
   type EditorTab,
@@ -103,7 +110,14 @@ export function WorkspaceShell({
     () => investigationFileService(manifest.slug, item.resource_id),
     [manifest.slug, item.resource_id],
   );
-  const bufferStore = useMemo(() => new FileBufferStore(bufferIO(service)), [service]);
+  const queryClient = useQueryClient();
+  const bufferStore = useMemo(() => {
+    // The buffer reads/writes file content THROUGH the shared qk.file cache, so
+    // an open editor and any other reader of the same workspace file dedupe onto
+    // one entry instead of each fetching it.
+    const io = bufferIO(service);
+    return new FileBufferStore(io, reactQueryContentCache(queryClient, service.scopeId, io));
+  }, [service, queryClient]);
   return (
     <WorkspaceSlugProvider value={manifest.slug}>
       <DialogProvider>

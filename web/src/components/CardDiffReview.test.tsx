@@ -4,8 +4,9 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { FileService } from "../api/fileService";
+import { qk } from "../api/queryKeys";
 import type { FileContent, FileInfo } from "../api/types";
-import { renderWithQuery } from "../test/queryWrapper";
+import { makeTestQueryClient, renderWithQuery } from "../test/queryWrapper";
 import { CardDiffReview, CURRENT_PATH, TODO_PATH } from "./CardDiffReview";
 
 // Mock the heavy lazy Monaco diff with a controllable textarea that surfaces both
@@ -141,5 +142,51 @@ describe("CardDiffReview", () => {
     render(svc);
     fireEvent.click(await screen.findByTestId("card-diff-open"));
     expect(await screen.findByText(/沒有會被覆寫/)).toBeInTheDocument();
+  });
+
+  it("reads the diff files through the shared qk.file content cache (dedup with the IDE)", async () => {
+    const { svc } = fakeSvc({ [TODO_PATH]: "proposed", [CURRENT_PATH]: "current" });
+    const client = makeTestQueryClient();
+    renderWithQuery(
+      <CardDiffReview
+        slug="topic-hub"
+        itemId="it1"
+        allow={["approve", "reject"]}
+        onDecide={vi.fn()}
+        service={svc}
+      />,
+      client,
+    );
+    fireEvent.click(await screen.findByTestId("card-diff-open"));
+    await screen.findByTestId("diff-modified");
+    // The bytes it read now live under the canonical qk.file key for its scope,
+    // so an open IDE buffer / any qk.file reader of the same file is served from
+    // this entry instead of fetching the file a second time.
+    await waitFor(() => {
+      expect(client.getQueryData(qk.file(svc.scopeId, TODO_PATH))).toMatchObject({ text: "proposed" });
+      expect(client.getQueryData(qk.file(svc.scopeId, CURRENT_PATH))).toMatchObject({ text: "current" });
+    });
+  });
+
+  it("writes the edited proposal through the shared cache on approve", async () => {
+    const { svc } = fakeSvc({ [TODO_PATH]: "old", [CURRENT_PATH]: "cur" });
+    const client = makeTestQueryClient();
+    renderWithQuery(
+      <CardDiffReview
+        slug="topic-hub"
+        itemId="it1"
+        allow={["approve", "reject"]}
+        onDecide={vi.fn()}
+        service={svc}
+      />,
+      client,
+    );
+    fireEvent.click(await screen.findByTestId("card-diff-open"));
+    const modified = await screen.findByTestId("diff-modified");
+    fireEvent.change(modified, { target: { value: "edited" } });
+    fireEvent.click(screen.getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(client.getQueryData(qk.file(svc.scopeId, TODO_PATH))).toMatchObject({ text: "edited" }),
+    );
   });
 });

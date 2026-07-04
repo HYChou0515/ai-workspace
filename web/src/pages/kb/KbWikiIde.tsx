@@ -22,7 +22,14 @@ import { MonacoEditor } from "../../components/MonacoEditor";
 import { DialogProvider } from "../../components/Dialog";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
-import { FileBufferProvider, FileBufferStore, useFileBuffer, useIsDirty } from "../../hooks/fileBuffer";
+import {
+  FileBufferProvider,
+  FileBufferStore,
+  type IO,
+  reactQueryContentCache,
+  useFileBuffer,
+  useIsDirty,
+} from "../../hooks/fileBuffer";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { FileTree } from "../investigation/FileTree";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
@@ -55,14 +62,15 @@ export function KbWikiIde({
   );
   const serviceRef = useRef(service);
   serviceRef.current = service;
-  const bufferStore = useMemo(
-    () =>
-      new FileBufferStore({
-        readFile: (p) => serviceRef.current.readFile(p),
-        writeFile: (p, b) => serviceRef.current.writeFile(p, b),
-      }),
-    [],
-  );
+  const bufferStore = useMemo(() => {
+    // Shared io so the buffer's fetch dedupes onto the same qk.file cache entry
+    // any other reader uses (scopeId is stable per collection).
+    const io: IO = {
+      readFile: (p) => serviceRef.current.readFile(p),
+      writeFile: (p, b) => serviceRef.current.writeFile(p, b),
+    };
+    return new FileBufferStore(io, reactQueryContentCache(qc, serviceRef.current.scopeId, io));
+  }, [qc]);
 
   // Source path → document id, for the Sources footer. Shares the collection's
   // one document-list cache entry (qk.kb.documents + fetchAllDocs) with the doc

@@ -11,6 +11,7 @@
  * without a live backend.
  */
 
+import type { QueryClient } from "@tanstack/react-query";
 import {
   createContext,
   useCallback,
@@ -22,6 +23,7 @@ import {
 
 import { type FileEncoding, encodeText } from "../api/encoding";
 import type { FileService } from "../api/fileService";
+import { qk } from "../api/queryKeys";
 import type { FileContent } from "../api/types";
 import { isReadOnlyPath } from "../lib/readonly";
 
@@ -61,12 +63,67 @@ export function bufferIO(svc: FileService): IO {
   return { readFile: (p) => svc.readFile(p), writeFile: (p, b) => svc.writeFile(p, b) };
 }
 
+/**
+ * The shared content cache the buffer reads/writes through, so a file's bytes
+ * are fetched ONCE under `qk.file(scopeId, path)` and every consumer (the
+ * editable buffer, the citation-card diff, any `useFileContent` reader) sees
+ * the same entry — no more parallel per-surface fetches of the same file.
+ *
+ *  - `load`  = `fetchQuery(..., staleTime: Infinity)` — served from cache when
+ *              a sibling already fetched it; the buffer treats a loaded file as
+ *              fresh until it explicitly `reload`s (a mid-edit refetch would
+ *              clobber the open editor, which no surface wants).
+ *  - `put`   = `setQueryData` — a save writes the new content THROUGH the cache
+ *              so the next reader gets the saved bytes without a round-trip.
+ *  - `drop`  = `removeQueries` — `reload` hard-drops the entry so the next
+ *              `load` refetches past the Infinity staleTime (the explicit
+ *              "get the latest from the server" path).
+ */
+export type ContentCache = {
+  load: (path: string) => Promise<FileContent>;
+  put: (path: string, content: FileContent) => void;
+  drop: (path: string) => void;
+};
+
+/** Build a `ContentCache` over one TanStack Query client, scoped to one
+ * FileService (`scopeId`) and reading through its `io`. The queryFn IS the
+ * service's own `readFile`, so WHAT gets fetched is unchanged — only WHERE the
+ * result is cached (the shared `qk.file` entry) changes. */
+export function reactQueryContentCache(
+  queryClient: QueryClient,
+  scopeId: string,
+  io: IO,
+): ContentCache {
+  return {
+    load: (path) =>
+      queryClient.fetchQuery({
+        queryKey: qk.file(scopeId, path),
+        queryFn: () => io.readFile(path),
+        staleTime: Infinity,
+      }),
+    put: (path, content) => queryClient.setQueryData(qk.file(scopeId, path), content),
+    drop: (path) => queryClient.removeQueries({ queryKey: qk.file(scopeId, path) }),
+  };
+}
+
 export class FileBufferStore {
   private entries = new Map<string, BufferEntry>();
   private listeners = new Map<string, Set<() => void>>();
   private inflight = new Set<string>();
 
-  constructor(private readonly io: IO) {}
+  // `cache` (optional) routes content I/O through the shared react-query cache
+  // so the same file is fetched once across surfaces. Absent → the store reads
+  // straight through `io` exactly as before (tests, and any bare construction).
+  constructor(
+    private readonly io: IO,
+    private readonly cache?: ContentCache,
+  ) {}
+
+  /** Read a path's content — through the shared cache when present, else the
+   * raw io (identical fetch either way; the cache just dedupes + shares it). */
+  private read(path: string): Promise<FileContent> {
+    return this.cache ? this.cache.load(path) : this.io.readFile(path);
+  }
 
   subscribe(path: string, cb: () => void): () => void {
     let set = this.listeners.get(path);
@@ -96,8 +153,7 @@ export class FileBufferStore {
     if (this.entries.has(path) || this.inflight.has(path)) return;
     this.inflight.add(path);
     this.entries.set(path, LOADING);
-    this.io
-      .readFile(path)
+    this.read(path)
       .then((content) => {
         this.inflight.delete(path);
         const text = content.kind === "text" ? content.text : "";
@@ -124,6 +180,10 @@ export class FileBufferStore {
   reload(path: string): void {
     this.entries.delete(path);
     this.inflight.delete(path);
+    // Hard-drop the shared cache entry so the re-`read` refetches from the
+    // server past the Infinity staleTime (a plain re-read would return the
+    // stale cached bytes — this is the explicit "get the latest" path).
+    this.cache?.drop(path);
     this.ensureLoaded(path);
   }
 
@@ -184,6 +244,17 @@ export class FileBufferStore {
           ? (encodeText(text, "binary").buffer as ArrayBuffer)
           : text;
       await this.io.writeFile(path, body);
+      // Write the saved bytes THROUGH the shared cache so the next reader (a
+      // second pane, the card-diff, a useFileContent) gets them without a
+      // round-trip — the write-through twin of `read()`.
+      const size = typeof body === "string" ? new TextEncoder().encode(body).byteLength : body.byteLength;
+      this.cache?.put(path, {
+        kind: "text",
+        path,
+        size,
+        text,
+        encoding: entry.encoding,
+      });
       const after = this.entries.get(path);
       // Keep dirty if the user typed more while the write was in flight.
       const save = after && after.text !== text ? "dirty" : "saved";
