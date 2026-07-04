@@ -4,7 +4,7 @@
 > 三條部署階梯，以及 **sandbox** 與**環境變數**兩個最容易踩雷的區塊。
 >
 > 分工：本頁講「**跑起來後用 YAML 調哪顆旋鈕**」；[部署指南](deployment.md) 講「**用程式/factory
-> 換掉整塊實作**」（寫你自己的 Sandbox / FileStore / Runner）；[`configs/config.example.yaml`](../configs/config.example.yaml)
+> 換掉整塊實作**」（寫你自己的 Sandbox / FileStore / Runner）；[`configs/config.example.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/configs/config.example.yaml)
 > 是**逐行權威參照**（每個 key 的完整註解都在那）。本頁不重抄註解，只給心智模型 + 導覽 + 情境對照。
 
 ---
@@ -420,7 +420,7 @@ observability:
 
 ## 相關文件
 
-- [`configs/config.example.yaml`](../configs/config.example.yaml) — 逐行權威參照（每個 key 的完整註解）
+- [`configs/config.example.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/configs/config.example.yaml) — 逐行權威參照（每個 key 的完整註解）
 - [部署指南 deployment.md](deployment.md) — 用程式/factory 換整塊實作、生產環境注意事項
 - [開發者導覽 index.md](index.md) — 30 秒心智模型與抽換點
 - [系統架構 architecture.md](architecture.md) — 每層職責與為什麼這樣切

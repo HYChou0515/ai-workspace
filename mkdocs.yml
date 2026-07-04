@@ -111,6 +111,7 @@ nav:
       - 共創 Skills: skills-authoring.md
   - 功能手冊:
       - Workflows 規格: workflows.md
+      - Workflow 參考模型（#428 釘死決策）: workflow-reference-model.md
       - Topic Hub: topic-hub.md
       - Sandbox Host: sandbox-host.md
       - Sandbox Host 線上契約: sandbox-host-wire.md

@@ -81,7 +81,7 @@ uv run python -m workspace_app
 
 > **要調 `config.yaml` 的旋鈕**（換模型、sandbox `kind`、多 pod、環境變數…）看
 > **[設定指南 configuration.md](configuration.md)**——本頁專講「用程式/factory 換整塊實作」，
-> 設定指南專講「用 YAML 調哪顆旋鈕」。逐行參照在 [`configs/config.example.yaml`](../configs/config.example.yaml)。
+> 設定指南專講「用 YAML 調哪顆旋鈕」。逐行參照在 [`configs/config.example.yaml`](https://github.com/HYChou0515/ai-workspace/blob/master/configs/config.example.yaml)。
 
 ---
 
