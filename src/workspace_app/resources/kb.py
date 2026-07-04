@@ -155,6 +155,14 @@ class Collection(Struct):  # → resource "collection"
     # migration). `permission.read_meta` + `permission.visibility` are indexed so
     # the collection list can be filtered to what the caller may see.
     permission: Permission | None = None
+    # Issue #308: count of this collection's docs carrying a per-doc read override
+    # (SourceDoc.permission). A cheap short-circuit for the AI-retrieval denylist:
+    # when 0, the retrieval path skips the "which docs is the speaker blocked from"
+    # query entirely, so a collection nobody has tightened per-doc pays nothing.
+    # Maintained (+1 on set / −1 on clear) by the doc-permission endpoints; never
+    # filtered/sorted on, so it's NON-indexed → adding it needs no migration (old
+    # rows decode with the 0 default = "no overrides").
+    has_doc_overrides: int = 0
     # Issue #105: the user-authored quality rubric — what makes a doc a good/bad
     # knowledge source for THIS collection, and which named dimensions to assess.
     # The judge composes it with a system-fixed output format (overall 0–100 +
@@ -322,6 +330,20 @@ class SourceDoc(Struct):  # → resource "source-doc"
     collection_visibility: str = "public"
     collection_read_meta: list[str] = []
     collection_created_by: str = ""
+    # Issue #308: this doc's OWN read-access override, on TOP of the inherited
+    # `collection_*` mirror above. Effective read = the collection allows AND this
+    # override allows — it can only TIGHTEN (never loosen), so a doc can be hidden
+    # from someone who can read the rest of the collection, but never shared with
+    # someone who can't. `None` (the default, every pre-#308 row) ≡ no override ≡
+    # pure inheritance. Only `visibility` + `read_meta` (existence) and
+    # `read_content` are honoured in v1; other verbs persist but are inert. Set
+    # only by the collection owner via `PUT /kb/documents/{id}/permission`; the
+    # doc's OWN uploader gets no special right (the owner in the read decision is
+    # the collection owner, `collection_created_by`). Self-contained: the
+    # collection→doc mirror fan-out NEVER touches this field. `permission.visibility`
+    # / `permission.read_meta` are indexed so the storage-scope + AI denylist can
+    # filter on it. Absent on pre-#308 rows ⇒ `None` ⇒ no override (no migration).
+    permission: Permission | None = None
 
 
 class DocChunk(Struct):  # → resource "doc-chunk"

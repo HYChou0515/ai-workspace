@@ -295,14 +295,26 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # migrate route only re-extracts indexed_data. The actual per-collection
     # values are backfilled by the fan-out (doc-create + the collection permission
     # setter), NOT by migrate (a migrate step can't load the parent collection).
+    #
+    # #308: `permission.visibility` + `permission.read_meta` indexed so a doc's OWN
+    # read override (SourceDoc.permission — the intersect-with-collection tightening)
+    # is filterable at the storage layer: the `source_doc` access_scope ANDs a
+    # doc-override predicate onto the collection-mirror one, and the AI-retrieval
+    # denylist queries overridden docs by `permission.visibility IS NOT NULL`.
+    # Bumped v7 → v8 with a no-op reindex step: `permission` defaults to `None`, so
+    # a pre-#308 row's `permission.visibility` extracts to null ≡ "no override"
+    # (the storage-scope's `is_null()` clause passes it through), needing no data
+    # change — the migrate route only re-extracts indexed_data. Real overrides are
+    # written fresh at v8 by the doc-permission endpoint, never by migrate.
     spec.add_model(
-        Schema(SourceDoc, "v7")
+        Schema(SourceDoc, "v8")
         .step(None, _reindex_only, to="v3", source_type=SourceDoc)
         .step("v2", _reindex_only, to="v3", source_type=SourceDoc)
         .step("v3", _backfill_token_count, to="v4", source_type=SourceDoc)
         .step("v4", _reindex_only, to="v5", source_type=SourceDoc)
         .step("v5", _reindex_only, to="v6", source_type=SourceDoc)
-        .step("v6", _reindex_only, to="v7", source_type=SourceDoc),
+        .step("v6", _reindex_only, to="v7", source_type=SourceDoc)
+        .step("v7", _reindex_only, to="v8", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
             IndexableField("content.size", int, index_key="content_size"),
@@ -316,6 +328,8 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("collection_visibility", str),
             IndexableField("collection_read_meta", list),
             IndexableField("collection_created_by", str),
+            IndexableField("permission.visibility", str),
+            IndexableField("permission.read_meta", list),
         ],
         access_scope=source_doc_access_scope(superusers),
     )
