@@ -32,6 +32,11 @@ from typing import Any
 
 import msgspec
 from specstar import QB, SpecStar
+from specstar.types import (
+    PreconditionFailedError,
+    ResourceIDNotFoundError,
+    ResourceIsDeletedError,
+)
 
 from ..filestore.protocol import FileStore
 from .credential import CredentialBroker
@@ -162,7 +167,95 @@ class WorkflowOrchestrator:
         return data
 
     def _patch(self, run_id: str, **changes: Any) -> None:
+        # #429 P8: every patch is progress, so stamp the liveness heartbeat unless a caller
+        # set it explicitly. A live run's `progress_at` advances step-by-step; a dead pod's
+        # stops, which is what `is_stuck` keys on.
+        changes.setdefault("progress_at", self.now())
         self._rm().update(run_id, msgspec.structs.replace(self._get(run_id), **changes))
+
+    def run_status(self, run_id: str) -> RunStatus | None:
+        """A run's status, or None if it no longer exists (#429 P8) — the sweeper's orphan
+        classifier reads this to tell settled / active / gone apart without raising."""
+        try:
+            return self._get(run_id).status
+        except (ResourceIDNotFoundError, ResourceIsDeletedError):
+            return None
+
+    def is_stuck(self, run_id: str, grace_ms: int) -> bool:
+        """#429 P8: is ``run_id`` a stuck orphan — RUNNING but with no progress heartbeat for
+        longer than ``grace_ms``? Only a RUNNING run qualifies (pending is queued, awaiting_human
+        needs a human, terminal is done). The grace must exceed a healthy step's worst case, so
+        a slow-but-live run is never falsely resumed (the #227 stuck-run tradeoff)."""
+        data = self._get(run_id)
+        if data.status is not RunStatus.RUNNING:
+            return False
+        last = data.progress_at or data.started or 0
+        return self.now() - last > grace_ms
+
+    async def resume(self, run_id: str, *, slug: str, profile: str, grace_ms: int) -> bool:
+        """#429 P8/F: re-drive a stuck orphan run from its journal breakpoint (completed steps
+        skip, §9), so a run a dead pod abandoned self-heals instead of hanging forever. Returns
+        True iff THIS caller took the resume.
+
+        Self-guarding against a double-drive on both axes: it re-checks staleness under the read
+        (a run that already got a fresh heartbeat — a peer just claimed it, or it settled — is
+        declined), and it CAS-stamps a fresh heartbeat with ``expected_etag`` so two pods that
+        both saw it stale race for the one claim and only the winner re-spawns the driver."""
+        res = self._rm().get(run_id)
+        data = res.data
+        assert isinstance(data, WorkflowRun)
+        last = data.progress_at or data.started or 0
+        if data.status is not RunStatus.RUNNING or self.now() - last <= grace_ms:
+            return False  # settled, or already fresh (a peer just claimed it) → not ours
+        try:
+            self._rm().update(
+                run_id,
+                msgspec.structs.replace(data, progress_at=self.now()),
+                expected_etag=res.info.etag,
+            )
+        except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
+            return False  # a concurrent racer claimed the resume → back off
+        manifest = await self._resolve_manifest(slug, profile, data.workflow_id, data.item_id)
+        assert manifest is not None
+        self._spawn(
+            run_id,
+            slug,
+            data.item_id,
+            profile,
+            data.captured_user,
+            manifest,
+            data.workflow_id,
+            data.chat_id,
+        )
+        return True
+
+    async def abandon(self, run_id: str, *, reason: str) -> None:
+        """#429 F-2: give up on a stuck orphan after its resume budget — a ONE-WAY transition
+        to a terminal, discoverable state. It lands as an errored run carrying an ``abandoned``
+        marker + ``reason``, frees the sandbox, and fires the failure notification, so the give-
+        up is visible (never a silent drop) and bounded (never dragged on forever); re-running
+        is a human's explicit act from that surface. No-op on an already-terminal run."""
+        data = self._get(run_id)
+        if data.status in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
+            return
+        # Best-effort local cancel — the orphan's real driver usually died on another pod, so
+        # there is nothing to cancel here, but a locally-tracked task must not outlive the row.
+        task = self._tasks.get(run_id)
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+        self._patch(
+            run_id,
+            status=RunStatus.ERROR,
+            ended=self.now(),
+            result={"abandoned": True, "reason": reason},
+        )
+        if self.credentials is not None:
+            self.credentials.revoke(run_id)
+        await self._release(data.item_id, terminal=True, key=data.chat_id or data.item_id)
+        if self.notify_failure is not None:
+            self.notify_failure(self._get(run_id))
 
     async def _resolve_manifest(
         self, slug: str, profile: str, workflow_id: str, item_id: str

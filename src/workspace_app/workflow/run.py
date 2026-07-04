@@ -134,6 +134,11 @@ class WorkflowRun(Struct):
     """Epoch ms when the driver started the run; None while ``pending``."""
     ended: int | None = None
     """Epoch ms when the run reached a terminal status; None until then."""
+    progress_at: int | None = None
+    """Epoch ms of the last progress patch — a liveness heartbeat (#429 P8). Advances on
+    every phase/step transition (`_apply_progress`), so a run left RUNNING by a dead pod goes
+    stale while a live one stays fresh; the orphan sweeper flags `now - progress_at > grace`.
+    Additive (None on runs written before #429), so no migration is needed."""
     result: dict[str, Any] | None = None
     """The ``run()`` return value (a summary), persisted on terminal."""
     pending_decision: PendingDecision | None = None

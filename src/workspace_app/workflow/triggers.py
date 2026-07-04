@@ -43,8 +43,15 @@ from specstar.types import (
 
 from ..apps.catalog import discover_app_slugs
 from ..apps.profiles import list_profiles, load_profile_triggers_raw
+from .run import RunStatus
 
 _log = logging.getLogger(__name__)
+
+# #429 P8: the default orphan-handling knobs. The grace must exceed a healthy step's worst
+# case so a slow-but-live run is never falsely resumed (the #227 stuck-run tradeoff); the
+# resume budget maps the "cron abandon after N windows (1~2)" decision onto resume attempts.
+_DEFAULT_ORPHAN_GRACE_MS = 3_600_000  # 1h, matching the index-sweeper stuck grace
+_DEFAULT_MAX_RESUME_ATTEMPTS = 2
 
 _DOW = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 _EVERY = ("daily", "weekly", "monthly")
@@ -301,7 +308,27 @@ class ITriggerStore(abc.ABC):
     def try_claim(self, trigger_id: str, fire_window: str) -> bool:
         """Atomically claim ``(trigger_id, fire_window)``. Returns True for the single
         caller that wins the race (which then starts the run), False for everyone else —
-        so a window fires exactly once across all pods."""
+        so a window fires exactly once across all pods. Winning a NEW window also resets the
+        run slot (``run_id``/``attempts``) — a fresh window is a fresh run."""
+
+    @abc.abstractmethod
+    def record_run(self, trigger_id: str, run_id: str) -> None:
+        """Record the run this trigger just started for the current window (#429 P8), so a
+        later sweep can find it if the driving pod dies. Resets the resume counter to 1."""
+
+    @abc.abstractmethod
+    def note_resume(self, trigger_id: str) -> None:
+        """Count one resume of the current window's orphan run (#429 F-2) — the resume budget
+        that, once spent, tips the orphan into ``abandon``."""
+
+    @abc.abstractmethod
+    def clear_run(self, trigger_id: str) -> None:
+        """Forget the current window's run (#429 P8) — it settled or was abandoned, so it is no
+        longer an orphan to chase."""
+
+    @abc.abstractmethod
+    def get_run(self, trigger_id: str) -> tuple[str, int]:
+        """The current window's ``(run_id, resume_attempts)`` — ``("", 0)`` when none."""
 
 
 # Cross-pod contention on ONE trigger's window row is a handful of pods for a few
@@ -314,10 +341,13 @@ class _TriggerWindow(Struct):
     """The last fire-window a scheduled trigger claimed. ``resource_id == trigger_id`` so
     the claim is a SINGLE-row CAS: advancing ``last_window`` to a new window iff no peer
     already advanced it is both the leader election AND the once-per-window gate in one
-    atomic step (no separate claim-set needed)."""
+    atomic step (no separate claim-set needed). ``run_id``/``attempts`` track the window's
+    in-flight run for orphan pickup (#429 P8) — cleared when a new window is claimed."""
 
     trigger_id: str
     last_window: str
+    run_id: str = ""
+    attempts: int = 0
 
 
 def register_trigger_store(spec: SpecStar) -> None:
@@ -336,15 +366,43 @@ class SpecstarTriggerStore(ITriggerStore):
     def __init__(self, spec: SpecStar) -> None:
         self._spec = spec
 
-    def last_window(self, trigger_id: str) -> str:
+    def _row(self, trigger_id: str) -> _TriggerWindow | None:
         rm = self._spec.get_resource_manager(_TriggerWindow)
         try:
             res = rm.get(trigger_id)
         except (ResourceIDNotFoundError, ResourceIsDeletedError):
-            return ""  # never fired
+            return None
         data = res.data
         assert isinstance(data, _TriggerWindow)
-        return data.last_window
+        return data
+
+    def _write_fields(self, trigger_id: str, **fields: object) -> None:
+        """Read-modify-write the ledger row, preserving unspecified fields. The current window's
+        run slot has a single writer at a time (the claim/resume winner), so no CAS is needed."""
+        row = self._row(trigger_id)
+        if row is None:
+            return
+        rm = self._spec.get_resource_manager(_TriggerWindow)
+        rm.update(trigger_id, msgspec.structs.replace(row, **fields))
+
+    def last_window(self, trigger_id: str) -> str:
+        row = self._row(trigger_id)
+        return row.last_window if row is not None else ""
+
+    def record_run(self, trigger_id: str, run_id: str) -> None:
+        self._write_fields(trigger_id, run_id=run_id, attempts=1)
+
+    def note_resume(self, trigger_id: str) -> None:
+        row = self._row(trigger_id)
+        if row is not None:
+            self._write_fields(trigger_id, attempts=row.attempts + 1)
+
+    def clear_run(self, trigger_id: str) -> None:
+        self._write_fields(trigger_id, run_id="")
+
+    def get_run(self, trigger_id: str) -> tuple[str, int]:
+        row = self._row(trigger_id)
+        return (row.run_id, row.attempts) if row is not None else ("", 0)
 
     def try_claim(self, trigger_id: str, fire_window: str) -> bool:
         rm = self._spec.get_resource_manager(_TriggerWindow)
@@ -381,8 +439,62 @@ class SpecstarTriggerStore(ITriggerStore):
         )
 
 
-StartTrigger = Callable[["ScheduleTrigger", str], Awaitable[None]]
+StartTrigger = Callable[["ScheduleTrigger", str], Awaitable[str | None]]
 OrchestratorStart = Callable[..., Awaitable[str]]
+
+# ── orphan pickup (#429 P8 / F) ──────────────────────────────────────────────
+#
+# A triggered run whose driving pod dies is left non-terminal with no live driver. The
+# sweeper (any pod) classifies the trigger's last run and, before firing a NEW window,
+# pays the old debt: a stuck orphan is resumed (F-1) until its budget is spent, then
+# abandoned (F-2). The four dispositions:
+_GONE = "gone"  # the run row is gone → nothing to chase
+_SETTLED = "settled"  # terminal → resolved, free the slot
+_STUCK = "stuck"  # RUNNING but heartbeat stale → an orphan to resume/abandon
+_ACTIVE = "active"  # pending / awaiting_human / RUNNING-fresh → a live run, leave it
+
+
+class IOrphanOps(abc.ABC):
+    """What the sweeper needs from the run engine to chase orphans (#429 P8), kept behind an
+    interface so the sweeper stays testable without a real orchestrator."""
+
+    @abc.abstractmethod
+    def disposition(self, run_id: str, grace_ms: int) -> str:
+        """Classify ``run_id`` as one of gone / settled / stuck / active."""
+
+    @abc.abstractmethod
+    async def resume(self, run_id: str, *, slug: str, profile: str, grace_ms: int) -> bool:
+        """Re-drive a stuck orphan from its journal; True iff this caller took the resume."""
+
+    @abc.abstractmethod
+    async def abandon(self, run_id: str, *, reason: str) -> None:
+        """Give up on an orphan past its resume budget — a one-way, discoverable transition."""
+
+
+class OrchestratorOrphanOps(IOrphanOps):
+    """``IOrphanOps`` over a ``WorkflowOrchestrator`` (duck-typed to avoid an import cycle —
+    only ``run_status`` / ``is_stuck`` / ``resume`` / ``abandon`` are used)."""
+
+    def __init__(self, orchestrator: object) -> None:
+        self._orch = orchestrator
+
+    def disposition(self, run_id: str, grace_ms: int) -> str:
+        status = self._orch.run_status(run_id)  # ty: ignore[unresolved-attribute]
+        if status is None:
+            return _GONE
+        if status in (RunStatus.DONE, RunStatus.ERROR, RunStatus.CANCELLED):
+            return _SETTLED
+        if status is RunStatus.RUNNING and self._orch.is_stuck(run_id, grace_ms):  # ty: ignore[unresolved-attribute]
+            return _STUCK
+        return _ACTIVE  # pending / awaiting_human / RUNNING-but-fresh
+
+    async def resume(self, run_id: str, *, slug: str, profile: str, grace_ms: int) -> bool:
+        return await self._orch.resume(  # ty: ignore[unresolved-attribute]
+            run_id, slug=slug, profile=profile, grace_ms=grace_ms
+        )
+
+    async def abandon(self, run_id: str, *, reason: str) -> None:
+        await self._orch.abandon(run_id, reason=reason)  # ty: ignore[unresolved-attribute]
 
 
 def build_trigger_start(start_run: OrchestratorStart) -> StartTrigger:
@@ -394,9 +506,9 @@ def build_trigger_start(start_run: OrchestratorStart) -> StartTrigger:
     already spent, so this period is simply skipped and the next window fires normally."""
     from .orchestrator import ActiveRunExists
 
-    async def start(t: ScheduleTrigger, window: str) -> None:
+    async def start(t: ScheduleTrigger, window: str) -> str | None:
         try:
-            await start_run(
+            return await start_run(
                 slug=t.slug,
                 item_id=t.item_id,
                 profile=t.profile,
@@ -410,6 +522,7 @@ def build_trigger_start(start_run: OrchestratorStart) -> StartTrigger:
                 t.item_id,
                 window,
             )
+            return None  # collision → nothing started; the next window re-evaluates
 
     return start
 
@@ -425,7 +538,13 @@ class TriggerSweeper:
     """The poll-loop half of a scheduled trigger (#429 P7), modelled on the #355 code_sync
     sweeper: each tick, for every enabled trigger that is due (its period target has passed
     and it hasn't fired for this window), CAS-claim ``(id, window)`` to elect one pod, and
-    the winner starts the run. Missed windows fire late (catch-up), never dropped."""
+    the winner starts the run. Missed windows fire late (catch-up), never dropped.
+
+    With an ``orphan`` handler wired (#429 P8), each tick FIRST settles the trigger's previous
+    run before firing a new window (F-1 — pay the old debt first): a stuck orphan is resumed
+    from its journal until its resume budget is spent, then abandoned to a discoverable
+    terminal state (F-2); a still-live run defers the new window. Without ``orphan`` (the P7
+    path) the sweeper just fires due windows."""
 
     def __init__(
         self,
@@ -434,11 +553,17 @@ class TriggerSweeper:
         store: ITriggerStore,
         start: StartTrigger,
         now_utc: Callable[[], datetime],
+        orphan: IOrphanOps | None = None,
+        grace_ms: int = _DEFAULT_ORPHAN_GRACE_MS,
+        max_resume_attempts: int = _DEFAULT_MAX_RESUME_ATTEMPTS,
     ) -> None:
         self._load = load
         self._store = store
         self._start = start
         self._now_utc = now_utc
+        self._orphan = orphan
+        self._grace_ms = grace_ms
+        self._max_attempts = max_resume_attempts
 
     def _local_now(self, tz: str) -> datetime:
         """``now`` in the schedule's zone as a naive datetime (the period math is naive-
@@ -447,16 +572,51 @@ class TriggerSweeper:
 
     async def tick(self) -> None:
         for t in self._load():
-            if not t.enabled:
-                continue
-            now = self._local_now(t.schedule.tz)
-            key = trigger_key(t)  # globally-unique; a bare id would collide across files
-            # Store calls are blocking specstar I/O — offload so a sweep never sits on the
-            # event loop (the code_sync sweeper offloads its whole tick for the same reason).
-            last = await asyncio.to_thread(self._store.last_window, key)
-            if not is_due(t.schedule, now, last):
-                continue
-            window = fire_window(t.schedule, now)
-            claimed = await asyncio.to_thread(self._store.try_claim, key, window)
-            if claimed:  # leader election + once-per-window
-                await self._start(t, window)
+            if t.enabled:
+                await self._tick_one(t)
+
+    async def _tick_one(self, t: ScheduleTrigger) -> None:
+        key = trigger_key(t)  # globally-unique; a bare id would collide across files
+        # F-1: settle any orphan of the previous window before considering a new one. If the
+        # run is still live (or we resumed it), defer the new window — one run per item at a
+        # time, and the old debt is paid first.
+        if not await self._settle_orphan(t, key):
+            return
+        now = self._local_now(t.schedule.tz)
+        # Store calls are blocking specstar I/O — offload so a sweep never sits on the event
+        # loop (the code_sync sweeper offloads its whole tick for the same reason).
+        last = await asyncio.to_thread(self._store.last_window, key)
+        if not is_due(t.schedule, now, last):
+            return
+        window = fire_window(t.schedule, now)
+        if not await asyncio.to_thread(self._store.try_claim, key, window):
+            return  # a peer claimed this window (leader election + once-per-window)
+        run_id = await self._start(t, window)
+        if run_id and self._orphan is not None:
+            await asyncio.to_thread(self._store.record_run, key, run_id)  # track for orphan pickup
+
+    async def _settle_orphan(self, t: ScheduleTrigger, key: str) -> bool:
+        """Resolve the trigger's previous run. Returns True to PROCEED to a new window (no run,
+        or one that settled / was abandoned), False to DEFER this tick (a live run, or an orphan
+        we just resumed — F-1: pay the old debt before firing again)."""
+        if self._orphan is None:
+            return True
+        run_id, attempts = await asyncio.to_thread(self._store.get_run, key)
+        if not run_id:
+            return True
+        disp = await asyncio.to_thread(self._orphan.disposition, run_id, self._grace_ms)
+        if disp == _ACTIVE:
+            return False  # a live run holds the item — don't fire a second
+        if disp == _STUCK:
+            if attempts < self._max_attempts:  # F-1: resume the orphan first
+                if await self._orphan.resume(
+                    run_id, slug=t.slug, profile=t.profile, grace_ms=self._grace_ms
+                ):
+                    await asyncio.to_thread(self._store.note_resume, key)
+                return False  # resumed (or a peer did) — skip the new window this tick
+            # F-2: resume budget spent → abandon to a discoverable terminal, then free the slot.
+            await self._orphan.abandon(
+                run_id, reason=f"stuck orphan abandoned after {self._max_attempts} resume attempts"
+            )
+        await asyncio.to_thread(self._store.clear_run, key)  # settled / gone / abandoned
+        return True

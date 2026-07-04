@@ -245,6 +245,12 @@ tz 或標為 known limitation。full cron 日後當**加法擴充**(schedule 也
 - **F-2 時效**:孤兒逾期 → 標 **abandoned-但可查**(進 D2d 可查機制,不刪=靜默、不無限拖)。
   - **時效單位跟觸發型態走**:cron = `N 個 window`(預設 1~2);event = **絕對時間 TTL**(event
     window 無規律間隔)。
+  - **落地映射(誠實記錄)**:cron 的「N 個 window」以 **N 次 resume 嘗試**實作
+    (`max_resume_attempts`,預設 2)——每個 sweep tick 對孤兒補一次 resume 並記一次;attempts 用
+    盡即 abandon。孤兒偵測沿用 #227 慣用法:run RUNNING 但 `progress_at` 心跳過 `grace_ms`
+    (預設 1h)即判 stuck;resume 走 `expected_etag` CAS 選單一 pod 重驅動,journal 讓已完成 step
+    skip(冪等)。abandon = 終態 `error` + `result.abandoned` 標記 + 釋放 sandbox + notify_failure
+    (可查、可從清單發現)。
   - **abandon = 單向落盤一次的狀態轉換**:判定一次寫死、不在邊界 active↔abandoned 抖動;重跑靠
     人從可查介面手動觸發(呼應「裁決落盤、重跑沿用」)。
 

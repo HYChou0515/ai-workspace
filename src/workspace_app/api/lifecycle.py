@@ -182,6 +182,7 @@ def build_lifespan(
         captured) so the orchestrator — built after the FastAPI app — is read from
         ``app.state.workflow_orchestrator``, symmetric with ``index_sweeper``."""
         from ..workflow.triggers import (
+            OrchestratorOrphanOps,
             SpecstarTriggerStore,
             TriggerSweeper,
             build_trigger_start,
@@ -189,11 +190,15 @@ def build_lifespan(
         )
 
         assert trigger_check_interval is not None  # gated by caller
+        orchestrator = app.state.workflow_orchestrator
         sweeper = TriggerSweeper(
             load=discover_schedule_triggers,
             store=SpecstarTriggerStore(spec),
-            start=build_trigger_start(app.state.workflow_orchestrator.start),
+            start=build_trigger_start(orchestrator.start),
             now_utc=_utcnow,
+            # #429 P8: chase orphaned triggered runs (a pod died mid-run) — resume from the
+            # journal, then abandon to a discoverable terminal once the resume budget is spent.
+            orphan=OrchestratorOrphanOps(orchestrator),
         )
         try:
             while True:

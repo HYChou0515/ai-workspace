@@ -28,11 +28,13 @@ from workspace_app.workflow.triggers import (
 
 class FakeStore(ITriggerStore):
     """An in-memory trigger store: a (trigger_id, window) claim is CAS — the first caller
-    wins, and the claimed window becomes ``last_window``."""
+    wins, and the claimed window becomes ``last_window``. Also tracks the window's in-flight
+    run + resume attempts for orphan pickup."""
 
     def __init__(self) -> None:
         self._claimed: set[tuple[str, str]] = set()
         self._last: dict[str, str] = {}
+        self._run: dict[str, tuple[str, int]] = {}
 
     def last_window(self, trigger_id: str) -> str:
         return self._last.get(trigger_id, "")
@@ -42,7 +44,22 @@ class FakeStore(ITriggerStore):
             return False
         self._claimed.add((trigger_id, fire_window))
         self._last[trigger_id] = fire_window
+        self._run.pop(trigger_id, None)  # a fresh window resets the run slot
         return True
+
+    def record_run(self, trigger_id: str, run_id: str) -> None:
+        self._run[trigger_id] = (run_id, 1)
+
+    def note_resume(self, trigger_id: str) -> None:
+        run_id, attempts = self._run.get(trigger_id, ("", 0))
+        self._run[trigger_id] = (run_id, attempts + 1)
+
+    def clear_run(self, trigger_id: str) -> None:
+        _run_id, attempts = self._run.get(trigger_id, ("", 0))
+        self._run[trigger_id] = ("", attempts)
+
+    def get_run(self, trigger_id: str) -> tuple[str, int]:
+        return self._run.get(trigger_id, ("", 0))
 
 
 def _fixed_now(dt: datetime):
@@ -242,6 +259,13 @@ async def test_sweeper_keys_the_store_by_the_globally_qualified_trigger_id():
             claimed.append(trigger_id)
             return True
 
+        def record_run(self, trigger_id: str, run_id: str) -> None: ...
+        def note_resume(self, trigger_id: str) -> None: ...
+        def clear_run(self, trigger_id: str) -> None: ...
+
+        def get_run(self, trigger_id: str) -> tuple[str, int]:
+            return ("", 0)
+
     fired: list[tuple[str, str, str]] = []
 
     async def start(t: ScheduleTrigger, win: str) -> None:
@@ -252,6 +276,119 @@ async def test_sweeper_keys_the_store_by_the_globally_qualified_trigger_id():
     await sweep.tick()
     assert claimed == ["rca:echo:weekly"]
     assert fired == [("rca", "echo", "weekly")]
+
+
+# ── #429 P8: sweeper orphan pickup + abandon ─────────────────────────────────
+
+
+class FakeOrphan:
+    """A scripted ``IOrphanOps``: every run classifies as ``disp``; resume/abandon are recorded."""
+
+    def __init__(self, disp: str, *, resume_wins: bool = True) -> None:
+        self._disp = disp
+        self._resume_wins = resume_wins
+        self.resumed: list[str] = []
+        self.abandoned: list[tuple[str, str]] = []
+
+    def disposition(self, run_id: str, grace_ms: int) -> str:
+        return self._disp
+
+    async def resume(self, run_id: str, *, slug: str, profile: str, grace_ms: int) -> bool:
+        self.resumed.append(run_id)
+        return self._resume_wins
+
+    async def abandon(self, run_id: str, *, reason: str) -> None:
+        self.abandoned.append((run_id, reason))
+
+
+def _orphan_trigger() -> ScheduleTrigger:
+    return ScheduleTrigger(
+        id="w",
+        workflow_id="r",
+        acting_user="b",
+        item_id="i",
+        slug="s",
+        profile="p",
+        schedule=Schedule(every="daily", at="03:00"),
+    )
+
+
+def _orphan_sweeper(store, orphan, fired, **kw):
+    async def start(t, win):
+        fired.append(win)
+        return "run-new"
+
+    return TriggerSweeper(
+        load=lambda: [_orphan_trigger()],
+        store=store,
+        start=start,
+        now_utc=_fixed_now(datetime(2026, 7, 4, 3, 30)),  # a new daily window is due
+        orphan=orphan,
+        grace_ms=1_000,
+        max_resume_attempts=2,
+        **kw,
+    )
+
+
+async def test_sweeper_resumes_a_stuck_orphan_before_firing_a_new_window():
+    """#429 F-1: a stuck orphan of the previous window is resumed FIRST, and the new window is
+    deferred this tick — the old debt is paid before firing again."""
+    store = FakeStore()
+    store.try_claim("s:p:w", "2026-07-03")  # a prior window
+    store.record_run("s:p:w", "run-old")  # whose run is now orphaned
+    orphan, fired = FakeOrphan("stuck"), []
+    await _orphan_sweeper(store, orphan, fired).tick()
+    assert orphan.resumed == ["run-old"]  # paid the old debt
+    assert store.get_run("s:p:w") == ("run-old", 2)  # resume attempt counted
+    assert fired == []  # the new window did NOT fire this tick (F-1)
+
+
+async def test_sweeper_abandons_an_orphan_past_budget_then_fires_the_new_window():
+    """#429 F-2: once the resume budget is spent the orphan is abandoned (discoverable), the
+    debt is written off, and the current window is then free to fire."""
+    store = FakeStore()
+    store.try_claim("s:p:w", "2026-07-03")
+    store.record_run("s:p:w", "run-old")
+    store.note_resume("s:p:w")  # attempts now 2 == max_resume_attempts
+    orphan, fired = FakeOrphan("stuck"), []
+    await _orphan_sweeper(store, orphan, fired).tick()
+    assert [r for r, _ in orphan.abandoned] == ["run-old"]  # gave up, discoverably
+    assert orphan.resumed == []
+    assert fired == ["2026-07-04"]  # the new window fired after writing off the debt
+    assert store.get_run("s:p:w") == ("run-new", 1)  # the new run is tracked
+
+
+async def test_sweeper_defers_the_new_window_while_a_run_is_still_live():
+    """A previous run still active (running-fresh / awaiting a human) holds the item — the
+    sweeper does not fire a second run on it, and touches nothing."""
+    store = FakeStore()
+    store.try_claim("s:p:w", "2026-07-03")
+    store.record_run("s:p:w", "run-live")
+    orphan, fired = FakeOrphan("active"), []
+    await _orphan_sweeper(store, orphan, fired).tick()
+    assert fired == [] and orphan.resumed == [] and orphan.abandoned == []
+    assert store.get_run("s:p:w") == ("run-live", 1)  # untouched
+
+
+async def test_sweeper_clears_a_settled_run_then_fires_the_new_window():
+    """Once the previous run settled (terminal), the slot is freed and the due window fires."""
+    store = FakeStore()
+    store.try_claim("s:p:w", "2026-07-03")
+    store.record_run("s:p:w", "run-done")
+    orphan, fired = FakeOrphan("settled"), []
+    await _orphan_sweeper(store, orphan, fired).tick()
+    assert fired == ["2026-07-04"]
+    assert store.get_run("s:p:w") == ("run-new", 1)  # cleared, then the new run tracked
+
+
+async def test_sweeper_records_the_started_run_for_orphan_tracking():
+    """A fresh trigger with no prior run fires and records the run id, so a future sweep can
+    chase it if this pod dies."""
+    store = FakeStore()
+    orphan, fired = FakeOrphan("gone"), []
+    await _orphan_sweeper(store, orphan, fired).tick()
+    assert fired == ["2026-07-04"]
+    assert store.get_run("s:p:w") == ("run-new", 1)
 
 
 async def test_sweeper_skips_disabled_and_not_due_triggers():
@@ -305,6 +442,25 @@ def test_specstar_store_keeps_triggers_independent(spec_instance: SpecStar):
     assert store.try_claim("rca:echo:weekly", "2026-W28") is True
     assert store.try_claim("hub:echo:weekly", "2026-W28") is True  # different trigger, same window
     assert store.last_window("rca:echo:weekly") == "2026-W28"
+
+
+def test_specstar_store_tracks_the_windows_run_and_resume_attempts(spec_instance: SpecStar):
+    """The ledger remembers the run a window started + how many times it was resumed (#429 P8),
+    so a later sweep can chase an orphan; a NEW window resets the run slot."""
+    register_trigger_store(spec_instance)
+    store = SpecstarTriggerStore(spec_instance)
+
+    assert store.get_run("t") == ("", 0)  # nothing recorded yet
+    store.try_claim("t", "2026-07-04")
+    store.record_run("t", "run-1")
+    assert store.get_run("t") == ("run-1", 1)  # first start → attempt 1
+    store.note_resume("t")
+    assert store.get_run("t") == ("run-1", 2)  # a resume bumps the budget counter
+    store.clear_run("t")
+    assert store.get_run("t") == ("", 2)  # run forgotten (settled / abandoned)
+    store.try_claim("t", "2026-07-05")  # a new window is a fresh run slot
+    assert store.get_run("t") == ("", 0)
+    assert store.last_window("t") == "2026-07-05"  # the window ledger still advanced
 
 
 def test_register_trigger_store_is_idempotent(spec_instance: SpecStar):
