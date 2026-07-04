@@ -299,9 +299,15 @@ class WorkflowHandle:
             remembered = await _remembered_alive()  # journal-first self-dedup (决议2)
             if remembered is not None:
                 return Verdict(kind="duplicate", payload={"of": remembered, "origin": "self"})
-            matched = await _cross_match()  # M1-AI cross-origin (决议2, P3)
-            if matched is not None:
-                return Verdict(kind="duplicate", payload={"of": matched, "origin": "cross"})
+            # create_new (M2, 决议4): a fresh entity per invocation — it must NOT dedup
+            # against another origin's entity, so skip M1-AI cross-matching. The
+            # created.json self-dedup above still makes a WITHIN-invocation revise reuse
+            # (never double-create); the cross-invocation "fresh per trigger" needs #429's
+            # per-invocation journal boundary (the DSL surface is gated until then).
+            if on_duplicate != "create_new":
+                matched = await _cross_match()  # M1-AI cross-origin (决议2, P3)
+                if matched is not None:
+                    return Verdict(kind="duplicate", payload={"of": matched, "origin": "cross"})
             return Verdict(kind="new")
 
         async def _cross_merge(number: int) -> None:

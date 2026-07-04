@@ -885,15 +885,26 @@ def _validate_step(
                 errs.append(
                     f"{where}: capability {step.call!r} needs a 'name' (#435 dedup identity)"
                 )
-            # #435 决议4: ``on_duplicate`` is validated against THIS capability's policy set.
-            allowed_pol = _CAP_ON_DUPLICATE.get(step.call, ())
-            if step.on_duplicate and step.on_duplicate not in allowed_pol:
+            # #435 P4 by-construction gate: ``create_new`` (M2 token) means "a fresh entity
+            # per invocation", which needs #429's per-invocation journal boundary — absent
+            # it, a manual re-run reuses the journal and SILENTLY reuses the entity instead
+            # of minting a new one. Block the author surface until #429 lands rather than
+            # ship that silent-wrong behavior (the within-run mechanism is ready + tested).
+            elif step.on_duplicate == "create_new":
                 errs.append(
-                    f"{where}: capability {step.call!r} 'on_duplicate' must be one of "
-                    f"{list(allowed_pol)}"
-                    if allowed_pol
-                    else f"{where}: capability {step.call!r} does not take an 'on_duplicate'"
+                    f"{where}: capability {step.call!r} 'on_duplicate' = 'create_new' needs the "
+                    "per-invocation journal boundary (#429), not yet available"
                 )
+            # #435 决议4: ``on_duplicate`` is validated against THIS capability's policy set.
+            else:
+                allowed_pol = _CAP_ON_DUPLICATE.get(step.call, ())
+                if step.on_duplicate and step.on_duplicate not in allowed_pol:
+                    errs.append(
+                        f"{where}: capability {step.call!r} 'on_duplicate' must be one of "
+                        f"{list(allowed_pol)}"
+                        if allowed_pol
+                        else f"{where}: capability {step.call!r} does not take an 'on_duplicate'"
+                    )
         _check_interp(
             [step.collection, step.path, step.title, step.body, step.keys, step.args],
             scope,

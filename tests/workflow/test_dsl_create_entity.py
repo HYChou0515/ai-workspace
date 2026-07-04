@@ -71,6 +71,25 @@ def test_create_entity_on_duplicate_policy_is_validated_per_capability() -> None
     assert any("does not take an 'on_duplicate'" in e for e in on_idempotent)
 
 
+def test_create_new_is_gated_until_the_per_invocation_journal_boundary() -> None:
+    """P4 by-construction gate: ``on_duplicate: create_new`` is statically rejected until
+    #429's per-invocation journal boundary exists — otherwise a manual re-run would reuse
+    the journal and silently reuse the entity instead of minting a fresh one."""
+    errs = _errs(
+        [
+            {
+                "type": "capability",
+                "call": "create_entity",
+                "phase": "p",
+                "type_name": "issue",
+                "name": "daily",
+                "on_duplicate": "create_new",
+            }
+        ]
+    )
+    assert any("create_new" in e and "#429" in e for e in errs)
+
+
 def test_reference_to_unknown_capability_output_field_is_rejected() -> None:
     """A named capability exposes its FIXED output schema, so ``{steps.<name>.<field>}``
     validates against what it actually produces — a bogus field is caught statically."""
