@@ -299,11 +299,13 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # values are backfilled by the fan-out (doc-create + the collection permission
     # setter), NOT by migrate (a migrate step can't load the parent collection).
     #
-    # #308: `permission.visibility` + `permission.read_meta` indexed so a doc's OWN
-    # read override (SourceDoc.permission — the intersect-with-collection tightening)
-    # is filterable at the storage layer: the `source_doc` access_scope ANDs a
-    # doc-override predicate onto the collection-mirror one, and the AI-retrieval
-    # denylist queries overridden docs by `permission.visibility IS NOT NULL`.
+    # #308: `permission.visibility` + `permission.read_meta` + `permission.read_content`
+    # indexed so a doc's OWN read override (SourceDoc.permission — the intersect-with-
+    # collection tightening) is filterable at the storage layer: the `source_doc`
+    # access_scope ANDs a doc-override predicate onto the collection-mirror one, and the
+    # `denied_doc_ids` denylist (list + AI-retrieval) queries overridden docs by
+    # `permission.visibility IS NOT NULL` and authorizes each from its indexed grant
+    # lists — a METAS-ONLY read (no data blob), so it stays inside the #395 list budget.
     # Bumped v7 → v8 with a no-op reindex step: `permission` defaults to `None`, so
     # a pre-#308 row's `permission.visibility` extracts to null ≡ "no override"
     # (the storage-scope's `is_null()` clause passes it through), needing no data
@@ -333,6 +335,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("collection_created_by", str),
             IndexableField("permission.visibility", str),
             IndexableField("permission.read_meta", list),
+            IndexableField("permission.read_content", list),
         ],
         access_scope=source_doc_access_scope(superusers, groups),
         # #308: gate a per-doc `permission` (override) write to the collection owner

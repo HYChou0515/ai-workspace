@@ -25,7 +25,16 @@ def test_ask_knowledge_base_depth_reaches_kb_search():
     recorded: dict[str, object] = {}
 
     class _RecordingRetriever:
-        def search(self, query, collection_ids, on_progress, *, enhancements=None, location=None):
+        def search(
+            self,
+            query,
+            collection_ids,
+            on_progress,
+            *,
+            enhancements=None,
+            location=None,
+            exclude_doc_ids=frozenset(),
+        ):
             recorded["enh"] = enhancements
             return []
 
@@ -60,7 +69,16 @@ def test_ask_knowledge_base_caps_kb_search_calls():
     captured: dict[str, str] = {}
 
     class _CountingRetriever:
-        def search(self, query, collection_ids, on_progress, *, enhancements=None, location=None):
+        def search(
+            self,
+            query,
+            collection_ids,
+            on_progress,
+            *,
+            enhancements=None,
+            location=None,
+            exclude_doc_ids=frozenset(),
+        ):
             calls["n"] += 1
             return []
 
@@ -98,7 +116,16 @@ def test_shared_budget_spans_multiple_ask_knowledge_base_calls():
     captured: dict[str, str] = {}
 
     class _CountingRetriever:
-        def search(self, query, collection_ids, on_progress, *, enhancements=None, location=None):
+        def search(
+            self,
+            query,
+            collection_ids,
+            on_progress,
+            *,
+            enhancements=None,
+            location=None,
+            exclude_doc_ids=frozenset(),
+        ):
             calls["n"] += 1
             return []
 

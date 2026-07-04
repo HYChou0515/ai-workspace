@@ -305,7 +305,16 @@ def test_kb_search_logs_underlying_exception_before_reraising(caplog):
     from workspace_app.agent import AgentToolContext, kb_search_impl
 
     class _BrokenRetriever:
-        def search(self, query, collection_ids, on_progress, *, enhancements=None, location=None):
+        def search(
+            self,
+            query,
+            collection_ids,
+            on_progress,
+            *,
+            enhancements=None,
+            location=None,
+            exclude_doc_ids=frozenset(),
+        ):
             raise ConnectionRefusedError("Ollama at http://localhost:11434 not reachable")
 
     ctx = RunContextWrapper(AgentToolContext(retriever=_BrokenRetriever()))  # ty: ignore
@@ -332,7 +341,16 @@ class _RecordingRetriever:
     def __init__(self):
         self.enhancements = "UNSET"
 
-    def search(self, query, collection_ids, on_progress, *, enhancements=None, location=None):
+    def search(
+        self,
+        query,
+        collection_ids,
+        on_progress,
+        *,
+        enhancements=None,
+        location=None,
+        exclude_doc_ids=frozenset(),
+    ):
         self.enhancements = enhancements
         return []
 

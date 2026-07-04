@@ -561,3 +561,103 @@ def test_collection_export_excludes_denied_docs(tmp_path) -> None:  # noqa: ANN0
     assert "secret.md" not in names  # excluded from the zip
     paths = {d["path"] for d in manifest["documents"]}
     assert paths == {"public.md"}  # and from the manifest
+
+
+def test_folder_subtree_export_excludes_denied_docs(tmp_path) -> None:  # noqa: ANN001
+    """The raw folder-download ZIP (#247) honours the same #308 exclusion — a doc
+    the caller can't `read_content` never lands in the bytes-only archive."""
+    import zipfile
+
+    from workspace_app.kb.collection_export import build_kb_subtree_zip
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec)
+    _mk_doc(spec, cid, "public.md")
+    secret = _mk_doc(
+        spec,
+        cid,
+        "secret.md",
+        permission=Permission(visibility="restricted", read_content=["user:alice"]),
+    )
+    out = tmp_path / "subtree.zip"
+    build_kb_subtree_zip(spec, cid, "", out, frozenset({secret}))
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+    assert "public.md" in names
+    assert "secret.md" not in names  # the override-hidden doc is skipped
+
+
+def test_doc_permission_endpoints_404_on_an_unknown_doc() -> None:
+    """`_authorize_doc_permission` maps a missing SourceDoc to 404 on every verb —
+    the owner-guard can't run without a loaded doc."""
+    client, _ = _client_and_spec({"id": "bob"})
+    missing = encode_doc_id("nope", "ghost.md")
+    assert client.get(f"/kb/documents/{missing}/permission").status_code == 404
+    put = client.put(f"/kb/documents/{missing}/permission", json={"visibility": "private"})
+    assert put.status_code == 404
+    assert client.delete(f"/kb/documents/{missing}/permission").status_code == 404
+
+
+def test_clearing_an_unoverridden_doc_is_a_noop() -> None:
+    """DELETE on a doc that carries no override reverts nothing (idempotent) and
+    still reports public — the counter stays at zero."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    doc_id = _ingestor(spec).store(collection_id=cid, user="bob", filename="a.md", data=b"hi")[0]
+    r = client.delete(f"/kb/documents/{doc_id}/permission")
+    assert r.status_code == 200
+    assert r.json()["visibility"] == "public"
+    assert _override_count(spec, cid) == 0
+
+
+# ---------------------------------------------------------------------------
+# direct-unit branches specstar / the API never drive through HTTP
+# ---------------------------------------------------------------------------
+
+
+def test_and_scopes_drops_a_half_that_imposes_no_restriction() -> None:
+    """`_and_scopes` is a symmetric AND: an ``UNRESTRICTED`` / ``None`` half drops
+    out and the other decides; two real predicates combine. (The doc access_scope
+    only ever feeds two same-superuser halves, so the drop branches are exercised
+    here directly.)"""
+    from specstar import QB, UNRESTRICTED
+
+    from workspace_app.perm.scope import _and_scopes
+
+    pred_a = QB["a"] == "x"
+    pred_b = QB["b"] == "y"
+    a = lambda _u: pred_a  # noqa: E731
+    b = lambda _u: pred_b  # noqa: E731
+    unrestricted = lambda _u: UNRESTRICTED  # noqa: E731
+    nothing = lambda _u: None  # noqa: E731
+
+    assert _and_scopes(a, unrestricted)("u") is pred_a  # right half drops → left decides
+    assert _and_scopes(unrestricted, b)("u") is pred_b  # left half drops → right decides
+    assert _and_scopes(a, nothing)("u") is pred_a  # None right → left decides
+    assert _and_scopes(nothing, b)("u") is pred_b  # None left → right decides
+    both = _and_scopes(a, b)("u")  # two real predicates combine
+    assert both is not pred_a and both is not pred_b
+
+
+def test_source_doc_checker_write_without_a_body_is_not_a_permission_rewrite() -> None:
+    """A SourceDoc write action carrying no ``data`` (e.g. a bodyless ``modify``)
+    can't be a permission rewrite → allowed, even for a non-owner. Mirrors the
+    collection checker's same defensive branch."""
+    from specstar.permission import PermissionResult
+    from specstar.types import ResourceAction
+
+    from workspace_app.perm.checker import SourceDocPermissionChecker
+
+    doc = SourceDoc(
+        collection_id="c1",
+        path="a.md",
+        content=Binary(data=b"x"),
+        collection_created_by="bob",
+        permission=Permission(visibility="restricted"),
+    )
+    snap = type("Snap", (), {"data": doc})()
+    ctx = type(
+        "Ctx", (), {"action": ResourceAction.modify, "current_resource": snap, "user": "carol"}
+    )()
+    assert SourceDocPermissionChecker().check_permission(ctx) == PermissionResult.allow
