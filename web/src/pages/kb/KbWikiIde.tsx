@@ -26,6 +26,7 @@ import { FileBufferProvider, FileBufferStore, useFileBuffer, useIsDirty } from "
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import { FileTree } from "../investigation/FileTree";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
+import { fetchAllDocs } from "./useCollectionDocs";
 import { stem, WikiPageBody } from "./WikiPageBody";
 
 export function KbWikiIde({
@@ -63,19 +64,22 @@ export function KbWikiIde({
     [],
   );
 
-  // Source path → document id, for the Sources footer.
-  const { data: docsPage } = useQuery({
-    queryKey: qk.kb.documentsPage(collectionId, 0, 500),
-    queryFn: () => client.listDocuments(collectionId, { offset: 0, limit: 500 }),
+  // Source path → document id, for the Sources footer. Shares the collection's
+  // one document-list cache entry (qk.kb.documents + fetchAllDocs) with the doc
+  // IDE / cards tab instead of minting a separate `documentsPage` key that
+  // re-fetched the same list — so visiting both tabs fetches the list once.
+  const { data: allDocs } = useQuery({
+    queryKey: qk.kb.documents(collectionId),
+    queryFn: () => fetchAllDocs(client, collectionId),
   });
   const docIdByPath = useMemo(() => {
     const m = new Map<string, string>();
-    for (const d of docsPage?.items ?? []) {
+    for (const d of allDocs ?? []) {
       m.set(d.path, d.resource_id);
       m.set(d.path.split("/").pop() ?? d.path, d.resource_id); // basename fallback
     }
     return m;
-  }, [docsPage]);
+  }, [allDocs]);
 
   // `.gitkeep` keeps an otherwise-empty folder alive — drop it from the tree,
   // but surface its directory so the empty folder still shows.

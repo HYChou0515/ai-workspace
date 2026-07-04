@@ -306,6 +306,33 @@ describe("kbFileService", () => {
     expect(await file.text()).toBe("# original");
   });
 
+  it("copyFile uses the list row's file_id + content_type and skips the envelope round-trip", async () => {
+    // Like readFile (#431): the source doc's blob id and content-type are on the
+    // list row, so a copy must not pay the extra GET /source-doc/{id}.
+    backend.blobs.set("src-fid", "# source body");
+    const rowDocs: KbDocument[] = [
+      {
+        resource_id: "doc-src",
+        path: "/src.md",
+        content_type: "text/markdown",
+        file_id: "src-fid",
+        created_by: "me",
+        status: "ready",
+        size: 13,
+      },
+    ];
+    const kb = makeKb();
+    const svc = kbFileService("col-1", rowDocs, kb, vi.fn());
+    const mock = vi.mocked(apiFetch);
+    const before = mock.mock.calls.length;
+    await svc.copyFile("/src.md", "/copy.md");
+    const urls = mock.mock.calls.slice(before).map((c) => c[0] as string);
+    expect(urls).toContain("/source-doc/doc-src/blobs/src-fid");
+    expect(urls.some((u) => /^\/source-doc\/[^/]+$/.test(u))).toBe(false); // no envelope
+    const [, file] = kb.uploadDocument.mock.calls[0]!;
+    expect(await file.text()).toBe("# source body");
+  });
+
   it("mkdir persists a hidden .gitkeep placeholder for the folder", async () => {
     const kb = makeKb();
     const svc = kbFileService("col-1", docs, kb, vi.fn());
@@ -318,16 +345,14 @@ describe("kbFileService", () => {
     const svc = kbFileService("col-1", docs, makeKb());
 
     it("resolves a doc-relative ref to the sibling doc's content blob", () => {
-      // a ref in /guides/setup.md → ./diagram.png is the sibling /guides/diagram.png
-      expect(svc.fileUrl("./diagram.png", "/guides/setup.md")).toBe(
-        "/api/source-doc/img-1/blobs/imgfid",
-      );
+      // a ref in /guides/setup.md → ./diagram.png is the sibling /guides/diagram.png.
+      // Uses the canonical content-addressed /blobs/{id} — the SAME URL the
+      // citation drawer's rewritten sibling images use, so the browser caches once.
+      expect(svc.fileUrl("./diagram.png", "/guides/setup.md")).toBe("/api/blobs/imgfid");
     });
 
     it("resolves a collection-root (absolute) ref", () => {
-      expect(svc.fileUrl("/guides/diagram.png", "/notes.md")).toBe(
-        "/api/source-doc/img-1/blobs/imgfid",
-      );
+      expect(svc.fileUrl("/guides/diagram.png", "/notes.md")).toBe("/api/blobs/imgfid");
     });
 
     it("passes external URLs / fragments through unchanged", () => {
