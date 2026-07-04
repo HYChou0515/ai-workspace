@@ -89,3 +89,30 @@ async def test_convert_capability_stages_text_and_is_wired_onto_the_handle(monke
     wf = WorkflowHandle(store=executor._files, workspace_id=item_id)
     executor.wire_handle(wf, "run-1", item_id, "u", "chat-1")
     assert await wf.convert("uploads/notes.md", "notes.md") == ("notes.md", "passthrough")
+
+
+async def test_send_notification_capability_dedups_over_the_store(monkeypatch):
+    """#435 P5: wire_handle binds wf.send_notification → the executor's notify over the
+    in-app Notification store (the send ledger). One send lands one notification; a revise
+    of the same {recipient}:{topic} is deduped by the indexed ``dedup_key`` query."""
+    from specstar import QB
+
+    from workspace_app.resources import Notification
+    from workspace_app.workflow.handle import WorkflowHandle
+
+    spec, executor, item_id = _build(monkeypatch)
+    wf = WorkflowHandle(store=executor._files, workspace_id=item_id)
+    executor.wire_handle(wf, "run-1", item_id, "u", "chat-1")
+
+    r1 = await wf.send_notification(
+        "bob", "issue-5-overdue", name="notify", title="Issue #5 overdue"
+    )
+    assert r1["sent"] is True and r1["action"] == "send"
+
+    # a revise: same recipient+topic, changed title → M1 fingerprint dedup → no re-send
+    r2 = await wf.send_notification("bob", "issue-5-overdue", name="notify", title="Issue #5 STILL")
+    assert r2["sent"] is False and r2["action"] == "skip"
+
+    rm = spec.get_resource_manager(Notification)
+    rows = list(rm.list_resources((QB["dedup_key"] == "bob:issue-5-overdue").build()))
+    assert len(rows) == 1  # exactly one notification created, deduped over the store

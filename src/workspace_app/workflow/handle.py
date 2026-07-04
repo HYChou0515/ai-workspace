@@ -21,6 +21,7 @@ from typing import Any
 
 from ..filestore.protocol import FileStore
 from .engine import StepFailed, run_step
+from .nonidempotent import Result, Verdict, run_nonidempotent
 
 # How an agent node runs one turn: given the (feedback-augmented) prompt + the tool
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
@@ -59,6 +60,15 @@ ConvertCapability = Callable[[str, str], Awaitable[tuple[str | None, str]]]
 # (streamed under the hood); tests inject a fake. ``None`` ⇒ no cross-origin AI dedup
 # (journal-first self-dedup still works) — so it is inert until wired + live-checked (P6).
 AskLlm = Callable[[str], Awaitable[str]]
+# The send-notification capability (#435 P5): (recipient, title, body, dedup_key) -> the
+# notification id. Creates one in-app Notification carrying the send-once fingerprint —
+# the create IS both the send and the ledger entry (M1, atomic). Wired by the driver over
+# the Notification store; faked in tests.
+NotifyCapability = Callable[[str, str, str, str], Awaitable[str]]
+# The send-ledger query (#435 P5): (dedup_key) -> has this fingerprint already been sent?
+# An indexed Notification query — the store IS the ledger. Wired by the driver; faked in
+# tests. ``None`` ⇒ never deduped (every send fires).
+NotificationSentCheck = Callable[[str], Awaitable[bool]]
 
 
 def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
@@ -99,6 +109,8 @@ class WorkflowHandle:
         upsert_card: UpsertCardCapability | None = None,
         find_card: FindCardCapability | None = None,
         ask_llm: AskLlm | None = None,
+        notify: NotifyCapability | None = None,
+        notification_sent: NotificationSentCheck | None = None,
         credential: str = "",
         step_timeout_s: float | None = None,
     ) -> None:
@@ -143,6 +155,12 @@ class WorkflowHandle:
         """Wired by the orchestration driver — the one-shot LLM classifier backing
         ``create_entity``'s M1-AI cross-origin dedup (#435 P3). None ⇒ no cross-origin AI
         match (journal-first self-dedup still works)."""
+        self._notify = notify
+        """Wired by the orchestration driver — the ``send_notification`` capability (#435
+        P5) over the in-app Notification store."""
+        self._notification_sent = notification_sent
+        """Wired by the orchestration driver — the send-ledger query backing
+        ``send_notification``'s M1-fingerprint dedup (#435 P5)."""
         self.credential = credential
         """The run-scoped credential (manual §15) — injected into a deterministic
         node's sandbox env so its script can auth capability HTTP calls. "" until
@@ -258,7 +276,6 @@ class WorkflowHandle:
             render_contribution,
             replace_fenced_block,
         )
-        from .nonidempotent import Result, Verdict, run_nonidempotent
 
         catalog, _diags = await discover_catalog(self._store, self._workspace_id)
         if type_name not in catalog:
@@ -366,6 +383,54 @@ class WorkflowHandle:
             cache=cache,
         )
         return int(result.fields["number"])
+
+    async def send_notification(
+        self,
+        recipient: str,
+        topic: str,
+        *,
+        name: str,
+        title: str = "",
+        body: str = "",
+        phase: str = "notify",
+        key: str = "",
+        cache: bool = True,
+    ) -> dict[str, Any]:
+        """Send one in-app notification as a non-idempotent capability on the #435 shell
+        (M1 send-once). ``decide`` queries the Notification store by the send-once
+        fingerprint ``{recipient}:{topic}`` — the store IS the ledger — so a replay or a
+        revise that changes only the title never re-notifies about the same topic; ``act``
+        creates the notification (send + ledger in one atomic write, so there is no
+        act-crash gap). A per-window fingerprint (once-per-day rather than once-ever) needs
+        #429's time-slicing; until then the fingerprint is once-ever per (recipient, topic).
+        Returns ``{sent, action, notification_id}``. ``name`` is the capability's site."""
+        if self._notify is None:
+            raise RuntimeError("send_notification needs a capability (wired by the run driver)")
+        notify_fn = self._notify
+        sent_check = self._notification_sent
+        fingerprint = f"{recipient}:{topic}"
+
+        async def decide(_feedback: str | None) -> Verdict:
+            already = sent_check is not None and await sent_check(fingerprint)
+            return Verdict(kind="duplicate" if already else "new", payload={"key": fingerprint})
+
+        async def act(verdict: Verdict) -> Result:
+            if verdict.kind == "duplicate":
+                return Result(fields={"sent": False, "action": "skip", "notification_id": ""})
+            nid = await notify_fn(recipient, title or topic, body, fingerprint)
+            return Result(fields={"sent": True, "action": "send", "notification_id": nid})
+
+        result = await run_nonidempotent(
+            self,
+            name=name,
+            inputs={"recipient": recipient, "topic": topic, "title": title, "body": body},
+            decide=decide,
+            act=act,
+            key=key,
+            phase=phase,
+            cache=cache,
+        )
+        return result.fields
 
     async def convert(
         self, src: str, dest: str, *, phase: str = "convert", cache: bool = True

@@ -455,8 +455,9 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # → term-question dedup is an exact element lookup; kind indexed → split term vs
     # description without a scan.
     spec.add_model(DocQuestion, indexed_fields=["collection_id", "status", "kind", "norm_key"])
-    # recipient indexed so "my notifications" is a query, not a full scan.
-    spec.add_model(Notification, indexed_fields=["recipient"])
+    # recipient indexed so "my notifications" is a query, not a full scan; dedup_key
+    # indexed so a workflow send_notification's "already sent?" is a query (#435 P5).
+    spec.add_model(Notification, indexed_fields=["recipient", "dedup_key"])
     # #100: workflow runs. item_id indexed so "an item's runs" is a query; status
     # so "active runs" (the concurrency cap) is a query, not a full scan. The
     # filesystem is the journal (manual §9), so this resource holds status, not

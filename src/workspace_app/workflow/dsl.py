@@ -36,11 +36,21 @@ from .steps import agent_step, agent_write_step, sandbox_node
 # The capability calls a user DSL may invoke (manual §22, Q4). Each maps to a
 # ``WorkflowHandle`` method that runs under the captured user's authz; a ``sandbox``
 # step gets no credential, so reliable side-effects only ever go through these.
-CAPABILITIES = ("ingest_to_collection", "upsert_context_card", "create_entity")
+CAPABILITIES = (
+    "ingest_to_collection",
+    "upsert_context_card",
+    "create_entity",
+    "send_notification",
+)
 _CAP_REQUIRED: dict[str, tuple[str, ...]] = {
     "ingest_to_collection": ("collection", "path"),
     "upsert_context_card": ("collection", "keys"),
     "create_entity": ("type_name",),
+}
+# #435 P5: send_notification takes its recipient/topic/title/body in ``args`` (like
+# create_entity's entity fields); these keys are required there.
+_CAP_REQUIRED_ARGS: dict[str, tuple[str, ...]] = {
+    "send_notification": ("recipient", "topic"),
 }
 # #435 决议4: a *non-idempotent* capability's ``on_duplicate`` policy set is a
 # per-capability interface — defined by the capability, NOT a strategy-layer default that
@@ -55,6 +65,7 @@ _CAP_ON_DUPLICATE: dict[str, tuple[str, ...]] = {
 # capability in this map must carry a ``name`` (its stable dedup identity, §P2).
 _CAP_OUTPUTS: dict[str, dict[str, Any]] = {
     "create_entity": {"number": "int", "created": "bool", "action": "str"},
+    "send_notification": {"sent": "bool", "action": "str", "notification_id": "str"},
 }
 # The deterministic gate builders a check spec may name (manual §6).
 _CHECKS = ("file_nonempty", "choice_in", "collection_has")
@@ -530,6 +541,20 @@ async def _exec_capability(
             key=key,  # the map-element scope key: one entity per element (§P2)
             phase=step.phase,
         )
+    elif step.call == "send_notification":  # #435 P5 — M1 send-once over the notification store
+        a = {
+            k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
+            for k, v in step.args.items()
+        }
+        await wf.send_notification(
+            a["recipient"],
+            a["topic"],
+            name=step.name,
+            title=a.get("title", ""),
+            body=a.get("body", ""),
+            key=key,
+            phase=step.phase,
+        )
     else:  # upsert_context_card (the only other allowed call; validated upstream)
         await wf.upsert_context_card(
             await _resolve(step.collection, ns, wf),
@@ -876,9 +901,12 @@ def _validate_step(
                 f"{where}: capability {step.call!r} is not allowed (one of {list(capabilities)})"
             )
         else:
-            for req in _CAP_REQUIRED[step.call]:
+            for req in _CAP_REQUIRED.get(step.call, ()):
                 if not getattr(step, req):
                     errs.append(f"{where}: capability {step.call!r} needs {req!r}")
+            for areq in _CAP_REQUIRED_ARGS.get(step.call, ()):  # #435 P5: args-carried reqs
+                if not step.args.get(areq):
+                    errs.append(f"{where}: capability {step.call!r} needs {areq!r} in 'args'")
             # #435: a non-idempotent capability (one with a fixed output schema) needs a
             # ``name`` — its stable dedup identity — else two sites would collide.
             if step.call in _CAP_OUTPUTS and not step.name:

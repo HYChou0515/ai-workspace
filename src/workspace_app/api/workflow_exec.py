@@ -29,7 +29,7 @@ from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
-from .notifications import notify
+from .notifications import notification_sent, notify
 from .rca_messages import to_rca_message
 
 if TYPE_CHECKING:
@@ -229,6 +229,26 @@ class WorkflowExecutor:
 
         return collection_has_doc(self._spec, collection=collection, path=path)
 
+    async def send_notification(
+        self, captured_user: str, recipient: str, title: str, body: str, dedup_key: str
+    ) -> str:
+        """The send_notification capability (#435 P5): one in-app Notification carrying the
+        send-once fingerprint (``dedup_key``) — the create is both the send and the ledger."""
+        return notify(
+            self._spec,
+            recipient=recipient,
+            kind="workflow",
+            title=title,
+            body=body,
+            dedup_key=dedup_key,
+            actor=captured_user,
+        )
+
+    async def notification_already_sent(self, dedup_key: str) -> bool:
+        """Backs send_notification's M1 dedup (#435 P5): an indexed Notification query on
+        the send-once fingerprint — the store IS the ledger."""
+        return notification_sent(self._spec, dedup_key)
+
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
     ) -> None:
@@ -250,6 +270,10 @@ class WorkflowExecutor:
             captured_user, collection, keys, title, body
         )
         wf._find_card = self.find_card
+        wf._notify = lambda recipient, title, body, dedup_key: self.send_notification(
+            captured_user, recipient, title, body, dedup_key
+        )
+        wf._notification_sent = self.notification_already_sent
 
     def _any_running(self, item_id: str) -> bool:
         """Is any run on this item still RUNNING? Used to decide whether the shared
