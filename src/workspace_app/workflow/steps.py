@@ -10,6 +10,7 @@ LLM-driven and **must** be gated; a deterministic node is author code with no LL
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from typing import Any
 
@@ -17,6 +18,32 @@ from .checks import file_nonempty
 from .engine import Check, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
+
+
+async def reads_fingerprint(wf: WorkflowHandle, reads: list[str] | None) -> dict[str, str] | None:
+    """A content fingerprint of the files a step DECLARES it reads (#429 P1).
+
+    Expands each ``reads`` glob/path, hashes each matched file's bytes, and returns a
+    sorted ``{relpath: sha256}`` map to fold into the step's input-hash — so editing a
+    declared file's CONTENT (not just its path) re-runs the step, which a bare path
+    arg does not give. The engine does this for the author: they only DECLARE what they
+    read; they cannot forget to interpolate a digest or compute it wrong.
+
+    A declared pattern that matches nothing contributes a stable sentinel keyed by the
+    pattern, so a missing→present transition also re-runs the step. Returns ``None`` for
+    an empty/absent ``reads`` so a step that declares nothing keeps its exact prior hash
+    (no cache-bust for the untouched majority)."""
+    if not reads:
+        return None
+    fp: dict[str, str] = {}
+    for pat in reads:
+        matched = await wf.glob(pat)
+        if not matched:
+            fp[pat.lstrip("/")] = "\x00absent"  # keyed by the pattern → appears/disappears
+            continue
+        for path in matched:
+            fp[path.lstrip("/")] = hashlib.sha256(await wf.read(path)).hexdigest()
+    return fp
 
 
 def _parse_fields(text: str) -> Any:
@@ -50,6 +77,7 @@ async def agent_step(
     tools: list[str] | None = None,
     retries: int = 0,
     cache: bool = True,
+    reads: list[str] | None = None,
 ) -> Any:
     """Run one agent node — an LLM turn on the item, gated. ``check`` is a required
     argument: an agent node without a gate is not expressible (manual §5.1). The
@@ -70,12 +98,16 @@ async def agent_step(
                 f"agent step {name or phase!r} timed out after {wf.step_timeout_s}s"
             ) from exc
 
+    args: dict[str, Any] = {"prompt": prompt, "tools": tools, "phase": phase}
+    fp = await reads_fingerprint(wf, reads)
+    if fp is not None:  # #429 P1: only when declared → untouched steps keep their hash
+        args["reads"] = fp
     return await run_step(
         wf,
         name=name or phase,
         key=key,
         phase=phase,
-        args={"prompt": prompt, "tools": tools, "phase": phase},
+        args=args,
         execute=execute,
         check=check,
         retries=retries,
@@ -96,6 +128,7 @@ async def agent_write_step(
     cache: bool = True,
     check: Check | None = None,
     outputs: dict[str, Any] | None = None,
+    reads: list[str] | None = None,
 ) -> Any:
     """Decision/action content step (issue #107): the agent PRODUCES the file's
     content as its message output — it does NOT call ``write_file`` — then a
@@ -130,12 +163,22 @@ async def agent_write_step(
             result["fields"] = _parse_fields(text)
         return result
 
+    args: dict[str, Any] = {
+        "prompt": prompt,
+        "tools": tools,
+        "out": out,
+        "outputs": outputs,
+        "phase": phase,
+    }
+    fp = await reads_fingerprint(wf, reads)
+    if fp is not None:  # #429 P1: only when declared → untouched steps keep their hash
+        args["reads"] = fp
     return await run_step(
         wf,
         name=name or phase,
         key=key,
         phase=phase,
-        args={"prompt": prompt, "tools": tools, "out": out, "outputs": outputs, "phase": phase},
+        args=args,
         execute=execute,
         check=check or file_nonempty(out),
         retries=retries,
@@ -153,11 +196,16 @@ async def sandbox_node(
     key: str = "",
     cache: bool = True,
     outputs: dict[str, Any] | None = None,
+    reads: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run one deterministic node — a command in the sandbox, no LLM (manual §5.2).
     Journals ``{exit_code, stdout}``; an optional ``check`` gates it (a deterministic
     node is often its own check). Reaches platform capabilities over HTTP from inside
-    the sandbox (later phases)."""
+    the sandbox (later phases).
+
+    ``reads`` (#429 P1) DECLARES the files this command depends on: the engine folds
+    their content fingerprint into the input-hash, so editing a declared file's content
+    re-runs the step (a bare path in ``run`` would skip on a content-only change)."""
     if wf.run_sandbox is None:
         raise RuntimeError("sandbox_node needs a sandbox runner (wired by the run driver)")
     run_sandbox = wf.run_sandbox
@@ -180,12 +228,16 @@ async def sandbox_node(
             result["fields"] = _parse_fields(stdout)
         return result
 
+    args: dict[str, Any] = {"run": run, "phase": phase, "outputs": outputs}
+    fp = await reads_fingerprint(wf, reads)
+    if fp is not None:  # only when declared → untouched steps keep their prior hash
+        args["reads"] = fp
     return await run_step(
         wf,
         name=name or phase,
         key=key,
         phase=phase,
-        args={"run": run, "phase": phase, "outputs": outputs},
+        args=args,
         execute=execute,
         check=check,
         cache=cache,

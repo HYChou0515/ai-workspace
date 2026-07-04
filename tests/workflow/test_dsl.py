@@ -4,6 +4,7 @@ step primitives (manual §22)."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -19,6 +20,7 @@ from workspace_app.workflow.dsl import (
     build_manifest,
     build_run,
     parse_def,
+    stale_risk_warnings,
     validate_def,
 )
 from workspace_app.workflow.engine import StepFailed
@@ -264,6 +266,72 @@ def test_validate_sandbox_needs_run():
     )
 
 
+def test_stale_risk_warnings_are_conservative_and_low_noise():
+    """`stale_risk_warnings` (#429 P1) is a low-noise, explicitly-heuristic nudge: it
+    warns only on the two statically-detectable stale-cache shapes and never claims to
+    parse the command. It NEVER fires on a step that has taken a stance (declared `reads`
+    or set `cache=false`), and it does NOT parse an opaque command to guess reads."""
+
+    def _warns(steps: list[dict[str, Any]]) -> list[str]:
+        return stale_risk_warnings(
+            parse_def(json.dumps({"id": "wf", "phases": [{"id": "p"}], "steps": steps}))
+        )
+
+    # (rule 1) a sandbox command with a path-like token but no reads / no cache=false
+    r1 = _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p"}])
+    assert any("reads" in w for w in r1)
+
+    # (rule 2) a sandbox step inside a map over a glob, no reads — the highest-risk shape
+    r2 = _warns(
+        [
+            {
+                "type": "map",
+                "over": "logs/*.log",
+                "as": "f",
+                "phase": "p",
+                "do": [{"type": "sandbox", "run": "process", "phase": "p"}],
+            }
+        ]
+    )
+    assert any("map" in w and "reads" in w for w in r2)
+
+    # took a stance → silent: declared reads
+    assert (
+        _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p", "reads": ["x.py"]}])
+        == []
+    )
+    # took a stance → silent: cache=false
+    assert (
+        _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p", "cache": False}])
+        == []
+    )
+    # no path-like token in the command → not flagged (no guessing)
+    assert _warns([{"type": "sandbox", "run": "echo hello", "phase": "p"}]) == []
+
+
+def test_validate_reads_path_shape():
+    """`reads` entries are declared paths/globs — validate rejects an empty entry and a
+    `..` traversal statically (#429 P1), so a malformed dependency is caught before run,
+    not silently ignored."""
+    empty = _errs([{"type": "sandbox", "run": "x", "phase": "p", "reads": [""]}])
+    assert any("reads" in e and "non-empty" in e for e in empty)
+    traversal = _errs([{"type": "sandbox", "run": "x", "phase": "p", "reads": ["../secrets"]}])
+    assert any("reads" in e and ".." in e for e in traversal)
+    # a well-formed reads (incl. interpolation + glob) is accepted
+    ok = _errs(
+        [
+            {
+                "type": "agent",
+                "prompt": "p",
+                "phase": "p",
+                "out": "o.md",
+                "reads": ["{config.dir}/*.log", "src/a.md"],
+            }
+        ]
+    )
+    assert not any("reads" in e for e in ok)
+
+
 def test_validate_gate_rules():
     errs = _errs([{"type": "gate", "phase": "p", "title": "", "allow": []}])
     assert any("needs a 'title'" in e for e in errs)
@@ -273,6 +341,11 @@ def test_validate_gate_rules():
 def test_validate_capability_rules():
     not_allowed = _errs([{"type": "capability", "call": "rm_rf", "phase": "p"}])
     assert any("not allowed" in e for e in not_allowed)
+    # #429 P2: update_entity needs type_name + number
+    upd = _errs(
+        [{"type": "capability", "call": "update_entity", "phase": "p", "type_name": "issue"}]
+    )
+    assert any("needs 'number'" in e for e in upd)
     missing = _errs(
         [{"type": "capability", "call": "ingest_to_collection", "phase": "p", "collection": "a"}]
     )
@@ -530,6 +603,339 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
     assert validate_def(d) == []
     assert await build_run(d)(wf, None) == {"status": "done"}
     assert ran == ['build ["a", "b"]'] and cards == [("a", ["k1", "k2"])]
+
+
+async def test_dsl_map_runs_each_element_on_its_own_turn_lane():
+    """The interpreter runs a map's inner steps on a per-element sub-handle (#429 P5), so
+    each element's agent turn drives its OWN turn lane (keyed by the element key) instead
+    of serializing behind one — the engine ability that makes `map` truly parallel."""
+    store = MemoryFileStore()
+    lanes: list[str] = []
+
+    def factory(subkey: str):
+        async def drive(prompt: str, tools: list[str] | None) -> str:
+            lanes.append(subkey)
+            return "note"
+
+        return drive
+
+    wf = make_wf(store)
+    wf.sub_turn = factory
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": {"range": "3"},
+                        "as": "i",
+                        "phase": "p",
+                        "do": [
+                            {"type": "agent", "prompt": "p {i}", "phase": "p", "out": "n_{i}.md"}
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    assert sorted(lanes) == ["0", "1", "2"]  # one distinct lane per element
+    assert await wf.read_text("/n_0.md") == "note"  # artifacts land in the shared workspace
+
+
+async def test_dsl_map_effective_concurrency_is_throttled_by_the_backend():
+    """`min(request, wf.turn_concurrency)` (#429 P5): a single local model (turn_concurrency
+    =1) serializes a `concurrency: 8` map — the same workflow.json runs wide on a hosted
+    pool and serial locally, no edit. cap is a REQUEST, not a guarantee."""
+
+    def _mapdef(req: int) -> Any:
+        return parse_def(
+            json.dumps(
+                {
+                    "id": "wf",
+                    "phases": [{"id": "p"}],
+                    "steps": [
+                        {
+                            "type": "map",
+                            "over": {"range": "4"},
+                            "as": "i",
+                            "phase": "p",
+                            "concurrency": req,
+                            "do": [
+                                {"type": "agent", "prompt": "{i}", "phase": "p", "out": "n_{i}.md"}
+                            ],
+                        }
+                    ],
+                }
+            )
+        )
+
+    def _peak_factory(peak: list[int]):
+        active = {"n": 0}
+
+        def factory(subkey: str):
+            async def drive(prompt: str, tools: list[str] | None) -> str:
+                active["n"] += 1
+                peak[0] = max(peak[0], active["n"])
+                await asyncio.sleep(0.01)
+                active["n"] -= 1
+                return "x"
+
+            return drive
+
+        return factory
+
+    # backend caps at 1 → serial despite concurrency: 8
+    peak = [0]
+    wf = make_wf(MemoryFileStore())
+    wf.sub_turn = _peak_factory(peak)
+    wf.turn_concurrency = 1
+    await build_run(_mapdef(8))(wf, None)
+    assert peak[0] == 1
+
+    # no backend cap → the requested parallelism actually overlaps
+    peak2 = [0]
+    wf2 = make_wf(MemoryFileStore())
+    wf2.sub_turn = _peak_factory(peak2)
+    await build_run(_mapdef(4))(wf2, None)
+    assert peak2[0] > 1
+
+
+async def test_map_prunes_orphan_element_artifacts_when_the_set_shrinks():
+    """When a map's element set shrinks (a glob goes 2→1), the departed element's inner
+    per-element journal artifact is pruned on the next run (#429 P4) — no accumulating
+    orphan receipts. A still-present element's artifact is kept."""
+    store = MemoryFileStore()
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    await wf.write("/in/a.txt", "1")
+    await wf.write("/in/b.txt", "2")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": "in/*.txt",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {"type": "sandbox", "run": "process {f}", "phase": "p", "name": "proc"}
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    jd = wf.journal_dir.lstrip("/")
+    assert await wf.exists(f"{jd}/step_proc/in_a.txt.json")
+    assert await wf.exists(f"{jd}/step_proc/in_b.txt.json")
+
+    await wf.delete("/in/b.txt")  # the set shrinks 2 → 1
+    await build_run(d)(wf, None)
+    assert await wf.exists(f"{jd}/step_proc/in_a.txt.json")  # still present → kept
+    assert not await wf.exists(f"{jd}/step_proc/in_b.txt.json")  # departed → pruned
+
+
+async def test_map_gc_prunes_orphans_of_switch_nested_steps():
+    """The orphan GC (#429 P4) also reaches a named step nested inside a `switch` in the
+    map's `do` — `_inner_journal_names` recurses into switch cases, so its per-element
+    artifacts are pruned too when the set shrinks."""
+    store = MemoryFileStore()
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    await wf.write("/in/a.txt", "1")
+    await wf.write("/in/b.txt", "2")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"route": "go"},
+                "steps": [
+                    {
+                        "type": "map",
+                        "over": "in/*.txt",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {
+                                "type": "switch",
+                                "on": "{config.route}",
+                                "phase": "p",
+                                "cases": {
+                                    "go": [
+                                        {
+                                            "type": "sandbox",
+                                            "run": "x {f}",
+                                            "phase": "p",
+                                            "name": "proc",
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    jd = wf.journal_dir.lstrip("/")
+    assert await wf.exists(f"{jd}/step_proc/in_b.txt.json")
+    await wf.delete("/in/b.txt")
+    await build_run(d)(wf, None)
+    assert not await wf.exists(f"{jd}/step_proc/in_b.txt.json")  # switch-nested orphan pruned
+
+
+async def test_dsl_update_entity_capability_merges_patch():
+    """The `update_entity` DSL capability routes through the same EntityStore path as
+    `create_entity` (#429 P2): `number` + the `args` patch are interpolated and merged,
+    other fields preserved."""
+    store = MemoryFileStore()
+    await store.write(
+        "ws",
+        "/.entity/issue/schema.yaml",
+        b"path: issues\nfields:\n  title: {role: text}\n"
+        b"  status: {role: status, values: [open, done]}\n",
+    )
+    await store.write(
+        "ws",
+        "/.entity/issue/skeleton.md",
+        b"---\ntitle: {{arg.title}}\nstatus: {{arg.status}}\n---\n",
+    )
+    wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
+    await wf.create_entity("issue", {"title": "A", "status": "open"}, name="seed")
+
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"target": "done"},
+                "steps": [
+                    {
+                        "type": "capability",
+                        "call": "update_entity",
+                        "phase": "p",
+                        "type_name": "issue",
+                        "number": 1,
+                        "args": {"status": "{config.target}"},
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    body = (await store.read("ws", "/issues/1.md")).decode()
+    assert "status: done" in body and "title: A" in body
+
+
+async def test_dsl_update_entity_number_must_resolve_to_int():
+    """A `number` that doesn't resolve to an integer is a loud DslError at run time."""
+    store = MemoryFileStore()
+    await store.write(
+        "ws", "/.entity/issue/schema.yaml", b"path: issues\nfields:\n  t: {role: text}\n"
+    )
+    await store.write("ws", "/.entity/issue/skeleton.md", b"---\nt: {{arg.t}}\n---\n")
+    wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {
+                        "type": "capability",
+                        "call": "update_entity",
+                        "phase": "p",
+                        "type_name": "issue",
+                        "number": "notanumber",
+                        "args": {"t": "x"},
+                    }
+                ],
+            }
+        )
+    )
+    with pytest.raises(DslError, match="must resolve to an integer"):
+        await build_run(d)(wf, None)
+
+
+async def test_dsl_step_cache_false_always_reruns():
+    """`cache: false` on a DSL step opts it out of the journal skip entirely — the
+    honest 'always re-run' escape hatch (#429 P1 rule 3) for a step whose inputs the
+    author can't fingerprint (e.g. 'fetch the latest')."""
+    store = MemoryFileStore()
+    runs: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        runs.append(cmd)
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [{"type": "sandbox", "run": "fetch latest", "phase": "p", "cache": False}],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    await build_run(d)(wf, None)
+    assert len(runs) == 2  # cache=False → never skipped
+
+
+async def test_dsl_sandbox_reads_folds_declared_content_into_hash():
+    """A `workflow.json` sandbox step that declares `reads` re-runs when the declared
+    file's content changes — the DSL threads `reads` into the engine's content-aware
+    input-hash (#429 P1). Interpolation in a `reads` entry is resolved first."""
+    store = MemoryFileStore()
+    runs: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        runs.append(cmd)
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox, config={"dir": "logs"})
+    await wf.write("/logs/a.log", "v1")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"dir": "logs"},
+                "steps": [
+                    {
+                        "type": "sandbox",
+                        "run": "analyze",
+                        "phase": "p",
+                        "reads": ["{config.dir}/*.log"],
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    await build_run(d)(wf, None)
+    await build_run(d)(wf, None)
+    assert len(runs) == 1  # unchanged declared content → skipped
+    await wf.write("/logs/a.log", "v2")
+    await build_run(d)(wf, None)
+    assert len(runs) == 2  # re-ran because a matched file's content changed
 
 
 async def test_run_gate_summary_reads_text_and_json():

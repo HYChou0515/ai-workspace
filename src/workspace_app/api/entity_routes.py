@@ -17,6 +17,7 @@ from fastapi import APIRouter, FastAPI, HTTPException
 from specstar import SpecStar
 
 from ..entity.catalog import EntityCatalog, discover_catalog
+from ..entity.events import EntityWriteSink
 from ..entity.forms import form_spec
 from ..entity.parser import ParsedEntity
 from ..entity.schema import Role
@@ -69,12 +70,14 @@ def register_entity_routes(
     activity: ActivityLog,
     spec: SpecStar,
     users: UserDirectory,
+    on_entity_write: EntityWriteSink | None = None,
 ) -> None:
     """Mount the entity CRUD routes onto ``app``.
 
     ``activity`` records create/update events into the shared feed (§F3); ``spec``
     + ``users`` drive assignment notifications — when a record's ``actor``-role
-    field is set to a person, they're notified (§F2)."""
+    field is set to a person, they're notified (§F2). ``on_entity_write`` (#429 P9) is the
+    post-commit event sink — a human's create/update fires matching event triggers."""
 
     # Shared per-(item,type) numbering locks, so racing creates across requests on
     # one pod can't both claim a number (single-pod serialization, §N5).
@@ -83,7 +86,9 @@ def register_entity_routes(
     async def _store(slug: str, item_id: str) -> tuple[str, EntityStore]:
         investigation_id = locator.require_item(slug, item_id)
         catalog, _diags = await discover_catalog(files, investigation_id)
-        return investigation_id, EntityStore(files, investigation_id, catalog, locks=locks)
+        return investigation_id, EntityStore(
+            files, investigation_id, catalog, locks=locks, on_write=on_entity_write
+        )
 
     def _require_type(catalog: EntityCatalog, type_name: str) -> None:
         if type_name not in catalog:
@@ -214,7 +219,11 @@ def register_entity_routes(
         _require_type(store.catalog, type_name)
         try:
             updated = await store.update(
-                type_name, number, body.patch, expected_version=body.expected_version
+                type_name,
+                number,
+                body.patch,
+                expected_version=body.expected_version,
+                actor=get_user_id(),
             )
         except FileNotFound as e:
             raise HTTPException(status_code=404, detail=f"no {type_name} #{number}") from e

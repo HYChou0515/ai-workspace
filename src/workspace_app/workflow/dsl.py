@@ -40,12 +40,15 @@ CAPABILITIES = (
     "ingest_to_collection",
     "upsert_context_card",
     "create_entity",
+    "update_entity",
     "send_notification",
 )
 _CAP_REQUIRED: dict[str, tuple[str, ...]] = {
     "ingest_to_collection": ("collection", "path"),
     "upsert_context_card": ("collection", "keys"),
     "create_entity": ("type_name",),
+    # #429 P2: update by (type + number); ``args`` is the merge-patch (fields → values).
+    "update_entity": ("type_name", "number"),
 }
 # #435 P5: send_notification takes its recipient/topic/title/body in ``args`` (like
 # create_entity's entity fields); these keys are required there.
@@ -102,6 +105,12 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     # a JSON object; the step parses + records it as ``result.fields``, referenceable
     # downstream as ``{steps.<name>.<field>}``. The type values gain meaning in P2.
     outputs: dict[str, Any] = field(default_factory=dict)
+    # #429 P1: files this turn DEPENDS on. The engine folds their content fingerprint into
+    # the input-hash so editing a declared source re-runs the step (interpolation allowed).
+    reads: list[str] = field(default_factory=list)
+    # #429 P1 rule 3: opt out of the journal skip — always re-run (an honest 'always fresh'
+    # for a step whose inputs the author can't fingerprint).
+    cache: bool = True
 
 
 class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
@@ -115,6 +124,12 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
     # #428 §1/§2: like AgentStep — when set, the script prints a JSON object to stdout
     # which the step parses into ``result.fields`` (referenceable downstream).
     outputs: dict[str, Any] = field(default_factory=dict)
+    # #429 P1: files this command DEPENDS on. The engine folds their content fingerprint
+    # into the input-hash so editing a declared file re-runs the step (a bare path in
+    # ``run`` would skip on a content-only change). Interpolation allowed.
+    reads: list[str] = field(default_factory=list)
+    # #429 P1 rule 3: opt out of the journal skip — always re-run.
+    cache: bool = True
 
 
 class GateStep(Struct, tag="gate", forbid_unknown_fields=True):
@@ -152,8 +167,11 @@ class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
     title: str = ""
     body: str = ""
     # #419 create_entity: which entity type + the field args (values may interpolate).
+    # #429 P2 update_entity: ``type_name`` + ``number`` identify the record, ``args`` is
+    # the merge-patch. ``number`` is a literal int or an interpolation ref (``{q.n}``).
     type_name: str = ""
     args: dict[str, Any] = field(default_factory=dict)
+    number: str | int = ""
     # #435: a non-idempotent capability's stable dedup identity — referenceable as
     # {steps.<name>.<field>} — and its per-capability on_duplicate policy.
     name: str = ""
@@ -177,6 +195,11 @@ class MapStep(Struct, tag="map", forbid_unknown_fields=True):
     # when more than one declares ``outputs``.
     name: str = ""
     collect: str = ""
+    # #429 P5: the author's requested parallelism for this map. The EFFECTIVE cap is
+    # ``min(request, wf.turn_concurrency)`` — a REQUEST throttled by the model backend's
+    # real concurrency (a single local model → ~1), not a guarantee. 0 ⇒ use the backend
+    # ceiling (or the engine default when unset).
+    concurrency: int = 0
 
 
 class SwitchStep(Struct, tag="switch", forbid_unknown_fields=True):
@@ -371,6 +394,27 @@ async def _resolve(template: Any, ns: dict[str, Any], wf: WorkflowHandle) -> Any
     return "".join(out)
 
 
+async def _resolve_reads(
+    reads: list[str], ns: dict[str, Any], wf: WorkflowHandle
+) -> list[str] | None:
+    """Resolve a step's ``reads`` declarations (#429 P1) — interpolate each entry
+    (``{config.dir}/*.log`` → ``logs/*.log``) into a concrete path/glob string. Returns
+    ``None`` for an empty ``reads`` so the adapter leaves the input-hash untouched."""
+    if not reads:
+        return None
+    return [_stringify(await _resolve(r, ns, wf)) for r in reads]
+
+
+async def _resolve_number(number: str | int, ns: dict[str, Any], wf: WorkflowHandle) -> int:
+    """Resolve an ``update_entity`` capability's ``number`` (#429 P2) — a literal int or an
+    interpolation ref (``{q.n}``) — to the concrete entity number."""
+    value = await _resolve(number, ns, wf) if isinstance(number, str) else number
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise DslError(f"update_entity 'number' must resolve to an integer, got {value!r}") from exc
+
+
 # ─── interpreter ─────────────────────────────────────────────────────────────
 
 
@@ -414,6 +458,21 @@ def _keyed_list(step: MapStep, items: list[Any]) -> list[tuple[Any, str]]:
     if len(set(keys)) != len(keys):
         raise StepFailed(f"map key_by {step.key_by!r} is not unique across elements")
     return elements
+
+
+_DEFAULT_MAP_CONCURRENCY = 8  # the engine default when neither author nor backend sets one
+
+
+def _map_concurrency(step: MapStep, wf: WorkflowHandle) -> int:
+    """The effective parallel-turn cap for a map (#429 P5): the author's ``concurrency``
+    request (or the backend/engine default when unset), throttled by the model backend's
+    real concurrency (``wf.turn_concurrency``). ``min(request, backend)`` — a REQUEST, not
+    a guarantee: a single local model (backend ≈ 1) degrades a ``concurrency: 8`` map to
+    serial without touching the workflow, while a hosted pool lets it run wide."""
+    request = step.concurrency or wf.turn_concurrency or _DEFAULT_MAP_CONCURRENCY
+    if wf.turn_concurrency is not None:
+        return min(request, wf.turn_concurrency)
+    return request
 
 
 async def _map_elements(
@@ -464,6 +523,36 @@ def _collect_name(step: MapStep) -> str:
     if not with_outputs and len(named) == 1:
         return next(iter(named))
     return ""
+
+
+def _inner_journal_names(steps: list[Step]) -> set[str]:
+    """The journal names of a map's inner agent/sandbox steps — the ones keyed by the
+    ELEMENT key (``name or phase``), recursing into a switch's cases. Capabilities are
+    excluded: they key by content (card key / args digest), never the element key, so
+    they must not be pruned by element key (#429 P4)."""
+    names: set[str] = set()
+    for s in steps:
+        if isinstance(s, AgentStep | SandboxStep):
+            names.add(s.name or s.phase)
+        elif isinstance(s, SwitchStep):
+            seqs = list(s.cases.values()) + ([s.default] if s.default is not None else [])
+            for seq in seqs:
+                names |= _inner_journal_names(seq)
+    return names
+
+
+async def _gc_map_orphans(wf: WorkflowHandle, step: MapStep, current_keys: set[str]) -> None:
+    """Prune a map's inner per-element journal artifacts for element keys no longer in the
+    current set (#429 P4). Runs when the map re-runs, right after the element set resolves,
+    so cleanup is tied to the natural moment the set changes — no standing GC sweep. Only
+    deletes keys that genuinely left the set (a key still present, or a set that grew, is
+    untouched), so a transient glob shrink at worst re-computes that element next time."""
+    for jname in _inner_journal_names(step.do):
+        prefix = f"{wf.journal_dir.lstrip('/')}/step_{jname}"
+        for path in await wf.glob([f"{prefix}/*.json"]):
+            key = path.rsplit("/", 1)[-1].removesuffix(".json")
+            if key not in current_keys:
+                await wf.delete(path)
 
 
 def _collected_value(result: Any) -> Any:
@@ -541,6 +630,17 @@ async def _exec_capability(
             key=key,  # the map-element scope key: one entity per element (§P2)
             phase=step.phase,
         )
+    elif step.call == "update_entity":  # #429 P2 — same EntityStore path, optimistic-retry
+        patch = {
+            k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
+            for k, v in step.args.items()
+        }
+        await wf.update_entity(
+            await _resolve(step.type_name, ns, wf),
+            await _resolve_number(step.number, ns, wf),
+            patch,
+            phase=step.phase,
+        )
     elif step.call == "send_notification":  # #435 P5 — M1 send-once over the notification store
         a = {
             k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
@@ -574,15 +674,22 @@ async def _exec_step(
 ) -> None:
     if isinstance(step, MapStep):
         elements = await _map_elements(step, ns, wf)
+        # #429 P4: prune orphan per-element artifacts left by a now-smaller set before
+        # re-running (cleanup tied to the moment the set resolves).
+        await _gc_map_orphans(wf, step, {ekey for _, ekey in elements})
 
         async def _one(elem: tuple[Any, str]) -> None:
             value, ekey = elem
             # #428 §1.1: an inner ``{steps.x.f}`` resolves at this element's key.
             sub = {**ns, step.as_: value, "__key__": ekey}
+            # #429 P5: run the element's steps on a per-element sub-handle so its agent
+            # turn drives its OWN turn lane (real parallel) instead of serializing; the
+            # sub-handle shares the workspace + journal, so artifacts land unchanged.
+            ewf = wf.sub_handle(ekey)
             for inner in step.do:
-                await _exec_step(wf, inner, sub, ekey, failures)
+                await _exec_step(ewf, inner, sub, ekey, failures)
 
-        failures.extend(await wf.map(_one, elements))
+        failures.extend(await wf.map(_one, elements, concurrency=_map_concurrency(step, wf)))
         if step.name:  # #428 §5: fan-in — publish the collected outputs as this map's field
             collected = await _collect_map_outputs(wf, step, elements)
             await wf.write_json(
@@ -652,6 +759,8 @@ async def _exec_step(
             name=step.name or None,
             key=key,
             outputs=step.outputs or None,
+            reads=await _resolve_reads(step.reads, ns, wf),
+            cache=step.cache,
         )
         return
     # AgentStep
@@ -665,6 +774,7 @@ async def _exec_step(
         check = await _build_check(step.check, ns, wf)
     else:
         check = None
+    reads = await _resolve_reads(step.reads, ns, wf)
     if step.out or step.outputs:
         await agent_write_step(
             wf,
@@ -677,6 +787,8 @@ async def _exec_step(
             retries=step.retries,
             check=check,
             outputs=step.outputs or None,
+            reads=reads,
+            cache=step.cache,
         )
     else:  # plain agent_step — ``check`` is required (validate_def guarantees it)
         assert check is not None
@@ -689,6 +801,8 @@ async def _exec_step(
             name=step.name or None,
             key=key,
             retries=step.retries,
+            reads=reads,
+            cache=step.cache,
         )
 
 
@@ -810,6 +924,27 @@ def _validate_check(
         if req not in args:
             errs.append(f"{where}: check {name!r} is missing {req!r}")
     _check_interp(args, scope, where, errs, steps_seen)
+
+
+def _validate_reads(
+    reads: list[str],
+    scope: set[str],
+    where: str,
+    errs: list[str],
+    steps_seen: dict[str, dict[str, Any]],
+) -> None:
+    """Static path-shape check for a step's ``reads`` (#429 P1). A declared read is a
+    workspace path/glob; an empty entry or a ``..`` traversal is a static error (a
+    malformed dependency should be caught before the run, not silently ignored). The
+    interpolation references inside each entry are checked like any other template."""
+    for entry in reads:
+        # the interpolated skeleton (tokens blanked) must still be a sane path shape
+        skeleton = _TOKEN.sub("", entry).strip()
+        if not skeleton and not _TOKEN.search(entry):
+            errs.append(f"{where}: a 'reads' entry must be a non-empty path")
+        elif ".." in entry.split("/"):
+            errs.append(f"{where}: a 'reads' entry cannot contain a '..' traversal")
+    _check_interp(reads, scope, where, errs, steps_seen)
 
 
 def _validate_step(
@@ -934,7 +1069,7 @@ def _validate_step(
                         else f"{where}: capability {step.call!r} does not take an 'on_duplicate'"
                     )
         _check_interp(
-            [step.collection, step.path, step.title, step.body, step.keys, step.args],
+            [step.collection, step.path, step.title, step.body, step.keys, step.args, step.number],
             scope,
             where,
             errs,
@@ -948,6 +1083,7 @@ def _validate_step(
         if step.check is not None:
             _validate_check(step.check, scope, where, errs, steps_seen)
         _validate_outputs(step.outputs, where, errs)
+        _validate_reads(step.reads, scope, where, errs, steps_seen)
         return
     # AgentStep
     if not step.prompt:
@@ -967,6 +1103,7 @@ def _validate_step(
     if step.check is not None:
         _validate_check(step.check, scope, where, errs, steps_seen)
     _validate_outputs(step.outputs, where, errs)
+    _validate_reads(step.reads, scope, where, errs, steps_seen)
 
 
 _SWITCH_MAX_DEPTH = 32  # #428 §3.2: a defensive cap on nested switches (not expressivity)
@@ -1210,3 +1347,58 @@ def validate_def(
     )
     _validate_revise(d.steps, errs)
     return errs
+
+
+# ─── stale-cache lint (#429 P1) ──────────────────────────────────────────────
+
+# A cheap, deliberately-heuristic signal that a sandbox command probably reads a file:
+# a path separator, a glob metachar, or a ``name.ext`` token. It is NOT an attempt to
+# parse the (opaque) command — it only nudges the author to DECLARE ``reads``.
+_PATH_LIKE = re.compile(r"/|[*?\[]|\b[\w-]+\.[A-Za-z][\w]*\b")
+
+
+def _is_glob_over(over: str | dict[str, Any]) -> bool:
+    """Does a map's ``over`` expand file PATHS (a glob) rather than a list value? True only
+    for a string carrying a glob metachar — a whole ``{ref}`` list value is not flagged."""
+    return isinstance(over, str) and any(c in over for c in "*?[")
+
+
+def _walk_stale(steps: list[Step], *, in_glob_map: bool, warns: list[str]) -> None:
+    for s in steps:
+        if isinstance(s, SandboxStep) and s.cache and not s.reads:
+            what = s.name or s.phase
+            if in_glob_map:
+                warns.append(
+                    f"sandbox step {what!r} inside a map over a glob declares no 'reads' — its "
+                    "command won't re-run when a matched file's CONTENT changes; declare 'reads' "
+                    "or set 'cache': false"
+                )
+            elif _PATH_LIKE.search(s.run):
+                warns.append(
+                    f"sandbox step {what!r} looks like it reads a file but declares no 'reads' — a "
+                    "content-only change won't re-run it; declare 'reads' or set 'cache': false "
+                    "(heuristic — ignore if the command reads nothing)"
+                )
+        if isinstance(s, MapStep):
+            _walk_stale(s.do, in_glob_map=_is_glob_over(s.over), warns=warns)
+        elif isinstance(s, SwitchStep):
+            for case in s.cases.values():
+                _walk_stale(case, in_glob_map=in_glob_map, warns=warns)
+            if s.default:
+                _walk_stale(s.default, in_glob_map=in_glob_map, warns=warns)
+
+
+def stale_risk_warnings(d: WorkflowDef) -> list[str]:
+    """Advisory stale-cache warnings for a parsed DSL (#429 P1), as human-readable strings.
+
+    Deliberately conservative and low-noise: it flags only the two statically-detectable
+    stale shapes — a sandbox command that *looks* like it reads a file yet declares no
+    ``reads`` (and isn't ``cache: false``), and any sandbox step inside a ``map`` over a
+    glob without ``reads`` (the highest-risk shape: the glob's members are the varying
+    content). It never parses the opaque command to guess what it reads, and it never
+    fires on a step that has taken a stance (declared ``reads`` or set ``cache: false``).
+    Always advisory — ``workflow check`` surfaces these as warnings, never errors, because
+    'declares no reads' is legitimately correct for a step that depends on no file."""
+    warns: list[str] = []
+    _walk_stale(d.steps, in_glob_map=False, warns=warns)
+    return warns

@@ -63,6 +63,7 @@ class WorkflowExecutor:
         turn_ctx: TurnContextBuilder,
         locator: ItemLocator,
         run_subagent: RunSubagent,
+        turn_concurrency: int = 1,
         ask_llm: ILlm | None = None,
     ) -> None:
         self._spec = spec
@@ -79,6 +80,11 @@ class WorkflowExecutor:
         # None ⇒ dedup stays journal-only (self-dedup); a wired model enables cross-match.
         self._ask_llm = ask_llm
         self._conv_rm = spec.get_resource_manager(Conversation)
+        # #429 P5: the parallel-turn ceiling a run's map may reach, derived from the model
+        # backend's real concurrency. Default 1 (serial) matches a single local model and
+        # keeps concurrent sub-turns off a shared conversation; a hosted multi-replica pool
+        # can raise it in config to let a `map` run its agent turns wide.
+        self._turn_concurrency = turn_concurrency
 
     def upload_dir(self, slug: str, profile: str) -> str:
         """#198: the active profile's staging folder — the orchestrator threads it onto
@@ -95,12 +101,19 @@ class WorkflowExecutor:
         captured_user: str,
         prompt: str,
         tools: list[str] | None,
+        *,
+        lane: str | None = None,
     ) -> str:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
         (keeping the run's stream separate from the item's other chats). Builds the
         ctx, narrows the tool ceiling to the step's subset, enqueues + awaits, persists
-        the produced messages under the captured user, and returns the assistant text."""
+        the produced messages under the captured user, and returns the assistant text.
+
+        ``lane`` (#429 P5) overrides the ENQUEUE key only — a per-element sub-lane so
+        map elements' turns run on their own FIFO worker (real parallel) — while the
+        conversation lookup + persist stay on ``chat_key`` (no orphan conversations). A
+        transient sub-lane is forgotten after its turn so its session doesn't leak."""
         try:
             rid = chat_key
             got = self._conv_rm.get(rid).data
@@ -134,7 +147,10 @@ class WorkflowExecutor:
                     self._conv_rm.update(rid, conv2)
             answer.extend(tm.content for tm in produced if tm.role == "assistant")
 
-        await self._turn_engine.enqueue(chat_key, prompt, ctx, on_complete=persist)
+        enqueue_key = lane or chat_key
+        await self._turn_engine.enqueue(enqueue_key, prompt, ctx, on_complete=persist)
+        if lane is not None and lane != chat_key:  # transient sub-lane → drop its session
+            await self._turn_engine.forget(lane)
         return "\n".join(answer)
 
     async def run_sandbox(
@@ -264,6 +280,15 @@ class WorkflowExecutor:
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
             item_id, chat_key, captured_user, prompt, tools
         )
+        # #429 P5: a per-element turn-lane factory — each map element drives its own
+        # enqueue lane (real parallel) but persists to the run's chat. The effective
+        # parallelism is min(map concurrency, turn_concurrency).
+        wf.sub_turn = lambda subkey: (
+            lambda prompt, tools: self.drive_turn(
+                item_id, chat_key, captured_user, prompt, tools, lane=f"{chat_key}#{subkey}"
+            )
+        )
+        wf.turn_concurrency = self._turn_concurrency
         wf.run_sandbox = lambda run, on_output=None: self.run_sandbox(
             item_id, run, wf.credential, on_output
         )

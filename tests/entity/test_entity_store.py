@@ -29,6 +29,40 @@ def _store(fs: MemoryFileStore | None = None) -> EntityStore:
     return EntityStore(fs or MemoryFileStore(), "ws1", catalog)
 
 
+async def test_create_and_update_emit_write_events_for_the_trigger_hook() -> None:
+    """#429 P9: the single write path emits a post-commit event on create (action=created) and
+    update (action=updated), carrying the record's number / version / fields + the acting user
+    and origin — the hook event triggers subscribe to. No events leak from reads."""
+    from workspace_app.entity.events import EntityOrigin
+
+    events: list = []
+
+    async def sink(ev):
+        events.append(ev)
+
+    catalog = EntityCatalog({"issue": _issue_type()})
+    store = EntityStore(MemoryFileStore(), "ws1", catalog, on_write=sink)
+
+    origin = EntityOrigin(trigger="rca:echo:t", depth=1)
+    created = await store.create("issue", {"title": "A"}, actor="alice", origin=origin)
+    await store.get("issue", created.number)  # a read emits nothing
+    await store.update("issue", created.number, {"status": "done"}, actor="bob")
+
+    assert [e.action for e in events] == ["created", "updated"]
+    ce, ue = events
+    assert (ce.item_id, ce.type_name, ce.number, ce.actor) == ("ws1", "issue", 1, "alice")
+    assert ce.fields["title"] == "A" and ce.origin == origin
+    assert ue.action == "updated" and ue.actor == "bob" and ue.fields["status"] == "done"
+    assert ue.version != ce.version  # the update changed the record's version
+
+
+async def test_no_write_sink_is_a_silent_noop() -> None:
+    """Without a sink wired (tests / surfaces that don't use triggers) writes just work."""
+    store = _store()  # constructed with no on_write
+    created = await store.create("issue", {"title": "A"}, actor="alice")
+    assert created.number == 1
+
+
 async def test_create_allocates_number_one_and_reads_back() -> None:
     """First create on an empty store gets permanent number 1; getting it back
     parses the frontmatter into fields (the skeleton default `status: open`)."""

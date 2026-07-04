@@ -264,6 +264,10 @@ def create_app(
     # Per-item run-history retention (manual §16): keep at most this many runs, pruning
     # the oldest terminal ones when a new run starts. 0 ⇒ keep all.
     workflow_keep_last_runs: int = 0,
+    # #429 P7: how often the schedule-trigger sweeper polls declared triggers.json for due
+    # runs. None ⇒ the sweeper is off (the safe default — headless triggered runs are opt-in
+    # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
+    trigger_check_interval: timedelta | None = None,
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -395,6 +399,7 @@ def create_app(
         gc_interval=gc_interval,
         gc_t1=gc_t1,
         gc_t2=gc_t2,
+        trigger_check_interval=trigger_check_interval,
     )
 
     # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and
@@ -763,6 +768,27 @@ def create_app(
     )
     app.state.workflow_orchestrator = workflow_orchestrator
 
+    # #429 P9: entity-write event triggers. The dispatcher matches an entity create/update
+    # against declared event triggers and fires runs (under each trigger's acting_user); the
+    # orchestrator emits its runs' entity writes through it (carrying the recursion marker),
+    # and the entity routes emit a human's writes. The watermark model is registered in the
+    # lifespan (post-apply, so no CRUD routes) — see build_lifespan.
+    from ..workflow.event_dispatch import (
+        EventTriggerDispatcher,
+        SpecstarEventWatermark,
+        build_event_trigger_start,
+    )
+    from ..workflow.triggers import discover_event_triggers
+
+    event_dispatcher = EventTriggerDispatcher(
+        triggers=discover_event_triggers,
+        app_of_item=locator.slug_of,
+        start=build_event_trigger_start(workflow_orchestrator.start),
+        watermark=SpecstarEventWatermark(spec),
+    )
+    workflow_orchestrator.entity_write_sink = event_dispatcher.dispatch
+    app.state.event_dispatcher = event_dispatcher
+
     register_workflow_routes(
         api,
         spec=spec,
@@ -868,6 +894,7 @@ def create_app(
         activity=activity,
         spec=spec,
         users=users,
+        on_entity_write=event_dispatcher.dispatch,  # #429 P9: human writes fire event triggers
     )
 
     # #177: now that EVERY route (specstar CRUD + all hand-written) is on the

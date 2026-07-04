@@ -30,16 +30,19 @@ from importlib import resources
 import msgspec
 
 from ..apps.profiles import ProfileManifest, workflow_profiles
-from .dsl import DslError, parse_def, validate_def
+from .dsl import DslError, parse_def, stale_risk_warnings, validate_def
 from .manifest import WorkflowManifest
 
 _APPS_PKG = "workspace_app.apps"
 
 
-def _check_dsl(dsl_path, where: str) -> list[Diagnostic]:
+def _check_dsl(dsl_path, where: str, *, strict: bool = False) -> list[Diagnostic]:
     """Static checks for a DSL workflow (#323, manual §22): the ``workflow.json`` parses
     and ``validate_def`` finds no problems (a bad step type / undeclared phase / a check
-    or capability the platform doesn't know / an out-of-scope interpolation)."""
+    or capability the platform doesn't know / an out-of-scope interpolation).
+
+    ``strict`` (#429 P1, opt-in per project) escalates the advisory stale-cache nudges to
+    errors — making 'take a stance' (declare ``reads`` or set ``cache``) mandatory."""
     try:
         d = parse_def(dsl_path.read_bytes())
     except DslError as exc:
@@ -49,8 +52,21 @@ def _check_dsl(dsl_path, where: str) -> list[Diagnostic]:
             )
         ]
     return [
-        Diagnostic("error", where, f"workflow.json: {msg}", "fix the workflow definition")
-        for msg in validate_def(d)
+        *(
+            Diagnostic("error", where, f"workflow.json: {msg}", "fix the workflow definition")
+            for msg in validate_def(d)
+        ),
+        # #429 P1: stale-cache nudges — advisory warnings by default (a step that reads no
+        # file legitimately declares no ``reads``); ``strict`` makes them errors.
+        *(
+            Diagnostic(
+                "error" if strict else "warning",
+                where,
+                f"stale-cache risk: {msg}",
+                "declare 'reads' or set 'cache': false",
+            )
+            for msg in stale_risk_warnings(d)
+        ),
     ]
 
 
@@ -102,7 +118,9 @@ def _defines_run(tree: ast.Module) -> bool:
     )
 
 
-def _check_workflow(run_dir, manifest: WorkflowManifest, where: str) -> list[Diagnostic]:
+def _check_workflow(
+    run_dir, manifest: WorkflowManifest, where: str, *, strict: bool = False
+) -> list[Diagnostic]:
     """Static checks for one workflow: its ``run.py`` loads + defines ``run()``, its
     phase ids are non-empty, and every ``phase=`` literal it emits is declared."""
     diags: list[Diagnostic] = []
@@ -122,7 +140,7 @@ def _check_workflow(run_dir, manifest: WorkflowManifest, where: str) -> list[Dia
     # it (discovery.load_run_callable), so its loud guard is here, not a Python parse.
     dsl_path = run_dir / "workflow.json"
     if dsl_path.is_file():
-        return [*diags, *_check_dsl(dsl_path, where)]
+        return [*diags, *_check_dsl(dsl_path, where, strict=strict)]
 
     try:
         text = (run_dir / "run.py").read_text(encoding="utf-8")
@@ -201,30 +219,31 @@ def _check_workflow_ids(workflows: list[WorkflowManifest], where: str) -> list[D
     return diags
 
 
-def check_profile_dir(profile_dir, where: str) -> list[Diagnostic]:
+def check_profile_dir(profile_dir, where: str, *, strict: bool = False) -> list[Diagnostic]:
     """Every authoring problem in one profile's workflows (``_profile.json`` + each
     ``run.py``), as a flat diagnostics list — empty when the profile is clean. ``where``
     is the human label (e.g. ``"playground/intake"``). Reads files through ``profile_dir``
     (a ``Path`` or a resources traversable), so it works on a temp fixture and a shipped
-    App alike."""
+    App alike. ``strict`` (#429 P1) escalates stale-cache warnings to errors."""
     pm = msgspec.json.decode((profile_dir / "_profile.json").read_bytes(), type=ProfileManifest)
     if pm.workflows:
         diags = _check_workflow_ids(pm.workflows, where)
         for wf in pm.workflows:
             sub = f"{where}/{wf.id}" if wf.id else where
-            diags += _check_workflow(profile_dir / "workflows" / wf.id, wf, sub)
+            diags += _check_workflow(profile_dir / "workflows" / wf.id, wf, sub, strict=strict)
         return diags
     if pm.workflow is not None:  # legacy singular form — run.py at the profile root
-        return _check_workflow(profile_dir, pm.workflow, where)
+        return _check_workflow(profile_dir, pm.workflow, where, strict=strict)
     return []
 
 
-def check_app(slug: str) -> list[Diagnostic]:
+def check_app(slug: str, *, strict: bool = False) -> list[Diagnostic]:
     """Every authoring problem across all of an App's workflow profiles — the flat
     list ``check`` prints and the CI gate asserts empty. An App with no workflows
-    (only interactive profiles) yields ``[]``."""
+    (only interactive profiles) yields ``[]``. ``strict`` (#429 P1) escalates stale-cache
+    warnings to errors."""
     apps = resources.files(_APPS_PKG)
     diags: list[Diagnostic] = []
     for name in workflow_profiles(slug):
-        diags += check_profile_dir(apps / slug / "profiles" / name, f"{slug}/{name}")
+        diags += check_profile_dir(apps / slug / "profiles" / name, f"{slug}/{name}", strict=strict)
     return diags

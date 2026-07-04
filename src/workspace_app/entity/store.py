@@ -15,6 +15,7 @@ import msgspec
 
 from ..filestore.protocol import FileExists, FileStore
 from .catalog import EntityCatalog
+from .events import EntityOrigin, EntityWriteEvent, EntityWriteSink
 from .numbering import create_exclusive, next_number, record_high_water
 from .parser import ParsedEntity, parse_entity, serialize_entity
 from .projection import Corpus, compute_derived
@@ -60,6 +61,7 @@ class EntityStore:
         catalog: EntityCatalog,
         *,
         locks: dict[str, asyncio.Lock] | None = None,
+        on_write: EntityWriteSink | None = None,
     ) -> None:
         self._fs = filestore
         self._ws = workspace_id
@@ -68,6 +70,9 @@ class EntityStore:
         # constructing per-request stores (the API) so racing creates on one item
         # can't both claim a number; the default is fine for a single store.
         self._locks = locks if locks is not None else {}
+        # #429 P9: the single write path emits a post-commit entity-write event so event
+        # triggers can fire. None ⇒ no event sink (tests / surfaces that don't wire triggers).
+        self._on_write = on_write
 
     @property
     def catalog(self) -> EntityCatalog:
@@ -77,7 +82,13 @@ class EntityStore:
         return f"/{records_path}/{number}.md"
 
     async def create(
-        self, type_name: str, args: dict[str, Any], *, actor: str = "", now: str = ""
+        self,
+        type_name: str,
+        args: dict[str, Any],
+        *,
+        actor: str = "",
+        now: str = "",
+        origin: EntityOrigin | None = None,
     ) -> ParsedEntity:
         entity_type = self._catalog.get(type_name)
         records_path = entity_type.records_path
@@ -100,7 +111,9 @@ class EntityStore:
                 except FileExists:
                     number += 1
             await record_high_water(self._fs, self._ws, records_path, number)
-        return parse_entity(text.encode(), number, type_name, entity_type.schema)
+        created = parse_entity(text.encode(), number, type_name, entity_type.schema)
+        await self._emit(created, "created", actor, origin)
+        return created
 
     async def get(self, type_name: str, number: int) -> ParsedEntity:
         entity_type = self._catalog.get(type_name)
@@ -115,6 +128,8 @@ class EntityStore:
         *,
         expected_version: str | None = None,
         body: str | None = None,
+        actor: str = "",
+        origin: EntityOrigin | None = None,
     ) -> ParsedEntity:
         """Merge `patch` into the record's fields and write it back. When
         `expected_version` is given (the `version` the caller read), the write is
@@ -139,7 +154,29 @@ class EntityStore:
             new_body = current.body if body is None else body
             text = serialize_entity({**current.fields, **patch}, new_body)
             await self._fs.write(self._ws, path, text.encode())
-        return parse_entity(text.encode(), number, type_name, entity_type.schema)
+        updated = parse_entity(text.encode(), number, type_name, entity_type.schema)
+        await self._emit(updated, "updated", actor, origin)
+        return updated
+
+    async def _emit(
+        self, entity: ParsedEntity, action: str, actor: str, origin: EntityOrigin | None
+    ) -> None:
+        """Publish a committed entity write to the event sink (#429 P9), post-commit and
+        in-request. No sink ⇒ a no-op (surfaces that don't wire triggers pay nothing)."""
+        if self._on_write is None:
+            return
+        await self._on_write(
+            EntityWriteEvent(
+                item_id=self._ws,
+                type_name=entity.type_name,
+                number=entity.number,
+                action=action,
+                actor=actor,
+                version=entity.version,
+                fields=dict(entity.fields),
+                origin=origin,
+            )
+        )
 
     async def _parse_type(self, type_name: str) -> list[ParsedEntity]:
         entity_type = self._catalog.get(type_name)

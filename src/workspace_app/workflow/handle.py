@@ -12,6 +12,7 @@ phases; this is the file/IO surface.
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import re
@@ -19,14 +20,20 @@ from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
 from typing import Any
 
+from ..entity.events import EntityWriteSink
 from ..filestore.protocol import FileStore
-from .engine import StepFailed, run_step
+from .engine import StepFailed, input_hash, run_step
 from .nonidempotent import Result, Verdict, run_nonidempotent
 
 # How an agent node runs one turn: given the (feedback-augmented) prompt + the tool
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
 # orchestration driver wires the real implementation (P4); tests inject a fake.
 DriveTurn = Callable[[str, list[str] | None], Awaitable[Any]]
+# A per-element turn-lane factory (#429 P5): subkey -> a DriveTurn bound to a DISTINCT
+# ChatTurnEngine key, so N map elements' agent turns run concurrently instead of
+# serializing behind one FIFO-per-key lane. Wired by the driver; None ⇒ sub-handles
+# share the parent's lane (serialized, the safe default).
+SubTurn = Callable[[str], DriveTurn]
 # A live-stdout sink (#178): called with each stdout byte chunk as it arrives, so a
 # long deterministic step shows movement instead of looking dead. Matches the sandbox
 # protocol's OutputSink (defined here to keep the workflow package decoupled).
@@ -113,6 +120,11 @@ class WorkflowHandle:
         notification_sent: NotificationSentCheck | None = None,
         credential: str = "",
         step_timeout_s: float | None = None,
+        sub_turn: SubTurn | None = None,
+        turn_concurrency: int | None = None,
+        entity_write_sink: EntityWriteSink | None = None,
+        origin_trigger: str = "",
+        trigger_depth: int = 0,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -168,6 +180,24 @@ class WorkflowHandle:
         self.step_timeout_s = step_timeout_s
         """Per-step wall-clock cap for an agent turn (manual §17); None ⇒ no cap.
         Exceeding it aborts the step (and so the run) to ``error``."""
+        self.sub_turn = sub_turn
+        """#429 P5: a ``subkey → DriveTurn`` factory the driver wires so ``sub_handle``
+        can bind each map element its own turn lane (real parallel agent turns). None ⇒
+        sub-handles reuse the parent lane (serialized — the safe default / tests)."""
+        self.turn_concurrency = turn_concurrency
+        """#429 P5: the effective parallel-turn ceiling derived from the model backend's
+        concurrency (a single local model → ~1, a hosted/multi-replica pool → larger). It
+        is a REQUEST ceiling throttled by the backend, not a guarantee. None ⇒ unset (the
+        author's per-map ``concurrency`` stands alone)."""
+        self._entity_write_sink = entity_write_sink
+        """#429 P9: the post-commit sink this run's entity writes emit through (the event-
+        trigger dispatcher). None ⇒ no event dispatch (tests / triggers off)."""
+        self._origin_trigger = origin_trigger
+        """#429 P9: the event trigger that spawned this run (or "" for human/schedule). Stamped
+        onto this run's entity writes so the dispatcher never re-fires the run's OWN trigger."""
+        self._trigger_depth = trigger_depth
+        """#429 P9: this run's depth in the event-trigger chain — stamped onto its writes so an
+        indirect cycle hits the global depth cap."""
 
     @property
     def journal_dir(self) -> str:
@@ -176,6 +206,19 @@ class WorkflowHandle:
         cluttering the workspace root. Legacy singular workflows (``workflow_id=""``)
         fall back to ``/.workflow/_default``."""
         return f"/.workflow/{self._workflow_id or '_default'}"
+
+    def sub_handle(self, subkey: str) -> WorkflowHandle:
+        """A per-element child handle (#429 P5) sharing this run's workspace, journal, and
+        capabilities, but whose agent turns run on a DISTINCT turn lane — so N map elements'
+        turns run concurrently instead of serializing behind one ChatTurnEngine key. The
+        driver wires ``sub_turn`` (a ``subkey → DriveTurn`` factory); without it the child
+        reuses the parent's ``drive_turn`` (graceful degrade to serialized). Everything else
+        (store, ``journal_dir``, capabilities, ``emit``) is shared, so per-element artifacts
+        land in the same journal keyed by the element key."""
+        child = copy.copy(self)
+        if self.sub_turn is not None:
+            child.drive_turn = self.sub_turn(subkey)
+        return child
 
     async def read(self, path: str) -> bytes:
         return await self._store.read(self._workspace_id, _abs(path))
@@ -241,6 +284,16 @@ class WorkflowHandle:
         )
         return result["doc_id"]
 
+    def _entity_origin(self):
+        """#429 P9: the ``EntityOrigin`` to stamp on this run's entity writes — set only for a
+        triggered run (``origin_trigger`` non-empty), so a human/schedule run's writes stay
+        origin-less (a fresh depth-0 chain root)."""
+        if not self._origin_trigger:
+            return None
+        from ..entity.events import EntityOrigin
+
+        return EntityOrigin(trigger=self._origin_trigger, depth=self._trigger_depth)
+
     async def create_entity(
         self,
         type_name: str,
@@ -280,7 +333,9 @@ class WorkflowHandle:
         catalog, _diags = await discover_catalog(self._store, self._workspace_id)
         if type_name not in catalog:
             raise StepFailed(f"unknown entity type: {type_name!r}")
-        store = EntityStore(self._store, self._workspace_id, catalog)
+        store = EntityStore(
+            self._store, self._workspace_id, catalog, on_write=self._entity_write_sink
+        )
         records_path = catalog.get(type_name).records_path
         created_path = f"{self.journal_dir}/step_{name}/{key or 'main'}.created.json"
 
@@ -338,7 +393,13 @@ class WorkflowHandle:
             )
             try:
                 await store.update(
-                    type_name, number, patch, expected_version=current.version, body=new_body
+                    type_name,
+                    number,
+                    patch,
+                    expected_version=current.version,
+                    body=new_body,
+                    actor=self.user,
+                    origin=self._entity_origin(),
                 )
             except EntityConflict as exc:
                 raise StepFailed(str(exc)) from exc
@@ -356,7 +417,12 @@ class WorkflowHandle:
                 current = await store.get(type_name, number)
                 try:  # self-merge overlays the declared fields; CAS guards a racing edit
                     await store.update(
-                        type_name, number, dict(args), expected_version=current.version
+                        type_name,
+                        number,
+                        dict(args),
+                        expected_version=current.version,
+                        actor=self.user,
+                        origin=self._entity_origin(),
                     )
                 except EntityConflict as exc:
                     raise StepFailed(str(exc)) from exc
@@ -367,7 +433,11 @@ class WorkflowHandle:
             if remembered is not None:
                 return Result(fields={"number": remembered, "created": False, "action": "resume"})
             created = await store.create(
-                type_name, args, actor=self.user, now=datetime.now(UTC).date().isoformat()
+                type_name,
+                args,
+                actor=self.user,
+                now=datetime.now(UTC).date().isoformat(),
+                origin=self._entity_origin(),
             )
             await self.write_json(created_path, {"number": created.number})
             return Result(fields={"number": created.number, "created": True, "action": "create"})
@@ -431,6 +501,66 @@ class WorkflowHandle:
             cache=cache,
         )
         return result.fields
+
+    async def update_entity(
+        self,
+        type_name: str,
+        number: int,
+        patch: dict[str, Any],
+        *,
+        phase: str = "commit",
+        cache: bool = True,
+        retries: int = 3,
+    ) -> str:
+        """Update a file-first entity (#419) through the framework's ``EntityStore.update``
+        — the SAME path the UI and the agent use, never a raw ``wf.write`` (§C, "single
+        write path"). Optimistic + conflict-retrying (#429 P2): it re-reads the record's
+        version, applies the merge-``patch`` with that version, and on ``EntityConflict``
+        (a *parallel run* moved the record) re-reads and retries up to ``retries`` times —
+        so two workflow runs updating the same entity never lost-update (this is how gap 5
+        "parallel runs hit the same entity" is closed, without a new lock). Journaled +
+        skipped on re-run keyed by ``(type, number, patch)`` — the patch is absolute field
+        values, so a re-run is a no-op skip, never a double-apply. Returns the new version."""
+        from ..entity.catalog import discover_catalog
+        from ..entity.store import EntityConflict, EntityStore
+
+        catalog, _diags = await discover_catalog(self._store, self._workspace_id)
+        if type_name not in catalog:
+            raise StepFailed(f"unknown entity type: {type_name!r}")
+        store = EntityStore(
+            self._store, self._workspace_id, catalog, on_write=self._entity_write_sink
+        )
+
+        async def execute(_feedback: str | None) -> dict[str, str]:
+            for _ in range(retries + 1):
+                current = await store.get(type_name, number)
+                try:
+                    updated = await store.update(
+                        type_name,
+                        number,
+                        patch,
+                        expected_version=current.version,
+                        actor=self.user,
+                        origin=self._entity_origin(),
+                    )
+                except EntityConflict:
+                    continue  # a parallel run moved it — re-read + re-apply on the fresh copy
+                return {"version": updated.version}
+            raise StepFailed(
+                f"update_entity {type_name} #{number}: too many version conflicts "
+                f"(retried {retries} times) — a parallel run keeps moving it"
+            )
+
+        result = await run_step(
+            self,
+            name="update_entity",
+            key=f"{type_name}_{number}_{input_hash(patch)}",
+            phase=phase,
+            args={"type": type_name, "number": number, "patch": patch},
+            execute=execute,
+            cache=cache,
+        )
+        return result["version"]
 
     async def convert(
         self, src: str, dest: str, *, phase: str = "convert", cache: bool = True

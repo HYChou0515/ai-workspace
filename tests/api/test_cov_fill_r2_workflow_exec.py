@@ -70,6 +70,31 @@ async def test_drive_turn_bogus_chat_key_falls_back_tools_none_and_empty_produce
     assert all(m.role != "assistant" for m in conv.messages)
 
 
+async def test_wired_sub_turn_drives_a_distinct_lane_then_forgets_it(monkeypatch):
+    """#429 P5: wire_handle binds a per-element sub-turn factory + the backend turn cap
+    onto wf. Invoking a sub-lane drives its OWN enqueue lane (real parallel) but persists
+    to the run's chat, then forgets the transient sub-lane so its session doesn't leak."""
+    from workspace_app.workflow.handle import WorkflowHandle
+
+    _spec, executor, item_id = _build(monkeypatch)
+    forgotten: list[str] = []
+    real_forget = executor._turn_engine.forget
+
+    async def spy_forget(key: str) -> None:
+        forgotten.append(key)
+        await real_forget(key)
+
+    monkeypatch.setattr(executor._turn_engine, "forget", spy_forget)
+
+    wf = WorkflowHandle(store=executor._files, workspace_id=item_id)
+    executor.wire_handle(wf, "run-1", item_id, "u", "no-such-chat")
+    assert wf.turn_concurrency == 1  # backend cap threaded onto the handle
+    assert wf.sub_turn is not None
+    answer = await wf.sub_turn("e0")("hi", None)  # drives lane 'no-such-chat#e0'
+    assert answer == ""  # scripted RunDone-only → empty
+    assert forgotten == ["no-such-chat#e0"]  # the transient sub-lane was dropped
+
+
 async def test_convert_capability_stages_text_and_is_wired_onto_the_handle(monkeypatch):
     """#324: the executor's ``convert`` reads a staged upload, runs the KB parsers to text,
     and stages it at a content-coherent path — and ``wire_handle`` binds it onto ``wf`` so a

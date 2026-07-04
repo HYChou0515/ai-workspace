@@ -54,6 +54,10 @@ class ServerSettings:
     # the cancel latency equals this interval; the same-pod fast-path is instant.
     # Smaller = snappier cancel but more store reads per active turn.
     turn_cancel_poll_seconds: float = 0.5
+    # #429 P7: how often the schedule-trigger sweeper polls profiles' triggers.json for
+    # due headless runs. 0 (default) ⇒ off — time-triggered workflows are opt-in per deploy.
+    # A CAS lease per (trigger, window) means only one pod fires each window when several run.
+    trigger_check_interval_sec: int = 0
 
 
 # ─── sandbox ────────────────────────────────────────────────────────────

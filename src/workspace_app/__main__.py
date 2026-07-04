@@ -300,6 +300,13 @@ def main() -> None:
             ),
             # #355: the server-local daily auto-sync time for code collections.
             code_daily_sync=settings.kb.git.daily_sync,
+            # #429 P7: schedule-trigger sweeper cadence. 0 ⇒ off (headless time-triggered
+            # workflows are opt-in per deploy).
+            trigger_check_interval=(
+                timedelta(seconds=settings.server.trigger_check_interval_sec)
+                if settings.server.trigger_check_interval_sec > 0
+                else None
+            ),
         )
     if packages:
         names = ", ".join(f"{p.name}({','.join(c.name for c in p.commands)})" for p in packages)

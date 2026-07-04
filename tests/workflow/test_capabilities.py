@@ -342,6 +342,43 @@ def test_upsert_context_card_updates_the_existing_card_for_an_existing_key(spec_
     assert spec_instance.get_resource_manager(ContextCard).get(first).data.body == "new"
 
 
+def test_upsert_context_card_retries_on_parallel_conflict(spec_instance: SpecStar, monkeypatch):
+    """#429 P5: the workflow card commit is optimistic — it reads the card body, updates
+    with an expected_body guard, and retries on CardConflict (a parallel run moved it), so
+    two runs upserting one card don't silently lost-update (consistency with update_entity)."""
+    from workspace_app.resources.kb import ContextCard
+    from workspace_app.workflow import capabilities as cap
+
+    cid = _collection(spec_instance)
+    first = cap.upsert_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="M4", body="v0", user="u"
+    )
+    real_update = cap.update_context_card
+    calls = {"n": 0}
+
+    def flaky(spec, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:  # first attempt loses the optimistic race
+            raise cap.CardConflict(kw["card_id"])
+        return real_update(spec, **kw)
+
+    monkeypatch.setattr(cap, "update_context_card", flaky)
+    second = cap.upsert_context_card(
+        spec_instance, collection=cid, keys=["M4"], title="M4", body="v1", user="u"
+    )
+    assert second == first and calls["n"] == 2  # retried once, then landed
+    assert spec_instance.get_resource_manager(ContextCard).get(first).data.body == "v1"
+
+    def always_conflict(spec, **kw):
+        raise cap.CardConflict(kw["card_id"])
+
+    monkeypatch.setattr(cap, "update_context_card", always_conflict)
+    with pytest.raises(cap.CardConflict):
+        cap.upsert_context_card(
+            spec_instance, collection=cid, keys=["M4"], title="M4", body="v2", user="u", retries=2
+        )
+
+
 def test_upsert_context_card_unknown_collection_is_rejected(spec_instance: SpecStar):
     from workspace_app.workflow.capabilities import upsert_context_card
 

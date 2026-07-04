@@ -63,7 +63,7 @@ class _Fakes:
         return [type(e).__name__ for _i, e in self.events]
 
 
-def _orch(spec, run_fn, fakes=None, *, store=None, wire=None, **kw):
+def _orch(spec, run_fn, fakes=None, *, store=None, wire=None, now=None, **kw):
     fakes = fakes or _Fakes()
     return (
         WorkflowOrchestrator(
@@ -75,11 +75,19 @@ def _orch(spec, run_fn, fakes=None, *, store=None, wire=None, **kw):
             publish=fakes.publish,
             release=fakes.release,
             notify_failure=fakes.notify,
-            now=_clock(),
+            now=now or _clock(),
             **kw,
         ),
         fakes,
     )
+
+
+def _insert_run(orch, **over):
+    """Insert a WorkflowRun row directly (bypassing the driver) so orphan/stuck logic can be
+    exercised against a chosen status + progress_at."""
+    base: dict = {"item_id": "i", "captured_user": "u", "status": RunStatus.RUNNING}
+    base.update(over)
+    return orch._rm().create(WorkflowRun(**base)).resource_id
 
 
 async def _ok(_fb):
@@ -335,6 +343,137 @@ async def test_second_active_run_on_same_item_is_rejected(spec_instance: SpecSta
     # once terminal, a fresh run is allowed (sequential runs per item, §14)
     rid2 = await orch.start(slug="rca", item_id="i3", profile="echo", captured_user="u")
     assert rid2 != run_id
+
+
+async def test_start_refuses_an_empty_captured_user(spec_instance: SpecStar):
+    """#429 E (execution gate 2): a headless/triggered run has no request user, so the acting
+    user is threaded through explicitly. If it arrives empty, fail loud — never silently run as
+    a system identity (the authz-scope 'no silent errors' rule)."""
+    orch, _ = _orch(spec_instance, _run_noop)
+    with pytest.raises(ValueError, match="captured_user"):
+        await orch.start(slug="rca", item_id="iE", profile="echo", captured_user="")
+
+
+async def _run_noop(wf, inputs):
+    return {}
+
+
+# ── #429 P8: orphan (stuck-run) detection ────────────────────────────────────
+
+
+async def test_is_stuck_flags_a_running_run_with_no_recent_progress(spec_instance: SpecStar):
+    """#429 P8: a run left RUNNING by a dead pod stops advancing its progress heartbeat, so
+    once ``now - progress_at`` passes the grace it reads as stuck (the #227 staleness idiom)."""
+    clock = [10_000]
+    orch, _ = _orch(spec_instance, _run_noop, now=lambda: clock[0])
+    rid = _insert_run(orch, status=RunStatus.RUNNING, started=0, progress_at=1_000)
+    clock[0] = 1_000 + 5_000
+    assert not orch.is_stuck(rid, grace_ms=10_000)  # 5s < grace → still live
+    clock[0] = 1_000 + 20_000
+    assert orch.is_stuck(rid, grace_ms=10_000)  # 20s > grace → stuck
+
+
+async def test_is_stuck_is_false_for_non_running_states(spec_instance: SpecStar):
+    """Only a RUNNING run can be a stuck orphan — pending (queued), awaiting_human (a human
+    must act), and terminal states are never resumed by the sweeper."""
+    orch, _ = _orch(spec_instance, _run_noop, now=lambda: 1_000_000)
+    for st in (
+        RunStatus.PENDING,
+        RunStatus.AWAITING_HUMAN,
+        RunStatus.DONE,
+        RunStatus.ERROR,
+        RunStatus.CANCELLED,
+    ):
+        rid = _insert_run(orch, status=st, progress_at=0)
+        assert not orch.is_stuck(rid, grace_ms=1)
+
+
+async def test_patch_stamps_progress_at_as_a_heartbeat(spec_instance: SpecStar):
+    """Every progress patch stamps ``progress_at`` from the run clock, so a live run's
+    heartbeat advances step-by-step and only a dead one goes stale."""
+    clock = [500]
+    orch, _ = _orch(spec_instance, _run_noop, now=lambda: clock[0])
+    rid = _insert_run(orch, status=RunStatus.RUNNING, progress_at=0)
+    clock[0] = 777
+    orch._patch(rid, current_phase="x")
+    assert orch._get(rid).progress_at == 777
+
+
+# ── #429 P8/F: resume a stuck orphan (CAS-guarded re-drive) ──────────────────
+
+
+async def test_resume_redrives_a_stuck_orphan_to_completion(spec_instance: SpecStar):
+    """A stuck orphan resumes: re-driving replays completed steps (they skip, §9) and the run
+    reaches DONE — the crashed run self-heals instead of hanging forever (#429 P8)."""
+    ran: list[int] = []
+
+    async def run(wf, inputs):
+        ran.append(1)
+        return {"ok": True}
+
+    orch, _ = _orch(spec_instance, run, now=lambda: 1_000_000)
+    rid = _insert_run(orch, status=RunStatus.RUNNING, started=0, progress_at=0)
+    took = await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000)
+    await asyncio.sleep(0)  # let the re-driven task run
+    assert took is True
+    assert ran == [1]
+    assert orch._get(rid).status is RunStatus.DONE
+
+
+async def test_resume_declines_a_settled_run(spec_instance: SpecStar):
+    """A run that reached a terminal state between detection and resume is no longer an orphan
+    — resume declines it rather than re-driving a finished run."""
+    orch, _ = _orch(spec_instance, _run_noop, now=lambda: 1_000_000)
+    rid = _insert_run(orch, status=RunStatus.DONE, progress_at=0)
+    assert await orch.resume(rid, slug="rca", profile="echo", grace_ms=1) is False
+
+
+async def test_resume_is_taken_by_only_one_caller(spec_instance: SpecStar):
+    """Two pods detect the same orphan; exactly one takes the resume. The winner stamps a
+    fresh heartbeat, so the second call sees it as no-longer-stale and backs off — a run is
+    never double-driven (#429 P8/F)."""
+    gate = asyncio.Event()
+    ran: list[int] = []
+
+    async def run(wf, inputs):
+        ran.append(1)
+        await gate.wait()
+        return {}
+
+    orch, _ = _orch(spec_instance, run, now=lambda: 1_000_000)
+    rid = _insert_run(orch, status=RunStatus.RUNNING, started=0, progress_at=0)
+    a = await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000)
+    b = await orch.resume(rid, slug="rca", profile="echo", grace_ms=10_000)
+    gate.set()
+    await asyncio.sleep(0)
+    assert [a, b] == [True, False]  # exactly one re-drive
+    assert ran == [1]
+
+
+# ── #429 F-2: abandon a stuck orphan past its resume budget ──────────────────
+
+
+async def test_abandon_marks_a_run_errored_and_discoverable(spec_instance: SpecStar):
+    """#429 F-2: an orphan past its resume budget is abandoned — a one-way move to a terminal,
+    DISCOVERABLE state (error + an `abandoned` marker + reason), the sandbox freed and the
+    failure surfaced, so it is never silently dropped nor dragged on forever."""
+    orch, fakes = _orch(spec_instance, _run_noop, now=lambda: 42)
+    rid = _insert_run(orch, item_id="iX", status=RunStatus.RUNNING, progress_at=0)
+    await orch.abandon(rid, reason="stuck past its resume budget")
+    data = orch._get(rid)
+    assert data.status is RunStatus.ERROR
+    assert data.result == {"abandoned": True, "reason": "stuck past its resume budget"}
+    assert data.ended == 42
+    assert ("iX", True) in fakes.released  # sandbox freed
+    assert fakes.notified and fakes.notified[-1].result == data.result  # surfaced as a failure
+
+
+async def test_abandon_is_a_noop_on_a_terminal_run(spec_instance: SpecStar):
+    """Abandon is one-way and idempotent — it never rewrites a run that already finished."""
+    orch, _ = _orch(spec_instance, _run_noop, now=lambda: 1)
+    rid = _insert_run(orch, status=RunStatus.DONE, result={"ok": 1})
+    await orch.abandon(rid, reason="x")
+    assert orch._get(rid).result == {"ok": 1}  # unchanged
 
 
 async def test_stop_cancels_and_releases(spec_instance: SpecStar):
