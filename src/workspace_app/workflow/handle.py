@@ -69,12 +69,6 @@ def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
     return f"{safe}_{digest}" if safe else digest
 
 
-def _args_digest(args: dict[str, Any]) -> str:
-    """A stable, short digest of a capability's args — folds them into the journal
-    key so a re-run with the SAME args skips (#419 create_entity idempotency)."""
-    return hashlib.sha1(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:12]
-
-
 def _abs(path: str) -> str:
     """Normalise to an absolute workspace-relative path (FileStore wants a leading
     ``/``); accept author-friendly relative paths like ``plan/f.json``."""
@@ -224,40 +218,89 @@ class WorkflowHandle:
         type_name: str,
         args: dict[str, Any],
         *,
+        name: str,
+        on_duplicate: str = "update",
         phase: str = "commit",
+        key: str = "",
         cache: bool = True,
     ) -> int:
-        """Create a file-first entity (#419) through the framework's numbering +
-        validation pipeline — the SAME ``EntityStore`` path the UI and the agent use,
-        never a raw ``wf.write`` with a hand-picked number (§C, "single write path").
-        Journaled + skipped on re-run (§9), keyed by (type + args), so a re-run never
-        mints a duplicate. Returns the permanent entity number."""
+        """Create a file-first entity (#419) through the framework numbering + validation
+        pipeline (the SAME ``EntityStore`` path the UI and agent use, never a raw
+        ``wf.write``), as a non-idempotent capability on the #435 shell.
+
+        ``name`` is the capability's STABLE dedup identity — its *site*. A re-run of the
+        same site self-dedups: journal-first via a write-once ``created.json`` remembers
+        the number this site minted, so a gate revise that CHANGES the content merges
+        into that entity instead of minting a duplicate (the old ``args``-digest key
+        double-created here — the changed content changed the key). ``on_duplicate`` picks
+        the duplicate action: ``update`` (self-merge the declared fields, leaving fields
+        the workflow doesn't declare — a human's edits — untouched, 决议3) or ``skip``
+        (return the existing number without touching it). ``key`` is the map-element scope
+        key (a create_entity inside a loop mints one entity per element). Returns the
+        entity number (sourced from the shell's published ``Result.fields['number']``)."""
         from datetime import UTC, datetime
 
         from ..entity.catalog import discover_catalog
-        from ..entity.store import EntityStore
+        from ..entity.store import EntityConflict, EntityStore
+        from .nonidempotent import Result, Verdict, run_nonidempotent
 
         catalog, _diags = await discover_catalog(self._store, self._workspace_id)
         if type_name not in catalog:
             raise StepFailed(f"unknown entity type: {type_name!r}")
         store = EntityStore(self._store, self._workspace_id, catalog)
+        records_path = catalog.get(type_name).records_path
+        created_path = f"{self.journal_dir}/step_{name}/{key or 'main'}.created.json"
 
-        async def execute(_feedback: str | None) -> dict[str, int]:
+        async def _remembered_alive() -> int | None:
+            """The number this site already minted, if its record still exists — else
+            the entity was hard-deleted, so forget it and mint anew."""
+            if not await self.exists(created_path):
+                return None
+            number = int((await self.read_json(created_path))["number"])
+            alive = await self._store.exists(self._workspace_id, f"/{records_path}/{number}.md")
+            return number if alive else None
+
+        async def decide(_feedback: str | None) -> Verdict:
+            remembered = await _remembered_alive()  # journal-first self-dedup (决议2)
+            if remembered is not None:
+                return Verdict(kind="duplicate", payload={"of": remembered, "origin": "self"})
+            return Verdict(kind="new")
+
+        async def act(verdict: Verdict) -> Result:
+            if verdict.kind == "duplicate":
+                number = int(verdict.payload["of"])
+                if on_duplicate == "skip":
+                    return Result(fields={"number": number, "created": False, "action": "skip"})
+                current = await store.get(type_name, number)
+                try:  # self-merge overlays the declared fields; CAS guards a racing edit
+                    await store.update(
+                        type_name, number, dict(args), expected_version=current.version
+                    )
+                except EntityConflict as exc:
+                    raise StepFailed(str(exc)) from exc
+                return Result(fields={"number": number, "created": False, "action": "merge"})
+            # new — guard the act-crash-before-journal window (§7): if this site already
+            # minted a (still-alive) entity, reuse it rather than mint a second.
+            remembered = await _remembered_alive()
+            if remembered is not None:
+                return Result(fields={"number": remembered, "created": False, "action": "resume"})
             created = await store.create(
                 type_name, args, actor=self.user, now=datetime.now(UTC).date().isoformat()
             )
-            return {"number": created.number}
+            await self.write_json(created_path, {"number": created.number})
+            return Result(fields={"number": created.number, "created": True, "action": "create"})
 
-        result = await run_step(
+        result = await run_nonidempotent(
             self,
-            name="create_entity",
-            key=f"{type_name}_{_args_digest(args)}",
+            name=name,
+            inputs={"type": type_name, "args": args, "on_duplicate": on_duplicate},
+            decide=decide,
+            act=act,
+            key=key,
             phase=phase,
-            args={"type": type_name, "args": args},
-            execute=execute,
             cache=cache,
         )
-        return result["number"]
+        return int(result.fields["number"])
 
     async def convert(
         self, src: str, dest: str, *, phase: str = "convert", cache: bool = True
