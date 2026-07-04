@@ -157,6 +157,56 @@ def test_interactive_profile_yields_no_diagnostics(tmp_path):
     assert check_profile_dir(tmp_path, "app/p") == []
 
 
+def _write_dsl(profile_dir: Path, wf_id: str, dsl: dict) -> None:
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "_profile.json").write_text(
+        json.dumps({"workflows": [{"id": wf_id, "phases": dsl["phases"]}]})
+    )
+    wdir = profile_dir / "workflows" / wf_id
+    wdir.mkdir(parents=True, exist_ok=True)
+    (wdir / "workflow.json").write_text(json.dumps(dsl))
+
+
+def test_dsl_stale_cache_risk_is_a_warning_not_an_error(tmp_path):
+    """`check` surfaces a stale-cache risk (a sandbox command that looks like it reads a
+    file but declares no `reads`) as an advisory WARNING, never an error (#429 P1)."""
+    _write_dsl(
+        tmp_path,
+        "w",
+        {"id": "w", "phases": [{"id": "p"}],
+         "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}]},
+    )
+    diags = check_profile_dir(tmp_path, "app/w")
+    assert _levels(diags) == ["warning"]
+    assert any("reads" in d.message for d in diags)
+
+
+def test_dsl_strict_mode_escalates_stale_risk_to_error(tmp_path):
+    """Strict mode (opt-in per project, #429 P1) makes 'take a stance' mandatory: an
+    un-declared stale-cache risk becomes an ERROR (fails the gate), while a step that
+    declared `reads` or set `cache: false` stays clean. Default mode keeps it a warning."""
+    _write_dsl(
+        tmp_path,
+        "w",
+        {"id": "w", "phases": [{"id": "p"}],
+         "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}]},
+    )
+    assert _levels(check_profile_dir(tmp_path, "app/w")) == ["warning"]  # default
+    assert _levels(check_profile_dir(tmp_path, "app/w", strict=True)) == ["error"]  # strict
+
+
+def test_dsl_step_that_declared_reads_is_clean(tmp_path):
+    """No stale-cache warning once the author has taken a stance (declared `reads`)."""
+    _write_dsl(
+        tmp_path,
+        "w",
+        {"id": "w", "phases": [{"id": "p"}],
+         "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p",
+                    "reads": ["analyze.py"]}]},
+    )
+    assert check_profile_dir(tmp_path, "app/w") == []
+
+
 def test_diagnostic_render_with_and_without_hint():
     assert Diagnostic("error", "a/p", "boom").render() == "error: a/p: boom"
     rendered = Diagnostic("warning", "a/p", "boom", "do x").render()

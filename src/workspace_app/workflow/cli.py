@@ -28,9 +28,9 @@ def _apps_dir() -> Path:
     return Path(str(resources.files("workspace_app.apps")))
 
 
-def _cmd_check(slug: str | None) -> int:
+def _cmd_check(slug: str | None, *, strict: bool = False) -> int:
     slugs = [slug] if slug else discover_app_slugs()
-    diags = [d for s in slugs for d in check_app(s)]
+    diags = [d for s in slugs for d in check_app(s, strict=strict)]
     for d in diags:
         print(d.render())
     errors = sum(1 for d in diags if d.level == "error")
@@ -73,6 +73,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     check = sub.add_parser("check", help="statically check workflow profiles for problems")
     check.add_argument("slug", nargs="?", help="app slug to check; omit to check every app")
+    check.add_argument(
+        "--strict",
+        action="store_true",
+        help="escalate stale-cache risks (an undeclared 'reads') from warning to error (#429 P1)",
+    )
 
     new = sub.add_parser("new", help="scaffold a runnable workflow from a recipe")
     new.add_argument("slug")
@@ -93,5 +98,5 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     if args.cmd == "check":
-        return _cmd_check(args.slug)
+        return _cmd_check(args.slug, strict=args.strict)
     return _cmd_new(args)

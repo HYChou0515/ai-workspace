@@ -77,6 +77,12 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     # a JSON object; the step parses + records it as ``result.fields``, referenceable
     # downstream as ``{steps.<name>.<field>}``. The type values gain meaning in P2.
     outputs: dict[str, Any] = field(default_factory=dict)
+    # #429 P1: files this turn DEPENDS on. The engine folds their content fingerprint into
+    # the input-hash so editing a declared source re-runs the step (interpolation allowed).
+    reads: list[str] = field(default_factory=list)
+    # #429 P1 rule 3: opt out of the journal skip — always re-run (an honest 'always fresh'
+    # for a step whose inputs the author can't fingerprint).
+    cache: bool = True
 
 
 class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
@@ -90,6 +96,12 @@ class SandboxStep(Struct, tag="sandbox", forbid_unknown_fields=True):
     # #428 §1/§2: like AgentStep — when set, the script prints a JSON object to stdout
     # which the step parses into ``result.fields`` (referenceable downstream).
     outputs: dict[str, Any] = field(default_factory=dict)
+    # #429 P1: files this command DEPENDS on. The engine folds their content fingerprint
+    # into the input-hash so editing a declared file re-runs the step (a bare path in
+    # ``run`` would skip on a content-only change). Interpolation allowed.
+    reads: list[str] = field(default_factory=list)
+    # #429 P1 rule 3: opt out of the journal skip — always re-run.
+    cache: bool = True
 
 
 class GateStep(Struct, tag="gate", forbid_unknown_fields=True):
@@ -335,6 +347,17 @@ async def _resolve(template: Any, ns: dict[str, Any], wf: WorkflowHandle) -> Any
         last = m.end()
     out.append(template[last:])
     return "".join(out)
+
+
+async def _resolve_reads(
+    reads: list[str], ns: dict[str, Any], wf: WorkflowHandle
+) -> list[str] | None:
+    """Resolve a step's ``reads`` declarations (#429 P1) — interpolate each entry
+    (``{config.dir}/*.log`` → ``logs/*.log``) into a concrete path/glob string. Returns
+    ``None`` for an empty ``reads`` so the adapter leaves the input-hash untouched."""
+    if not reads:
+        return None
+    return [_stringify(await _resolve(r, ns, wf)) for r in reads]
 
 
 # ─── interpreter ─────────────────────────────────────────────────────────────
@@ -595,6 +618,8 @@ async def _exec_step(
             name=step.name or None,
             key=key,
             outputs=step.outputs or None,
+            reads=await _resolve_reads(step.reads, ns, wf),
+            cache=step.cache,
         )
         return
     # AgentStep
@@ -608,6 +633,7 @@ async def _exec_step(
         check = await _build_check(step.check, ns, wf)
     else:
         check = None
+    reads = await _resolve_reads(step.reads, ns, wf)
     if step.out or step.outputs:
         await agent_write_step(
             wf,
@@ -620,6 +646,8 @@ async def _exec_step(
             retries=step.retries,
             check=check,
             outputs=step.outputs or None,
+            reads=reads,
+            cache=step.cache,
         )
     else:  # plain agent_step — ``check`` is required (validate_def guarantees it)
         assert check is not None
@@ -632,6 +660,8 @@ async def _exec_step(
             name=step.name or None,
             key=key,
             retries=step.retries,
+            reads=reads,
+            cache=step.cache,
         )
 
 
@@ -755,6 +785,27 @@ def _validate_check(
     _check_interp(args, scope, where, errs, steps_seen)
 
 
+def _validate_reads(
+    reads: list[str],
+    scope: set[str],
+    where: str,
+    errs: list[str],
+    steps_seen: dict[str, dict[str, Any]],
+) -> None:
+    """Static path-shape check for a step's ``reads`` (#429 P1). A declared read is a
+    workspace path/glob; an empty entry or a ``..`` traversal is a static error (a
+    malformed dependency should be caught before the run, not silently ignored). The
+    interpolation references inside each entry are checked like any other template."""
+    for entry in reads:
+        # the interpolated skeleton (tokens blanked) must still be a sane path shape
+        skeleton = _TOKEN.sub("", entry).strip()
+        if not skeleton and not _TOKEN.search(entry):
+            errs.append(f"{where}: a 'reads' entry must be a non-empty path")
+        elif ".." in entry.split("/"):
+            errs.append(f"{where}: a 'reads' entry cannot contain a '..' traversal")
+    _check_interp(reads, scope, where, errs, steps_seen)
+
+
 def _validate_step(
     step: Step,
     where: str,
@@ -862,6 +913,7 @@ def _validate_step(
         if step.check is not None:
             _validate_check(step.check, scope, where, errs, steps_seen)
         _validate_outputs(step.outputs, where, errs)
+        _validate_reads(step.reads, scope, where, errs, steps_seen)
         return
     # AgentStep
     if not step.prompt:
@@ -881,6 +933,7 @@ def _validate_step(
     if step.check is not None:
         _validate_check(step.check, scope, where, errs, steps_seen)
     _validate_outputs(step.outputs, where, errs)
+    _validate_reads(step.reads, scope, where, errs, steps_seen)
 
 
 _SWITCH_MAX_DEPTH = 32  # #428 §3.2: a defensive cap on nested switches (not expressivity)
@@ -1120,3 +1173,58 @@ def validate_def(
     )
     _validate_revise(d.steps, errs)
     return errs
+
+
+# ─── stale-cache lint (#429 P1) ──────────────────────────────────────────────
+
+# A cheap, deliberately-heuristic signal that a sandbox command probably reads a file:
+# a path separator, a glob metachar, or a ``name.ext`` token. It is NOT an attempt to
+# parse the (opaque) command — it only nudges the author to DECLARE ``reads``.
+_PATH_LIKE = re.compile(r"/|[*?\[]|\b[\w-]+\.[A-Za-z][\w]*\b")
+
+
+def _is_glob_over(over: str | dict[str, Any]) -> bool:
+    """Does a map's ``over`` expand file PATHS (a glob) rather than a list value? True only
+    for a string carrying a glob metachar — a whole ``{ref}`` list value is not flagged."""
+    return isinstance(over, str) and any(c in over for c in "*?[")
+
+
+def _walk_stale(steps: list[Step], *, in_glob_map: bool, warns: list[str]) -> None:
+    for s in steps:
+        if isinstance(s, SandboxStep) and s.cache and not s.reads:
+            what = s.name or s.phase
+            if in_glob_map:
+                warns.append(
+                    f"sandbox step {what!r} inside a map over a glob declares no 'reads' — its "
+                    "command won't re-run when a matched file's CONTENT changes; declare 'reads' "
+                    "or set 'cache': false"
+                )
+            elif _PATH_LIKE.search(s.run):
+                warns.append(
+                    f"sandbox step {what!r} looks like it reads a file but declares no 'reads' — a "
+                    "content-only change won't re-run it; declare 'reads' or set 'cache': false "
+                    "(heuristic — ignore if the command reads nothing)"
+                )
+        if isinstance(s, MapStep):
+            _walk_stale(s.do, in_glob_map=_is_glob_over(s.over), warns=warns)
+        elif isinstance(s, SwitchStep):
+            for case in s.cases.values():
+                _walk_stale(case, in_glob_map=in_glob_map, warns=warns)
+            if s.default:
+                _walk_stale(s.default, in_glob_map=in_glob_map, warns=warns)
+
+
+def stale_risk_warnings(d: WorkflowDef) -> list[str]:
+    """Advisory stale-cache warnings for a parsed DSL (#429 P1), as human-readable strings.
+
+    Deliberately conservative and low-noise: it flags only the two statically-detectable
+    stale shapes — a sandbox command that *looks* like it reads a file yet declares no
+    ``reads`` (and isn't ``cache: false``), and any sandbox step inside a ``map`` over a
+    glob without ``reads`` (the highest-risk shape: the glob's members are the varying
+    content). It never parses the opaque command to guess what it reads, and it never
+    fires on a step that has taken a stance (declared ``reads`` or set ``cache: false``).
+    Always advisory — ``workflow check`` surfaces these as warnings, never errors, because
+    'declares no reads' is legitimately correct for a step that depends on no file."""
+    warns: list[str] = []
+    _walk_stale(d.steps, in_glob_map=False, warns=warns)
+    return warns

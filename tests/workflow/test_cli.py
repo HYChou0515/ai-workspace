@@ -23,14 +23,18 @@ def test_check_one_slug_exits_zero(capsys):
 
 
 def test_check_exits_one_on_an_error(capsys, monkeypatch):
-    monkeypatch.setattr(cli, "check_app", lambda s: [Diagnostic("error", f"{s}/p", "boom")])
+    monkeypatch.setattr(
+        cli, "check_app", lambda s, **kw: [Diagnostic("error", f"{s}/p", "boom")]
+    )
     assert cli.main(["check", "playground"]) == 1
     out = capsys.readouterr().out
     assert "boom" in out and "1 error(s)" in out
 
 
 def test_check_with_only_warnings_exits_zero(capsys, monkeypatch):
-    monkeypatch.setattr(cli, "check_app", lambda s: [Diagnostic("warning", f"{s}/p", "drift")])
+    monkeypatch.setattr(
+        cli, "check_app", lambda s, **kw: [Diagnostic("warning", f"{s}/p", "drift")]
+    )
     assert cli.main(["check", "playground"]) == 0
     assert "1 warning(s)" in capsys.readouterr().out
 

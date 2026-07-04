@@ -19,6 +19,7 @@ from workspace_app.workflow.dsl import (
     build_manifest,
     build_run,
     parse_def,
+    stale_risk_warnings,
     validate_def,
 )
 from workspace_app.workflow.engine import StepFailed
@@ -262,6 +263,56 @@ def test_validate_sandbox_needs_run():
     assert any(
         "non-empty 'run'" in e for e in _errs([{"type": "sandbox", "run": "", "phase": "p"}])
     )
+
+
+def test_stale_risk_warnings_are_conservative_and_low_noise():
+    """`stale_risk_warnings` (#429 P1) is a low-noise, explicitly-heuristic nudge: it
+    warns only on the two statically-detectable stale-cache shapes and never claims to
+    parse the command. It NEVER fires on a step that has taken a stance (declared `reads`
+    or set `cache=false`), and it does NOT parse an opaque command to guess reads."""
+
+    def _warns(steps: list[dict[str, Any]]) -> list[str]:
+        return stale_risk_warnings(
+            parse_def(json.dumps({"id": "wf", "phases": [{"id": "p"}], "steps": steps}))
+        )
+
+    # (rule 1) a sandbox command with a path-like token but no reads / no cache=false
+    r1 = _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p"}])
+    assert any("reads" in w for w in r1)
+
+    # (rule 2) a sandbox step inside a map over a glob, no reads — the highest-risk shape
+    r2 = _warns(
+        [{"type": "map", "over": "logs/*.log", "as": "f", "phase": "p",
+          "do": [{"type": "sandbox", "run": "process", "phase": "p"}]}]
+    )
+    assert any("map" in w and "reads" in w for w in r2)
+
+    # took a stance → silent: declared reads
+    assert _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p",
+                    "reads": ["x.py"]}]) == []
+    # took a stance → silent: cache=false
+    assert _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p",
+                    "cache": False}]) == []
+    # no path-like token in the command → not flagged (no guessing)
+    assert _warns([{"type": "sandbox", "run": "echo hello", "phase": "p"}]) == []
+
+
+def test_validate_reads_path_shape():
+    """`reads` entries are declared paths/globs — validate rejects an empty entry and a
+    `..` traversal statically (#429 P1), so a malformed dependency is caught before run,
+    not silently ignored."""
+    empty = _errs([{"type": "sandbox", "run": "x", "phase": "p", "reads": [""]}])
+    assert any("reads" in e and "non-empty" in e for e in empty)
+    traversal = _errs(
+        [{"type": "sandbox", "run": "x", "phase": "p", "reads": ["../secrets"]}]
+    )
+    assert any("reads" in e and ".." in e for e in traversal)
+    # a well-formed reads (incl. interpolation + glob) is accepted
+    ok = _errs(
+        [{"type": "agent", "prompt": "p", "phase": "p", "out": "o.md",
+          "reads": ["{config.dir}/*.log", "src/a.md"]}]
+    )
+    assert not any("reads" in e for e in ok)
 
 
 def test_validate_gate_rules():
@@ -530,6 +581,68 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
     assert validate_def(d) == []
     assert await build_run(d)(wf, None) == {"status": "done"}
     assert ran == ['build ["a", "b"]'] and cards == [("a", ["k1", "k2"])]
+
+
+async def test_dsl_step_cache_false_always_reruns():
+    """`cache: false` on a DSL step opts it out of the journal skip entirely — the
+    honest 'always re-run' escape hatch (#429 P1 rule 3) for a step whose inputs the
+    author can't fingerprint (e.g. 'fetch the latest')."""
+    store = MemoryFileStore()
+    runs: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        runs.append(cmd)
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [{"type": "sandbox", "run": "fetch latest", "phase": "p",
+                           "cache": False}],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    await build_run(d)(wf, None)
+    assert len(runs) == 2  # cache=False → never skipped
+
+
+async def test_dsl_sandbox_reads_folds_declared_content_into_hash():
+    """A `workflow.json` sandbox step that declares `reads` re-runs when the declared
+    file's content changes — the DSL threads `reads` into the engine's content-aware
+    input-hash (#429 P1). Interpolation in a `reads` entry is resolved first."""
+    store = MemoryFileStore()
+    runs: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        runs.append(cmd)
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox, config={"dir": "logs"})
+    await wf.write("/logs/a.log", "v1")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"dir": "logs"},
+                "steps": [
+                    {"type": "sandbox", "run": "analyze", "phase": "p",
+                     "reads": ["{config.dir}/*.log"]}
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    await build_run(d)(wf, None)
+    await build_run(d)(wf, None)
+    assert len(runs) == 1  # unchanged declared content → skipped
+    await wf.write("/logs/a.log", "v2")
+    await build_run(d)(wf, None)
+    assert len(runs) == 2  # re-ran because a matched file's content changed
 
 
 async def test_run_gate_summary_reads_text_and_json():

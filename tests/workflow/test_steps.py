@@ -42,6 +42,27 @@ async def test_agent_step_gates_then_journals_and_skips_on_rerun(wf: WorkflowHan
     assert len(turns) == 1  # second call skipped via the journal
 
 
+async def test_agent_step_reads_reruns_on_declared_content_change(wf: WorkflowHandle):
+    """A plain (gated) agent node honours `reads` too: editing a declared source the
+    turn depends on re-runs it, prompt unchanged (#429 P1)."""
+    turns: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        turns.append(prompt)
+        await wf.write("/out.txt", "done")
+        return "ok"
+
+    wf.drive_turn = drive_turn
+    await wf.write("/src.txt", "a")
+    await agent_step(wf, prompt="p", phase="p", check=file_nonempty("/out.txt"), reads=["src.txt"])
+    await agent_step(wf, prompt="p", phase="p", check=file_nonempty("/out.txt"), reads=["src.txt"])
+    assert len(turns) == 1
+
+    await wf.write("/src.txt", "b")
+    await agent_step(wf, prompt="p", phase="p", check=file_nonempty("/out.txt"), reads=["src.txt"])
+    assert len(turns) == 2
+
+
 async def test_agent_step_retries_with_feedback_until_the_gate_passes(wf: WorkflowHandle):
     """A failing gate re-drives the turn with the failure fed back into the prompt;
     once the agent produces valid output the gate passes."""
@@ -94,6 +115,28 @@ async def test_sandbox_node_journals_exit_and_skips_on_rerun(wf: WorkflowHandle)
     assert len(runs) == 1
 
 
+async def test_sandbox_node_reads_reruns_on_declared_content_change(wf: WorkflowHandle):
+    """A sandbox_node that declares `reads` re-runs when a declared file's CONTENT
+    changes, even though `run` (the command) and the path are unchanged — the engine
+    folds the declared files' content fingerprint into the input-hash (#429 P1). This
+    is the content-aware invalidation that a bare path arg does NOT give."""
+    runs: list[str] = []
+
+    async def run_sandbox(cmd: str, on_output=None) -> tuple[int, str]:
+        runs.append(cmd)
+        return (0, "ok\n")
+
+    wf.run_sandbox = run_sandbox
+    await wf.write("/data.txt", "v1")
+    await sandbox_node(wf, run="python analyze.py", phase="a", reads=["data.txt"])
+    await sandbox_node(wf, run="python analyze.py", phase="a", reads=["data.txt"])
+    assert len(runs) == 1  # unchanged declared content → skipped via the journal
+
+    await wf.write("/data.txt", "v2")  # CONTENT changed; command + path unchanged
+    await sandbox_node(wf, run="python analyze.py", phase="a", reads=["data.txt"])
+    assert len(runs) == 2  # re-ran because the declared file's content changed
+
+
 async def test_sandbox_node_gate_fails_on_nonzero_exit(wf: WorkflowHandle):
     async def run_sandbox(cmd: str, on_output=None) -> tuple[int, str]:
         return (1, "boom")
@@ -139,6 +182,27 @@ async def test_agent_write_step_overwrites_an_existing_file(wf: WorkflowHandle):
     wf.drive_turn = drive_turn
     await agent_write_step(wf, prompt="rewrite", phase="p", out="/MEMORY.md", tools=["read_file"])
     assert await wf.read_text("/MEMORY.md") == "FRESH"
+
+
+async def test_agent_write_step_reads_reruns_on_declared_content_change(wf: WorkflowHandle):
+    """`reads` on an agent node folds the declared source files' content into the
+    input-hash, so editing a source the agent summarised re-runs it — even though the
+    prompt is unchanged (#429 P1)."""
+    turns: list[str] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        turns.append(prompt)
+        return "summary"
+
+    wf.drive_turn = drive_turn
+    await wf.write("/src.md", "original")
+    await agent_write_step(wf, prompt="summarise src", phase="p", out="/o.md", reads=["src.md"])
+    await agent_write_step(wf, prompt="summarise src", phase="p", out="/o.md", reads=["src.md"])
+    assert len(turns) == 1  # unchanged source → skipped
+
+    await wf.write("/src.md", "revised")  # source content changed; prompt unchanged
+    await agent_write_step(wf, prompt="summarise src", phase="p", out="/o.md", reads=["src.md"])
+    assert len(turns) == 2  # re-ran because the declared source changed
 
 
 async def test_agent_write_step_per_step_timeout_aborts():
