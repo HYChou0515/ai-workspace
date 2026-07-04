@@ -109,6 +109,8 @@ export const qk = {
     chat: (id: string) => ["kb", "chat", id] as const,
     // #310: a collection's current access state (share dialog pre-fill).
     collectionPermission: (id: string) => ["kb", "collection-permission", id] as const,
+    // #308: a document's current per-doc read override (share dialog pre-fill).
+    docPermission: (id: string) => ["kb", "doc-permission", id] as const,
     agent: ["kb", "agent"] as const,
     doc: (id: string) => ["kb", "doc", id] as const,
     // The doc IDE's cheap open-a-doc metadata (rationale + parser guidance) —

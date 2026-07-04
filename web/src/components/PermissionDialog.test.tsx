@@ -15,7 +15,7 @@ vi.mock("./UserChip", () => ({
 }));
 vi.mock("./Icon", () => ({ Icon: () => <span /> }));
 
-import { type CollectionPermission } from "../lib/permission";
+import { DOC_ROLES, type CollectionPermission } from "../lib/permission";
 import { renderWithQuery } from "../test/queryWrapper";
 import { PermissionDialog } from "./PermissionDialog";
 
@@ -105,5 +105,37 @@ describe("PermissionDialog", () => {
     );
     fireEvent.click(screen.getByTestId("toggle-advanced"));
     expect(screen.getByTestId("advanced-verbs").textContent).toContain("read_content: user:alice");
+  });
+
+  // #308 — the per-doc override reuses this dialog with a narrower role set + copy.
+  it("restricts the role picker to the roles it is given (DOC_ROLES = Viewer only)", () => {
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="notes.md"
+        owner="bob"
+        value={shared()}
+        roles={DOC_ROLES}
+        onSubmit={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    const options = Array.from(
+      (screen.getByTestId("role-alice") as HTMLSelectElement).options,
+    ).map((o) => o.value);
+    expect(options).toEqual(["viewer"]);
+  });
+
+  it("renders the caller-supplied caption", () => {
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="notes.md"
+        owner="bob"
+        value={perm()}
+        caption="Tighten who can read this document."
+        onSubmit={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("Tighten who can read this document.")).toBeInTheDocument();
   });
 });

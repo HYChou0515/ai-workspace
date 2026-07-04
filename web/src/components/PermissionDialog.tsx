@@ -5,6 +5,7 @@ import {
   COLLECTION_ROLES,
   type CollectionPermission,
   type Grant,
+  type RoleDef,
   type RoleId,
   type Visibility,
   grantsFromPermission,
@@ -25,6 +26,8 @@ export function PermissionDialog({
   owner,
   value,
   busy = false,
+  roles = COLLECTION_ROLES,
+  caption: captionText = "Choose who can access this collection.",
   onSubmit,
   onClose,
 }: {
@@ -33,6 +36,11 @@ export function PermissionDialog({
   owner: string;
   value: CollectionPermission;
   busy?: boolean;
+  /** The roles offered in the grant picker. Defaults to the three collection
+   * roles; a per-doc override (#308) passes `DOC_ROLES` (Viewer only). */
+  roles?: RoleDef[];
+  /** Sub-heading under the title — resource-specific copy. */
+  caption?: string;
   onSubmit: (perm: CollectionPermission) => void;
   onClose: () => void;
 }) {
@@ -72,7 +80,7 @@ export function PermissionDialog({
         style={panel}
       >
         <strong style={{ fontSize: pxToRem(14) }}>Share “{resourceName}”</strong>
-        <p style={caption}>Choose who can access this collection.</p>
+        <p style={caption}>{captionText}</p>
 
         <fieldset style={{ border: "none", margin: 0, padding: 0, display: "grid", gap: 6 }}>
           {VISIBILITIES.map((v) => (
@@ -114,7 +122,7 @@ export function PermissionDialog({
                       onChange={(e) => setRole(g.userId, e.target.value as RoleId)}
                       style={{ marginLeft: "auto", fontSize: pxToRem(12) }}
                     >
-                      {COLLECTION_ROLES.map((r) => (
+                      {roles.map((r) => (
                         <option key={r.id} value={r.id}>
                           {r.label}
                         </option>

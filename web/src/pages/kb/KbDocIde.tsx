@@ -11,7 +11,7 @@
  * service caps; new docs still arrive through the upload button.
  */
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
@@ -21,6 +21,9 @@ import { kbFileService, normPath } from "../../api/kbFileService";
 import { qk } from "../../api/queryKeys";
 import { DialogProvider } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
+import { PermissionDialog } from "../../components/PermissionDialog";
+import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { DOC_ROLES, type CollectionPermission } from "../../lib/permission";
 import { ResizeDivider } from "../../components/ResizeDivider";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
@@ -108,6 +111,42 @@ export function KbDocIde({
     // the summary too so its poll gate reopens without waiting for the list.
     void qc.invalidateQueries({ queryKey: qk.kb.documentsStatus(collectionId) });
   }, [qc, collectionId]);
+
+  // #308: only the COLLECTION owner (the backend authority for a per-doc override)
+  // is offered the per-doc "Permissions" action. Owner-ness is a string compare
+  // against the cached collection list; the endpoints re-check server-side.
+  const me = useCurrentUser();
+  const collectionsQuery = useQuery({
+    queryKey: qk.kb.collections,
+    queryFn: () => client.listCollections(),
+  });
+  const collectionOwner = collectionsQuery.data?.find(
+    (c) => c.resource_id === collectionId,
+  )?.owner;
+  const canManagePerms = collectionOwner != null && collectionOwner === me;
+  // The doc whose per-doc read-override dialog is open (null = closed) — the same
+  // shape as `tuneDoc`, opened from the editor header.
+  const [permDoc, setPermDoc] = useState<KbDocument | null>(null);
+  const permQuery = useQuery({
+    queryKey: qk.kb.docPermission(permDoc?.resource_id ?? "__none__"),
+    enabled: permDoc != null,
+    queryFn: () => client.getDocPermission((permDoc as KbDocument).resource_id),
+  });
+  const setPermMut = useMutation({
+    mutationFn: (perm: CollectionPermission) =>
+      client.setDocPermission((permDoc as KbDocument).resource_id, perm),
+    onSuccess: () => {
+      refetch(); // visibility may now hide the doc from some viewers
+      setPermDoc(null);
+    },
+  });
+  const clearPermMut = useMutation({
+    mutationFn: () => client.clearDocPermission((permDoc as KbDocument).resource_id),
+    onSuccess: () => {
+      refetch();
+      setPermDoc(null);
+    },
+  });
 
   const service = useMemo(
     () => kbFileService(collectionId, docs, client, refetch),
@@ -263,6 +302,7 @@ export function KbDocIde({
                       doc={docByPath.get(activePath)}
                       onReindex={reindex}
                       onTune={setTuneDoc}
+                      onPermissions={canManagePerms ? setPermDoc : undefined}
                     />
                   ) : (
                     <div className="kb-ide__empty">Select a document to view or edit.</div>
@@ -284,6 +324,23 @@ export function KbDocIde({
                   }
                   onClose={() => setTuneDoc(null)}
                   client={client}
+                />
+              )}
+              {permDoc && permQuery.data && collectionOwner && (
+                <PermissionDialog
+                  resourceName={permDoc.path}
+                  owner={collectionOwner}
+                  value={permQuery.data}
+                  roles={DOC_ROLES}
+                  caption="Choose who can read this document. It can only restrict access further than the collection — never widen it."
+                  busy={setPermMut.isPending || clearPermMut.isPending}
+                  onSubmit={(perm) => {
+                    // "Public" ⇒ no restriction ⇒ remove the override (revert to
+                    // pure collection inheritance); otherwise store the tightening.
+                    if (perm.visibility === "public") clearPermMut.mutate();
+                    else setPermMut.mutate(perm);
+                  }}
+                  onClose={() => setPermDoc(null)}
                 />
               )}
             </div>
@@ -415,11 +472,15 @@ function KbEditorPane({
   doc,
   onReindex,
   onTune,
+  onPermissions,
 }: {
   path: string;
   doc?: KbDocument;
   onReindex?: (docId: string) => void;
   onTune?: (doc: KbDocument) => void;
+  /** #308: open the per-doc read-override dialog (collection owner only; the
+   * parent passes `undefined` for everyone else). */
+  onPermissions?: (doc: KbDocument) => void;
 }) {
   const t = useT();
   const { save } = useFileBuffer(path);
@@ -472,6 +533,18 @@ function KbEditorPane({
             onClick={() => onTune(doc)}
           >
             {t("kb.tuneParsing.button")}
+          </button>
+        )}
+        {doc && onPermissions && (
+          // #308: open the per-doc read-override dialog (collection owner only).
+          <button
+            type="button"
+            className="kb-btn"
+            data-testid="doc-permissions"
+            title="Restrict who can read this document"
+            onClick={() => onPermissions(doc)}
+          >
+            <Icon name="users" size={13} /> Permissions
           </button>
         )}
         {canToggle && (

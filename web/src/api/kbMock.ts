@@ -34,6 +34,7 @@ type MockDoc = KbDocument & { quality_rationale?: string; parser_guidance_overri
 const collections = new Map<string, KbCollection>();
 /** #310: per-collection access state (absent ⇒ public with no grants). */
 const collectionPerms = new Map<string, CollectionPermission>();
+const docPerms = new Map<string, CollectionPermission>();
 
 const defaultPermission = (): CollectionPermission => ({
   visibility: "public",
@@ -460,6 +461,16 @@ export const mockKbApi: KbApi = {
   async setCollectionPermission(id, perm) {
     collectionPerms.set(id, perm);
     return { visibility: perm.visibility, notified: [] };
+  },
+  async getDocPermission(id) {
+    return docPerms.get(id) ?? defaultPermission();
+  },
+  async setDocPermission(id, perm) {
+    docPerms.set(id, perm);
+    return { visibility: perm.visibility, notified: [] };
+  },
+  async clearDocPermission(id) {
+    docPerms.delete(id);
   },
   async shareChat(chatId, userIds) {
     const chat = chats.get(chatId);

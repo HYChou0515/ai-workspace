@@ -77,6 +77,11 @@ export const COLLECTION_ROLES: RoleDef[] = [
   },
 ];
 
+/** #308 — a per-doc read override only TIGHTENS read access (the backend honours
+ * just the read verbs on a doc), so its dialog offers a single Viewer role. Reuses
+ * the Viewer def so the role⇄grant mapping is identical to a collection viewer. */
+export const DOC_ROLES: RoleDef[] = [COLLECTION_ROLES[0]];
+
 /** The verbs any collection role touches — the set the dialog OWNS. Every other
  * verb on the permission is left untouched on save. */
 const ROLE_VERBS: Set<string> = new Set(COLLECTION_ROLES.flatMap((r) => r.verbs));
