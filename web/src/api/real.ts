@@ -245,8 +245,19 @@ export const realApi: ApiClient = {
 
   async getConversation(investigationId: string) {
     try {
+      // Narrow to THIS item server-side on the INDEXED `item_id` field: the
+      // specstar list route pushes the condition to SQL, so we fetch only this
+      // item's conversations instead of the whole `/conversation` collection to
+      // scan on the client (which grew O(all conversations) over the wire). The
+      // client-side `find` below is kept for identical selection semantics (the
+      // first item_id match, in the same list order) — just over a bounded set.
+      const params: SearchParams = {
+        data_conditions: JSON.stringify([
+          { field_path: "item_id", operator: "eq", value: investigationId },
+        ]),
+      };
       const arr = await json<SpecstarEntry<ConversationStruct>[]>(
-        await apiFetch("/conversation"),
+        await apiFetch(`/conversation${toQuery(params)}`),
       );
       const hit = arr.find((e) => e.data.item_id === investigationId);
       if (!hit) return null;

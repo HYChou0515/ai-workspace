@@ -33,4 +33,24 @@ describe("realApi.getConversation — #139 wire field is item_id", () => {
     expect(conv).not.toBeNull();
     expect(conv?.messages.map((m) => m.content)).toEqual(["hi from alice", "hello"]);
   });
+
+  it("narrows to the item server-side (indexed item_id filter), not a full-collection scan", async () => {
+    const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify([]), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await realApi.getConversation("rca-investigation:abc");
+
+    const url = String(fetchMock.mock.calls[0]![0]);
+    // The request carries a server-side data_conditions filter on the INDEXED
+    // item_id field, so the backend returns just this item's conversations —
+    // no more fetching the whole collection to scan on the client.
+    expect(url).toContain("/conversation?");
+    const qs = new URLSearchParams(url.slice(url.indexOf("?")));
+    const conds = JSON.parse(qs.get("data_conditions") ?? "[]");
+    expect(conds).toContainEqual({
+      field_path: "item_id",
+      operator: "eq",
+      value: "rca-investigation:abc",
+    });
+  });
 });
