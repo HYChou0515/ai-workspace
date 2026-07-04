@@ -111,6 +111,37 @@ await sandbox_node(wf, *, run, phase, check=None, name=None, key="", cache=True)
 在 sandbox(沙箱)裡跑一個指令。無 LLM;這就是純粹的作者程式碼。拿它做可靠、可腳本化的工作;
 如果它的成功與否不是一目了然,就加 gate。
 
+### `reads`:讓「檔案內容」參與 cache(#429 P1)
+
+step 的 skip 條件是 `input_hash(它的 args)`——**args 沒有的東西,對 cache 不存在**。所以一個
+讀檔的節點,如果它讀的檔**內容**變了、但你傳的 args(指令字串、prompt、路徑)沒變,它會**錯誤地
+skip、拿到過期結果**,而且不會報錯。`sandbox_node` 的 `run` 是不透明指令、`map over glob` 尤其
+危險(命中路徑不變、內容變了)。
+
+正解是**宣告 `reads`**——列出這個節點依賴的檔;引擎會自動把它們的**內容指紋摺進 input-hash**,
+於是編輯任何一個宣告的檔就會重跑這個節點。你**不用**自己去算 hash 再 interpolate 進 args:
+
+```python
+await sandbox_node(wf, run="python analyze.py", phase="a", reads=["logs/*.log"])
+await agent_step(wf, ..., reads=["spec.md"])          # agent 也吃 reads
+await agent_write_step(wf, ..., reads=["src/**/*.py"])
+```
+
+`workflow.json` 一樣:`{"type":"sandbox","run":"analyze","phase":"a","reads":["logs/*.log"]}`
+(entry 可 interpolate,如 `"{config.dir}/*.log"`)。
+
+**維護 cache 正確性的三條規則,依優先序**:
+
+1. **首選:宣告 `reads`。** 讓引擎代算指紋——作者不可能算錯或忘記 interpolate。
+2. **保險:`cache=False`。** 當你連要讀哪些檔都列不出來(例如「抓最新的」),就誠實每次重跑。
+3. **下策:手動把指紋餵進 args。** 只有連 `reads` 都不想列時才用——把責任揹回自己身上。
+
+`workflow check` 會對「看起來讀了檔(指令含路徑樣 token)卻沒宣告 `reads`、也沒 `cache=False`」的
+sandbox 節點出一個**警告**(以及 `map over glob` 裡沒宣告 `reads` 的 sandbox 步)。它是**啟發式、
+低噪音、不擋存檔**的提醒(讀無檔的節點本就該沒有 `reads`)。專案想更嚴可用 `workflow check
+--strict`,把這種未表態升成 error——強制「必須表態」(宣告 `reads` 或明寫 `cache`),但表態成什麼
+仍是你的判斷。
+
 ### Human gate
 
 ```python
@@ -120,6 +151,33 @@ decision = await human_gate(wf, *, phase, title, summary="",
 為人停下來。第一次抵達時 run 會以 `awaiting_human` 暫停;一旦記錄了一個決定,重跑會 replay
 已完成的 step、抵達這個 gate、找到那個決定,然後繼續。`summary` 是給人審閱的內容(一個字串或
 任何可 JSON 化的值)。這就是標準的 **produce → review → commit** 接縫。
+
+### Gate vs Steer:何時用哪個(#429)
+
+兩者都「暫停等人 → 續跑」,容易混。分工的**一句話判準**——接的是同一條「圖能不能事先靜態畫出」
+的總線:
+
+> **「這個暫停點,是我寫 workflow 時就*畫得進圖裡*的嗎?」**
+> 畫得進去(發佈前一定要審)→ **gate**;畫不進去(要等 run 跑歪、看到才知道要介入)→ **steer**。
+
+| | **gate**(含 `revise`) | **steer**(#288) |
+|---|---|---|
+| 誰設計的 | 作者**織進** workflow 的一部分 | 平台能力,**非**作者程式碼 |
+| 何時 | 流程裡**預定**的決策點(in-flow) | **任意時點**的臨時介入(out-of-flow) |
+| 形式 | **選單式**預定選項(approve/revise/reject) | **自由文字** overlay(改 inputs＋invalidate 步) |
+| 留痕/可重播 | 走 journal;**明天再跑會重現** | overlay;**一次性、不重現** |
+
+**「留痕/可重播」是最實用的一欄**:gate 的簽核點明天再跑會**再出現**(它是流程的一部分);steer 的
+臨時介入**不會**。所以問「這個介入要不要*每次*都發生」——要 → 寫成 gate;只是這次 → steer。
+
+正例＋反例(擺明兩個誤置方向):
+
+- **gate** 正例:發佈前審週報。
+  反例:**不要**用 gate 去接「我臨時想改個方向」——那不是每次都要的簽核,硬塞進 workflow 會讓
+  **每次**跑都卡一個其實只有這次要的關。
+- **steer** 正例:跑到一半發現方向錯、自由重導。
+  反例:**不要**用 steer 去做每次都該有的簽核——那該在設計時就畫成 gate;靠 steer 等於把一個
+  計畫內的關口變成「要**記得每次**手動介入」,**會漏**。
 
 ### Capabilities(`wf` 上的 deterministic 副作用)
 
@@ -132,7 +190,18 @@ await wf.upsert_context_card(collection, keys, *, title="", body="",
                              phase="commit", cache=True) -> card_id
 await wf.find_overwrite_card(collection, keys, *, title="") -> {...} | None  # 唯讀
 await wf.convert(src, dest, *, phase="convert", cache=True) -> (out_path, kind)
+await wf.create_entity(type_name, args, *, phase="commit", cache=True) -> number
+await wf.update_entity(type_name, number, patch, *, phase="commit",
+                       cache=True, retries=3) -> version
 ```
+
+`create_entity`／`update_entity`(#419／#429 P2)走**跟 UI／agent 同一條** `EntityStore` 配號＋
+驗證管線——**絕不**用 raw `wf.write` 自己挑號寫進 entity 目錄(單一寫入路徑)。`update_entity` 是
+**樂觀鎖＋衝突重試**:它讀現值版本、帶版本 merge-patch,若撞上**平行 run** 動過同一筆
+(`EntityConflict`)就重讀重試——所以兩條 run 改同一 entity **不會靜默 lost-update**。兩者都有
+journal:同 `args`／同 `(number, patch)` 重跑是 idempotent skip,絕不重複建號或重複套用。
+`workflow.json` 版:`{"type":"capability","call":"update_entity","type_name":"issue",
+"number":"{q.n}","args":{"status":"done"}}`。
 
 `wf.convert`(#324)把一份上傳**先轉成文字、再 file 進 collection**——只存轉好的 artifact,
 絕不存原始 binary(topic-hub 的 →collections 在 `input.json` 開了 `convert` 時用它)。它跑的是
