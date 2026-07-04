@@ -139,6 +139,14 @@ class WorkflowRun(Struct):
     every phase/step transition (`_apply_progress`), so a run left RUNNING by a dead pod goes
     stale while a live one stays fresh; the orphan sweeper flags `now - progress_at > grace`.
     Additive (None on runs written before #429), so no migration is needed."""
+    origin_trigger: str = ""
+    """The event trigger that spawned this run (#429 P9), or "" for a human / schedule launch.
+    A run's entity writes carry this so the dispatcher never re-fires the run's OWN trigger
+    (recursion guard 1)."""
+    trigger_depth: int = 0
+    """This run's depth in the event-trigger chain (#429 P9). A first-level (human / schedule)
+    run is 0; each event-triggered hop adds one. Its entity writes carry it so an indirect
+    cycle hits the global depth cap (recursion guard 2)."""
     result: dict[str, Any] | None = None
     """The ``run()`` return value (a summary), persisted on terminal."""
     pending_decision: PendingDecision | None = None

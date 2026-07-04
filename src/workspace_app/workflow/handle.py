@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
 from typing import Any
 
+from ..entity.events import EntityWriteSink
 from ..filestore.protocol import FileStore
 from .engine import StepFailed, run_step
 
@@ -109,6 +110,9 @@ class WorkflowHandle:
         step_timeout_s: float | None = None,
         sub_turn: SubTurn | None = None,
         turn_concurrency: int | None = None,
+        entity_write_sink: EntityWriteSink | None = None,
+        origin_trigger: str = "",
+        trigger_depth: int = 0,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -163,6 +167,15 @@ class WorkflowHandle:
         concurrency (a single local model → ~1, a hosted/multi-replica pool → larger). It
         is a REQUEST ceiling throttled by the backend, not a guarantee. None ⇒ unset (the
         author's per-map ``concurrency`` stands alone)."""
+        self._entity_write_sink = entity_write_sink
+        """#429 P9: the post-commit sink this run's entity writes emit through (the event-
+        trigger dispatcher). None ⇒ no event dispatch (tests / triggers off)."""
+        self._origin_trigger = origin_trigger
+        """#429 P9: the event trigger that spawned this run (or "" for human/schedule). Stamped
+        onto this run's entity writes so the dispatcher never re-fires the run's OWN trigger."""
+        self._trigger_depth = trigger_depth
+        """#429 P9: this run's depth in the event-trigger chain — stamped onto its writes so an
+        indirect cycle hits the global depth cap."""
 
     @property
     def journal_dir(self) -> str:
@@ -249,6 +262,16 @@ class WorkflowHandle:
         )
         return result["doc_id"]
 
+    def _entity_origin(self):
+        """#429 P9: the ``EntityOrigin`` to stamp on this run's entity writes — set only for a
+        triggered run (``origin_trigger`` non-empty), so a human/schedule run's writes stay
+        origin-less (a fresh depth-0 chain root)."""
+        if not self._origin_trigger:
+            return None
+        from ..entity.events import EntityOrigin
+
+        return EntityOrigin(trigger=self._origin_trigger, depth=self._trigger_depth)
+
     async def create_entity(
         self,
         type_name: str,
@@ -270,11 +293,17 @@ class WorkflowHandle:
         catalog, _diags = await discover_catalog(self._store, self._workspace_id)
         if type_name not in catalog:
             raise StepFailed(f"unknown entity type: {type_name!r}")
-        store = EntityStore(self._store, self._workspace_id, catalog)
+        store = EntityStore(
+            self._store, self._workspace_id, catalog, on_write=self._entity_write_sink
+        )
 
         async def execute(_feedback: str | None) -> dict[str, int]:
             created = await store.create(
-                type_name, args, actor=self.user, now=datetime.now(UTC).date().isoformat()
+                type_name,
+                args,
+                actor=self.user,
+                now=datetime.now(UTC).date().isoformat(),
+                origin=self._entity_origin(),
             )
             return {"number": created.number}
 
@@ -314,14 +343,21 @@ class WorkflowHandle:
         catalog, _diags = await discover_catalog(self._store, self._workspace_id)
         if type_name not in catalog:
             raise StepFailed(f"unknown entity type: {type_name!r}")
-        store = EntityStore(self._store, self._workspace_id, catalog)
+        store = EntityStore(
+            self._store, self._workspace_id, catalog, on_write=self._entity_write_sink
+        )
 
         async def execute(_feedback: str | None) -> dict[str, str]:
             for _ in range(retries + 1):
                 current = await store.get(type_name, number)
                 try:
                     updated = await store.update(
-                        type_name, number, patch, expected_version=current.version
+                        type_name,
+                        number,
+                        patch,
+                        expected_version=current.version,
+                        actor=self.user,
+                        origin=self._entity_origin(),
                     )
                 except EntityConflict:
                     continue  # a parallel run moved it — re-read + re-apply on the fresh copy

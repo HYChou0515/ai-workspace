@@ -256,8 +256,15 @@ tz 或標為 known limitation。full cron 日後當**加法擴充**(schedule 也
 
 ### P9 — 事件觸發
 
-- **機制**:specstar `event_handlers`(`.on_success(create/patch)`)掛在 entity record resource
-  上(照 reindex-on-edit),post-commit、in-request、在處理該寫入的 pod 觸發一次。
+- **⚠️ 探勘校正(落地時修正原設想)**:#419 entity 是 **file-first**(經 `EntityStore` 寫進
+  `WorkspaceFile`;warm workspace 還先走 sandbox、根本不派 specstar event),所以「掛 specstar
+  `event_handlers` 在 entity resource 上」**不成立**。改掛在**單一寫入路徑本身**——`EntityStore`
+  `create`/`update` commit 後、in-request、在寫入 pod 上 emit 一顆 `EntityWriteEvent`(型別/編號/
+  version/fields/actor/origin 都齊),由 `EventTriggerDispatcher` 消費。這保留了計畫要的「一次、就地」
+  語意,只是換到 file-first 對的 seam(呼應本計畫「宣告即正確、對齊現況」原則)。型別/watermark 存
+  `workflow/event_dispatch.py`;event schema + loader 在 `triggers.py`。
+- **機制(修正後)**:`EntityStore` 寫入 → `on_write` sink → dispatcher,post-commit、in-request、
+  在處理該寫入的 pod 觸發一次。
 - **過濾**:trigger 宣告 `on: entity.<type>.created|updated` + 可選 `where`(欄位/狀態轉換條件,
   避免每次瑣碎編輯都觸發;由 `OnSuccessPatch` narrow)。
 - **遞迴 guard(必做)**:
@@ -286,6 +293,11 @@ tz 或標為 known limitation。full cron 日後當**加法擴充**(schedule 也
 - workflow-as-durable-JobType on worker pod(A 的 in-process v1 之外,讓 run 上 HPA、pod 重啟
   自動接手)。
 - DST tz 語意(不存在/重複本地時刻)。
+- **P9 agent-tool 寫入路徑接上 event dispatch**:v1 已接 workflow(orchestrator)+ 人(entity
+  routes)兩條寫入路徑;agent 工具 `create_entity`/`update_entity` 也要餵同一顆 dispatcher,但需在
+  多個 `AgentToolContext` 建構點加欄位,故留 follow-up(機制與另兩條路徑完全相同,已驗)。
+- **P9 D2d on-demand backfill 的 route/CLI**:watermark ledger + `processed_version` 已具備「可查
+  落後」的基礎;把「version > watermark 卻無對應 run」做成一支 operator 查詢/補跑指令留 follow-up。
 
 ---
 

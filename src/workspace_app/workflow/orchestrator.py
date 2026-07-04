@@ -38,6 +38,7 @@ from specstar.types import (
     ResourceIsDeletedError,
 )
 
+from ..entity.events import EntityWriteSink
 from ..filestore.protocol import FileStore
 from .credential import CredentialBroker
 from .driver import _now_ms, run_workflow
@@ -147,6 +148,10 @@ class WorkflowOrchestrator:
     # new run starts (manual §16 retention). 0 ⇒ keep all.
     keep_last_runs: int = 0
     now: Callable[[], int] = _now_ms
+    # #429 P9: post-commit sink for a run's entity writes (the event-trigger dispatcher). A run's
+    # ``create_entity``/``update_entity`` emit through this so downstream event triggers fire.
+    # None ⇒ no event dispatch (tests / a deploy with triggers off).
+    entity_write_sink: EntityWriteSink | None = None
     _tasks: dict[str, asyncio.Task[None]] = field(default_factory=dict)
     _step_counts: dict[str, int] = field(default_factory=dict)
     _sem: asyncio.Semaphore | None = None
@@ -312,6 +317,8 @@ class WorkflowOrchestrator:
         captured_user: str,
         workflow_id: str = "",
         chat_id: str = "",
+        origin_trigger: str = "",
+        trigger_depth: int = 0,
     ) -> str:
         """Create a ``WorkflowRun`` (capturing the user, §15) and kick the run off as
         a background task. ``workflow_id`` selects which of the profile's workflows to
@@ -347,6 +354,8 @@ class WorkflowOrchestrator:
                     phases=phases,
                     chat_id=chat_id,
                     workflow_id=workflow_id,
+                    origin_trigger=origin_trigger,
+                    trigger_depth=trigger_depth,
                 )
             )
             .resource_id
@@ -509,6 +518,9 @@ class WorkflowOrchestrator:
                 item_id=item_id,
                 ttl_ms=int(self.credential_ttl_s * 1000),
             )
+        # #429 P9: read the run's trigger origin from its row (avoids threading it through
+        # every drive/execute signature) so the handle stamps it onto this run's entity writes.
+        run = self._get(run_id)
         wf = WorkflowHandle(
             store=self.store,
             workspace_id=item_id,
@@ -519,6 +531,9 @@ class WorkflowOrchestrator:
             emit=lambda ev: self._on_event(run_id, key, ev),
             credential=credential,
             step_timeout_s=self.step_timeout_s,
+            entity_write_sink=self.entity_write_sink,
+            origin_trigger=run.origin_trigger,
+            trigger_depth=run.trigger_depth,
         )
         self.wire_handle(wf, run_id, item_id, captured_user, key)
         return wf

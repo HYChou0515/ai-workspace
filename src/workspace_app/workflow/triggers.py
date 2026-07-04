@@ -107,6 +107,10 @@ class EventTrigger(Struct, tag="event", forbid_unknown_fields=True):
     on: str = "created"
     where: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
+    # Runtime context, filled by the loader from the file's location (like ScheduleTrigger) —
+    # slug scopes the trigger to its app's entity writes; the fired run's item is the entity's.
+    slug: str = ""
+    profile: str = ""
 
 
 Trigger = ScheduleTrigger | EventTrigger
@@ -194,22 +198,8 @@ def load_profile_triggers(slug: str, profile: str) -> list[ScheduleTrigger]:
     skipped WHOLE with a loud warning — one bad profile must never wedge the sweep (resilient,
     #227-style), and a half-trusted trigger must never fire (the E-decl / 'no silent errors'
     contract). Event triggers are handled by P9's event dispatch, not the schedule sweep."""
-    raw = load_profile_triggers_raw(slug, profile)
-    if raw is None:
-        return []
-    try:
-        tf = parse_triggers(raw)
-    except TriggerError as exc:
-        _log.warning("skipping malformed triggers.json for %s/%s: %s", slug, profile, exc)
-        return []
-    errs = [e for e in validate_triggers(tf) if not e.startswith("hint:")]
-    if errs:
-        _log.warning("skipping invalid triggers for %s/%s: %s", slug, profile, "; ".join(errs))
-        return []
     return [
-        msgspec.structs.replace(t, slug=slug, profile=profile)
-        for t in tf.triggers
-        if isinstance(t, ScheduleTrigger) and t.enabled
+        t for t in _valid_triggers(slug, profile) if isinstance(t, ScheduleTrigger) and t.enabled
     ]
 
 
@@ -222,6 +212,49 @@ def discover_schedule_triggers() -> list[ScheduleTrigger]:
         for profile in list_profiles(slug):
             out.extend(load_profile_triggers(slug, profile))
     return out
+
+
+def _valid_triggers(slug: str, profile: str) -> list[Trigger]:
+    """A profile's parsed + statically-valid triggers (either kind), each stamped with its
+    (slug, profile) origin. A malformed or invalid file is skipped WHOLE with a loud warning —
+    the same lint-not-crash / no-half-trusted-trigger contract as the schedule loader."""
+    raw = load_profile_triggers_raw(slug, profile)
+    if raw is None:
+        return []
+    try:
+        tf = parse_triggers(raw)
+    except TriggerError as exc:
+        _log.warning("skipping malformed triggers.json for %s/%s: %s", slug, profile, exc)
+        return []
+    errs = [e for e in validate_triggers(tf) if not e.startswith("hint:")]
+    if errs:
+        _log.warning("skipping invalid triggers for %s/%s: %s", slug, profile, "; ".join(errs))
+        return []
+    return [msgspec.structs.replace(t, slug=slug, profile=profile) for t in tf.triggers]
+
+
+def load_profile_event_triggers(slug: str, profile: str) -> list[EventTrigger]:
+    """A profile's ENABLED event triggers (#429 P9), origin-stamped. Event triggers fire on an
+    entity write in-request (P9 dispatch), NOT via the schedule sweep."""
+    return [t for t in _valid_triggers(slug, profile) if isinstance(t, EventTrigger) and t.enabled]
+
+
+def discover_event_triggers() -> list[EventTrigger]:
+    """Every enabled event trigger across all apps' profiles (#429 P9) — the entity-write
+    dispatcher's trigger source, re-scanned so an operator's edit takes effect without a
+    restart."""
+    out: list[EventTrigger] = []
+    for slug in discover_app_slugs():
+        for profile in list_profiles(slug):
+            out.extend(load_profile_event_triggers(slug, profile))
+    return out
+
+
+def where_matches(where: dict[str, str], fields: dict[str, object]) -> bool:
+    """Does an entity's ``fields`` satisfy an event trigger's ``where`` (#429 P9/D)? Every
+    declared ``field: value`` must equal the record's field (string-compared, so "5" matches
+    5) — the narrowing that stops a trivial edit from firing. An empty ``where`` matches all."""
+    return all(str(fields.get(key, "")) == want for key, want in where.items())
 
 
 def _validate_event(t: EventTrigger, where: str, errs: list[str]) -> None:
@@ -527,10 +560,12 @@ def build_trigger_start(start_run: OrchestratorStart) -> StartTrigger:
     return start
 
 
-def trigger_key(t: ScheduleTrigger) -> str:
-    """The globally-unique claim key for a trigger — ``slug:profile:id`` once the loader has
-    filled its origin, else the bare ``id`` (tests / a not-yet-located trigger). ``:`` (not
-    ``/``) because a specstar resource_id is slash-free (same rule as a SourceDoc id)."""
+def trigger_key(t: Trigger) -> str:
+    """The globally-unique key for a trigger (either kind) — ``slug:profile:id`` once the
+    loader has filled its origin, else the bare ``id`` (tests / a not-yet-located trigger).
+    ``:`` (not ``/``) because a specstar resource_id is slash-free (same rule as a SourceDoc
+    id). Used as the schedule claim key AND the event trigger's recursion-marker / watermark
+    key."""
     return f"{t.slug}:{t.profile}:{t.id}" if t.slug else t.id
 
 

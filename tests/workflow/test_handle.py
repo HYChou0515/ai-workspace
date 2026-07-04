@@ -35,8 +35,10 @@ async def test_sub_handle_gives_each_element_its_own_turn_lane() -> None:
     assert a.journal_dir == wf.journal_dir  # shared journal/workspace
     await a.write("/shared.txt", "x")
     assert await wf.read_text("/shared.txt") == "x"  # writes land in the same workspace
-    await a.drive_turn("p", None)
-    await b.drive_turn("p", None)
+    a_drive, b_drive = a.drive_turn, b.drive_turn
+    assert a_drive is not None and b_drive is not None
+    await a_drive("p", None)
+    await b_drive("p", None)
     assert seen == ["a", "b"]
 
 
@@ -163,11 +165,11 @@ async def test_update_entity_retries_on_parallel_conflict(monkeypatch) -> None:
     real_update = store_mod.EntityStore.update
     calls = {"n": 0}
 
-    async def flaky(self, type_name, number, patch, *, expected_version=None):
+    async def flaky(self, type_name, number, patch, **kw):
         calls["n"] += 1
         if calls["n"] == 1:  # first attempt loses the optimistic race
             raise store_mod.EntityConflict("moved")
-        return await real_update(self, type_name, number, patch, expected_version=expected_version)
+        return await real_update(self, type_name, number, patch, **kw)
 
     monkeypatch.setattr(store_mod.EntityStore, "update", flaky)
     await wf.update_entity("t", n, {"s": "y"}, phase="p")

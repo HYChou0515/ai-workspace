@@ -283,17 +283,28 @@ def test_stale_risk_warnings_are_conservative_and_low_noise():
 
     # (rule 2) a sandbox step inside a map over a glob, no reads — the highest-risk shape
     r2 = _warns(
-        [{"type": "map", "over": "logs/*.log", "as": "f", "phase": "p",
-          "do": [{"type": "sandbox", "run": "process", "phase": "p"}]}]
+        [
+            {
+                "type": "map",
+                "over": "logs/*.log",
+                "as": "f",
+                "phase": "p",
+                "do": [{"type": "sandbox", "run": "process", "phase": "p"}],
+            }
+        ]
     )
     assert any("map" in w and "reads" in w for w in r2)
 
     # took a stance → silent: declared reads
-    assert _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p",
-                    "reads": ["x.py"]}]) == []
+    assert (
+        _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p", "reads": ["x.py"]}])
+        == []
+    )
     # took a stance → silent: cache=false
-    assert _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p",
-                    "cache": False}]) == []
+    assert (
+        _warns([{"type": "sandbox", "run": "python analyze.py", "phase": "p", "cache": False}])
+        == []
+    )
     # no path-like token in the command → not flagged (no guessing)
     assert _warns([{"type": "sandbox", "run": "echo hello", "phase": "p"}]) == []
 
@@ -304,14 +315,19 @@ def test_validate_reads_path_shape():
     not silently ignored."""
     empty = _errs([{"type": "sandbox", "run": "x", "phase": "p", "reads": [""]}])
     assert any("reads" in e and "non-empty" in e for e in empty)
-    traversal = _errs(
-        [{"type": "sandbox", "run": "x", "phase": "p", "reads": ["../secrets"]}]
-    )
+    traversal = _errs([{"type": "sandbox", "run": "x", "phase": "p", "reads": ["../secrets"]}])
     assert any("reads" in e and ".." in e for e in traversal)
     # a well-formed reads (incl. interpolation + glob) is accepted
     ok = _errs(
-        [{"type": "agent", "prompt": "p", "phase": "p", "out": "o.md",
-          "reads": ["{config.dir}/*.log", "src/a.md"]}]
+        [
+            {
+                "type": "agent",
+                "prompt": "p",
+                "phase": "p",
+                "out": "o.md",
+                "reads": ["{config.dir}/*.log", "src/a.md"],
+            }
+        ]
     )
     assert not any("reads" in e for e in ok)
 
@@ -326,8 +342,9 @@ def test_validate_capability_rules():
     not_allowed = _errs([{"type": "capability", "call": "rm_rf", "phase": "p"}])
     assert any("not allowed" in e for e in not_allowed)
     # #429 P2: update_entity needs type_name + number
-    upd = _errs([{"type": "capability", "call": "update_entity", "phase": "p",
-                  "type_name": "issue"}])
+    upd = _errs(
+        [{"type": "capability", "call": "update_entity", "phase": "p", "type_name": "issue"}]
+    )
     assert any("needs 'number'" in e for e in upd)
     missing = _errs(
         [{"type": "capability", "call": "ingest_to_collection", "phase": "p", "collection": "a"}]
@@ -610,8 +627,15 @@ async def test_dsl_map_runs_each_element_on_its_own_turn_lane():
                 "id": "wf",
                 "phases": [{"id": "p"}],
                 "steps": [
-                    {"type": "map", "over": {"range": "3"}, "as": "i", "phase": "p",
-                     "do": [{"type": "agent", "prompt": "p {i}", "phase": "p", "out": "n_{i}.md"}]}
+                    {
+                        "type": "map",
+                        "over": {"range": "3"},
+                        "as": "i",
+                        "phase": "p",
+                        "do": [
+                            {"type": "agent", "prompt": "p {i}", "phase": "p", "out": "n_{i}.md"}
+                        ],
+                    }
                 ],
             }
         )
@@ -633,9 +657,16 @@ async def test_dsl_map_effective_concurrency_is_throttled_by_the_backend():
                     "id": "wf",
                     "phases": [{"id": "p"}],
                     "steps": [
-                        {"type": "map", "over": {"range": "4"}, "as": "i", "phase": "p",
-                         "concurrency": req,
-                         "do": [{"type": "agent", "prompt": "{i}", "phase": "p", "out": "n_{i}.md"}]}
+                        {
+                            "type": "map",
+                            "over": {"range": "4"},
+                            "as": "i",
+                            "phase": "p",
+                            "concurrency": req,
+                            "do": [
+                                {"type": "agent", "prompt": "{i}", "phase": "p", "out": "n_{i}.md"}
+                            ],
+                        }
                     ],
                 }
             )
@@ -690,9 +721,15 @@ async def test_map_prunes_orphan_element_artifacts_when_the_set_shrinks():
                 "id": "wf",
                 "phases": [{"id": "p"}],
                 "steps": [
-                    {"type": "map", "over": "in/*.txt", "as": "f", "phase": "p",
-                     "do": [{"type": "sandbox", "run": "process {f}", "phase": "p",
-                             "name": "proc"}]}
+                    {
+                        "type": "map",
+                        "over": "in/*.txt",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {"type": "sandbox", "run": "process {f}", "phase": "p", "name": "proc"}
+                        ],
+                    }
                 ],
             }
         )
@@ -727,10 +764,29 @@ async def test_map_gc_prunes_orphans_of_switch_nested_steps():
                 "phases": [{"id": "p"}],
                 "config": {"route": "go"},
                 "steps": [
-                    {"type": "map", "over": "in/*.txt", "as": "f", "phase": "p",
-                     "do": [{"type": "switch", "on": "{config.route}", "phase": "p",
-                             "cases": {"go": [{"type": "sandbox", "run": "x {f}", "phase": "p",
-                                              "name": "proc"}]}}]}
+                    {
+                        "type": "map",
+                        "over": "in/*.txt",
+                        "as": "f",
+                        "phase": "p",
+                        "do": [
+                            {
+                                "type": "switch",
+                                "on": "{config.route}",
+                                "phase": "p",
+                                "cases": {
+                                    "go": [
+                                        {
+                                            "type": "sandbox",
+                                            "run": "x {f}",
+                                            "phase": "p",
+                                            "name": "proc",
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                    }
                 ],
             }
         )
@@ -755,7 +811,9 @@ async def test_dsl_update_entity_capability_merges_patch():
         b"  status: {role: status, values: [open, done]}\n",
     )
     await store.write(
-        "ws", "/.entity/issue/skeleton.md", b"---\ntitle: {{arg.title}}\nstatus: {{arg.status}}\n---\n"
+        "ws",
+        "/.entity/issue/skeleton.md",
+        b"---\ntitle: {{arg.title}}\nstatus: {{arg.status}}\n---\n",
     )
     wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
     await wf.create_entity("issue", {"title": "A", "status": "open"})
@@ -767,8 +825,14 @@ async def test_dsl_update_entity_capability_merges_patch():
                 "phases": [{"id": "p"}],
                 "config": {"target": "done"},
                 "steps": [
-                    {"type": "capability", "call": "update_entity", "phase": "p",
-                     "type_name": "issue", "number": 1, "args": {"status": "{config.target}"}}
+                    {
+                        "type": "capability",
+                        "call": "update_entity",
+                        "phase": "p",
+                        "type_name": "issue",
+                        "number": 1,
+                        "args": {"status": "{config.target}"},
+                    }
                 ],
             }
         )
@@ -782,7 +846,9 @@ async def test_dsl_update_entity_capability_merges_patch():
 async def test_dsl_update_entity_number_must_resolve_to_int():
     """A `number` that doesn't resolve to an integer is a loud DslError at run time."""
     store = MemoryFileStore()
-    await store.write("ws", "/.entity/issue/schema.yaml", b"path: issues\nfields:\n  t: {role: text}\n")
+    await store.write(
+        "ws", "/.entity/issue/schema.yaml", b"path: issues\nfields:\n  t: {role: text}\n"
+    )
     await store.write("ws", "/.entity/issue/skeleton.md", b"---\nt: {{arg.t}}\n---\n")
     wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm")
     d = parse_def(
@@ -790,8 +856,16 @@ async def test_dsl_update_entity_number_must_resolve_to_int():
             {
                 "id": "wf",
                 "phases": [{"id": "p"}],
-                "steps": [{"type": "capability", "call": "update_entity", "phase": "p",
-                           "type_name": "issue", "number": "notanumber", "args": {"t": "x"}}],
+                "steps": [
+                    {
+                        "type": "capability",
+                        "call": "update_entity",
+                        "phase": "p",
+                        "type_name": "issue",
+                        "number": "notanumber",
+                        "args": {"t": "x"},
+                    }
+                ],
             }
         )
     )
@@ -816,8 +890,7 @@ async def test_dsl_step_cache_false_always_reruns():
             {
                 "id": "wf",
                 "phases": [{"id": "p"}],
-                "steps": [{"type": "sandbox", "run": "fetch latest", "phase": "p",
-                           "cache": False}],
+                "steps": [{"type": "sandbox", "run": "fetch latest", "phase": "p", "cache": False}],
             }
         )
     )
@@ -846,8 +919,12 @@ async def test_dsl_sandbox_reads_folds_declared_content_into_hash():
                 "phases": [{"id": "p"}],
                 "config": {"dir": "logs"},
                 "steps": [
-                    {"type": "sandbox", "run": "analyze", "phase": "p",
-                     "reads": ["{config.dir}/*.log"]}
+                    {
+                        "type": "sandbox",
+                        "run": "analyze",
+                        "phase": "p",
+                        "reads": ["{config.dir}/*.log"],
+                    }
                 ],
             }
         )

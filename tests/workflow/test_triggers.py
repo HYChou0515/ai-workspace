@@ -516,6 +516,40 @@ def test_load_profile_triggers_absent_file_is_empty(monkeypatch):
     assert trg.load_profile_triggers("rca", "echo") == []
 
 
+def test_load_profile_event_triggers_fills_origin_and_filters(monkeypatch):
+    """#429 P9: a profile's enabled EVENT triggers load with their (slug, profile) origin;
+    schedule triggers and disabled ones are excluded (events go through the P9 dispatcher)."""
+    from workspace_app.workflow import triggers as trg
+
+    payload = json.dumps(
+        {
+            "triggers": [
+                {"type": "event", "id": "ev", "workflow_id": "w", "acting_user": "b",
+                 "entity": "issue", "on": "created"},
+                {"type": "event", "id": "off", "workflow_id": "w", "acting_user": "b",
+                 "entity": "issue", "enabled": False},
+                _sched(id="sched"),
+            ]
+        }
+    )
+    monkeypatch.setattr(trg, "load_profile_triggers_raw", lambda s, p: payload.encode())
+    got = trg.load_profile_event_triggers("rca", "echo")
+    assert [t.id for t in got] == ["ev"]  # disabled + schedule excluded
+    assert (got[0].slug, got[0].profile) == ("rca", "echo")
+
+
+def test_where_matches_narrows_on_declared_fields():
+    """#429 P9/D: every declared where field must equal the record's (string-compared); an
+    empty where matches all — the narrowing that stops a trivial edit from firing."""
+    from workspace_app.workflow.triggers import where_matches
+
+    assert where_matches({}, {"status": "open"})  # no constraint → matches
+    assert where_matches({"status": "open"}, {"status": "open", "prio": "hi"})
+    assert not where_matches({"status": "open"}, {"status": "closed"})
+    assert where_matches({"prio": "5"}, {"prio": 5})  # string-compared: "5" matches 5
+    assert not where_matches({"status": "open"}, {})  # missing field never matches a constraint
+
+
 def test_discover_scans_every_app_and_profile(monkeypatch):
     from workspace_app.workflow import triggers as trg
 

@@ -266,6 +266,13 @@ def build_lifespan(
         # timing so its CRUD routes are never emitted.
         if registry.address is not None:
             register_sandbox_address(spec)
+        # #429 P9: the event-trigger processing high-water model (idempotent + the D2d
+        # discoverable-lag ledger). Registered post-apply so its CRUD routes are never emitted,
+        # like the coordination models above. Event dispatch is in-request (not swept), so this
+        # is wired whenever the app runs — it just no-ops when no event triggers are declared.
+        from ..workflow.event_dispatch import register_event_watermark
+
+        register_event_watermark(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
         # NOTE: the full capability round is deliberately NOT scheduled here
