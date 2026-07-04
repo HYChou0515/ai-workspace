@@ -15,7 +15,7 @@ import msgspec
 from fastapi import APIRouter, FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from specstar import QB, SpecStar
+from specstar import QB, UNRESTRICTED, SpecStar
 from specstar.aggregates import Count, ForeignAggregate, Max, Sum
 from specstar.types import Binary, ResourceIDNotFoundError
 
@@ -50,6 +50,7 @@ from ..kb.preview import is_structured_text, preview_markdown
 from ..kb.retriever import Retriever
 from ..kb.upload_checks import UploadRejected
 from ..perm import Actor, Permission, Verb, Visibility, authorize
+from ..perm.scope import source_doc_override_scope
 from ..resources.groups import groups_of
 from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
 from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
@@ -659,6 +660,33 @@ def register_kb_routes(
         ):
             raise HTTPException(status_code=403, detail=f"not authorized to {verb}")
         return coll, created_by
+
+    def _authorize_doc_content(doc: SourceDoc) -> None:
+        """#308 — after the collection's ``read_content`` gate, a per-doc override
+        (``SourceDoc.permission``) can further restrict THIS doc — the intersect
+        that only TIGHTENS. Sequenced like ``_authorize_collection``: the override's
+        ``read_meta`` first (404 — the doc is hidden from a caller the override
+        blocks entirely) then ``read_content`` (403 — the caller may see the doc
+        exists but not read it). Matched against the mirrored ``collection_created_by``
+        so the collection owner / a superuser bypass; a doc with no override
+        (``permission is None`` ≡ public) passes both."""
+        actor = _actor()
+        if not authorize(
+            actor,
+            "read_meta",
+            doc.permission,
+            created_by=doc.collection_created_by,
+            superusers=superusers,
+        ):
+            raise HTTPException(status_code=404, detail="document not found")
+        if not authorize(
+            actor,
+            "read_content",
+            doc.permission,
+            created_by=doc.collection_created_by,
+            superusers=superusers,
+        ):
+            raise HTTPException(status_code=403, detail="not authorized to read_content")
 
     @app.get("/kb/collections")
     async def list_collections() -> list[CollectionOut]:
@@ -1304,6 +1332,20 @@ def register_kb_routes(
         _authorize_collection(collection_id, "read_content")
         rm = spec.get_resource_manager(SourceDoc)
         q = QB["collection_id"] == collection_id
+        # #308: within a browsable collection, per-doc overrides can hide individual
+        # docs from THIS reader. AND the doc-override read_meta predicate into the
+        # SAME indexed query (still metas-only, no per-doc load), so both the page
+        # and the `total` count drop docs the caller can't see. The scope's own
+        # owner / superuser branches let the collection owner and superusers through
+        # (no filter), and a doc with no override passes via its `is_null()` clause
+        # — so a collection nobody tightened per-doc lists exactly as before.
+        override = source_doc_override_scope(superusers, lambda u: groups_of(spec, u))(
+            get_user_id()
+        )
+        if override is not UNRESTRICTED and override is not None:
+            # ty can't narrow the `_Unrestricted` singleton out of an `is not` check;
+            # the guard above guarantees `override` is a real ConditionBuilder here.
+            q = q & override  # ty: ignore[unsupported-operator]
         total = rm.count_resources(q.build())
         # Sort by IMMUTABLE keys BEFORE paging — `created_time` (the resource's
         # birth stamp, never moves across revisions) newest-first, with
@@ -1438,6 +1480,7 @@ def register_kb_routes(
         # fan-out completes). 404 hides a doc whose collection is invisible; 403
         # blocks an in-scope member who lacks read_content.
         _authorize_collection(doc.collection_id, "read_content")
+        _authorize_doc_content(doc)  # #308: a per-doc override may further hide it
         # The owner is the resource-level creator (first uploader), not the
         # latest revision's author.
         user = rm.get_meta(doc_id).created_by
@@ -1644,6 +1687,7 @@ def register_kb_routes(
             return []
         assert isinstance(sd, SourceDoc)
         _authorize_collection(sd.collection_id, "read_content")
+        _authorize_doc_content(sd)  # #308: a per-doc override may further hide it
         chrm = spec.get_resource_manager(DocChunk)
         cited = chunk_cited(spec, doc_id)
         rows: list[dict] = []
