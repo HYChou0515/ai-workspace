@@ -331,7 +331,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("permission.visibility", str),
             IndexableField("permission.read_meta", list),
         ],
-        access_scope=source_doc_access_scope(superusers),
+        access_scope=source_doc_access_scope(superusers, groups),
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the
     # retriever's per-collection lookup) is a query — a non-indexed filter would

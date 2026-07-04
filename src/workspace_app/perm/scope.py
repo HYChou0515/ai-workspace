@@ -90,22 +90,69 @@ def collection_access_scope(
     )
 
 
+def _and_scopes(a: AccessScope, b: AccessScope) -> AccessScope:
+    """Two access scopes ANDed: a row is visible iff BOTH admit it. A half that
+    imposes no restriction (``UNRESTRICTED`` for a superuser, or ``None`` — the
+    specstar "no predicate" reading; our own halves never return it) drops out and
+    the other half decides; otherwise the two predicates combine with ``&``."""
+
+    def scope(user: str) -> ConditionBuilder | None | _Unrestricted:
+        pa = a(user)
+        pb = b(user)
+        if pa is UNRESTRICTED or pa is None:
+            return pb
+        if pb is UNRESTRICTED or pb is None:
+            return pa
+        # Both are real predicates here (the UNRESTRICTED/None branches returned);
+        # ty can't narrow the `_Unrestricted` singleton out of an `is` check.
+        return pa & pb  # ty: ignore[unsupported-operator]
+
+    return scope
+
+
+def source_doc_override_scope(
+    superusers: frozenset[str] = frozenset(),
+    groups_provider: GroupsProvider | None = None,
+) -> AccessScope:
+    """#308: a doc's OWN per-doc read override, on TOP of the inherited collection
+    mirror. The SAME ``_visibility_scope`` over the doc's own ``permission.*``
+    fields, with the OWNER branch matched against the mirrored
+    ``collection_created_by`` (the collection owner — the override's authority, who
+    always sees the doc; the doc's uploader is NOT special, per #308/D4). A doc
+    with no override (``permission is None`` → null ``permission.visibility``)
+    passes via the ``is_null()`` clause, so this predicate only ever HIDES an
+    explicitly-overridden doc — the intersect that can tighten, never loosen."""
+    return _visibility_scope(
+        visibility_field="permission.visibility",
+        read_meta_field="permission.read_meta",
+        owner_field="collection_created_by",
+        superusers=superusers,
+        groups_provider=groups_provider,
+    )
+
+
 def source_doc_access_scope(
     superusers: frozenset[str] = frozenset(),
+    groups_provider: GroupsProvider | None = None,
 ) -> AccessScope:
-    """#303: a SourceDoc inherits its collection's read visibility. The doc
-    carries a DENORMALIZED mirror of the collection's visibility / read_meta /
-    created_by (`collection_*` fields, kept current by doc-create + a fan-out on
-    collection permission change), so the SAME predicate that hides a collection
-    hides its docs — at the storage layer, covering the auto-CRUD
-    `GET /source-doc/{id}`. Matched against the mirrored `collection_created_by`
-    (the collection owner), NOT the doc's own uploader."""
-    return _visibility_scope(
+    """#303 + #308: a SourceDoc is visible iff its COLLECTION admits it (the #303
+    denormalized ``collection_*`` mirror — the SAME predicate that hides a
+    collection hides its docs, at the storage layer covering the auto-CRUD
+    ``GET /source-doc/{id}``) AND its OWN per-doc override admits it (#308). The two
+    are ANDed so an override can only TIGHTEN: a doc the caller can't reach through
+    the collection stays hidden, and one the collection admits can be further
+    hidden by its own override. Both halves match the caller against the mirrored
+    ``collection_created_by`` (the collection owner), NOT the doc's uploader.
+    ``groups_provider`` (#307) resolves a ``group:<id>`` grant on EITHER half —
+    closing the #303 gap where the doc scope ignored groups (#308/D7)."""
+    collection = _visibility_scope(
         visibility_field="collection_visibility",
         read_meta_field="collection_read_meta",
         owner_field="collection_created_by",
         superusers=superusers,
+        groups_provider=groups_provider,
     )
+    return _and_scopes(collection, source_doc_override_scope(superusers, groups_provider))
 
 
 def kbchat_access_scope(
