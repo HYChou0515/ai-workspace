@@ -35,7 +35,7 @@ from ..kb.collection_export import (
 )
 from ..kb.collection_import import import_collection
 from ..kb.doc_id import canonical_path, encode_doc_id
-from ..kb.doc_permission import collection_mirror_fields, push_mirror_to_docs
+from ..kb.doc_permission import collection_mirror_fields, denied_doc_ids, push_mirror_to_docs
 from ..kb.findability import (
     ProbeResult,
     ProbeSide,
@@ -55,7 +55,7 @@ from ..resources.kb import Collection, DocChunk, IndexRun, SourceDoc
 from .events import AgentEvent, MessageDelta, RunDone, RunError, to_sse
 from .notifications import notify
 from .permission_body import PermissionBody as _PermissionBody
-from .permission_body import PermissionOut
+from .permission_body import PermissionOut, build_permission
 from .permission_body import granted_user_ids as _granted_user_ids
 
 if TYPE_CHECKING:
@@ -660,6 +660,33 @@ def register_kb_routes(
             raise HTTPException(status_code=403, detail=f"not authorized to {verb}")
         return coll, created_by
 
+    def _authorize_doc_content(doc: SourceDoc) -> None:
+        """#308 — after the collection's ``read_content`` gate, a per-doc override
+        (``SourceDoc.permission``) can further restrict THIS doc — the intersect
+        that only TIGHTENS. Sequenced like ``_authorize_collection``: the override's
+        ``read_meta`` first (404 — the doc is hidden from a caller the override
+        blocks entirely) then ``read_content`` (403 — the caller may see the doc
+        exists but not read it). Matched against the mirrored ``collection_created_by``
+        so the collection owner / a superuser bypass; a doc with no override
+        (``permission is None`` ≡ public) passes both."""
+        actor = _actor()
+        if not authorize(
+            actor,
+            "read_meta",
+            doc.permission,
+            created_by=doc.collection_created_by,
+            superusers=superusers,
+        ):
+            raise HTTPException(status_code=404, detail="document not found")
+        if not authorize(
+            actor,
+            "read_content",
+            doc.permission,
+            created_by=doc.collection_created_by,
+            superusers=superusers,
+        ):
+            raise HTTPException(status_code=403, detail="not authorized to read_content")
+
     @app.get("/kb/collections")
     async def list_collections() -> list[CollectionOut]:
         coll_rm = spec.get_resource_manager(Collection)
@@ -773,6 +800,110 @@ def register_kb_routes(
         return PermissionOut(
             resource_id=collection_id, visibility=new_perm.visibility, notified=notified
         )
+
+    # ── Issue #308: per-doc read override (set / clear / read) ────────────
+    def _authorize_doc_permission(doc_id: str) -> tuple[SourceDoc, str]:
+        """Gate the doc-permission endpoints: ONLY the collection owner (the
+        mirrored ``collection_created_by``) or a superuser may manage a doc's
+        override (#308/D4). 404 when the doc is gone OR the caller can't even see
+        its collection (no existence leak); 403 when they can see the collection but
+        aren't the owner. Returns the doc + the owner to persist AS."""
+        rm = spec.get_resource_manager(SourceDoc)
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail="document not found") from exc
+        assert isinstance(doc, SourceDoc)
+        # `read_meta` on the collection first — a caller who can't see the collection
+        # gets a uniform 404 (its _authorize_collection raises), not a 403 that would
+        # leak the doc's existence.
+        _authorize_collection(doc.collection_id, "read_meta")
+        owner = doc.collection_created_by
+        me = get_user_id()
+        if me != owner and me not in superusers:
+            raise HTTPException(status_code=403, detail="only the collection owner may set this")
+        return doc, owner
+
+    def _sync_override_count(collection_id: str, by: str) -> None:
+        """Recompute the collection's ``has_doc_overrides`` from the source of truth
+        — an indexed COUNT of its docs carrying an override — so the AI-retrieval
+        short-circuit's counter can't DRIFT under concurrent set/clear (a hand-rolled
+        +1/−1 could, and a wrongly-low count would skip the denylist → leak). Called
+        after the doc's ``permission`` write commits, so the count reflects it."""
+        drm = spec.get_resource_manager(SourceDoc)
+        n = drm.count_resources(
+            (
+                (QB["collection_id"] == collection_id) & QB["permission.visibility"].is_not_null()
+            ).build()
+        )
+        crm = spec.get_resource_manager(Collection)
+        coll = crm.get(collection_id).data
+        assert isinstance(coll, Collection)
+        if coll.has_doc_overrides != n:
+            with crm.using(by):
+                crm.update(collection_id, msgspec.structs.replace(coll, has_doc_overrides=n))
+
+    @app.get("/kb/documents/{doc_id}/permission")
+    async def get_document_permission(doc_id: str) -> PermissionState:
+        """#308 — the doc's current override for the share dialog to pre-fill. No
+        override ≡ the doc inherits its collection (reads as public with empty
+        grants). Owner-only (404 if you can't see the collection, 403 if you can but
+        aren't the owner)."""
+        doc, _ = _authorize_doc_permission(doc_id)
+        perm = doc.permission or Permission()
+        return PermissionState(
+            visibility=perm.visibility,
+            read_meta=perm.read_meta,
+            write_meta=perm.write_meta,
+            read_content=perm.read_content,
+            add_content=perm.add_content,
+            edit_content=perm.edit_content,
+            read_chat=perm.read_chat,
+            converse=perm.converse,
+            execute=perm.execute,
+            use_terminal=perm.use_terminal,
+            change_permission=perm.change_permission,
+        )
+
+    @app.put("/kb/documents/{doc_id}/permission")
+    async def set_document_permission(doc_id: str, body: _PermissionBody) -> PermissionOut:
+        """#308 — set a doc's read override, TIGHTENING what it inherits from its
+        collection (the intersect can only restrict, never loosen — enforced at read
+        time, not here). Owner-only. Persists AS the owner (so the anti-bypass
+        checker, which gates a `permission` write to the owner, passes), then
+        recomputes ``has_doc_overrides`` and notifies newly-granted users."""
+        doc, owner = _authorize_doc_permission(doc_id)
+        new_perm = build_permission(body)  # 400 on a bad visibility
+        old_perm = doc.permission
+        rm = spec.get_resource_manager(SourceDoc)
+        with rm.using(owner):
+            rm.update(doc_id, msgspec.structs.replace(doc, permission=new_perm))
+        _sync_override_count(doc.collection_id, owner)
+        me = get_user_id()
+        notified = sorted(_granted_user_ids(new_perm) - _granted_user_ids(old_perm) - {me})
+        for uid in notified:
+            notify(
+                spec,
+                recipient=uid,
+                kind="share",
+                title=f'Shared a document: "{doc.path}"',
+                link=f"/kb/collections/{doc.collection_id}",
+                actor=me,
+            )
+        return PermissionOut(resource_id=doc_id, visibility=new_perm.visibility, notified=notified)
+
+    @app.delete("/kb/documents/{doc_id}/permission")
+    async def clear_document_permission(doc_id: str) -> PermissionOut:
+        """#308 — remove a doc's override so it reverts to pure collection
+        inheritance. Owner-only. Idempotent (clearing an un-overridden doc is a
+        no-op)."""
+        doc, owner = _authorize_doc_permission(doc_id)
+        if doc.permission is not None:
+            rm = spec.get_resource_manager(SourceDoc)
+            with rm.using(owner):
+                rm.update(doc_id, msgspec.structs.replace(doc, permission=None))
+            _sync_override_count(doc.collection_id, owner)
+        return PermissionOut(resource_id=doc_id, visibility="public", notified=[])
 
     @app.get("/kb/upload-checks")
     async def list_upload_checks() -> list[UploadCheckHintOut]:
@@ -929,8 +1060,14 @@ def register_kb_routes(
         # see, 403 blocks an in-scope member without content access), not just a
         # not-found check.
         coll, _ = _authorize_collection(collection_id, "read_content")
+        # #308: drop docs whose per-doc override blocks THIS exporter's read_content
+        # (empty for a collection nobody tightened per-doc) so the zip can't leak a
+        # doc hidden from the caller.
+        exclude = denied_doc_ids(
+            spec, _actor(), [collection_id], "read_content", superusers=superusers
+        )
         download_id, size = await prepare_zip(
-            lambda out: build_collection_zip(spec, collection_id, out)
+            lambda out: build_collection_zip(spec, collection_id, out, exclude)
         )
         return DownloadPrepared(
             download_id=download_id,
@@ -964,8 +1101,12 @@ def register_kb_routes(
         # not-found check.
         coll, _ = _authorize_collection(collection_id, "read_content")
         folder = prefix.strip("/").rsplit("/", 1)[-1] or coll.name
+        # #308: drop docs whose per-doc override blocks THIS exporter's read_content.
+        exclude = denied_doc_ids(
+            spec, _actor(), [collection_id], "read_content", superusers=superusers
+        )
         download_id, size = await prepare_zip(
-            lambda out: build_kb_subtree_zip(spec, collection_id, prefix, out)
+            lambda out: build_kb_subtree_zip(spec, collection_id, prefix, out, exclude)
         )
         return DownloadPrepared(
             download_id=download_id,
@@ -1304,6 +1445,16 @@ def register_kb_routes(
         _authorize_collection(collection_id, "read_content")
         rm = spec.get_resource_manager(SourceDoc)
         q = QB["collection_id"] == collection_id
+        # #308: within a browsable collection, per-doc overrides can hide individual
+        # docs from THIS reader. EXCLUDE (not include) the docs whose override blocks
+        # the caller's `read_meta`, in-query so the page + `total` stay correct. The
+        # denied set queries only OVERRIDDEN docs (`permission.visibility` not null,
+        # always properly indexed), so a collection with no overrides — and any
+        # pre-migrate row whose index predates #308 — is untouched, and the owner /
+        # a superuser are never denied (they pass `authorize`).
+        denied = denied_doc_ids(spec, _actor(), [collection_id], "read_meta", superusers=superusers)
+        if denied:
+            q = q & QB.resource_id().not_in(list(denied))
         total = rm.count_resources(q.build())
         # Sort by IMMUTABLE keys BEFORE paging — `created_time` (the resource's
         # birth stamp, never moves across revisions) newest-first, with
@@ -1438,6 +1589,7 @@ def register_kb_routes(
         # fan-out completes). 404 hides a doc whose collection is invisible; 403
         # blocks an in-scope member who lacks read_content.
         _authorize_collection(doc.collection_id, "read_content")
+        _authorize_doc_content(doc)  # #308: a per-doc override may further hide it
         # The owner is the resource-level creator (first uploader), not the
         # latest revision's author.
         user = rm.get_meta(doc_id).created_by
@@ -1644,6 +1796,7 @@ def register_kb_routes(
             return []
         assert isinstance(sd, SourceDoc)
         _authorize_collection(sd.collection_id, "read_content")
+        _authorize_doc_content(sd)  # #308: a per-doc override may further hide it
         chrm = spec.get_resource_manager(DocChunk)
         cited = chunk_cited(spec, doc_id)
         rows: list[dict] = []

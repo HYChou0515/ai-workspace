@@ -135,10 +135,17 @@ def test_dense_pass_fans_out_to_both_vector_fields(spec: SpecStar):
     real = retriever._dense_order
 
     def spy(
-        collection_ids: list[str], vec: list[float], *, field: str = "embedding", location=None
+        collection_ids: list[str],
+        vec: list[float],
+        *,
+        field: str = "embedding",
+        location=None,
+        exclude_doc_ids=frozenset(),
     ) -> list[str]:
         calls.append((field, len(vec)))
-        return real(collection_ids, vec, field=field, location=location)
+        return real(
+            collection_ids, vec, field=field, location=location, exclude_doc_ids=exclude_doc_ids
+        )
 
     retriever._dense_order = spy  # type: ignore[method-assign]  # ty: ignore[invalid-assignment]
     retriever.search("authenticate user", collection_ids=[cid])

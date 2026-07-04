@@ -437,4 +437,66 @@ describe("KbDocIde", () => {
     expect(await screen.findByRole("heading", { name: "Hello KB" })).toBeInTheDocument();
     expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("/a dir/b.md");
   });
+
+  // #308 — per-doc read override dialog, opened from the editor header.
+  function permFixture(over: Record<string, unknown> = {}) {
+    return {
+      visibility: "public",
+      read_meta: [],
+      write_meta: [],
+      read_content: [],
+      add_content: [],
+      edit_content: [],
+      read_chat: [],
+      converse: [],
+      execute: [],
+      use_terminal: [],
+      change_permission: [],
+      ...over,
+    };
+  }
+
+  async function openDoc(owner: string, over: Partial<KbApi> = {}) {
+    const client = stubClient([doc({ path: "/notes.md" })], {
+      listCollections: async () => [{ resource_id: "c1", owner }] as never,
+      getDocPermission: async () => permFixture({ visibility: "private" }) as never,
+      ...over,
+    });
+    renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
+    fireEvent.click(await screen.findByText("notes.md"));
+    return client;
+  }
+
+  it("#308 offers the collection owner a per-doc Permissions action that opens the dialog", async () => {
+    const setDoc = vi.fn(async () => ({ visibility: "private", notified: [] }));
+    await openDoc("default-user", { setDocPermission: setDoc as never });
+    fireEvent.click(await screen.findByTestId("doc-permissions"));
+    // the reused #310 dialog opens for THIS doc
+    expect(await screen.findByTestId("permission-dialog")).toBeInTheDocument();
+    // saving a tightening override PUTs it
+    fireEvent.click(screen.getByTestId("permission-save"));
+    await vi.waitFor(() => expect(setDoc).toHaveBeenCalled());
+  });
+
+  it("#308 setting the doc back to Public clears the override (reverts to inheritance)", async () => {
+    const setDoc = vi.fn(async () => ({ visibility: "public", notified: [] }));
+    const clearDoc = vi.fn(async () => {});
+    await openDoc("default-user", {
+      setDocPermission: setDoc as never,
+      clearDocPermission: clearDoc as never,
+    });
+    fireEvent.click(await screen.findByTestId("doc-permissions"));
+    await screen.findByTestId("permission-dialog");
+    fireEvent.click(screen.getByTestId("visibility-public"));
+    fireEvent.click(screen.getByTestId("permission-save"));
+    await vi.waitFor(() => expect(clearDoc).toHaveBeenCalled());
+    expect(setDoc).not.toHaveBeenCalled();
+  });
+
+  it("#308 hides the Permissions action from a non-owner", async () => {
+    await openDoc("someone-else");
+    // the editor header renders (the doc opened) but no Permissions button
+    expect(await screen.findByTestId("kb-ide-status")).toHaveTextContent("/notes.md");
+    expect(screen.queryByTestId("doc-permissions")).not.toBeInTheDocument();
+  });
 });

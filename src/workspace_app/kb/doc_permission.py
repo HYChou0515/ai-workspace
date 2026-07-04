@@ -11,11 +11,13 @@ visibility / read_meta changes. See ``docs/plan-permissions.md`` (#303).
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 import msgspec
 from specstar import QB, SpecStar
 
+from ..perm import Actor, Permission, Verb, authorize
 from ..resources.kb import Collection, SourceDoc
 
 
@@ -41,6 +43,66 @@ def collection_mirror_fields(spec: SpecStar, collection_id: str) -> dict[str, An
         "collection_read_meta": read_meta,
         "collection_created_by": created_by,
     }
+
+
+def denied_doc_ids(
+    spec: SpecStar,
+    actor: Actor,
+    collection_ids: Iterable[str],
+    verb: Verb,
+    *,
+    superusers: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """#308 — the doc-ids in ``collection_ids`` whose per-doc override BLOCKS
+    ``actor`` from ``verb`` (``read_meta`` for the document LIST, ``read_content``
+    for AI retrieval). The (usually empty) EXCLUSION set the list filter and the
+    retriever remove from their candidates.
+
+    It queries ONLY docs that carry an override (``permission.visibility`` is not
+    null). An override is only ever written fresh at the current schema, so that
+    field is always properly indexed on exactly these rows — which means a
+    pre-migrate / un-overridden doc (whose ``permission.visibility`` may not be in
+    the index yet) is NEVER in the candidate set, and thus never wrongly excluded
+    (an inclusion predicate keyed on ``is_null()`` would drop such rows on the
+    disk/postgres backend, where an un-extracted index doesn't match ``is_null()``).
+    A collection nobody tightened per-doc yields an empty set. Each override is
+    authorized against the mirrored collection owner (``collection_created_by``), so
+    the owner / a superuser are never denied.
+
+    A **metas-only** read: it uses ``search_resources`` (the indexed_data
+    projection), NOT ``list_resources``, so the document LIST never pulls a full
+    SourceDoc data blob (the multi-KB extracted ``text``) — keeping it inside the
+    #395 list budget. The override's ``visibility`` + read-grant lists ride the
+    index, so a minimal ``Permission`` reconstructed from them feeds ``authorize``
+    (still the single decision point) without loading the record."""
+    cids = list(collection_ids)
+    if not cids:
+        return frozenset()
+    grant_field = f"permission.{verb}"
+    drm = spec.get_resource_manager(SourceDoc)
+    q = QB["collection_id"].in_(cids) & QB["permission.visibility"].is_not_null()
+    denied: set[str] = set()
+    for m in drm.search_resources(q.build()):
+        indexed = getattr(m, "indexed_data", None)
+        indexed = indexed if isinstance(indexed, dict) else {}
+        vis = indexed.get("permission.visibility")
+        if not isinstance(vis, str):  # pragma: no cover — is_not_null guarantees a value
+            continue
+        grants = indexed.get(grant_field)
+        override = Permission(visibility=vis)
+        # Only the queried verb's grant list rides the index, so set exactly it —
+        # authorize reads `visibility` + `grants(verb)` and nothing else here.
+        setattr(override, verb, [str(g) for g in grants] if isinstance(grants, list) else [])
+        created_by = indexed.get("collection_created_by")
+        if not authorize(
+            actor,
+            verb,
+            override,
+            created_by=created_by if isinstance(created_by, str) else "",
+            superusers=superusers,
+        ):
+            denied.add(m.resource_id)
+    return frozenset(denied)
 
 
 def push_mirror_to_docs(

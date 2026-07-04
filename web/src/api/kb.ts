@@ -519,6 +519,20 @@ export interface KbApi {
     id: string,
     perm: CollectionPermission,
   ): Promise<{ visibility: string; notified: string[] }>;
+  /** #308 — a document's CURRENT per-doc read override, for the share dialog to
+   * pre-fill (`GET /kb/documents/{id}/permission`). No override reads as public
+   * with empty grants (the doc then purely inherits its collection). */
+  getDocPermission(id: string): Promise<CollectionPermission>;
+  /** #308 — set a document's read override (`PUT …/permission`). It only tightens
+   * (never loosens) what the doc inherits — enforced at read time. Returns the
+   * newly-granted user ids that were notified. */
+  setDocPermission(
+    id: string,
+    perm: CollectionPermission,
+  ): Promise<{ visibility: string; notified: string[] }>;
+  /** #308 — remove a document's override (`DELETE …/permission`) so it reverts to
+   * pure collection inheritance. */
+  clearDocPermission(id: string): Promise<void>;
   /** Re-chunk + re-embed documents in the collection (recovers `error` docs
    * after an embedder fix). Each re-queued doc flips back to `indexing`.
    * `{ only: "failed" }` re-queues ONLY docs stuck in `error` (issue #223);
@@ -1125,6 +1139,30 @@ export const realKbApi: KbApi = {
       "set collection permission",
     );
     return (await resp.json()) as { visibility: string; notified: string[] };
+  },
+  async getDocPermission(id) {
+    const resp = await ok(
+      await apiFetch(`/kb/documents/${encodeURIComponent(id)}/permission`),
+      "get document permission",
+    );
+    return (await resp.json()) as CollectionPermission;
+  },
+  async setDocPermission(id, perm) {
+    const resp = await ok(
+      await apiFetch(`/kb/documents/${encodeURIComponent(id)}/permission`, {
+        method: "PUT",
+        headers: jsonHeaders,
+        body: JSON.stringify(perm),
+      }),
+      "set document permission",
+    );
+    return (await resp.json()) as { visibility: string; notified: string[] };
+  },
+  async clearDocPermission(id) {
+    await ok(
+      await apiFetch(`/kb/documents/${encodeURIComponent(id)}/permission`, { method: "DELETE" }),
+      "clear document permission",
+    );
   },
   async shareChat(chatId, userIds) {
     await ok(
