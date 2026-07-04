@@ -47,11 +47,21 @@ def _content_type(doc: SourceDoc) -> str:
 GITKEEP = ".gitkeep"
 
 
-def build_kb_subtree_zip(spec: SpecStar, collection_id: str, prefix: str, out_path: Path) -> None:
+def build_kb_subtree_zip(
+    spec: SpecStar,
+    collection_id: str,
+    prefix: str,
+    out_path: Path,
+    exclude_doc_ids: frozenset[str] = frozenset(),
+) -> None:
     """Issue #247: write a plain ZIP of the ORIGINAL bytes of every SourceDoc in
     ``collection_id`` under the folder ``prefix`` (``""`` = the whole collection)
     to ``out_path``. Entries are re-rooted at ``prefix``; ``.gitkeep`` folder
     placeholders are skipped. No manifest — this is "get the files out".
+
+    ``exclude_doc_ids`` (#308) drops docs whose per-doc override blocks the
+    exporting user's ``read_content`` — so an export can't leak a doc hidden from
+    the caller (empty ⇒ export everything, unchanged).
 
     Raises ``ResourceIDNotFoundError`` when the collection does not exist.
     """
@@ -59,6 +69,8 @@ def build_kb_subtree_zip(spec: SpecStar, collection_id: str, prefix: str, out_pa
     doc_rm = spec.get_resource_manager(SourceDoc)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for rev in doc_rm.list_resources((QB["collection_id"] == collection_id).build()):
+            if rev.info.resource_id in exclude_doc_ids:  # ty: ignore[unresolved-attribute]
+                continue
             doc = rev.data
             assert isinstance(doc, SourceDoc)
             arcname = subtree_arcname(doc.path, prefix)
@@ -69,8 +81,17 @@ def build_kb_subtree_zip(spec: SpecStar, collection_id: str, prefix: str, out_pa
             zf.writestr(arcname, raw)
 
 
-def build_collection_zip(spec: SpecStar, collection_id: str, out_path: Path) -> None:
+def build_collection_zip(
+    spec: SpecStar,
+    collection_id: str,
+    out_path: Path,
+    exclude_doc_ids: frozenset[str] = frozenset(),
+) -> None:
     """Write the export zip for ``collection_id`` to ``out_path``.
+
+    ``exclude_doc_ids`` (#308) drops docs whose per-doc override blocks the
+    exporting user's ``read_content`` — from BOTH the zip and the manifest —
+    so the export can't leak a doc hidden from the caller (empty ⇒ unchanged).
 
     Raises ``ResourceIDNotFoundError`` (via the resource manager) when the
     collection does not exist.
@@ -98,6 +119,8 @@ def build_collection_zip(spec: SpecStar, collection_id: str, out_path: Path) -> 
     documents: list[dict[str, Any]] = []
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for rev in doc_rm.list_resources((QB["collection_id"] == collection_id).build()):
+            if rev.info.resource_id in exclude_doc_ids:  # ty: ignore[unresolved-attribute]
+                continue
             doc = rev.data
             assert isinstance(doc, SourceDoc)
             raw = doc_rm.restore_binary(doc).content.data

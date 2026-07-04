@@ -592,6 +592,7 @@ def kb_search_impl(
             on_progress,
             enhancements=effective,
             location=location,
+            exclude_doc_ids=ctx.context.exclude_doc_ids,  # #308: per-doc override
         ):
             key = (passage.document_id, passage.start, passage.end)
             idx = seen.get(key)

@@ -1060,8 +1060,14 @@ def register_kb_routes(
         # see, 403 blocks an in-scope member without content access), not just a
         # not-found check.
         coll, _ = _authorize_collection(collection_id, "read_content")
+        # #308: drop docs whose per-doc override blocks THIS exporter's read_content
+        # (empty for a collection nobody tightened per-doc) so the zip can't leak a
+        # doc hidden from the caller.
+        exclude = denied_doc_ids(
+            spec, _actor(), [collection_id], "read_content", superusers=superusers
+        )
         download_id, size = await prepare_zip(
-            lambda out: build_collection_zip(spec, collection_id, out)
+            lambda out: build_collection_zip(spec, collection_id, out, exclude)
         )
         return DownloadPrepared(
             download_id=download_id,
@@ -1095,8 +1101,12 @@ def register_kb_routes(
         # not-found check.
         coll, _ = _authorize_collection(collection_id, "read_content")
         folder = prefix.strip("/").rsplit("/", 1)[-1] or coll.name
+        # #308: drop docs whose per-doc override blocks THIS exporter's read_content.
+        exclude = denied_doc_ids(
+            spec, _actor(), [collection_id], "read_content", superusers=superusers
+        )
         download_id, size = await prepare_zip(
-            lambda out: build_kb_subtree_zip(spec, collection_id, prefix, out)
+            lambda out: build_kb_subtree_zip(spec, collection_id, prefix, out, exclude)
         )
         return DownloadPrepared(
             download_id=download_id,

@@ -179,6 +179,13 @@ class AgentToolContext:
     # glossary / resolve_collection scope); this drives the agent-rankable
     # `ask_knowledge_base` fallback only.
     collection_tiers: list[list[str]] = field(default_factory=list)
+    # #308: the doc-ids whose per-doc read override BLOCKS this turn's speaker from
+    # their CONTENT — the retriever excludes their chunks so a doc tightened away
+    # from the speaker never leaks into an AI answer. Computed ONCE at the API
+    # boundary (KB-chat send + the ask_knowledge_base bridge), where the speaker,
+    # their groups, and the superusers are all known; empty for an unwired /
+    # no-override context, so a turn nobody tightened per-doc pays nothing.
+    exclude_doc_ids: frozenset[str] = field(default_factory=frozenset)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
     # #195 / #334: this turn's kb_search budget. Default unlimited-but-counted;
     # the KB-chat turn and the ask_knowledge_base bridge seed `max_calls` from

@@ -18,8 +18,11 @@ from ..agent.config_catalog import AgentConfigCatalog
 from ..agent.context import KbSearchBudget
 from ..kb.cited import record_citations
 from ..kb.collections import readable_collection_ids
+from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
+from ..perm import Actor
 from ..resources import AgentConfig
+from ..resources.groups import groups_of
 from ..resources.kb import Citation, Collection
 from ..sandbox.protocol import OutputSink
 from .events import AgentEvent
@@ -114,6 +117,17 @@ class SubagentBridge:
         if ids and not readable:
             return "No accessible knowledge sources for this query.", []
         ids = readable
+        # #308: beyond the collection-level gate above, resolve which individual
+        # docs the speaker's per-doc override blocks (read_content) so the KB
+        # sub-agent's retriever excludes them — the speaker identity lives here, not
+        # in the KB ctx `answer_question` builds.
+        exclude_doc_ids = denied_doc_ids(
+            self._spec,
+            Actor.human(speaker, groups=groups_of(self._spec, speaker)),
+            ids,
+            "read_content",
+            superusers=self._superusers,
+        )
 
         def relay(ev: AgentEvent) -> None:
             if emit is None:
@@ -156,5 +170,7 @@ class SubagentBridge:
             # ask_knowledge_base call in the turn draws from it; absent one, the
             # bridge falls back to a fresh budget from `max_searches`.
             budget=budget,
+            # #308: the speaker's per-doc-override exclusion (resolved above).
+            exclude_doc_ids=exclude_doc_ids,
         )
         return answer, captured

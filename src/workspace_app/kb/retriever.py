@@ -163,14 +163,20 @@ def _resolve_enhancements(
     )
 
 
-def _scoped(base: ConditionBuilder, location: LocationFilter | None) -> ConditionBuilder:
-    """AND the location filter's predicates onto a base query. `None`/empty ⇒
-    the base unchanged (unscoped)."""
-    if location is None:
-        return base
+def _scoped(
+    base: ConditionBuilder,
+    location: LocationFilter | None,
+    exclude_doc_ids: frozenset[str] = frozenset(),
+) -> ConditionBuilder:
+    """AND the location filter's predicates onto a base query, then EXCLUDE any
+    denied docs (#308 — the per-doc read override the speaker can't see). `None`/
+    empty location + empty exclusion ⇒ the base unchanged (unscoped)."""
     out = base
-    for cond in location.conditions():
-        out = out & cond
+    if location is not None:
+        for cond in location.conditions():
+            out = out & cond
+    if exclude_doc_ids:
+        out = out & QB["source_doc_id"].not_in(list(exclude_doc_ids))
     return out
 
 
@@ -247,6 +253,7 @@ class Retriever:
         location: LocationFilter | None = None,
         overlay: Overlay | None = None,
         depth: int | None = None,
+        exclude_doc_ids: frozenset[str] = frozenset(),
     ) -> list[RetrievedPassage]:
         """`enhancements` is the per-call override: any field set to a
         concrete value wins over the operator default for that knob,
@@ -275,7 +282,10 @@ class Retriever:
         mmr_k = depth if depth is not None else self._top_k * 3
         limit = depth if depth is not None else self._top_k
         loc = location if location is not None and not location.is_empty() else None
-        chunks = self._load_chunks(collection_ids, loc)  # {chunk_id: DocChunk}
+        # {chunk_id: DocChunk}; #308 excludes chunks of docs the speaker's per-doc
+        # override blocks, from BOTH the BM25/MMR corpus (this dict) and the dense
+        # native-vector query below, so a hidden doc never reaches ranking/answer.
+        chunks = self._load_chunks(collection_ids, loc, exclude_doc_ids)
         if overlay is not None:
             chunks = {
                 cid: ch for cid, ch in chunks.items() if ch.source_doc_id != overlay.shadow_doc_id
@@ -317,6 +327,7 @@ class Retriever:
                     cids=collection_ids,
                     loc=loc,
                     overlay=overlay,
+                    exclude_doc_ids=exclude_doc_ids,
                 )
             )
             # P3.0 fan-out: a separate dense pass for the code-vector field
@@ -507,6 +518,7 @@ class Retriever:
         cids: list[str],
         loc: LocationFilter | None,
         overlay: Overlay | None,
+        exclude_doc_ids: frozenset[str] = frozenset(),
     ) -> list[str]:
         """Dense ranking for one query vector. Normal path pushes the cosine sort
         into the store (pgvector). The #328 overlay path recomputes it in-memory
@@ -515,7 +527,9 @@ class Retriever:
         geometry."""
         if overlay is not None:
             return self._dense_order_mem(chunks, vec, field=field)
-        return self._dense_order(cids, vec, field=field, location=loc)
+        return self._dense_order(
+            cids, vec, field=field, location=loc, exclude_doc_ids=exclude_doc_ids
+        )
 
     def _dense_order_mem(
         self, chunks: dict[str, DocChunk], vec: list[float], *, field: str
@@ -538,6 +552,7 @@ class Retriever:
         *,
         field: str = "embedding",
         location: LocationFilter | None = None,
+        exclude_doc_ids: frozenset[str] = frozenset(),
     ) -> list[str]:
         """Top candidate chunk ids nearest `vec` in the given vector `field`
         (``embedding`` or ``embedding_alt``), via specstar's native vector
@@ -547,7 +562,7 @@ class Retriever:
         the vector sort — index filter + vector order in ONE query, the same
         way `collection_id` already scopes it."""
         rm = self._spec.get_resource_manager(DocChunk)
-        scope = _scoped(QB["collection_id"].in_(collection_ids), location)
+        scope = _scoped(QB["collection_id"].in_(collection_ids), location, exclude_doc_ids)
         query = (
             scope
             # specstar's order_by type union omits VectorDistanceSort (works at runtime)
@@ -561,7 +576,10 @@ class Retriever:
         ]
 
     def _load_chunks(
-        self, collection_ids: list[str], location: LocationFilter | None = None
+        self,
+        collection_ids: list[str],
+        location: LocationFilter | None = None,
+        exclude_doc_ids: frozenset[str] = frozenset(),
     ) -> dict[str, DocChunk]:
         """The chunk universe for BM25 + MMR + passage metadata. A `location`
         filter scopes it the SAME way as the dense query, so every retrieval
@@ -569,7 +587,7 @@ class Retriever:
         rm = self._spec.get_resource_manager(DocChunk)
         out: dict[str, DocChunk] = {}
         for cid in collection_ids:
-            scope = _scoped(QB["collection_id"] == cid, location)
+            scope = _scoped(QB["collection_id"] == cid, location, exclude_doc_ids)
             for r in rm.list_resources(scope.build()):
                 data = r.data
                 assert isinstance(data, DocChunk)

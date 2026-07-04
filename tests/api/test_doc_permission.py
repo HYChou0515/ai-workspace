@@ -37,14 +37,17 @@ def _ingestor(spec: SpecStar) -> Ingestor:
 
 
 def _client_and_spec(
-    holder: dict[str, str], *, superusers: frozenset[str] = frozenset()
+    holder: dict[str, str],
+    *,
+    superusers: frozenset[str] = frozenset(),
+    runner: object | None = None,
 ) -> tuple[TestClient, SpecStar]:
     spec = make_spec(default_user=lambda: holder["id"], superusers=superusers)
     app = create_app(
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=ScriptedAgentRunner([]),
+        runner=runner if runner is not None else ScriptedAgentRunner([]),  # ty: ignore[invalid-argument-type]
         kb_embedder=HashEmbedder(dim=EMBED_DIM),
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
         get_user_id=lambda: holder["id"],
@@ -151,7 +154,7 @@ def test_doc_permission_visibility_is_a_queryable_index() -> None:
             resource_id=plain_id,
         )
     hits = [
-        r.info.resource_id
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
         for r in drm.list_resources((QB["permission.visibility"] == "restricted").build())
     ]
     assert hits == [overridden_id]
@@ -483,3 +486,78 @@ def test_denied_doc_ids_superuser_never_denied() -> None:
         )
         == frozenset()
     )
+
+
+# ---------------------------------------------------------------------------
+# P5 — AI retrieval denylist (end-to-end ctx wiring) + export exclusion
+# ---------------------------------------------------------------------------
+
+
+class _ExcludeRecordingRunner:
+    """A KB runner that records the `exclude_doc_ids` the API boundary put on the
+    turn context — so we assert the speaker's per-doc-override exclusion reaches
+    the retriever seam (the retriever's own filtering is unit-tested separately)."""
+
+    def __init__(self) -> None:
+        self.seen: frozenset[str] = frozenset({"__unset__"})
+
+    async def run(self, prompt: str, ctx):  # noqa: ANN001
+        from workspace_app.api.events import MessageDelta, RunDone
+
+        self.seen = frozenset(ctx.exclude_doc_ids)
+        yield MessageDelta(text="ok")
+        yield RunDone()
+
+
+def test_kb_chat_send_puts_the_speakers_denied_docs_on_the_turn_ctx() -> None:
+    holder = {"id": "bob"}
+    runner = _ExcludeRecordingRunner()
+    client, spec = _client_and_spec(holder, runner=runner)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    doc_id = _ingestor(spec).store(collection_id=cid, user="bob", filename="a.md", data=b"secret")[
+        0
+    ]
+    client.put(
+        f"/kb/documents/{doc_id}/permission",
+        json={
+            "visibility": "restricted",
+            "read_meta": ["user:alice"],
+            "read_content": ["user:alice"],
+        },
+    )
+    # carol (blocked from the doc) chats over the collection → the doc is excluded
+    holder["id"] = "carol"
+    chat = client.post("/kb/chats", json={"collection_ids": [cid]}).json()["resource_id"]
+    client.post(f"/kb/chats/{chat}/messages", json={"content": "what do the docs say?"})
+    assert runner.seen == frozenset({doc_id})
+    # bob (the collection owner) is never denied
+    holder["id"] = "bob"
+    chat2 = client.post("/kb/chats", json={"collection_ids": [cid]}).json()["resource_id"]
+    client.post(f"/kb/chats/{chat2}/messages", json={"content": "hi"})
+    assert runner.seen == frozenset()
+
+
+def test_collection_export_excludes_denied_docs(tmp_path) -> None:  # noqa: ANN001
+    import json
+    import zipfile
+
+    from workspace_app.kb.collection_export import build_collection_zip
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec)
+    _mk_doc(spec, cid, "public.md")
+    secret = _mk_doc(
+        spec,
+        cid,
+        "secret.md",
+        permission=Permission(visibility="restricted", read_meta=["user:alice"]),
+    )
+    out = tmp_path / "export.zip"
+    build_collection_zip(spec, cid, out, frozenset({secret}))
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+        manifest = json.loads(zf.read(".kb-collection/manifest.json"))
+    assert "public.md" in names
+    assert "secret.md" not in names  # excluded from the zip
+    paths = {d["path"] for d in manifest["documents"]}
+    assert paths == {"public.md"}  # and from the manifest

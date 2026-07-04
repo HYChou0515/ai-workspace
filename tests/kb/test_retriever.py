@@ -356,3 +356,33 @@ def test_empty_llm_replies_fall_back_to_the_plain_query(
     )
     passages = Retriever(spec, embedder=embedder, llm=_FakeLlm("   ")).search("reflow", [cid])
     assert passages[0].document_id == encode_doc_id(cid, "reflow.md")
+
+
+def test_search_excludes_denied_docs(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    """#308: `exclude_doc_ids` drops a doc's chunks from BOTH the dense and the
+    BM25 paths, so a doc the speaker's per-doc override blocks never reaches
+    ranking or the answer."""
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="reflow.md",
+        data=b"reflow oven temperature drifted in zone three causing solder voids",
+    )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="second.md",
+        data=b"reflow temperature also matters greatly for this second document here",
+    )
+    blocked = encode_doc_id(cid, "reflow.md")
+    r = Retriever(spec, embedder=embedder)
+    # baseline: the reflow doc is retrievable
+    assert any(p.document_id == blocked for p in r.search("reflow temperature", [cid]))
+    # excluding it removes every passage from that doc; the other doc still returns
+    got = r.search("reflow temperature", [cid], exclude_doc_ids=frozenset({blocked}))
+    assert got, "the non-excluded doc should still return passages"
+    assert all(p.document_id != blocked for p in got)

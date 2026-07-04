@@ -37,11 +37,13 @@ from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
 from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections
 from ..kb.context_cards import match as match_cards
+from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
 from ..perm import Actor, Permission, authorize
 from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
+from ..resources.groups import groups_of
 from ..resources.kb import Citation, KbChat, KbMessage
 from ..users.protocol import UserDirectory
 from .chat_naming import first_user_snippet
@@ -85,6 +87,7 @@ async def answer_question(
     on_citations: Callable[[list[Citation]], None] | None = None,
     max_searches: int | None = None,
     budget: KbSearchBudget | None = None,
+    exclude_doc_ids: frozenset[str] = frozenset(),
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
     with a compact sources footer. This is how the RCA agent's
@@ -126,6 +129,11 @@ async def answer_question(
         # ask_knowledge_base calls, #334 Q6) wins — all its sub-agents then draw
         # from the one budget; otherwise seed a fresh one from `max_searches`.
         kb_search_budget=budget if budget is not None else KbSearchBudget(max_calls=max_searches),
+        # #308: the caller (the ask_knowledge_base bridge) resolves which docs the
+        # ORIGINAL speaker's per-doc override blocks, so this sub-agent's retriever
+        # can't surface a doc the speaker can't read — even though the KB ctx itself
+        # carries no speaker identity.
+        exclude_doc_ids=exclude_doc_ids,
     )
     parts: list[str] = []
     # (tool_name, error_text) pairs captured from ToolEnd events whose
@@ -590,6 +598,16 @@ def register_kb_chat_routes(
         ctx = AgentToolContext(
             retriever=retriever,
             collection_ids=chat.collection_ids,
+            # #308: exclude docs whose per-doc override blocks THIS speaker's
+            # read_content, so the retriever never surfaces a doc tightened away
+            # from them (empty when no doc in scope is overridden).
+            exclude_doc_ids=denied_doc_ids(
+                spec,
+                Actor.human(get_user_id(), groups=groups_of(spec, get_user_id())),
+                chat.collection_ids,
+                "read_content",
+                superusers=superusers,
+            ),
             agent_config=agent_config,
             # specstar handle so the agent's `lookup_glossary` tool (when granted)
             # can read this collection's context cards — deterministic glossary
