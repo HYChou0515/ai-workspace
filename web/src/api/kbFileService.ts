@@ -185,14 +185,22 @@ export function kbFileService(
     // Copy = read the source bytes and upload them as a fresh doc at `to`.
     async copyFile(from: string, to: string): Promise<void> {
       const copyOne = async (doc: KbDocument, dest: string): Promise<void> => {
-        const env = await getEnvelope(doc.resource_id);
-        const fileId = env.data.content.file_id;
+        // The blob id + content-type ride the list row (#87); only a just-
+        // uploaded / still-indexing row lacks file_id — fall back to the envelope
+        // there. Avoids the extra GET /source-doc/{id} per copied file.
+        let fileId = doc.file_id;
+        let contentType = doc.content_type;
+        if (!fileId) {
+          const env = await getEnvelope(doc.resource_id);
+          fileId = env.data.content.file_id;
+          contentType = env.data.content.content_type;
+        }
         const resp = await apiFetch(
           `/source-doc/${encodeURIComponent(doc.resource_id)}/blobs/${encodeURIComponent(fileId)}`,
         );
         if (!resp.ok) throw new Error(`copy ${doc.path} failed: ${resp.status}`);
         const bytes = await resp.arrayBuffer();
-        const file = new File([bytes], basename(dest), { type: env.data.content.content_type });
+        const file = new File([bytes], basename(dest), { type: contentType });
         await kb.uploadDocument(collectionId, file, dest);
       };
       const exact = docFor(from);
@@ -224,15 +232,17 @@ export function kbFileService(
     // Resolve a markdown ref to a sibling doc's content blob (the old full-page
     // viewer's behaviour). Absolute URLs / fragments / protocol-relative refs
     // pass through; a relative ref resolves doc-relative to a sibling SourceDoc
-    // and becomes its `/source-doc/{id}/blobs/{file_id}` URL. Unknown sibling →
-    // left as-is (a broken-image marker beats a wrong URL).
+    // and becomes the canonical content-addressed `/blobs/{file_id}` URL — the
+    // SAME URL the citation drawer's rewritten sibling images use, so the same
+    // image shown in both surfaces hits the browser cache once instead of twice.
+    // Unknown sibling → left as-is (a broken-image marker beats a wrong URL).
     fileUrl: (src, fromPath) => {
       if (!src) return "";
       if (/^(?:[a-z][a-z0-9+.-]*:|#|\/\/)/i.test(src)) return src;
       const target = resolveRefPath(fromPath ?? "/", src);
       const sibling = byPath.get(target);
       if (!sibling || !sibling.file_id) return src;
-      return `${API_PREFIX}/source-doc/${encodeURIComponent(sibling.resource_id)}/blobs/${encodeURIComponent(sibling.file_id)}`;
+      return `${API_PREFIX}/blobs/${encodeURIComponent(sibling.file_id)}`;
     },
 
     // #247: a single doc downloads its content blob verbatim. Unknown path / a
