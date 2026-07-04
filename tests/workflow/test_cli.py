@@ -23,9 +23,7 @@ def test_check_one_slug_exits_zero(capsys):
 
 
 def test_check_exits_one_on_an_error(capsys, monkeypatch):
-    monkeypatch.setattr(
-        cli, "check_app", lambda s, **kw: [Diagnostic("error", f"{s}/p", "boom")]
-    )
+    monkeypatch.setattr(cli, "check_app", lambda s, **kw: [Diagnostic("error", f"{s}/p", "boom")])
     assert cli.main(["check", "playground"]) == 1
     out = capsys.readouterr().out
     assert "boom" in out and "1 error(s)" in out

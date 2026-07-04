@@ -173,8 +173,11 @@ def test_dsl_stale_cache_risk_is_a_warning_not_an_error(tmp_path):
     _write_dsl(
         tmp_path,
         "w",
-        {"id": "w", "phases": [{"id": "p"}],
-         "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}]},
+        {
+            "id": "w",
+            "phases": [{"id": "p"}],
+            "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}],
+        },
     )
     diags = check_profile_dir(tmp_path, "app/w")
     assert _levels(diags) == ["warning"]
@@ -188,8 +191,11 @@ def test_dsl_strict_mode_escalates_stale_risk_to_error(tmp_path):
     _write_dsl(
         tmp_path,
         "w",
-        {"id": "w", "phases": [{"id": "p"}],
-         "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}]},
+        {
+            "id": "w",
+            "phases": [{"id": "p"}],
+            "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p"}],
+        },
     )
     assert _levels(check_profile_dir(tmp_path, "app/w")) == ["warning"]  # default
     assert _levels(check_profile_dir(tmp_path, "app/w", strict=True)) == ["error"]  # strict
@@ -200,9 +206,18 @@ def test_dsl_step_that_declared_reads_is_clean(tmp_path):
     _write_dsl(
         tmp_path,
         "w",
-        {"id": "w", "phases": [{"id": "p"}],
-         "steps": [{"type": "sandbox", "run": "python analyze.py", "phase": "p",
-                    "reads": ["analyze.py"]}]},
+        {
+            "id": "w",
+            "phases": [{"id": "p"}],
+            "steps": [
+                {
+                    "type": "sandbox",
+                    "run": "python analyze.py",
+                    "phase": "p",
+                    "reads": ["analyze.py"],
+                }
+            ],
+        },
     )
     assert check_profile_dir(tmp_path, "app/w") == []
 

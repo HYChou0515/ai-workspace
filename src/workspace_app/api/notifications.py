@@ -29,8 +29,11 @@ def notify(
     body: str = "",
     link: str = "",
     actor: str | None = None,
+    dedup_key: str = "",
 ) -> str:
-    """Create one notification addressed to `recipient`. Returns its id."""
+    """Create one notification addressed to `recipient`. Returns its id. `dedup_key`
+    (#435 P5) records the send-once fingerprint so `notification_sent` can later find it —
+    creating the row IS both the send and the ledger entry (M1, atomic, no send gap)."""
     rm = spec.get_resource_manager(Notification)
     rev = rm.create(
         Notification(
@@ -41,9 +44,18 @@ def notify(
             link=link,
             actor=actor,
             created_at=_now_ms(),
+            dedup_key=dedup_key,
         )
     )
     return rev.resource_id
+
+
+def notification_sent(spec: SpecStar, dedup_key: str) -> bool:
+    """#435 P5: has a notification with this send-once fingerprint already been created?
+    An indexed `dedup_key` query (not a scan) — the Notification store IS the send ledger,
+    so a workflow's send_notification skips a re-send on a replay/revise."""
+    rm = spec.get_resource_manager(Notification)
+    return any(rm.list_resources((QB["dedup_key"] == dedup_key).build()))
 
 
 def _to_dict(resource_id: str, n: Notification) -> dict:

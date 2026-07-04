@@ -83,13 +83,13 @@ async def test_upload_dir_is_injectable():
     assert h.upload_dir == "docs"
 
 
-async def test_create_entity_uses_framework_numbering_and_is_idempotent() -> None:
+async def test_create_entity_uses_framework_numbering_and_dedups_by_site() -> None:
     """`wf.create_entity` mints entities through the SAME EntityStore path as the
-    UI/agent (framework numbering, no raw wf.write), and is journaled so a re-run
-    with the same args never duplicates (#419 §C, workflow接軌)."""
+    UI/agent (framework numbering, no raw wf.write). Its dedup identity is the
+    capability's ``name`` (its site, #435 P2): distinct sites mint distinct entities;
+    the same site re-run self-dedups instead of duplicating."""
     import pytest
 
-    from workspace_app.entity.store import EntityStore  # noqa: F401  (import parity)
     from workspace_app.filestore.memory import MemoryFileStore
     from workspace_app.workflow.engine import StepFailed
 
@@ -100,19 +100,19 @@ async def test_create_entity_uses_framework_numbering_and_is_idempotent() -> Non
     await store.write("ws", "/.entity/issue/skeleton.md", b"---\ntitle: {{arg.title}}\n---\n")
     wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
 
-    n1 = await wf.create_entity("issue", {"title": "A"})
-    n2 = await wf.create_entity("issue", {"title": "B"})
+    n1 = await wf.create_entity("issue", {"title": "A"}, name="a")
+    n2 = await wf.create_entity("issue", {"title": "B"}, name="b")
     assert (n1, n2) == (1, 2)
     assert "title: A" in (await store.read("ws", "/issues/1.md")).decode()
 
-    # re-run with the same args → journaled skip, no duplicate file
-    again = await wf.create_entity("issue", {"title": "A"})
+    # the same site re-run → self-dedup, no duplicate file
+    again = await wf.create_entity("issue", {"title": "A"}, name="a")
     assert again == 1
     assert not await store.exists("ws", "/issues/3.md")
 
     # unknown type fails loudly (before journaling)
     with pytest.raises(StepFailed):
-        await wf.create_entity("nope", {"title": "X"})
+        await wf.create_entity("nope", {"title": "X"}, name="c")
 
 
 async def test_update_entity_merges_patch_and_is_idempotent() -> None:
@@ -135,7 +135,7 @@ async def test_update_entity_merges_patch_and_is_idempotent() -> None:
     )
     wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
 
-    n = await wf.create_entity("issue", {"title": "A", "status": "open"})
+    n = await wf.create_entity("issue", {"title": "A", "status": "open"}, name="mk")
     await wf.update_entity("issue", n, {"status": "done"})
     body = (await store.read("ws", "/issues/1.md")).decode()
     assert "status: done" in body and "title: A" in body  # patch merged, title preserved
@@ -160,7 +160,7 @@ async def test_update_entity_retries_on_parallel_conflict(monkeypatch) -> None:
     await store.write("ws", "/.entity/t/schema.yaml", b"path: ts\nfields:\n  s: {role: text}\n")
     await store.write("ws", "/.entity/t/skeleton.md", b"---\ns: {{arg.s}}\n---\n")
     wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
-    n = await wf.create_entity("t", {"s": "x"})
+    n = await wf.create_entity("t", {"s": "x"}, name="mk")
 
     real_update = store_mod.EntityStore.update
     calls = {"n": 0}

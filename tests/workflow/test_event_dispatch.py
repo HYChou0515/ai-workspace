@@ -34,12 +34,22 @@ class FakeWatermark(IEventWatermark):
 
 
 _TRIGGER_BASE = EventTrigger(
-    id="on_issue", workflow_id="triage", acting_user="bot", entity="issue", on="created",
-    slug="rca", profile="echo",
+    id="on_issue",
+    workflow_id="triage",
+    acting_user="bot",
+    entity="issue",
+    on="created",
+    slug="rca",
+    profile="echo",
 )
 _EVENT_BASE = EntityWriteEvent(
-    item_id="rca/i1", type_name="issue", number=5, action="created", actor="alice",
-    version="v1", fields={"status": "open"},
+    item_id="rca/i1",
+    type_name="issue",
+    number=5,
+    action="created",
+    actor="alice",
+    version="v1",
+    fields={"status": "open"},
 )
 
 

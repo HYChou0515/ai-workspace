@@ -22,7 +22,8 @@ from typing import Any
 
 from ..entity.events import EntityWriteSink
 from ..filestore.protocol import FileStore
-from .engine import StepFailed, run_step
+from .engine import StepFailed, input_hash, run_step
+from .nonidempotent import Result, Verdict, run_nonidempotent
 
 # How an agent node runs one turn: given the (feedback-augmented) prompt + the tool
 # subset, drive a ChatTurnEngine turn on the item and return a result summary. The
@@ -61,6 +62,20 @@ FindCardCapability = Callable[[str, list[str], str], Awaitable[dict[str, Any] | 
 # path, and returns where the caller files it (``None`` for an unreadable binary → skip).
 # Wired by the driver; faked in tests.
 ConvertCapability = Callable[[str, str], Awaitable[tuple[str | None, str]]]
+# The one-shot LLM classifier backing ``create_entity``'s M1-AI cross-origin dedup (#435
+# P3): prompt -> the model's text answer. Wired by the driver over the workflow's ILlm
+# (streamed under the hood); tests inject a fake. ``None`` ⇒ no cross-origin AI dedup
+# (journal-first self-dedup still works) — so it is inert until wired + live-checked (P6).
+AskLlm = Callable[[str], Awaitable[str]]
+# The send-notification capability (#435 P5): (recipient, title, body, dedup_key) -> the
+# notification id. Creates one in-app Notification carrying the send-once fingerprint —
+# the create IS both the send and the ledger entry (M1, atomic). Wired by the driver over
+# the Notification store; faked in tests.
+NotifyCapability = Callable[[str, str, str, str], Awaitable[str]]
+# The send-ledger query (#435 P5): (dedup_key) -> has this fingerprint already been sent?
+# An indexed Notification query — the store IS the ledger. Wired by the driver; faked in
+# tests. ``None`` ⇒ never deduped (every send fires).
+NotificationSentCheck = Callable[[str], Awaitable[bool]]
 
 
 def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
@@ -74,12 +89,6 @@ def _card_step_key(keys: list[str], title: str, body: str = "") -> str:
     safe = re.sub(r"[^0-9a-z]+", "_", basis.casefold()).strip("_")[:48]
     digest = hashlib.sha1(f"{basis}\x00{body}".encode()).hexdigest()[:8]
     return f"{safe}_{digest}" if safe else digest
-
-
-def _args_digest(args: dict[str, Any]) -> str:
-    """A stable, short digest of a capability's args — folds them into the journal
-    key so a re-run with the SAME args skips (#419 create_entity idempotency)."""
-    return hashlib.sha1(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()[:12]
 
 
 def _abs(path: str) -> str:
@@ -106,6 +115,9 @@ class WorkflowHandle:
         collection_checker: CollectionChecker | None = None,
         upsert_card: UpsertCardCapability | None = None,
         find_card: FindCardCapability | None = None,
+        ask_llm: AskLlm | None = None,
+        notify: NotifyCapability | None = None,
+        notification_sent: NotificationSentCheck | None = None,
         credential: str = "",
         step_timeout_s: float | None = None,
         sub_turn: SubTurn | None = None,
@@ -151,6 +163,16 @@ class WorkflowHandle:
         """Wired by the orchestration driver — the read-only ``find_overwrite_target``
         capability (#205) backing the review "before" snapshot. None ⇒ no existing card
         is ever found (a fresh workspace), so the snapshot is empty."""
+        self.ask_llm = ask_llm
+        """Wired by the orchestration driver — the one-shot LLM classifier backing
+        ``create_entity``'s M1-AI cross-origin dedup (#435 P3). None ⇒ no cross-origin AI
+        match (journal-first self-dedup still works)."""
+        self._notify = notify
+        """Wired by the orchestration driver — the ``send_notification`` capability (#435
+        P5) over the in-app Notification store."""
+        self._notification_sent = notification_sent
+        """Wired by the orchestration driver — the send-ledger query backing
+        ``send_notification``'s M1-fingerprint dedup (#435 P5)."""
         self.credential = credential
         """The run-scoped credential (manual §15) — injected into a deterministic
         node's sandbox env so its script can auth capability HTTP calls. "" until
@@ -277,18 +299,36 @@ class WorkflowHandle:
         type_name: str,
         args: dict[str, Any],
         *,
+        name: str,
+        on_duplicate: str = "update",
         phase: str = "commit",
+        key: str = "",
         cache: bool = True,
     ) -> int:
-        """Create a file-first entity (#419) through the framework's numbering +
-        validation pipeline — the SAME ``EntityStore`` path the UI and the agent use,
-        never a raw ``wf.write`` with a hand-picked number (§C, "single write path").
-        Journaled + skipped on re-run (§9), keyed by (type + args), so a re-run never
-        mints a duplicate. Returns the permanent entity number."""
+        """Create a file-first entity (#419) through the framework numbering + validation
+        pipeline (the SAME ``EntityStore`` path the UI and agent use, never a raw
+        ``wf.write``), as a non-idempotent capability on the #435 shell.
+
+        ``name`` is the capability's STABLE dedup identity — its *site*. A re-run of the
+        same site self-dedups: journal-first via a write-once ``created.json`` remembers
+        the number this site minted, so a gate revise that CHANGES the content merges
+        into that entity instead of minting a duplicate (the old ``args``-digest key
+        double-created here — the changed content changed the key). ``on_duplicate`` picks
+        the duplicate action: ``update`` (self-merge the declared fields, leaving fields
+        the workflow doesn't declare — a human's edits — untouched, 决议3) or ``skip``
+        (return the existing number without touching it). ``key`` is the map-element scope
+        key (a create_entity inside a loop mints one entity per element). Returns the
+        entity number (sourced from the shell's published ``Result.fields['number']``)."""
         from datetime import UTC, datetime
 
         from ..entity.catalog import discover_catalog
-        from ..entity.store import EntityStore
+        from ..entity.store import EntityConflict, EntityStore
+        from .entity_dedup import (
+            match_prompt,
+            parse_match,
+            render_contribution,
+            replace_fenced_block,
+        )
 
         catalog, _diags = await discover_catalog(self._store, self._workspace_id)
         if type_name not in catalog:
@@ -296,8 +336,102 @@ class WorkflowHandle:
         store = EntityStore(
             self._store, self._workspace_id, catalog, on_write=self._entity_write_sink
         )
+        records_path = catalog.get(type_name).records_path
+        created_path = f"{self.journal_dir}/step_{name}/{key or 'main'}.created.json"
 
-        async def execute(_feedback: str | None) -> dict[str, int]:
+        async def _remembered_alive() -> int | None:
+            """The number this site already minted, if its record still exists — else
+            the entity was hard-deleted, so forget it and mint anew."""
+            if not await self.exists(created_path):
+                return None
+            number = int((await self.read_json(created_path))["number"])
+            alive = await self._store.exists(self._workspace_id, f"/{records_path}/{number}.md")
+            return number if alive else None
+
+        async def _cross_match() -> int | None:
+            """M1-AI cross-origin dedup (决议2/8): does this new entity correspond to one
+            an OTHER origin already filed? Reversible act only (a non-destructive enrich),
+            so fail-open — any AI failure/hallucination → NEW (``None``). Inert when no
+            LLM is wired."""
+            if self.ask_llm is None:
+                return None
+            existing = (await store.query(type_name)).entities
+            candidates = [
+                {"number": e.number, "title": e.fields.get("title", "")} for e in existing
+            ]
+            if not candidates:
+                return None
+            try:
+                answer = await self.ask_llm(match_prompt(dict(args), candidates))
+            except Exception:  # noqa: BLE001 — fail-open (决议8): any AI failure → NEW
+                return None
+            return parse_match(answer, [c["number"] for c in candidates])
+
+        async def decide(_feedback: str | None) -> Verdict:
+            remembered = await _remembered_alive()  # journal-first self-dedup (决议2)
+            if remembered is not None:
+                return Verdict(kind="duplicate", payload={"of": remembered, "origin": "self"})
+            # create_new (M2, 决议4): a fresh entity per invocation — it must NOT dedup
+            # against another origin's entity, so skip M1-AI cross-matching. The
+            # created.json self-dedup above still makes a WITHIN-invocation revise reuse
+            # (never double-create); the cross-invocation "fresh per trigger" needs #429's
+            # per-invocation journal boundary (the DSL surface is gated until then).
+            if on_duplicate != "create_new":
+                matched = await _cross_match()  # M1-AI cross-origin (决议2, P3)
+                if matched is not None:
+                    return Verdict(kind="duplicate", payload={"of": matched, "origin": "cross"})
+            return Verdict(kind="new")
+
+        async def _cross_merge(number: int) -> None:
+            """Enrich an OTHER origin's entity non-destructively (决议3/5): fill only empty
+            frontmatter fields (never overwrite a human's non-empty value) and overwrite
+            the workflow-owned fenced block in the body (idempotent — no accumulation)."""
+            current = await store.get(type_name, number)
+            patch = {k: v for k, v in args.items() if not current.fields.get(k)}
+            new_body = replace_fenced_block(
+                current.body, name, render_contribution(name, dict(args))
+            )
+            try:
+                await store.update(
+                    type_name,
+                    number,
+                    patch,
+                    expected_version=current.version,
+                    body=new_body,
+                    actor=self.user,
+                    origin=self._entity_origin(),
+                )
+            except EntityConflict as exc:
+                raise StepFailed(str(exc)) from exc
+
+        async def act(verdict: Verdict) -> Result:
+            if verdict.kind == "duplicate":
+                number = int(verdict.payload["of"])
+                if on_duplicate == "skip":
+                    return Result(fields={"number": number, "created": False, "action": "skip"})
+                if verdict.payload.get("origin") == "cross":  # someone else's entity — enrich
+                    await _cross_merge(number)
+                    return Result(
+                        fields={"number": number, "created": False, "action": "cross-merge"}
+                    )
+                current = await store.get(type_name, number)
+                try:  # self-merge overlays the declared fields; CAS guards a racing edit
+                    await store.update(
+                        type_name,
+                        number,
+                        dict(args),
+                        expected_version=current.version,
+                        actor=self.user,
+                        origin=self._entity_origin(),
+                    )
+                except EntityConflict as exc:
+                    raise StepFailed(str(exc)) from exc
+                return Result(fields={"number": number, "created": False, "action": "merge"})
+            # new — guard the act-crash-before-journal window (§7): if this site already
+            # minted a (still-alive) entity, reuse it rather than mint a second.
+            remembered = await _remembered_alive()
+            if remembered is not None:
+                return Result(fields={"number": remembered, "created": False, "action": "resume"})
             created = await store.create(
                 type_name,
                 args,
@@ -305,18 +439,68 @@ class WorkflowHandle:
                 now=datetime.now(UTC).date().isoformat(),
                 origin=self._entity_origin(),
             )
-            return {"number": created.number}
+            await self.write_json(created_path, {"number": created.number})
+            return Result(fields={"number": created.number, "created": True, "action": "create"})
 
-        result = await run_step(
+        result = await run_nonidempotent(
             self,
-            name="create_entity",
-            key=f"{type_name}_{_args_digest(args)}",
+            name=name,
+            inputs={"type": type_name, "args": args, "on_duplicate": on_duplicate},
+            decide=decide,
+            act=act,
+            key=key,
             phase=phase,
-            args={"type": type_name, "args": args},
-            execute=execute,
             cache=cache,
         )
-        return result["number"]
+        return int(result.fields["number"])
+
+    async def send_notification(
+        self,
+        recipient: str,
+        topic: str,
+        *,
+        name: str,
+        title: str = "",
+        body: str = "",
+        phase: str = "notify",
+        key: str = "",
+        cache: bool = True,
+    ) -> dict[str, Any]:
+        """Send one in-app notification as a non-idempotent capability on the #435 shell
+        (M1 send-once). ``decide`` queries the Notification store by the send-once
+        fingerprint ``{recipient}:{topic}`` — the store IS the ledger — so a replay or a
+        revise that changes only the title never re-notifies about the same topic; ``act``
+        creates the notification (send + ledger in one atomic write, so there is no
+        act-crash gap). A per-window fingerprint (once-per-day rather than once-ever) needs
+        #429's time-slicing; until then the fingerprint is once-ever per (recipient, topic).
+        Returns ``{sent, action, notification_id}``. ``name`` is the capability's site."""
+        if self._notify is None:
+            raise RuntimeError("send_notification needs a capability (wired by the run driver)")
+        notify_fn = self._notify
+        sent_check = self._notification_sent
+        fingerprint = f"{recipient}:{topic}"
+
+        async def decide(_feedback: str | None) -> Verdict:
+            already = sent_check is not None and await sent_check(fingerprint)
+            return Verdict(kind="duplicate" if already else "new", payload={"key": fingerprint})
+
+        async def act(verdict: Verdict) -> Result:
+            if verdict.kind == "duplicate":
+                return Result(fields={"sent": False, "action": "skip", "notification_id": ""})
+            nid = await notify_fn(recipient, title or topic, body, fingerprint)
+            return Result(fields={"sent": True, "action": "send", "notification_id": nid})
+
+        result = await run_nonidempotent(
+            self,
+            name=name,
+            inputs={"recipient": recipient, "topic": topic, "title": title, "body": body},
+            decide=decide,
+            act=act,
+            key=key,
+            phase=phase,
+            cache=cache,
+        )
+        return result.fields
 
     async def update_entity(
         self,
@@ -370,7 +554,7 @@ class WorkflowHandle:
         result = await run_step(
             self,
             name="update_entity",
-            key=f"{type_name}_{number}_{_args_digest(patch)}",
+            key=f"{type_name}_{number}_{input_hash(patch)}",
             phase=phase,
             args={"type": type_name, "number": number, "patch": patch},
             execute=execute,

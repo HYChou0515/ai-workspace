@@ -524,10 +524,22 @@ def test_load_profile_event_triggers_fills_origin_and_filters(monkeypatch):
     payload = json.dumps(
         {
             "triggers": [
-                {"type": "event", "id": "ev", "workflow_id": "w", "acting_user": "b",
-                 "entity": "issue", "on": "created"},
-                {"type": "event", "id": "off", "workflow_id": "w", "acting_user": "b",
-                 "entity": "issue", "enabled": False},
+                {
+                    "type": "event",
+                    "id": "ev",
+                    "workflow_id": "w",
+                    "acting_user": "b",
+                    "entity": "issue",
+                    "on": "created",
+                },
+                {
+                    "type": "event",
+                    "id": "off",
+                    "workflow_id": "w",
+                    "acting_user": "b",
+                    "entity": "issue",
+                    "enabled": False,
+                },
                 _sched(id="sched"),
             ]
         }

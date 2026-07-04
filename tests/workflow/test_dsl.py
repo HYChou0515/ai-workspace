@@ -816,7 +816,7 @@ async def test_dsl_update_entity_capability_merges_patch():
         b"---\ntitle: {{arg.title}}\nstatus: {{arg.status}}\n---\n",
     )
     wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
-    await wf.create_entity("issue", {"title": "A", "status": "open"})
+    await wf.create_entity("issue", {"title": "A", "status": "open"}, name="seed")
 
     d = parse_def(
         json.dumps(
@@ -2471,6 +2471,7 @@ async def test_run_create_entity_capability() -> None:
                         "call": "create_entity",
                         "phase": "p",
                         "type_name": "task",
+                        "name": "ship",
                         "args": {"title": "Ship it"},
                     }
                 ],

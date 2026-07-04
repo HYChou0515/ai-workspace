@@ -41,6 +41,7 @@ CAPABILITIES = (
     "upsert_context_card",
     "create_entity",
     "update_entity",
+    "send_notification",
 )
 _CAP_REQUIRED: dict[str, tuple[str, ...]] = {
     "ingest_to_collection": ("collection", "path"),
@@ -48,6 +49,26 @@ _CAP_REQUIRED: dict[str, tuple[str, ...]] = {
     "create_entity": ("type_name",),
     # #429 P2: update by (type + number); ``args`` is the merge-patch (fields → values).
     "update_entity": ("type_name", "number"),
+}
+# #435 P5: send_notification takes its recipient/topic/title/body in ``args`` (like
+# create_entity's entity fields); these keys are required there.
+_CAP_REQUIRED_ARGS: dict[str, tuple[str, ...]] = {
+    "send_notification": ("recipient", "topic"),
+}
+# #435 决议4: a *non-idempotent* capability's ``on_duplicate`` policy set is a
+# per-capability interface — defined by the capability, NOT a strategy-layer default that
+# other capabilities inherit. Absent ⇒ the capability is idempotent and takes no
+# ``on_duplicate`` (setting one is a static error). ``create_new`` (M2 token) lands in P4.
+_CAP_ON_DUPLICATE: dict[str, tuple[str, ...]] = {
+    "create_entity": ("update", "skip"),
+}
+# #435: a capability's output fields are FIXED by the capability (owner-defined), not
+# author-declared — referenceable downstream as ``{steps.<name>.<field>}``. A named
+# non-idempotent capability registers these so a reference validates statically. A
+# capability in this map must carry a ``name`` (its stable dedup identity, §P2).
+_CAP_OUTPUTS: dict[str, dict[str, Any]] = {
+    "create_entity": {"number": "int", "created": "bool", "action": "str"},
+    "send_notification": {"sent": "bool", "action": "str", "notification_id": "str"},
 }
 # The deterministic gate builders a check spec may name (manual §6).
 _CHECKS = ("file_nonempty", "choice_in", "collection_has")
@@ -131,7 +152,12 @@ class GateStep(Struct, tag="gate", forbid_unknown_fields=True):
 
 
 class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
-    """A reliable, idempotent side-effect (manual §8) run under the captured user."""
+    """A reliable side-effect (manual §8) run under the captured user. An idempotent
+    capability (ingest/upsert) needs nothing more; a *non-idempotent* one (create_entity,
+    #435) additionally declares a ``name`` — its stable dedup identity, its *site* — so a
+    re-run of the same site (e.g. a gate revise that changes the content) self-dedups
+    instead of double-creating, and its ``on_duplicate`` picks the duplicate action from
+    the capability's own policy set (``_CAP_ON_DUPLICATE``)."""
 
     call: str
     phase: str
@@ -146,6 +172,10 @@ class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
     type_name: str = ""
     args: dict[str, Any] = field(default_factory=dict)
     number: str | int = ""
+    # #435: a non-idempotent capability's stable dedup identity — referenceable as
+    # {steps.<name>.<field>} — and its per-capability on_duplicate policy.
+    name: str = ""
+    on_duplicate: str = ""
 
 
 class MapStep(Struct, tag="map", forbid_unknown_fields=True):
@@ -578,19 +608,28 @@ async def _gate_summary(wf: WorkflowHandle, step: GateStep, ns: dict[str, Any]) 
     return summary
 
 
-async def _exec_capability(wf: WorkflowHandle, step: CapabilityStep, ns: dict[str, Any]) -> None:
+async def _exec_capability(
+    wf: WorkflowHandle, step: CapabilityStep, ns: dict[str, Any], key: str
+) -> None:
     if step.call == "ingest_to_collection":
         await wf.ingest_to_collection(
             await _resolve(step.collection, ns, wf),
             await _resolve(step.path, ns, wf),
             phase=step.phase,
         )
-    elif step.call == "create_entity":  # #419 — same numbering pipeline, no raw write
+    elif step.call == "create_entity":  # #419/#435 — same numbering pipeline, no raw write
         resolved = {
             k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
             for k, v in step.args.items()
         }
-        await wf.create_entity(await _resolve(step.type_name, ns, wf), resolved, phase=step.phase)
+        await wf.create_entity(
+            await _resolve(step.type_name, ns, wf),
+            resolved,
+            name=step.name,
+            on_duplicate=step.on_duplicate or "update",
+            key=key,  # the map-element scope key: one entity per element (§P2)
+            phase=step.phase,
+        )
     elif step.call == "update_entity":  # #429 P2 — same EntityStore path, optimistic-retry
         patch = {
             k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
@@ -600,6 +639,20 @@ async def _exec_capability(wf: WorkflowHandle, step: CapabilityStep, ns: dict[st
             await _resolve(step.type_name, ns, wf),
             await _resolve_number(step.number, ns, wf),
             patch,
+            phase=step.phase,
+        )
+    elif step.call == "send_notification":  # #435 P5 — M1 send-once over the notification store
+        a = {
+            k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
+            for k, v in step.args.items()
+        }
+        await wf.send_notification(
+            a["recipient"],
+            a["topic"],
+            name=step.name,
+            title=a.get("title", ""),
+            body=a.get("body", ""),
+            key=key,
             phase=step.phase,
         )
     else:  # upsert_context_card (the only other allowed call; validated upstream)
@@ -689,7 +742,7 @@ async def _exec_step(
             raise _Revise
         raise _Stop(decision.choice)
     if isinstance(step, CapabilityStep):
-        await _exec_capability(wf, step, ns)
+        await _exec_capability(wf, step, ns, key)
         return
     if isinstance(step, SandboxStep):
         # #428 §1.2: ``outputs`` ⇒ parse stdout JSON into result.fields, gated on it.
@@ -983,9 +1036,38 @@ def _validate_step(
                 f"{where}: capability {step.call!r} is not allowed (one of {list(capabilities)})"
             )
         else:
-            for req in _CAP_REQUIRED[step.call]:
+            for req in _CAP_REQUIRED.get(step.call, ()):
                 if not getattr(step, req):
                     errs.append(f"{where}: capability {step.call!r} needs {req!r}")
+            for areq in _CAP_REQUIRED_ARGS.get(step.call, ()):  # #435 P5: args-carried reqs
+                if not step.args.get(areq):
+                    errs.append(f"{where}: capability {step.call!r} needs {areq!r} in 'args'")
+            # #435: a non-idempotent capability (one with a fixed output schema) needs a
+            # ``name`` — its stable dedup identity — else two sites would collide.
+            if step.call in _CAP_OUTPUTS and not step.name:
+                errs.append(
+                    f"{where}: capability {step.call!r} needs a 'name' (#435 dedup identity)"
+                )
+            # #435 P4 by-construction gate: ``create_new`` (M2 token) means "a fresh entity
+            # per invocation", which needs #429's per-invocation journal boundary — absent
+            # it, a manual re-run reuses the journal and SILENTLY reuses the entity instead
+            # of minting a new one. Block the author surface until #429 lands rather than
+            # ship that silent-wrong behavior (the within-run mechanism is ready + tested).
+            elif step.on_duplicate == "create_new":
+                errs.append(
+                    f"{where}: capability {step.call!r} 'on_duplicate' = 'create_new' needs the "
+                    "per-invocation journal boundary (#429), not yet available"
+                )
+            # #435 决议4: ``on_duplicate`` is validated against THIS capability's policy set.
+            else:
+                allowed_pol = _CAP_ON_DUPLICATE.get(step.call, ())
+                if step.on_duplicate and step.on_duplicate not in allowed_pol:
+                    errs.append(
+                        f"{where}: capability {step.call!r} 'on_duplicate' must be one of "
+                        f"{list(allowed_pol)}"
+                        if allowed_pol
+                        else f"{where}: capability {step.call!r} does not take an 'on_duplicate'"
+                    )
         _check_interp(
             [step.collection, step.path, step.title, step.body, step.keys, step.args, step.number],
             scope,
@@ -1176,7 +1258,11 @@ def _register_step(
     elif isinstance(step, MapStep):
         # #428 §5.3: from outside, only the fan-in ``.outputs`` (a list) is referenceable.
         steps_seen[name] = {"outputs": "list"}
-    else:  # a named AgentStep / SandboxStep (only these three step kinds carry a name)
+    elif isinstance(step, CapabilityStep):
+        # #435: a named capability exposes its FIXED (owner-defined) output schema, so a
+        # downstream ``{steps.<name>.<field>}`` validates against what it actually produces.
+        steps_seen[name] = dict(_CAP_OUTPUTS.get(step.call, {}))
+    else:  # a named AgentStep / SandboxStep
         assert isinstance(step, AgentStep | SandboxStep)
         # #428 §1.5/§3.4: keep the whole ``outputs`` declaration so a reference can be
         # checked for field existence AND a switch can check its cases against an enum.

@@ -127,6 +127,7 @@ class EntityStore:
         patch: dict[str, Any],
         *,
         expected_version: str | None = None,
+        body: str | None = None,
         actor: str = "",
         origin: EntityOrigin | None = None,
     ) -> ParsedEntity:
@@ -135,7 +136,9 @@ class EntityStore:
         rejected with `EntityConflict` if the record changed since — the
         optimistic check (§C6). The read-check-write runs under the per-type lock
         so it's atomic against a racing create/update on this pod (N5).
-        `expected_version=None` skips the check (the UI's last-write default)."""
+        `expected_version=None` skips the check (the UI's last-write default).
+        `body` replaces the markdown body (a workflow cross-merge rewrites its own
+        fenced region, #435 P3); `body=None` preserves the current body."""
         entity_type = self._catalog.get(type_name)
         path = self._record_path(entity_type.records_path, number)
         lock = self._locks.setdefault(f"{self._ws}:{type_name}", asyncio.Lock())
@@ -148,7 +151,8 @@ class EntityStore:
                     f"{type_name} #{number} changed since you read it "
                     f"(expected {expected_version}, now {current.version})"
                 )
-            text = serialize_entity({**current.fields, **patch}, current.body)
+            new_body = current.body if body is None else body
+            text = serialize_entity({**current.fields, **patch}, new_body)
             await self._fs.write(self._ws, path, text.encode())
         updated = parse_entity(text.encode(), number, type_name, entity_type.schema)
         await self._emit(updated, "updated", actor, origin)
