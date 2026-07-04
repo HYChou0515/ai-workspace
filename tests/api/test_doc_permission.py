@@ -11,8 +11,9 @@ and the doc's own ``permission.visibility`` is a queryable index.
 """
 
 import msgspec
+import pytest
 from specstar import QB, SpecStar
-from specstar.types import Binary, ResourceIDNotFoundError
+from specstar.types import Binary, PermissionDeniedError, ResourceIDNotFoundError
 
 from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
@@ -322,3 +323,163 @@ def test_document_list_filters_out_overridden_docs_per_reader() -> None:
     assert _list() == (2, {"plain.md", "secret.md"})
     holder["id"] = "carol"  # collection reader sees only the plain doc
     assert _list() == (1, {"plain.md"})
+
+
+# ---------------------------------------------------------------------------
+# P4 — the write API (set / clear / read) + the auto-CRUD anti-bypass + counter
+# ---------------------------------------------------------------------------
+
+
+def _override_count(spec: SpecStar, cid: str) -> int:
+    coll = spec.get_resource_manager(Collection).get(cid).data
+    assert isinstance(coll, Collection)
+    return coll.has_doc_overrides
+
+
+def test_owner_sets_reads_and_clears_a_doc_override() -> None:
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    doc_id = _ingestor(spec).store(collection_id=cid, user="bob", filename="a.md", data=b"hi")[0]
+    # set
+    r = client.put(
+        f"/kb/documents/{doc_id}/permission",
+        json={
+            "visibility": "restricted",
+            "read_meta": ["user:alice"],
+            "read_content": ["user:alice"],
+        },
+    )
+    assert r.status_code == 200
+    assert r.json()["visibility"] == "restricted"
+    # read back
+    state = client.get(f"/kb/documents/{doc_id}/permission").json()
+    assert state["visibility"] == "restricted"
+    assert state["read_meta"] == ["user:alice"]
+    # the override is now enforced: carol is hidden
+    holder["id"] = "carol"
+    assert client.get(f"/kb/documents?id={doc_id}").status_code == 404
+    # clear → back to inheritance (public collection ⇒ carol reads again)
+    holder["id"] = "bob"
+    assert client.delete(f"/kb/documents/{doc_id}/permission").status_code == 200
+    holder["id"] = "carol"
+    assert client.get(f"/kb/documents?id={doc_id}").status_code == 200
+
+
+def test_has_doc_overrides_counter_tracks_set_and_clear() -> None:
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    d1 = _ingestor(spec).store(collection_id=cid, user="bob", filename="a.md", data=b"one")[0]
+    d2 = _ingestor(spec).store(collection_id=cid, user="bob", filename="b.md", data=b"two")[0]
+    assert _override_count(spec, cid) == 0
+    client.put(f"/kb/documents/{d1}/permission", json={"visibility": "private"})
+    assert _override_count(spec, cid) == 1
+    client.put(f"/kb/documents/{d2}/permission", json={"visibility": "private"})
+    assert _override_count(spec, cid) == 2
+    # re-setting the same doc (still one override) keeps the count exact
+    client.put(f"/kb/documents/{d1}/permission", json={"visibility": "restricted"})
+    assert _override_count(spec, cid) == 2
+    client.delete(f"/kb/documents/{d1}/permission")
+    assert _override_count(spec, cid) == 1
+    client.delete(f"/kb/documents/{d2}/permission")
+    assert _override_count(spec, cid) == 0
+
+
+def test_a_non_owner_cannot_set_a_doc_override() -> None:
+    """In a public collection carol can read the doc, but only the collection owner
+    manages its override → 403."""
+    holder = {"id": "bob"}
+    client, spec = _client_and_spec(holder)
+    cid = client.post("/kb/collections", json={"name": "c"}).json()["resource_id"]
+    doc_id = _ingestor(spec).store(collection_id=cid, user="bob", filename="a.md", data=b"hi")[0]
+    holder["id"] = "carol"
+    assert (
+        client.put(f"/kb/documents/{doc_id}/permission", json={"visibility": "private"}).status_code
+        == 403
+    )
+    assert client.get(f"/kb/documents/{doc_id}/permission").status_code == 403
+
+
+def test_auto_crud_permission_write_is_blocked_for_a_non_owner() -> None:
+    """The anti-bypass: a direct RM update (the auto-CRUD `PUT /source-doc/{id}`
+    path) that changes `permission` is denied for a non-owner, but the owner may,
+    and a NON-permission write by a non-owner (a re-index status bump) is allowed —
+    the checker is narrow."""
+    spec = make_spec(default_user=lambda: "bob")
+    crm = spec.get_resource_manager(Collection)
+    with crm.using("bob"):
+        cid = crm.create(Collection(name="c")).resource_id
+    doc_id = _mk_doc(spec, cid, "a.md")
+    drm = spec.get_resource_manager(SourceDoc)
+    doc = drm.get(doc_id).data
+    assert isinstance(doc, SourceDoc)
+    # a non-owner changing `permission` is denied
+    with drm.using("carol"), pytest.raises(PermissionDeniedError):
+        drm.update(
+            doc_id, msgspec.structs.replace(doc, permission=Permission(visibility="private"))
+        )
+    # a non-owner write that does NOT touch `permission` is allowed (narrow checker)
+    with drm.using("carol"):
+        drm.update(doc_id, msgspec.structs.replace(doc, status="ready"))
+    # the owner may change `permission`
+    with drm.using("bob"):
+        drm.update(
+            doc_id, msgspec.structs.replace(doc, permission=Permission(visibility="private"))
+        )
+    assert isinstance(drm.get(doc_id).data, SourceDoc)
+
+
+# ---------------------------------------------------------------------------
+# denied_doc_ids — the shared exclusion helper (backs the list + AI retrieval)
+# ---------------------------------------------------------------------------
+
+
+def test_denied_doc_ids_only_returns_blocked_overridden_docs() -> None:
+    from workspace_app.kb.doc_permission import denied_doc_ids
+    from workspace_app.perm import Actor
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec)
+    plain = _mk_doc(spec, cid, "plain.md")  # no override
+    secret = _mk_doc(
+        spec,
+        cid,
+        "secret.md",
+        permission=Permission(visibility="restricted", read_meta=["user:alice"]),
+    )
+    carol = Actor.human("carol")
+    # carol is blocked from the overridden doc only; the plain doc is never a candidate
+    denied = denied_doc_ids(spec, carol, [cid], "read_meta")
+    assert denied == frozenset({secret})
+    assert plain not in denied
+    # alice is granted → nothing denied
+    assert denied_doc_ids(spec, Actor.human("alice"), [cid], "read_meta") == frozenset()
+    # the collection owner is never denied (authorize owner branch)
+    assert denied_doc_ids(spec, Actor.human("bob"), [cid], "read_meta") == frozenset()
+
+
+def test_denied_doc_ids_empty_when_no_overrides() -> None:
+    from workspace_app.kb.doc_permission import denied_doc_ids
+    from workspace_app.perm import Actor
+
+    spec = make_spec(default_user=lambda: "bob")
+    cid = _mk_collection(spec)
+    _mk_doc(spec, cid, "a.md")
+    _mk_doc(spec, cid, "b.md")
+    assert denied_doc_ids(spec, Actor.human("carol"), [cid], "read_content") == frozenset()
+
+
+def test_denied_doc_ids_superuser_never_denied() -> None:
+    from workspace_app.kb.doc_permission import denied_doc_ids
+    from workspace_app.perm import Actor
+
+    spec = make_spec(default_user=lambda: "bob", superusers=frozenset({"root"}))
+    cid = _mk_collection(spec)
+    _mk_doc(spec, cid, "secret.md", permission=Permission(visibility="private"))
+    assert (
+        denied_doc_ids(
+            spec, Actor.human("root"), [cid], "read_content", superusers=frozenset({"root"})
+        )
+        == frozenset()
+    )

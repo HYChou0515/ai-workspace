@@ -207,6 +207,66 @@ def collection_permission_event_handler(
     return PermissionEventHandler(CollectionPermissionChecker(superusers, groups_provider))
 
 
+class SourceDocPermissionChecker(IPermissionChecker):
+    """#308 — the anti-bypass for a SourceDoc's per-doc read override. Allow-by-
+    default; the ONE write it gates is a change to the doc's own ``permission``
+    field (the override): only the collection owner (the mirrored
+    ``collection_created_by``) or a superuser may set/clear it — so the owner-only
+    rule the dedicated ``PUT /kb/documents/{id}/permission`` enforces can't be
+    bypassed through the auto-CRUD ``PUT /source-doc/{id}``. Every OTHER write
+    (ingest create, the collection→doc mirror fan-out, re-index, status bumps) is
+    allowed and this checker never denies it — they don't touch ``permission``, so
+    ``_rewrites_permission`` is false and we return ``allow`` before any owner
+    check. Unlike ``CollectionPermissionChecker`` this does NOT gate general
+    ``write_meta`` (that's out of #308's scope and would break those programmatic
+    doc writes)."""
+
+    def __init__(self, superusers: frozenset[str] = frozenset()) -> None:
+        self._superusers = superusers
+
+    def check_permission(self, context: Any) -> PermissionResult:
+        if getattr(context, "action", None) not in _WRITE_META_ACTIONS:
+            return PermissionResult.allow  # create / read / lifecycle — not our concern
+        snap = _current(context)
+        if snap is None or not self._rewrites_permission(context, _stored_permission(snap)):
+            return PermissionResult.allow  # no row, or the write leaves `permission` untouched
+        user = _context_user(context)
+        owner = getattr(snap.data, "collection_created_by", "")
+        if user == owner or user in self._superusers:
+            return PermissionResult.allow
+        return PermissionResult.deny
+
+    def required_resource_parts(self, action: ResourceAction) -> frozenset[ResourcePart]:
+        if action in _WRITE_META_ACTIONS:
+            return frozenset({ResourcePart.META, ResourcePart.DATA})
+        return frozenset()
+
+    def _rewrites_permission(self, context: Any, stored: Permission | None) -> bool:
+        """Whether this write changes the doc's ``permission`` — a full-body write
+        (update/modify) whose ``permission`` differs from the stored one, or a
+        patch naming ``permission`` (reusing the Collection checker's helpers, which
+        are resource-agnostic)."""
+        if getattr(context, "action", None) == ResourceAction.patch:
+            return _patch_touches_permission(getattr(context, "patch_data", UNSET))
+        new = getattr(context, "data", UNSET)
+        if new is UNSET or new is None:
+            return False
+        new_perm = getattr(new, "permission", UNSET)
+        return new_perm is not UNSET and new_perm != stored
+
+
+def source_doc_permission_event_handler(
+    superusers: frozenset[str] = frozenset(),
+) -> PermissionEventHandler:
+    """#308 — wrap the SourceDoc override anti-bypass checker for the per-model
+    ``event_handlers`` slot (the ``permission_checker`` slot is shadowed by
+    specstar's spec-level default — see module docstring). Fires on EVERY SourceDoc
+    write, but only ever denies a ``permission``-field change by a non-owner; the
+    high-volume programmatic writes (ingest / index / mirror fan-out) never touch
+    ``permission`` and pass straight through."""
+    return PermissionEventHandler(SourceDocPermissionChecker(superusers))
+
+
 def work_item_permission_event_handler(
     superusers: frozenset[str] = frozenset(),
 ) -> PermissionEventHandler:

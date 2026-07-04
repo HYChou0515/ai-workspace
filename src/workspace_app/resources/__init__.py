@@ -21,7 +21,10 @@ from specstar.crud.route_templates.migrate import MigrateRouteTemplate
 from specstar.types import IndexableField
 
 from ..kb.chat_permission import kbchat_permission_event_handler
-from ..perm.checker import collection_permission_event_handler
+from ..perm.checker import (
+    collection_permission_event_handler,
+    source_doc_permission_event_handler,
+)
 from ..perm.scope import (
     GroupsProvider,
     collection_access_scope,
@@ -332,6 +335,11 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("permission.read_meta", list),
         ],
         access_scope=source_doc_access_scope(superusers, groups),
+        # #308: gate a per-doc `permission` (override) write to the collection owner
+        # so the auto-CRUD `PUT /source-doc/{id}` can't bypass the dedicated
+        # endpoint's owner-only rule. Never denies the high-volume ingest / index /
+        # mirror-fan-out writes (they don't touch `permission`).
+        event_handlers=[source_doc_permission_event_handler(superusers)],
     )
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the
     # retriever's per-collection lookup) is a query — a non-indexed filter would
