@@ -630,35 +630,158 @@ credential，§1），把使用者的 Python 跑進 API 不安全。
 step 身分穩定）。詳細的 build 計畫 + 完整 grill 決策見
 [`plan-issue-323.md`](plan-issue-323.md)。
 
-- **詞彙（Q7 天花板）：** `steps` 有序清單；step `type` ∈
-  `agent` / `sandbox` / `gate` / `capability` / `map`（唯一的迴圈，one-level）；
-  `{x}` / `{x.field}` 唯讀字串代入（**非任意運算式**；`{x.field}` 在 `x` 指向 `.json`
-  檔時讀檔取欄位——正是 §8 的 decision→data→action routing）；`check` 是 §6 的宣告式
-  builder；branch 用資料 routing（§11）。**沒有** revise-loop / branch / 巢狀 map——那些
-  留給 dev 的 `run.py`。
+> **本節是 how / why 的規格。** 每個語法配動畫 + sample JSON 的**視覺手冊**見
+> [`workflows-syntax.html`](workflows-syntax.html)；#428 六項語法的 grill **釘死決策**
+> （物理模型、邊界情境、被否決的替代方案）見
+> [`workflow-reference-model.md`](workflow-reference-model.md)；#323 的 build 計畫見
+> [`plan-issue-323.md`](plan-issue-323.md)。
+
+### 22.1 護欄：整張圖能不能事先靜態畫出來
+
+DSL 的界線是一條線：**流程圖的*形狀*必須事先靜態宣告**——分支有限、展開單層、無界者
+出局。走哪條、展開幾個可以執行期、甚至 AI 決定，但圖本身要畫得出來。所有語法都守在這條
+線內；它們讓 DSL 更一致、更少意外，**不增加表達力（無 eval）**，所以不把 DSL 推向圖靈
+完備。真正需要任意運算與無界流程的（巢狀遞迴展開、無界適應迴圈、變數算式），交給 dev 的
+`run.py`。**唯一的環**是 gate `revise`（§22.7）——一條人閘住的有界回邊，且在圖上顯式。
+
+### 22.2 節點型別（Q7 天花板）
+
+`steps` 是一個有序清單；每個 step 的 `type` ∈ 六種：
+
+| type | 做什麼 |
+| --- | --- |
+| `agent` | LLM 一回合。`out` 寫內容檔；`outputs` 宣告具名欄位（§22.4）；否則需 `check`。必有 gate。 |
+| `sandbox` | 確定性指令，無 LLM。純計算、**無憑證**（可靠副作用只走 capability）。 |
+| `gate` | 人工閘。`approve` 續、`reject` 終止；`revise` 帶回饋打回重做（§22.7）。 |
+| `capability` | 可靠且冪等的副作用：`ingest_to_collection` / `upsert_context_card` / `create_entity`。 |
+| `map` | 唯一的迴圈（§22.5）。`over` 展開集合、`do` 是元素內序列。一層到底，不准巢狀。 |
+| `switch` | 有界條件分支（§22.6）。`cases` 預先列舉，只走一條。 |
+
+值從兩處**進來**：`{config.x}`（workflow 設定）、`{inputs.y}`（觸發時傳入）。值在 step
+之間**流動**：`{item}`（map 當下元素、它的欄位 `{item.field}`）、`{steps.<name>.<field>}`
+（某步的具名產出，§22.3）。全部同一種寫法——**唯讀字串代入，非任意運算式**（`{x.field}`
+在 `x` 指向 `.json` 檔時讀檔取欄位，正是 §8 的 decision→data→action routing）。
+
+### 22.3 統一引用 `{steps.<name>.<field>}`（#428）
+
+一個具名 step 的產出用 `{steps.<name>.<field>}` 引用，跟 `{config.x}` 同一種寫法。
+**物理模型：具名產出 ＝ 那步既有的 journal 條目**——`{steps.classify.type}` 讀
+`.workflow/<id>/step_classify/main.json`（map 元素則是該元素的 key）的
+`result.fields.type`。不另立平行檔案、不加 `<run>/` 層（那會變兩份真相 + 破壞跨 run skip）。
+
+- `agent` 宣告 `outputs` → 它的回覆被 parse 成 `result.fields`；`sandbox` 宣告 `outputs`
+  → 它 stdout 印的 JSON 被 parse 成 `result.fields`。
+- `validate_def` 靜態檢查：引用的 step 存在、在同 scope 且宣告早於引用、欄位在 `outputs` 裡。
+- `{item.field}`（map 變數的欄位存取）保留——被取代的只是 fan-in 的暗慣例（改成具名
+  `.outputs`，§22.5）。
+
+```jsonc
+{ "type":"agent", "name":"classify", "phase":"classify",
+  "prompt":"判斷異常類型，輸出 JSON。",
+  "outputs": { "type": {"type":"str","enum":["latency","errors","other"]} } }
+// 之後任何一步：  "on": "{steps.classify.type}"
+```
+
+### 22.4 `outputs` schema（#428）
+
+`outputs` 宣告一步的具名欄位（name → 型別）。型別是地基：`str` / `int` / `float` /
+`bool` / `list` / `obj`；`enum` 是選配、只限 scalar。宣告 `outputs` 的 step **自帶一個
+implicit gate**——回覆不 parse 成物件、缺欄位、型別/enum 不符 → 當 check 失敗、帶原因
+重試（`retries`）。`enum` 還讓 `switch` 的 `cases` 被靜態檢查窮盡性（§22.6）。
+
+```jsonc
+"outputs": {
+  "type":  { "type":"str", "enum":["latency","errors","other"] },
+  "score": "float"
+}
+```
+
+### 22.5 `map`：唯一的迴圈（#428 擴充 `over`）
+
+`over` 展開一個集合，`do`（一串 step）對每個元素依序跑完；單一元素失敗只 skip + 收進
+`failures[]`（不炸整批，前端顯示「27/30 · 3 failed」）。三種 `over`：
+
+- **glob 字串**（現行）：`"over":"src/**/*.md"`——符合的檔各展開一次，key = 排序後的相對路徑。
+- **清單值**（#428）：`"over":"{steps.extract.items}"`——直接吃上一步的具名 list，key =
+  陣列位置或 `key_by` 指名的欄位。免先落檔。
+- **range**（#428）：`"over":{"range":"{inputs.n}"}`——一個數字，展開 `0..n-1`，key = index。
+
+**fan-in（#428）：** 具名 map 把它「宣告 outputs 的那步」的 fields 收成一個 per-element
+list，用 `{steps.<map>.outputs}` 引用（唯一步免寫、多步用 `collect:` 指名、零步退化成
+artifact 路徑清單）。跳過的元素留 `null` 佔位，讓下游 `map over .outputs` 的位置對齊。
+
+```jsonc
+{ "type":"agent", "name":"extract", "phase":"x", "prompt":"抽出所有待辦",
+  "outputs":{"items":"list"} },
+{ "type":"map", "over":"{steps.extract.items}", "as":"t", "phase":"card",
+  "do":[ {"type":"capability","call":"upsert_context_card","phase":"card",
+          "collection":"tasks","keys":["{t.id}"],"title":"{t.title}","body":"{t.body}"} ] }
+```
+
+安全線：**單層展開**——`do` 內不可放 `map` 或 `gate`（`validate_def` 擋）。寬度可執行期
+才知道，不准巢狀遞迴。
+
+### 22.6 `switch`：有界條件分支（#428）
+
+`switch` 讀 `on`（單一穩定引用：`{config.x}` / `{inputs.y}` / 某具名步的欄位）選一條
+`cases` 跑，其餘是死路。`default` 有寫（即使 `[]`）→ 未匹配值 no-op；`default` 缺席 →
+未匹配值 loud 報錯。`on` 只接受單一穩定引用——這是 switch **不 journal 卻仍能 replay
+選同一條**的隱藏前提。
+
+```jsonc
+{ "type":"agent", "name":"classify", "phase":"c", "prompt":"判斷類型",
+  "outputs":{"type":{"type":"str","enum":["latency","errors","other"]}} },
+{ "type":"switch", "on":"{steps.classify.type}", "phase":"route",
+  "cases":{ "latency":[ /* … */ ], "errors":[ /* … */ ], "other":[ /* … */ ] } }
+```
+
+`on` 指向帶 `enum` 的欄位時，`validate_def` 檢查每個 case 都在 enum 內、且（無 `default`
+時）窮盡所有 enum 值。巢狀 switch 允許（有防呆深度上限）；map 元素內禁 gate/map 的規則會
+穿過巢狀 switch 遞移。
+
+### 22.7 `gate revise`：有界的人閘回邊（#428）
+
+一個具名 gate 的 `allow` 含 `revise` 時，人按 revise + 附一句自由回饋 → 打回 `revise_to`
+指名的那步重做。回饋以 `{steps.<gate>.feedback}` 注入該步 prompt——**這是圖上唯一合法的
+向前引用**（target 跑在 gate 之前卻引用它的回饋），讓唯一的回邊在圖上顯式，而非魔法變數。
+
+```jsonc
+{ "type":"agent", "name":"draft", "phase":"draft",
+  "prompt":"擬週報。修改意見：{steps.review.feedback}", "out":"report.md" },
+{ "type":"gate", "name":"review", "phase":"review", "title":"審週報",
+  "summary_from":"report.md", "allow":["approve","revise","reject"], "revise_to":"draft" }
+```
+
+機制是資料驅動的：feedback 折進 `revise_to` 的 input-hash → §9 自動重跑那步 + 下游；引擎
+唯一顯式做的是刪掉 gate 自己的 `decision.json`（讓它重新暫停）。`revise_to` 有五條靜態
+約束（存在且在 gate 前 / 不指 map·switch case 內 / `revise ∈ allow ⇔ revise_to` / target
+須引用 feedback / 與其 gate 間不得有其他 gate）——細節見
+[`workflow-reference-model.md`](workflow-reference-model.md) §6。與 #288 的 steer 並存
+分工：revise 是作者織進 workflow 的**情境內**有界 loop，steer 是活躍窗外**情境外**的自由
+文字 overlay。
+
+### 22.8 其餘不變式（安全 / 儲存 / co-design）
+
 - **安全不變式（Q4）= 「使用者 workflow 能做的，恰好等於它的作者親手能做的」。**
-  capability（`ingest_to_collection`、`upsert_context_card`）是 interpreter 在
-  **captured user 的 authz scope** 下跑的 DSL primitive；一個使用者的 `sandbox` step 是
-  **compute-only**（不給 run-scoped credential），所以 side-effect 永遠只走受控的
-  capability primitive。authoring 不產生任何新權限。
+  capability 是 interpreter 在 **captured user 的 authz scope** 下跑的 DSL primitive；
+  使用者的 `sandbox` step 是 **compute-only**（不給 run-scoped credential），side-effect
+  永遠只走受控的 capability。authoring 不產生任何新權限。
 - **儲存／發現（Q5，照搬 §298 的 skill 模型）：** 一份使用者 workflow 住在
   `<workspace>/.workflows/<id>.json`（FileStore），**item-local**、live 讀、同名
-  **shadow** 掉 package workflow，用既有的通用資料夾下載 export，由 dev promote。
-  **不是** specstar resource。
-- **一個 interpreter 服務兩層（Q6）：** 一個 *package* workflow 可以是 `run.py`
-  （trusted Python）**或** `workflow.json`（被 interpret）。**promote = 把 json 複製進
-  profile**，免 transpile（正如 skill promote 就是複製 `SKILL.md`）。
-- **Co-design（Q8）：** 一個 `author-workflow` shared meta-skill 引導 AI 起草 DSL；
-  一個 `save_workflow` tool 在寫入前 **驗證**（schema、phase 一致、`tools` ⊆ profile
-  上限、capability 在允許清單、`check` 格式）並把無效的 DSL **退回原因讓 AI 修**
-  （正如 `save_skill` 擋 body cap）。v1 **不**自動試跑——使用者按 Run 來測。
+  **shadow** 掉 package workflow，用既有通用資料夾 export，由 dev promote。**不是**
+  specstar resource。
+- **一個 interpreter 服務兩層（Q6）：** package workflow 可以是 `run.py`（trusted Python）
+  **或** `workflow.json`（被 interpret）；**promote = 把 json 複製進 profile**，免 transpile。
+- **Co-design（Q8）：** `author-workflow` shared meta-skill 引導 AI 起草 DSL；`save_workflow`
+  tool 在寫入前 **驗證**（schema、phase 一致、`tools` ⊆ profile 上限、capability 在允許
+  清單，以及 `check` / `outputs` / `switch` / `revise_to` 格式）並把無效 DSL **退回原因讓
+  AI 修**。v1 **不**自動試跑——使用者按 Run 來測。
 - **上限／authz（Q9）：** 與 package workflow **同一組** cap（§16–§17）；能存取該 item
   就能 author + run；captured-user scope。
 
-**v1 範圍（已全數落地）：** DSL 引擎（schema + interpreter + validator）、package 端可
-interpret `workflow.json`（= promote target）、`save_workflow` + `author-workflow`
-+ workspace 列表（P1–P3，PR #332）；**workspace 就地自助執行**（orchestrator 注入
-`load_workspace`、Run-route fallback、item-scoped `/workflows` 端點 — workflow 唯一
-超出 skill 的地方）+ **FE Workflows panel**（每列 Run + 下載/匯入，掛在 AgentPanel）
-（P4–P5）。**v2 延後：** revise-loop / branch / 巢狀 map；co-design 自動試跑；promote 時
-transpile 成 Python；per-user quota。
+**落地狀態：** #323 的 DSL 引擎（schema + interpreter + validator）、`save_workflow` +
+`author-workflow`、workspace 就地自助執行 + FE Workflows panel 已落地（PR #332 起）；
+**#428 六項語法擴充**（統一引用 / `outputs` / `switch` / `over` 清單·range / fan-in 具名 /
+gate `revise`）已全數落地並 merge（schema 維持 `1` 原地擴充）。**仍延後：** per-element
+真平行 sub-handle（引擎能力、非語法 → #429）；promote 時 transpile 成 Python；
+per-user quota。

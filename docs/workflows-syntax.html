@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Workflow 製作手冊 · workflow.json 全語法</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0d1424;--panel:#141d34;--panel-2:#18223c;--grid:#22304f;
+    --edge-line:#3c5680;--edge-bright:#5fa8ff;
+    --det:#7fa8da;--det-fill:#1c2b47;--ai:#e8b14c;--ai-fill:#2e2512;
+    --gate:#b07ce8;--gate-fill:#271c3a;
+    --ok:#54c08a;--ok-dim:#2b4a3c;--no:#d67059;--no-dim:#4a2c25;--des:#5fa8ff;
+    --tx:#dbe5f6;--tx-mut:#8fa3c4;--tx-faint:#5f7196;
+    --display:"Space Grotesk","Noto Sans TC",system-ui,sans-serif;
+    --body:"Noto Sans TC",system-ui,sans-serif;--mono:"IBM Plex Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+  body{margin:0;background:var(--ink);color:var(--tx);font-family:var(--body);line-height:1.6;
+    background-image:linear-gradient(var(--grid) 1px,transparent 1px),linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:32px 32px;background-position:center;background-attachment:fixed}
+  body::before{content:"";position:fixed;inset:0;background:radial-gradient(ellipse at 50% 0%,transparent 40%,var(--ink) 92%);pointer-events:none;z-index:0}
+  .wrap{position:relative;z-index:1;max-width:1060px;margin:0 auto;padding:clamp(20px,5vw,56px) clamp(16px,4vw,40px) 80px}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--edge-bright);margin:0 0 14px}
+  h1{font-family:var(--display);font-weight:700;font-size:clamp(26px,6vw,44px);line-height:1.06;margin:0 0 14px}
+  h1 .sub{display:block;color:var(--tx-mut);font-weight:500;font-size:clamp(14px,3.2vw,18px);margin-top:10px}
+  .thesis{border-left:2px solid var(--edge-bright);padding:4px 0 4px 18px;margin:18px 0 0;max-width:72ch;font-size:15px}
+  .thesis b{color:#fff;font-weight:600}
+  .statuslegend{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+  .sl{font-family:var(--mono);font-size:11.5px;padding:5px 11px;border-radius:999px;display:inline-flex;gap:7px;align-items:center}
+  .sl .dot{width:7px;height:7px;border-radius:50%}
+  .sl.now{background:var(--ok-dim);color:#9fe6c1;border:1px solid #315f49}.sl.now .dot{background:#54c08a}
+  .sl.des{background:#16294a;color:#a9cdf5;border:1px solid #2f4d78}.sl.des .dot{background:var(--des)}
+  .sl.esc{background:var(--no-dim);color:#f0a897;border:1px solid #6b3a2e}.sl.esc .dot{background:var(--no)}
+
+  nav.toc{margin:26px 0 6px;padding:16px 18px;background:var(--panel);border:1px solid var(--grid);border-radius:14px}
+  nav.toc .cap{font-family:var(--mono);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--tx-faint);margin:0 0 10px}
+  nav.toc ol{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+  nav.toc a{font-family:var(--mono);font-size:12px;color:var(--tx-mut);text-decoration:none;padding:5px 11px;border:1px solid var(--grid);border-radius:8px;display:inline-block;transition:.15s}
+  nav.toc a:hover{border-color:var(--edge-bright);color:var(--edge-bright)}
+  nav.toc a .k{color:var(--edge-bright);margin-right:6px}
+
+  .howto{margin:26px 0 8px;background:var(--panel);border:1px solid var(--grid);border-radius:14px;padding:18px clamp(16px,3vw,24px)}
+  .howto .cap{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--edge-bright);margin:0 0 12px}
+  .howrow{display:grid;grid-template-columns:1fr;gap:14px}
+  @media(min-width:640px){.howrow{grid-template-columns:1fr 1fr}}
+  .howcell{background:var(--panel-2);border:1px solid var(--grid);border-radius:11px;padding:12px 14px}
+  .howcell h4{font-family:var(--display);font-size:15px;margin:0 0 2px;font-weight:600}
+  .howcell .d{font-size:12.5px;color:var(--tx-mut);margin:0 0 8px}
+  .howcell svg{display:block;width:100%;height:auto}
+  .legend{display:flex;flex-wrap:wrap;gap:12px 20px;margin-top:14px;font-family:var(--mono);font-size:11.5px;color:var(--tx-mut)}
+  .lg{display:flex;align-items:center;gap:8px}
+  .swatch{width:18px;height:13px;border-radius:4px;flex:none}
+  .sw-det{background:var(--det-fill);border:1.5px solid var(--det)}
+  .sw-ai{background:var(--ai-fill);border:1.5px solid var(--ai)}
+  .sw-gate{width:14px;height:14px;background:var(--gate-fill);border:1.5px solid var(--gate);transform:rotate(45deg);border-radius:3px}
+  .sw-tok{width:10px;height:10px;border-radius:50%;background:var(--edge-bright);box-shadow:0 0 8px var(--edge-bright)}
+  .sw-dead{width:18px;border-top:2px dashed var(--tx-faint)}
+
+  .section-head{display:flex;align-items:baseline;gap:12px;margin:48px 0 4px;flex-wrap:wrap;scroll-margin-top:16px}
+  .section-head .n{font-family:var(--mono);color:var(--edge-bright);font-size:13px;letter-spacing:.12em}
+  .section-head h2{font-family:var(--display);font-weight:600;font-size:clamp(20px,4.8vw,27px);margin:0}
+  .section-head .gloss{color:var(--tx-mut);font-size:14px}
+  .rule{color:var(--tx-faint);font-size:13px;font-family:var(--mono);margin:8px 0 20px}
+  .lead{font-size:14.5px;color:var(--tx-mut);margin:6px 0 20px;max-width:74ch}
+  .grid{display:grid;grid-template-columns:1fr;gap:18px}
+  @media(min-width:820px){.grid{grid-template-columns:1fr 1fr}}
+
+  .card{background:var(--panel);border:1px solid var(--grid);border-radius:14px;padding:20px;overflow:hidden}
+  .card.esc{background:linear-gradient(180deg,var(--panel),#17182a)}
+  .card.full{grid-column:1 / -1}
+  .card-top{display:flex;align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap}
+  .card h3{font-family:var(--display);font-weight:600;font-size:17px;margin:0}
+  .tg{font-family:var(--mono);font-size:10px;padding:3px 8px;border-radius:6px;letter-spacing:.03em}
+  .tg.now{background:var(--ok-dim);color:#9fe6c1;border:1px solid #315f49}
+  .tg.des{background:#16294a;color:#a9cdf5;border:1px solid #2f4d78}
+  .tg.esc{background:var(--no-dim);color:#f0a897;border:1px solid #6b3a2e}
+  .en{font-family:var(--mono);font-size:11px;color:var(--tx-faint);margin:2px 0 0}
+  figure{margin:12px 0 0;background:var(--panel-2);border:1px solid var(--grid);border-radius:10px;padding:8px 8px 0}
+  figure svg{display:block;width:100%;height:auto}
+  .point{font-family:var(--mono);font-size:11px;color:var(--edge-bright);padding:8px 4px;border-top:1px solid var(--grid);margin-top:6px}
+  .point.esc-p{color:var(--no)}
+  .eg{margin:11px 0 0;font-size:12.5px;color:var(--tx-mut)}
+  .eg::before{content:"例  ";font-family:var(--mono);color:var(--edge-bright);font-size:11px}
+  .code{margin-top:12px}
+  .clbl{font-family:var(--mono);font-size:10px;color:var(--tx-faint);margin-bottom:6px;letter-spacing:.05em}
+  pre{margin:0;background:#0a0f1c;border:1px solid var(--grid);border-radius:9px;padding:11px 12px;overflow-x:auto;
+    font-family:var(--mono);font-size:10.8px;line-height:1.62;color:#b9c8e2;-webkit-overflow-scrolling:touch}
+  pre .c{color:#6b7fa8}
+  pre .d{color:#7fc0ff}
+  pre .r{color:#e79a86}
+  .note{font-family:var(--body);font-size:12px;color:var(--tx-mut);margin-top:8px}
+  .note b{color:#a9cdf5}
+  .warn{font-family:var(--body);font-size:12px;color:#f0b28a;margin-top:8px}
+
+  table.ref{width:100%;border-collapse:collapse;margin-top:6px;font-size:13px}
+  table.ref td{border-bottom:1px solid var(--grid);padding:9px 8px;vertical-align:top}
+  table.ref .ty{font-family:var(--mono);color:var(--edge-bright);white-space:nowrap;font-size:12px}
+  table.ref .st{white-space:nowrap}
+  code.i{font-family:var(--mono);font-size:12px;color:var(--edge-bright)}
+
+  .band{margin:46px 0 0;padding:clamp(22px,5vw,32px);background:linear-gradient(135deg,#132444,#0f1a30);border:1px solid #2a4574;border-radius:16px;position:relative;overflow:hidden}
+  .band::after{content:"";position:absolute;inset:0;background-image:linear-gradient(90deg,var(--edge-bright) 1px,transparent 1px);background-size:60px 100%;opacity:.06}
+  .band .k{font-family:var(--mono);font-size:12px;letter-spacing:.2em;text-transform:uppercase;color:var(--edge-bright);margin:0 0 12px}
+  .band p{margin:0;font-size:clamp(16px,3.3vw,21px);font-family:var(--display);font-weight:500;line-height:1.42;max-width:62ch}
+  .band p b{color:#fff;font-weight:700;border-bottom:2px solid var(--ai);padding-bottom:1px}
+  .band .fine{font-family:var(--body);font-size:13.5px;font-weight:400;color:var(--tx-mut);margin-top:14px;max-width:66ch}
+  footer{margin-top:44px;padding-top:22px;border-top:1px solid var(--grid);font-family:var(--mono);font-size:12px;color:var(--tx-faint)}
+
+  .tok{animation:flow 2.6s linear infinite}
+  @keyframes flow{from{offset-distance:0%}to{offset-distance:100%}}
+  .pulse{animation:pulse 2.4s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:.32}50%{opacity:.92}}
+  @media(prefers-reduced-motion:reduce){.tok,.pulse{animation:none}.tok{offset-distance:58%}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Workflow 製作手冊 · workflow.json</p>
+    <h1>寫一條 workflow，這裡有你需要的全部語法
+      <span class="sub">每種都有動畫 + sample JSON · 標明現行 / 逃生口走 run.py</span>
+    </h1>
+    <p class="thesis">workflow.json 是<b>非圖靈完備</b>的宣告資料：你描述一張流程圖，受信任的直譯器照著跑。界線是 <b>整張圖能不能事先靜態畫出來</b> —— 畫得出來就進 DSL，畫不出來交給 run.py。</p>
+    <div class="statuslegend">
+      <span class="sl now"><span class="dot"></span>現行 · dsl.py 今天可跑（#428 六語法已全數落地）</span>
+      <span class="sl esc"><span class="dot"></span>無法宣告 · 走 run.py</span>
+    </div>
+
+    <nav class="toc">
+      <p class="cap">目錄</p>
+      <ol>
+        <li><a href="#s0"><span class="k">0</span>怎麼看</a></li>
+        <li><a href="#s1"><span class="k">1</span>一條 workflow 的骨架</a></li>
+        <li><a href="#s2"><span class="k">2</span>節點型別</a></li>
+        <li><a href="#s3"><span class="k">3</span>值怎麼進、怎麼流</a></li>
+        <li><a href="#s4"><span class="k">4</span>展開 map</a></li>
+        <li><a href="#s5"><span class="k">5</span>分支 switch</a></li>
+        <li><a href="#s6"><span class="k">6</span>人工閘 + 副作用</a></li>
+        <li><a href="#s7"><span class="k">7</span>驗收 check + 重試</a></li>
+        <li><a href="#s8"><span class="k">8</span>無法宣告</a></li>
+      </ol>
+    </nav>
+  </header>
+
+  <!-- 0 -->
+  <div class="section-head" id="s0"><span class="n">0</span><h2>怎麼看</h2><span class="gloss">兩種輪廓先分清楚</span></div>
+  <div class="howto">
+    <div class="howrow">
+      <div class="howcell">
+        <h4>展開 = 每個元素跑同一條線，再收斂</h4>
+        <p class="d">流水線<b style="color:var(--edge-bright)">依序各跑一遍</b>，結果 <b style="color:var(--edge-bright)">fan-in 收回</b>。</p>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="8" y="46" width="30" height="22" rx="6" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <rect x="78" y="8" width="118" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="78" y="47" width="118" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="78" y="86" width="118" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <text x="137" y="22" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">讀→AI→寫</text>
+          <text x="137" y="61" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">讀→AI→寫</text>
+          <text x="137" y="100" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">讀→AI→寫</text>
+          <path d="M38 57 C58 57 58 18 78 18" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M38 57 H78" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M38 57 C58 57 58 96 78 96" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M196 18 C224 18 224 57 244 57" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M196 57 H244" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M196 96 C224 96 224 57 244 57" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <rect x="244" y="41" width="48" height="32" rx="8" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="268" y="61" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">收斂</text>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M78 18 H196')"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M78 57 H196');animation-delay:.5s"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M78 96 H196');animation-delay:1s"/>
+        </svg>
+      </div>
+      <div class="howcell">
+        <h4>分支 = 只走一條</h4>
+        <p class="d"><b style="color:var(--edge-bright)">一條亮</b>、其他<b style="color:var(--tx-faint)">灰掉是死路</b>。</p>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="14" y="46" width="38" height="24" rx="6" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <path d="M52 58 H82" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="86" y="44" width="28" height="28" rx="4" transform="rotate(45 100 58)" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.3"/>
+          <rect x="210" y="8" width="80" height="22" rx="6" fill="var(--det-fill)" stroke="var(--tx-faint)" stroke-width="1.3" opacity=".4"/>
+          <rect x="210" y="47" width="80" height="22" rx="6" fill="var(--det-fill)" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <rect x="210" y="86" width="80" height="22" rx="6" fill="var(--det-fill)" stroke="var(--tx-faint)" stroke-width="1.3" opacity=".4"/>
+          <path d="M114 51 C170 32 180 19 210 19" fill="none" stroke="var(--tx-faint)" stroke-width="1.3" stroke-dasharray="4 4" opacity=".5"/>
+          <path d="M118 58 H210" fill="none" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <path d="M114 65 C170 84 180 97 210 97" fill="none" stroke="var(--tx-faint)" stroke-width="1.3" stroke-dasharray="4 4" opacity=".5"/>
+          <circle class="tok" r="3.8" fill="var(--edge-bright)" style="offset-path:path('M52 58 H82 M118 58 H210')"/>
+        </svg>
+      </div>
+    </div>
+    <div class="legend">
+      <span class="lg"><span class="swatch sw-det"></span>確定性節點</span>
+      <span class="lg"><span class="swatch sw-ai"></span>AI 節點</span>
+      <span class="lg"><span class="swatch sw-gate"></span>gate / switch 岔路</span>
+      <span class="lg"><span class="swatch sw-tok"></span>資料流</span>
+      <span class="lg"><span class="swatch sw-dead"></span>死路</span>
+    </div>
+  </div>
+
+  <!-- 1 骨架 -->
+  <div class="section-head" id="s1"><span class="n">1</span><h2>一條 workflow 的骨架</h2><span class="gloss">最外層長什麼樣</span></div>
+  <p class="lead">一個 workflow.json 就是一個 <code class="i">WorkflowDef</code>：頂層的 <code class="i">steps</code> 依序執行，<code class="i">config</code> 提供設定、<code class="i">phases</code> 是給前端畫進度的骨架。檔名即 id 的權威。</p>
+  <div class="card full">
+    <div class="code">
+      <div class="clbl">workflow.json · 頂層</div>
+<pre>{
+  "id": "throughput-check",          <span class="c">// 唯一識別（workspace 檔名即權威）</span>
+  "title": "Throughput 退化檢查",
+  "phases": [                        <span class="c">// 進度骨架，前端畫「1/3 · analyze」</span>
+    {"name":"detect"}, {"name":"analyze"}, {"name":"review"}
+  ],
+  "config": { "threshold": 0.1 },    <span class="c">// {config.threshold} 引用</span>
+  "steps": [ <span class="c">/* 頂層步驟，依序執行（見以下各節） */</span> ]
+}</pre>
+    </div>
+    <table class="ref" style="margin-top:14px">
+      <tr><td class="ty">id</td><td>唯一識別。workspace 檔遮蔽同 id 的 package 檔。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">title / description / tag / hint</td><td>Run picker 顯示用的中繼資料。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">phases[]</td><td>進度骨架。每個 step 標 <code class="i">phase</code> 歸到某一格，前端據此畫進度條與「12/20 · 1 failed」。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">config{}</td><td>這條 workflow 的設定，用 <code class="i">{config.x}</code> 引用。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">steps[]</td><td>頂層步驟序列，依序跑。</td><td class="st"><span class="tg now">現行</span></td></tr>
+    </table>
+  </div>
+
+  <!-- 2 節點型別 -->
+  <div class="section-head" id="s2"><span class="n">2</span><h2>節點型別</h2><span class="gloss">六種積木</span></div>
+  <div class="card full">
+    <table class="ref">
+      <tr><td class="ty">agent</td><td>LLM 一回合。<code class="i">out</code> 寫內容檔；<code class="i">outputs</code> 宣告具名欄位；否則需 <code class="i">check</code>。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">sandbox</td><td>確定性指令，無 LLM。純計算、無憑證（可靠副作用走 capability）。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">gate</td><td>人工閘。approve 續、reject 終止；<code class="i">revise</code> 帶 user 回饋 <code class="i">{steps.&lt;gate&gt;.feedback}</code> 打回某步重做。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">capability</td><td>可靠且冪等的副作用：<code class="i">ingest_to_collection</code> / <code class="i">upsert_context_card</code>。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">map</td><td>唯一迴圈。<code class="i">over</code> glob；<code class="i">over</code> 清單 / range。<code class="i">do</code> 是元素內序列。</td><td class="st"><span class="tg now">現行</span></td></tr>
+      <tr><td class="ty">switch</td><td>有界條件分支。<code class="i">cases</code> 預先列舉。</td><td class="st"><span class="tg now">現行</span></td></tr>
+    </table>
+  </div>
+
+  <!-- 3 值 -->
+  <div class="section-head" id="s3"><span class="n">3</span><h2>值怎麼進、怎麼流</h2><span class="gloss">一種語法定址任何值</span></div>
+  <p class="lead">值從兩處<b style="color:var(--tx)">進來</b>：<code class="i">{config.x}</code>（workflow 設定）、<code class="i">{inputs.y}</code>（觸發時傳入）。值在 step 之間<b style="color:var(--tx)">流動</b>：<code class="i">{item}</code>（map 當下元素）、<code class="i">{steps.名.欄位}</code>（某步的具名產出）。全部同一種寫法，插值只定址、無 eval。</p>
+  <div class="grid">
+    <div class="card">
+      <div class="card-top"><h3>具名產出 {steps.x.field}</h3><span class="tg now">現行</span></div>
+      <p class="en">表面是變數、骨子是檔案</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="8" y="44" width="60" height="30" rx="7" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.4"/>
+          <text x="38" y="63" fill="var(--ai)" font-family="var(--mono)" font-size="9" text-anchor="middle">classify</text>
+          <path d="M68 59 H120" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="120" y="42" width="70" height="34" rx="5" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="155" y="57" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">step_classify/</text>
+          <text x="155" y="68" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">main.json</text>
+          <path d="M190 59 H242" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="242" y="44" width="52" height="30" rx="7" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="268" y="63" fill="var(--det)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">下游</text>
+          <text x="155" y="30" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">寫（骨子：檔案）</text>
+          <text x="242" y="98" fill="var(--edge-bright)" font-family="var(--mono)" font-size="8" text-anchor="middle">{steps.classify.type}</text>
+          <circle class="tok" r="3.6" fill="var(--ai)" style="offset-path:path('M68 59 H120')"/>
+          <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M190 59 H242');animation-delay:.7s"/>
+        </svg>
+        <div class="point">重點：step 有名字，產出用 {steps.名.欄位} 引用；跟 {config.x} 同一種寫法。</div>
+      </figure>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"agent", "name":"classify", "phase":"classify",
+  "prompt":"判斷異常類型，輸出 JSON。",
+  <span class="d">"outputs":{ "type":{"type":"str","enum":["latency","errors","other"]} }</span> }
+
+<span class="c">// 之後任何一步都能引用，validate_def 靜態檢查欄位存在</span>
+"on": "<span class="d">{steps.classify.type}</span>"</pre>
+        <p class="note"><b>骨子裡</b>＝讀 <span style="font-family:var(--mono)">.workflow/&lt;id&gt;/step_classify/main.json</span> 的 <span style="font-family:var(--mono)">result.fields.type</span>（既有 journal 條目,不另立新檔）。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>outputs schema + 靜態驗證</h3><span class="tg now">現行</span></div>
+      <p class="en">型別（地基）+ enum（選配）</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="20" y="20" width="120" height="76" rx="8" fill="var(--panel)" stroke="var(--det)" stroke-width="1.2"/>
+          <text x="80" y="38" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">outputs</text>
+          <text x="34" y="56" fill="var(--edge-bright)" font-family="var(--mono)" font-size="9">type : str</text>
+          <text x="34" y="72" fill="var(--ai)" font-family="var(--mono)" font-size="8">enum[3]</text>
+          <text x="34" y="88" fill="var(--edge-bright)" font-family="var(--mono)" font-size="9">score: float</text>
+          <path d="M140 58 H176" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="176" y="34" width="110" height="48" rx="8" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.3"/>
+          <text x="231" y="52" fill="var(--gate)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">validate_def</text>
+          <text x="231" y="66" fill="var(--tx-mut)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">存檔即檢查</text>
+          <text x="231" y="76" fill="var(--tx-mut)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">欄位/型別/窮盡</text>
+          <circle class="tok" r="3.4" fill="var(--edge-bright)" style="offset-path:path('M140 58 H176')"/>
+        </svg>
+        <div class="point">重點：型別是地基、enum 是選配；enum 讓 switch 的 cases 被檢查窮盡性。</div>
+      </figure>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>"outputs": {
+  "type": <span class="d">{ "type":"str", "enum":["latency","errors","other"] }</span>,
+  "score": "float"
+}
+<span class="c">// 型別：str|int|float|bool|list|obj（地基）</span>
+<span class="c">// 進來的值：{config.x}、{inputs.y}（觸發時傳入）</span></pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 map -->
+  <div class="section-head" id="s4"><span class="n">4</span><h2>展開 map</h2><span class="gloss">唯一的迴圈 · 依序 → fan-in</span></div>
+  <p class="rule">安全線：單層展開；寬度可執行期才知道，不准巢狀遞迴。</p>
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-top"><h3>over glob</h3><span class="tg now">現行</span></div>
+      <p class="en">集合＝符合 glob 的檔案數</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="10" y="42" width="26" height="34" rx="4" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.2" opacity=".6"/>
+          <rect x="16" y="37" width="26" height="34" rx="4" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.2" opacity=".85"/>
+          <rect x="22" y="32" width="26" height="34" rx="4" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="35" y="88" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">glob</text>
+          <rect x="74" y="8" width="112" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="74" y="47" width="112" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="74" y="86" width="112" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <text x="130" y="22" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">翻譯→寫</text>
+          <text x="130" y="61" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">翻譯→寫</text>
+          <text x="130" y="100" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">翻譯→寫</text>
+          <path d="M48 55 C60 55 60 18 74 18" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M48 55 H74" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M48 55 C60 55 60 96 74 96" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M186 18 C214 18 214 57 234 57" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M186 57 H234" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M186 96 C214 96 214 57 234 57" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <rect x="234" y="41" width="50" height="32" rx="8" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="259" y="61" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">收斂</text>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M74 18 H186')"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M74 57 H186');animation-delay:.5s"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M74 96 H186');animation-delay:1s"/>
+        </svg>
+        <div class="point">重點：現狀 fan-out＝檔案驅動，符合 glob 的檔有幾個就展開幾個。</div>
+      </figure>
+      <p class="eg">把 30 個 md 檔各翻一遍。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"map", "name":"tr", "over":"src/**/*.md",
+  "as":"f", "phase":"translate",
+  "do":[ {"type":"agent","phase":"translate",
+          "prompt":"翻 {f}","out":"out/{f}.en.md"} ] }</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>do = 元素內流水線</h3><span class="tg now">現行</span></div>
+      <p class="en">do 是一串 step，每元素依序跑完</p>
+      <figure>
+        <svg viewBox="0 0 300 104" aria-hidden="true">
+          <rect x="8" y="38" width="40" height="26" rx="7" fill="var(--panel)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="28" y="55" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">元素</text>
+          <rect x="66" y="38" width="46" height="26" rx="6" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="89" y="55" fill="var(--det)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">讀</text>
+          <rect x="128" y="38" width="46" height="26" rx="6" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.3"/>
+          <text x="151" y="55" fill="var(--ai)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">AI</text>
+          <rect x="190" y="38" width="46" height="26" rx="6" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.3"/>
+          <text x="213" y="55" fill="var(--gate)" font-family="var(--mono)" font-size="8" text-anchor="middle">寫回</text>
+          <rect x="252" y="38" width="40" height="26" rx="7" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="272" y="55" fill="var(--det)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">✓</text>
+          <path d="M48 51 H66 M112 51 H128 M174 51 H190 M236 51 H252" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <text x="150" y="88" fill="var(--no)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">✗ 不准放 map / gate（一層到底）</text>
+          <circle class="tok" r="3.4" fill="var(--edge-bright)" style="offset-path:path('M48 51 H66 M112 51 H128 M174 51 H190 M236 51 H252')"/>
+        </svg>
+        <div class="point">重點：do 是 list[Step]，可混 sandbox/agent/capability 串成鏈；每元素跑完整條。</div>
+      </figure>
+      <p class="eg">每個檔：前處理 → AI 摘要 → 寫回卡片。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"map", "over":"docs/*.txt", "as":"d", "phase":"proc",
+  "do":[
+    {"type":"sandbox","phase":"proc","run":"python clean.py {d}"},
+    {"type":"agent","phase":"proc","prompt":"摘要 {d}","out":"sum/{d}.md"},
+    {"type":"capability","call":"upsert_context_card","phase":"proc",
+     "collection":"kb","keys":["{d}"],"title":"{d}","body":"..."}
+  ] }</pre>
+        <p class="warn">✗ <b>do 內不可放 <span style="font-family:var(--mono)">map</span> 或 <span style="font-family:var(--mono)">gate</span></b>（Q7，validate_def 擋）—— 這就是「不准巢狀遞迴」與「gate 只能在頂層」。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>over 清單值</h3><span class="tg now">現行</span></div>
+      <p class="en">集合＝上一步的具名清單（免先落檔）</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="8" y="42" width="48" height="34" rx="8" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.4"/>
+          <text x="32" y="58" fill="var(--ai)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">extract</text>
+          <text x="32" y="69" fill="var(--ai)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">→list</text>
+          <rect x="86" y="10" width="104" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="86" y="49" width="104" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="86" y="88" width="104" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <text x="138" y="24" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">開一張卡</text>
+          <text x="138" y="63" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">開一張卡</text>
+          <text x="138" y="102" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">開一張卡</text>
+          <path d="M56 59 C70 59 70 20 86 20" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M56 59 H86" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M56 59 C70 59 70 98 86 98" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M190 20 C218 20 218 59 238 59" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M190 59 H238" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M190 98 C218 98 218 59 238 59" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <rect x="238" y="43" width="50" height="32" rx="8" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="263" y="63" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">收斂</text>
+          <circle class="tok" r="3.2" fill="var(--ai)" style="offset-path:path('M86 20 H190')"/>
+          <circle class="tok" r="3.2" fill="var(--ai)" style="offset-path:path('M86 59 H190');animation-delay:.5s"/>
+          <circle class="tok" r="3.2" fill="var(--ai)" style="offset-path:path('M86 98 H190');animation-delay:1s"/>
+        </svg>
+        <div class="point">重點：over 直接吃清單值，引擎背後物化成檔維持元素身份。</div>
+      </figure>
+      <p class="eg">AI 抽出所有待辦，每項各開一張卡。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"agent", "name":"extract", "phase":"extract",
+  "prompt":"抽出所有待辦", <span class="d">"outputs":{"items":"list"}</span> },
+
+{ "type":"map", "over":<span class="d">"{steps.extract.items}"</span>, "as":"t", "phase":"card",
+  "do":[ {"type":"capability","call":"upsert_context_card","phase":"card",
+          "collection":"tasks","keys":["{t.id}"],
+          "title":"{t.title}","body":"{t.body}"} ] }</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>over range</h3><span class="tg now">現行</span></div>
+      <p class="en">集合＝一個數字（跑 N 次）</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="8" y="44" width="46" height="30" rx="7" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="31" y="63" fill="var(--det)" font-family="var(--mono)" font-size="10" text-anchor="middle">N=3</text>
+          <rect x="84" y="10" width="106" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="84" y="49" width="106" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="84" y="88" width="106" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <text x="137" y="24" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">i=0 · 產生</text>
+          <text x="137" y="63" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">i=1 · 產生</text>
+          <text x="137" y="102" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">i=2 · 產生</text>
+          <path d="M54 59 C68 59 68 20 84 20" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M54 59 H84" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M54 59 C68 59 68 98 84 98" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M190 20 C218 20 218 59 238 59" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M190 59 H238" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <path d="M190 98 C218 98 218 59 238 59" fill="none" stroke="var(--edge-line)" stroke-width="1.2"/>
+          <rect x="238" y="43" width="50" height="32" rx="8" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="263" y="63" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">收斂</text>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M84 20 H190')"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M84 59 H190');animation-delay:.5s"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M84 98 H190');animation-delay:1s"/>
+        </svg>
+        <div class="point">重點：over 吃一個數字，展開 N 次；不用手動生 N 個檔。</div>
+      </figure>
+      <p class="eg">產生 N 個變體各存一份。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"map", "over":<span class="d">{"range":"{inputs.n}"}</span>,
+  "as":"i", "phase":"gen",
+  "do":[ {"type":"agent","phase":"gen",
+          "prompt":"產生第 {i} 個變體","out":"v/{i}.md"} ] }</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>fan-in 收斂</h3><span class="tg now">現行</span></div>
+      <p class="en">整批輸出＝ {steps.map.outputs}</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="16" y="10" width="88" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="16" y="49" width="88" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="16" y="88" width="88" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <text x="60" y="24" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">元素 1</text>
+          <text x="60" y="63" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">元素 2</text>
+          <text x="60" y="102" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">元素 3</text>
+          <path d="M104 20 C150 20 150 59 176 59" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <path d="M104 59 H176" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <path d="M104 98 C150 98 150 59 176 59" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="176" y="40" width="64" height="38" rx="8" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.4"/>
+          <text x="208" y="56" fill="var(--det)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">收成清單</text>
+          <text x="208" y="68" fill="var(--edge-bright)" font-family="var(--mono)" font-size="7" text-anchor="middle">.outputs</text>
+          <path d="M240 59 H276" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="270" y="45" width="24" height="28" rx="6" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M104 20 C150 20 150 59 176 59')"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M104 59 H176');animation-delay:.35s"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M104 98 C150 98 150 59 176 59');animation-delay:.7s"/>
+          <circle class="tok" r="3.4" fill="var(--edge-bright)" style="offset-path:path('M240 59 H276');animation-delay:1.1s"/>
+        </svg>
+        <div class="point">重點：fan-in 從暗規則（自己 glob）變一級引用 {steps.tr.outputs}。</div>
+      </figure>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"sandbox", "phase":"collect",
+  "run":"python index.py --files <span class="d">{steps.tr.outputs}</span>" }</pre>
+        <p class="note"><b>另一種收法</b>：也可以 <span style="font-family:var(--mono)">glob "out/*"</span> 收回，只是要自己記得檔落在哪；<span style="font-family:var(--mono)">.outputs</span> 讓引擎替你記住每個元素的身份。</p>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>skip + collect</h3><span class="tg now">現行</span></div>
+      <p class="en">一顆老鼠屎不壞一鍋</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="12" y="10" width="80" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <rect x="12" y="49" width="80" height="20" rx="10" fill="var(--panel)" stroke="var(--no)" stroke-width="1.3"/>
+          <rect x="12" y="88" width="80" height="20" rx="10" fill="var(--panel)" stroke="var(--edge-bright)" stroke-width="1.2"/>
+          <text x="52" y="24" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">元素 1 ✓</text>
+          <text x="52" y="63" fill="var(--no)" font-family="var(--mono)" font-size="8" text-anchor="middle">元素 2 ✗</text>
+          <text x="52" y="102" fill="var(--tx-mut)" font-family="var(--mono)" font-size="8" text-anchor="middle">元素 3 ✓</text>
+          <path d="M92 20 C140 20 140 44 172 44" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <path d="M92 98 C140 98 140 44 172 44" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="172" y="28" width="56" height="32" rx="8" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="200" y="48" fill="var(--det)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">收斂成功</text>
+          <path d="M92 59 C130 59 130 84 172 84" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 3"/>
+          <rect x="172" y="72" width="72" height="26" rx="7" fill="var(--no-dim)" stroke="var(--no)" stroke-width="1.3"/>
+          <text x="208" y="89" fill="var(--no)" font-family="var(--mono)" font-size="8" text-anchor="middle">failures[ ]</text>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M92 20 C140 20 140 44 172 44')"/>
+          <circle class="tok" r="3.2" fill="var(--no)" style="offset-path:path('M92 59 C130 59 130 84 172 84');animation-delay:.4s"/>
+          <circle class="tok" r="3.2" fill="var(--edge-bright)" style="offset-path:path('M92 98 C140 98 140 44 172 44');animation-delay:.8s"/>
+        </svg>
+        <div class="point">重點：單一元素失敗只 skip、收進 failures[]，其餘照跑。</div>
+      </figure>
+      <p class="eg">30 檔翻譯，3 檔失敗 → 收 27 個成功 + 一份失敗清單。</p>
+      <div class="code">
+        <div class="clbl">行為（無需額外語法）</div>
+<pre><span class="c">// map 自帶 skip+collect：</span>
+<span class="c">// 失敗元素 → run.failures[]（key + error），不炸整批</span>
+<span class="c">// 前端顯示 "27/30 · 3 failed"</span></pre>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 5 switch -->
+  <div class="section-head" id="s5"><span class="n">5</span><h2>分支 switch</h2><span class="gloss">只走一條 · cases 預先列舉</span></div>
+  <p class="rule">安全線：分支路徑事先宣告、數量有限；不准無界迴圈。</p>
+  <div class="grid">
+
+    <div class="card">
+      <div class="card-top"><h3>switch on 設定 / 輸入</h3><span class="tg now">現行</span></div>
+      <p class="en">條件跑前已知</p>
+      <figure>
+        <svg viewBox="0 0 300 112" aria-hidden="true">
+          <path d="M12 44 h40 v22 h-40 l-8 -11 z" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="32" y="59" fill="var(--det)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">kind</text>
+          <path d="M52 55 H84" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="88" y="41" width="28" height="28" rx="4" transform="rotate(45 102 55)" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.3"/>
+          <rect x="210" y="10" width="80" height="22" rx="6" fill="var(--det-fill)" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <rect x="210" y="78" width="80" height="22" rx="6" fill="var(--det-fill)" stroke="var(--tx-faint)" stroke-width="1.3" opacity=".4"/>
+          <path d="M116 49 C170 32 178 21 210 21" fill="none" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <path d="M116 61 C170 78 178 89 210 89" fill="none" stroke="var(--tx-faint)" stroke-width="1.3" stroke-dasharray="4 4" opacity=".5"/>
+          <text x="150" y="18" fill="var(--tx-faint)" font-family="var(--mono)" font-size="8">md</text>
+          <text x="150" y="98" fill="var(--tx-faint)" font-family="var(--mono)" font-size="8">csv</text>
+          <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M52 55 H84 M116 49 C170 32 178 21 210 21')"/>
+        </svg>
+        <div class="point">重點：on 讀設定/輸入值（現行插值即可），switch 選一條。</div>
+      </figure>
+      <p class="eg">格式是 md 走 A、csv 走 B。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ <span class="d">"type":"switch"</span>, "on":"{inputs.kind}", "phase":"route",
+  "cases":{
+    "md": [ {"type":"agent","phase":"route","prompt":"...","out":"o.md"} ],
+    "csv":[ {"type":"sandbox","phase":"route","run":"python csv.py"} ]
+  }, "default":[] }</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>switch on 計算值</h3><span class="tg now">現行</span></div>
+      <p class="en">條件＝程式算出的具名欄位</p>
+      <figure>
+        <svg viewBox="0 0 300 112" aria-hidden="true">
+          <rect x="8" y="40" width="42" height="32" rx="6" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <line x1="16" y1="50" x2="44" y2="50" stroke="var(--det)" stroke-width="2"/>
+          <line x1="16" y1="58" x2="38" y2="58" stroke="var(--det)" stroke-width="2"/>
+          <line x1="16" y1="66" x2="46" y2="66" stroke="var(--det)" stroke-width="2"/>
+          <path d="M50 56 H84" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="88" y="42" width="28" height="28" rx="4" transform="rotate(45 102 56)" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.3"/>
+          <text x="102" y="60" fill="var(--gate)" font-family="var(--mono)" font-size="8" text-anchor="middle">?</text>
+          <rect x="210" y="18" width="80" height="22" rx="6" fill="var(--det-fill)" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <rect x="210" y="72" width="80" height="22" rx="6" fill="var(--det-fill)" stroke="var(--tx-faint)" stroke-width="1.3" opacity=".4"/>
+          <path d="M116 50 C170 34 178 29 210 29" fill="none" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <path d="M116 62 C170 78 178 83 210 83" fill="none" stroke="var(--tx-faint)" stroke-width="1.3" stroke-dasharray="4 4" opacity=".5"/>
+          <text x="150" y="26" fill="var(--edge-bright)" font-family="var(--mono)" font-size="8">true</text>
+          <text x="150" y="92" fill="var(--tx-faint)" font-family="var(--mono)" font-size="8">false</text>
+          <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M50 56 H84 M116 50 C170 34 178 29 210 29')"/>
+        </svg>
+        <div class="point">重點：sandbox 產出具名 bool，switch on 它 —— 引用模型讓這乾淨。</div>
+      </figure>
+      <p class="eg">throughput 掉超過 10% 才進調查。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"sandbox", "name":"measure", "phase":"measure",
+  "run":"python measure.py", <span class="d">"outputs":{"dropped":"bool"}</span> },
+
+{ <span class="d">"type":"switch"</span>, "on":"<span class="d">{steps.measure.dropped}</span>", "phase":"route",
+  "cases":{ "true":[ {"type":"gate","phase":"route","title":"要深入？"},
+                     {"type":"agent","phase":"route","prompt":"分析原因","out":"rca.md"} ] },
+  "default":[] }</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>switch on AI 判斷</h3><span class="tg now">現行</span></div>
+      <p class="en">AI 選一條，路徑仍預先宣告</p>
+      <figure>
+        <svg viewBox="0 0 300 112" aria-hidden="true">
+          <rect x="8" y="42" width="36" height="30" rx="8" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.4"/>
+          <text x="26" y="61" fill="var(--ai)" font-family="var(--mono)" font-size="9" text-anchor="middle">AI</text>
+          <path d="M44 57 H84" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="88" y="43" width="28" height="28" rx="4" transform="rotate(45 102 57)" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.3"/>
+          <text x="102" y="60" fill="var(--gate)" font-family="var(--mono)" font-size="6.5" text-anchor="middle">type</text>
+          <rect x="212" y="8" width="78" height="20" rx="6" fill="var(--det-fill)" stroke="var(--tx-faint)" stroke-width="1.3" opacity=".4"/>
+          <rect x="212" y="45" width="78" height="20" rx="6" fill="var(--det-fill)" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <rect x="212" y="82" width="78" height="20" rx="6" fill="var(--det-fill)" stroke="var(--tx-faint)" stroke-width="1.3" opacity=".4"/>
+          <path d="M116 51 C170 32 178 19 212 19" fill="none" stroke="var(--tx-faint)" stroke-width="1.3" stroke-dasharray="4 4" opacity=".5"/>
+          <path d="M118 57 H212" fill="none" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <path d="M116 63 C170 82 178 92 212 92" fill="none" stroke="var(--tx-faint)" stroke-width="1.3" stroke-dasharray="4 4" opacity=".5"/>
+          <text x="176" y="15" fill="var(--tx-faint)" font-family="var(--mono)" font-size="7">latency</text>
+          <text x="176" y="53" fill="var(--edge-bright)" font-family="var(--mono)" font-size="7">errors</text>
+          <text x="176" y="99" fill="var(--tx-faint)" font-family="var(--mono)" font-size="7">other</text>
+          <circle class="tok" r="3.6" fill="var(--ai)" style="offset-path:path('M44 57 H84 M118 57 H212')"/>
+        </svg>
+        <div class="point">重點：agent outputs 帶 enum → switch cases 被靜態檢查窮盡。</div>
+      </figure>
+      <p class="eg">異常 latency 走 A、errors 走 B。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"agent", "name":"classify", "phase":"classify",
+  "prompt":"判斷異常類型",
+  <span class="d">"outputs":{"type":{"type":"str","enum":["latency","errors","other"]}}</span> },
+
+{ <span class="d">"type":"switch"</span>, "on":"<span class="d">{steps.classify.type}</span>", "phase":"route",
+  "cases":{ "latency":[...], "errors":[...], "other":[...] } }</pre>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-top"><h3>gate + revise（吃回饋）</h3><span class="tg now">現行</span></div>
+      <p class="en">人審 → 附一句話 → 帶著回饋重做</p>
+      <figure>
+        <svg viewBox="0 0 300 118" aria-hidden="true">
+          <rect x="10" y="48" width="52" height="28" rx="7" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.4"/>
+          <text x="36" y="66" fill="var(--ai)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">draft</text>
+          <path d="M62 62 H92" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="96" y="48" width="28" height="28" rx="4" transform="rotate(45 110 62)" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.4"/>
+          <text x="110" y="65" fill="var(--gate)" font-family="var(--mono)" font-size="6.5" text-anchor="middle">gate</text>
+          <rect x="220" y="51" width="70" height="22" rx="6" fill="var(--det-fill)" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <text x="255" y="66" fill="var(--edge-bright)" font-family="var(--mono)" font-size="8" text-anchor="middle">approve→續</text>
+          <path d="M124 62 H220" fill="none" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <path class="pulse" d="M110 48 C110 16 36 16 36 46" fill="none" stroke="var(--gate)" stroke-width="1.4" stroke-dasharray="4 4"/>
+          <rect x="86" y="6" width="128" height="18" rx="9" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.1" class="pulse"/>
+          <text x="150" y="18" fill="var(--gate)" font-family="var(--mono)" font-size="8" text-anchor="middle" class="pulse">revise：「第三段精簡一點」</text>
+          <text x="150" y="98" fill="var(--tx-mut)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">回饋注入 draft 的 prompt = {steps.review.feedback}</text>
+          <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M62 62 H92 M124 62 H220')"/>
+          <circle class="tok" r="3" fill="var(--gate)" style="offset-path:path('M110 48 C110 16 36 16 36 46');animation-delay:.3s"/>
+        </svg>
+        <div class="point">重點：revise 不是盲目重跑 —— 它帶 user 的一句自由回饋，注入重做那步的 prompt。</div>
+      </figure>
+      <p class="eg">審週報 →「第三段太細，精簡」→ 帶著這句重生成 → 再審。</p>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"agent", "name":"draft", "phase":"draft",
+  "prompt":"擬週報。<span class="d">修改意見：{steps.review.feedback}</span>",
+  "out":"report.md" },
+
+{ "type":"gate", <span class="d">"name":"review"</span>, "phase":"review", "title":"審週報",
+  "summary_from":"report.md",
+  "allow":["approve",<span class="d">"revise"</span>,"reject"],
+  <span class="d">"revise_to":"draft"</span> }
+<span class="c">// approve→續　reject→整條結束　revise→帶 {steps.review.feedback} 回 draft
+// 具名 gate「review」的 feedback = {steps.review.feedback}（唯一合法的向前引用）</span></pre>
+        <p class="note"><b>三個選項</b>：approve（過）、reject（結束、什麼都不留）、<b>revise（附一句自由回饋、打回 <span style="font-family:var(--mono)">revise_to</span> 指名的那步重做）</b>。回饋以 <span style="font-family:var(--mono)">{steps.&lt;gate&gt;.feedback}</span> 注入該步 prompt（跟其他具名產出同一種寫法,讓唯一的回邊在圖上顯式）—— 同 steer 的自由指令精神。</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- 6 gate + capability -->
+  <div class="section-head" id="s6"><span class="n">6</span><h2>人工閘 + 副作用</h2><span class="gloss">gate 只能在頂層 · 寫入只走 capability</span></div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-top"><h3>gate approve / reject</h3><span class="tg now">現行</span></div>
+      <p class="en">produce → review → commit</p>
+      <figure>
+        <svg viewBox="0 0 300 100" aria-hidden="true">
+          <rect x="10" y="38" width="52" height="26" rx="7" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="36" y="55" fill="var(--det)" font-family="var(--mono)" font-size="8" text-anchor="middle">produce</text>
+          <path d="M62 51 H92" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="96" y="37" width="28" height="28" rx="4" transform="rotate(45 110 51)" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.4"/>
+          <rect x="212" y="10" width="78" height="20" rx="6" fill="var(--det-fill)" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <text x="251" y="24" fill="var(--edge-bright)" font-family="var(--mono)" font-size="8" text-anchor="middle">approve→續</text>
+          <rect x="212" y="70" width="78" height="20" rx="6" fill="var(--no-dim)" stroke="var(--no)" stroke-width="1.3"/>
+          <text x="251" y="84" fill="var(--no)" font-family="var(--mono)" font-size="8" text-anchor="middle">reject→停</text>
+          <path d="M124 45 C170 30 178 20 212 20" fill="none" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <path d="M124 57 C170 72 178 80 212 80" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 4" opacity=".7"/>
+          <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M62 51 H92 M124 45 C170 30 178 20 212 20')"/>
+        </svg>
+        <div class="point">重點：只有 approve 續行；reject 讓整條 run 結束（不 commit）。summary_from 決定給人看哪些檔。</div>
+      </figure>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"gate", "phase":"review", "title":"確認要發布？",
+  "summary_from":"out/*.md", "allow":["approve","reject"] }</pre>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-top"><h3>capability 副作用</h3><span class="tg now">現行</span></div>
+      <p class="en">sandbox 無憑證 · 寫入只走這裡</p>
+      <figure>
+        <svg viewBox="0 0 300 100" aria-hidden="true">
+          <rect x="14" y="38" width="60" height="26" rx="7" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.3"/>
+          <text x="44" y="55" fill="var(--ai)" font-family="var(--mono)" font-size="8" text-anchor="middle">產出 json</text>
+          <path d="M74 51 H120" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="120" y="34" width="80" height="34" rx="7" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.3"/>
+          <text x="160" y="49" fill="var(--gate)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">capability</text>
+          <text x="160" y="60" fill="var(--tx-mut)" font-family="var(--mono)" font-size="6.5" text-anchor="middle">冪等副作用</text>
+          <path d="M200 51 H240" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="240" y="38" width="52" height="26" rx="7" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <text x="266" y="55" fill="var(--det)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">KB/卡</text>
+          <circle class="tok" r="3.4" fill="var(--ai)" style="offset-path:path('M74 51 H120')"/>
+          <circle class="tok" r="3.4" fill="var(--edge-bright)" style="offset-path:path('M200 51 H240');animation-delay:.6s"/>
+        </svg>
+        <div class="point">重點：可靠副作用只走 capability（ingest_to_collection / upsert_context_card）。</div>
+      </figure>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"capability", "call":"ingest_to_collection",
+  "phase":"ingest", "collection":"docs", "path":"out/*.md" }</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7 check -->
+  <div class="section-head" id="s7"><span class="n">7</span><h2>驗收 check + 重試</h2><span class="gloss">節點怎麼「不合格就不放行」</span></div>
+  <p class="lead">check 是 workflow 強制力的一半：step 產出不合格就<b style="color:var(--tx)">擋下、帶回饋重試</b>，重試 <code class="i">retries</code> 次仍不過 → <code class="i">StepFailed</code>（在 map 內就 skip+collect）。沒有 <code class="i">out</code> 的 agent 一定要有 check。</p>
+  <div class="grid">
+    <div class="card">
+      <div class="card-top"><h3>check → 重試 → 失敗</h3><span class="tg now">現行</span></div>
+      <p class="en">retry-with-feedback</p>
+      <figure>
+        <svg viewBox="0 0 300 116" aria-hidden="true">
+          <rect x="10" y="46" width="50" height="28" rx="7" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.4"/>
+          <text x="35" y="64" fill="var(--ai)" font-family="var(--mono)" font-size="8.5" text-anchor="middle">step</text>
+          <path d="M60 60 H90" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <rect x="94" y="46" width="28" height="28" rx="4" transform="rotate(45 108 60)" fill="var(--gate-fill)" stroke="var(--gate)" stroke-width="1.4"/>
+          <text x="108" y="63" fill="var(--gate)" font-family="var(--mono)" font-size="7" text-anchor="middle">check</text>
+          <rect x="216" y="20" width="74" height="22" rx="6" fill="var(--det-fill)" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <text x="253" y="35" fill="var(--edge-bright)" font-family="var(--mono)" font-size="8" text-anchor="middle">pass→續</text>
+          <path d="M122 54 C170 38 176 31 216 31" fill="none" stroke="var(--edge-bright)" stroke-width="1.5"/>
+          <path class="pulse" d="M108 74 C108 96 35 96 35 76" fill="none" stroke="var(--gate)" stroke-width="1.3" stroke-dasharray="4 4"/>
+          <text x="72" y="110" fill="var(--gate)" font-family="var(--mono)" font-size="8" text-anchor="middle" class="pulse">fail → 帶回饋重試 ×retries</text>
+          <rect x="216" y="74" width="74" height="22" rx="6" fill="var(--no-dim)" stroke="var(--no)" stroke-width="1.3"/>
+          <text x="253" y="89" fill="var(--no)" font-family="var(--mono)" font-size="7.5" text-anchor="middle">用盡→StepFailed</text>
+          <path d="M122 66 C170 82 176 85 216 85" fill="none" stroke="var(--no)" stroke-width="1.2" stroke-dasharray="3 3" opacity=".6"/>
+          <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M60 60 H90 M122 54 C170 38 176 31 216 31')"/>
+        </svg>
+        <div class="point">重點：check 不過 → 帶著失敗原因重跑 step，用盡 retries 才算失敗。</div>
+      </figure>
+      <div class="code">
+        <div class="clbl">workflow.json</div>
+<pre>{ "type":"agent", "phase":"draft", "prompt":"產生摘要",
+  "out":"sum.md",
+  "check":{"file_nonempty":{"path":"sum.md"}},
+  "retries": 2 }</pre>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-top"><h3>三種 check builder</h3><span class="tg now">現行</span></div>
+      <p class="en">確定性的驗收條件</p>
+      <div class="code" style="margin-top:14px">
+        <table class="ref">
+          <tr><td class="ty">file_nonempty</td><td>某檔存在且非空。<br><code class="i">{"path":"..."}</code></td></tr>
+          <tr><td class="ty">choice_in</td><td>JSON 某欄位的值落在允許集合內（＝ AI 結構化輸出的雛形）。<br><code class="i">{"path":"..","key":"..","allowed":[..]}</code></td></tr>
+          <tr><td class="ty">collection_has</td><td>某 collection 已含某項（ingest 後驗證）。<br><code class="i">{"collection":"..","path":".."}</code></td></tr>
+        </table>
+        <p class="note">check 的參數也吃插值，例如 <span style="font-family:var(--mono)">allowed</span> 可來自 <span style="font-family:var(--mono)">{config.kinds}</span>。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 8 無法宣告 -->
+  <div class="section-head" id="s8"><span class="n">8</span><h2>無法宣告 → run.py</h2><span class="gloss">圖畫不出來，或需要任意運算</span></div>
+  <p class="rule">護欄：圖必須靜態宣告 —— 不准無界迴圈、巢狀遞迴、AI 生新步驟、任意變數運算。</p>
+  <div class="grid">
+    <div class="card esc">
+      <div class="card-top"><h3>巢狀 / 遞迴展開</h3><span class="tg esc">逃生口</span></div>
+      <p class="en">深度未知</p>
+      <figure>
+        <svg viewBox="0 0 260 104" aria-hidden="true">
+          <rect x="12" y="40" width="44" height="24" rx="6" fill="var(--det-fill)" stroke="var(--det)" stroke-width="1.3"/>
+          <rect x="92" y="40" width="44" height="24" rx="6" fill="var(--edge-line)" stroke="var(--edge-bright)" stroke-width="1.2" fill-opacity=".3"/>
+          <path d="M56 52 H92" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <circle class="tok" r="3.6" fill="var(--edge-bright)" style="offset-path:path('M56 52 H92')"/>
+          <path class="pulse" d="M136 52 C166 52 166 28 192 28" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 4"/>
+          <path class="pulse" d="M136 52 H194" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 4" style="animation-delay:.4s"/>
+          <path class="pulse" d="M136 52 C166 52 166 76 192 76" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 4" style="animation-delay:.8s"/>
+          <circle cx="206" cy="28" r="7" fill="none" stroke="var(--no)" stroke-width="1.2" stroke-dasharray="3 3" class="pulse"/>
+          <circle cx="208" cy="52" r="7" fill="none" stroke="var(--no)" stroke-width="1.2" stroke-dasharray="3 3" class="pulse" style="animation-delay:.4s"/>
+          <circle cx="206" cy="76" r="7" fill="none" stroke="var(--no)" stroke-width="1.2" stroke-dasharray="3 3" class="pulse" style="animation-delay:.8s"/>
+          <text x="206" y="98" fill="var(--no)" font-family="var(--mono)" font-size="12" text-anchor="middle" class="pulse">?</text>
+        </svg>
+        <div class="point esc-p">元素又展開新一批，深度不定 —— 圖畫不出來。</div>
+      </figure>
+      <p class="eg">每個檔找出它引用的檔，再重複⋯⋯</p>
+    </div>
+    <div class="card esc">
+      <div class="card-top"><h3>無界適應</h3><span class="tg esc">逃生口</span></div>
+      <p class="en">步數 / 回合未知</p>
+      <figure>
+        <svg viewBox="0 0 260 104" aria-hidden="true">
+          <rect x="14" y="40" width="42" height="24" rx="6" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.3"/>
+          <rect x="100" y="40" width="42" height="24" rx="6" fill="var(--ai-fill)" stroke="var(--ai)" stroke-width="1.3"/>
+          <path d="M56 52 H100" fill="none" stroke="var(--edge-line)" stroke-width="1.3"/>
+          <path class="pulse" d="M121 40 C121 16 70 16 58 38" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 4"/>
+          <text x="90" y="12" fill="var(--no)" font-family="var(--mono)" font-size="8" text-anchor="middle" class="pulse">再繞一圈？</text>
+          <path class="pulse" d="M142 52 C174 52 174 30 198 30" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 4" style="animation-delay:.5s"/>
+          <path class="pulse" d="M142 58 C174 76 176 84 198 84" fill="none" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="4 4" style="animation-delay:.9s"/>
+          <circle cx="210" cy="30" r="7" fill="none" stroke="var(--no)" stroke-width="1.2" stroke-dasharray="3 3" class="pulse"/>
+          <circle cx="210" cy="84" r="7" fill="none" stroke="var(--no)" stroke-width="1.2" stroke-dasharray="3 3" class="pulse" style="animation-delay:.5s"/>
+          <text x="222" y="62" fill="var(--no)" font-family="var(--mono)" font-size="12" text-anchor="middle" class="pulse">?</text>
+          <circle class="tok" r="3.6" fill="var(--ai)" style="offset-path:path('M56 52 H100')"/>
+        </svg>
+        <div class="point esc-p">下一步取決於發現什麼，AI 生出沒宣告的新步驟。</div>
+      </figure>
+      <p class="eg">root cause 一路追下去 → 交給 RCA。</p>
+    </div>
+    <div class="card esc">
+      <div class="card-top"><h3>任意運算 / eval</h3><span class="tg esc">逃生口</span></div>
+      <p class="en">變數計算、自訂函式</p>
+      <figure>
+        <svg viewBox="0 0 260 104" aria-hidden="true">
+          <rect x="30" y="30" width="200" height="44" rx="8" fill="var(--panel)" stroke="var(--no)" stroke-width="1.3" stroke-dasharray="5 4" class="pulse"/>
+          <text x="130" y="50" fill="var(--no)" font-family="var(--mono)" font-size="10" text-anchor="middle">{ a * b + f(x) }</text>
+          <text x="130" y="66" fill="var(--tx-faint)" font-family="var(--mono)" font-size="8" text-anchor="middle">插值只定址，不運算</text>
+        </svg>
+        <div class="point esc-p">DSL 的 {…} 是純定址、無 eval。要運算 → sandbox / run.py。</div>
+      </figure>
+      <p class="eg">需要 if 之外的算式、迴圈控制。</p>
+    </div>
+  </div>
+
+  <div class="band">
+    <p class="k">安全線 · 貫穿全篇</p>
+    <p>圖的<b>形狀</b>必須事先靜態畫出來：分支有限、展開單層、無界者出局。</p>
+    <p class="fine">寬度與走哪條可執行期、甚至 AI 決定；但流程圖本身要畫得出來。這些語法（含 #428 新落地的六項）都守在這條線內 —— 它們讓 DSL <b style="color:#fff">更一致、更少意外</b>，不增加表達力（無 eval），所以不會把 DSL 推向圖靈完備。真正需要運算與無界流程的，交給 run.py。</p>
+  </div>
+
+  <footer>Workflow 製作手冊 · 骨架 → 節點 → 值 → map → switch → gate → check → 逃生口 · 現行 DSL ／ run.py 逃生口<br>
+  撰寫指南見 <span style="font-family:var(--mono)">docs/workflows.md §22</span> · #428 六語法的釘死決策見 <span style="font-family:var(--mono)">docs/workflow-reference-model.md</span></footer>
+
+</div>
+</body>
+</html>

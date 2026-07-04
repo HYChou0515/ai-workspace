@@ -19,7 +19,7 @@
 控制流就是普通的 Python——`for` / `if` / `await`——跑在一個 *step* 函式庫之上。這條開發者
 寫的 `run.py` 路徑沒有 DSL;不過 #323 另外為*使用者*開了一條宣告式的 `workflow.json`(跟 AI
 一起 author、存成資料而非 Python,由 trusted interpreter 跑在同一批 step primitive 之上)——
-細節見 [`workflows.md`](workflows.md) §22,這篇不重複。
+細節見 [`workflows.md`](workflows.md) §22 與**視覺手冊** [`workflows-syntax.html`](workflows-syntax.html)（每個語法配動畫 + sample JSON),這篇不重複。
 
 它落在 **profile** 層級:
 
