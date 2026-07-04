@@ -3,6 +3,7 @@ and send / stream / cancel per chat. Item-level (no chat_id) endpoints keep hitt
 the implicit default chat (byte-for-byte, covered in test_messages.py)."""
 
 import asyncio
+import json
 
 from httpx import ASGITransport
 
@@ -46,6 +47,25 @@ def test_get_conversation_wire_field_is_item_id():
     data = entries[0]["data"]
     assert data["item_id"] == iid
     assert "investigation_id" not in data
+
+
+def test_get_conversation_list_filters_by_indexed_item_id():
+    """The FE narrows ``GET /conversation`` to ONE item server-side via a
+    data_conditions filter on the INDEXED ``item_id`` field — a perf fix so it no
+    longer fetches the whole collection to scan on the client. Prove the route
+    honours the filter (and that ``eq`` on the string handle works): with two
+    items each holding a conversation, filtering to one returns only its row."""
+    client, spec, iid = _client()
+    other = register_rca_item(spec)
+    client.post(f"/a/rca/items/{iid}/messages", json={"content": "q"})
+    client.post(f"/a/rca/items/{other}/messages", json={"content": "q2"})
+    # Unfiltered, the collection holds BOTH items' conversations.
+    assert len(client.get("/conversation").json()) == 2
+    # Filtered to `iid`, the backend returns only that item's conversation —
+    # an indexed WHERE, not a full scan the client has to narrow.
+    conds = json.dumps([{"field_path": "item_id", "operator": "eq", "value": iid}])
+    entries = client.get("/conversation", params={"data_conditions": conds}).json()
+    assert [e["data"]["item_id"] for e in entries] == [iid]
 
 
 def test_chats_list_is_empty_then_shows_the_default_after_a_message():
