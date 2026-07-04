@@ -116,3 +116,39 @@ async def test_send_notification_capability_dedups_over_the_store(monkeypatch):
     rm = spec.get_resource_manager(Notification)
     rows = list(rm.list_resources((QB["dedup_key"] == "bob:issue-5-overdue").build()))
     assert len(rows) == 1  # exactly one notification created, deduped over the store
+
+
+async def test_wire_handle_binds_ask_llm_over_the_run_model(monkeypatch):
+    """#435 P6: wire_handle binds wf.ask_llm → the executor's ILlm (create_entity's
+    cross-origin match, M1-AI). collect() is blocking, so the wired call offloads it off
+    the loop; with no model wired the handle stays inert (journal-only self-dedup)."""
+    from collections.abc import Iterator
+
+    from workspace_app.kb.llm import ILlm
+    from workspace_app.workflow.handle import WorkflowHandle
+
+    class _FakeLlm(ILlm):
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+            self.prompts.append(prompt)
+            yield "thinking", True  # reasoning chunk is dropped by collect()
+            yield "2", False
+
+    _spec, executor, item_id = _build(monkeypatch)
+
+    # wired: wf.ask_llm forwards the prompt to the model and returns its non-reasoning text
+    fake = _FakeLlm()
+    executor._ask_llm = fake
+    wf = WorkflowHandle(store=executor._files, workspace_id=item_id)
+    executor.wire_handle(wf, "run-1", item_id, "u", "chat-1")
+    assert wf.ask_llm is not None  # wired (narrows AskLlm | None for the call below)
+    assert await wf.ask_llm("which one?") == "2"
+    assert fake.prompts == ["which one?"]
+
+    # inert: no model → wire_handle leaves ask_llm at the handle default (None)
+    executor._ask_llm = None
+    wf2 = WorkflowHandle(store=executor._files, workspace_id=item_id)
+    executor.wire_handle(wf2, "run-2", item_id, "u", "chat-1")
+    assert wf2.ask_llm is None

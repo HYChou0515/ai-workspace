@@ -97,7 +97,7 @@ async def test_act_crash_after_create_does_not_double_create() -> None:
     assert not await store.exists("ws", "/issues/2.md")
 
 
-async def test_concurrent_store_conflict_on_merge_fails_the_step() -> None:
+async def test_concurrent_store_conflict_on_merge_fails_the_step(monkeypatch) -> None:
     """A merge that hits the store's optimistic lock (the entity changed under it,
     a cross-pod race) becomes a ``StepFailed`` — the element drops into ``failures[]``
     and the human's edit is not clobbered (§8), rather than a silent overwrite."""
@@ -106,19 +106,16 @@ async def test_concurrent_store_conflict_on_merge_fails_the_step() -> None:
     wf = await _wf()
     await wf.create_entity("issue", {"title": "A"}, name="site")
 
-    orig_update = store_mod.EntityStore.update
     calls = {"n": 0}
 
-    async def _conflicting_update(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+    async def _conflicting_update(self, *args, **kwargs):
         calls["n"] += 1
         raise store_mod.EntityConflict("changed under me")
 
-    store_mod.EntityStore.update = _conflicting_update  # type: ignore[method-assign]
-    try:
-        with pytest.raises(StepFailed):
-            await wf.create_entity("issue", {"title": "B"}, name="site")
-    finally:
-        store_mod.EntityStore.update = orig_update  # type: ignore[method-assign]
+    # monkeypatch.setattr auto-restores + isn't type-checked against the method slot.
+    monkeypatch.setattr(store_mod.EntityStore, "update", _conflicting_update)
+    with pytest.raises(StepFailed):
+        await wf.create_entity("issue", {"title": "B"}, name="site")
     assert calls["n"] == 1
 
 

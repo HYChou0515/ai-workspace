@@ -732,6 +732,10 @@ def create_app(
         turn_ctx=turn_ctx,
         locator=locator,
         run_subagent=_run_subagent,
+        # #435 P6: backs create_entity's cross-origin dedup (M1-AI). Reuse the KB answer
+        # model — the same capable text model that answers questions decides whether two
+        # entities are the same. Inert (journal-only self-dedup) if this is None.
+        ask_llm=kb_answer_llm,
     )
 
     workflow_credentials = CredentialBroker()

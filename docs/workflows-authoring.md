@@ -132,7 +132,17 @@ await wf.upsert_context_card(collection, keys, *, title="", body="",
                              phase="commit", cache=True) -> card_id
 await wf.find_overwrite_card(collection, keys, *, title="") -> {...} | None  # 唯讀
 await wf.convert(src, dest, *, phase="convert", cache=True) -> (out_path, kind)
+await wf.create_entity(type_name, args, *, name, on_duplicate="update",
+                       phase="commit", key="", cache=True) -> number
+await wf.send_notification(recipient, topic, *, name, title="", body="",
+                          phase="notify", cache=True) -> {sent, action, notification_id}
 ```
+
+`create_entity` / `send_notification` 是 **non-idempotent capabilities**(#435):它們的
+*action* 對外界有一次性副作用(建一筆實體、發一則通知),所以光靠「同 args 跳過」的 journal
+去重不夠——一個 revise 改了欄位、或跨 run 手動重跑,args 會變但那個「真實世界的東西」還是同
+一個。詳見下面的〈非冪等 capability 去重〉。`name` 是**必填**:它是去重身分(不是 args
+指紋),同一個 `name` 站點在 revise／replay 時對應到同一個實體。
 
 `wf.convert`(#324)把一份上傳**先轉成文字、再 file 進 collection**——只存轉好的 artifact,
 絕不存原始 binary(topic-hub 的 →collections 在 `input.json` 開了 `convert` 時用它)。它跑的是
@@ -141,6 +151,49 @@ await wf.convert(src, dest, *, phase="convert", cache=True) -> (out_path, kind)
 `deck.pptx` → `deck.pptx.md`)、`passthrough`(本來就是純文字／程式碼,維持原副檔名)、`none`
 (沒有 parser 讀得懂的 binary——此時 `out_path` 是 `None`,呼叫端**跳過**它,絕不把原始 bytes
 落地)。回傳的 `out_path` 就是你接著要 file 的那條 workspace 路徑。
+
+### 非冪等 capability 去重(#435)
+
+一個 idempotent capability(`ingest` / `upsert_card`)重跑不會有事——它的 action 是
+「upsert」,再做一次就覆蓋掉。但 `create_entity` / `send_notification` 的 action **本質是一次
+性的**:再做一次就是「多一筆實體」「多一則通知」。這類 capability 走一層共用的**非冪等外殼**
+(`workflow/nonidempotent.py`),把每次呼叫拆成兩筆各自 journal 的 `run_step`:
+
+```
+step_<name>/<key>.decide.json   ← 一個 Verdict(kind = new | duplicate | token)
+step_<name>/<key>.json          ← 發布出去的 Result(number / notification_id …)
+```
+
+`decide` 先判斷「這個東西存不存在」,`act` 再依 verdict 分派(建新／合併／跳過)。因為 act 的
+input hash 把 decide 的 verdict 也算進去,§9 的 hash-chaining 就白送你**三態重跑**
+(verdict 沒變 → 跳過;verdict 變了 → 重判)——不需要另外寫一套兩段落盤。
+
+**去重靠的是機制目錄,不是「策略層」**。policy 定義在**單一 capability 介面**這層,不是一個通
+用策略層:
+
+- **M1 — 查既有的真實來源(store)。** 兩種味道:*deterministic fingerprint*(例如
+  `send_notification` 用 `{recipient}:{topic}` 去查通知 ledger,同一個主題只發一次),或
+  *AI-semantic*(`create_entity` 問模型:這筆新實體跟別的來源已經 file 的某筆是不是同一個真實
+  東西)。AI 那條是 opt-in 的:owner 沒 wire 模型時退化成純 journal 自我去重。
+- **M2 — idempotency token。** 呼叫綁一個調用 token(journal 身分),`create_new` 政策就是
+  「M1 減掉跨來源比對」——同一 run 內 revise 靠 `created.json` 安全,跨 run 的 `create_new`
+  在 #429 落地前由 `workflow check` 靜態擋掉。
+- **M3 — self-ledger(deferred)。** 給真正 blind 的外部 channel(送出去無法回查)用;in-app
+  通知不需要,因為那筆 store record **本身**就同時是「送出」與「ledger」(原子)。
+
+三個關鍵不變式:
+
+- **journal-first、AI-second 身分。** 先看 write-once `created.json`(deterministic 自我去
+  重,擋 revise 雙建);只有跨來源時才動用 AI。
+- **self / cross 分流的合併。** 同源(自己之前建的)= overlay;跨源(別人建的)= 非破壞的
+  **圍欄覆寫**——只改自己 `name` 擁有的 `<!-- wf:<name> begin/end -->` 區塊 + 填空欄位,絕不
+  動人手寫的標題／內文。圍欄每次**覆寫**(不是 append),所以重跑不會累積(决议5,靠構造冪等)。
+- **decide-AI 只守可逆的 act(决議8)。** M1-AI 從構造上只會守「非破壞的 enrich」這種可逆動
+  作,所以 fail-open 永遠安全:模型出錯／幻覺 → 當成 NEW,頂多多建一筆(可逆),絕不誤 merge 進
+  一筆不存在的紀錄。
+
+DSL(`workflow.json`)對 non-idempotent 步驟強制要 `name`;把 `on_duplicate` 設成
+`create_new` 但 #429 還沒到,`workflow check` 會靜態報錯擋下。
 
 ### Gates
 
