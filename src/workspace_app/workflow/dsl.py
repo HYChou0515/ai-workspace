@@ -475,6 +475,36 @@ def _collect_name(step: MapStep) -> str:
     return ""
 
 
+def _inner_journal_names(steps: list[Step]) -> set[str]:
+    """The journal names of a map's inner agent/sandbox steps — the ones keyed by the
+    ELEMENT key (``name or phase``), recursing into a switch's cases. Capabilities are
+    excluded: they key by content (card key / args digest), never the element key, so
+    they must not be pruned by element key (#429 P4)."""
+    names: set[str] = set()
+    for s in steps:
+        if isinstance(s, AgentStep | SandboxStep):
+            names.add(s.name or s.phase)
+        elif isinstance(s, SwitchStep):
+            seqs = list(s.cases.values()) + ([s.default] if s.default is not None else [])
+            for seq in seqs:
+                names |= _inner_journal_names(seq)
+    return names
+
+
+async def _gc_map_orphans(wf: WorkflowHandle, step: MapStep, current_keys: set[str]) -> None:
+    """Prune a map's inner per-element journal artifacts for element keys no longer in the
+    current set (#429 P4). Runs when the map re-runs, right after the element set resolves,
+    so cleanup is tied to the natural moment the set changes — no standing GC sweep. Only
+    deletes keys that genuinely left the set (a key still present, or a set that grew, is
+    untouched), so a transient glob shrink at worst re-computes that element next time."""
+    for jname in _inner_journal_names(step.do):
+        prefix = f"{wf.journal_dir.lstrip('/')}/step_{jname}"
+        for path in await wf.glob([f"{prefix}/*.json"]):
+            key = path.rsplit("/", 1)[-1].removesuffix(".json")
+            if key not in current_keys:
+                await wf.delete(path)
+
+
 def _collected_value(result: Any) -> Any:
     """One element's contribution to ``.outputs``: its collected step's ``fields`` (an
     ``outputs`` step), else its ``out`` path (a write step), else ``None`` (§5.1 degrade)."""
@@ -571,6 +601,9 @@ async def _exec_step(
 ) -> None:
     if isinstance(step, MapStep):
         elements = await _map_elements(step, ns, wf)
+        # #429 P4: prune orphan per-element artifacts left by a now-smaller set before
+        # re-running (cleanup tied to the moment the set resolves).
+        await _gc_map_orphans(wf, step, {ekey for _, ekey in elements})
 
         async def _one(elem: tuple[Any, str]) -> None:
             value, ekey = elem

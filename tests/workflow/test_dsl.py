@@ -587,6 +587,42 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
     assert ran == ['build ["a", "b"]'] and cards == [("a", ["k1", "k2"])]
 
 
+async def test_map_prunes_orphan_element_artifacts_when_the_set_shrinks():
+    """When a map's element set shrinks (a glob goes 2→1), the departed element's inner
+    per-element journal artifact is pruned on the next run (#429 P4) — no accumulating
+    orphan receipts. A still-present element's artifact is kept."""
+    store = MemoryFileStore()
+
+    async def run_sandbox(cmd: str, on_output: Any) -> tuple[int, str]:
+        return 0, "ok"
+
+    wf = make_wf(store, run_sandbox=run_sandbox)
+    await wf.write("/in/a.txt", "1")
+    await wf.write("/in/b.txt", "2")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [
+                    {"type": "map", "over": "in/*.txt", "as": "f", "phase": "p",
+                     "do": [{"type": "sandbox", "run": "process {f}", "phase": "p",
+                             "name": "proc"}]}
+                ],
+            }
+        )
+    )
+    await build_run(d)(wf, None)
+    jd = wf.journal_dir.lstrip("/")
+    assert await wf.exists(f"{jd}/step_proc/in_a.txt.json")
+    assert await wf.exists(f"{jd}/step_proc/in_b.txt.json")
+
+    await wf.delete("/in/b.txt")  # the set shrinks 2 → 1
+    await build_run(d)(wf, None)
+    assert await wf.exists(f"{jd}/step_proc/in_a.txt.json")  # still present → kept
+    assert not await wf.exists(f"{jd}/step_proc/in_b.txt.json")  # departed → pruned
+
+
 async def test_dsl_update_entity_capability_merges_patch():
     """The `update_entity` DSL capability routes through the same EntityStore path as
     `create_entity` (#429 P2): `number` + the `args` patch are interpolated and merged,
