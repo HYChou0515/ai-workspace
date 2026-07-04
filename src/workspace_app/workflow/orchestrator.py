@@ -225,6 +225,16 @@ class WorkflowOrchestrator:
         run (manual §4); ``chat_id`` is the workflow chat it drives (manual §3). With a
         ``chat_id``, runs are **per-chat** so many may run in parallel on one item
         (§3); without one (legacy), the one-active-run-per-item rule still holds (§14)."""
+        # #429 E (execution gate 2): a headless (triggered) run has no request user, so the
+        # acting user must be threaded through explicitly. If it arrives empty — a plumbing
+        # bug, a lost serialization — FAIL LOUD rather than silently run as a system/superuser
+        # (the authz-scope version of the 'no silent errors' rule). A declaration-time check
+        # (validate_triggers) already rejects an empty acting_user; this defends the run point.
+        if not captured_user:
+            raise ValueError(
+                "workflow run needs a non-empty captured_user (the acting authz scope) — "
+                "refusing to run headless with no identity"
+            )
         # Without a chat_id the one-active-run-per-item rule holds (§14); with one, runs
         # are per-chat, so guard only the target chat (#343 takeover / topic-hub §3).
         existing = (

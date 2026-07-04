@@ -21,7 +21,7 @@ import contextlib
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
@@ -47,6 +47,12 @@ INDEX_SWEEP_INTERVAL_S = 300.0
 INDEX_STUCK_AFTER_S = 3600.0
 
 
+def _utcnow() -> datetime:
+    """Timezone-aware wall clock in UTC — the trigger sweeper's ``now_utc`` (each schedule
+    converts it into its own zone for the period math)."""
+    return datetime.now(UTC)
+
+
 def build_lifespan(
     *,
     registry: InvestigationRegistry,
@@ -65,6 +71,7 @@ def build_lifespan(
     gc_interval: timedelta | None,
     gc_t1: str,
     gc_t2: str,
+    trigger_check_interval: timedelta | None = None,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build the FastAPI ``lifespan`` context manager, capturing the injected
     deps in the nested sweeper closures. The coordinators stay off-capture and
@@ -166,6 +173,36 @@ def build_lifespan(
         except asyncio.CancelledError:
             return
 
+    async def trigger_sweeper(app: FastAPI) -> None:
+        """#429 P7: the schedule-trigger poll loop. Each tick re-scans every app/profile's
+        ``triggers.json`` (so an operator edit takes effect without a restart), and for each
+        enabled schedule that is due, a CAS claim elects ONE pod to launch the run under the
+        trigger's declared ``acting_user``. The whole tick swallows its own errors so one bad
+        profile / a transient specstar blip never wedges the loop. ``app`` is passed in (vs
+        captured) so the orchestrator — built after the FastAPI app — is read from
+        ``app.state.workflow_orchestrator``, symmetric with ``index_sweeper``."""
+        from ..workflow.triggers import (
+            SpecstarTriggerStore,
+            TriggerSweeper,
+            build_trigger_start,
+            discover_schedule_triggers,
+        )
+
+        assert trigger_check_interval is not None  # gated by caller
+        sweeper = TriggerSweeper(
+            load=discover_schedule_triggers,
+            store=SpecstarTriggerStore(spec),
+            start=build_trigger_start(app.state.workflow_orchestrator.start),
+            now_utc=_utcnow,
+        )
+        try:
+            while True:
+                await asyncio.sleep(trigger_check_interval.total_seconds())
+                with contextlib.suppress(Exception):
+                    await sweeper.tick()
+        except asyncio.CancelledError:
+            return
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Issue #51 / Q2: the fast (connectivity-grade) probes block
@@ -235,6 +272,14 @@ def build_lifespan(
             # #245: seed the CAS lease, then run the orphan-blob GC on a schedule.
             register_gc_lease(spec)
             bg.append(asyncio.create_task(blob_gc_sweeper()))
+        if trigger_check_interval is not None:
+            # #429 P7: register the shared window-ledger model (post-apply, so its CRUD
+            # routes are never emitted — same reason as the blob-GC lease above), then run
+            # the schedule-trigger poll loop.
+            from ..workflow.triggers import register_trigger_store
+
+            register_trigger_store(spec)
+            bg.append(asyncio.create_task(trigger_sweeper(app)))
         try:
             yield
         finally:

@@ -22,6 +22,7 @@ _APPS_PKG = "workspace_app.apps"
 _PROFILES_DIR = "profiles"
 _PROFILE_FILE = "_profile.json"
 _PROMPT_FILE = "_prompt.md"
+_TRIGGERS_FILE = "triggers.json"
 _NON_PROFILE = {"__pycache__"}
 
 
@@ -137,3 +138,13 @@ def load_profile_appendix(app_slug: str, name: str) -> str:
         return (_profiles_root(app_slug) / name / _PROMPT_FILE).read_text("utf-8")
     except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
         return ""
+
+
+def load_profile_triggers_raw(app_slug: str, name: str) -> bytes | None:
+    """The raw bytes of the profile's ``triggers.json`` (#429 P6/P7), or ``None`` when it
+    ships none. Parsing + validation live in ``workflow.triggers`` — this is only the
+    resources boundary, symmetric with ``load_profile_appendix``."""
+    try:
+        return (_profiles_root(app_slug) / name / _TRIGGERS_FILE).read_bytes()
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError, OSError):
+        return None

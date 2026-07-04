@@ -264,6 +264,10 @@ def create_app(
     # Per-item run-history retention (manual §16): keep at most this many runs, pruning
     # the oldest terminal ones when a new run starts. 0 ⇒ keep all.
     workflow_keep_last_runs: int = 0,
+    # #429 P7: how often the schedule-trigger sweeper polls declared triggers.json for due
+    # runs. None ⇒ the sweeper is off (the safe default — headless triggered runs are opt-in
+    # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
+    trigger_check_interval: timedelta | None = None,
 ) -> FastAPI:
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
@@ -395,6 +399,7 @@ def create_app(
         gc_interval=gc_interval,
         gc_t1=gc_t1,
         gc_t2=gc_t2,
+        trigger_check_interval=trigger_check_interval,
     )
 
     # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and

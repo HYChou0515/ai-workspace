@@ -337,6 +337,19 @@ async def test_second_active_run_on_same_item_is_rejected(spec_instance: SpecSta
     assert rid2 != run_id
 
 
+async def test_start_refuses_an_empty_captured_user(spec_instance: SpecStar):
+    """#429 E (execution gate 2): a headless/triggered run has no request user, so the acting
+    user is threaded through explicitly. If it arrives empty, fail loud — never silently run as
+    a system identity (the authz-scope 'no silent errors' rule)."""
+    orch, _ = _orch(spec_instance, _run_noop)
+    with pytest.raises(ValueError, match="captured_user"):
+        await orch.start(slug="rca", item_id="iE", profile="echo", captured_user="")
+
+
+async def _run_noop(wf, inputs):
+    return {}
+
+
 async def test_stop_cancels_and_releases(spec_instance: SpecStar):
     started = asyncio.Event()
 
