@@ -36,11 +36,18 @@ from .steps import agent_step, agent_write_step, sandbox_node
 # The capability calls a user DSL may invoke (manual §22, Q4). Each maps to a
 # ``WorkflowHandle`` method that runs under the captured user's authz; a ``sandbox``
 # step gets no credential, so reliable side-effects only ever go through these.
-CAPABILITIES = ("ingest_to_collection", "upsert_context_card", "create_entity")
+CAPABILITIES = (
+    "ingest_to_collection",
+    "upsert_context_card",
+    "create_entity",
+    "update_entity",
+)
 _CAP_REQUIRED: dict[str, tuple[str, ...]] = {
     "ingest_to_collection": ("collection", "path"),
     "upsert_context_card": ("collection", "keys"),
     "create_entity": ("type_name",),
+    # #429 P2: update by (type + number); ``args`` is the merge-patch (fields → values).
+    "update_entity": ("type_name", "number"),
 }
 # The deterministic gate builders a check spec may name (manual §6).
 _CHECKS = ("file_nonempty", "choice_in", "collection_has")
@@ -134,8 +141,11 @@ class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
     title: str = ""
     body: str = ""
     # #419 create_entity: which entity type + the field args (values may interpolate).
+    # #429 P2 update_entity: ``type_name`` + ``number`` identify the record, ``args`` is
+    # the merge-patch. ``number`` is a literal int or an interpolation ref (``{q.n}``).
     type_name: str = ""
     args: dict[str, Any] = field(default_factory=dict)
+    number: str | int = ""
 
 
 class MapStep(Struct, tag="map", forbid_unknown_fields=True):
@@ -360,6 +370,16 @@ async def _resolve_reads(
     return [_stringify(await _resolve(r, ns, wf)) for r in reads]
 
 
+async def _resolve_number(number: str | int, ns: dict[str, Any], wf: WorkflowHandle) -> int:
+    """Resolve an ``update_entity`` capability's ``number`` (#429 P2) — a literal int or an
+    interpolation ref (``{q.n}``) — to the concrete entity number."""
+    value = await _resolve(number, ns, wf) if isinstance(number, str) else number
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise DslError(f"update_entity 'number' must resolve to an integer, got {value!r}") from exc
+
+
 # ─── interpreter ─────────────────────────────────────────────────────────────
 
 
@@ -521,6 +541,17 @@ async def _exec_capability(wf: WorkflowHandle, step: CapabilityStep, ns: dict[st
             for k, v in step.args.items()
         }
         await wf.create_entity(await _resolve(step.type_name, ns, wf), resolved, phase=step.phase)
+    elif step.call == "update_entity":  # #429 P2 — same EntityStore path, optimistic-retry
+        patch = {
+            k: (await _resolve(v, ns, wf) if isinstance(v, str) else v)
+            for k, v in step.args.items()
+        }
+        await wf.update_entity(
+            await _resolve(step.type_name, ns, wf),
+            await _resolve_number(step.number, ns, wf),
+            patch,
+            phase=step.phase,
+        )
     else:  # upsert_context_card (the only other allowed call; validated upstream)
         await wf.upsert_context_card(
             await _resolve(step.collection, ns, wf),
@@ -899,7 +930,7 @@ def _validate_step(
                 if not getattr(step, req):
                     errs.append(f"{where}: capability {step.call!r} needs {req!r}")
         _check_interp(
-            [step.collection, step.path, step.title, step.body, step.keys, step.args],
+            [step.collection, step.path, step.title, step.body, step.keys, step.args, step.number],
             scope,
             where,
             errs,

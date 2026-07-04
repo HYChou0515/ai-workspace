@@ -259,6 +259,59 @@ class WorkflowHandle:
         )
         return result["number"]
 
+    async def update_entity(
+        self,
+        type_name: str,
+        number: int,
+        patch: dict[str, Any],
+        *,
+        phase: str = "commit",
+        cache: bool = True,
+        retries: int = 3,
+    ) -> str:
+        """Update a file-first entity (#419) through the framework's ``EntityStore.update``
+        — the SAME path the UI and the agent use, never a raw ``wf.write`` (§C, "single
+        write path"). Optimistic + conflict-retrying (#429 P2): it re-reads the record's
+        version, applies the merge-``patch`` with that version, and on ``EntityConflict``
+        (a *parallel run* moved the record) re-reads and retries up to ``retries`` times —
+        so two workflow runs updating the same entity never lost-update (this is how gap 5
+        "parallel runs hit the same entity" is closed, without a new lock). Journaled +
+        skipped on re-run keyed by ``(type, number, patch)`` — the patch is absolute field
+        values, so a re-run is a no-op skip, never a double-apply. Returns the new version."""
+        from ..entity.catalog import discover_catalog
+        from ..entity.store import EntityConflict, EntityStore
+
+        catalog, _diags = await discover_catalog(self._store, self._workspace_id)
+        if type_name not in catalog:
+            raise StepFailed(f"unknown entity type: {type_name!r}")
+        store = EntityStore(self._store, self._workspace_id, catalog)
+
+        async def execute(_feedback: str | None) -> dict[str, str]:
+            for _ in range(retries + 1):
+                current = await store.get(type_name, number)
+                try:
+                    updated = await store.update(
+                        type_name, number, patch, expected_version=current.version
+                    )
+                except EntityConflict:
+                    continue  # a parallel run moved it — re-read + re-apply on the fresh copy
+                return {"version": updated.version}
+            raise StepFailed(
+                f"update_entity {type_name} #{number}: too many version conflicts "
+                f"(retried {retries} times) — a parallel run keeps moving it"
+            )
+
+        result = await run_step(
+            self,
+            name="update_entity",
+            key=f"{type_name}_{number}_{_args_digest(patch)}",
+            phase=phase,
+            args={"type": type_name, "number": number, "patch": patch},
+            execute=execute,
+            cache=cache,
+        )
+        return result["version"]
+
     async def convert(
         self, src: str, dest: str, *, phase: str = "convert", cache: bool = True
     ) -> tuple[str | None, str]:

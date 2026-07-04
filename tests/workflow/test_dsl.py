@@ -324,6 +324,10 @@ def test_validate_gate_rules():
 def test_validate_capability_rules():
     not_allowed = _errs([{"type": "capability", "call": "rm_rf", "phase": "p"}])
     assert any("not allowed" in e for e in not_allowed)
+    # #429 P2: update_entity needs type_name + number
+    upd = _errs([{"type": "capability", "call": "update_entity", "phase": "p",
+                  "type_name": "issue"}])
+    assert any("needs 'number'" in e for e in upd)
     missing = _errs(
         [{"type": "capability", "call": "ingest_to_collection", "phase": "p", "collection": "a"}]
     )
@@ -581,6 +585,62 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
     assert validate_def(d) == []
     assert await build_run(d)(wf, None) == {"status": "done"}
     assert ran == ['build ["a", "b"]'] and cards == [("a", ["k1", "k2"])]
+
+
+async def test_dsl_update_entity_capability_merges_patch():
+    """The `update_entity` DSL capability routes through the same EntityStore path as
+    `create_entity` (#429 P2): `number` + the `args` patch are interpolated and merged,
+    other fields preserved."""
+    store = MemoryFileStore()
+    await store.write(
+        "ws",
+        "/.entity/issue/schema.yaml",
+        b"path: issues\nfields:\n  title: {role: text}\n"
+        b"  status: {role: status, values: [open, done]}\n",
+    )
+    await store.write(
+        "ws", "/.entity/issue/skeleton.md", b"---\ntitle: {{arg.title}}\nstatus: {{arg.status}}\n---\n"
+    )
+    wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm", user="alice")
+    await wf.create_entity("issue", {"title": "A", "status": "open"})
+
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "config": {"target": "done"},
+                "steps": [
+                    {"type": "capability", "call": "update_entity", "phase": "p",
+                     "type_name": "issue", "number": 1, "args": {"status": "{config.target}"}}
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    body = (await store.read("ws", "/issues/1.md")).decode()
+    assert "status: done" in body and "title: A" in body
+
+
+async def test_dsl_update_entity_number_must_resolve_to_int():
+    """A `number` that doesn't resolve to an integer is a loud DslError at run time."""
+    store = MemoryFileStore()
+    await store.write("ws", "/.entity/issue/schema.yaml", b"path: issues\nfields:\n  t: {role: text}\n")
+    await store.write("ws", "/.entity/issue/skeleton.md", b"---\nt: {{arg.t}}\n---\n")
+    wf = WorkflowHandle(store=store, workspace_id="ws", workflow_id="pm")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "p"}],
+                "steps": [{"type": "capability", "call": "update_entity", "phase": "p",
+                           "type_name": "issue", "number": "notanumber", "args": {"t": "x"}}],
+            }
+        )
+    )
+    with pytest.raises(DslError, match="must resolve to an integer"):
+        await build_run(d)(wf, None)
 
 
 async def test_dsl_step_cache_false_always_reruns():
