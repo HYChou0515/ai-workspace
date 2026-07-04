@@ -115,10 +115,10 @@ export const qk = {
     // separate from `doc` (the heavy render, used by the citation drawer).
     docMeta: (id: string) => ["kb", "doc-meta", id] as const,
     docChunks: (id: string) => ["kb", "doc-chunks", id] as const,
-    // Issue #50: the LLM wiki browser.
+    // Issue #50: the LLM wiki browser. (Wiki *page content* is cached under the
+    // shared `qk.file(scopeId, path)` key via the wiki IDE's buffer, not a
+    // separate per-page key — so there's no `wikiPage` here.)
     wikiPages: (collectionId: string) => ["kb", "wiki-pages", collectionId] as const,
-    wikiPage: (collectionId: string, path: string) =>
-      ["kb", "wiki-page", collectionId, path] as const,
     wikiStatus: (collectionId: string) => ["kb", "wiki-status", collectionId] as const,
     // #106: a collection's context cards (the lightweight glossary).
     contextCards: (collectionId: string) => ["kb", "context-cards", collectionId] as const,

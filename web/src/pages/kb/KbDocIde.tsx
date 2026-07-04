@@ -27,6 +27,8 @@ import { usePersistentNumber } from "../../hooks/usePersistentNumber";
 import {
   FileBufferProvider,
   FileBufferStore,
+  type IO,
+  reactQueryContentCache,
   useFileBuffer,
   useIsDirty,
 } from "../../hooks/fileBuffer";
@@ -118,14 +120,16 @@ export function KbDocIde({
   // never reset by a background refetch.
   const serviceRef = useRef(service);
   serviceRef.current = service;
-  const bufferStore = useMemo(
-    () =>
-      new FileBufferStore({
-        readFile: (p) => serviceRef.current.readFile(p),
-        writeFile: (p, b) => serviceRef.current.writeFile(p, b),
-      }),
-    [],
-  );
+  const bufferStore = useMemo(() => {
+    // One io the store AND its content cache share, so the buffer's fetch and
+    // any other qk.file reader dedupe onto the SAME cache entry (scopeId is
+    // stable per collection, so reading it off the ref once is fine).
+    const io: IO = {
+      readFile: (p) => serviceRef.current.readFile(p),
+      writeFile: (p, b) => serviceRef.current.writeFile(p, b),
+    };
+    return new FileBufferStore(io, reactQueryContentCache(qc, serviceRef.current.scopeId, io));
+  }, [qc]);
 
   const navigate = useNavigate();
   const params = useParams();

@@ -9,10 +9,11 @@
  * `onDecide`, so the modal and the card stay in sync.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
 import { type FileService, investigationFileService } from "../api/fileService";
+import { qk } from "../api/queryKeys";
 import { useT } from "../lib/i18n";
 import { MonacoDiffEditor } from "./MonacoDiffEditor";
 import { pxToRem } from "../lib/pxToRem";
@@ -105,6 +106,7 @@ function CardDiffModal({
   onClose: () => void;
 }) {
   const t = useT();
+  const queryClient = useQueryClient();
   const [loaded, setLoaded] = useState<{ current: string; todo: string } | null>(null);
   const [draft, setDraft] = useState("");
   const [revising, setRevising] = useState(false);
@@ -112,9 +114,19 @@ function CardDiffModal({
 
   useEffect(() => {
     let alive = true;
+    // Read the two diff files THROUGH the shared qk.file cache instead of a
+    // bespoke bypass: an open IDE buffer of the same file (or any qk.file
+    // reader) then dedupes onto this entry. `staleTime: 0` keeps the modal's
+    // "fresh on every open" behaviour (a run may have rewritten the proposal),
+    // and `retry: false` matches the old direct-read (no retry on a 404).
     const readText = (path: string) =>
-      svc
-        .readFile(path)
+      queryClient
+        .fetchQuery({
+          queryKey: qk.file(svc.scopeId, path),
+          queryFn: () => svc.readFile(path),
+          staleTime: 0,
+          retry: false,
+        })
         .then((c) => (c.kind === "text" ? c.text : ""))
         .catch(() => "");
     Promise.all([readText(CURRENT_PATH), readText(TODO_PATH)]).then(([current, todo]) => {
@@ -125,13 +137,22 @@ function CardDiffModal({
     return () => {
       alive = false;
     };
-  }, [svc]);
+  }, [svc, queryClient]);
 
   const decide = async (choice: string, input?: string) => {
     // Persist right-pane edits before the decision commits them (last-write-wins;
     // a failed write surfaces on the run, not here).
     if (loaded && draft !== loaded.todo) {
       await svc.writeFile(TODO_PATH, draft).catch(() => {});
+      // Write-through the shared cache so a later reader of the proposal gets
+      // the saved bytes (the buffer's save does the same).
+      queryClient.setQueryData(qk.file(svc.scopeId, TODO_PATH), {
+        kind: "text",
+        path: TODO_PATH,
+        size: new TextEncoder().encode(draft).byteLength,
+        text: draft,
+        encoding: "utf-8",
+      });
     }
     onDecide(choice, input);
   };

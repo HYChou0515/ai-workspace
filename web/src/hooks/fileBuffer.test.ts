@@ -1,6 +1,8 @@
+import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
-import { FileBufferStore } from "./fileBuffer";
+import { qk } from "../api/queryKeys";
+import { FileBufferStore, reactQueryContentCache } from "./fileBuffer";
 
 function makeIO(initial: Record<string, string> = {}) {
   const files = { ...initial };
@@ -161,5 +163,59 @@ describe("FileBufferStore", () => {
     s.reload("/a.md");
     await tick();
     expect(s.snapshot("/a.md").text).toBe("v2");
+  });
+});
+
+describe("FileBufferStore backed by a shared react-query content cache", () => {
+  it("loads through the shared cache so a second reader of the same path is served without a refetch", async () => {
+    const io = makeIO({ "/a.md": "shared" });
+    const qc = new QueryClient();
+    const cache = reactQueryContentCache(qc, "scope1", io);
+    const s = new FileBufferStore(io, cache);
+    s.ensureLoaded("/a.md");
+    await tick();
+    expect(s.snapshot("/a.md").text).toBe("shared");
+    // A second consumer reading the same (scope, path) is served from the cache
+    // the buffer already filled — one fetch total (the consolidation win).
+    const again = await cache.load("/a.md");
+    expect(again.kind === "text" && again.text).toBe("shared");
+    expect(io.readFile).toHaveBeenCalledTimes(1);
+    // The bytes live under the canonical qk.file key, so any qk.file reader shares them.
+    expect(qc.getQueryData(qk.file("scope1", "/a.md"))).toMatchObject({ text: "shared" });
+  });
+
+  it("save writes through to the content cache so a fresh reader sees the new content", async () => {
+    const io = makeIO({ "/a.md": "old" });
+    const qc = new QueryClient();
+    const cache = reactQueryContentCache(qc, "s", io);
+    const s = new FileBufferStore(io, cache);
+    s.ensureLoaded("/a.md");
+    await tick();
+    s.setText("/a.md", "new");
+    await s.save("/a.md");
+    expect(qc.getQueryData(qk.file("s", "/a.md"))).toMatchObject({ kind: "text", text: "new" });
+  });
+
+  it("reload drops the cached entry so it refetches past the Infinity staleTime", async () => {
+    const io = makeIO({ "/a.md": "v1" });
+    const qc = new QueryClient();
+    const cache = reactQueryContentCache(qc, "s", io);
+    const s = new FileBufferStore(io, cache);
+    s.ensureLoaded("/a.md");
+    await tick();
+    io.files["/a.md"] = "v2";
+    s.reload("/a.md");
+    await tick();
+    expect(s.snapshot("/a.md").text).toBe("v2");
+    expect(io.readFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("with NO cache, behaves exactly as before (reads straight through io)", async () => {
+    const io = makeIO({ "/a.md": "plain" });
+    const s = new FileBufferStore(io);
+    s.ensureLoaded("/a.md");
+    await tick();
+    expect(s.snapshot("/a.md").text).toBe("plain");
+    expect(io.readFile).toHaveBeenCalledTimes(1);
   });
 });
