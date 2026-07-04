@@ -16,6 +16,7 @@ through the ``/run`` endpoint.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
@@ -29,12 +30,13 @@ from ..sandbox.protocol import OutputSink, Sandbox
 from ..workflow.capabilities import convert_upload, ingest_to_collection, upsert_context_card
 from ..workflow.handle import WorkflowHandle
 from ..workflow.run import RunStatus, WorkflowRun
-from .notifications import notify
+from .notifications import notification_sent, notify
 from .rca_messages import to_rca_message
 
 if TYPE_CHECKING:
     from ..files import WorkspaceFiles
     from ..kb.ingest import Ingestor
+    from ..kb.llm import ILlm
     from .locator import ItemLocator
     from .registry import InvestigationRegistry
     from .turn_context import TurnContextBuilder
@@ -61,6 +63,7 @@ class WorkflowExecutor:
         turn_ctx: TurnContextBuilder,
         locator: ItemLocator,
         run_subagent: RunSubagent,
+        ask_llm: ILlm | None = None,
     ) -> None:
         self._spec = spec
         self._files = files
@@ -72,6 +75,9 @@ class WorkflowExecutor:
         self._turn_ctx = turn_ctx
         self._locator = locator
         self._run_subagent = run_subagent
+        # #435 P6: the ILlm backing the create_entity cross-origin match (M1-AI, §decide-AI).
+        # None ⇒ dedup stays journal-only (self-dedup); a wired model enables cross-match.
+        self._ask_llm = ask_llm
         self._conv_rm = spec.get_resource_manager(Conversation)
 
     def upload_dir(self, slug: str, profile: str) -> str:
@@ -229,6 +235,26 @@ class WorkflowExecutor:
 
         return collection_has_doc(self._spec, collection=collection, path=path)
 
+    async def send_notification(
+        self, captured_user: str, recipient: str, title: str, body: str, dedup_key: str
+    ) -> str:
+        """The send_notification capability (#435 P5): one in-app Notification carrying the
+        send-once fingerprint (``dedup_key``) — the create is both the send and the ledger."""
+        return notify(
+            self._spec,
+            recipient=recipient,
+            kind="workflow",
+            title=title,
+            body=body,
+            dedup_key=dedup_key,
+            actor=captured_user,
+        )
+
+    async def notification_already_sent(self, dedup_key: str) -> bool:
+        """Backs send_notification's M1 dedup (#435 P5): an indexed Notification query on
+        the send-once fingerprint — the store IS the ledger."""
+        return notification_sent(self._spec, dedup_key)
+
     def wire_handle(
         self, wf: WorkflowHandle, run_id: str, item_id: str, captured_user: str, chat_key: str
     ) -> None:
@@ -250,6 +276,16 @@ class WorkflowExecutor:
             captured_user, collection, keys, title, body
         )
         wf._find_card = self.find_card
+        wf._notify = lambda recipient, title, body, dedup_key: self.send_notification(
+            captured_user, recipient, title, body, dedup_key
+        )
+        wf._notification_sent = self.notification_already_sent
+        # #435 P6: the create_entity cross-origin match asks the run's model. collect()
+        # is blocking (streams under the hood), so offload it off the loop; left inert
+        # (journal-only self-dedup) when no model is wired.
+        if self._ask_llm is not None:
+            ask = self._ask_llm
+            wf.ask_llm = lambda prompt: asyncio.to_thread(ask.collect, prompt)
 
     def _any_running(self, item_id: str) -> bool:
         """Is any run on this item still RUNNING? Used to decide whether the shared

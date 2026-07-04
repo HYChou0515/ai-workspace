@@ -74,7 +74,9 @@
 [284](plan-issue-284.md) ·
 [287](plan-issue-287.md) ·
 [288](plan-issue-288.md) ·
-[298](plan-issue-298.md)
+[298](plan-issue-298.md) ·
+[419](plan-issue-419.md) ·
+[435](plan-issue-435.md)
 
 彙整型：[plan-issues.md](plan-issues.md) · [plan-followups.md](plan-followups.md)
 

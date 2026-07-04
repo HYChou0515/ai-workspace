@@ -2065,6 +2065,7 @@ async def test_run_create_entity_capability() -> None:
                         "call": "create_entity",
                         "phase": "p",
                         "type_name": "task",
+                        "name": "ship",
                         "args": {"title": "Ship it"},
                     }
                 ],

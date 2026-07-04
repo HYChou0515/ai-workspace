@@ -21,3 +21,6 @@ class Notification(Struct):  # → resource "notification"
     actor: str | None = None  # who triggered it (user id); None when system/agent
     read: bool = False
     created_at: int | None = None  # epoch ms
+    dedup_key: str = ""  # #435 P5: send-once fingerprint ({recipient}:{topic}[:window]) so
+    # a workflow's send_notification capability can query "already sent?" — the store is the
+    # ledger (M1). Empty on notifications not produced by a deduped sender.
