@@ -42,7 +42,7 @@ const _CODE_PHASE_KEYS = new Set(CODE_WIKI_PHASES.map(([k]) => k));
  * populated states, so guidance can be set BEFORE the first build (no
  * death-lock). Saving PATCHes the collection.
  */
-function WikiGuidanceEditor({
+export function WikiGuidanceEditor({
   collectionId,
   maintainerGuidance,
   readerGuidance,
@@ -54,6 +54,9 @@ function WikiGuidanceEditor({
   client: KbApi;
 }) {
   const qc = useQueryClient();
+  // #460 P5: collapsed by default so this settings panel doesn't grow inline
+  // directly below the file tree; it's a discoverable disclosure instead.
+  const [open, setOpen] = useState(false);
   const [writing, setWriting] = useState(maintainerGuidance);
   const [answering, setAnswering] = useState(readerGuidance);
   useEffect(() => {
@@ -101,55 +104,75 @@ function WikiGuidanceEditor({
         maxWidth: 560,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          padding: 0,
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <Icon name={open ? "chev_d" : "chev_r"} size={12} color="var(--text-paper-d)" />
         <Icon name="sparkle" size={13} color="var(--accent-h)" />
         <span className="caps" style={{ fontSize: pxToRem(11) }}>
           Wiki guidance
         </span>
-      </div>
+      </button>
 
-      <label htmlFor="wiki-writing-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600 }}>
-        Writing guidance
-      </label>
-      <p style={hint}>
-        How pages are organised and written. Applies to documents added from now on — rebuild to
-        apply it to existing pages.
-      </p>
-      <textarea
-        id="wiki-writing-guidance"
-        value={writing}
-        placeholder="e.g. Group pages by reflow zone; keep an index of defect codes."
-        onChange={(e) => setWriting(e.target.value)}
-        style={ta}
-      />
+      {open && (
+        <>
+          <label htmlFor="wiki-writing-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
+            Writing guidance
+          </label>
+          <p style={hint}>
+            How pages are organised and written. Applies to documents added from now on — rebuild to
+            apply it to existing pages.
+          </p>
+          <textarea
+            id="wiki-writing-guidance"
+            value={writing}
+            placeholder="e.g. Group pages by reflow zone; keep an index of defect codes."
+            onChange={(e) => setWriting(e.target.value)}
+            style={ta}
+          />
 
-      <label htmlFor="wiki-answering-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
-        Answering guidance
-      </label>
-      <p style={hint}>How questions are answered. Takes effect on the next question.</p>
-      <textarea
-        id="wiki-answering-guidance"
-        value={answering}
-        placeholder="e.g. Lead with a one-line summary, then the detail."
-        onChange={(e) => setAnswering(e.target.value)}
-        style={ta}
-      />
+          <label htmlFor="wiki-answering-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
+            Answering guidance
+          </label>
+          <p style={hint}>How questions are answered. Takes effect on the next question.</p>
+          <textarea
+            id="wiki-answering-guidance"
+            value={answering}
+            placeholder="e.g. Lead with a one-line summary, then the detail."
+            onChange={(e) => setAnswering(e.target.value)}
+            style={ta}
+          />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
-        <button
-          type="button"
-          className="kb-btn kb-btn--primary"
-          disabled={!dirty || saveMut.isPending}
-          onClick={() => saveMut.mutate()}
-        >
-          {saveMut.isPending ? "Saving…" : "Save guidance"}
-        </button>
-        {saveMut.isError && (
-          <span role="alert" style={{ fontSize: pxToRem(12), color: "var(--warn)" }}>
-            Couldn't save — try again.
-          </span>
-        )}
-      </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+            <button
+              type="button"
+              className="kb-btn kb-btn--primary"
+              disabled={!dirty || saveMut.isPending}
+              onClick={() => saveMut.mutate()}
+            >
+              {saveMut.isPending ? "Saving…" : "Save guidance"}
+            </button>
+            {saveMut.isError && (
+              <span role="alert" style={{ fontSize: pxToRem(12), color: "var(--warn)" }}>
+                Couldn't save — try again.
+              </span>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }
