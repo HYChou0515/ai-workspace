@@ -1301,6 +1301,11 @@
   gap: 6px;
   margin-bottom: 8px;
 }
+.kb-colpage__titlerow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .kb-colpage__title {
   font-family: var(--font-display);
   font-weight: 800;
@@ -1309,6 +1314,26 @@
   margin: 0;
   color: var(--text-paper);
   cursor: text;
+}
+/* Discoverable rename affordance — a pencil beside the title, matching the KB
+   chat rename (#357) + DomainField (#466). Replaces the hidden click-to-rename
+   that was signalled only by a tooltip. */
+.kb-colpage__editbtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-btn);
+  border: none;
+  background: transparent;
+  color: var(--text-paper-d);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.kb-colpage__editbtn:hover {
+  background: var(--paper-2);
+  color: var(--text-paper);
 }
 .kb-colpage__nameedit {
   font-family: var(--font-display);

@@ -533,16 +533,30 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
                 }}
               />
             ) : (
-              <h1
-                className="kb-colpage__title"
-                title="Click to rename"
-                onClick={() => {
-                  setNameDraft(selected.name);
-                  setEditingName(true);
-                }}
-              >
-                {selected.name}
-              </h1>
+              <div className="kb-colpage__titlerow">
+                <h1
+                  className="kb-colpage__title"
+                  title="Rename"
+                  onClick={() => {
+                    setNameDraft(selected.name);
+                    setEditingName(true);
+                  }}
+                >
+                  {selected.name}
+                </h1>
+                <button
+                  type="button"
+                  className="kb-colpage__editbtn"
+                  aria-label={`Rename ${selected.name}`}
+                  title="Rename"
+                  onClick={() => {
+                    setNameDraft(selected.name);
+                    setEditingName(true);
+                  }}
+                >
+                  <Icon name="pencil" size={14} />
+                </button>
+              </div>
             )}
             {editingDesc ? (
               <textarea
