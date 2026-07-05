@@ -48,18 +48,11 @@ export function KbCollectionsModal({
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 2 }}>
           <button
             type="button"
+            className="btn"
+            data-variant="primary"
+            data-size="sm"
             data-testid="kb-collections-done"
             onClick={onClose}
-            style={{
-              height: 30,
-              padding: "0 14px",
-              borderRadius: "var(--radius-btn)",
-              fontSize: pxToRem(13),
-              cursor: "pointer",
-              border: "1px solid var(--accent)",
-              background: "var(--accent)",
-              color: "var(--white)",
-            }}
           >
             {t("picker.done")}
           </button>

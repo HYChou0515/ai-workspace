@@ -97,9 +97,11 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
                 <button
                   key={a.id}
                   type="button"
+                  className="btn"
+                  data-variant={a.variant === "primary" ? "primary" : a.variant === "danger" ? "danger" : "secondary"}
+                  data-size="sm"
                   autoFocus={a.variant === "primary"}
                   onClick={() => settle(a.id)}
-                  style={actionStyle(a.variant)}
                 >
                   {a.label}
                 </button>
@@ -110,26 +112,6 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
       )}
     </DialogContext.Provider>
   );
-}
-
-function actionStyle(variant: DialogAction["variant"]): React.CSSProperties {
-  const base: React.CSSProperties = {
-    height: 30,
-    padding: "0 14px",
-    borderRadius: "var(--radius-btn)",
-    fontSize: pxToRem(13),
-    cursor: "pointer",
-    border: "1px solid var(--paper-3)",
-    background: "var(--white)",
-    color: "var(--text-paper)",
-  };
-  if (variant === "primary") {
-    return { ...base, background: "var(--accent)", borderColor: "var(--accent)", color: "var(--white)" };
-  }
-  if (variant === "danger") {
-    return { ...base, color: "var(--err)", borderColor: "var(--err)" };
-  }
-  return base;
 }
 
 export function useDialog(): DialogContextValue {

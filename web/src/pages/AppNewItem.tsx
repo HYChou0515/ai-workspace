@@ -28,23 +28,6 @@ import { pxToRem } from "../lib/pxToRem";
 
 const FORM_ID = "new-item-form";
 
-const primaryBtn: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 8,
-  justifyContent: "center",
-  height: 36,
-  padding: "0 14px",
-  fontSize: pxToRem(13),
-  fontWeight: 500,
-  fontFamily: "inherit",
-  color: "var(--white)",
-  background: "var(--accent)",
-  border: "1px solid transparent",
-  borderRadius: "var(--radius-btn)",
-  cursor: "pointer",
-};
-
 const ghostBtn: CSSProperties = {
   height: 36,
   padding: "0 14px",
@@ -135,10 +118,10 @@ export function AppNewItem() {
 
           {/* Footer (fixed) */}
           <div style={{ padding: "14px 22px", borderTop: "1px solid var(--paper-3)", display: "flex", justifyContent: "flex-end", gap: 8, background: "var(--paper-2)" }}>
-            <button type="button" onClick={close} style={ghostBtn}>
+            <button type="button" className="btn" data-variant="ghost" data-size="md" onClick={close}>
               Cancel
             </button>
-            <button type="submit" form={FORM_ID} disabled={create.isPending} style={{ ...primaryBtn, opacity: create.isPending ? 0.6 : 1 }}>
+            <button type="submit" form={FORM_ID} disabled={create.isPending} className="btn" data-variant="primary" data-size="md">
               {create.isPending ? "Saving…" : "Create"}
             </button>
           </div>

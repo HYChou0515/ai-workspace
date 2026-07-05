@@ -124,7 +124,9 @@ export function PermissionDialog({
                       type="button"
                       aria-label={`Remove ${g.userId}`}
                       onClick={() => toggleUser(g.userId)}
-                      style={{ ...btn(), height: 24 }}
+                      className="btn"
+                      data-variant="danger"
+                      data-size="sm"
                     >
                       Remove
                     </button>
@@ -139,7 +141,10 @@ export function PermissionDialog({
           type="button"
           data-testid="toggle-advanced"
           onClick={() => setAdvanced((a) => !a)}
-          style={{ ...btn(), alignSelf: "flex-start" }}
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          style={{ alignSelf: "flex-start" }}
         >
           {advanced ? "Hide advanced" : "Show advanced"}
         </button>
@@ -150,7 +155,14 @@ export function PermissionDialog({
         )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-          <button type="button" data-testid="permission-cancel" onClick={onClose} style={btn()}>
+          <button
+            type="button"
+            data-testid="permission-cancel"
+            onClick={onClose}
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+          >
             Cancel
           </button>
           <button
@@ -158,7 +170,9 @@ export function PermissionDialog({
             data-testid="permission-save"
             disabled={busy}
             onClick={() => onSubmit(next())}
-            style={btn("primary")}
+            className="btn"
+            data-variant="primary"
+            data-size="sm"
           >
             Save
           </button>
@@ -201,18 +215,3 @@ const verbsBox: React.CSSProperties = {
   color: "var(--text-paper-d)",
   overflowX: "auto",
 };
-
-function btn(kind?: "primary" | "danger"): React.CSSProperties {
-  const base: React.CSSProperties = {
-    height: 28,
-    padding: "0 14px",
-    fontSize: pxToRem(13),
-    borderRadius: "var(--radius-btn)",
-    border: "1px solid var(--paper-3)",
-    cursor: "pointer",
-  };
-  if (kind === "primary") {
-    return { ...base, background: "var(--accent)", color: "var(--white)", borderColor: "var(--accent)" };
-  }
-  return { ...base, background: "var(--white)", color: "var(--text-paper)" };
-}

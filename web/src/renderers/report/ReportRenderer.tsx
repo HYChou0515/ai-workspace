@@ -235,15 +235,9 @@ function VersionRibbon({
           onClick={onSave}
           disabled={!dirty}
           title={dirty ? "Save changes (⌘/Ctrl-S)" : "No unsaved changes"}
-          style={{
-            padding: "4px 10px",
-            border: dirty ? "1px solid var(--accent)" : "1px solid var(--ink-4)",
-            borderRadius: "var(--radius-btn)",
-            background: dirty ? "var(--accent)" : "transparent",
-            color: dirty ? "var(--white)" : "var(--text-dark-d)",
-            fontSize: pxToRem(12),
-            cursor: dirty ? "pointer" : "default",
-          }}
+          className="btn"
+          data-variant="primary"
+          data-size="sm"
         >
           {dirty ? "Save" : "Saved"}
         </button>
@@ -271,13 +265,9 @@ function VersionRibbon({
         type="button"
         onClick={onExport}
         title="Print / save the report as PDF"
-        style={{
-          padding: "4px 10px",
-          border: "1px solid var(--ink-4)",
-          borderRadius: "var(--radius-btn)",
-          color: "var(--text-dark)",
-          fontSize: pxToRem(12),
-        }}
+        className="btn"
+        data-variant="secondary"
+        data-size="sm"
       >
         Export PDF
       </button>
@@ -286,14 +276,9 @@ function VersionRibbon({
         onClick={onGenerate}
         disabled={generating}
         title="Ask the agent to draft the next report version"
-        style={{
-          padding: "4px 12px",
-          background: generating ? "var(--ink-4)" : "var(--accent)",
-          color: "var(--white)",
-          borderRadius: "var(--radius-btn)",
-          fontSize: pxToRem(12),
-          cursor: generating ? "wait" : "pointer",
-        }}
+        className="btn"
+        data-variant="primary"
+        data-size="sm"
       >
         {generating ? "Generating…" : "Generate new version"}
       </button>
@@ -327,12 +312,9 @@ function SupersededNotice({
       <button
         type="button"
         onClick={() => onJump(current)}
-        style={{
-          padding: "2px 10px",
-          border: "1px solid var(--paper-3)",
-          borderRadius: "var(--radius-btn)",
-          fontSize: pxToRem(12),
-        }}
+        className="btn"
+        data-variant="secondary"
+        data-size="sm"
       >
         Go to current
       </button>

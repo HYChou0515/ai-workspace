@@ -107,24 +107,47 @@ export function ToolsPickerModal({
             style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
           >
             <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("tools.discard")}</span>
-            <button type="button" data-testid="tools-discard-no" onClick={() => setConfirming(false)} style={btn()}>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="tools-discard-no"
+              onClick={() => setConfirming(false)}
+            >
               {t("tools.cancel")}
             </button>
-            <button type="button" data-testid="tools-discard-yes" onClick={onClose} style={btn("danger")}>
+            <button
+              type="button"
+              className="btn"
+              data-variant="danger"
+              data-size="sm"
+              data-testid="tools-discard-yes"
+              onClick={onClose}
+            >
               {t("tools.resetVisible")}
             </button>
           </div>
         ) : (
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-            <button type="button" data-testid="tools-cancel" onClick={attemptClose} style={btn()}>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="tools-cancel"
+              onClick={attemptClose}
+            >
               {t("tools.cancel")}
             </button>
             <button
               type="button"
+              className="btn"
+              data-variant="primary"
+              data-size="sm"
               data-testid="tools-save"
               onClick={save}
               disabled={!ready || !dirty || saving}
-              style={btn("primary")}
             >
               {t("tools.save")}
             </button>
@@ -150,22 +173,4 @@ function sameOverride(a: Record<string, boolean>, b: Record<string, boolean>): b
   const kb = Object.keys(b);
   if (ka.length !== kb.length) return false;
   return ka.every((k) => k in b && a[k] === b[k]);
-}
-
-function btn(kind?: "primary" | "danger"): React.CSSProperties {
-  const base: React.CSSProperties = {
-    height: 28,
-    padding: "0 14px",
-    fontSize: pxToRem(13),
-    borderRadius: "var(--radius-btn)",
-    border: "1px solid var(--paper-3)",
-    cursor: "pointer",
-  };
-  if (kind === "primary") {
-    return { ...base, background: "var(--accent)", color: "var(--white)", borderColor: "var(--accent)" };
-  }
-  if (kind === "danger") {
-    return { ...base, background: "var(--white)", color: "var(--err)" };
-  }
-  return { ...base, background: "var(--white)", color: "var(--text-paper)" };
 }

@@ -304,16 +304,9 @@ export function CollectionsPickerModal({
                   type="button"
                   data-testid={`orphan-remove-${e.id}`}
                   onClick={() => toggle(e.id)}
-                  style={{
-                    height: 24,
-                    padding: "0 8px",
-                    fontSize: pxToRem(12),
-                    borderRadius: "var(--radius-btn)",
-                    border: "1px solid var(--paper-3)",
-                    background: "var(--white)",
-                    color: "var(--err)",
-                    cursor: "pointer",
-                  }}
+                  className="btn"
+                  data-variant="danger"
+                  data-size="sm"
                 >
                   移除
                 </button>
@@ -330,16 +323,37 @@ export function CollectionsPickerModal({
             style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
           >
             <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>放棄未儲存的變更？</span>
-            <button type="button" data-testid="discard-no" onClick={() => setConfirming(false)} style={btn()}>
+            <button
+              type="button"
+              data-testid="discard-no"
+              onClick={() => setConfirming(false)}
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+            >
               繼續編輯
             </button>
-            <button type="button" data-testid="discard-yes" onClick={onClose} style={btn("danger")}>
+            <button
+              type="button"
+              data-testid="discard-yes"
+              onClick={onClose}
+              className="btn"
+              data-variant="danger"
+              data-size="sm"
+            >
               放棄變更
             </button>
           </div>
         ) : (
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-            <button type="button" data-testid="collections-cancel" onClick={attemptClose} style={btn()}>
+            <button
+              type="button"
+              data-testid="collections-cancel"
+              onClick={attemptClose}
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+            >
               取消
             </button>
             <button
@@ -347,7 +361,9 @@ export function CollectionsPickerModal({
               data-testid="collections-save"
               onClick={onSave}
               disabled={!ready || !dirty || saving}
-              style={btn("primary")}
+              className="btn"
+              data-variant="primary"
+              data-size="sm"
             >
               {saving ? "儲存中…" : "儲存"}
             </button>
@@ -369,29 +385,4 @@ function tierBtn(): React.CSSProperties {
     color: "var(--text-paper)",
     cursor: "pointer",
   };
-}
-
-function btn(variant?: "primary" | "danger"): React.CSSProperties {
-  const base: React.CSSProperties = {
-    height: 30,
-    padding: "0 14px",
-    borderRadius: "var(--radius-btn)",
-    fontSize: pxToRem(13),
-    cursor: "pointer",
-    border: "1px solid var(--paper-3)",
-    background: "var(--white)",
-    color: "var(--text-paper)",
-  };
-  if (variant === "primary") {
-    return {
-      ...base,
-      background: "var(--accent)",
-      borderColor: "var(--accent)",
-      color: "var(--white)",
-    };
-  }
-  if (variant === "danger") {
-    return { ...base, color: "var(--err)", borderColor: "var(--err)" };
-  }
-  return base;
 }

@@ -230,7 +230,10 @@ export function AppDashboard() {
           </div>
           <Link
             to={`/a/${slug}/new`}
-            style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, height: 36, marginTop: 16, borderRadius: "var(--radius-btn)", background: "var(--accent)", color: "var(--white)", fontSize: pxToRem(13), fontWeight: 500, textDecoration: "none" }}
+            className="btn"
+            data-variant="primary"
+            data-size="md"
+            style={{ marginTop: 16 }}
           >
             <Icon name="plus" size={14} />
             {createLabel}
@@ -314,19 +317,9 @@ export function AppDashboard() {
               </p>
               <Link
                 to={`/a/${slug}/new`}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  height: 38,
-                  padding: "0 18px",
-                  borderRadius: "var(--radius-btn)",
-                  background: "var(--accent)",
-                  color: "var(--white)",
-                  fontSize: pxToRem(14),
-                  fontWeight: 600,
-                  textDecoration: "none",
-                }}
+                className="btn"
+                data-variant="primary"
+                data-size="md"
               >
                 <Icon name="plus" size={14} color="var(--white)" />
                 {createLabel}
@@ -383,20 +376,12 @@ export function AppDashboard() {
           <FilterSelect label="Filter by updated" prefix="Updated" value={age} onChange={setAge} options={["7", "30"]} labelOf={(d) => `last ${d}d`} />
           <button
             type="button"
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
             data-testid="dash-clear-filters"
             onClick={clearFilters}
             disabled={!hasActiveFilter}
-            style={{
-              height: 28,
-              padding: "0 10px",
-              fontSize: pxToRem(12),
-              borderRadius: "var(--radius-btn)",
-              border: "1px solid var(--paper-3)",
-              background: "var(--white)",
-              color: hasActiveFilter ? "var(--text-paper)" : "var(--text-paper-d2)",
-              cursor: hasActiveFilter ? "pointer" : "default",
-              opacity: hasActiveFilter ? 1 : 0.6,
-            }}
           >
             {t("dash.clearFilters")}
           </button>
