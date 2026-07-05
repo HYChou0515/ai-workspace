@@ -59,4 +59,24 @@ describe("GlobalSettings", () => {
     fireEvent.click(screen.getByRole("button", { name: "設定" }));
     expect(screen.getByRole("link", { name: "API 文件" })).toHaveAttribute("href", "/api/docs");
   });
+
+  // #460 P4: the docs anchor read as plain text (global reset strips anchors);
+  // it must carry a visible link affordance.
+  it("styles the API reference with a link affordance", () => {
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "設定" }));
+    const link = screen.getByRole("link", { name: "API 文件" });
+    expect(link.style.textDecoration).toContain("underline");
+  });
+
+  // #460 P4: "單人示範（免登入）" was wrong — the product is multi-user and does
+  // resolve an identity via the auth seam; it just has no SSO yet.
+  it("describes the sign-in method accurately (not single-user / no-login)", () => {
+    renderSettings();
+    fireEvent.click(screen.getByRole("button", { name: "設定" }));
+    const dialog = screen.getByRole("dialog", { name: "設定" });
+    expect(dialog.textContent).toContain("示範模式");
+    expect(dialog.textContent).not.toContain("單人");
+    expect(dialog.textContent).not.toContain("免登入");
+  });
 });

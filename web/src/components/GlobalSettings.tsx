@@ -94,7 +94,12 @@ export function GlobalSettings() {
                 <dd style={{ margin: 0 }}>{t("about.signin.value")}</dd>
                 <dt style={{ color: "var(--text-paper-d)" }}>{t("about.docs")}</dt>
                 <dd style={{ margin: 0 }}>
-                  <a href={`${API_PREFIX}/docs`} target="_blank" rel="noreferrer">
+                  <a
+                    href={`${API_PREFIX}/docs`}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{ color: "var(--accent-h)", textDecoration: "underline" }}
+                  >
                     {t("about.docs.link")}
                   </a>
                 </dd>
