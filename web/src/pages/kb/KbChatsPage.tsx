@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { kbApi, type KbApi, type KbChatSummary } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { useOptionalDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { Popover } from "../../components/Popover";
 import { Skeleton } from "../../components/Skeleton";
@@ -56,6 +57,7 @@ export function KbChatsPage({
   }, [refreshSignal, refetch]);
 
   const me = useCurrentUser();
+  const dialog = useOptionalDialog();
   const pinned = usePersistentSet("kb:pinned-chats");
   const [tab, setTab] = useState<Tab>("all");
 
@@ -69,6 +71,23 @@ export function KbChatsPage({
     mutationFn: (chatId: string) => client.deleteChat(chatId),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
   });
+
+  // Deleting a whole conversation is irreversible — confirm first (#456). When no
+  // dialog is in context (bare render) the destructive guard degrades to direct.
+  const requestDelete = async (chatId: string, label: string) => {
+    if (dialog) {
+      const choice = await dialog.confirm({
+        title: "Delete this conversation?",
+        body: `This permanently deletes “${label}” and can’t be undone.`,
+        actions: [
+          { id: "cancel", label: "Cancel" },
+          { id: "delete", label: "Delete", variant: "danger" },
+        ],
+      });
+      if (choice !== "delete") return;
+    }
+    removeMut.mutate(chatId);
+  };
   const renameMut = useMutation({
     mutationFn: (v: { chatId: string; title: string }) => client.renameChat(v.chatId, v.title),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.kb.chats }),
@@ -211,9 +230,9 @@ export function KbChatsPage({
               className="kb-iconbtn"
               aria-label={`Delete ${label}`}
               disabled={removeMut.isPending && removeMut.variables === c.resource_id}
-              onClick={() => removeMut.mutate(c.resource_id)}
+              onClick={() => void requestDelete(c.resource_id, label)}
             >
-              <Icon name="x" size={14} />
+              <Icon name="trash" size={14} />
             </button>
           </>
         )}

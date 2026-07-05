@@ -11,7 +11,7 @@ export const ICON_NAMES = [
   "play", "term", "user", "users", "settings", "bell", "branch", "sparkle", "arrow_r", "arrow_u",
   "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "layers",
   "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote", "external",
-  "paperclip", "pencil", "home", "kanban",
+  "paperclip", "pencil", "home", "kanban", "trash",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -224,6 +224,15 @@ export function Icon({
         <rect x="3" y="4" width="18" height="16" rx="1.5" {...sp} />
         <path d="M9 4 V20 M15 4 V20" {...sp} />
         <path d="M5 7.5 H7 M11 7.5 H13 M17 7.5 H19" {...sp} />
+      </>
+    ),
+    // trash — a bin (lid + body + slats). Signals destroy, unlike a bare "x".
+    trash: (
+      <>
+        <path d="M4 7 H20" {...sp} />
+        <path d="M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7" {...sp} />
+        <path d="M6 7 L7 20 A1 1 0 0 0 8 21 H16 A1 1 0 0 0 17 20 L18 7" {...sp} />
+        <path d="M10 11 V17 M14 11 V17" {...sp} />
       </>
     ),
     quote: (
