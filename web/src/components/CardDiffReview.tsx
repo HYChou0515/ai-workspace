@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { type FileService, investigationFileService } from "../api/fileService";
 import { qk } from "../api/queryKeys";
 import { useT } from "../lib/i18n";
+import { ModalShell } from "./ModalShell";
 import { MonacoDiffEditor } from "./MonacoDiffEditor";
 import { pxToRem } from "../lib/pxToRem";
 
@@ -168,39 +169,20 @@ function CardDiffModal({
   const allNew = loaded != null && loaded.current.trim() === "";
 
   return (
-    <div
-      role="presentation"
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={t("cardDiff.title")}
       data-testid="card-diff-modal"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.45)",
+      width={1100}
+      maxWidth="96vw"
+      panelStyle={{
+        height: "min(80vh, 760px)",
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 300,
-        padding: 24,
+        flexDirection: "column",
+        gap: 8,
+        padding: 14,
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("cardDiff.title")}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(1100px, 96vw)",
-          height: "min(80vh, 760px)",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card, 8px)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.24)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          padding: 14,
-        }}
-      >
         <header style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
           <strong style={{ fontSize: pxToRem(14) }}>{t("cardDiff.title")}</strong>
           <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
@@ -254,7 +236,7 @@ function CardDiffModal({
             style={{
               padding: "5px 12px",
               borderRadius: 6,
-              border: "1px solid var(--line)",
+              border: "1px solid var(--paper-3)",
               background: "var(--paper-2)",
               cursor: "pointer",
             }}
@@ -271,7 +253,7 @@ function CardDiffModal({
               style={{
                 padding: "5px 12px",
                 borderRadius: 6,
-                border: "1px solid var(--line)",
+                border: "1px solid var(--paper-3)",
                 cursor: busy ? "default" : "pointer",
                 background:
                   choice === "approve"
@@ -288,7 +270,6 @@ function CardDiffModal({
             </button>
           ))}
         </footer>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

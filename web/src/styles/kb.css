@@ -415,7 +415,7 @@
   min-width: 0;
 }
 .kb-docviewer__eyebrow {
-  font-size: var(--text-body-xs, 11px);
+  font-size: var(--text-xs);
   color: var(--text-paper-d);
   margin-bottom: 2px;
 }
@@ -437,7 +437,7 @@
   gap: 8px;
   margin-top: 4px;
   font-family: var(--font-mono);
-  font-size: var(--text-mono, 11px);
+  font-size: var(--text-xs);
   color: var(--text-paper-d);
 }
 .kb-docviewer__meta .is-hot {
@@ -805,7 +805,7 @@
 .kb-metric__value {
   font-family: var(--font-display);
   font-weight: 800;
-  font-size: var(--text-display-xs, 24px);
+  font-size: var(--text-display-sm);
   letter-spacing: -0.01em;
   color: var(--text-paper);
   white-space: nowrap;
@@ -813,7 +813,7 @@
   text-overflow: ellipsis;
 }
 .kb-metric__sub {
-  font-size: var(--text-body-xs, 11px);
+  font-size: var(--text-xs);
   color: var(--text-paper-d2);
 }
 
@@ -844,7 +844,7 @@
 }
 .kb-tab__count {
   font-family: var(--font-mono);
-  font-size: var(--text-mono, 11px);
+  font-size: var(--text-xs);
   color: var(--text-paper-d2);
 }
 .kb-tab.is-active .kb-tab__count {
@@ -962,9 +962,9 @@
 .kb-sync-status__btn {
   flex: none;
   padding: 3px 10px;
-  border: 1px solid var(--border-paper);
-  border-radius: 5px;
-  background: var(--bg-paper);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--paper);
   color: var(--text-paper);
   font-size: var(--text-body-sm);
   cursor: pointer;
@@ -1361,7 +1361,7 @@
   font-size: var(--text-body-sm);
 }
 .kb-btn--danger {
-  background: var(--err, #c0392b);
+  background: var(--err);
   color: var(--white);
   border-color: transparent;
 }
@@ -1429,10 +1429,10 @@
   cursor: not-allowed;
 }
 .kb-menu__item--danger {
-  color: var(--err, #c0392b);
+  color: var(--err);
 }
 .kb-menu__item--danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--err, #c0392b) 10%, transparent);
+  background: color-mix(in srgb, var(--err) 10%, transparent);
 }
 .kb-menu__divider {
   height: 1px;
@@ -1455,16 +1455,16 @@
   line-height: 1.5;
 }
 .kb-quality--good {
-  background: color-mix(in srgb, var(--ok, #2e7d32) 16%, transparent);
-  color: var(--ok, #2e7d32);
+  background: color-mix(in srgb, var(--ok) 16%, transparent);
+  color: var(--ok);
 }
 .kb-quality--ok {
-  background: color-mix(in srgb, var(--warn, #b07d00) 18%, transparent);
-  color: var(--warn, #b07d00);
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
 }
 .kb-quality--bad {
-  background: color-mix(in srgb, var(--err, #c0392b) 16%, transparent);
-  color: var(--err, #c0392b);
+  background: color-mix(in srgb, var(--err) 16%, transparent);
+  color: var(--err);
 }
 .kb-ide__status-quality {
   display: inline-flex;
@@ -2048,15 +2048,15 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--text-dim);
-  font-size: var(--text-sm);
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
   padding: 24px 0;
 }
 /* PDF (browser viewer) + sandboxed HTML render in a full-width frame. */
 .kb-dociframe {
   width: 100%;
   height: 72vh;
-  border: 1px solid var(--line);
+  border: 1px solid var(--paper-3);
   border-radius: 6px;
   background: #fff;
 }
@@ -2066,7 +2066,7 @@
 .kb-status-detail {
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  color: var(--text-dim);
+  color: var(--text-paper-d);
   max-width: 220px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2251,7 +2251,7 @@
   overflow: auto;
   padding: 10px 0;
   border-right: 1px solid var(--paper-3);
-  background: var(--paper-1, transparent);
+  background: transparent;
   /* #346: the FileTree "Files" header is sticky; here the tree sits on the
      white .kb-ide surface, so match the header background to it (the workspace
      sidebar leaves the default --paper). */
@@ -2276,7 +2276,7 @@
   gap: 10px;
   padding: 7px 12px;
   border-bottom: 1px solid var(--paper-3);
-  background: var(--paper-1, transparent);
+  background: transparent;
 }
 .kb-ide__crumb {
   overflow: hidden;
@@ -2329,7 +2329,7 @@
   min-height: 24px;
   padding: 3px 12px;
   border-top: 1px solid var(--paper-3);
-  background: var(--paper-1, transparent);
+  background: transparent;
   font-size: 0.6875rem;
   color: var(--text-paper-d);
 }
@@ -2510,7 +2510,7 @@
 .kb-cardgen__badges { display: flex; gap: 6px; }
 .kb-cardgen__badge { font-size: 0.6875rem; padding: 1px 6px; border-radius: 999px; background: var(--paper-2); color: var(--text-paper-d); }
 .kb-cardgen__badge.is-update { background: var(--accent-soft); color: var(--accent); }
-.kb-cardgen__badge.is-uncertain { background: #f6e2b3; color: #7a5a00; }
+.kb-cardgen__badge.is-uncertain { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
 .kb-cardgen__keys { font-size: 0.75rem; color: var(--text-paper-d); }
 .kb-cardgen__prov { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
 .kb-cardgen__prov li { font-size: 0.7rem; color: var(--text-paper-d2); display: flex; gap: 6px; }

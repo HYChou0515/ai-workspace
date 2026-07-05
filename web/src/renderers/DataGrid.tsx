@@ -51,7 +51,7 @@ export function DataGrid({ rows, maxRows = DEFAULT_MAX_ROWS }: { rows: string[][
 
 function cell(head: boolean): React.CSSProperties {
   return {
-    border: "1px solid var(--rule)",
+    border: "1px solid var(--paper-3)",
     padding: "3px 8px",
     textAlign: "left",
     whiteSpace: "nowrap",

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   ALL_VERBS,
@@ -12,6 +12,7 @@ import {
   permissionFromGrants,
 } from "../lib/permission";
 import { pxToRem } from "../lib/pxToRem";
+import { ModalShell } from "./ModalShell";
 import { UserChip } from "./UserChip";
 import { UserPicker } from "./UserPicker";
 
@@ -48,14 +49,6 @@ export function PermissionDialog({
   const [grants, setGrants] = useState<Grant[]>(() => grantsFromPermission(value, owner));
   const [advanced, setAdvanced] = useState(false);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const next = () => permissionFromGrants(visibility, grants, value);
 
   const toggleUser = (id: string) =>
@@ -70,15 +63,14 @@ export function PermissionDialog({
   const preview = next();
 
   return (
-    <div role="presentation" onClick={onClose} style={overlay}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Share ${resourceName}`}
-        data-testid="permission-dialog"
-        onClick={(e) => e.stopPropagation()}
-        style={panel}
-      >
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={`Share ${resourceName}`}
+      data-testid="permission-dialog"
+      width={480}
+      maxWidth="92vw"
+      panelStyle={panel}
+    >
         <strong style={{ fontSize: pxToRem(14) }}>Share “{resourceName}”</strong>
         <p style={caption}>{captionText}</p>
 
@@ -132,7 +124,9 @@ export function PermissionDialog({
                       type="button"
                       aria-label={`Remove ${g.userId}`}
                       onClick={() => toggleUser(g.userId)}
-                      style={{ ...btn(), height: 24 }}
+                      className="btn"
+                      data-variant="danger"
+                      data-size="sm"
                     >
                       Remove
                     </button>
@@ -147,7 +141,10 @@ export function PermissionDialog({
           type="button"
           data-testid="toggle-advanced"
           onClick={() => setAdvanced((a) => !a)}
-          style={{ ...btn(), alignSelf: "flex-start" }}
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
+          style={{ alignSelf: "flex-start" }}
         >
           {advanced ? "Hide advanced" : "Show advanced"}
         </button>
@@ -158,7 +155,14 @@ export function PermissionDialog({
         )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-          <button type="button" data-testid="permission-cancel" onClick={onClose} style={btn()}>
+          <button
+            type="button"
+            data-testid="permission-cancel"
+            onClick={onClose}
+            className="btn"
+            data-variant="secondary"
+            data-size="sm"
+          >
             Cancel
           </button>
           <button
@@ -166,13 +170,14 @@ export function PermissionDialog({
             data-testid="permission-save"
             disabled={busy}
             onClick={() => onSubmit(next())}
-            style={btn("primary")}
+            className="btn"
+            data-variant="primary"
+            data-size="sm"
           >
             Save
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -182,24 +187,7 @@ const VISIBILITIES: { id: Visibility; label: string; hint: string }[] = [
   { id: "public", label: "Public", hint: "Everyone in the workspace" },
 ];
 
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.4)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 200,
-};
-
 const panel: React.CSSProperties = {
-  width: 480,
-  maxWidth: "92vw",
-  maxHeight: "82vh",
-  background: "var(--white)",
-  borderRadius: "var(--radius-card)",
-  border: "1px solid var(--paper-3)",
-  boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
   padding: 18,
   display: "flex",
   flexDirection: "column",
@@ -221,24 +209,9 @@ const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", g
 const verbsBox: React.CSSProperties = {
   margin: 0,
   padding: 10,
-  background: "var(--paper-1)",
+  background: "var(--paper-2)",
   borderRadius: "var(--radius-btn)",
   fontSize: pxToRem(11),
   color: "var(--text-paper-d)",
   overflowX: "auto",
 };
-
-function btn(kind?: "primary" | "danger"): React.CSSProperties {
-  const base: React.CSSProperties = {
-    height: 28,
-    padding: "0 14px",
-    fontSize: pxToRem(13),
-    borderRadius: "var(--radius-btn)",
-    border: "1px solid var(--paper-3)",
-    cursor: "pointer",
-  };
-  if (kind === "primary") {
-    return { ...base, background: "var(--accent)", color: "var(--white)", borderColor: "var(--accent)" };
-  }
-  return { ...base, background: "var(--white)", color: "var(--text-paper)" };
-}

@@ -12,6 +12,7 @@ import {
   serializeCollectionsFile,
   type CollectionEntry,
 } from "./collectionsFile";
+import { ModalShell } from "./ModalShell";
 import { pxToRem } from "../lib/pxToRem";
 
 /**
@@ -158,40 +159,20 @@ export function CollectionsPickerModal({
   };
 
   return (
-    <div
-      role="presentation"
-      onClick={attemptClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
+    <ModalShell
+      onClose={attemptClose}
+      ariaLabel="選擇知識庫"
+      data-testid="collections-modal"
+      width={460}
+      maxWidth="92vw"
+      panelStyle={{
+        padding: 18,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 0,
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="選擇知識庫"
-        data-testid="collections-modal"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 460,
-          maxWidth: "92vw",
-          maxHeight: "82vh",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 18,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-          minHeight: 0,
-        }}
-      >
         <strong style={{ fontSize: pxToRem(14) }}>選擇知識庫</strong>
         <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
           勾選這個主題要查詢的知識庫；選好才有內容可供 AI 檢索與引用。
@@ -205,8 +186,8 @@ export function CollectionsPickerModal({
               lineHeight: 1.5,
               padding: "8px 10px",
               borderRadius: "var(--radius-btn)",
-              border: "1px solid var(--danger, #b4413c)",
-              color: "var(--danger, #b4413c)",
+              border: "1px solid var(--err)",
+              color: "var(--err)",
               background: "rgba(180,65,60,0.06)",
             }}
           >
@@ -226,7 +207,7 @@ export function CollectionsPickerModal({
         {!ready ? (
           <div style={{ flex: 1, minHeight: 0 }}>
             {fileQ.isError ? (
-              <p style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>無法讀取 collections.json。</p>
+              <p style={{ fontSize: pxToRem(12), color: "var(--err)" }}>無法讀取 collections.json。</p>
             ) : (
               <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>載入中…</p>
             )}
@@ -309,7 +290,7 @@ export function CollectionsPickerModal({
               gap: 4,
             }}
           >
-            <span style={{ fontSize: pxToRem(11), color: "var(--danger, #b4413c)" }}>已不存在的知識庫（建議移除）</span>
+            <span style={{ fontSize: pxToRem(11), color: "var(--err)" }}>已不存在的知識庫（建議移除）</span>
             {orphans.map((e) => (
               <div
                 key={e.id}
@@ -323,16 +304,9 @@ export function CollectionsPickerModal({
                   type="button"
                   data-testid={`orphan-remove-${e.id}`}
                   onClick={() => toggle(e.id)}
-                  style={{
-                    height: 24,
-                    padding: "0 8px",
-                    fontSize: pxToRem(12),
-                    borderRadius: "var(--radius-btn)",
-                    border: "1px solid var(--paper-3)",
-                    background: "var(--white)",
-                    color: "var(--danger, #b4413c)",
-                    cursor: "pointer",
-                  }}
+                  className="btn"
+                  data-variant="danger"
+                  data-size="sm"
                 >
                   移除
                 </button>
@@ -341,7 +315,7 @@ export function CollectionsPickerModal({
           </div>
         )}
 
-        {saveError && <div style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>{saveError}</div>}
+        {saveError && <div style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{saveError}</div>}
 
         {confirming ? (
           <div
@@ -349,16 +323,37 @@ export function CollectionsPickerModal({
             style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
           >
             <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>放棄未儲存的變更？</span>
-            <button type="button" data-testid="discard-no" onClick={() => setConfirming(false)} style={btn()}>
+            <button
+              type="button"
+              data-testid="discard-no"
+              onClick={() => setConfirming(false)}
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+            >
               繼續編輯
             </button>
-            <button type="button" data-testid="discard-yes" onClick={onClose} style={btn("danger")}>
+            <button
+              type="button"
+              data-testid="discard-yes"
+              onClick={onClose}
+              className="btn"
+              data-variant="danger"
+              data-size="sm"
+            >
               放棄變更
             </button>
           </div>
         ) : (
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-            <button type="button" data-testid="collections-cancel" onClick={attemptClose} style={btn()}>
+            <button
+              type="button"
+              data-testid="collections-cancel"
+              onClick={attemptClose}
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+            >
               取消
             </button>
             <button
@@ -366,14 +361,15 @@ export function CollectionsPickerModal({
               data-testid="collections-save"
               onClick={onSave}
               disabled={!ready || !dirty || saving}
-              style={btn("primary")}
+              className="btn"
+              data-variant="primary"
+              data-size="sm"
             >
               {saving ? "儲存中…" : "儲存"}
             </button>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -389,29 +385,4 @@ function tierBtn(): React.CSSProperties {
     color: "var(--text-paper)",
     cursor: "pointer",
   };
-}
-
-function btn(variant?: "primary" | "danger"): React.CSSProperties {
-  const base: React.CSSProperties = {
-    height: 30,
-    padding: "0 14px",
-    borderRadius: "var(--radius-btn)",
-    fontSize: pxToRem(13),
-    cursor: "pointer",
-    border: "1px solid var(--paper-3)",
-    background: "var(--white)",
-    color: "var(--text-paper)",
-  };
-  if (variant === "primary") {
-    return {
-      ...base,
-      background: "var(--accent)",
-      borderColor: "var(--accent)",
-      color: "var(--white)",
-    };
-  }
-  if (variant === "danger") {
-    return { ...base, color: "var(--danger, #b4413c)", borderColor: "var(--danger, #b4413c)" };
-  }
-  return base;
 }

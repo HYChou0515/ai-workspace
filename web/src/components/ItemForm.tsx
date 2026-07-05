@@ -38,32 +38,6 @@ const inputStyle: CSSProperties = {
   outline: "none",
 };
 
-const primaryBtn: CSSProperties = {
-  height: 36,
-  padding: "0 16px",
-  fontSize: pxToRem(13),
-  fontWeight: 500,
-  fontFamily: "inherit",
-  color: "var(--white)",
-  background: "var(--accent)",
-  border: "1px solid transparent",
-  borderRadius: "var(--radius-btn)",
-  cursor: "pointer",
-};
-
-const ghostBtn: CSSProperties = {
-  height: 36,
-  padding: "0 14px",
-  fontSize: pxToRem(13),
-  fontWeight: 500,
-  fontFamily: "inherit",
-  color: "var(--text-paper-d)",
-  background: "transparent",
-  border: "1px solid transparent",
-  borderRadius: "var(--radius-btn)",
-  cursor: "pointer",
-};
-
 /** Drop empty values before submit so omitted optional/enum fields take their
  * backend default — sending `severity=""` would fail msgspec enum conversion.
  * Empty arrays (`topics: []`) are dropped too so a tagless item keeps its
@@ -293,15 +267,15 @@ export function ItemForm({
 
       {hideFooter ? null : onCancel ? (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
-          <button type="button" onClick={onCancel} style={ghostBtn}>
+          <button type="button" className="btn" data-variant="ghost" data-size="md" onClick={onCancel}>
             Cancel
           </button>
-          <button type="submit" disabled={pending} style={{ ...primaryBtn, opacity: pending ? 0.6 : 1 }}>
+          <button type="submit" className="btn" data-variant="primary" data-size="md" disabled={pending}>
             {pending ? "Saving…" : submitLabel}
           </button>
         </div>
       ) : (
-        <button type="submit" disabled={pending} style={{ ...primaryBtn, marginTop: 4, opacity: pending ? 0.6 : 1 }}>
+        <button type="submit" className="btn" data-variant="primary" data-size="md" disabled={pending} style={{ marginTop: 4 }}>
           {pending ? "Saving…" : submitLabel}
         </button>
       )}

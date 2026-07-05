@@ -97,6 +97,15 @@
   --radius-card:   8px;
   --radius-modal:  12px;
   --radius-avatar: 50%;
+
+  /* Layering — one scale so overlays stop colliding (#445). Content modals sit
+   * at --z-modal; an imperative confirm (Dialog) rides just above so it stacks
+   * over an open modal; the brand splash and the global progress bar own the
+   * top two bands. base.css / brand.css reference these too. */
+  --z-modal:    100;
+  --z-dialog:   150;
+  --z-splash:   200;
+  --z-progress: 300;
 }
 
 /*

@@ -202,38 +202,24 @@ export function WorkflowProgress({
         {showStop && (
           <button
             type="button"
+            className="btn"
+            data-variant="danger"
+            data-size="sm"
             data-testid="wf-stop"
             onClick={onStop}
             disabled={stopping}
-            style={{
-              padding: "2px 10px",
-              borderRadius: 6,
-              border: "1px solid var(--err)",
-              background: "transparent",
-              color: "var(--err)",
-              cursor: stopping ? "default" : "pointer",
-              opacity: stopping ? 0.6 : 1,
-              fontSize: pxToRem(11.5),
-            }}
           >
             {t("wf.stop")}
           </button>
         )}
         <button
           type="button"
+          className="btn"
+          data-variant="secondary"
+          data-size="sm"
           data-testid="wf-progress-toggle"
           aria-expanded={expanded}
           onClick={() => setExpanded((v) => !v)}
-          style={{
-            padding: "2px 8px",
-            borderRadius: 6,
-            border: "1px solid var(--paper-3)",
-            background: "transparent",
-            color: "var(--text-paper-d)",
-            cursor: "pointer",
-            fontSize: pxToRem(11.5),
-            whiteSpace: "nowrap",
-          }}
         >
           {expanded ? t("wf.progress.collapse") : t("wf.progress.expand")}
         </button>

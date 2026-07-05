@@ -6,6 +6,7 @@ import { qk } from "../api/queryKeys";
 import type { ApiClient, ItemToolState } from "../api/types";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
+import { ModalShell } from "./ModalShell";
 import { ToolsChecklist } from "./ToolsChecklist";
 
 /**
@@ -75,41 +76,15 @@ export function ToolsPickerModal({
   };
 
   return (
-    <div
-      role="presentation"
-      onClick={attemptClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
-      }}
+    <ModalShell
+      onClose={attemptClose}
+      ariaLabel={t("tools.title")}
+      data-testid="tools-modal"
+      width={480}
+      maxWidth="92vw"
+      panelStyle={{ padding: 18, display: "flex", flexDirection: "column", gap: 10, minHeight: 0 }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("tools.title")}
-        data-testid="tools-modal"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 480,
-          maxWidth: "92vw",
-          maxHeight: "82vh",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 18,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-          minHeight: 0,
-        }}
-      >
-        <strong style={{ fontSize: pxToRem(14) }}>{t("tools.title")}</strong>
+      <strong style={{ fontSize: pxToRem(14) }}>{t("tools.title")}</strong>
         <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
           {t("tools.desc")}
         </p>
@@ -117,7 +92,7 @@ export function ToolsPickerModal({
         {!ready ? (
           <div style={{ flex: 1, minHeight: 0 }}>
             {toolsQ.isError ? (
-              <p style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>{t("tools.none")}</p>
+              <p style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{t("tools.none")}</p>
             ) : (
               <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("tools.loading")}</p>
             )}
@@ -132,31 +107,53 @@ export function ToolsPickerModal({
             style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
           >
             <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("tools.discard")}</span>
-            <button type="button" data-testid="tools-discard-no" onClick={() => setConfirming(false)} style={btn()}>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="tools-discard-no"
+              onClick={() => setConfirming(false)}
+            >
               {t("tools.cancel")}
             </button>
-            <button type="button" data-testid="tools-discard-yes" onClick={onClose} style={btn("danger")}>
+            <button
+              type="button"
+              className="btn"
+              data-variant="danger"
+              data-size="sm"
+              data-testid="tools-discard-yes"
+              onClick={onClose}
+            >
               {t("tools.resetVisible")}
             </button>
           </div>
         ) : (
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 2 }}>
-            <button type="button" data-testid="tools-cancel" onClick={attemptClose} style={btn()}>
+            <button
+              type="button"
+              className="btn"
+              data-variant="secondary"
+              data-size="sm"
+              data-testid="tools-cancel"
+              onClick={attemptClose}
+            >
               {t("tools.cancel")}
             </button>
             <button
               type="button"
+              className="btn"
+              data-variant="primary"
+              data-size="sm"
               data-testid="tools-save"
               onClick={save}
               disabled={!ready || !dirty || saving}
-              style={btn("primary")}
             >
               {t("tools.save")}
             </button>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -176,22 +173,4 @@ function sameOverride(a: Record<string, boolean>, b: Record<string, boolean>): b
   const kb = Object.keys(b);
   if (ka.length !== kb.length) return false;
   return ka.every((k) => k in b && a[k] === b[k]);
-}
-
-function btn(kind?: "primary" | "danger"): React.CSSProperties {
-  const base: React.CSSProperties = {
-    height: 28,
-    padding: "0 14px",
-    fontSize: pxToRem(13),
-    borderRadius: "var(--radius-btn)",
-    border: "1px solid var(--paper-3)",
-    cursor: "pointer",
-  };
-  if (kind === "primary") {
-    return { ...base, background: "var(--accent)", color: "var(--white)", borderColor: "var(--accent)" };
-  }
-  if (kind === "danger") {
-    return { ...base, background: "var(--white)", color: "var(--danger, #b4413c)" };
-  }
-  return { ...base, background: "var(--white)", color: "var(--text-paper)" };
 }

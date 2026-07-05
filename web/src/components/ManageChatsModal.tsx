@@ -5,6 +5,7 @@ import { relativeTime } from "../api/types";
 import { chatLabel } from "./chatLabel";
 import { chatStatusBadge } from "./chatStatusBadge";
 import { Icon } from "./Icon";
+import { ModalShell } from "./ModalShell";
 
 /**
  * The manage-all-chats modal (#132) — the large surface for the "many chats" case.
@@ -166,63 +167,62 @@ export function ManageChatsModal({
   const shown = q ? chats.filter((c) => chatLabel(c).toLowerCase().includes(q)) : chats;
 
   return (
-    <div className="manage-chats__overlay" role="presentation" onMouseDown={onClose}>
-      <div
-        className="manage-chats__dialog"
-        role="dialog"
-        aria-label="Manage chats"
-        data-testid="manage-chats-modal"
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <header className="manage-chats__header">
-          <h2 className="manage-chats__title">Manage chats</h2>
-          <button
-            type="button"
-            className="manage-chats__close"
-            aria-label="Close"
-            data-testid="manage-chats-close"
-            onClick={onClose}
-          >
-            <Icon name="x" size={14} color="var(--text-paper-d)" />
-          </button>
-        </header>
-        <input
-          className="manage-chats__search"
-          type="search"
-          placeholder="Search chats"
-          aria-label="Search chats"
-          data-testid="manage-chats-search"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        <div className="manage-chats__tableWrap">
-          <table className="manage-chats__table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Activity</th>
-                <th>Messages</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((chat) => (
-                <ChatRow
-                  key={chat.chat_id}
-                  chat={chat}
-                  active={chat.chat_id === activeChatId}
-                  onSelect={onSelect}
-                  onClose={onClose}
-                  onRename={onRename}
-                  onDelete={onDelete}
-                />
-              ))}
-            </tbody>
-          </table>
-          {shown.length === 0 && <p className="manage-chats__empty">No chats match.</p>}
-        </div>
+    <ModalShell
+      onClose={onClose}
+      ariaLabel="Manage chats"
+      data-testid="manage-chats-modal"
+      width={720}
+      maxWidth="100%"
+      panelClassName="manage-chats__dialog"
+    >
+      <header className="manage-chats__header">
+        <h2 className="manage-chats__title">Manage chats</h2>
+        <button
+          type="button"
+          className="manage-chats__close"
+          aria-label="Close"
+          data-testid="manage-chats-close"
+          onClick={onClose}
+        >
+          <Icon name="x" size={14} color="var(--text-paper-d)" />
+        </button>
+      </header>
+      <input
+        className="manage-chats__search"
+        type="search"
+        placeholder="Search chats"
+        aria-label="Search chats"
+        data-testid="manage-chats-search"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+      />
+      <div className="manage-chats__tableWrap">
+        <table className="manage-chats__table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Activity</th>
+              <th>Messages</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {shown.map((chat) => (
+              <ChatRow
+                key={chat.chat_id}
+                chat={chat}
+                active={chat.chat_id === activeChatId}
+                onSelect={onSelect}
+                onClose={onClose}
+                onRename={onRename}
+                onDelete={onDelete}
+              />
+            ))}
+          </tbody>
+        </table>
+        {shown.length === 0 && <p className="manage-chats__empty">No chats match.</p>}
       </div>
-    </div>
+    </ModalShell>
   );
 }

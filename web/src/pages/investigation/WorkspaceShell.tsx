@@ -554,7 +554,7 @@ function EditItemModal({
           background: "var(--white)",
           borderRadius: "var(--radius-card)",
           padding: 20,
-          boxShadow: "var(--shadow-pop)",
+          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
         }}
       >
         <h2 style={{ marginTop: 0, fontSize: pxToRem(18) }}>Edit {manifest.item.noun}</h2>
@@ -1938,7 +1938,7 @@ function GroupTabStrip({ group, groups }: { group: EditorGroup; groups: Groups }
         flexShrink: 0,
       }}
     >
-      <div className="scrollable" style={{ display: "flex", flex: 1, overflowX: "auto" }}>
+      <div className="scrollable" style={{ display: "flex", flex: 1, minWidth: 0, overflowX: "auto" }}>
         {group.tabs.map((t: EditorTab, i) => {
           const isActive = t.path === active;
           return (
@@ -2229,6 +2229,7 @@ function BottomPanel({
             className="scrollable"
             style={{
               flex: 1,
+              minHeight: 0,
               overflow: "auto",
               padding: "8px 14px",
               fontFamily: "var(--font-mono)",

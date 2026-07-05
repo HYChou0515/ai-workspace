@@ -85,7 +85,8 @@ describe("KbCollectionsModal", () => {
     );
     fireEvent.click(screen.getByTestId("kb-collections-dialog"));
     expect(onClose).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId("kb-collections-backdrop"));
+    // ModalShell derives the backdrop testid from the panel's (`${id}-backdrop`).
+    fireEvent.click(screen.getByTestId("kb-collections-dialog-backdrop"));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

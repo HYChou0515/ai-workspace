@@ -185,7 +185,7 @@ export function ItemChatShell({
             alignItems: "center",
             flex: "0 0 auto",
             padding: "4px 8px",
-            borderBottom: "1px solid var(--border, #2a2a2a)",
+            borderBottom: "1px solid var(--paper-3)",
           }}
         >
           {showSwitcher && (

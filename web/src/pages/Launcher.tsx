@@ -188,7 +188,7 @@ export function Launcher() {
         />
       )}
       <main style={{ maxWidth: 1080, margin: "0 auto", padding: 28 }}>
-        <div style={{ fontFamily: "monospace", fontSize: pxToRem(11), letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
+        <div style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), letterSpacing: "0.12em", color: "var(--text-paper-d2)" }}>
           {t("launcher.appsEyebrow")}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "4px 0 24px" }}>
@@ -210,7 +210,7 @@ export function Launcher() {
                 gridColumn: "1 / -1",
                 padding: "18px 20px",
                 borderRadius: 12,
-                border: "1px dashed var(--line)",
+                border: "1px dashed var(--paper-3)",
                 background: "var(--paper-2)",
               }}
             >

@@ -114,23 +114,17 @@ export function WorkflowDecisionCard({
             }
             onDecide(choice, isRevise ? note : undefined);
           };
+          const variant = choice === "approve" ? "primary" : choice === "reject" ? "danger" : "secondary";
           return (
             <button
               key={choice}
               type="button"
+              className="btn"
+              data-variant={variant}
+              data-size="sm"
               data-action={choice}
               disabled={busy}
               onClick={onClick}
-              style={{
-                padding: "5px 12px",
-                borderRadius: 6,
-                border: "1px solid var(--line)",
-                cursor: busy ? "default" : "pointer",
-                background:
-                  choice === "approve" ? "var(--ok)" : choice === "reject" ? "var(--err)" : "var(--paper-2)",
-                color: choice === "approve" || choice === "reject" ? "#fff" : "var(--text-paper)",
-                fontWeight: 500,
-              }}
             >
               {ACTION_LABEL[choice] ?? choice}
             </button>

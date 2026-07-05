@@ -12,7 +12,7 @@ import { qk } from "../api/queryKeys";
 import { pxToRem } from "../lib/pxToRem";
 
 function scoreColor(score: number): string {
-  if (score >= 80) return "var(--ok, #2e9e5b)";
+  if (score >= 80) return "var(--ok)";
   if (score >= 50) return "var(--warn)";
   return "var(--err)";
 }
