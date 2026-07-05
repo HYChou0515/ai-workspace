@@ -34,6 +34,7 @@ export default function MonacoEditorImpl({
   minimap = false,
   autoHeight = false,
   minHeight = 120,
+  ariaLabel,
 }: MonacoEditorProps) {
   const [height, setHeight] = useState(minHeight);
   const fontSize = useMonacoFontSize(13);
@@ -64,6 +65,7 @@ export default function MonacoEditorImpl({
         }}
         options={{
           readOnly,
+          ariaLabel,
           minimap: { enabled: minimap },
           fontSize,
           fontFamily: "var(--font-mono)",

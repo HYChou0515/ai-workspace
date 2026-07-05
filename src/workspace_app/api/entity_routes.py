@@ -223,6 +223,7 @@ def register_entity_routes(
                 number,
                 body.patch,
                 expected_version=body.expected_version,
+                body=body.body,
                 actor=get_user_id(),
             )
         except FileNotFound as e:

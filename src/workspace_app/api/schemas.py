@@ -317,3 +317,4 @@ class _EntityCreateBody(BaseModel):
 class _EntityUpdateBody(BaseModel):
     patch: dict[str, Any] = Field(default_factory=dict)
     expected_version: str | None = None  # §C6 — reject if the record moved on
+    body: str | None = None  # §C2 — replace the markdown body; None preserves it

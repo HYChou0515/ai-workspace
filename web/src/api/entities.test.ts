@@ -29,6 +29,13 @@ describe("entitiesApi.update", () => {
     expect(body).toEqual({ patch: { status: "done" } });
   });
 
+  it("sends the markdown body in the PUT payload when provided (§C2)", async () => {
+    vi.mocked(apiFetch).mockResolvedValue(okJson(record));
+    await entitiesApi.update("rca", "item-1", "issue", 1, { status: "done" }, "v1", "## Notes");
+    const body = JSON.parse(vi.mocked(apiFetch).mock.calls.at(-1)![1]!.body as string);
+    expect(body).toEqual({ patch: { status: "done" }, expected_version: "v1", body: "## Notes" });
+  });
+
   it("throws EntityConflictError on a 409 so the UI can reload instead of clobbering", async () => {
     vi.mocked(apiFetch).mockResolvedValue(errStatus(409));
     await expect(

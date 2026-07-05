@@ -70,6 +70,20 @@ describe("useEntityWrite", () => {
     expect(entitiesApi.create).not.toHaveBeenCalled();
   });
 
+  it("save carries the frontmatter patch + markdown body through the update path (§C2)", async () => {
+    vi.mocked(entitiesApi.update).mockResolvedValue(rec(1, "v2", { status: "done" }));
+    const { result } = setup([rec(1, "v1", { status: "open" })]);
+    act(() => result.current.save(1, { status: "done" }, "## Notes"));
+    await waitFor(() => expect(entitiesApi.update).toHaveBeenCalled());
+    expect(entitiesApi.update).toHaveBeenCalledWith(SLUG, ITEM, TYPE, 1, { status: "done" }, "v1", "## Notes");
+  });
+
+  it("does not save when canWrite is false (read-only member)", () => {
+    const { result } = setup([rec(1, "v1")], { canWrite: false });
+    act(() => result.current.save(1, { status: "done" }, "body"));
+    expect(entitiesApi.update).not.toHaveBeenCalled();
+  });
+
   it("creates a record through the shared write path", async () => {
     vi.mocked(entitiesApi.create).mockResolvedValue(rec(2, "v1", { title: "X" }));
     const { result } = setup([]);

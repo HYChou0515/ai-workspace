@@ -27,7 +27,13 @@ export type UseEntityWriteOptions = {
   canWrite?: boolean;
 };
 
-type UpdateVars = { number: number; patch: Record<string, unknown>; expectedVersion?: string };
+type UpdateVars = {
+  number: number;
+  patch: Record<string, unknown>;
+  expectedVersion?: string;
+  /** §C2 — replace the markdown body too (the file editor); omitted preserves it. */
+  body?: string;
+};
 
 export function useEntityWrite(slug: string, itemId: string, type: string, options?: UseEntityWriteOptions) {
   const canWrite = options?.canWrite ?? true;
@@ -44,7 +50,7 @@ export function useEntityWrite(slug: string, itemId: string, type: string, optio
   });
 
   const update = useMutation<EntityInstance, Error, UpdateVars, { prev?: EntityList }>({
-    onMutate: async ({ number, patch }) => {
+    onMutate: async ({ number, patch, body }) => {
       const listKey = qk.entities.list(slug, itemId, type);
       await qc.cancelQueries({ queryKey: listKey });
       const prev = qc.getQueryData<EntityList>(listKey);
@@ -52,18 +58,22 @@ export function useEntityWrite(slug: string, itemId: string, type: string, optio
         qc.setQueryData<EntityList>(listKey, {
           ...prev,
           entities: prev.entities.map((e) =>
-            e.number === number ? { ...e, fields: { ...e.fields, ...patch } } : e,
+            e.number === number
+              ? { ...e, fields: { ...e.fields, ...patch }, ...(body !== undefined ? { body } : {}) }
+              : e,
           ),
         });
       }
       return { prev };
     },
-    mutationFn: ({ number, patch, expectedVersion }) =>
-      // Omit the optional arg entirely when there's no version (last-write),
-      // keeping the call arity clean for callers/tests.
-      expectedVersion === undefined
-        ? entitiesApi.update(slug, itemId, type, number, patch)
-        : entitiesApi.update(slug, itemId, type, number, patch, expectedVersion),
+    mutationFn: ({ number, patch, expectedVersion, body }) =>
+      // Omit trailing optionals when absent so the inline path keeps a clean
+      // 5-arg call (§C2 file editor passes a body → the 7-arg form).
+      body !== undefined
+        ? entitiesApi.update(slug, itemId, type, number, patch, expectedVersion, body)
+        : expectedVersion === undefined
+          ? entitiesApi.update(slug, itemId, type, number, patch)
+          : entitiesApi.update(slug, itemId, type, number, patch, expectedVersion),
     onError: (err, { number }, ctx) => {
       // Roll back the optimistic edit; a real conflict then reloads (onSettled).
       if (ctx?.prev) qc.setQueryData(qk.entities.list(slug, itemId, type), ctx.prev);
@@ -87,6 +97,17 @@ export function useEntityWrite(slug: string, itemId: string, type: string, optio
     [canWrite, qc, slug, itemId, type, update],
   );
 
+  // §C2 — the file editor saves the frontmatter patch + markdown body together.
+  const save = useCallback(
+    (number: number, patchObj: Record<string, unknown>, body: string) => {
+      if (!canWrite) return;
+      const list = qc.getQueryData<EntityList>(qk.entities.list(slug, itemId, type));
+      const expectedVersion = list?.entities.find((e) => e.number === number)?.version;
+      update.mutate({ number, patch: patchObj, expectedVersion, body });
+    },
+    [canWrite, qc, slug, itemId, type, update],
+  );
+
   const createRecord = useCallback(
     (args: Record<string, unknown>) => {
       if (!canWrite) return;
@@ -103,6 +124,7 @@ export function useEntityWrite(slug: string, itemId: string, type: string, optio
     canWrite,
     create: createRecord,
     patch,
+    save,
     isBusy: create.isPending || update.isPending,
     conflicts,
     dismissConflict,

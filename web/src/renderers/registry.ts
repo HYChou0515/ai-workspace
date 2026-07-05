@@ -15,6 +15,7 @@ import type { ComponentType } from "react";
 
 import { CsvRenderer } from "./CsvRenderer";
 import { AiYamlRenderer } from "./entity/AiYamlRenderer";
+import { RecordFileRenderer } from "./entity/RecordFileRenderer";
 import { HtmlRenderer } from "./HtmlRenderer";
 import { ImageRenderer } from "./ImageRenderer";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -51,6 +52,20 @@ export const RENDERERS: RendererDef[] = [
     key: "report",
     match: (p) => /(?:^|\/)report\.v\d+\.md$/i.test(p),
     Component: ReportRenderer,
+    outline: true,
+  },
+  // #453: an entity record file (`{records_path}/N.md`, e.g. `issues/5.md`) opens
+  // as the structured file editor (frontmatter form/YAML + body) instead of raw
+  // markdown. The coarse numeric-basename gate matches here; the renderer confirms
+  // via the catalog and degrades to markdown when the folder isn't a records_path
+  // or the number has no projected record — so a plain doc named `N.md` keeps full
+  // markdown behaviour (editToggle + outline). Anchored before `markdown`; report
+  // files (`report.vN.md`) are matched earlier and never look like a bare integer.
+  {
+    key: "record",
+    match: (p) => /(?:^|\/)\d+\.md$/i.test(p),
+    Component: RecordFileRenderer,
+    editToggle: true,
     outline: true,
   },
   { key: "markdown", match: ext("md", "markdown"), Component: MarkdownRenderer, editToggle: true, outline: true },
