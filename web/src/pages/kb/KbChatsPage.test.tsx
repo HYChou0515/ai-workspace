@@ -65,6 +65,13 @@ describe("KbChatsPage", () => {
     expect(onOpenChat).toHaveBeenCalledWith(chat.resource_id);
   });
 
+  it("exposes a chat's full name via title= on the clipped row title (#456)", async () => {
+    await mockKbApi.createChat("Void thresholds across the reflow oven zones", ["col-1"]);
+    render(<KbChatsPage client={mockKbApi} />);
+    const title = await screen.findByText("Void thresholds across the reflow oven zones");
+    expect(title).toHaveAttribute("title", "Void thresholds across the reflow oven zones");
+  });
+
   it("disables only the in-flight row's delete button, leaving other rows clickable", async () => {
     await mockKbApi.createChat("Doomed", []);
     await mockKbApi.createChat("Safe", []);

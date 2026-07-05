@@ -171,7 +171,9 @@ export function KbChatsPage({
             onClick={() => onOpenChat?.(c.resource_id)}
           >
             <Icon name="chat" size={15} color="var(--text-paper-d)" />
-            <span className="kb-chats__title">{label}</span>
+            <span className="kb-chats__title" title={label}>
+              {label}
+            </span>
             {owned ? (
               <span className="kb-chats__meta">{c.message_count} msgs</span>
             ) : (

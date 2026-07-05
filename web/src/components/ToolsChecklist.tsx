@@ -81,6 +81,15 @@ export function ToolsChecklist({
       >
         {visible.map((tool) => {
           const state = stateOf(tool.key);
+          // The secondary line shows the follow-default hint or the tool's own
+          // description; both it and the label clip on one line, so mirror the
+          // shown text into title= for a hover tooltip when it overflows (#456).
+          const detail =
+            state === "follow"
+              ? tool.default_on
+                ? t("tools.defaultOn")
+                : t("tools.defaultOff")
+              : tool.description;
           return (
             <div
               key={tool.key}
@@ -96,6 +105,7 @@ export function ToolsChecklist({
             >
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div
+                  title={tool.label}
                   style={{
                     fontWeight: 500,
                     overflow: "hidden",
@@ -106,6 +116,7 @@ export function ToolsChecklist({
                   {tool.label}
                 </div>
                 <div
+                  title={detail}
                   style={{
                     fontSize: pxToRem(11),
                     color: "var(--text-paper-d)",
@@ -114,11 +125,7 @@ export function ToolsChecklist({
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {state === "follow"
-                    ? tool.default_on
-                      ? t("tools.defaultOn")
-                      : t("tools.defaultOff")
-                    : tool.description}
+                  {detail}
                 </div>
               </div>
               <div
