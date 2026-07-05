@@ -281,15 +281,23 @@ def _valid_hhmm(value: str) -> bool:
 # rather than being dropped like a cron 'fire at this instant' would.
 
 
-def fire_window(s: Schedule, now: datetime) -> str:
-    """The period key for ``now`` (local to the schedule's tz): ``YYYY-MM-DD`` (daily),
-    ``YYYY-Www`` ISO week (weekly), or ``YYYY-MM`` (monthly)."""
-    if s.every == "weekly":
+def window_key(every: str, now: datetime) -> str:
+    """The period bucket key for ``now``: ``YYYY-MM-DD`` (daily), ``YYYY-Www`` ISO week
+    (weekly), or ``YYYY-MM`` (monthly); any other ``every`` buckets by day. Shared by the
+    schedule trigger's fire dedup (``fire_window``) and #435's ``send_notification``
+    per-window fingerprint — one truncation rule, so a "daily" notify and a "daily" schedule
+    bucket identically."""
+    if every == "weekly":
         iso = now.isocalendar()
         return f"{iso.year}-W{iso.week:02d}"
-    if s.every == "monthly":
+    if every == "monthly":
         return f"{now.year:04d}-{now.month:02d}"
     return now.strftime("%Y-%m-%d")
+
+
+def fire_window(s: Schedule, now: datetime) -> str:
+    """The period key for ``now`` (local to the schedule's tz) — see :func:`window_key`."""
+    return window_key(s.every, now)
 
 
 def period_target(s: Schedule, now: datetime) -> datetime:

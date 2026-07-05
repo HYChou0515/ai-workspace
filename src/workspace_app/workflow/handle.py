@@ -495,23 +495,34 @@ class WorkflowHandle:
         name: str,
         title: str = "",
         body: str = "",
+        window: str = "",
         phase: str = "notify",
         key: str = "",
         cache: bool = True,
     ) -> dict[str, Any]:
         """Send one in-app notification as a non-idempotent capability on the #435 shell
-        (M1 send-once). ``decide`` queries the Notification store by the send-once
-        fingerprint ``{recipient}:{topic}`` — the store IS the ledger — so a replay or a
-        revise that changes only the title never re-notifies about the same topic; ``act``
-        creates the notification (send + ledger in one atomic write, so there is no
-        act-crash gap). A per-window fingerprint (once-per-day rather than once-ever) needs
-        #429's time-slicing; until then the fingerprint is once-ever per (recipient, topic).
+        (M1 send-once). ``decide`` queries the Notification store by the send fingerprint —
+        the store IS the ledger — so a replay or a revise that changes only the title never
+        re-notifies about the same topic; ``act`` creates the notification (send + ledger in
+        one atomic write, so there is no act-crash gap).
+
+        ``window`` (P8) buckets the run's creation instant into the fingerprint so a
+        recurring notify sends once per period instead of once-ever: ``""`` ⇒ once-ever
+        ``{recipient}:{topic}``; ``daily``/``weekly``/``monthly`` ⇒
+        ``{recipient}:{topic}:{window_key}`` (a new period → a fresh key → re-sends). Because
+        the journal is workflow_id-scoped (a re-trigger reuses it), the run's ``run_id`` is
+        folded into the shell inputs so ``decide`` re-consults the ledger each invocation
+        rather than journal-skipping — the ledger, not the journal, is the send authority.
         Returns ``{sent, action, notification_id}``. ``name`` is the capability's site."""
         if self._notify is None:
             raise RuntimeError("send_notification needs a capability (wired by the run driver)")
         notify_fn = self._notify
         sent_check = self._notification_sent
         fingerprint = f"{recipient}:{topic}"
+        if window and self.run_started_at is not None:
+            from .triggers import window_key
+
+            fingerprint = f"{fingerprint}:{window_key(window, self.run_started_at)}"
 
         async def decide(_feedback: str | None) -> Verdict:
             already = sent_check is not None and await sent_check(fingerprint)
@@ -523,10 +534,21 @@ class WorkflowHandle:
             nid = await notify_fn(recipient, title or topic, body, fingerprint)
             return Result(fields={"sent": True, "action": "send", "notification_id": nid})
 
+        inputs: dict[str, Any] = {
+            "recipient": recipient,
+            "topic": topic,
+            "title": title,
+            "body": body,
+        }
+        if self.run_id:
+            # Fold the per-invocation identity so decide re-runs (and re-queries the ledger)
+            # each invocation instead of returning the workflow_id-scoped journal's cached
+            # ruling — the ledger is the send authority (M1), not the journal.
+            inputs["run_id"] = self.run_id
         result = await run_nonidempotent(
             self,
             name=name,
-            inputs={"recipient": recipient, "topic": topic, "title": title, "body": body},
+            inputs=inputs,
             decide=decide,
             act=act,
             key=key,
