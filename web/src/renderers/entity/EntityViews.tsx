@@ -108,10 +108,48 @@ export function QuickCreate({
   );
 }
 
+// ── conflict banner (§B2) ──────────────────────────────────────────────────
+
+/** A non-blocking alert for records whose optimistic-lock write hit a 409. The
+ * write hook has already reloaded the row to the other person's value; this just
+ * tells the user their edit didn't land and lets them dismiss per record. */
+function ConflictBanner({ conflicts, onDismiss }: { conflicts: number[]; onDismiss?: (number: number) => void }) {
+  return (
+    <div
+      role="alert"
+      style={{ border: "1px solid var(--warn)", borderRadius: 6, padding: 8, marginBottom: 8, fontSize: pxToRem(13) }}
+    >
+      Someone else changed {conflicts.length === 1 ? "this record" : "these records"} — your edit wasn't applied and the
+      latest {conflicts.length === 1 ? "value was" : "values were"} reloaded.
+      <span style={{ marginLeft: 8, display: "inline-flex", gap: 4 }}>
+        {conflicts.map((n) => (
+          <button
+            key={n}
+            type="button"
+            className="btn"
+            data-variant="ghost"
+            data-size="sm"
+            aria-label={`dismiss conflict ${n}`}
+            onClick={() => onDismiss?.(n)}
+          >
+            #{n} ✕
+          </button>
+        ))}
+      </span>
+    </div>
+  );
+}
+
 // ── dispatcher ─────────────────────────────────────────────────────────────
 
-export function EntityViewBody(props: EntityViewProps) {
-  const { spec, type, entities, invalid, onCreate, busy } = props;
+export type EntityViewBodyProps = EntityViewProps & {
+  /** Record numbers whose write hit a 409 (§B2), shown as a dismissable banner. */
+  conflicts?: number[];
+  onDismissConflict?: (number: number) => void;
+};
+
+export function EntityViewBody(props: EntityViewBodyProps) {
+  const { spec, type, entities, invalid, onCreate, busy, conflicts, onDismissConflict } = props;
   const renderer = resolveViewRenderer(spec.view);
   const { Component } = renderer;
   const showEmpty = entities.length === 0 && !renderer.ownsEmptyState;
@@ -121,6 +159,7 @@ export function EntityViewBody(props: EntityViewProps) {
         <h3 style={{ margin: 0 }}>{spec.title ?? spec.entity}</h3>
         {type && !renderer.suppressQuickCreate && <QuickCreate form={type.form} onCreate={onCreate} busy={busy} />}
       </div>
+      {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {invalid && invalid.length > 0 && (
         <div style={{ color: "var(--warn)", marginBottom: 8, fontSize: pxToRem(13) }}>
           {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be parsed and {invalid.length > 1 ? "are" : "is"} hidden.

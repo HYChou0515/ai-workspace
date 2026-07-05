@@ -16,12 +16,8 @@
 import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
-import {
-  useEntities,
-  useEntityCatalog,
-  useEntityHealth,
-  useEntityMutations,
-} from "../../hooks/useEntities";
+import { useEntities, useEntityCatalog, useEntityHealth } from "../../hooks/useEntities";
+import { useEntityWrite } from "../../hooks/useEntityWrite";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
 import { YamlTree } from "../YamlTree";
@@ -43,7 +39,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const catalogQ = useEntityCatalog(slug, itemId);
   const listQ = useEntities(slug, itemId, entityName);
   const healthQ = useEntityHealth(slug, itemId, isHealth);
-  const mut = useEntityMutations(slug, itemId, entityName);
+  const write = useEntityWrite(slug, itemId, entityName);
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
@@ -67,9 +63,11 @@ export function AiYamlRenderer({ path }: { path: string }) {
       type={type}
       entities={list?.entities ?? []}
       invalid={list?.invalid ?? []}
-      onCreate={(args) => mut.create(args)}
-      onPatch={(number, patch) => mut.patch(number, patch)}
-      busy={mut.isCreating || mut.isPatching}
+      onCreate={write.create}
+      onPatch={write.patch}
+      busy={write.isBusy}
+      conflicts={write.conflicts}
+      onDismissConflict={write.dismissConflict}
     />
   );
 }

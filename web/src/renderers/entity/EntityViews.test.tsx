@@ -181,6 +181,33 @@ describe("GanttView", () => {
   });
 });
 
+describe("conflict banner (§B2)", () => {
+  it("shows a non-blocking alert for a conflicted record and dismisses it", () => {
+    const onDismiss = vi.fn();
+    render(
+      <EntityViewBody
+        spec={tableSpec}
+        type={issueType}
+        entities={[issue(1, { title: "A" })]}
+        conflicts={[1]}
+        onDismissConflict={onDismiss}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(/changed/i);
+    fireEvent.click(screen.getByLabelText("dismiss conflict 1"));
+    expect(onDismiss).toHaveBeenCalledWith(1);
+  });
+
+  it("renders no alert when there are no conflicts", () => {
+    render(
+      <EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "A" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+});
+
 describe("invalid records", () => {
   it("warns that unparseable records are hidden", () => {
     render(

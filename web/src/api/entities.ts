@@ -13,6 +13,17 @@ import { apiFetch } from "./http";
 
 const enc = encodeURIComponent;
 
+/** Thrown when `update` hits a 409 — the record's `expected_version` no longer
+ * matches, i.e. someone changed it since we read it (§C6). Typed so the write
+ * hook can reload + surface the conflict instead of clobbering (last-write). */
+export class EntityConflictError extends Error {
+  readonly status = 409;
+  constructor(message = "entity changed since you read it") {
+    super(message);
+    this.name = "EntityConflictError";
+  }
+}
+
 /** One parse/lint finding (§E). `error` drops the record from the projection;
  * `warning` still projects. */
 export type EntityDiagnostic = {
@@ -143,12 +154,18 @@ export const entitiesApi = {
     type: string,
     number: number,
     patch: Record<string, unknown>,
+    expectedVersion?: string,
   ): Promise<EntityInstance> {
+    // §C6: echo the record's version so a concurrent edit is reported (409)
+    // rather than silently clobbered. Omitted → last-write-wins.
+    const payload: { patch: Record<string, unknown>; expected_version?: string } = { patch };
+    if (expectedVersion !== undefined) payload.expected_version = expectedVersion;
     const resp = await apiFetch(`${base(slug, itemId)}/${enc(type)}/${number}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ patch }),
+      body: JSON.stringify(payload),
     });
+    if (resp.status === 409) throw new EntityConflictError();
     if (!resp.ok) throw new Error(`entity update failed: ${resp.status}`);
     return resp.json();
   },
