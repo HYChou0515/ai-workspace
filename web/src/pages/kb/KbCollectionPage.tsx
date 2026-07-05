@@ -31,6 +31,7 @@ import {
 import { qk } from "../../api/queryKeys";
 import { mergeBlocked, screenFiles, type BlockedUpload } from "../../kb/uploadChecks";
 import { UploadBlockedList } from "./UploadBlockedList";
+import { DialogProvider, useDialog } from "../../components/Dialog";
 import { Icon, type IconName } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { Popover } from "../../components/Popover";
@@ -84,8 +85,20 @@ export function useCollectionOutlet(): KbCollectionCtx {
   return useOutletContext<KbCollectionCtx>();
 }
 
-export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
+// A DialogProvider wraps the body so the re-index confirm prompts (and any
+// future confirms on this page or its tab Outlet) can use the shared modal —
+// the same one the file-tree bulk re-index uses, so all three feel identical.
+export function KbCollectionPage(props: { client?: KbApi }) {
+  return (
+    <DialogProvider>
+      <KbCollectionPageBody {...props} />
+    </DialogProvider>
+  );
+}
+
+function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   const t = useT();
+  const dialog = useDialog();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const { openDoc, openCite } = useKbOutlet();
@@ -413,6 +426,35 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
         ? "review"
         : "documents";
 
+  // Re-indexing every document (or every failed one) restarts a lot of work, so
+  // gate the whole-collection actions behind a confirm — same modal the file
+  // tree uses for a >=2 bulk re-index (KbDocIde), so the three feel identical.
+  const askReindexAll = async () => {
+    if (!selected || selected.doc_count === 0) return;
+    const n = selected.doc_count;
+    const choice = await dialog.confirm({
+      title: "Re-index all documents",
+      body: `Re-index all ${n} ${n === 1 ? "document" : "documents"} in “${selected.name}”? This restarts indexing for every one.`,
+      actions: [
+        { id: "go", label: t("kb.reindexAll"), variant: "primary" },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (choice === "go") reindexAllMut.mutate();
+  };
+  const askReindexFailed = async () => {
+    const n = erroredCount;
+    const choice = await dialog.confirm({
+      title: "Re-index failed documents",
+      body: `Re-index ${n} failed ${n === 1 ? "document" : "documents"}?`,
+      actions: [
+        { id: "go", label: t("kb.status.retryFailed"), variant: "primary" },
+        { id: "cancel", label: "Cancel" },
+      ],
+    });
+    if (choice === "go") reindexFailedMut.mutate();
+  };
+
   return (
     <section className="kb-colpage" aria-label="Collection">
       {/* No `accept` filter on the pickers: an extension allow-list (all the BE
@@ -561,7 +603,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                     <Icon name="git" size={14} color="var(--text-paper-d)" /> Git connection
                   </button>
                 ) : null}
-                <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); reindexAllMut.mutate(); }}>
+                <button type="button" role="menuitem" className="kb-menu__item" disabled={selected.doc_count === 0 || reindexAllMut.isPending} onClick={() => { close(); void askReindexAll(); }}>
                   <Icon name="refresh" size={14} color="var(--text-paper-d)" /> {t("kb.reindexAll")}
                 </button>
                 <button type="button" role="menuitem" className="kb-menu__item" disabled={downloadMut.isPending} onClick={() => { close(); downloadMut.mutate(selected.resource_id); }}>
@@ -718,7 +760,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
                     className="kb-btn kb-index-status__retry"
                     data-testid="kb-reindex-failed"
                     disabled={reindexFailedMut.isPending}
-                    onClick={() => reindexFailedMut.mutate()}
+                    onClick={() => void askReindexFailed()}
                   >
                     <Icon name="refresh" size={12} /> {t("kb.status.retryFailed")}
                   </button>
@@ -849,7 +891,7 @@ export function KbCollectionPage({ client = kbApi }: { client?: KbApi }) {
             className="kb-btn"
             data-testid="kb-reindex-all"
             disabled={selected.doc_count === 0 || reindexAllMut.isPending}
-            onClick={() => reindexAllMut.mutate()}
+            onClick={() => void askReindexAll()}
           >
             <Icon name="refresh" size={12} /> {t("kb.reindexAll")}
           </button>
