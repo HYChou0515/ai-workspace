@@ -407,11 +407,15 @@ export function FileTree({
         style={{
           position: "sticky",
           top: 0,
-          zIndex: 1,
+          // #460 P3: sit above rows/badges so a scrolled row can never paint
+          // over the header, and carry the top spacing INSIDE this opaque sticky
+          // box (the scroll container no longer pads its top) so no row peeks
+          // through a transparent band above the header.
+          zIndex: 2,
           background: "var(--filetree-header-bg, var(--paper))",
           display: "flex",
           alignItems: "center",
-          padding: "0 10px 4px 14px",
+          padding: "10px 10px 4px 14px",
         }}
       >
         <span className="caps" style={{ flex: searchable ? undefined : 1 }}>

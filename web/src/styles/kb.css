@@ -2249,7 +2249,10 @@
   width: 260px;
   flex-shrink: 0;
   overflow: auto;
-  padding: 10px 0;
+  /* #460 P3: no top padding — the sticky "Files" header owns its own top
+     spacing, so there is no transparent band above the pin for rows to peek
+     through as the tree scrolls. Keep the bottom breathing room. */
+  padding: 0 0 10px;
   border-right: 1px solid var(--paper-3);
   background: transparent;
   /* #346: the FileTree "Files" header is sticky; here the tree sits on the
