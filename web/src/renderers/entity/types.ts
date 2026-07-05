@@ -7,6 +7,7 @@
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
+import type { RefIndex } from "./refTraversal";
 
 export type ViewKind = "table" | "board" | "gantt" | "health";
 
@@ -31,6 +32,8 @@ export type EntityViewProps = {
   invalid?: EntityInstance[];
   /** The company directory, for `actor`-role widgets (assignee pickers). */
   users?: User[];
+  /** Records of referenced types, for ref-traversal columns + ref pickers (§A4). */
+  refIndex?: RefIndex;
   onCreate: (args: Record<string, unknown>) => void;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
   busy?: boolean;

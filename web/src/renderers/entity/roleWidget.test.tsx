@@ -76,4 +76,20 @@ describe("RoleField", () => {
     fireEvent.blur(input);
     expect(onCommit).toHaveBeenCalledWith(40);
   });
+
+  it("edits a ref as a #N-title picker and commits the target number (§B3)", () => {
+    const onCommit = vi.fn();
+    render(
+      <RoleField widget="ref" name="milestone" value="" refOptions={[{ number: 5, label: "v1.0" }]} onCommit={onCommit} />,
+    );
+    fireEvent.change(screen.getByLabelText("milestone"), { target: { value: "5" } });
+    expect(onCommit).toHaveBeenCalledWith(5);
+  });
+
+  it("falls back to a numeric ref input when no options are loaded yet", () => {
+    render(<RoleField widget="ref" name="milestone" value={3} onCommit={vi.fn()} />);
+    const input = screen.getByLabelText("milestone");
+    expect(input).toHaveValue(3);
+    expect(input.tagName).toBe("INPUT");
+  });
 });

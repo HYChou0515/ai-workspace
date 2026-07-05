@@ -12,6 +12,7 @@ import {
   parseViewSpec,
   type ViewSpec,
 } from "./EntityViews";
+import { buildRefIndex } from "./refTraversal";
 
 const issueType: EntityType = {
   name: "issue",
@@ -182,6 +183,66 @@ describe("role widgets in the table (§B3)", () => {
     render(<EntityViewBody spec={tableSpec} type={withActorForm} entities={[]} users={users} onCreate={vi.fn()} onPatch={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "+ New" }));
     expect(screen.getByLabelText("assignee").tagName).toBe("SELECT");
+  });
+});
+
+describe("ref-traversal in the table (§A4)", () => {
+  const refType: EntityType = {
+    name: "issue",
+    records_path: "issues",
+    fields: [
+      { name: "title", role: "text" },
+      { name: "milestone", role: "ref", to: "milestone" },
+    ],
+    form: [],
+  };
+  const ms = (n: number, fields: Record<string, unknown>) => ({ number: n, type_name: "milestone", fields, body: "", diagnostics: [] });
+
+  it("shows a milestone.title column as the referenced milestone's title", () => {
+    const index = buildRefIndex({ milestone: [ms(5, { title: "v1.0" })] });
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["title", "milestone.title"] }}
+        type={refType}
+        entities={[issue(1, { title: "A", milestone: 5 })]}
+        refIndex={index}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("v1.0")).toBeInTheDocument();
+  });
+
+  it("degrades a dangling ref column to a marker instead of crashing (§D)", () => {
+    const index = buildRefIndex({ milestone: [] });
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["milestone.title"] }}
+        type={refType}
+        entities={[issue(1, { milestone: 9 })]}
+        refIndex={index}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("#9?")).toBeInTheDocument();
+  });
+
+  it("edits a ref column as a #N-title picker and patches the chosen number", () => {
+    const index = buildRefIndex({ milestone: [ms(5, { title: "v1.0" })] });
+    const onPatch = vi.fn();
+    render(
+      <EntityViewBody
+        spec={{ view: "table", entity: "issue", columns: ["milestone"] }}
+        type={refType}
+        entities={[issue(1, { milestone: "" })]}
+        refIndex={index}
+        onCreate={vi.fn()}
+        onPatch={onPatch}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("milestone"), { target: { value: "5" } });
+    expect(onPatch).toHaveBeenCalledWith(1, { milestone: 5 });
   });
 });
 

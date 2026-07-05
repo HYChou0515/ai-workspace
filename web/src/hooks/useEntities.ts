@@ -5,9 +5,16 @@
  * + conflict contract every renderer rides.
  */
 
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 
-import { type EntityCatalog, type EntityHealth, type EntityList, entitiesApi } from "../api/entities";
+import {
+  type EntityCatalog,
+  type EntityHealth,
+  type EntityInstance,
+  type EntityList,
+  entitiesApi,
+} from "../api/entities";
 import { qk } from "../api/queryKeys";
 
 export function useEntityCatalog(slug: string, itemId: string) {
@@ -32,4 +39,29 @@ export function useEntities(slug: string, itemId: string, type: string) {
     queryFn: () => entitiesApi.list(slug, itemId, type),
     enabled: !!slug && !!itemId && !!type,
   });
+}
+
+/** Load the record lists of several referenced types at once (#448 P4) so the
+ * renderer can resolve ref-traversal columns + populate ref pickers. `useQueries`
+ * takes a dynamic list, so the set can vary with the open view's schema. */
+export function useReferencedRecords(
+  slug: string,
+  itemId: string,
+  types: string[],
+): Record<string, EntityInstance[]> {
+  const results = useQueries({
+    queries: types.map((t) => ({
+      queryKey: qk.entities.list(slug, itemId, t),
+      queryFn: () => entitiesApi.list(slug, itemId, t),
+      enabled: !!slug && !!itemId && !!t,
+    })),
+  });
+  // Re-derive only when a referenced list actually refetches (dataUpdatedAt),
+  // not on every render (`useQueries` returns a fresh array each time).
+  const stamp = results.map((r) => r.dataUpdatedAt).join(",");
+  const byType: Record<string, EntityInstance[]> = {};
+  types.forEach((t, i) => {
+    byType[t] = results[i]?.data?.entities ?? [];
+  });
+  return useMemo(() => byType, [types, stamp]);
 }

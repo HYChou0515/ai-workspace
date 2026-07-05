@@ -17,6 +17,7 @@ import { useState } from "react";
 
 import type { EntityRole } from "../../api/entities";
 import type { User } from "../../api/types";
+import type { RefOption } from "./refTraversal";
 import { fieldText } from "./shared";
 
 export type WidgetKind =
@@ -209,18 +210,60 @@ const inlineInputStyle: React.CSSProperties = {
   border: "none",
 };
 
+/** A ref rendered as a `#N <title>` picker over the target records, or a plain
+ * numeric input when the target records aren't loaded (P4 fallback). */
+function RefSelect({
+  name,
+  value,
+  options,
+  disabled,
+  required,
+  className,
+  onCommit,
+}: {
+  name: string;
+  value: unknown;
+  options: RefOption[];
+  disabled?: boolean;
+  required?: boolean;
+  className?: string;
+  onCommit: (next: unknown) => void;
+}) {
+  const text = fieldText(value);
+  return (
+    <select
+      aria-label={name}
+      className={className}
+      value={text}
+      disabled={disabled}
+      required={required}
+      onChange={(e) => onCommit(e.target.value === "" ? null : Number(e.target.value))}
+    >
+      <option value="">—</option>
+      {text && !options.some((o) => String(o.number) === text) && <option value={text}>{text}</option>}
+      {options.map((o) => (
+        <option key={o.number} value={o.number}>
+          #{o.number} {o.label}
+        </option>
+      ))}
+    </select>
+  );
+}
+
 export type RoleFieldProps = {
   widget: WidgetKind;
   name: string;
   value: unknown;
   values?: string[] | null;
   users?: User[];
+  /** Target records for a `ref` widget — turns it into a #N-title picker. */
+  refOptions?: RefOption[];
   disabled?: boolean;
   required?: boolean;
   onCommit: (next: unknown) => void;
 };
 
-export function RoleField({ widget, name, value, values, users, disabled, required, onCommit }: RoleFieldProps) {
+export function RoleField({ widget, name, value, values, users, refOptions, disabled, required, onCommit }: RoleFieldProps) {
   if (widget === "readonly") return <span>{fieldText(value)}</span>;
   if (widget === "select")
     return <StatusSelect name={name} value={value} values={values} disabled={disabled} required={required} onCommit={onCommit} />;
@@ -228,6 +271,8 @@ export function RoleField({ widget, name, value, values, users, disabled, requir
     return <ActorSelect name={name} value={value} users={users} disabled={disabled} required={required} onCommit={onCommit} />;
   if (widget === "daterange")
     return <DateRangeInput name={name} value={value} disabled={disabled} onCommit={onCommit} />;
+  if (widget === "ref" && refOptions && refOptions.length > 0)
+    return <RefSelect name={name} value={value} options={refOptions} disabled={disabled} required={required} onCommit={onCommit} />;
 
   const text = fieldText(value);
   const numeric = NUMERIC.has(widget);

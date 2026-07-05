@@ -13,16 +13,19 @@
  * structured preview (§E, #361).
  */
 
+import { useMemo } from "react";
+
 import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
-import { useEntities, useEntityCatalog, useEntityHealth } from "../../hooks/useEntities";
+import { useEntities, useEntityCatalog, useEntityHealth, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
 import { YamlTree } from "../YamlTree";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
+import { buildRefIndex, referencedTypes } from "./refTraversal";
 
 export function AiYamlRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
@@ -43,6 +46,13 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const write = useEntityWrite(slug, itemId, entityName);
   const users = useUsers();
 
+  // Resolve the type + load its referenced types BEFORE the early returns, so the
+  // ref-record queries stay unconditional (rules of hooks). `milestone.title`
+  // columns + ref pickers read these at render time (§A4).
+  const type = catalogQ.data?.types.find((t) => t.name === entityName) ?? null;
+  const refTypes = useMemo(() => referencedTypes(type), [type]);
+  const refIndex = buildRefIndex(useReferencedRecords(slug, itemId, refTypes));
+
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
     return <div style={{ color: "var(--text-paper-d)" }}>Loading {path}…</div>;
@@ -56,7 +66,6 @@ export function AiYamlRenderer({ path }: { path: string }) {
     return <HealthView title={spec.title} findings={healthQ.data?.findings ?? []} />;
   }
 
-  const type = catalogQ.data?.types.find((t) => t.name === spec.entity) ?? null;
   const list = listQ.data;
 
   return (
@@ -66,6 +75,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
       entities={list?.entities ?? []}
       invalid={list?.invalid ?? []}
       users={users}
+      refIndex={refIndex}
       onCreate={write.create}
       onPatch={write.patch}
       busy={write.isBusy}

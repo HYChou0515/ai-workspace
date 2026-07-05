@@ -6,6 +6,7 @@
  */
 
 import type { EntityInstance, EntityType } from "../../api/entities";
+import { refOptions, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { roleOf } from "./shared";
 import type { EntityViewProps, ViewSpec } from "./types";
@@ -26,7 +27,7 @@ const cellStyle: React.CSSProperties = {
   verticalAlign: "top",
 };
 
-export function TableView({ spec, type, entities, users, onPatch, busy }: EntityViewProps) {
+export function TableView({ spec, type, entities, users, refIndex, onPatch, busy }: EntityViewProps) {
   const columns = columnsFor(spec, type, entities);
   return (
     <table style={{ borderCollapse: "collapse", width: "100%" }}>
@@ -45,17 +46,33 @@ export function TableView({ spec, type, entities, users, onPatch, busy }: Entity
           <tr key={e.number}>
             <td style={cellStyle}>{e.number}</td>
             {columns.map((c) => {
-              const spec = roleOf(type, c);
+              // A dotted `milestone.title` column follows the ref at render time
+              // (§A4); a dangling target degrades to a marker, never a crash (§D).
+              const traversal = refIndex ? traverseColumn(c, e, type, refIndex) : null;
+              if (traversal) {
+                return (
+                  <td key={c} style={cellStyle}>
+                    {traversal.dangling ? (
+                      <span title="referenced record not found" style={{ color: "var(--warn)" }}>
+                        {traversal.text}
+                      </span>
+                    ) : (
+                      traversal.text
+                    )}
+                  </td>
+                );
+              }
+              const fieldSpec = roleOf(type, c);
+              const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
               return (
                 <td key={c} style={cellStyle}>
                   <RoleField
-                    // A column with no schema field (e.g. a `milestone.title`
-                    // ref-traversal column, P4) renders read-only for now.
-                    widget={spec ? widgetForRole(spec.role) : "readonly"}
-                    name={spec?.name ?? c}
+                    widget={fieldSpec ? widgetForRole(fieldSpec.role) : "readonly"}
+                    name={fieldSpec?.name ?? c}
                     value={e.fields[c]}
-                    values={spec?.values}
+                    values={fieldSpec?.values}
                     users={users}
+                    refOptions={opts}
                     disabled={busy}
                     onCommit={(next) => onPatch(e.number, { [c]: next })}
                   />
