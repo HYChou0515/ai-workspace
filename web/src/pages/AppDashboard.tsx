@@ -114,6 +114,10 @@ export function AppDashboard() {
   // The "severity" column = the first toned, non-status field; the rest of the
   // list (minus status/severity) feeds the "topic · product" column.
   const sevField = list.find((f) => f !== statusField && styles[f]) ?? "";
+  // An App only has a severity concept when a toned non-status field exists
+  // (#467). Without one, "critical" is always 0 — don't surface a meaningless
+  // critical counter / metric / filter (App-template driven, not slug-hardcoded).
+  const hasSeverity = sevField !== "";
   const productField = list.find((f) => f !== statusField && f !== sevField) ?? "";
   const fieldSpec = (name: string): FieldSpec | undefined =>
     manifest.fields?.find((s) => s.name === name);
@@ -333,7 +337,13 @@ export function AppDashboard() {
           <div>
             <CapsLabel>{noun}</CapsLabel>
             <h1 style={{ fontSize: pxToRem(40), fontWeight: 800, margin: "10px 0 0", letterSpacing: "-0.02em" }}>
-              {openCount} open <span style={{ color: "var(--accent)" }}>·</span> {criticalCount} critical
+              {openCount} open
+              {hasSeverity && (
+                <>
+                  {" "}
+                  <span style={{ color: "var(--accent)" }}>·</span> {criticalCount} critical
+                </>
+              )}
             </h1>
             <p style={{ color: "var(--text-paper-d)", fontSize: pxToRem(14), margin: "8px 0 0" }}>
               All {noun.toLowerCase()} are visible to your org. Pin the ones you own.
@@ -341,7 +351,9 @@ export function AppDashboard() {
           </div>
           <div style={{ display: "flex", gap: 28, alignItems: "flex-end" }}>
             <Metric label="Open" value={String(openCount)} sub={noun.toLowerCase()} />
-            <Metric label="Critical · open" value={String(criticalCount)} sub="need attention" />
+            {hasSeverity && (
+              <Metric label="Critical · open" value={String(criticalCount)} sub="need attention" />
+            )}
             {closing[0] && <Metric label={`${pretty(closing[0])} · 30d`} value={String(closed30d)} sub="last 30d" />}
             {manifest.onboarding && (
               <HelpButton onClick={ob.reopen} label={`About ${manifest.title}`} />
@@ -370,7 +382,9 @@ export function AppDashboard() {
         {/* filter strip */}
         <div style={{ padding: "16px 28px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Icon name="filter" size={13} color="var(--text-paper-d)" />
-          <FilterSelect label="Filter by severity" prefix="Severity" value={sev} onChange={setSev} options={fieldSpec(sevField)?.options ?? []} />
+          {hasSeverity && (
+            <FilterSelect label="Filter by severity" prefix="Severity" value={sev} onChange={setSev} options={fieldSpec(sevField)?.options ?? []} />
+          )}
           <FilterSelect label="Filter by topic" prefix="Topic" value={topic} onChange={setTopic} options={allTopics} />
           <FilterSelect label="Filter by owner" prefix="Owner" value={owner} onChange={setOwner} options={owners} labelOf={nameOf} />
           <FilterSelect label="Filter by updated" prefix="Updated" value={age} onChange={setAge} options={["7", "30"]} labelOf={(d) => `last ${d}d`} />

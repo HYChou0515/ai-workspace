@@ -139,6 +139,23 @@ describe("AppDashboard", () => {
     expect(heading).toHaveTextContent(/1 critical/);
   });
 
+  it("hides all critical / severity UI when the manifest declares no severity field (#467)", () => {
+    // A no-severity app: only `status` is toned, so the derived `sevField` is ""
+    // and the critical count is a meaningless constant 0 — don't surface it.
+    const base = vi.mocked(useAppManifest)("rca")!;
+    vi.mocked(useAppManifest).mockReturnValueOnce({
+      ...base,
+      field_styles: { status: base.field_styles?.status ?? {} },
+    });
+    renderDash();
+
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).toHaveTextContent(/open/i);
+    expect(heading).not.toHaveTextContent(/critical/i); // no "· N critical"
+    expect(screen.queryByText(/Critical · open/i)).not.toBeInTheDocument(); // no metric card
+    expect(screen.queryByLabelText(/Filter by severity/i)).not.toBeInTheDocument(); // no filter
+  });
+
   it("renders status tabs with counts; clicking a closed status reveals its items", () => {
     renderDash();
     const tabs = screen.getByTestId("dash-tabs");
