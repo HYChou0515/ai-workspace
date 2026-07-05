@@ -11,10 +11,11 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { HealthApi, HealthCheckRow } from "../api/health";
 import { BreadcrumbProvider, useBreadcrumbTrail } from "../hooks/breadcrumbs";
+import { LocaleProvider } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
 import { DiagnosticsPage } from "./DiagnosticsPage";
 
@@ -46,14 +47,35 @@ function row(over: Partial<HealthCheckRow>): HealthCheckRow {
 
 function renderPage(api: HealthApi) {
   return renderWithQuery(
-    <MemoryRouter>
-      <DiagnosticsPage client={api} />
-    </MemoryRouter>,
+    <LocaleProvider>
+      <MemoryRouter>
+        <DiagnosticsPage client={api} />
+      </MemoryRouter>
+    </LocaleProvider>,
   );
 }
 
 describe("DiagnosticsPage", () => {
-  afterEach(cleanup);
+  // The page is localized (#465); these assertions are worded in English, so
+  // run them under the English locale. The zh-TW render is covered separately.
+  beforeEach(() => localStorage.setItem("ws.locale", "en"));
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("renders in Traditional Chinese under the zh-TW locale (#465)", async () => {
+    localStorage.setItem("ws.locale", "zh-TW");
+    renderPage({
+      getChecks: async () => ({ running: false, checks: [row({})] }),
+      runChecks: async () => ({ started: true }),
+    });
+    expect(await screen.findByRole("heading", { name: "AI 診斷" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "健康檢查" })).toBeInTheDocument();
+    // the hardcoded English no longer leaks through under zh-TW
+    expect(screen.queryByText("AI diagnostics")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Activity" })).not.toBeInTheDocument();
+  });
 
   it("labels the telemetry tab 'Activity', not the OTel term 'Traces' (#171)", async () => {
     renderPage({
@@ -138,17 +160,19 @@ describe("DiagnosticsPage", () => {
 
   it("publishes a Home › Diagnostics breadcrumb", () => {
     renderWithQuery(
-      <MemoryRouter>
-        <BreadcrumbProvider>
-          <DiagnosticsPage
-            client={{
-              getChecks: async () => ({ running: false, checks: [] }),
-              runChecks: async () => ({ started: true }),
-            }}
-          />
-          <TrailProbe />
-        </BreadcrumbProvider>
-      </MemoryRouter>,
+      <LocaleProvider>
+        <MemoryRouter>
+          <BreadcrumbProvider>
+            <DiagnosticsPage
+              client={{
+                getChecks: async () => ({ running: false, checks: [] }),
+                runChecks: async () => ({ started: true }),
+              }}
+            />
+            <TrailProbe />
+          </BreadcrumbProvider>
+        </MemoryRouter>
+      </LocaleProvider>,
     );
     const items = screen.getByTestId("trail").querySelectorAll("li");
     expect([...items].map((li) => li.textContent)).toEqual(["Home", "Diagnostics"]);

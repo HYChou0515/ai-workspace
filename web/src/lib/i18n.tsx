@@ -690,6 +690,33 @@ export const messages = {
     "zh-TW": "尚未儲存的變更會遺失，要關閉嗎？",
     en: "Discard unsaved changes?",
   },
+
+  // Diagnostics page (#465) — AI health checks + model sanity + activity.
+  "diag.crumb": { "zh-TW": "診斷", en: "Diagnostics" },
+  "diag.back": { "zh-TW": "返回", en: "Back" },
+  "diag.title": { "zh-TW": "AI 診斷", en: "AI diagnostics" },
+  "diag.subtitle": {
+    "zh-TW":
+      "快速檢查支撐這個工作區的 AI 功能是否正常回應並完成任務。這裡的警告不會擋住你，只是說明為什麼有些地方看起來怪怪的。",
+    en: "Quick checks that verify the AI features behind this workspace are responding and doing their jobs. A warning here never blocks you — it explains why something might look off.",
+  },
+  "diag.runAll": { "zh-TW": "全部重新檢查", en: "Run all checks" },
+  "diag.tab.checks": { "zh-TW": "健康檢查", en: "Health checks" },
+  "diag.tab.matrix": { "zh-TW": "模型體檢", en: "Model sanity" },
+  "diag.tab.activity": { "zh-TW": "活動", en: "Activity" },
+  "diag.checking": {
+    "zh-TW": "檢查中…每項檢查完成後會即時更新。",
+    en: "Checking… results update as each probe finishes.",
+  },
+  "diag.outcome.pass": { "zh-TW": "正常", en: "Normal" },
+  "diag.outcome.fail": { "zh-TW": "發現問題", en: "Issue found" },
+  "diag.outcome.error": { "zh-TW": "無法執行", en: "Couldn't run" },
+  "diag.outcome.skip": { "zh-TW": "未設定", en: "Not configured" },
+  "diag.outcome.none": { "zh-TW": "尚未檢查", en: "Not checked yet" },
+  "diag.lastChecked": { "zh-TW": "上次檢查 {when}", en: "Last checked {when}" },
+  "diag.took": { "zh-TW": " · 耗時 {sec}s", en: " · took {sec}s" },
+  "diag.rerunAria": { "zh-TW": "重新檢查：{name}", en: "Re-run: {name}" },
+  "diag.rerunTitle": { "zh-TW": "重新執行這項檢查", en: "Re-run this check" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

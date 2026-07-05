@@ -17,26 +17,27 @@ import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
 import { type ChipTone } from "../components/StatusChip";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
+import { type MsgKey, useT } from "../lib/i18n";
 import { SanityQuestions } from "./SanityQuestions";
 import { SanityTable } from "./SanityTable";
 import { SanityVerdicts } from "./SanityVerdicts";
 import { TelemetryPanel } from "./TelemetryPanel";
 import { pxToRem } from "../lib/pxToRem";
 
-type Outcome = { label: string; tone: ChipTone };
+type Outcome = { key: MsgKey; tone: ChipTone };
 
 function outcome(status: HealthCheckRow["status"]): Outcome {
   switch (status) {
     case "pass":
-      return { label: "Normal", tone: "ok" };
+      return { key: "diag.outcome.pass", tone: "ok" };
     case "fail":
-      return { label: "Issue found", tone: "warn" };
+      return { key: "diag.outcome.fail", tone: "warn" };
     case "error":
-      return { label: "Couldn't run", tone: "err" };
+      return { key: "diag.outcome.error", tone: "err" };
     case "skip":
-      return { label: "Not configured", tone: "muted" };
+      return { key: "diag.outcome.skip", tone: "muted" };
     default:
-      return { label: "Not checked yet", tone: "muted" };
+      return { key: "diag.outcome.none", tone: "muted" };
   }
 }
 
@@ -57,6 +58,7 @@ const TONE_FG: Record<ChipTone, string> = {
 };
 
 function OutcomeChip({ status }: { status: HealthCheckRow["status"] }) {
+  const t = useT();
   const o = outcome(status);
   return (
     <span
@@ -72,7 +74,7 @@ function OutcomeChip({ status }: { status: HealthCheckRow["status"] }) {
         color: TONE_FG[o.tone],
       }}
     >
-      {o.label}
+      {t(o.key)}
     </span>
   );
 }
@@ -85,7 +87,8 @@ function when(ms: number | null): string {
 export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  useBreadcrumbs([{ label: "Home", to: "/" }, { label: "Diagnostics" }]);
+  const t = useT();
+  useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: t("diag.crumb") }]);
   const [tab, setTab] = useState<"checks" | "traces" | "matrix">("checks");
   const { data } = useQuery({
     queryKey: qk.health,
@@ -131,7 +134,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
             marginBottom: 18,
           }}
         >
-          <Icon name="chev_l" size={13} /> Back
+          <Icon name="chev_l" size={13} /> {t("diag.back")}
         </button>
 
         <header
@@ -144,7 +147,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
           }}
         >
           <div>
-            <h1 style={{ margin: 0, fontSize: pxToRem(22) }}>AI diagnostics</h1>
+            <h1 style={{ margin: 0, fontSize: pxToRem(22) }}>{t("diag.title")}</h1>
             <p
               style={{
                 margin: "6px 0 0",
@@ -153,9 +156,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
                 maxWidth: 480,
               }}
             >
-              Quick checks that verify the AI features behind this workspace are responding
-              and doing their jobs. A warning here never blocks you — it explains why
-              something might look off.
+              {t("diag.subtitle")}
             </p>
           </div>
           {tab === "checks" && (
@@ -178,7 +179,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
                 whiteSpace: "nowrap",
               }}
             >
-              <Icon name="refresh" size={14} /> Run all checks
+              <Icon name="refresh" size={14} /> {t("diag.runAll")}
             </button>
           )}
         </header>
@@ -191,11 +192,11 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
         >
           {(
             [
-              ["checks", "Health checks"],
-              ["matrix", "Model sanity"],
+              ["checks", t("diag.tab.checks")],
+              ["matrix", t("diag.tab.matrix")],
               // #171: "Activity" (not the OTel jargon "Traces") on the tab; the
               // route/state key stays "traces".
-              ["traces", "Activity"],
+              ["traces", t("diag.tab.activity")],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -243,7 +244,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
               fontSize: "var(--text-body-sm)",
             }}
           >
-            Checking… results update as each probe finishes.
+            {t("diag.checking")}
           </div>
         )}
 
@@ -284,8 +285,10 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
                       color: "var(--text-paper-d)",
                     }}
                   >
-                    Last checked {when(c.checked_at)}
-                    {c.latency_ms != null ? ` · took ${(c.latency_ms / 1000).toFixed(1)}s` : ""}
+                    {t("diag.lastChecked", { when: when(c.checked_at) })}
+                    {c.latency_ms != null
+                      ? t("diag.took", { sec: (c.latency_ms / 1000).toFixed(1) })
+                      : ""}
                   </div>
                 )}
               </div>
@@ -293,8 +296,8 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
               <button
                 type="button"
                 disabled={running}
-                aria-label={`Re-run: ${c.description}`}
-                title="Re-run this check"
+                aria-label={t("diag.rerunAria", { name: c.description })}
+                title={t("diag.rerunTitle")}
                 onClick={() => run.mutate(c.check_id)}
                 style={{
                   display: "inline-flex",
