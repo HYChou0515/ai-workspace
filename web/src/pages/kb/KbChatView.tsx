@@ -146,25 +146,15 @@ export function KbChatView({
 
         {chat && (
           <div className="kb-chatview__actions">
-            {isPinned ? (
-              <button
-                type="button"
-                className="kb-btn kb-btn--sm"
-                aria-label="Unpin conversation"
-                onClick={() => pinned.toggle(mountChatId as string)}
-              >
-                <Icon name="pin" size={13} /> Pinned
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="kb-btn kb-btn--sm"
-                aria-label="Pin conversation"
-                onClick={() => pinned.toggle(mountChatId as string)}
-              >
-                <Icon name="pin" size={13} /> Pin
-              </button>
-            )}
+            <button
+              type="button"
+              className={`kb-btn kb-btn--sm${isPinned ? " kb-btn--on" : ""}`}
+              aria-pressed={isPinned}
+              aria-label={isPinned ? "Unpin conversation" : "Pin conversation"}
+              onClick={() => pinned.toggle(mountChatId as string)}
+            >
+              <Icon name="pin" size={13} /> {isPinned ? "Pinned" : "Pin"}
+            </button>
             {isOwner && (
               <Popover
                 align="end"

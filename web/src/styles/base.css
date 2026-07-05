@@ -51,6 +51,20 @@ button {
   outline-offset: 2px;
 }
 
+/* Tag/chip remove control — muted at rest, danger-red on hover, so removal reads
+   as destructive on approach instead of looking like a neutral close x (#466). */
+.tag-remove {
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-paper-d);
+  transition: color 0.12s;
+}
+.tag-remove:hover {
+  color: var(--err);
+}
+
 input,
 textarea,
 select {
@@ -251,6 +265,23 @@ select {
 @keyframes health-dot-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.45; transform: scale(0.8); }
+}
+/* The dot is a LINK to /diagnostics, not decoration — give it the same
+   button-like hover/focus chrome as the other header controls so it reads as
+   interactive rather than a passive status pip (#466). */
+.health-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.health-dot:hover {
+  background: var(--paper-2);
 }
 
 /*

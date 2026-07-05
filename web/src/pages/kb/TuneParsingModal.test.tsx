@@ -96,10 +96,10 @@ describe("TuneParsingModal", () => {
     open(client);
     await screen.findByDisplayValue("BASE GUIDANCE");
     fireEvent.change(screen.getByLabelText("問題"), { target: { value: "q" } });
-    fireEvent.change(screen.getByLabelText("解析 prompt"), {
+    fireEvent.change(screen.getByLabelText("解讀指引"), {
       target: { value: "Focus on solder void." },
     });
-    fireEvent.click(screen.getByRole("button", { name: /用 guidance 重新解析/ }));
+    fireEvent.click(screen.getByRole("button", { name: /用指引重新解讀/ }));
     await waitFor(() => {
       expect(client.probeFindability).toHaveBeenCalledWith(
         expect.objectContaining({ guidance: "Focus on solder void." }),
@@ -113,9 +113,9 @@ describe("TuneParsingModal", () => {
     const client = fakeClient();
     open(client);
     fireEvent.change(screen.getByLabelText("問題"), { target: { value: "why voids?" } });
-    fireEvent.click(screen.getByRole("button", { name: /用 guidance 重新解析/ }));
+    fireEvent.click(screen.getByRole("button", { name: /用指引重新解讀/ }));
     await screen.findByText(/最佳 #2/);
-    fireEvent.click(screen.getByRole("button", { name: /試答 \(套用新 prompt 後\)/ }));
+    fireEvent.click(screen.getByRole("button", { name: /試答 \(套用新指引後\)/ }));
     expect(await screen.findByText(/Voids form from outgassing \[1\]\./)).toBeInTheDocument();
     expect(client.answerFindability).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -130,13 +130,13 @@ describe("TuneParsingModal", () => {
     const client = fakeClient();
     open(client);
     await screen.findByDisplayValue("BASE GUIDANCE");
-    fireEvent.change(screen.getByLabelText("解析 prompt"), { target: { value: "doc-only steering" } });
+    fireEvent.change(screen.getByLabelText("解讀指引"), { target: { value: "doc-only steering" } });
     fireEvent.click(screen.getByRole("button", { name: /只套用到這份文件/ }));
     await waitFor(() => {
       expect(client.setDocumentGuidance).toHaveBeenCalledWith("c1/u/a.pdf", "doc-only steering");
     });
     // the saved-not-in-effect nudge + reindex button appear
-    expect(await screen.findByRole("button", { name: /重新索引這份文件/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /重新讀取這份文件/ })).toBeInTheDocument();
   });
 
   it("saving doc-guidance refreshes the doc IDE's cached override (invalidates docMeta)", async () => {
@@ -158,7 +158,7 @@ describe("TuneParsingModal", () => {
       qc,
     );
     await screen.findByDisplayValue("BASE GUIDANCE");
-    fireEvent.change(screen.getByLabelText("解析 prompt"), { target: { value: "doc-only steering" } });
+    fireEvent.change(screen.getByLabelText("解讀指引"), { target: { value: "doc-only steering" } });
     fireEvent.click(screen.getByRole("button", { name: /只套用到這份文件/ }));
     await waitFor(() => {
       expect(spy).toHaveBeenCalledWith(
@@ -173,7 +173,7 @@ describe("TuneParsingModal", () => {
     vi.stubGlobal("confirm", confirm);
     open(client);
     await screen.findByDisplayValue("BASE GUIDANCE");
-    fireEvent.change(screen.getByLabelText("解析 prompt"), { target: { value: "collection steering" } });
+    fireEvent.change(screen.getByLabelText("解讀指引"), { target: { value: "collection steering" } });
     fireEvent.click(screen.getByRole("button", { name: /套用到整個 collection/ }));
     await waitFor(() => {
       expect(client.updateCollection).toHaveBeenCalledWith("c1", {
@@ -209,7 +209,7 @@ describe("TuneParsingModal", () => {
     open(client);
     await screen.findByDisplayValue("BASE GUIDANCE");
     fireEvent.click(screen.getByRole("button", { name: /只套用到這份文件/ }));
-    const reindex = await screen.findByRole("button", { name: /重新索引這份文件/ });
+    const reindex = await screen.findByRole("button", { name: /重新讀取這份文件/ });
     fireEvent.click(reindex);
     await waitFor(() => expect(client.reindexDocument).toHaveBeenCalledWith("c1/u/a.pdf"));
   });

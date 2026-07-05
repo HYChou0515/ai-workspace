@@ -14,6 +14,13 @@ const WORKFLOWS: WorkflowManifestDTO[] = [
 ];
 
 describe("NewItemPicker", () => {
+  it("labels the trigger so it reads as opening a create menu, not a bare adjective (#466)", () => {
+    render(<NewItemPicker workflows={WORKFLOWS} onFreeChat={() => {}} onWorkflow={() => {}} />);
+    // "New…" (ellipsis) signals the button opens a picker of what to create,
+    // rather than a context-free "New".
+    expect(screen.getByTestId("new-item-button")).toHaveTextContent("New…");
+  });
+
   it("opens a free chat from the menu", () => {
     const onFreeChat = vi.fn();
     render(

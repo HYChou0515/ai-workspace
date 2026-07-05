@@ -1081,7 +1081,7 @@ export function AgentHeader({
         aria-label={t("workflows.button")}
         style={hdrBtn}
       >
-        <Icon name="layers" size={13} /> {t("workflows.button")}
+        <Icon name="workflow" size={13} /> {t("workflows.button")}
       </button>
       <button
         type="button"

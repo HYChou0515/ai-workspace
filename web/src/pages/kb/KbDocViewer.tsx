@@ -137,24 +137,25 @@ export function KbDocViewer({
           <button
             type="button"
             className="kb-btn kb-btn--sm"
+            title="Have the AI re-read this document so search and answers reflect its latest content"
             disabled={reindexMut.isPending}
             onClick={() => reindexMut.mutate()}
           >
-            <Icon name="refresh" size={13} /> Re-index
+            <Icon name="refresh" size={13} /> Re-read
           </button>
           <button
             type="button"
             className="kb-btn kb-btn--sm"
-            aria-label="Remove document"
+            aria-label="Delete document"
             onClick={() => setConfirmRemove((v) => !v)}
           >
-            <Icon name="x" size={13} /> Remove
+            <Icon name="trash" size={13} /> Delete
           </button>
           {confirmRemove && (
-            <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm remove document">
-              <span>Remove this document?</span>
+            <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm delete document">
+              <span>Delete this document?</span>
               <button type="button" className="kb-btn kb-btn--danger kb-btn--sm" onClick={() => removeMut.mutate()}>
-                Remove
+                Delete
               </button>
               <button type="button" className="kb-btn kb-btn--sm" onClick={() => setConfirmRemove(false)}>
                 Cancel

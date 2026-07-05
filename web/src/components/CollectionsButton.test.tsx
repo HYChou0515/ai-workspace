@@ -15,6 +15,17 @@ describe("CollectionsButton", () => {
     expect(btn.className).toContain("collections-button--empty");
   });
 
+  it("nudges without stealing the primary CTA's solid-accent weight when empty (#466)", () => {
+    render(<CollectionsButton count={0} onClick={() => {}} />);
+    const style = screen.getByTestId("collections-button").getAttribute("style") ?? "";
+    // The empty-state nudge must NOT paint a solid --accent fill — that weight is
+    // reserved for the page's primary action. It uses the soft-accent tint while
+    // still drawing the eye via the accent border + text.
+    expect(style).not.toMatch(/background(-color)?:\s*var\(--accent\)/);
+    expect(style).toMatch(/background(-color)?:\s*var\(--accent-soft\)/);
+    expect(style).toMatch(/color:\s*var\(--accent\)/);
+  });
+
   it("frames the selection as the agent's search scope, not a generic count (#172)", () => {
     render(<CollectionsButton count={3} onClick={() => {}} />);
     const btn = screen.getByTestId("collections-button");

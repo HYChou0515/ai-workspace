@@ -433,8 +433,8 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
     if (!selected || selected.doc_count === 0) return;
     const n = selected.doc_count;
     const choice = await dialog.confirm({
-      title: "Re-index all documents",
-      body: `Re-index all ${n} ${n === 1 ? "document" : "documents"} in “${selected.name}”? This restarts indexing for every one.`,
+      title: "Re-read all documents",
+      body: `Re-read all ${n} ${n === 1 ? "document" : "documents"} in “${selected.name}”? The AI reads each one again from scratch.`,
       actions: [
         { id: "go", label: t("kb.reindexAll"), variant: "primary" },
         { id: "cancel", label: "Cancel" },
@@ -445,8 +445,8 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
   const askReindexFailed = async () => {
     const n = erroredCount;
     const choice = await dialog.confirm({
-      title: "Re-index failed documents",
-      body: `Re-index ${n} failed ${n === 1 ? "document" : "documents"}?`,
+      title: "Re-read failed documents",
+      body: `Re-read ${n} failed ${n === 1 ? "document" : "documents"}?`,
       actions: [
         { id: "go", label: t("kb.status.retryFailed"), variant: "primary" },
         { id: "cancel", label: "Cancel" },
@@ -511,12 +511,12 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
             <div className="kb-colpage__chips">
               <button
                 type="button"
-                className={`kb-chip${isPinned ? " kb-chip--accent" : ""}`}
+                className={`kb-chip kb-chip--btn${isPinned ? " is-on" : ""}`}
                 aria-label={`${isPinned ? "Unpin" : "Pin"} ${selected.name}`}
                 aria-pressed={isPinned}
                 onClick={() => pinned.toggle(selected.resource_id)}
               >
-                <Icon name="pin" size={10} /> {isPinned ? "pinned" : "pin"}
+                <Icon name="pin" size={10} /> {isPinned ? "Pinned" : "Pin"}
               </button>
             </div>
             {editingName ? (
@@ -533,16 +533,30 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
                 }}
               />
             ) : (
-              <h1
-                className="kb-colpage__title"
-                title="Click to rename"
-                onClick={() => {
-                  setNameDraft(selected.name);
-                  setEditingName(true);
-                }}
-              >
-                {selected.name}
-              </h1>
+              <div className="kb-colpage__titlerow">
+                <h1
+                  className="kb-colpage__title"
+                  title="Rename"
+                  onClick={() => {
+                    setNameDraft(selected.name);
+                    setEditingName(true);
+                  }}
+                >
+                  {selected.name}
+                </h1>
+                <button
+                  type="button"
+                  className="kb-colpage__editbtn"
+                  aria-label={`Rename ${selected.name}`}
+                  title="Rename"
+                  onClick={() => {
+                    setNameDraft(selected.name);
+                    setEditingName(true);
+                  }}
+                >
+                  <Icon name="pencil" size={14} />
+                </button>
+              </div>
             )}
             {editingDesc ? (
               <textarea

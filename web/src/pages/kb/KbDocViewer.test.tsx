@@ -113,11 +113,11 @@ describe("KbDocViewer", () => {
     );
     render(<KbDocViewer documentId="col-1/u/a.md" onClose={() => {}} client={client} />);
     await screen.findByText("a.md");
-    await userEvent.click(screen.getByRole("button", { name: "Re-index" }));
+    await userEvent.click(screen.getByRole("button", { name: "Re-read" }));
     expect(reindexDocument).toHaveBeenCalledWith("col-1/u/a.md");
   });
 
-  it("removes the document after confirmation, then closes", async () => {
+  it("deletes the document after confirmation, then closes (#466: 'Delete', not 'Remove')", async () => {
     const deleteDocument = vi.fn(async () => {});
     const onClose = vi.fn();
     const client = fakeClient(
@@ -126,8 +126,11 @@ describe("KbDocViewer", () => {
     );
     render(<KbDocViewer documentId="col-1/u/a.md" onClose={onClose} client={client} />);
     await screen.findByText("a.md");
-    await userEvent.click(screen.getByRole("button", { name: "Remove document" }));
-    await userEvent.click(screen.getByRole("button", { name: "Remove" }));
+    // A permanent delete (deleteDocument) reads "Delete", matching the collection /
+    // chat / file delete controls — not "Remove" (which the app uses for taking an
+    // item out of a set).
+    await userEvent.click(screen.getByRole("button", { name: "Delete document" }));
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith("col-1/u/a.md"));
     expect(onClose).toHaveBeenCalled();
   });

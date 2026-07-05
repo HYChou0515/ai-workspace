@@ -715,14 +715,17 @@ export function TopBar({
           }
           style={{
             height: 28,
-            border: "1px solid var(--paper-3)",
+            // Pressed (workspace open) = the accent-soft active fill used across
+            // the app's toggles, so the on/off direction is unmistakable rather
+            // than a faint bg swap read only via the title/aria (#466 ④).
+            border: `1px solid ${ideCollapsed ? "var(--paper-3)" : "var(--accent)"}`,
             borderRadius: "var(--radius-btn)",
-            background: ideCollapsed ? "transparent" : "var(--paper-2)",
+            background: ideCollapsed ? "transparent" : "var(--accent-soft)",
             display: "inline-flex",
             alignItems: "center",
             gap: 6,
             padding: "0 10px",
-            color: ideCollapsed ? "var(--text-paper-d)" : "var(--text-paper)",
+            color: ideCollapsed ? "var(--text-paper-d)" : "var(--accent-h)",
             fontSize: pxToRem(12),
             cursor: "pointer",
           }}

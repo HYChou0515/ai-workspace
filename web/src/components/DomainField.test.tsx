@@ -52,4 +52,27 @@ describe("DomainField (inline-edit)", () => {
     fireEvent.click(screen.getByText("P2"));
     expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   });
+
+  it("renders an editable select as a real <button>, not a role=button span (#466)", () => {
+    render(<DomainField field={severity} value="P2" tone="warn" onChange={vi.fn()} />);
+    // A real, keyboard-operable button — not a span painted to look like a chip.
+    expect(screen.getByText("P2").closest("button")).not.toBeNull();
+  });
+
+  it("renders an editable text field as a real <button> (#466)", () => {
+    render(<DomainField field={product} value="MX-7" onChange={vi.fn()} />);
+    expect(screen.getByText("MX-7").closest("button")).not.toBeNull();
+  });
+});
+
+describe("DomainField (read-only has no false clickable affordance) (#466)", () => {
+  it("a read-only select is a passive span, not a button", () => {
+    render(<DomainField field={severity} value="P2" tone="err" />);
+    expect(screen.getByText("P2").closest("button")).toBeNull();
+  });
+
+  it("a read-only text field is a passive span, not a button", () => {
+    render(<DomainField field={product} value="MX-7" />);
+    expect(screen.getByText("MX-7").closest("button")).toBeNull();
+  });
 });

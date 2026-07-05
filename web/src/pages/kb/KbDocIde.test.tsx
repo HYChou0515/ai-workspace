@@ -242,8 +242,8 @@ describe("KbDocIde", () => {
     } as unknown as KbApi;
     renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
     await user.click(await screen.findByText("tuned.md"));
-    await user.click(await screen.findByRole("button", { name: "調整解析" }));
-    const editor = await screen.findByLabelText("解析 prompt");
+    await user.click(await screen.findByRole("button", { name: "調整解讀方式" }));
+    const editor = await screen.findByLabelText("解讀指引");
     expect(editor).toHaveValue("treat tables as JSON");
   });
 
@@ -397,7 +397,7 @@ describe("KbDocIde", () => {
     const d = doc({ path: "/hello.md", status: "ready", chunks: 2 });
     renderWithQuery(<KbDocIde collectionId="c1" client={stubClient([d], { reindexDocument })} />);
     await user.click(await screen.findByText("hello.md"));
-    await user.click(await screen.findByRole("button", { name: /reindex/i }));
+    await user.click(await screen.findByRole("button", { name: /re-read/i }));
     expect(reindexDocument).toHaveBeenCalledWith(d.resource_id);
   });
 
@@ -416,10 +416,10 @@ describe("KbDocIde", () => {
     await user.keyboard("{/Control}");
     fireEvent.contextMenu(screen.getByText("b.md"));
     const menu = await screen.findByTestId("tree-context-menu");
-    await user.click(within(menu).getByRole("button", { name: /^reindex$/i }));
+    await user.click(within(menu).getByRole("button", { name: /^re-read$/i }));
     // Re-indexing >=2 docs confirms first; approve, then both fire.
-    const dialog = await screen.findByRole("dialog", { name: "Re-index 2 documents" });
-    await user.click(within(dialog).getByRole("button", { name: "Re-index" }));
+    const dialog = await screen.findByRole("dialog", { name: "Re-read 2 documents" });
+    await user.click(within(dialog).getByRole("button", { name: "Re-read" }));
     expect(reindexDocument).toHaveBeenCalledWith("id:/a.md");
     expect(reindexDocument).toHaveBeenCalledWith("id:/b.md");
   });
@@ -439,8 +439,8 @@ describe("KbDocIde", () => {
     await user.keyboard("{/Control}");
     fireEvent.contextMenu(screen.getByText("b.md"));
     const menu = await screen.findByTestId("tree-context-menu");
-    await user.click(within(menu).getByRole("button", { name: /^reindex$/i }));
-    const dialog = await screen.findByRole("dialog", { name: "Re-index 2 documents" });
+    await user.click(within(menu).getByRole("button", { name: /^re-read$/i }));
+    const dialog = await screen.findByRole("dialog", { name: "Re-read 2 documents" });
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(reindexDocument).not.toHaveBeenCalled();
   });
@@ -457,7 +457,7 @@ describe("KbDocIde", () => {
     // Right-click a single, unselected doc — one doc re-indexes straight away.
     fireEvent.contextMenu(await screen.findByText("a.md"));
     const menu = await screen.findByTestId("tree-context-menu");
-    await user.click(within(menu).getByRole("button", { name: /^reindex$/i }));
+    await user.click(within(menu).getByRole("button", { name: /^re-read$/i }));
     await waitFor(() => expect(reindexDocument).toHaveBeenCalledWith("id:/a.md"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(reindexDocument).toHaveBeenCalledTimes(1);

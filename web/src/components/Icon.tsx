@@ -11,7 +11,7 @@ export const ICON_NAMES = [
   "play", "term", "user", "users", "settings", "bell", "branch", "sparkle", "arrow_r", "arrow_u",
   "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "panel_left",
   "layers", "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote",
-  "external", "paperclip", "pencil", "home", "kanban", "trash",
+  "external", "paperclip", "pencil", "home", "kanban", "trash", "workflow", "wiki",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -190,6 +190,23 @@ export function Icon({
       </>
     ),
     layers: <path d="M12 3 L21 8 L12 13 L3 8 Z M3 13 L12 18 L21 13 M3 17 L12 22 L21 17" {...sp} />,
+    // workflow — connected task nodes (a small flow/pipeline), distinct from the
+    // stacked `layers` = collections identity (#466 ②).
+    workflow: (
+      <>
+        <rect x="3" y="4" width="7" height="5" rx="1" {...sp} />
+        <rect x="14" y="15" width="7" height="5" rx="1" {...sp} />
+        <path d="M6.5 9 V13 A2 2 0 0 0 8.5 15 H14" {...sp} />
+      </>
+    ),
+    // wiki — an open book (two facing pages + spine), distinct from the stacked
+    // `layers` = collections identity (#466 ②).
+    wiki: (
+      <>
+        <path d="M12 6 Q8 4 4 5 V18 Q8 17 12 19 Q16 17 20 18 V5 Q16 4 12 6 Z" {...sp} />
+        <path d="M12 6 V19" {...sp} />
+      </>
+    ),
     download: <path d="M12 4 V16 M7 11 L12 16 L17 11 M4 20 H20" {...sp} />,
     upload: <path d="M12 20 V8 M7 13 L12 8 L17 13 M4 4 H20" {...sp} />,
     filter: <path d="M4 5 H20 L14 13 V19 L10 21 V13 Z" {...sp} />,
@@ -269,6 +286,7 @@ export function Icon({
       width={size}
       height={size}
       style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0, ...style }}
+      data-icon={name}
       aria-hidden
     >
       {/* An unregistered key (e.g. a manifest icon the set doesn't have) must not

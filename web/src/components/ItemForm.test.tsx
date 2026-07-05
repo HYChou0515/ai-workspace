@@ -47,6 +47,15 @@ describe("ItemForm", () => {
     expect(screen.getByText(/title is required/i)).toBeInTheDocument();
   });
 
+  it("marks the tag-remove control as destructive so it reads as more than a close x (#466)", () => {
+    render(<ItemForm manifest={manifest} submitLabel="Create" onSubmit={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("Topics"), { target: { value: "Reflow" } });
+    fireEvent.keyDown(screen.getByLabelText("Topics"), { key: "Enter" });
+    // The `.tag-remove` class supplies the danger-on-hover cue (a bare muted x
+    // gave no signal that it removes the tag).
+    expect(screen.getByRole("button", { name: "Remove Reflow" }).className).toContain("tag-remove");
+  });
+
   it("collects field values (incl. picker + tags) and submits them", () => {
     const onSubmit = vi.fn();
     render(<ItemForm manifest={manifest} submitLabel="Create" onSubmit={onSubmit} />);

@@ -55,18 +55,10 @@ export function HealthDot({ client = healthApi }: { client?: HealthApi }) {
   return (
     <Link
       to="/diagnostics"
+      className="health-dot"
       aria-label={COPY[state]}
       title={COPY[state]}
       data-health={state}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        width: 22,
-        height: 22,
-        borderRadius: 6,
-        color: "inherit",
-      }}
     >
       <span
         aria-hidden

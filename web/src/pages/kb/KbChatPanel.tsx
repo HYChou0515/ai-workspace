@@ -202,7 +202,7 @@ export function KbChatPanel({
                 <button
                   key={c.resource_id}
                   type="button"
-                  className={`kb-chip${on ? " is-on" : ""}`}
+                  className={`kb-chip kb-chip--btn${on ? " is-on" : ""}`}
                   aria-pressed={on}
                   onClick={() => toggle(c.resource_id)}
                 >
@@ -214,7 +214,7 @@ export function KbChatPanel({
             {collections.length > PILL_COUNT && (
               <button
                 type="button"
-                className="kb-chip kb-chip--more"
+                className="kb-chip kb-chip--btn kb-chip--more"
                 data-testid="kb-collections-more"
                 onClick={() => setPickerOpen(true)}
               >

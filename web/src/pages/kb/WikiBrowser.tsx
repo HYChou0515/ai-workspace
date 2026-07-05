@@ -256,7 +256,7 @@ export function WikiBrowser({
           justifyContent: "center",
         }}
       >
-        <Icon name="layers" size={15} color="var(--accent)" />
+        <Icon name="wiki" size={15} color="var(--accent)" />
       </div>
       <div
         style={{
@@ -514,7 +514,7 @@ export function WikiBrowser({
             justifyContent: "center",
           }}
         >
-          <Icon name="layers" size={24} color="var(--accent-h)" />
+          <Icon name="wiki" size={24} color="var(--accent-h)" />
         </div>
         {errorBanner}
         <div style={{ maxWidth: 400 }}>

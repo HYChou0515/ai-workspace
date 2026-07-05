@@ -56,6 +56,21 @@ describe("KbChatView header", () => {
     expect(screen.getByRole("button", { name: "Unpin conversation" })).toBeInTheDocument();
   });
 
+  it("signals the pinned state visually (aria-pressed + active fill), not only via the label (#466)", async () => {
+    // Unique id: pin state persists in localStorage across tests, so isolate from
+    // the "pins the conversation" test above (which leaves chat:1 pinned).
+    const fresh: KbChatDetail = { ...baseChat, resource_id: "chat:pinviz" };
+    render(<KbChatView chatId="chat:pinviz" client={chatClient(fresh)} />);
+    await screen.findByText("Void thresholds");
+    const pin = screen.getByRole("button", { name: "Pin conversation" });
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+    expect(pin.className).not.toContain("kb-btn--on");
+    await userEvent.click(pin);
+    const unpin = screen.getByRole("button", { name: "Unpin conversation" });
+    expect(unpin).toHaveAttribute("aria-pressed", "true");
+    expect(unpin.className).toContain("kb-btn--on"); // accent active state, not just text
+  });
+
   it("exports the thread as a re-ingestable .chat.json download", async () => {
     // Round-trip contract (issue #39 chat-history support): the export
     // must be DIRECTLY re-uploadable to a KB collection — `.chat.json`
