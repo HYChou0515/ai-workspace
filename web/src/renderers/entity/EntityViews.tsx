@@ -14,7 +14,9 @@
 import { useState } from "react";
 
 import type { EntityFormField } from "../../api/entities";
+import type { User } from "../../api/types";
 import { pxToRem } from "../../lib/pxToRem";
+import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { fieldText, parseSpan, parseViewSpec } from "./shared";
 import type { EntityViewProps, ViewKind, ViewSpec } from "./types";
 import { resolveViewRenderer } from "./viewKindRegistry";
@@ -27,40 +29,14 @@ export type { EntityViewProps, ViewKind, ViewSpec };
 
 // ── quick-create form ──────────────────────────────────────────────────────
 
-function CreateInput({ field, value, onChange }: { field: EntityFormField; value: string; onChange: (v: string) => void }) {
-  if (field.widget === "select" && field.values && field.values.length > 0) {
-    return (
-      <select className="inline-edit" aria-label={field.name} value={value} onChange={(e) => onChange(e.target.value)}>
-        <option value="">—</option>
-        {field.values.map((v) => (
-          <option key={v} value={v}>
-            {v}
-          </option>
-        ))}
-      </select>
-    );
-  }
-  const type = field.widget === "date" ? "date" : field.widget === "progress" ? "number" : "text";
-  const placeholder = field.widget === "daterange" ? "start/end" : field.widget === "ref" ? "#" : "";
-  return (
-    <input
-      className="inline-edit"
-      aria-label={field.name}
-      type={type}
-      value={value}
-      placeholder={placeholder}
-      required={field.required}
-      onChange={(e) => onChange(e.target.value)}
-    />
-  );
-}
-
 export function QuickCreate({
   form,
+  users,
   onCreate,
   busy,
 }: {
   form: EntityFormField[];
+  users?: User[];
   onCreate: (args: Record<string, unknown>) => void;
   busy?: boolean;
 }) {
@@ -95,7 +71,15 @@ export function QuickCreate({
             {f.name}
             {f.required ? " *" : ""}
           </span>
-          <CreateInput field={f} value={draft[f.name] ?? ""} onChange={(v) => setDraft((d) => ({ ...d, [f.name]: v }))} />
+          <RoleCreateInput
+            widget={f.widget as WidgetKind}
+            name={f.name}
+            value={draft[f.name] ?? ""}
+            values={f.values}
+            users={users}
+            required={f.required}
+            onChange={(v) => setDraft((d) => ({ ...d, [f.name]: v }))}
+          />
         </label>
       ))}
       <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>
@@ -149,7 +133,7 @@ export type EntityViewBodyProps = EntityViewProps & {
 };
 
 export function EntityViewBody(props: EntityViewBodyProps) {
-  const { spec, type, entities, invalid, onCreate, busy, conflicts, onDismissConflict } = props;
+  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict } = props;
   const renderer = resolveViewRenderer(spec.view);
   const { Component } = renderer;
   const showEmpty = entities.length === 0 && !renderer.ownsEmptyState;
@@ -157,7 +141,7 @@ export function EntityViewBody(props: EntityViewBodyProps) {
     <div style={{ padding: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <h3 style={{ margin: 0 }}>{spec.title ?? spec.entity}</h3>
-        {type && !renderer.suppressQuickCreate && <QuickCreate form={type.form} onCreate={onCreate} busy={busy} />}
+        {type && !renderer.suppressQuickCreate && <QuickCreate form={type.form} users={users} onCreate={onCreate} busy={busy} />}
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {invalid && invalid.length > 0 && (

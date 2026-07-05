@@ -7,7 +7,8 @@
 
 import type { EntityInstance } from "../../api/entities";
 import { pxToRem } from "../../lib/pxToRem";
-import { EditableCell, fieldText, roleOf } from "./shared";
+import { RoleField, widgetForRole } from "./roleWidget";
+import { fieldText, roleOf } from "./shared";
 import type { EntityViewProps } from "./types";
 
 const UNSET = " unset";
@@ -52,9 +53,11 @@ export function BoardView({ spec, type, entities, onPatch, busy }: EntityViewPro
                 })}
                 {statusSpec?.values && (
                   <div style={{ marginTop: 6 }}>
-                    <EditableCell
-                      spec={statusSpec}
+                    <RoleField
+                      widget={widgetForRole(statusSpec.role)}
+                      name={statusSpec.name}
                       value={e.fields[groupField]}
+                      values={statusSpec.values}
                       disabled={busy}
                       onCommit={(next) => onPatch(e.number, { [groupField]: next })}
                     />

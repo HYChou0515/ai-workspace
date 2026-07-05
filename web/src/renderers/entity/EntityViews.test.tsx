@@ -143,6 +143,48 @@ describe("QuickCreate", () => {
   });
 });
 
+describe("role widgets in the table (§B3)", () => {
+  const users = [
+    { id: "alice", name: "Alice", section: "", email: "", photo_url: "" },
+    { id: "bob", name: "Bob", section: "", email: "", photo_url: "" },
+  ];
+  const withActor: EntityType = { ...issueType, fields: [...issueType.fields, { name: "assignee", role: "actor" }] };
+
+  it("edits an actor column as a directory select and patches the chosen id", () => {
+    const onPatch = vi.fn();
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["assignee"] };
+    render(
+      <EntityViewBody spec={spec} type={withActor} entities={[issue(1, { assignee: "" })]} users={users} onCreate={vi.fn()} onPatch={onPatch} />,
+    );
+    fireEvent.change(screen.getByLabelText("assignee"), { target: { value: "bob" } });
+    expect(onPatch).toHaveBeenCalledWith(1, { assignee: "bob" });
+  });
+
+  it("edits a daterange column as start + end date inputs", () => {
+    const onPatch = vi.fn();
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["span"] };
+    render(<EntityViewBody spec={spec} type={issueType} entities={[issue(1, { span: "" })]} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.change(screen.getByLabelText("span start"), { target: { value: "2026-01-01" } });
+    fireEvent.change(screen.getByLabelText("span end"), { target: { value: "2026-02-01" } });
+    expect(onPatch).toHaveBeenLastCalledWith(1, { span: "2026-01-01/2026-02-01" });
+  });
+
+  it("renders a compute-on-read column read-only (no editable control)", () => {
+    const withRollup: EntityType = { ...issueType, fields: [{ name: "open_count", role: "rollup" }] };
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["open_count"] };
+    render(<EntityViewBody spec={spec} type={withRollup} entities={[issue(1, { open_count: 3 })]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.queryByLabelText("open_count")).not.toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+  });
+
+  it("renders an actor field in quick-create as a directory select", () => {
+    const withActorForm: EntityType = { ...issueType, form: [{ name: "assignee", widget: "actor", required: false }] };
+    render(<EntityViewBody spec={tableSpec} type={withActorForm} entities={[]} users={users} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    expect(screen.getByLabelText("assignee").tagName).toBe("SELECT");
+  });
+});
+
 describe("BoardView", () => {
   const boardSpec: ViewSpec = { view: "board", entity: "issue", group_by: "status", card: { title: "title", badges: ["progress"] } };
 

@@ -6,6 +6,7 @@
  */
 
 import type { EntityInstance, EntityType } from "../../api/entities";
+import type { User } from "../../api/types";
 
 export type ViewKind = "table" | "board" | "gantt" | "health";
 
@@ -28,6 +29,8 @@ export type EntityViewProps = {
   entities: EntityInstance[];
   /** Records that failed to parse (shown as a degraded warning banner). */
   invalid?: EntityInstance[];
+  /** The company directory, for `actor`-role widgets (assignee pickers). */
+  users?: User[];
   onCreate: (args: Record<string, unknown>) => void;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
   busy?: boolean;

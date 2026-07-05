@@ -1,9 +1,9 @@
 /**
  * Cross-renderer helpers shared by the entity view kinds (#419 §B / #448 P1):
- * value formatting, span parsing, the view-spec parser, role lookup, and the
- * inline-editable table/board cell. Kept in one module so `TableView`,
- * `BoardView`, and `GanttView` can each live in their own file without one
- * importing another.
+ * value formatting, span parsing, the view-spec parser, and role lookup. Kept in
+ * one module so `TableView`, `BoardView`, and `GanttView` can each live in their
+ * own file without one importing another. The editable widgets live in
+ * `roleWidget` (the single role→widget table).
  */
 
 import { load as parseYaml } from "js-yaml";
@@ -63,77 +63,4 @@ export function parseSpan(value: unknown): { start: number; end: number } | null
 
 export function roleOf(type: EntityType | null, name: string): EntityFieldSpec | undefined {
   return type?.fields.find((f) => f.name === name);
-}
-
-export const READONLY_ROLES = new Set(["backref", "rollup"]);
-
-// ── inline-editable cell ───────────────────────────────────────────────────
-
-export function EditableCell({
-  spec,
-  value,
-  disabled,
-  onCommit,
-}: {
-  spec: EntityFieldSpec | undefined;
-  value: unknown;
-  disabled?: boolean;
-  onCommit: (next: unknown) => void;
-}) {
-  const text = fieldText(value);
-  const role = spec?.role;
-
-  // Compute-on-read fields are never editable — they're derived from other
-  // records, so there's nothing to write back.
-  if (!spec || READONLY_ROLES.has(role ?? "")) {
-    return <span>{text}</span>;
-  }
-
-  if (role === "status" && spec.values && spec.values.length > 0) {
-    return (
-      <select
-        aria-label={spec.name}
-        value={text}
-        disabled={disabled}
-        onChange={(e) => onCommit(e.target.value)}
-      >
-        {!spec.values.includes(text) && <option value={text}>{text || "—"}</option>}
-        {spec.values.map((v) => (
-          <option key={v} value={v}>
-            {v}
-          </option>
-        ))}
-      </select>
-    );
-  }
-
-  const numeric = role === "progress" || role === "rank" || role === "ref";
-  const commit = (raw: string) => {
-    const trimmed = raw.trim();
-    if (trimmed === text) return;
-    if (numeric) {
-      if (trimmed === "") return onCommit(null);
-      const n = Number(trimmed);
-      if (!Number.isNaN(n)) onCommit(n);
-      return;
-    }
-    onCommit(trimmed === "" ? null : trimmed);
-  };
-
-  return (
-    // Keyed by the committed value so a successful patch remounts the input with
-    // the fresh value (uncontrolled → no stale-draft bookkeeping).
-    <input
-      key={text}
-      aria-label={spec.name}
-      type={numeric ? "number" : role === "date" ? "date" : "text"}
-      defaultValue={text}
-      disabled={disabled}
-      style={{ width: "100%", boxSizing: "border-box", background: "transparent", border: "none" }}
-      onBlur={(e) => commit(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-      }}
-    />
-  );
 }

@@ -18,6 +18,7 @@ import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
 import { useEntities, useEntityCatalog, useEntityHealth } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
+import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
 import { YamlTree } from "../YamlTree";
@@ -40,6 +41,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const listQ = useEntities(slug, itemId, entityName);
   const healthQ = useEntityHealth(slug, itemId, isHealth);
   const write = useEntityWrite(slug, itemId, entityName);
+  const users = useUsers();
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
@@ -63,6 +65,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
       type={type}
       entities={list?.entities ?? []}
       invalid={list?.invalid ?? []}
+      users={users}
       onCreate={write.create}
       onPatch={write.patch}
       busy={write.isBusy}

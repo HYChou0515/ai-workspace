@@ -6,7 +6,8 @@
  */
 
 import type { EntityInstance, EntityType } from "../../api/entities";
-import { EditableCell, roleOf } from "./shared";
+import { RoleField, widgetForRole } from "./roleWidget";
+import { roleOf } from "./shared";
 import type { EntityViewProps, ViewSpec } from "./types";
 
 function columnsFor(spec: ViewSpec, type: EntityType | null, entities: EntityInstance[]): string[] {
@@ -25,7 +26,7 @@ const cellStyle: React.CSSProperties = {
   verticalAlign: "top",
 };
 
-export function TableView({ spec, type, entities, onPatch, busy }: EntityViewProps) {
+export function TableView({ spec, type, entities, users, onPatch, busy }: EntityViewProps) {
   const columns = columnsFor(spec, type, entities);
   return (
     <table style={{ borderCollapse: "collapse", width: "100%" }}>
@@ -43,16 +44,24 @@ export function TableView({ spec, type, entities, onPatch, busy }: EntityViewPro
         {entities.map((e) => (
           <tr key={e.number}>
             <td style={cellStyle}>{e.number}</td>
-            {columns.map((c) => (
-              <td key={c} style={cellStyle}>
-                <EditableCell
-                  spec={roleOf(type, c)}
-                  value={e.fields[c]}
-                  disabled={busy}
-                  onCommit={(next) => onPatch(e.number, { [c]: next })}
-                />
-              </td>
-            ))}
+            {columns.map((c) => {
+              const spec = roleOf(type, c);
+              return (
+                <td key={c} style={cellStyle}>
+                  <RoleField
+                    // A column with no schema field (e.g. a `milestone.title`
+                    // ref-traversal column, P4) renders read-only for now.
+                    widget={spec ? widgetForRole(spec.role) : "readonly"}
+                    name={spec?.name ?? c}
+                    value={e.fields[c]}
+                    values={spec?.values}
+                    users={users}
+                    disabled={busy}
+                    onCommit={(next) => onPatch(e.number, { [c]: next })}
+                  />
+                </td>
+              );
+            })}
           </tr>
         ))}
       </tbody>
