@@ -80,6 +80,9 @@ describe("SanityTable (coverage)", () => {
     expect(screen.getByRole("columnheader", { name: "Question" })).toBeInTheDocument();
     expect(screen.getByTestId("run-missing")).toHaveTextContent("Run all not-run");
     expect(screen.queryByText("完成")).not.toBeInTheDocument();
+    // the mechanical + AI grade cells localize too — "Pass", not the raw token
+    expect(screen.getAllByText("Pass").length).toBeGreaterThan(0);
+    expect(screen.queryByText("pass")).not.toBeInTheDocument();
   });
 
   it("coverageLevels + buildRows produce the full expected grid with statuses", () => {

@@ -187,7 +187,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
         <div
           className="kb-tabs"
           role="tablist"
-          aria-label="Diagnostics view"
+          aria-label={t("diag.viewAria")}
           style={{ display: "flex", gap: 4, margin: "16px 0 0" }}
         >
           {(

@@ -80,8 +80,9 @@ const STATUS_COLOR: Record<RowStatus, string> = {
 };
 
 function GradeTag({ grade }: { grade: string }) {
-  if (grade === "pass") return <span style={{ color: "var(--ok)" }}>pass</span>;
-  if (grade === "fail") return <span style={{ color: "var(--warn)" }}>fail</span>;
+  const t = useT();
+  if (grade === "pass") return <span style={{ color: "var(--ok)" }}>{t("sanity.table.grade.pass")}</span>;
+  if (grade === "fail") return <span style={{ color: "var(--warn)" }}>{t("sanity.table.grade.fail")}</span>;
   return <span style={{ color: "var(--text-paper-d)" }}>—</span>;
 }
 

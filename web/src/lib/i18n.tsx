@@ -710,6 +710,7 @@ export const messages = {
   "diag.tab.checks": { "zh-TW": "健康檢查", en: "Health checks" },
   "diag.tab.matrix": { "zh-TW": "模型體檢", en: "Model sanity" },
   "diag.tab.activity": { "zh-TW": "活動", en: "Activity" },
+  "diag.viewAria": { "zh-TW": "診斷檢視", en: "Diagnostics view" },
   "diag.checking": {
     "zh-TW": "檢查中…每項檢查完成後會即時更新。",
     en: "Checking… results update as each probe finishes.",
@@ -769,6 +770,8 @@ export const messages = {
   "sanity.table.status.missing": { "zh-TW": "未跑", en: "Not run" },
   "sanity.table.status.done": { "zh-TW": "完成", en: "Done" },
   "sanity.table.status.error": { "zh-TW": "錯誤", en: "Error" },
+  "sanity.table.grade.pass": { "zh-TW": "通過", en: "Pass" },
+  "sanity.table.grade.fail": { "zh-TW": "未通過", en: "Fail" },
   "sanity.table.summary": { "zh-TW": "已測 {done} / {total} 格", en: "Ran {done} / {total} cells" },
   "sanity.table.summaryRemaining": {
     "zh-TW": " · 還有 {n} 格未跑",

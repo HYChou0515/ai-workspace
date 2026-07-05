@@ -72,6 +72,9 @@ describe("DiagnosticsPage", () => {
     });
     expect(await screen.findByRole("heading", { name: "AI 診斷" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "健康檢查" })).toBeInTheDocument();
+    // the view-switch tablist's accessible name localizes too (was a raw
+    // "Diagnostics view" aria-label that never translated)
+    expect(screen.getByRole("tablist", { name: "診斷檢視" })).toBeInTheDocument();
     // the hardcoded English no longer leaks through under zh-TW
     expect(screen.queryByText("AI diagnostics")).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Activity" })).not.toBeInTheDocument();
