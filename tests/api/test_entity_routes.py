@@ -47,6 +47,27 @@ def test_entity_crud_end_to_end(harness: Harness) -> None:
     assert updated.json()["fields"]["status"] == "done"
 
 
+def test_update_can_replace_the_markdown_body(harness: Harness) -> None:
+    """§C2 — the single-entity file editor saves the frontmatter patch AND the
+    markdown body through the one update write path (not a raw file write). An
+    omitted body is preserved, not wiped."""
+    _ship_issue_schema(harness)
+    c = harness.client
+    c.post(harness.wpath("/entities/issue"), json={"args": {"title": "A"}})
+
+    updated = c.put(
+        harness.wpath("/entities/issue/1"),
+        json={"patch": {"status": "done"}, "body": "## Notes\nsome detail"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["fields"]["status"] == "done"
+    assert updated.json()["body"] == "## Notes\nsome detail"
+
+    # body omitted on a later update → the stored body is preserved.
+    again = c.put(harness.wpath("/entities/issue/1"), json={"patch": {"title": "B"}})
+    assert again.json()["body"] == "## Notes\nsome detail"
+
+
 def test_update_rejects_a_stale_version_with_409(harness: Harness) -> None:
     """§C6: the update route echoes a `version`; a PUT carrying a stale
     `expected_version` (the record moved on) is a 409, not a silent overwrite."""
