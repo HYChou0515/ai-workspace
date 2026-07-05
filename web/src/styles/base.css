@@ -51,6 +51,20 @@ button {
   outline-offset: 2px;
 }
 
+/* Tag/chip remove control — muted at rest, danger-red on hover, so removal reads
+   as destructive on approach instead of looking like a neutral close x (#466). */
+.tag-remove {
+  display: inline-flex;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--text-paper-d);
+  transition: color 0.12s;
+}
+.tag-remove:hover {
+  color: var(--err);
+}
+
 input,
 textarea,
 select {

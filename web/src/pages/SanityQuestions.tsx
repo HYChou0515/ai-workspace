@@ -205,7 +205,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
               type="button"
               data-testid={`q-delete-${q.id}`}
               onClick={() => remove.mutate(q.id)}
-              style={{ border: "none", background: "none", color: "var(--warn)", cursor: "pointer" }}
+              style={{ border: "none", background: "none", color: "var(--err)", cursor: "pointer" }}
             >
               刪除
             </button>

@@ -77,4 +77,13 @@ describe("SanityQuestions (題目管理)", () => {
     await userEvent.click(await screen.findByTestId("q-delete-c1"));
     await waitFor(() => expect(api.deleteCustom).toHaveBeenCalledWith("c1"));
   });
+
+  it("styles the permanent delete as a danger action, not an amber warning (#466)", async () => {
+    renderWithQuery(<SanityQuestions client={fakeApi()} />);
+    const style = (await screen.findByTestId("q-delete-c1")).getAttribute("style") ?? "";
+    // A permanent delete reads in the danger colour, distinct from --warn (which
+    // the design system reserves for non-destructive caution).
+    expect(style).toMatch(/color:\s*var\(--err\)/);
+    expect(style).not.toMatch(/color:\s*var\(--warn\)/);
+  });
 });

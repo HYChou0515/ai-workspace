@@ -97,7 +97,7 @@ function TagInput({ label, value, onChange }: { label: string; value: string[]; 
       {value.map((t) => (
         <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 4px 2px 8px", borderRadius: "var(--radius-chip)", background: "var(--paper-2)", fontSize: pxToRem(12) }}>
           {t}
-          <button type="button" aria-label={`Remove ${t}`} onClick={() => onChange(value.filter((x) => x !== t))} style={{ display: "inline-flex", border: "none", background: "transparent", cursor: "pointer", color: "var(--text-paper-d)" }}>
+          <button type="button" className="tag-remove" aria-label={`Remove ${t}`} onClick={() => onChange(value.filter((x) => x !== t))}>
             <Icon name="x" size={10} />
           </button>
         </span>
