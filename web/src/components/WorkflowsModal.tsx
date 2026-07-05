@@ -9,6 +9,7 @@ import { useWorkspaceWorkflows } from "../hooks/useWorkspaceWorkflows";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { ModalShell } from "./ModalShell";
 
 /**
  * The Workflows panel (#323) — lists the workflows the user co-created with the agent in
@@ -77,40 +78,20 @@ export function WorkflowsModal({
   const list = workflows.data ?? [];
 
   return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={t("workflows.title")}
+      data-testid="workflows-modal"
+      width={480}
+      maxWidth="92vw"
+      panelStyle={{
+        padding: 18,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 0,
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("workflows.title")}
-        data-testid="workflows-modal"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 480,
-          maxWidth: "92vw",
-          maxHeight: "82vh",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 18,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-          minHeight: 0,
-        }}
-      >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="layers" size={15} />
           <strong style={{ flex: 1 }}>{t("workflows.title")}</strong>
@@ -209,8 +190,7 @@ export function WorkflowsModal({
             }}
           />
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 

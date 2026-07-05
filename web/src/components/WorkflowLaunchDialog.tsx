@@ -10,12 +10,11 @@
  * `onConfirm` (the real startRun) only once the operator confirms a runnable preview.
  */
 
-import { useEffect } from "react";
-
 import type { PreflightCheckDTO } from "../api/workflows";
 import { usePreviewRun } from "../hooks/useWorkflow";
 import { useT } from "../lib/i18n";
 import { Icon } from "./Icon";
+import { ModalShell } from "./ModalShell";
 import { pxToRem } from "../lib/pxToRem";
 
 export function WorkflowLaunchDialog({
@@ -36,49 +35,20 @@ export function WorkflowLaunchDialog({
   const p = preview.data;
   const canRun = !!p?.can_run;
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={p?.title || t("wf.launch.title")}
+      data-testid="wf-launch-dialog"
+      width={460}
+      maxWidth="92vw"
+      panelStyle={{
+        padding: 20,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
+        flexDirection: "column",
+        gap: 12,
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={p?.title || t("wf.launch.title")}
-        data-testid="wf-launch-dialog"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 460,
-          maxWidth: "92vw",
-          maxHeight: "85vh",
-          overflowY: "auto",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 20,
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
             {t("wf.launch.title")}
@@ -194,8 +164,7 @@ export function WorkflowLaunchDialog({
             {t("wf.launch.run")}
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 

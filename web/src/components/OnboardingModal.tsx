@@ -6,10 +6,9 @@
  * Escape / backdrop are the soft close (onGotIt), never a permanent dismiss.
  */
 
-import { useEffect } from "react";
-
 import type { Onboarding } from "../api/types";
 import { pxToRem } from "../lib/pxToRem";
+import { ModalShell } from "./ModalShell";
 
 export function OnboardingModal({
   content,
@@ -25,48 +24,14 @@ export function OnboardingModal({
    * with no richer help target). */
   onSeeFull?: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onGotIt();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onGotIt]);
-
   return (
-    <div
-      role="presentation"
-      onClick={onGotIt}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
-      }}
+    <ModalShell
+      onClose={onGotIt}
+      ariaLabel={content.title}
+      width={460}
+      maxWidth="92vw"
+      panelStyle={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={content.title}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 460,
-          maxWidth: "92vw",
-          maxHeight: "86vh",
-          overflowY: "auto",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 24,
-          display: "flex",
-          flexDirection: "column",
-          gap: 16,
-        }}
-      >
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <h2 style={{ fontSize: pxToRem(20), fontWeight: 800, margin: 0, letterSpacing: "-0.01em" }}>
             {content.title}
@@ -168,7 +133,6 @@ export function OnboardingModal({
             Got it
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }

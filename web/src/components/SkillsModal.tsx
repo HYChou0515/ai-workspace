@@ -9,6 +9,7 @@ import { skillDir } from "../api/workspaceSkills";
 import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 import { Icon } from "./Icon";
+import { ModalShell } from "./ModalShell";
 
 /**
  * The Skills panel (#298 + #380). Lists every skill available to this item —
@@ -113,40 +114,20 @@ export function SkillsModal({
   };
 
   return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={t("skills.title")}
+      data-testid="skills-modal"
+      width={520}
+      maxWidth="92vw"
+      panelStyle={{
+        padding: 18,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 0,
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={t("skills.title")}
-        data-testid="skills-modal"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 520,
-          maxWidth: "92vw",
-          maxHeight: "82vh",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 18,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-          minHeight: 0,
-        }}
-      >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Icon name="sparkle" size={15} />
           <strong style={{ flex: 1 }}>{t("skills.title")}</strong>
@@ -233,8 +214,7 @@ export function SkillsModal({
             }}
           />
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 

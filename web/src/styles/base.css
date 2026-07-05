@@ -226,7 +226,7 @@ select {
   position: fixed;
   inset: 0 0 auto 0;
   height: 2px;
-  z-index: 300;
+  z-index: var(--z-progress);
   overflow: hidden;
   pointer-events: none;
   background: var(--accent-soft);

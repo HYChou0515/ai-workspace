@@ -22,6 +22,7 @@ import {
 } from "../api/health";
 import { useT } from "../lib/i18n";
 import { Icon } from "./Icon";
+import { ModalShell } from "./ModalShell";
 import { pxToRem } from "../lib/pxToRem";
 
 export type ReplayRequest =
@@ -129,35 +130,12 @@ export function ReplayDialog({
   const original = data?.original ?? null;
 
   return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(20,16,12,.4)",
-        zIndex: 90,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 20,
-      }}
+    <ModalShell
+      onClose={onClose}
+      ariaLabel="Replay"
+      width="min(680px, 100%)"
+      panelStyle={{ padding: "18px 20px 22px" }}
     >
-      <div
-        role="dialog"
-        aria-label="Replay"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: "min(680px, 100%)",
-          maxHeight: "84vh",
-          overflow: "auto",
-          background: "var(--paper)",
-          borderRadius: 10,
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 18px 50px rgba(20,16,12,.25)",
-          padding: "18px 20px 22px",
-        }}
-      >
         <header style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
           <div style={{ flex: 1 }}>
             <h2 style={{ margin: 0, fontSize: pxToRem(16) }}>Replay with the current AI</h2>
@@ -331,7 +309,6 @@ export function ReplayDialog({
             </Section>
           </>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }

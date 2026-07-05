@@ -13,6 +13,7 @@ import { useT } from "../lib/i18n";
 import { FontSizeSlider } from "./FontSizeSlider";
 import { Icon } from "./Icon";
 import { LanguageToggle } from "./LanguageToggle";
+import { ModalShell } from "./ModalShell";
 
 const THEME_MODES: ThemeMode[] = ["system", "light", "dark"];
 
@@ -33,34 +34,15 @@ export function GlobalSettings() {
       </button>
 
       {open && (
-        <div
-          onClick={() => setOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(20,22,28,0.35)",
-            backdropFilter: "blur(2px)",
-            zIndex: 80,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
+        <ModalShell
+          onClose={() => setOpen(false)}
+          ariaLabel={t("settings.title")}
+          width={360}
+          maxWidth="calc(100vw - 32px)"
+          backdropStyle={{ background: "rgba(20,22,28,0.35)", backdropFilter: "blur(2px)" }}
+          panelStyle={{ padding: 20, boxShadow: "0 20px 50px rgba(20,22,28,0.25)" }}
         >
-          <div
-            role="dialog"
-            aria-label={t("settings.title")}
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: 360,
-              maxWidth: "calc(100vw - 32px)",
-              background: "var(--white)",
-              border: "1px solid var(--paper-3)",
-              borderRadius: "var(--radius-modal)",
-              boxShadow: "0 20px 50px rgba(20,22,28,0.25)",
-              padding: 20,
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 16, gap: 8 }}>
               <span
                 style={{
                   fontFamily: "var(--font-display)",
@@ -118,8 +100,7 @@ export function GlobalSettings() {
                 </dd>
               </dl>
             </Section>
-          </div>
-        </div>
+        </ModalShell>
       )}
     </>
   );

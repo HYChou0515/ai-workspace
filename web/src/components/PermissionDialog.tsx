@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   ALL_VERBS,
@@ -12,6 +12,7 @@ import {
   permissionFromGrants,
 } from "../lib/permission";
 import { pxToRem } from "../lib/pxToRem";
+import { ModalShell } from "./ModalShell";
 import { UserChip } from "./UserChip";
 import { UserPicker } from "./UserPicker";
 
@@ -48,14 +49,6 @@ export function PermissionDialog({
   const [grants, setGrants] = useState<Grant[]>(() => grantsFromPermission(value, owner));
   const [advanced, setAdvanced] = useState(false);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   const next = () => permissionFromGrants(visibility, grants, value);
 
   const toggleUser = (id: string) =>
@@ -70,15 +63,14 @@ export function PermissionDialog({
   const preview = next();
 
   return (
-    <div role="presentation" onClick={onClose} style={overlay}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Share ${resourceName}`}
-        data-testid="permission-dialog"
-        onClick={(e) => e.stopPropagation()}
-        style={panel}
-      >
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={`Share ${resourceName}`}
+      data-testid="permission-dialog"
+      width={480}
+      maxWidth="92vw"
+      panelStyle={panel}
+    >
         <strong style={{ fontSize: pxToRem(14) }}>Share “{resourceName}”</strong>
         <p style={caption}>{captionText}</p>
 
@@ -171,8 +163,7 @@ export function PermissionDialog({
             Save
           </button>
         </div>
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
@@ -182,24 +173,7 @@ const VISIBILITIES: { id: Visibility; label: string; hint: string }[] = [
   { id: "public", label: "Public", hint: "Everyone in the workspace" },
 ];
 
-const overlay: React.CSSProperties = {
-  position: "fixed",
-  inset: 0,
-  background: "rgba(0,0,0,0.4)",
-  display: "flex",
-  alignItems: "center",
-  justifyContent: "center",
-  zIndex: 200,
-};
-
 const panel: React.CSSProperties = {
-  width: 480,
-  maxWidth: "92vw",
-  maxHeight: "82vh",
-  background: "var(--white)",
-  borderRadius: "var(--radius-card)",
-  border: "1px solid var(--paper-3)",
-  boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
   padding: 18,
   display: "flex",
   flexDirection: "column",

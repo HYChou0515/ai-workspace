@@ -65,7 +65,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 200,
+            zIndex: "var(--z-dialog)",
           }}
         >
           <div

@@ -12,6 +12,7 @@ import {
   serializeCollectionsFile,
   type CollectionEntry,
 } from "./collectionsFile";
+import { ModalShell } from "./ModalShell";
 import { pxToRem } from "../lib/pxToRem";
 
 /**
@@ -158,40 +159,20 @@ export function CollectionsPickerModal({
   };
 
   return (
-    <div
-      role="presentation"
-      onClick={attemptClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
+    <ModalShell
+      onClose={attemptClose}
+      ariaLabel="選擇知識庫"
+      data-testid="collections-modal"
+      width={460}
+      maxWidth="92vw"
+      panelStyle={{
+        padding: 18,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
+        flexDirection: "column",
+        gap: 10,
+        minHeight: 0,
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="選擇知識庫"
-        data-testid="collections-modal"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 460,
-          maxWidth: "92vw",
-          maxHeight: "82vh",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 18,
-          display: "flex",
-          flexDirection: "column",
-          gap: 10,
-          minHeight: 0,
-        }}
-      >
         <strong style={{ fontSize: pxToRem(14) }}>選擇知識庫</strong>
         <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
           勾選這個主題要查詢的知識庫；選好才有內容可供 AI 檢索與引用。
@@ -372,8 +353,7 @@ export function CollectionsPickerModal({
             </button>
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 
