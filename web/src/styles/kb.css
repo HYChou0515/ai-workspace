@@ -455,6 +455,15 @@
   padding: 4px 10px;
   font-size: var(--text-body-sm);
 }
+/* Toggled-ON state for a kb-btn used as a toggle (pin, view mode, …) — an
+   accent-soft fill + accent border/text so the active direction is visible, not
+   carried only by the label or aria-pressed (#466 ④). */
+.kb-btn--on {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-h);
+  font-weight: 600;
+}
 .kb-docviewer__body {
   flex: 1;
   overflow: auto;

@@ -131,6 +131,16 @@ describe("TopBar Workspace toggle (#159)", () => {
     expect(screen.getByRole("button", { name: /go to file/i })).toBeInTheDocument();
   });
 
+  it("shows the workspace-open state with an active accent fill, not just aria/title (#466)", () => {
+    renderTopBar({ workspace: true, ideCollapsed: false }); // open = pressed
+    const openStyle = screen.getByRole("button", { name: /workspace/i }).getAttribute("style") ?? "";
+    expect(openStyle).toMatch(/background:\s*var\(--accent-soft\)/);
+    cleanup();
+    renderTopBar({ workspace: true, ideCollapsed: true }); // collapsed = resting
+    const restStyle = screen.getByRole("button", { name: /workspace/i }).getAttribute("style") ?? "";
+    expect(restStyle).not.toMatch(/background:\s*var\(--accent-soft\)/);
+  });
+
   it("names the chat effect in the tooltip so the toggle isn't a mystery control", () => {
     // #: the control reads as "Workspace", but its visible effect is on the chat
     // (it fills the row when the IDE folds away). Spell that out so it's obvious.
