@@ -238,6 +238,39 @@ export const messages = {
     en: "This document couldn't be loaded. Try again in a moment.",
   },
   "kb.doc.citedPassage": { "zh-TW": "引用段落", en: "Cited passage" },
+  // KB document viewer drawer chrome (#465 follow-up: the doc drawer + body, so
+  // a zh-TW reader never hits English "Download" / "Chunks" / "Delete" mid-page).
+  "kb.docview.title": { "zh-TW": "文件", en: "Document" },
+  "kb.docview.cited": { "zh-TW": "被引用 {n} 次", en: "cited {n}×" },
+  "kb.docview.chunks": { "zh-TW": "{n} 個區塊", en: "{n} chunks" },
+  "kb.docview.uploaded": { "zh-TW": "上傳於 {date}", en: "uploaded {date}" },
+  "kb.docview.close": { "zh-TW": "關閉", en: "Close" },
+  "kb.docview.openFull": { "zh-TW": "開啟完整檢視", en: "Open full view" },
+  "kb.docview.download": { "zh-TW": "下載", en: "Download" },
+  "kb.docview.testAi": { "zh-TW": "測試 AI", en: "Test AI" },
+  "kb.docview.testAiTitle": {
+    "zh-TW": "把 AI 對這個檔案的處理當作測試重跑一次，不會改動任何東西",
+    en: "Re-run the AI's processing of this file as a test — nothing is changed",
+  },
+  "kb.docview.reread": { "zh-TW": "重新讀取", en: "Re-read" },
+  "kb.docview.rereadTitle": {
+    "zh-TW": "讓 AI 重新讀取這份文件，搜尋與回答會反映最新內容",
+    en: "Have the AI re-read this document so search and answers reflect its latest content",
+  },
+  "kb.docview.delete": { "zh-TW": "刪除", en: "Delete" },
+  "kb.docview.deleteAria": { "zh-TW": "刪除文件", en: "Delete document" },
+  "kb.docview.confirmDeleteAria": { "zh-TW": "確認刪除文件", en: "Confirm delete document" },
+  "kb.docview.confirmDeleteBody": { "zh-TW": "確定刪除這份文件？", en: "Delete this document?" },
+  "kb.docview.cancel": { "zh-TW": "取消", en: "Cancel" },
+  // KB document body: File ⇄ Chunks toggle, chunk list, no-preview notice.
+  "kb.docbody.viewFile": { "zh-TW": "檔案", en: "File" },
+  "kb.docbody.viewChunks": { "zh-TW": "區塊 ({n})", en: "Chunks ({n})" },
+  "kb.docbody.noChunks": { "zh-TW": "沒有已索引的區塊。", en: "No indexed chunks." },
+  "kb.docbody.chunkCited": { "zh-TW": "被引用 {n} 次", en: "{n} cited" },
+  "kb.docbody.previewUnavailable": {
+    "zh-TW": "這種檔案無法預覽 —— 請用「下載」開啟。",
+    en: "Preview isn't available for this file — use Download to view it.",
+  },
 
   // #356 Tune parsing modal — user-facing framing is "adjust how the AI reads
   // this document" (root cause ③: no "parse"/"parsing" jargon in the entry).

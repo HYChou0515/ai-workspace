@@ -97,11 +97,11 @@ describe("KbDocViewer", () => {
     });
     render(<KbDocViewer documentId="col-1/u/reflow.md" onClose={() => {}} client={client} />);
 
-    const meta = await screen.findByText(/cited 3×/);
+    const meta = await screen.findByText(/被引用 3 次/);
     const strip = meta.closest(".kb-docviewer__meta")!;
     expect(strip).toHaveTextContent("2 KB");
-    expect(strip).toHaveTextContent("6 chunks");
-    const download = screen.getByRole("link", { name: /Download/ });
+    expect(strip).toHaveTextContent("6 個區塊");
+    const download = screen.getByRole("link", { name: /下載/ });
     expect(download).toHaveAttribute("href", expect.stringContaining("/blobs/blob-xyz"));
   });
 
@@ -113,7 +113,7 @@ describe("KbDocViewer", () => {
     );
     render(<KbDocViewer documentId="col-1/u/a.md" onClose={() => {}} client={client} />);
     await screen.findByText("a.md");
-    await userEvent.click(screen.getByRole("button", { name: "Re-read" }));
+    await userEvent.click(screen.getByRole("button", { name: "重新讀取" }));
     expect(reindexDocument).toHaveBeenCalledWith("col-1/u/a.md");
   });
 
@@ -129,8 +129,8 @@ describe("KbDocViewer", () => {
     // A permanent delete (deleteDocument) reads "Delete", matching the collection /
     // chat / file delete controls — not "Remove" (which the app uses for taking an
     // item out of a set).
-    await userEvent.click(screen.getByRole("button", { name: "Delete document" }));
-    await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "刪除文件" }));
+    await userEvent.click(screen.getByRole("button", { name: "刪除" }));
     await waitFor(() => expect(deleteDocument).toHaveBeenCalledWith("col-1/u/a.md"));
     expect(onClose).toHaveBeenCalled();
   });
@@ -182,7 +182,7 @@ describe("KbDocViewer binary documents (issue #39 bug)", () => {
     });
     render(<KbDocViewer documentId="col-1/u/deck.pptx" onClose={() => {}} client={client} />);
     // User-facing copy stays jargon-free — no format/mime internals.
-    expect(await screen.findByText(/preview isn't available/i)).toBeInTheDocument();
+    expect(await screen.findByText(/無法預覽/)).toBeInTheDocument();
     // No mojibake article body.
     expect(screen.queryByRole("img")).toBeNull();
   });
@@ -260,7 +260,7 @@ describe("KbDocViewer — replay entry (#51 P6)", () => {
     render(
       <KbDocViewer documentId="col-1/u/inv-1.chat.json" onClose={() => {}} client={client} />,
     );
-    const btn = await screen.findByRole("button", { name: /test ai/i });
+    const btn = await screen.findByRole("button", { name: /測試 AI/ });
     await userEvent.click(btn);
     // The replay dialog opens (its probe runs against the real client —
     // here it just shows the dialog frame).
@@ -273,6 +273,6 @@ describe("KbDocViewer — replay entry (#51 P6)", () => {
     });
     render(<KbDocViewer documentId="col-1/u/notes.md" onClose={() => {}} client={client} />);
     await screen.findByText("notes.md");
-    expect(screen.queryByRole("button", { name: /test ai/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /測試 AI/ })).not.toBeInTheDocument();
   });
 });
