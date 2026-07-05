@@ -2612,7 +2612,7 @@ function LogLine({
   );
 }
 
-function StatusBar({
+export function StatusBar({
   activeTab,
   investigationId,
 }: {
@@ -2636,10 +2636,6 @@ function StatusBar({
         fontSize: pxToRem(11),
       }}
     >
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-        <Icon name="branch" size={12} color="var(--text-dark)" /> main
-      </span>
-      <span>↑ 0 ↓ 0</span>
       <span style={{ flex: 1 }} />
       <span>{kind ? `lang: ${kind}` : ""}</span>
       {isNotebook && (
