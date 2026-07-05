@@ -145,16 +145,16 @@ export function KbDocViewer({
           <button
             type="button"
             className="kb-btn kb-btn--sm"
-            aria-label="Remove document"
+            aria-label="Delete document"
             onClick={() => setConfirmRemove((v) => !v)}
           >
-            <Icon name="x" size={13} /> Remove
+            <Icon name="trash" size={13} /> Delete
           </button>
           {confirmRemove && (
-            <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm remove document">
-              <span>Remove this document?</span>
+            <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm delete document">
+              <span>Delete this document?</span>
               <button type="button" className="kb-btn kb-btn--danger kb-btn--sm" onClick={() => removeMut.mutate()}>
-                Remove
+                Delete
               </button>
               <button type="button" className="kb-btn kb-btn--sm" onClick={() => setConfirmRemove(false)}>
                 Cancel
