@@ -165,6 +165,7 @@ class EntityStore:
         in-request. No sink ⇒ a no-op (surfaces that don't wire triggers pay nothing)."""
         if self._on_write is None:
             return
+        records_path = self._catalog.get(entity.type_name).records_path
         await self._on_write(
             EntityWriteEvent(
                 item_id=self._ws,
@@ -175,6 +176,7 @@ class EntityStore:
                 version=entity.version,
                 fields=dict(entity.fields),
                 origin=origin,
+                path=self._record_path(records_path, entity.number),
             )
         )
 

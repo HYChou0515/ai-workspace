@@ -26,7 +26,8 @@ import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
 import type { EntityViewProps } from "./types";
 
-export function BoardView({ spec, type, entities, users, onPatch, busy }: EntityViewProps) {
+export function BoardView({ spec, type, entities, users, canWrite, onPatch, busy }: EntityViewProps) {
+  const readOnly = canWrite === false; // §E — a non-writer can't drag or change status
   const groupField = spec.group_by ?? "status";
   const statusSpec = roleOf(type, groupField);
   const { known, extra } = partitionColumns(statusSpec, entities, groupField);
@@ -57,6 +58,7 @@ export function BoardView({ spec, type, entities, users, onPatch, busy }: Entity
       groupField={groupField}
       users={users}
       busy={busy}
+      readOnly={readOnly}
       onPatch={onPatch}
     />
   );
@@ -141,6 +143,7 @@ function Card({
   groupField,
   users,
   busy,
+  readOnly,
   onPatch,
 }: {
   entity: EntityInstance;
@@ -151,9 +154,14 @@ function Card({
   groupField: string;
   users?: User[];
   busy?: boolean;
+  readOnly?: boolean;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform } = useDraggable({ id: `card-${entity.number}` });
+  // §E — a read-only member can neither drag the card nor change its status.
+  const { attributes, listeners, setNodeRef, transform } = useDraggable({
+    id: `card-${entity.number}`,
+    disabled: readOnly,
+  });
   return (
     <div
       ref={setNodeRef}
@@ -184,7 +192,7 @@ function Card({
             name={statusSpec.name}
             value={entity.fields[groupField]}
             values={statusSpec.values}
-            disabled={busy}
+            disabled={busy || readOnly}
             onCommit={(next) => onPatch(entity.number, { [groupField]: next })}
           />
         </div>

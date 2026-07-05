@@ -80,9 +80,11 @@ def register_chat_routes(
         conversation resource."""
         investigation_id = locator.require_item(slug, item_id)
         # subscribe_sse() registers the subscriber NOW (eagerly), so a turn that
-        # starts between connect and first body-pull isn't missed.
+        # starts between connect and first body-pull isn't missed. #455: tag the
+        # viewer so a join/leave updates the item's presence roster.
         return StreamingResponse(
-            turn_engine.subscribe_sse(investigation_id), media_type="text/event-stream"
+            turn_engine.subscribe_sse(investigation_id, get_user_id()),
+            media_type="text/event-stream",
         )
 
     @app.delete(

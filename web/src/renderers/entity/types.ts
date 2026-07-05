@@ -34,6 +34,9 @@ export type EntityViewProps = {
   users?: User[];
   /** Records of referenced types, for ref-traversal columns + ref pickers (§A4). */
   refIndex?: RefIndex;
+  /** #455 read-only gate: false hides + disables every write affordance (inline
+   * edit / +New / drag). Omitted ≡ writable. */
+  canWrite?: boolean;
   onCreate: (args: Record<string, unknown>) => void;
   onPatch: (number: number, patch: Record<string, unknown>) => void;
   busy?: boolean;

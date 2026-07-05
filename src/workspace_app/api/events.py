@@ -168,6 +168,17 @@ class FailoverSwitch:
     type: Literal["failover_switch"] = "failover_switch"
 
 
+@dataclass(frozen=True)
+class Presence:
+    """#455: the live roster of an item's stream — the distinct users currently
+    subscribed to its `/stream`. Broadcast whenever a viewer joins or leaves, so
+    every open view shows who else is here (an avatar stack). Per-pod + ephemeral
+    (a viewer on another pod isn't counted), consistent with the SSE broadcast."""
+
+    users: list[str]
+    type: Literal["presence"] = "presence"
+
+
 AgentEvent = (
     MessageDelta
     | ToolStart
@@ -183,6 +194,7 @@ AgentEvent = (
     | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)
+    | Presence  # #455: broadcast-only (live viewer roster on the item stream)
     | PhaseEntered  # #100: workflow phase/step observability (manual §12)
     | StepStarted
     | StepOutput  # #178: live stdout from a running deterministic step

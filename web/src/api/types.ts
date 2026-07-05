@@ -268,9 +268,11 @@ export interface SearchParams {
 
 export type ActivityEntry = {
   ts: string; // ISO-8601
-  kind: string; // investigation_created | file_written | agent_turn_complete | ...
+  kind: string; // investigation_created | file_written | agent_turn_complete | entity_created | ...
   text: string;
-  ref: { investigation_id?: string; path?: string };
+  // Entity writes (#455) carry `{type, number}` so the feed can open the record
+  // file; file events carry `path`. All are optional — the shape is per-kind.
+  ref: { investigation_id?: string; path?: string; type?: string; number?: number };
 };
 
 export type FileContent =

@@ -70,4 +70,20 @@ describe("BoardView (#451)", () => {
     board({ entities: [issue(1, { title: "A", status: "open" })] });
     expect(screen.getByTestId("card-1")).toHaveAttribute("aria-roledescription", "draggable");
   });
+
+  describe("read-only gate (§E canWrite)", () => {
+    it("disables the status select and stops the card from dragging when canWrite is false", () => {
+      const onPatch = vi.fn();
+      board({ entities: [issue(1, { title: "A", status: "open" })], canWrite: false, onPatch });
+      expect(screen.getByLabelText("status")).toBeDisabled();
+      // @dnd-kit disables the draggable → the card advertises aria-disabled.
+      expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "true");
+    });
+
+    it("keeps the card draggable + status editable by default (canWrite omitted)", () => {
+      board({ entities: [issue(1, { title: "A", status: "open" })] });
+      expect(screen.getByLabelText("status")).not.toBeDisabled();
+      expect(screen.getByTestId("card-1")).toHaveAttribute("aria-disabled", "false");
+    });
+  });
 });

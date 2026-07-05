@@ -250,7 +250,7 @@ async def test_subscribe_sse_exits_when_event_stream_exhausts(monkeypatch):
     underlying event iterator is exhausted (vs. the infinite live queue)."""
     engine = ChatTurnEngine(_NoopRunner())
 
-    async def finite_events(_key: str) -> AsyncIterator[AgentEvent]:
+    async def finite_events(_key: str, _user_id: str = "") -> AsyncIterator[AgentEvent]:
         yield MessageDelta(text="hi")
         yield RunDone()
         # generator returns here → the for-loop in _frames hits its exit branch

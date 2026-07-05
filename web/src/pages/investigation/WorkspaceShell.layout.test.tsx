@@ -7,6 +7,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppItem, AppManifest } from "../../api/types";
 import { TopBar, initialIdeCollapsed, mainSurfaceTabs } from "./WorkspaceShell";
 
+// The TopBar hosts the live PresenceBar (#455), which opens an SSE subscription +
+// reads the current user through TanStack Query. These layout tests render TopBar
+// bare (no providers) and only exercise the Workspace toggle — stub presence out.
+vi.mock("../../components/PresenceBar", () => ({ PresenceBar: () => null }));
+
 afterEach(cleanup);
 
 function manifest(over: {
