@@ -186,6 +186,51 @@ describe("role widgets in the table (§B3)", () => {
   });
 });
 
+describe("table sort / filter / column visibility (§A1)", () => {
+  it("sorts rows case-insensitively when a column header is clicked", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title"] };
+    render(
+      <EntityViewBody
+        spec={spec}
+        type={issueType}
+        entities={[issue(1, { title: "Beta" }), issue(2, { title: "alpha" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^title/ }));
+    const values = screen.getAllByLabelText("title").map((i) => (i as HTMLInputElement).value);
+    expect(values).toEqual(["alpha", "Beta"]);
+  });
+
+  it("filters rows by a status value from the role's value domain", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"] };
+    render(
+      <EntityViewBody
+        spec={spec}
+        type={issueType}
+        entities={[issue(1, { title: "A", status: "open" }), issue(2, { title: "B", status: "done" })]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("filter status"), { target: { value: "done" } });
+    expect(screen.queryByDisplayValue("A")).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue("B")).toBeInTheDocument();
+  });
+
+  it("hides a column through the columns menu", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"] };
+    render(
+      <EntityViewBody spec={spec} type={issueType} entities={[issue(1, { title: "A", status: "open" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: /^status/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Columns" }));
+    fireEvent.click(screen.getByLabelText("toggle status"));
+    expect(screen.queryByRole("button", { name: /^status/ })).not.toBeInTheDocument();
+  });
+});
+
 describe("ref-traversal in the table (§A4)", () => {
   const refType: EntityType = {
     name: "issue",
