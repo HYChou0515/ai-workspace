@@ -25,13 +25,13 @@ export function UsageBar({ slug, itemId }: { slug: string; itemId: string }) {
   return (
     <div
       data-testid="workspace-usage"
-      style={{ display: "flex", flexDirection: "column", gap: pxToRem(2) }}
+      style={{ display: "flex", flexDirection: "column", gap: 2 }}
     >
       <div
         style={{
-          height: pxToRem(4),
+          height: 4,
           background: "var(--paper-3)",
-          borderRadius: pxToRem(2),
+          borderRadius: 2,
           overflow: "hidden",
         }}
       >

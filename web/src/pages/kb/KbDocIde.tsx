@@ -69,7 +69,7 @@ function EmptyUploadCta({
         padding: 40,
         margin: 12,
         border: "2px dashed var(--paper-3)",
-        borderRadius: 10,
+        borderRadius: "var(--radius-card)",
         color: "var(--text-paper-d)",
         textAlign: "center",
       }}

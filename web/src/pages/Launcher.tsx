@@ -50,7 +50,7 @@ function AppCard({ app }: { app: AppSummary }) {
           style={{
             width: 54,
             height: 54,
-            borderRadius: 13,
+            borderRadius: "var(--radius-modal)",
             background: "var(--paper-2)",
             display: "inline-flex",
             alignItems: "center",
@@ -93,7 +93,7 @@ function KbCard() {
         style={{
           width: 54,
           height: 54,
-          borderRadius: 13,
+          borderRadius: "var(--radius-modal)",
           background: "var(--paper-2)",
           display: "inline-flex",
           alignItems: "center",
@@ -139,7 +139,7 @@ function HelpCard() {
         style={{
           width: 54,
           height: 54,
-          borderRadius: 13,
+          borderRadius: "var(--radius-modal)",
           background: "var(--paper-2)",
           display: "inline-flex",
           alignItems: "center",

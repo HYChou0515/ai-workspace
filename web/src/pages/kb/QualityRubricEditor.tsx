@@ -37,7 +37,7 @@ export function QualityRubricEditor({
       style={{
         textAlign: "left",
         border: "1px solid var(--paper-3)",
-        borderRadius: 10,
+        borderRadius: "var(--radius-card)",
         padding: 16,
         background: "var(--paper-2)",
         display: "flex",

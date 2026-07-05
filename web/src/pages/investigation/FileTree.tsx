@@ -771,7 +771,7 @@ function InlineEdit({
           flex: 1,
           minWidth: 0,
           border: "1px solid var(--accent)",
-          borderRadius: 3,
+          borderRadius: "var(--radius-chip)",
           padding: "1px 4px",
           fontSize: pxToRem(12),
           outline: "none",

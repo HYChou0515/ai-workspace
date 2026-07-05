@@ -138,7 +138,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
             onClick={() => save.mutate()}
             style={{
               padding: "6px 14px",
-              borderRadius: 7,
+              borderRadius: "var(--radius-btn)",
               border: "1px solid var(--paper-3)",
               background: "var(--accent-soft)",
               color: "var(--accent-h)",
@@ -157,7 +157,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
               onClick={reset}
               style={{
                 padding: "6px 14px",
-                borderRadius: 7,
+                borderRadius: "var(--radius-btn)",
                 border: "1px solid var(--paper-3)",
                 background: "var(--paper-2)",
                 fontSize: "var(--text-body-sm)",

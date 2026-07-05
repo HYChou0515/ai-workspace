@@ -79,7 +79,7 @@ function Row({
         style={{
           width: 32,
           height: 32,
-          borderRadius: 7,
+          borderRadius: "var(--radius-btn)",
           background: on ? "var(--accent-soft)" : "var(--paper-2)",
           display: "flex",
           alignItems: "center",

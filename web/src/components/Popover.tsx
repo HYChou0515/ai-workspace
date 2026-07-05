@@ -116,7 +116,7 @@ export function PopoverItem({
           width: 12,
           height: 12,
           border: "1px solid var(--paper-3)",
-          borderRadius: 3,
+          borderRadius: "var(--radius-chip)",
           background: selected ? "var(--accent)" : "transparent",
           display: "inline-flex",
           alignItems: "center",

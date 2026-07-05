@@ -92,7 +92,7 @@ function WikiGuidanceEditor({
       style={{
         textAlign: "left",
         border: "1px solid var(--paper-3)",
-        borderRadius: 10,
+        borderRadius: "var(--radius-card)",
         padding: 16,
         background: "var(--paper-2)",
         display: "flex",
@@ -226,7 +226,7 @@ export function WikiBrowser({
         style={{
           width: 28,
           height: 28,
-          borderRadius: 7,
+          borderRadius: "var(--radius-btn)",
           background: "var(--ink)",
           display: "flex",
           alignItems: "center",
@@ -235,8 +235,24 @@ export function WikiBrowser({
       >
         <Icon name="layers" size={15} color="var(--accent)" />
       </div>
-      <div style={{ fontSize: pxToRem(14), fontWeight: 600, color: "var(--ink)" }}>
-        {collectionName} <span style={{ color: "var(--text-paper-d2)", fontWeight: 400 }}>· Wiki</span>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 4,
+          minWidth: 0,
+          fontSize: pxToRem(14),
+          fontWeight: 600,
+          color: "var(--ink)",
+        }}
+      >
+        <span
+          title={collectionName}
+          style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >
+          {collectionName}
+        </span>
+        <span style={{ flexShrink: 0, color: "var(--text-paper-d2)", fontWeight: 400 }}>· Wiki</span>
       </div>
       <span
         style={{
@@ -371,7 +387,7 @@ export function WikiBrowser({
       status?.phase && _CODE_PHASE_KEYS.has(status.phase) ? CODE_WIKI_PHASES : WIKI_PHASES;
     const activeIdx = STEPS.findIndex(([k]) => k === status?.phase);
     return (
-      <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: 10, overflow: "hidden" }}>
+      <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
         {header}
         <div
           style={{
@@ -468,7 +484,7 @@ export function WikiBrowser({
           style={{
             width: 52,
             height: 52,
-            borderRadius: 13,
+            borderRadius: "var(--radius-modal)",
             background: "var(--accent-soft)",
             display: "flex",
             alignItems: "center",
@@ -507,7 +523,7 @@ export function WikiBrowser({
 
   // ── ready (possibly mid-rebuild): the editable wiki IDE ─────────────
   return (
-    <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: 10, overflow: "hidden" }}>
+    <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
       {header}
       {errorBanner && <div style={{ padding: "10px 14px 0" }}>{errorBanner}</div>}
       <KbWikiIde collectionId={collectionId} onOpenDoc={onOpenDoc} client={client} />

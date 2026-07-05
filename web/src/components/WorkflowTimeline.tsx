@@ -211,7 +211,7 @@ export function WorkflowTimeline({ steps, live }: { steps: StepStateDTO[]; live:
                   width: w,
                   height: ROW_H - 6,
                   background: statusColor(b.step.status),
-                  borderRadius: 3,
+                  borderRadius: "var(--radius-chip)",
                   display: "flex",
                   alignItems: "center",
                   paddingLeft: 5,
@@ -219,7 +219,7 @@ export function WorkflowTimeline({ steps, live }: { steps: StepStateDTO[]; live:
                   opacity: b.step.status === "skipped" ? 0.5 : 1,
                 }}
               >
-                <span style={{ fontSize: pxToRem(10), color: "#fff", whiteSpace: "nowrap" }}>
+                <span style={{ fontSize: pxToRem(10), color: "var(--text-dark)", whiteSpace: "nowrap" }}>
                   {b.step.name}
                 </span>
               </div>
@@ -248,7 +248,7 @@ const nowBtn: React.CSSProperties = {
   borderRadius: 6,
   border: "1px solid var(--accent, var(--info))",
   background: "var(--accent, var(--info))",
-  color: "#fff",
+  color: "var(--text-dark)",
   cursor: "pointer",
   fontSize: pxToRem(11),
 };

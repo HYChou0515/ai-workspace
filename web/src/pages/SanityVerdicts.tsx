@@ -85,7 +85,7 @@ export function SanityVerdicts({ client = sanityApi }: { client?: SanityApi }) {
           style={{
             marginLeft: "auto",
             padding: "5px 11px",
-            borderRadius: 7,
+            borderRadius: "var(--radius-btn)",
             border: "1px solid var(--paper-3)",
             background: "var(--paper-2)",
             fontSize: "var(--text-body-sm)",

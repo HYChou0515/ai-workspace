@@ -451,7 +451,7 @@ function CardHeader({
         style={{
           padding: "1px 6px",
           background: "var(--paper-2)",
-          borderRadius: 3,
+          borderRadius: "var(--radius-chip)",
           color: "var(--text-paper)",
         }}
       >
