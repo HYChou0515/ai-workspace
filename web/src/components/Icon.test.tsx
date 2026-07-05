@@ -26,7 +26,7 @@ describe("Icon", () => {
   // A named icon with no entry in `paths` renders an EMPTY <svg> (invisible) —
   // that's exactly how the PM app's "kanban" icon went missing. Guard the glyphs
   // that ship as app/UI identity so a typo or a dropped entry fails loudly here.
-  it.each<IconName>(["kanban", "panel_left", "split", "flame", "sparkle", "chat"])(
+  it.each<IconName>(["kanban", "panel_left", "split", "flame", "sparkle", "chat", "workflow"])(
     "renders a non-empty glyph for %s",
     (name) => {
       const { container } = render(<Icon name={name} />);
@@ -35,4 +35,18 @@ describe("Icon", () => {
       expect(svg!.childElementCount).toBeGreaterThan(0);
     },
   );
+
+  it("tags the svg with its icon name so a glyph choice is identifiable (#466)", () => {
+    const { container } = render(<Icon name="layers" />);
+    expect(container.querySelector("svg")).toHaveAttribute("data-icon", "layers");
+  });
+
+  it("draws workflows with a glyph distinct from collections' layers (#466)", () => {
+    // Workflows had reused the `layers` glyph = the collections identity; they
+    // must now read as their own thing.
+    const wf = render(<Icon name="workflow" />).container.querySelector("svg")?.innerHTML;
+    const layers = render(<Icon name="layers" />).container.querySelector("svg")?.innerHTML;
+    expect(wf).toBeTruthy();
+    expect(wf).not.toBe(layers);
+  });
 });

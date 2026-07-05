@@ -93,7 +93,7 @@ export function WorkflowsModal({
       }}
     >
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <Icon name="layers" size={15} />
+          <Icon name="workflow" size={15} />
           <strong style={{ flex: 1 }}>{t("workflows.title")}</strong>
           <button
             type="button"
