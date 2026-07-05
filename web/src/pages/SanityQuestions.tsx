@@ -16,6 +16,7 @@ import {
   sanityApi,
 } from "../api/sanity";
 import { qk } from "../api/queryKeys";
+import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
 const LEVELS = ["none", "low", "medium", "high"];
@@ -37,6 +38,7 @@ const field = {
 };
 
 export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const [form, setForm] = useState<CustomQuestionBody>(EMPTY);
   const [editing, setEditing] = useState<string | null>(null);
@@ -86,23 +88,23 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
 
   return (
     <div data-testid="sanity-questions" style={{ marginTop: 20 }}>
-      <strong style={{ fontSize: pxToRem(13) }}>題目管理</strong>
+      <strong style={{ fontSize: pxToRem(13) }}>{t("sanity.q.title")}</strong>
       <p style={{ margin: "4px 0 10px", fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
-        自訂題目由 AI 評分(無機械評分)。內建題目不可編輯。
+        {t("sanity.q.note")}
       </p>
 
       {/* author / edit form */}
       <div style={{ display: "grid", gap: 8, maxWidth: 560 }}>
         <input
           data-testid="q-category"
-          placeholder="題組(例如:格式輸出)"
+          placeholder={t("sanity.q.ph.category")}
           value={form.category}
           onChange={(e) => setForm({ ...form, category: e.target.value })}
           style={field}
         />
         <textarea
           data-testid="q-prompt"
-          placeholder="題目(給模型的提問)"
+          placeholder={t("sanity.q.ph.prompt")}
           value={form.prompt}
           onChange={(e) => setForm({ ...form, prompt: e.target.value })}
           rows={2}
@@ -110,14 +112,14 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
         />
         <textarea
           data-testid="q-expected"
-          placeholder="參考答案 / 期望行為(餵給 AI 評審)"
+          placeholder={t("sanity.q.ph.expected")}
           value={form.expected}
           onChange={(e) => setForm({ ...form, expected: e.target.value })}
           rows={2}
           style={field}
         />
         <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>要跑的深度</span>
+          <span style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("sanity.q.levels")}</span>
           {LEVELS.map((lvl) => (
             <label key={lvl} style={{ display: "inline-flex", gap: 4, fontSize: "var(--text-body-sm)" }}>
               <input
@@ -148,7 +150,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
               opacity: !canSave || save.isPending ? 0.6 : 1,
             }}
           >
-            {editing ? "更新題目" : "新增題目"}
+            {editing ? t("sanity.q.update") : t("sanity.q.create")}
           </button>
           {editing && (
             <button
@@ -164,7 +166,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
                 cursor: "pointer",
               }}
             >
-              取消
+              {t("tools.cancel")}
             </button>
           )}
         </div>
@@ -187,7 +189,9 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontSize: "var(--text-body-sm)", fontWeight: 500 }}>
                 [{q.category}] {q.prompt}
-                {!q.enabled && <span style={{ color: "var(--text-paper-d)" }}> · 已停用</span>}
+                {!q.enabled && (
+                  <span style={{ color: "var(--text-paper-d)" }}>{t("sanity.q.disabled")}</span>
+                )}
               </div>
               <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
                 ↳ {q.expected} · {q.levels.join(", ") || "none"}
@@ -199,7 +203,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
               onClick={() => startEdit(q)}
               style={{ border: "none", background: "none", color: "var(--accent-h)", cursor: "pointer" }}
             >
-              編輯
+              {t("sanity.q.edit")}
             </button>
             <button
               type="button"
@@ -207,7 +211,7 @@ export function SanityQuestions({ client = sanityApi }: { client?: SanityApi }) 
               onClick={() => remove.mutate(q.id)}
               style={{ border: "none", background: "none", color: "var(--err)", cursor: "pointer" }}
             >
-              刪除
+              {t("sanity.q.delete")}
             </button>
           </li>
         ))}

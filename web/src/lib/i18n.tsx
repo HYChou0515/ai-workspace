@@ -786,6 +786,28 @@ export const messages = {
   "sanity.table.modal.ai": { "zh-TW": "AI：{grade}", en: "AI: {grade}" },
   "sanity.table.modal.reasoned": { "zh-TW": "有推理", en: "reasoned" },
   "sanity.table.modal.noReasoning": { "zh-TW": "無推理", en: "no reasoning" },
+
+  // Model sanity → custom question manager (#465).
+  "sanity.q.title": { "zh-TW": "題目管理", en: "Question manager" },
+  "sanity.q.note": {
+    "zh-TW": "自訂題目由 AI 評分（無機械評分）。內建題目不可編輯。",
+    en: "Custom questions are graded by the AI (no mechanical grader). Built-in questions can't be edited.",
+  },
+  "sanity.q.ph.category": {
+    "zh-TW": "題組（例如：格式輸出）",
+    en: "Category (e.g. Formatting)",
+  },
+  "sanity.q.ph.prompt": { "zh-TW": "題目（給模型的提問）", en: "Question (the prompt sent to the model)" },
+  "sanity.q.ph.expected": {
+    "zh-TW": "參考答案 / 期望行為（餵給 AI 評審）",
+    en: "Expected answer / behavior (given to the AI judge)",
+  },
+  "sanity.q.levels": { "zh-TW": "要跑的深度", en: "Efforts to run" },
+  "sanity.q.create": { "zh-TW": "新增題目", en: "Add question" },
+  "sanity.q.update": { "zh-TW": "更新題目", en: "Update question" },
+  "sanity.q.disabled": { "zh-TW": " · 已停用", en: " · disabled" },
+  "sanity.q.edit": { "zh-TW": "編輯", en: "Edit" },
+  "sanity.q.delete": { "zh-TW": "刪除", en: "Delete" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

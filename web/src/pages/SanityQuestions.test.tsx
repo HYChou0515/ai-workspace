@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CustomQuestion, SanityApi } from "../api/sanity";
+import { LocaleProvider } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
 import { SanityQuestions } from "./SanityQuestions";
 
@@ -29,7 +30,22 @@ function fakeApi(over: Partial<SanityApi> = {}): SanityApi {
 }
 
 describe("SanityQuestions (題目管理)", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("localizes its chrome — English under the en locale (#465)", async () => {
+    localStorage.setItem("ws.locale", "en");
+    renderWithQuery(
+      <LocaleProvider>
+        <SanityQuestions client={fakeApi()} />
+      </LocaleProvider>,
+    );
+    expect(await screen.findByText("Question manager")).toBeInTheDocument();
+    expect(screen.getByTestId("q-save")).toHaveTextContent("Add question");
+    expect(screen.queryByText("題目管理")).not.toBeInTheDocument();
+  });
 
   it("lists existing custom questions", async () => {
     renderWithQuery(<SanityQuestions client={fakeApi()} />);
