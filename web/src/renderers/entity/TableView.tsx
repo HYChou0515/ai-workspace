@@ -45,8 +45,9 @@ const headerBtnStyle: React.CSSProperties = {
 
 type FilterOption = { value: string; label: string };
 
-export function TableView({ spec, type, entities, invalid, users, refIndex, onPatch, busy }: EntityViewProps) {
+export function TableView({ spec, type, entities, invalid, users, refIndex, canWrite, onPatch, busy }: EntityViewProps) {
   const allColumns = columnsFor(spec, type, entities);
+  const readOnly = canWrite === false; // §E — disable inline edits for non-writers
   const [sort, setSort] = useState<{ column: string; dir: SortDir } | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
@@ -178,7 +179,10 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
         <thead>
           <tr>
             <th style={cellStyle}>
-              <input type="checkbox" aria-label="select all" checked={allSelected} onChange={toggleAll} />
+              {/* §E — no multi-select / batch for a read-only member. */}
+              {!readOnly && (
+                <input type="checkbox" aria-label="select all" checked={allSelected} onChange={toggleAll} />
+              )}
             </th>
             <th style={cellStyle}>#</th>
             {columns.map((c) => (
@@ -225,12 +229,14 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
             return (
               <tr key={e.number}>
                 <td style={cellStyle}>
-                  <input
-                    type="checkbox"
-                    aria-label={`select ${e.number}`}
-                    checked={selected.has(e.number)}
-                    onChange={() => toggleRow(e.number)}
-                  />
+                  {!readOnly && (
+                    <input
+                      type="checkbox"
+                      aria-label={`select ${e.number}`}
+                      checked={selected.has(e.number)}
+                      onChange={() => toggleRow(e.number)}
+                    />
+                  )}
                 </td>
                 <td style={cellStyle}>{e.number}</td>
                 {columns.map((c) => {
@@ -265,7 +271,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
                         values={fieldSpec?.values}
                         users={users}
                         refOptions={opts}
-                        disabled={busy}
+                        disabled={busy || readOnly}
                         onCommit={(next) => onPatch(e.number, { [c]: next })}
                       />
                     </td>

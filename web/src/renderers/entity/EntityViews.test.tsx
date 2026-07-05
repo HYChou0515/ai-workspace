@@ -409,6 +409,49 @@ describe("invalid records", () => {
   });
 });
 
+describe("read-only gate (§E canWrite)", () => {
+  it("hides the create affordance and disables inline edits when canWrite is false", () => {
+    render(
+      <EntityViewBody
+        spec={tableSpec}
+        type={issueType}
+        entities={[issue(1, { title: "A", status: "open" })]}
+        canWrite={false}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "+ New" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("status")).toBeDisabled();
+    expect(screen.getByLabelText("title")).toBeDisabled();
+  });
+
+  it("hides multi-select + batch (§A1) when canWrite is false", () => {
+    render(
+      <EntityViewBody
+        spec={tableSpec}
+        type={issueType}
+        entities={[issue(1, { title: "A", status: "open" })]}
+        canWrite={false}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    // No selection checkboxes ⇒ the batch toolbar can never open.
+    expect(screen.queryByLabelText("select all")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("select 1")).not.toBeInTheDocument();
+  });
+
+  it("shows write affordances by default (canWrite omitted ≡ writable)", () => {
+    render(
+      <EntityViewBody spec={tableSpec} type={issueType} entities={[issue(1, { title: "A" })]} onCreate={vi.fn()} onPatch={vi.fn()} />,
+    );
+    expect(screen.getByRole("button", { name: "+ New" })).toBeInTheDocument();
+    expect(screen.getByLabelText("title")).not.toBeDisabled();
+    expect(screen.getByLabelText("select all")).toBeInTheDocument();
+  });
+});
+
 describe("fault-tolerant degradation (§D)", () => {
   it("shows an unparseable record as a degraded error row with its diagnostic", () => {
     const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title"] };

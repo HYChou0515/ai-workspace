@@ -22,6 +22,7 @@ import { useFileBuffer } from "../../hooks/fileBuffer";
 import { useOpenFile } from "../../hooks/openFile";
 import { useEntities, useEntityCatalog, useEntityHealth, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
+import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
@@ -42,10 +43,14 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const entityName = spec?.entity ?? "";
   const isHealth = spec?.view === "health";
 
+  // §E read-only gate: derive the item's write permission for this member; a
+  // read-only viewer's write affordances are hidden and every write is a no-op.
+  const canWrite = useItemCanWrite(slug, itemId);
+
   const catalogQ = useEntityCatalog(slug, itemId);
   const listQ = useEntities(slug, itemId, entityName);
   const healthQ = useEntityHealth(slug, itemId, isHealth);
-  const write = useEntityWrite(slug, itemId, entityName);
+  const write = useEntityWrite(slug, itemId, entityName, { canWrite });
   const users = useUsers();
   const openFile = useOpenFile();
 
@@ -88,6 +93,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
       invalid={list?.invalid ?? []}
       users={users}
       refIndex={refIndex}
+      canWrite={canWrite}
       catalogDiagnostics={catalogQ.data?.diagnostics ?? []}
       // catalog loaded but this type isn't in it → its schema failed to load (§D).
       schemaMissing={catalogQ.isSuccess && !type}

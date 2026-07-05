@@ -159,6 +159,7 @@ export type EntityViewBodyProps = EntityViewProps & {
 export function EntityViewBody(props: EntityViewBodyProps) {
   const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing } =
     props;
+  const canWrite = props.canWrite !== false; // omitted ≡ writable (§E)
   const renderer = resolveViewRenderer(spec.view);
   const { Component } = renderer;
   const showEmpty = entities.length === 0 && !renderer.ownsEmptyState;
@@ -166,7 +167,9 @@ export function EntityViewBody(props: EntityViewBodyProps) {
     <div style={{ padding: 12 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <h3 style={{ margin: 0 }}>{spec.title ?? spec.entity}</h3>
-        {type && !renderer.suppressQuickCreate && <QuickCreate form={type.form} users={users} onCreate={onCreate} busy={busy} />}
+        {type && !renderer.suppressQuickCreate && canWrite && (
+          <QuickCreate form={type.form} users={users} onCreate={onCreate} busy={busy} />
+        )}
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
