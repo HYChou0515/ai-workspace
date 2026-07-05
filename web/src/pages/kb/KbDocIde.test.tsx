@@ -242,7 +242,7 @@ describe("KbDocIde", () => {
     } as unknown as KbApi;
     renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
     await user.click(await screen.findByText("tuned.md"));
-    await user.click(await screen.findByRole("button", { name: "調整解析" }));
+    await user.click(await screen.findByRole("button", { name: "調整解讀方式" }));
     const editor = await screen.findByLabelText("解析 prompt");
     expect(editor).toHaveValue("treat tables as JSON");
   });

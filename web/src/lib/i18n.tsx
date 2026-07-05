@@ -232,13 +232,14 @@ export const messages = {
   "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
   "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
 
-  // #356 Tune parsing modal.
-  "kb.tuneParsing.button": { "zh-TW": "調整解析", en: "Tune parsing" },
+  // #356 Tune parsing modal — user-facing framing is "adjust how the AI reads
+  // this document" (root cause ③: no "parse"/"parsing" jargon in the entry).
+  "kb.tuneParsing.button": { "zh-TW": "調整解讀方式", en: "Adjust reading" },
   "kb.tuneParsing.buttonTitle": {
-    "zh-TW": "為這份文件調整解析 prompt,並試答看看",
-    en: "Tune the parse prompt for this document, and try answering",
+    "zh-TW": "調整 AI 解讀這份文件的方式,再試答看看",
+    en: "Adjust how the AI reads this document, then try answering",
   },
-  "kb.tuneParsing.title": { "zh-TW": "調整解析", en: "Tune parsing" },
+  "kb.tuneParsing.title": { "zh-TW": "調整解讀方式", en: "Adjust reading" },
   "kb.tuneParsing.description": {
     "zh-TW": "打一個使用者會問的問題,看這份文件在檢索中排到多深(會排得比使用者實際看到的更深,所以埋很深的段落會顯示成像「#37」而不只是「找不到」)。編輯下面的解析 prompt 後可重新解析、並「試答」這題;只套用到這份文件,或套用到整個 collection。套用前不會寫入任何東西。",
     en: 'Type a question your users would ask and see how deep this document ranks for it — we rank far past the top results a user sees, so a buried passage reads as "#37" rather than just "absent". Edit the parse prompt below, re-parse, and "Try answer" the question; save it for this document only, or apply it to the whole collection. Nothing is written until you apply.',
