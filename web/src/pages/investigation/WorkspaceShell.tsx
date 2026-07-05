@@ -15,6 +15,7 @@ import { DomainFields } from "../../components/DomainFields";
 import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
+import { ActivityFeed } from "../../components/ActivityFeed";
 import { Icon, type IconName } from "../../components/Icon";
 import { ModalShell } from "../../components/ModalShell";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
@@ -65,7 +66,7 @@ import { pxToRem } from "../../lib/pxToRem";
 
 type OpenFileFn = (path: string, opts?: { preview?: boolean }) => void;
 
-export type ActivityMode = "evidence" | "search" | "history" | "reviewers";
+export type ActivityMode = "evidence" | "search" | "history" | "reviewers" | "activity";
 
 /** Close a tab through the dirty-aware path (save-on-close prompt). Provided
  * by ShellBody so the deep tab strip can request closes without prop drilling. */
@@ -988,6 +989,7 @@ function ActivityBar({
     { name: "search", label: "Search files", onClick: () => onMode("search"), active: mode === "search" },
     { name: "clock", label: "History", onClick: () => onMode("history"), active: mode === "history" },
     { name: "users", label: "Reviewers", onClick: () => onMode("reviewers"), active: mode === "reviewers" },
+    { name: "bell", label: "Activity", onClick: () => onMode("activity"), active: mode === "activity" },
   ];
   return (
     <div
@@ -1053,6 +1055,8 @@ function ActivitySidebar(props: {
       return <HistorySidebar files={props.files} recentFiles={props.recentFiles} onOpenFile={props.onOpenFile} />;
     case "reviewers":
       return <ReviewersSidebar item={props.item} />;
+    case "activity":
+      return <ActivityFeed slug={props.manifest.slug} itemId={props.item.resource_id} onOpenFile={props.onOpenFile} />;
   }
 }
 
