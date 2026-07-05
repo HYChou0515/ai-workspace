@@ -717,6 +717,29 @@ export const messages = {
   "diag.took": { "zh-TW": " · 耗時 {sec}s", en: " · took {sec}s" },
   "diag.rerunAria": { "zh-TW": "重新檢查：{name}", en: "Re-run: {name}" },
   "diag.rerunTitle": { "zh-TW": "重新執行這項檢查", en: "Re-run this check" },
+
+  // Diagnostics → Activity tab: LLM-run traces + durable-store telemetry (#465).
+  "telemetry.span.tool": { "zh-TW": "工具", en: "tool" },
+  "telemetry.span.agent": { "zh-TW": "代理", en: "agent" },
+  "telemetry.span.handoff": { "zh-TW": "交接", en: "handoff" },
+  "telemetry.noSteps": { "zh-TW": "沒有記錄任何步驟。", en: "No steps recorded." },
+  "telemetry.step": { "zh-TW": "{n} 步", en: "{n} step" },
+  "telemetry.steps": { "zh-TW": "{n} 步", en: "{n} steps" },
+  "telemetry.live": { "zh-TW": "即時", en: "live" },
+  "telemetry.empty": {
+    "zh-TW": "目前沒有任何活動。跑一次 AI（對話、建立 wiki）後，它的 LLM 呼叫與工具呼叫就會即時出現在這裡。",
+    en: "No activity yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls appear here live.",
+  },
+  "telemetry.durable.aria": { "zh-TW": "持久儲存遙測", en: "Durable store telemetry" },
+  "telemetry.durable.title": { "zh-TW": "持久儲存", en: "Durable store" },
+  "telemetry.durable.files": { "zh-TW": "每次鏡射檔案數（p95）", en: "Files / mirror (p95)" },
+  "telemetry.durable.restore": { "zh-TW": "冷喚醒還原（p95）", en: "Cold-wake restore (p95)" },
+  "telemetry.durable.rows": { "zh-TW": "WorkspaceFile 列數", en: "WorkspaceFile rows" },
+  "telemetry.durable.trend": { "zh-TW": "WorkspaceFile 列數趨勢", en: "WorkspaceFile rows trend" },
+  "telemetry.durable.samples": {
+    "zh-TW": "{mirror} 次鏡射 · {restore} 次還原取樣",
+    en: "{mirror} mirror · {restore} restore samples",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

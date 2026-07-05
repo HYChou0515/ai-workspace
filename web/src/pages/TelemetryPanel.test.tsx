@@ -2,13 +2,15 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render as rtlRender, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { MonitorApi, MonitorSummary } from "../api/monitor";
+import { LocaleProvider } from "../lib/i18n";
 import { QueryWrap } from "../test/queryWrapper";
 import { TelemetryPanel } from "./TelemetryPanel";
 
-const render = (ui: Parameters<typeof rtlRender>[0]) => rtlRender(ui, { wrapper: QueryWrap });
+const render = (ui: Parameters<typeof rtlRender>[0]) =>
+  rtlRender(<LocaleProvider>{ui}</LocaleProvider>, { wrapper: QueryWrap });
 
 const emptySummary: MonitorSummary = {
   p95_n_files: null,
@@ -37,7 +39,19 @@ const withTrace: MonitorApi = {
 };
 
 describe("TelemetryPanel", () => {
-  afterEach(cleanup);
+  // Localized (#465); these assertions are English, so pin the English locale.
+  beforeEach(() => localStorage.setItem("ws.locale", "en"));
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("renders in Traditional Chinese under the zh-TW locale (#465)", async () => {
+    localStorage.setItem("ws.locale", "zh-TW");
+    render(<TelemetryPanel client={withTrace} />);
+    expect(await screen.findByText("持久儲存")).toBeInTheDocument();
+    expect(screen.queryByText("Durable store")).not.toBeInTheDocument();
+  });
 
   it("lists a run and expands to reveal its steps (LLM + tool calls)", async () => {
     render(<TelemetryPanel client={withTrace} />);
