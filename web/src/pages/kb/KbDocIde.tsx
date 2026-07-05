@@ -42,6 +42,7 @@ import { FileTree } from "../investigation/FileTree";
 import { TuneParsingModal } from "./TuneParsingModal";
 import { docHref } from "./kbLinks";
 import { QualityBadge } from "./QualityBadge";
+import { QualityDetails } from "./QualityDetails";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { pxToRem } from "../../lib/pxToRem";
 import { useCollectionDocs } from "./useCollectionDocs";
@@ -341,7 +342,11 @@ function KbDocIdeBody({
                   )}
                 </div>
               </div>
-              <KbStatusBar doc={activeDoc} rationale={docMetaQuery.data?.quality_rationale} />
+              <KbStatusBar
+                doc={activeDoc}
+                rationale={docMetaQuery.data?.quality_rationale}
+                breakdown={docMetaQuery.data?.quality_breakdown}
+              />
               {tuneDoc && (
                 <TuneParsingModal
                   collectionId={collectionId}
@@ -392,7 +397,15 @@ function fmtBytes(n: number): string {
  * per-doc chunks / cited / size that used to live in the table column.
  * `rationale` (#105 "why good/bad") arrives from the open doc's render call —
  * #395 moved it off the list row. */
-function KbStatusBar({ doc, rationale }: { doc?: KbDocument; rationale?: string }) {
+function KbStatusBar({
+  doc,
+  rationale,
+  breakdown,
+}: {
+  doc?: KbDocument;
+  rationale?: string;
+  breakdown?: Record<string, number>;
+}) {
   const t = useT();
   if (!doc) {
     return <div className="kb-ide__status kb-ide__status--empty" data-testid="kb-ide-status" />;
@@ -437,17 +450,10 @@ function KbStatusBar({ doc, rationale }: { doc?: KbDocument; rationale?: string 
       )}
       <span className="kb-ide__status-state">{status}</span>
       {typeof doc.quality_score === "number" && (
-        // #105: the AI quality verdict — the coloured grade + a short rationale
-        // ("why good/bad"), title-truncated. Only when the doc has been judged.
-        <span className="kb-ide__status-quality" data-testid="kb-ide-quality">
-          <span className="kb-ide__status-quality-label">{t("kb.quality.heading")}</span>
-          <QualityBadge score={doc.quality_score} />
-          {rationale ? (
-            <span className="kb-ide__status-quality-why" title={rationale}>
-              {rationale}
-            </span>
-          ) : null}
-        </span>
+        // #105 / #460 P7+P8: the AI quality verdict — coloured grade + visible
+        // good/ok/bad label, expanding into the full rationale + per-dimension
+        // breakdown. Only when the doc has been judged.
+        <QualityDetails score={doc.quality_score} rationale={rationale} breakdown={breakdown} />
       )}
       {(chunksLabel || rest.length > 0) && (
         <span className="kb-ide__status-meta">

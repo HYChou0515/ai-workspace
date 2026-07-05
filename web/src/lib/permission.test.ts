@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   type CollectionPermission,
+  EVERYONE,
   grantsFromPermission,
   permissionFromGrants,
+  previewSubjects,
   roleForVerbs,
   subjectUser,
   userSubject,
@@ -88,5 +90,37 @@ describe("permissionFromGrants", () => {
       { userId: "alice", role: "viewer" },
       { userId: "carol", role: "editor" },
     ]);
+  });
+});
+
+// #460 P6 — the advanced preview must reflect the SELECTED visibility, mirroring
+// the backend authorize() semantics, not just echo the stored grant lists.
+describe("previewSubjects — visibility semantics", () => {
+  const withGrants = (): CollectionPermission => ({
+    ...empty("restricted"),
+    read_meta: ["user:alice"],
+    read_content: ["user:alice", "user:bob"],
+    change_permission: ["user:carol"],
+  });
+
+  it("public: every verb resolves to everyone, EXCEPT change_permission", () => {
+    const p = withGrants();
+    expect(previewSubjects("public", p, "read_meta")).toEqual([EVERYONE]);
+    expect(previewSubjects("public", p, "converse")).toEqual([EVERYONE]);
+    // change_permission is never opened up by visibility — grant-list only.
+    expect(previewSubjects("public", p, "change_permission")).toEqual(["user:carol"]);
+  });
+
+  it("private: every managed verb resolves to nobody; change_permission still grant-list only", () => {
+    const p = withGrants();
+    expect(previewSubjects("private", p, "read_meta")).toEqual([]);
+    expect(previewSubjects("private", p, "read_content")).toEqual([]);
+    expect(previewSubjects("private", p, "change_permission")).toEqual(["user:carol"]);
+  });
+
+  it("restricted: echoes the per-verb grant list verbatim", () => {
+    const p = withGrants();
+    expect(previewSubjects("restricted", p, "read_content")).toEqual(["user:alice", "user:bob"]);
+    expect(previewSubjects("restricted", p, "read_meta")).toEqual(["user:alice"]);
   });
 });

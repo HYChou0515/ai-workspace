@@ -134,6 +134,8 @@ describe("WikiBrowser (#50 P7)", () => {
       />,
     );
 
+    // #460 P5: the guidance panel is collapsed by default — expand it first.
+    await userEvent.click(await screen.findByRole("button", { name: /wiki guidance/i }));
     const writing = await screen.findByLabelText(/writing guidance/i);
     expect(writing).toHaveValue("Organize by zone."); // prefilled from props
     const answering = screen.getByLabelText(/answering guidance/i);
