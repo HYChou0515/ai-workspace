@@ -112,6 +112,40 @@ function renderDash() {
   return renderDashAt("/a/rca");
 }
 
+describe("AppDashboard responsive (#464)", () => {
+  const realMM = window.matchMedia;
+  afterEach(() => {
+    window.matchMedia = realMM;
+  });
+  function stubViewport(narrow: boolean) {
+    window.matchMedia = ((q: string) => ({
+      matches: narrow,
+      media: q,
+      onchange: null,
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent: () => true,
+    })) as unknown as typeof window.matchMedia;
+  }
+
+  it("keeps the fixed 240px sidebar column on a wide viewport", () => {
+    stubViewport(false);
+    renderDash();
+    expect(screen.getByTestId("dash-sidebar")).toHaveStyle({ width: "240px" });
+  });
+
+  it("drops the fixed 240px column and stacks the sidebar on a narrow viewport", () => {
+    stubViewport(true);
+    renderDash();
+    // The 240px flex-shrink:0 column is what forced horizontal overflow ≤768px;
+    // narrow makes it a full-width top section and the shell stacks vertically.
+    expect(screen.getByTestId("dash-sidebar")).toHaveStyle({ width: "100%" });
+    expect(screen.getByTestId("page-app-dashboard")).toHaveStyle({ flexDirection: "column" });
+  });
+});
+
 describe("AppDashboard", () => {
   it("shows a skeleton placeholder (not bare 'Loading…') while the manifest loads (#170)", () => {
     vi.mocked(useAppManifest).mockReturnValueOnce(undefined);

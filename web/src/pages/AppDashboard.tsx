@@ -38,6 +38,7 @@ import { UserAvatar } from "../components/UserChip";
 import { useT } from "../lib/i18n";
 import { useBreadcrumbs } from "../hooks/breadcrumbs";
 import { useCurrentUser } from "../hooks/useCurrentUser";
+import { useIsNarrow } from "../hooks/useMediaQuery";
 import { useOnboarding } from "../hooks/useOnboarding";
 import { usePinned, useRecentlyViewed } from "../hooks/usePins";
 import { useAppItems, useAppManifest } from "../hooks/useResources";
@@ -81,6 +82,9 @@ export function AppDashboard() {
   // it (one-shot, on mount) so the dashboard opens already narrowed (#158).
   const [topic, setTopic] = useState(() => params.get("topic") ?? "any");
   const [age, setAge] = useState("any");
+  // Below 768px the fixed 240px sidebar can't coexist with the main column, so
+  // it becomes a full-width top section and the shell stacks vertically (#464).
+  const isNarrow = useIsNarrow();
   useBreadcrumbs(
     manifest ? [{ label: "Home", to: "/" }, { label: manifest.title }] : [{ label: "Home", to: "/" }],
   );
@@ -209,12 +213,27 @@ export function AppDashboard() {
   return (
     <div
       data-testid="page-app-dashboard"
-      style={{ ...themed, display: "flex", height: "100%", background: "var(--paper)", color: "var(--text-paper)" }}
+      style={{
+        ...themed,
+        display: "flex",
+        flexDirection: isNarrow ? "column" : "row",
+        height: "100%",
+        background: "var(--paper)",
+        color: "var(--text-paper)",
+      }}
     >
       {/* SIDEBAR */}
       <aside
         data-testid="dash-sidebar"
-        style={{ width: 240, flexShrink: 0, borderRight: "1px solid var(--paper-3)", display: "flex", flexDirection: "column", padding: "18px 0" }}
+        style={{
+          width: isNarrow ? "100%" : 240,
+          flexShrink: 0,
+          borderRight: isNarrow ? "none" : "1px solid var(--paper-3)",
+          borderBottom: isNarrow ? "1px solid var(--paper-3)" : "none",
+          display: "flex",
+          flexDirection: "column",
+          padding: "18px 0",
+        }}
       >
         <div style={{ padding: "0 18px 16px", borderBottom: "1px solid var(--paper-3)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -240,13 +259,21 @@ export function AppDashboard() {
           </Link>
         </div>
 
-        <nav style={{ padding: "8px 8px", display: "flex", flexDirection: "column", gap: 1 }}>
+        <nav
+          style={{
+            padding: "8px 8px",
+            display: "flex",
+            flexDirection: isNarrow ? "row" : "column",
+            gap: isNarrow ? 4 : 1,
+            overflowX: isNarrow ? "auto" : "visible",
+          }}
+        >
           {nav.map((n) => (
-            <NavRow key={n.key} icon={n.icon} label={n.label} count={n.count} active={view === n.key} onClick={() => setView(n.key)} />
+            <NavRow key={n.key} icon={n.icon} label={n.label} count={n.count} active={view === n.key} onClick={() => setView(n.key)} horizontal={isNarrow} />
           ))}
         </nav>
 
-        {supportsTopics && (
+        {supportsTopics && !isNarrow && (
           <div style={{ padding: "16px 16px 8px" }}>
             <CapsLabel>Topics</CapsLabel>
             {allTopics.length === 0 && (
@@ -276,6 +303,7 @@ export function AppDashboard() {
           </div>
         )}
 
+        {!isNarrow && (
         <div style={{ marginTop: "auto", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px 0", borderTop: "1px solid var(--paper-3)" }}>
           <UserAvatar userId={me} size={28} />
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -285,6 +313,7 @@ export function AppDashboard() {
             )}
           </div>
         </div>
+        )}
       </aside>
 
       {/* MAIN */}
@@ -329,17 +358,17 @@ export function AppDashboard() {
         ) : (
           <>
         {/* page header */}
-        <div style={{ padding: "28px 28px 18px", display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 24, borderBottom: "1px solid var(--paper-3)" }}>
+        <div style={{ padding: isNarrow ? "20px 16px 16px" : "28px 28px 18px", display: "flex", flexDirection: isNarrow ? "column" : "row", alignItems: isNarrow ? "stretch" : "flex-end", justifyContent: "space-between", gap: isNarrow ? 16 : 24, borderBottom: "1px solid var(--paper-3)" }}>
           <div>
             <CapsLabel>{noun}</CapsLabel>
-            <h1 style={{ fontSize: pxToRem(40), fontWeight: 800, margin: "10px 0 0", letterSpacing: "-0.02em" }}>
+            <h1 style={{ fontSize: pxToRem(isNarrow ? 28 : 40), fontWeight: 800, margin: "10px 0 0", letterSpacing: "-0.02em" }}>
               {openCount} open <span style={{ color: "var(--accent)" }}>·</span> {criticalCount} critical
             </h1>
             <p style={{ color: "var(--text-paper-d)", fontSize: pxToRem(14), margin: "8px 0 0" }}>
               All {noun.toLowerCase()} are visible to your org. Pin the ones you own.
             </p>
           </div>
-          <div style={{ display: "flex", gap: 28, alignItems: "flex-end" }}>
+          <div style={{ display: "flex", gap: isNarrow ? "12px 20px" : 28, alignItems: "flex-end", flexWrap: isNarrow ? "wrap" : "nowrap" }}>
             <Metric label="Open" value={String(openCount)} sub={noun.toLowerCase()} />
             <Metric label="Critical · open" value={String(criticalCount)} sub="need attention" />
             {closing[0] && <Metric label={`${pretty(closing[0])} · 30d`} value={String(closed30d)} sub="last 30d" />}
@@ -350,7 +379,7 @@ export function AppDashboard() {
         </div>
 
         {/* status tabs */}
-        <div data-testid="dash-tabs" style={{ padding: "0 28px", borderBottom: "1px solid var(--paper-3)", display: "flex", gap: 28 }}>
+        <div data-testid="dash-tabs" style={{ padding: isNarrow ? "0 16px" : "0 28px", borderBottom: "1px solid var(--paper-3)", display: "flex", gap: isNarrow ? 18 : 28, overflowX: isNarrow ? "auto" : "visible" }}>
           {tabs.map((t) => {
             const active = view === t.key;
             return (
@@ -358,7 +387,7 @@ export function AppDashboard() {
                 key={t.key}
                 type="button"
                 onClick={() => setView(t.key)}
-                style={{ padding: "12px 0", border: "none", borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`, background: "transparent", display: "flex", alignItems: "center", gap: 6, cursor: "pointer", font: "inherit" }}
+                style={{ padding: "12px 0", flexShrink: 0, whiteSpace: "nowrap", border: "none", borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`, background: "transparent", display: "flex", alignItems: "center", gap: 6, cursor: "pointer", font: "inherit" }}
               >
                 <span style={{ fontSize: pxToRem(14), fontWeight: active ? 600 : 400, color: active ? "var(--text-paper)" : "var(--text-paper-d)" }}>{t.label}</span>
                 <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: active ? "var(--accent)" : "var(--text-paper-d2)" }}>{t.count}</span>
@@ -368,7 +397,7 @@ export function AppDashboard() {
         </div>
 
         {/* filter strip */}
-        <div style={{ padding: "16px 28px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={{ padding: isNarrow ? "12px 16px" : "16px 28px", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <Icon name="filter" size={13} color="var(--text-paper-d)" />
           <FilterSelect label="Filter by severity" prefix="Severity" value={sev} onChange={setSev} options={fieldSpec(sevField)?.options ?? []} />
           <FilterSelect label="Filter by topic" prefix="Topic" value={topic} onChange={setTopic} options={allTopics} />
@@ -392,8 +421,8 @@ export function AppDashboard() {
         </div>
 
         {/* table */}
-        <div style={{ flex: 1, overflow: "auto", padding: "0 28px 28px" }}>
-          <div role="table" data-testid="dash-items" style={{ background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
+        <div style={{ flex: 1, overflow: "auto", padding: isNarrow ? "0 16px 16px" : "0 28px 28px" }}>
+          <div role="table" data-testid="dash-items" style={{ minWidth: isNarrow ? 560 : undefined, background: "var(--white)", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
             <div role="row" style={{ display: "grid", gridTemplateColumns: GRID, padding: "10px 16px", borderBottom: "1px solid var(--paper-3)", alignItems: "center", gap: 10 }}>
               <div />
               {[manifest.item.noun, manifest.labels[sevField] ?? "Severity", "Topic · product", "Owner", "Updated"].map((h) => (
@@ -481,16 +510,16 @@ function Metric({ label, value, sub }: { label: string; value: string; sub: stri
   );
 }
 
-function NavRow({ icon, label, count, active, onClick }: { icon: IconName; label: string; count?: number; active: boolean; onClick: () => void }) {
+function NavRow({ icon, label, count, active, onClick, horizontal }: { icon: IconName; label: string; count?: number; active: boolean; onClick: () => void; horizontal?: boolean }) {
   return (
     <button
       type="button"
       onClick={onClick}
       data-active={active ? "" : undefined}
-      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", height: 32, padding: "0 10px", border: "none", borderRadius: 4, background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent)" : "var(--text-paper-d)", font: "inherit", fontSize: pxToRem(13), cursor: "pointer", textAlign: "left" }}
+      style={{ display: "flex", alignItems: "center", gap: 10, width: horizontal ? "auto" : "100%", flexShrink: horizontal ? 0 : undefined, height: 32, padding: "0 10px", border: "none", borderRadius: 4, background: active ? "var(--accent-soft)" : "transparent", color: active ? "var(--accent)" : "var(--text-paper-d)", font: "inherit", fontSize: pxToRem(13), cursor: "pointer", textAlign: "left" }}
     >
       <Icon name={icon} size={15} />
-      <span style={{ flex: 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: active ? 600 : 400 }}>{label}</span>
+      <span style={{ flex: horizontal ? "0 0 auto" : 1, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", fontWeight: active ? 600 : 400 }}>{label}</span>
       {count != null && (
         <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: active ? "var(--accent)" : "var(--text-paper-d2)" }}>{count}</span>
       )}
