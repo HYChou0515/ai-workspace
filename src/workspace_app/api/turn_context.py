@@ -36,6 +36,7 @@ from .turns import history_items
 if TYPE_CHECKING:
     from specstar import SpecStar
 
+    from ..entity.events import EntityOrigin, EntityWriteSink
     from ..files import WorkspaceFiles
     from ..filestore.protocol import FileStore
     from ..kb.retriever import Enhancements
@@ -101,6 +102,12 @@ class TurnContextBuilder:
         self._history_max_messages = history_max_messages
         self._history_max_context_tokens = history_max_context_tokens
         self._wiki_coordinator = wiki_coordinator
+        # #429 P10: the event-dispatch sink stamped onto every agent turn's ctx so an
+        # agent's entity write fires on_event workflows. Set after construction by the
+        # composition root (the EventTriggerDispatcher is built later than this builder,
+        # so it can't be a constructor arg — mirrors orchestrator.entity_write_sink).
+        # None ⇒ no dispatch wired (tests / deployments with no triggers pay nothing).
+        self.entity_write_sink: EntityWriteSink | None = None
 
     def _common(
         self,
@@ -146,6 +153,11 @@ class TurnContextBuilder:
             # fires live (a skill turned off is unreadable) and the workspace-skill
             # block can drop the disabled ones.
             skill_prefs=self._locator.skill_prefs_of(item_id),
+            # #429 P10: the entity tools publish a post-commit write event through this,
+            # so an AI-authored entity change fires on_event workflows like any other
+            # write. Identical across both turn shapes — the ambient ORIGIN differs (see
+            # build_workflow_turn), the sink does not.
+            entity_write_sink=self.entity_write_sink,
         )
 
     async def build_chat_turn(
@@ -211,10 +223,18 @@ class TurnContextBuilder:
         agent_config: AgentConfig | None,
         run_subagent: RunSubagent,
         history_messages: list[Message],
+        entity_write_origin: EntityOrigin | None = None,
     ) -> AgentToolContext:
         """The lean workflow agent-node turn context (`_wf_drive_turn`): the shared
         core only — every interactive extra stays at its ``AgentToolContext`` default,
-        byte-for-byte what a workflow node saw before."""
+        byte-for-byte what a workflow node saw before.
+
+        ``entity_write_origin`` (#429 P10) is the running workflow's
+        ``EntityOrigin(trigger, depth)`` when it was spawned by a trigger — passed in by
+        ``WorkflowExecutor.wire_handle`` from the run's handle — so an agent editing an
+        entity mid-run stamps the SAME origin a workflow-handle write would, keeping the
+        dispatcher's self-trigger + depth-cap guards effective on the agent path. None
+        for a human/schedule run (a first-level write)."""
         session = await self._registry.session(item_id)
         return AgentToolContext(
             **self._common(
@@ -223,5 +243,6 @@ class TurnContextBuilder:
                 agent_config=agent_config,
                 run_subagent=run_subagent,
                 history_messages=history_messages,
-            )
+            ),
+            entity_write_origin=entity_write_origin,
         )

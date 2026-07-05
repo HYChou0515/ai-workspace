@@ -787,6 +787,11 @@ def create_app(
         watermark=SpecstarEventWatermark(spec),
     )
     workflow_orchestrator.entity_write_sink = event_dispatcher.dispatch
+    # #429 P10: agent-tool entity writes (chat + workflow agent nodes) also fire event
+    # triggers — same dispatcher, so an AI edit is indistinguishable from a UI/workflow
+    # write. Set post-construction (the builder predates the dispatcher, like the
+    # orchestrator's sink above).
+    turn_ctx.entity_write_sink = event_dispatcher.dispatch
     app.state.event_dispatcher = event_dispatcher
 
     register_workflow_routes(

@@ -20,7 +20,7 @@ from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
 from typing import Any
 
-from ..entity.events import EntityWriteSink
+from ..entity.events import EntityOrigin, EntityWriteSink
 from ..filestore.protocol import FileStore
 from .engine import StepFailed, input_hash, run_step
 from .nonidempotent import Result, Verdict, run_nonidempotent
@@ -284,14 +284,16 @@ class WorkflowHandle:
         )
         return result["doc_id"]
 
-    def _entity_origin(self):
-        """#429 P9: the ``EntityOrigin`` to stamp on this run's entity writes — set only for a
-        triggered run (``origin_trigger`` non-empty), so a human/schedule run's writes stay
-        origin-less (a fresh depth-0 chain root)."""
+    @property
+    def entity_origin(self) -> EntityOrigin | None:
+        """#429 P9/P10: the ``EntityOrigin`` to stamp on this run's entity writes — set only for
+        a triggered run (``origin_trigger`` non-empty), so a human/schedule run's writes stay
+        origin-less (a fresh depth-0 chain root). One source of truth: this run's own capability
+        writes stamp it directly, and ``WorkflowExecutor.wire_handle`` reads it to give an agent
+        node's turn the same origin — so an agent-mediated write is depth-counted like any other,
+        keeping the dispatcher's self-trigger + depth-cap guards effective on the agent path."""
         if not self._origin_trigger:
             return None
-        from ..entity.events import EntityOrigin
-
         return EntityOrigin(trigger=self._origin_trigger, depth=self._trigger_depth)
 
     async def create_entity(
@@ -399,7 +401,7 @@ class WorkflowHandle:
                     expected_version=current.version,
                     body=new_body,
                     actor=self.user,
-                    origin=self._entity_origin(),
+                    origin=self.entity_origin,
                 )
             except EntityConflict as exc:
                 raise StepFailed(str(exc)) from exc
@@ -422,7 +424,7 @@ class WorkflowHandle:
                         dict(args),
                         expected_version=current.version,
                         actor=self.user,
-                        origin=self._entity_origin(),
+                        origin=self.entity_origin,
                     )
                 except EntityConflict as exc:
                     raise StepFailed(str(exc)) from exc
@@ -437,7 +439,7 @@ class WorkflowHandle:
                 args,
                 actor=self.user,
                 now=datetime.now(UTC).date().isoformat(),
-                origin=self._entity_origin(),
+                origin=self.entity_origin,
             )
             await self.write_json(created_path, {"number": created.number})
             return Result(fields={"number": created.number, "created": True, "action": "create"})
@@ -541,7 +543,7 @@ class WorkflowHandle:
                         patch,
                         expected_version=current.version,
                         actor=self.user,
-                        origin=self._entity_origin(),
+                        origin=self.entity_origin,
                     )
                 except EntityConflict:
                     continue  # a parallel run moved it — re-read + re-apply on the fresh copy

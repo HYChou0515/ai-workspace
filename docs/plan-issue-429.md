@@ -37,6 +37,7 @@ grill 前的三份 code 探勘改變了 #429 的樣貌,先記錄事實基礎:
 | P7 | 時間觸發 runtime(sweeper + CAS lease + start) | 是 |
 | P8 | 孤兒重拾 + 時效 abandon | 是 |
 | P9 | 事件觸發(event_handlers + where + 遞迴 guard + 水位) | 是 |
+| P10 | agent 工具寫入接上 event dispatch(補齊單一寫入路徑 + origin 傳遞) | 是 |
 
 ---
 
@@ -283,6 +284,40 @@ tz 或標為 known limitation。full cron 日後當**加法擴充**(schedule 也
 
 ---
 
+## P10 — agent 工具寫入接上 event dispatch(補齊單一寫入路徑)
+
+**問題(P9 收尾時標記的接縫)**:P9 把事件 emit 掛在 `EntityStore.create/update` 這條**單一寫入
+路徑**上,但 emit 是否真的發,取決於該 `EntityStore` 實例建構時有沒有注入 `on_write` sink。v1 只有
+**人/UI(`entity_routes`)**與 **workflow handle(`orchestrator`)**兩條路徑注入了 sink;**agent 工具
+(`create_entity`/`update_entity`/`link_entity`)建構的 `EntityStore` 沒帶 sink**。後果:agent 改 entity
+→ 靜默、不 emit、不觸發 `on_event` workflow。這在最常見的來源(AI 動 entity)上違反「所有寫入無差別」的
+初衷——使用者手動改會觸發、workflow 改會觸發,AI 幫忙改卻不會。
+
+**定案**:把 agent 工具接上同一顆 dispatcher,並**連同 origin 一起傳**——這是關鍵,不能只接 sink。
+
+- `AgentToolContext` 加兩欄:`entity_write_sink`(dispatch sink;`None`=不 emit,KB/wiki/測試零成本)與
+  `entity_write_origin`(`EntityOrigin | None`)。工具 `_entity_store` 傳 `on_write=sink`,三個寫入工具
+  (create/update/link)都傳 `origin=entity_write_origin` 與 `actor`。
+- **origin 傳遞是護欄關鍵**:P9 的兩道遞迴 guard(自觸發跳過 + 深度上限)全靠 `event.origin`。若把 agent
+  路徑天真地以 `origin=None` 接上,則 event-triggered workflow 內的 agent 寫入會以 **depth 0** 重新發事件,
+  丟失所在 run 的 `(trigger, depth)` → guard 1 認不出、guard 2 從 0 重數 → **agent 一改 entity 就可能自我
+  重觸發 / 繞環**。正解:
+  - **純使用者 chat**(`build_chat_turn`)→ `origin=None`(depth 0,第一層寫入,本來就該觸發)。
+  - **workflow agent-node**(`build_workflow_turn`)→ 帶所在 run 的 `EntityOrigin(trigger, depth)`,與
+    handle 自身寫入用的 `WorkflowHandle.entity_origin` **同一顆**(升為公開屬性=單一真源)。由
+    `WorkflowExecutor.wire_handle` 從 handle 讀出、經 `drive_turn` 傳進 `build_workflow_turn`。
+- **sink 後設注入**:`EventTriggerDispatcher` 在 `create_app` 中比 `TurnContextBuilder` 晚建,故沿用既有
+  pattern(`workflow_orchestrator.entity_write_sink = …`),在 dispatcher 建好後
+  `turn_ctx.entity_write_sink = event_dispatcher.dispatch`。
+- **DoD 回歸測試**:event-triggered workflow 內 agent 改 entity **不得繞過 depth cap**——把 agent 工具 sink
+  接真 `EventTriggerDispatcher`,驗證 depth=cap 的 agent 寫入 fire 不出東西、且不自觸發;對照 `origin=None`
+  的第一層寫入會 fire(證明線是通的、是 origin 擋住而非斷線)。
+
+**仍延後(P10 之外)**:D2d on-demand backfill 的 operator route/CLI(watermark ledger 已具「可查落後」的
+基礎)維持獨立 follow-up。
+
+---
+
 ## 明確延後的 follow-up
 
 - 使用者 item-local workflow 自排程(+ per-user quota)。
@@ -293,9 +328,7 @@ tz 或標為 known limitation。full cron 日後當**加法擴充**(schedule 也
 - workflow-as-durable-JobType on worker pod(A 的 in-process v1 之外,讓 run 上 HPA、pod 重啟
   自動接手)。
 - DST tz 語意(不存在/重複本地時刻)。
-- **P9 agent-tool 寫入路徑接上 event dispatch**:v1 已接 workflow(orchestrator)+ 人(entity
-  routes)兩條寫入路徑;agent 工具 `create_entity`/`update_entity` 也要餵同一顆 dispatcher,但需在
-  多個 `AgentToolContext` 建構點加欄位,故留 follow-up(機制與另兩條路徑完全相同,已驗)。
+- ~~**P9 agent-tool 寫入路徑接上 event dispatch**~~ → **已於 P10 收掉**(見下)。
 - **P9 D2d on-demand backfill 的 route/CLI**:watermark ledger + `processed_version` 已具備「可查
   落後」的基礎;把「version > watermark 卻無對應 run」做成一支 operator 查詢/補跑指令留 follow-up。
 

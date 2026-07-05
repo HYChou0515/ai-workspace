@@ -13,6 +13,7 @@ from ..sync import SandboxSync
 if TYPE_CHECKING:
     from specstar import SpecStar
 
+    from ..entity.events import EntityOrigin, EntityWriteSink
     from ..kb.retriever import Enhancements, Retriever
     from ..kb.vlm import IVlm, VlmDescriber
     from ..kb.wiki.sources import IWikiSources
@@ -203,6 +204,19 @@ class AgentToolContext:
     # context cards stamp `created_by`/`updated_by` as this user). Set per-turn
     # from the message author; empty for contexts with no card-write tools.
     acting_user: str = ""
+    # #429 P10: the event-dispatch sink the agent's entity tools (create/update/
+    # link_entity) publish a post-commit EntityWriteEvent to, so an AI-authored
+    # entity change fires on_event workflows exactly like a UI or workflow write —
+    # the single write path stays indistinguishable across all its callers. None ⇒
+    # no emit (KB/wiki/test contexts that wire no triggers pay nothing).
+    entity_write_sink: EntityWriteSink | None = None
+    # #429 P10: the ambient trigger origin stamped on those writes. Set ONLY when
+    # this turn runs INSIDE a triggered workflow run (build_workflow_turn threads
+    # the run's EntityOrigin(trigger, depth)), so the dispatcher's self-trigger +
+    # depth-cap recursion guards count an agent-mediated write like any other run
+    # write. A plain user chat leaves it None (depth 0 — a first-level write that
+    # SHOULD fire triggers).
+    entity_write_origin: EntityOrigin | None = None
     # #242: the resolved current speaker (name / handle / section) for the
     # per-turn system note that tells the agent who it is replying to in a
     # shared, multi-collaborator workspace. Set per-turn by the API layer from

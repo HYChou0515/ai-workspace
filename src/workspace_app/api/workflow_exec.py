@@ -34,6 +34,7 @@ from .notifications import notification_sent, notify
 from .rca_messages import to_rca_message
 
 if TYPE_CHECKING:
+    from ..entity.events import EntityOrigin
     from ..files import WorkspaceFiles
     from ..kb.ingest import Ingestor
     from ..kb.llm import ILlm
@@ -103,6 +104,7 @@ class WorkflowExecutor:
         tools: list[str] | None,
         *,
         lane: str | None = None,
+        entity_write_origin: EntityOrigin | None = None,
     ) -> str:
         """Run one agent node as a turn on the run's WORKFLOW CHAT (§3, §5.1):
         ``chat_key`` is that chat's conversation id, so turns enqueue + persist there
@@ -132,6 +134,9 @@ class WorkflowExecutor:
             agent_config=cfg,
             run_subagent=self._run_subagent,
             history_messages=conv.messages,
+            # #429 P10: an agent node's entity writes carry the run's trigger origin, so
+            # they fire on_event workflows AND stay inside the recursion depth cap.
+            entity_write_origin=entity_write_origin,
         )
         answer: list[str] = []
 
@@ -277,15 +282,25 @@ class WorkflowExecutor:
         """Wire a run's ``WorkflowHandle`` to this executor's capabilities. Agent turns
         drive the run's workflow CHAT (chat_key); sandbox / ingest stay on item_id (the
         workspace shared across the item's chats, §3.1)."""
+        # #429 P10: thread the run's trigger origin (empty for a human/schedule run) so an
+        # agent node's entity writes are depth-counted like the handle's own — read once
+        # here; it's fixed for the run's lifetime.
+        origin = wf.entity_origin
         wf.drive_turn = lambda prompt, tools: self.drive_turn(
-            item_id, chat_key, captured_user, prompt, tools
+            item_id, chat_key, captured_user, prompt, tools, entity_write_origin=origin
         )
         # #429 P5: a per-element turn-lane factory — each map element drives its own
         # enqueue lane (real parallel) but persists to the run's chat. The effective
         # parallelism is min(map concurrency, turn_concurrency).
         wf.sub_turn = lambda subkey: (
             lambda prompt, tools: self.drive_turn(
-                item_id, chat_key, captured_user, prompt, tools, lane=f"{chat_key}#{subkey}"
+                item_id,
+                chat_key,
+                captured_user,
+                prompt,
+                tools,
+                lane=f"{chat_key}#{subkey}",
+                entity_write_origin=origin,
             )
         )
         wf.turn_concurrency = self._turn_concurrency
