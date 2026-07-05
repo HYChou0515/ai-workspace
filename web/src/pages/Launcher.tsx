@@ -111,7 +111,7 @@ function KbCard() {
           {t("launcher.kb.desc")}
         </span>
       </span>
-      <Icon name="external" size={16} color="var(--text-paper-d2)" />
+      <Icon name="arrow_r" size={16} color="var(--text-paper-d2)" />
     </Link>
   );
 }
@@ -160,7 +160,7 @@ function HelpCard() {
           {t("launcher.help.desc")}
         </span>
       </span>
-      <Icon name="external" size={16} color="var(--text-paper-d2)" />
+      <Icon name="arrow_r" size={16} color="var(--text-paper-d2)" />
     </Link>
   );
 }
