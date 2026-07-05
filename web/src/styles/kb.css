@@ -2569,3 +2569,94 @@
 .kb-cardgen__foot { display: flex; gap: 8px; justify-content: flex-end; align-items: center; padding-top: 8px; border-top: 1px solid var(--paper-3); margin-top: 4px; }
 .kb-cardgen__foot button { padding: 5px 14px; border: 1px solid var(--paper-3); border-radius: var(--radius-btn); background: var(--paper); cursor: pointer; color: var(--text-paper); }
 .kb-cardgen__foot button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ======================= Responsive: narrow (#464) =======================
+ * Below 768px every KB shell's fixed first column (220 / 380 / 260px) overflows
+ * the viewport. Collapse each master-detail grid to a single column: the nav
+ * rail becomes a horizontal scroll strip, the list/tree panels cap their height
+ * and scroll, and the detail/editor takes the rest. Breakpoint mirrors
+ * lib/breakpoints.ts (NARROW_QUERY = max-width 767px) — keep them in sync. */
+@media (max-width: 767px) {
+  /* KB home: rail on top as a horizontal strip, content below it. */
+  .kb-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .kb-nav {
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--paper-3);
+    padding: 8px 12px;
+  }
+  .kb-nav__brand {
+    display: none;
+  }
+  .kb-nav__item {
+    flex-shrink: 0;
+  }
+  .kb-nav__back {
+    margin-top: 0;
+    flex-shrink: 0;
+  }
+
+  /* Chats: conversation list above, the open conversation below. */
+  .kb-chats-split {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 42vh) 1fr;
+  }
+  .kb-chats-split > .kb-chats {
+    border-right: none;
+    border-bottom: 1px solid var(--paper-3);
+  }
+
+  /* Doc IDE: file tree above the editor pane. The tree width is a JS inline
+     style (draggable, #402), so the responsive override needs !important. */
+  .kb-ide__main {
+    flex-direction: column;
+  }
+  .kb-ide__tree {
+    width: auto !important;
+    max-height: 38vh;
+    border-right: none;
+    border-bottom: 1px solid var(--paper-3);
+  }
+  /* the vertical tree/pane resize handle is meaningless once stacked */
+  .kb-ide__main > [role="separator"][aria-orientation="vertical"] {
+    display: none;
+  }
+
+  /* Collections header: stack the intro above the metrics (side-by-side they
+     clip at ~360px), and let the metrics wrap instead of forcing a wide row. */
+  .kb-grid-page {
+    padding: 16px;
+  }
+  .kb-libhead {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+  .kb-libhead__metrics {
+    flex-wrap: wrap;
+    gap: 12px 20px;
+  }
+
+  /* Collection page: stack the title lead above its action buttons (side by
+     side the "Upload files" button clipped off the right edge), let the actions
+     wrap, and reflow the 6-up stat strip to as many columns as fit. */
+  .kb-colpage {
+    padding: 16px;
+  }
+  .kb-colpage__head {
+    flex-direction: column;
+    gap: 14px;
+  }
+  .kb-colpage__actions {
+    flex-wrap: wrap;
+  }
+  .kb-colpage__stats {
+    grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  }
+}
