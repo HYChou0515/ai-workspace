@@ -174,9 +174,9 @@ describe("KB routes", () => {
 
   it("opens the overlay from ?doc= and closing keeps the other params", async () => {
     renderAt("/kb/collections?view=mine&doc=col-1/me/reflow.md&hl=zone");
-    expect(await screen.findByRole("dialog", { name: "Document" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "文件" })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    await userEvent.click(screen.getByRole("button", { name: "關閉" }));
     // doc/hl are gone but the grid filter survives
     expect(screen.getByTestId("loc")).toHaveTextContent("view=mine");
     expect(screen.getByTestId("loc")).not.toHaveTextContent("doc=");

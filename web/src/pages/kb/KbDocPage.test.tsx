@@ -95,9 +95,9 @@ describe("KbDocPage", () => {
     await screen.findByText(/body text here/);
 
     // toggle reports the chunk count and switches to the chunks list
-    await userEvent.click(screen.getByRole("tab", { name: /chunks \(2\)/i }));
+    await userEvent.click(screen.getByRole("tab", { name: /區塊 \(2\)/ }));
     const chunk0 = (await screen.findByText("# Reflow")).closest(".kb-chunk")!;
-    expect(chunk0).toHaveTextContent("3 cited");
+    expect(chunk0).toHaveTextContent("被引用 3 次");
     expect(chunk0).toHaveTextContent("#0");
   });
 

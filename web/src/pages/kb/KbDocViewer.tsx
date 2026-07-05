@@ -13,6 +13,7 @@ import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
 import { ReplayDialog } from "../../components/ReplayDialog";
+import { useT } from "../../lib/i18n";
 import { kindIcon } from "./docKind";
 import { KbDocBody } from "./KbDocBody";
 import { blobHref, docHref } from "./kbLinks";
@@ -43,6 +44,7 @@ export function KbDocViewer({
   client?: KbApi;
 }) {
   const qc = useQueryClient();
+  const t = useT();
   const [docId, setDocId] = useState(documentId);
   const [doc, setDoc] = useState<KbRenderedDoc | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
@@ -89,76 +91,76 @@ export function KbDocViewer({
   return (
     <>
       <div className="kb-drawer-backdrop" onClick={onClose} aria-hidden />
-      <aside className="kb-docviewer" role="dialog" aria-label="Document">
+      <aside className="kb-docviewer" role="dialog" aria-label={t("kb.docview.title")}>
         <header className="kb-docviewer__head">
           <div className="kb-docviewer__icon">
             <Icon name={kindIcon(doc?.filename ?? docId)} size={18} color="var(--text-paper-d)" />
           </div>
           <div className="kb-docviewer__titles">
             {collectionName && <div className="kb-docviewer__eyebrow">{collectionName}</div>}
-            <h3 className="kb-docviewer__name">{doc?.filename ?? "Document"}</h3>
+            <h3 className="kb-docviewer__name">{doc?.filename ?? t("kb.docview.title")}</h3>
             {doc && (
               <div className="kb-docviewer__meta">
                 <span>{fmtBytes(doc.size)}</span>
                 <span aria-hidden>·</span>
-                <span className={doc.cited > 0 ? "is-hot" : undefined}>cited {doc.cited}×</span>
+                <span className={doc.cited > 0 ? "is-hot" : undefined}>{t("kb.docview.cited", { n: doc.cited })}</span>
                 <span aria-hidden>·</span>
-                <span>{doc.chunks} chunks</span>
+                <span>{t("kb.docview.chunks", { n: doc.chunks })}</span>
                 <span aria-hidden>·</span>
-                <span>uploaded {fmtDate(doc.updated_at)}</span>
+                <span>{t("kb.docview.uploaded", { date: fmtDate(doc.updated_at) })}</span>
               </div>
             )}
           </div>
-          <button type="button" className="kb-iconbtn" aria-label="Close" onClick={onClose}>
+          <button type="button" className="kb-iconbtn" aria-label={t("kb.docview.close")} onClick={onClose}>
             <Icon name="x" size={16} />
           </button>
         </header>
 
         <div className="kb-docviewer__actions">
           <a className="kb-btn kb-btn--sm" href={docHref(docId, snippet)} target="_blank" rel="noreferrer">
-            <Icon name="external" size={13} /> Open full view
+            <Icon name="external" size={13} /> {t("kb.docview.openFull")}
           </a>
           {doc && (
             <a className="kb-btn kb-btn--sm" href={blobHref(doc.file_id)} download={doc.filename}>
-              <Icon name="download" size={13} /> Download
+              <Icon name="download" size={13} /> {t("kb.docview.download")}
             </a>
           )}
           {replayable && (
             <button
               type="button"
               className="kb-btn kb-btn--sm"
-              title="Re-run the AI's processing of this file as a test — nothing is changed"
+              title={t("kb.docview.testAiTitle")}
               onClick={() => setReplayOpen(true)}
             >
-              <Icon name="sparkle" size={13} /> Test AI
+              <Icon name="sparkle" size={13} /> {t("kb.docview.testAi")}
             </button>
           )}
           <span style={{ flex: 1 }} />
           <button
             type="button"
             className="kb-btn kb-btn--sm"
-            title="Have the AI re-read this document so search and answers reflect its latest content"
+            title={t("kb.docview.rereadTitle")}
             disabled={reindexMut.isPending}
             onClick={() => reindexMut.mutate()}
           >
-            <Icon name="refresh" size={13} /> Re-read
+            <Icon name="refresh" size={13} /> {t("kb.docview.reread")}
           </button>
           <button
             type="button"
             className="kb-btn kb-btn--sm"
-            aria-label="Delete document"
+            aria-label={t("kb.docview.deleteAria")}
             onClick={() => setConfirmRemove((v) => !v)}
           >
-            <Icon name="trash" size={13} /> Delete
+            <Icon name="trash" size={13} /> {t("kb.docview.delete")}
           </button>
           {confirmRemove && (
-            <div className="kb-colpage__confirm" role="dialog" aria-label="Confirm delete document">
-              <span>Delete this document?</span>
+            <div className="kb-colpage__confirm" role="dialog" aria-label={t("kb.docview.confirmDeleteAria")}>
+              <span>{t("kb.docview.confirmDeleteBody")}</span>
               <button type="button" className="kb-btn kb-btn--danger kb-btn--sm" onClick={() => removeMut.mutate()}>
-                Delete
+                {t("kb.docview.delete")}
               </button>
               <button type="button" className="kb-btn kb-btn--sm" onClick={() => setConfirmRemove(false)}>
-                Cancel
+                {t("kb.docview.cancel")}
               </button>
             </div>
           )}

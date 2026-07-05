@@ -136,7 +136,7 @@ export function KbDocBody({
             className={`kb-docview-tab${view === "file" ? " is-active" : ""}`}
             onClick={() => setView("file")}
           >
-            <Icon name="file" size={13} /> File
+            <Icon name="file" size={13} /> {t("kb.docbody.viewFile")}
           </button>
           <button
             type="button"
@@ -145,7 +145,7 @@ export function KbDocBody({
             className={`kb-docview-tab${view === "chunks" ? " is-active" : ""}`}
             onClick={() => setView("chunks")}
           >
-            <Icon name="layers" size={13} /> Chunks ({chunks.length})
+            <Icon name="layers" size={13} /> {t("kb.docbody.viewChunks", { n: chunks.length })}
           </button>
         </div>
       )}
@@ -158,7 +158,7 @@ export function KbDocBody({
       {failed && <div className="kb-drawer__error">{t("kb.doc.loadError")}</div>}
       {view === "chunks" ? (
         <div className="kb-chunks">
-          {chunks.length === 0 && <p className="kb-cols__empty">No indexed chunks.</p>}
+          {chunks.length === 0 && <p className="kb-cols__empty">{t("kb.docbody.noChunks")}</p>}
           {chunks.map((ch) => (
             <div key={ch.chunk_id} className="kb-chunk">
               <div className="kb-chunk__meta">
@@ -168,7 +168,7 @@ export function KbDocBody({
                 </span>
                 <span className={`kb-chunk__cited${ch.cited > 0 ? " is-cited" : ""}`}>
                   <Icon name="quote" size={11} color="currentColor" />
-                  {ch.cited} cited
+                  {t("kb.docbody.chunkCited", { n: ch.cited })}
                 </span>
               </div>
               <pre className="kb-chunk__text">{ch.text}</pre>
@@ -230,8 +230,7 @@ export function KbDocBody({
           />
         ) : doc.markdown === "" ? (
           <div className="kb-docbinary">
-            <Icon name="file" size={14} /> Preview isn&apos;t available for this file —
-            use Download to view it.
+            <Icon name="file" size={14} /> {t("kb.docbody.previewUnavailable")}
           </div>
         ) : (
           (structuredCore(doc.filename, doc.markdown) ?? (
