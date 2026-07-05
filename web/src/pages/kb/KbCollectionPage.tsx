@@ -511,7 +511,7 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
             <div className="kb-colpage__chips">
               <button
                 type="button"
-                className={`kb-chip${isPinned ? " kb-chip--accent" : ""}`}
+                className={`kb-chip kb-chip--btn${isPinned ? " is-on" : ""}`}
                 aria-label={`${isPinned ? "Unpin" : "Pin"} ${selected.name}`}
                 aria-pressed={isPinned}
                 onClick={() => pinned.toggle(selected.resource_id)}

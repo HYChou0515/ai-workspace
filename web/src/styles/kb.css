@@ -1889,20 +1889,23 @@
   color: var(--text-paper-d2);
   margin-right: 2px;
 }
-.kb-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
+/* Interactive chip — a real toggle/button, worn ONLY by a <button> (alongside
+   the base .kb-chip). Button chrome: pointer + hover + white fill, plus the
+   .is-on active state. Kept visually distinct from the passive .kb-chip label
+   above so a control can never masquerade as a static tag (#466). */
+.kb-chip--btn {
   padding: 4px 10px;
-  border: 1px solid var(--paper-3);
   border-radius: 14px;
   background: var(--white);
   font-family: var(--font-body);
-  font-size: var(--text-xs);
-  color: var(--text-paper-d);
   cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.kb-chip.is-on {
+.kb-chip--btn:hover {
+  border-color: var(--accent);
+  color: var(--accent-h);
+}
+.kb-chip--btn.is-on {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent-h);

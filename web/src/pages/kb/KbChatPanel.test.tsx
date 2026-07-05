@@ -64,6 +64,15 @@ describe("KbChatPanel collection picker (#271)", () => {
     expect(screen.queryByText("Coll 8")).not.toBeInTheDocument();
   });
 
+  it("renders the collection pills as interactive chips, not passive tags (#466)", async () => {
+    render(<KbChatPanel chatId={null} client={panelClient(EIGHT)} />);
+    await screen.findByText("Coll 1");
+    // A toggle pill must opt into the interactive `kb-chip--btn` chrome so it
+    // doesn't look identical to a static metadata label (the ① affordance bug).
+    expect(pill("Coll 1").className).toContain("kb-chip--btn");
+    expect(screen.getByTestId("kb-collections-more").className).toContain("kb-chip--btn");
+  });
+
   it("shows no 'more' button when there are 6 or fewer collections", async () => {
     render(<KbChatPanel chatId={null} client={panelClient(EIGHT.slice(0, 5))} />);
     await screen.findByText("Coll 1");
