@@ -209,7 +209,7 @@ export function AppDashboard() {
   return (
     <div
       data-testid="page-app-dashboard"
-      style={{ ...themed, display: "flex", minHeight: "100%", background: "var(--paper)", color: "var(--text-paper)" }}
+      style={{ ...themed, display: "flex", height: "100%", background: "var(--paper)", color: "var(--text-paper)" }}
     >
       {/* SIDEBAR */}
       <aside
