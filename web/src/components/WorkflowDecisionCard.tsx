@@ -63,7 +63,7 @@ export function WorkflowDecisionCard({
             padding: "2px 8px",
             borderRadius: 999,
             background: "var(--warn)",
-            color: "#fff",
+            color: "var(--text-dark)",
             fontSize: pxToRem(11),
             fontWeight: 600,
             textTransform: "uppercase",

@@ -171,7 +171,7 @@ export function ReplayDialog({
             style={{
               marginTop: 18,
               padding: "14px 12px",
-              borderRadius: 7,
+              borderRadius: "var(--radius-btn)",
               background: "var(--paper-2)",
               color: "var(--text-paper-d)",
               fontSize: "var(--text-body-sm)",
@@ -187,7 +187,7 @@ export function ReplayDialog({
             style={{
               marginTop: 18,
               padding: "10px 12px",
-              borderRadius: 7,
+              borderRadius: "var(--radius-btn)",
               background: "rgba(198,138,46,.12)",
               color: "var(--warn)",
               fontSize: "var(--text-body-sm)",

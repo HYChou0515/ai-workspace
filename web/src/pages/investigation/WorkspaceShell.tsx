@@ -2118,7 +2118,7 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
         alignItems: "center",
         justifyContent: "center",
         color: "var(--text-paper-d2)",
-        borderRadius: 3,
+        borderRadius: "var(--radius-chip)",
       }}
     >
       {dirty && !hover ? (
@@ -2694,7 +2694,7 @@ function KernelStatusPill({
           gap: 3,
           padding: "0 6px",
           height: 18,
-          borderRadius: 3,
+          borderRadius: "var(--radius-chip)",
           background: "transparent",
           border: "1px solid rgba(255,255,255,0.2)",
           color: "var(--text-dark)",

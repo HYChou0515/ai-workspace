@@ -68,4 +68,24 @@ describe("design-token integrity (#445)", () => {
 
     expect(offenders, `undefined token references:\n${offenders.join("\n")}`).toEqual([]);
   });
+
+  /**
+   * Guard: no raw white `color` literal. Text painted `#fff` on an accent /
+   * status fill is invisible in neither theme *today*, but it is a hardcoded
+   * hex that dodges the token system — and `--white` is the WRONG fix (it flips
+   * to a dark ink in dark mode, turning the label dark-on-orange). The theme-
+   * stable "light text on a coloured surface" token is `--text-dark`. See #445.
+   */
+  it("uses --text-dark, not a raw white hex, for text on coloured fills", () => {
+    const offenders: string[] = [];
+    for (const file of sourceFiles(SRC)) {
+      const text = readFileSync(file, "utf8");
+      text.split("\n").forEach((line, i) => {
+        if (/\bcolor:\s*["']#(?:fff|ffffff)["']/i.test(line)) {
+          offenders.push(`${relative(SRC, file)}:${i + 1}  ${line.trim()}`);
+        }
+      });
+    }
+    expect(offenders, `raw white color literals:\n${offenders.join("\n")}`).toEqual([]);
+  });
 });

@@ -325,7 +325,7 @@ export function ModelEffortPicker({
               width: 320,
               background: "var(--paper)",
               border: "1px solid var(--paper-3)",
-              borderRadius: 10,
+              borderRadius: "var(--radius-card)",
               boxShadow: "0 12px 40px rgba(20,22,28,.16)",
               zIndex: 81,
               overflow: "hidden",

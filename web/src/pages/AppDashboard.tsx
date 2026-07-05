@@ -611,7 +611,7 @@ function ItemRow({
         <div style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", overflow: "hidden" }}>
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{topics[0] ?? ""}</span>
           {topics.length > 1 && (
-            <span title={topics.slice(1).join(", ")} style={{ flexShrink: 0, padding: "1px 5px", border: "1px solid var(--paper-3)", borderRadius: 3, fontSize: pxToRem(10), color: "var(--text-paper-d)", fontFamily: "var(--font-mono)" }}>
+            <span title={topics.slice(1).join(", ")} style={{ flexShrink: 0, padding: "1px 5px", border: "1px solid var(--paper-3)", borderRadius: "var(--radius-chip)", fontSize: pxToRem(10), color: "var(--text-paper-d)", fontFamily: "var(--font-mono)" }}>
               +{topics.length - 1}
             </span>
           )}

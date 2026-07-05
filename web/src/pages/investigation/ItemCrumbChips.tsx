@@ -49,7 +49,7 @@ function CrumbLink({ label, onClick, title }: { label: string; onClick: () => vo
         color: "var(--text-paper-d)",
         fontSize: "var(--text-body-sm)",
         padding: "1px 4px",
-        borderRadius: 3,
+        borderRadius: "var(--radius-chip)",
       }}
       onMouseEnter={(e) => {
         e.currentTarget.style.color = "var(--accent-h)";

@@ -46,7 +46,7 @@ export function SteerConfirmCard({
             padding: "2px 8px",
             borderRadius: 999,
             background: "var(--info)",
-            color: "#fff",
+            color: "var(--text-dark)",
             fontSize: pxToRem(11),
             fontWeight: 600,
             textTransform: "uppercase",
@@ -110,7 +110,7 @@ export function SteerConfirmCard({
             border: "1px solid var(--paper-3)",
             cursor: busy ? "default" : "pointer",
             background: "var(--ok)",
-            color: "#fff",
+            color: "var(--text-dark)",
             fontWeight: 500,
           }}
         >
