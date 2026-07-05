@@ -11,7 +11,7 @@ export const ICON_NAMES = [
   "play", "term", "user", "users", "settings", "bell", "branch", "sparkle", "arrow_r", "arrow_u",
   "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "panel_left",
   "layers", "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote",
-  "external", "paperclip", "pencil", "home", "kanban", "trash", "workflow",
+  "external", "paperclip", "pencil", "home", "kanban", "trash", "workflow", "wiki",
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -197,6 +197,14 @@ export function Icon({
         <rect x="3" y="4" width="7" height="5" rx="1" {...sp} />
         <rect x="14" y="15" width="7" height="5" rx="1" {...sp} />
         <path d="M6.5 9 V13 A2 2 0 0 0 8.5 15 H14" {...sp} />
+      </>
+    ),
+    // wiki — an open book (two facing pages + spine), distinct from the stacked
+    // `layers` = collections identity (#466 ②).
+    wiki: (
+      <>
+        <path d="M12 6 Q8 4 4 5 V18 Q8 17 12 19 Q16 17 20 18 V5 Q16 4 12 6 Z" {...sp} />
+        <path d="M12 6 V19" {...sp} />
       </>
     ),
     download: <path d="M12 4 V16 M7 11 L12 16 L17 11 M4 20 H20" {...sp} />,

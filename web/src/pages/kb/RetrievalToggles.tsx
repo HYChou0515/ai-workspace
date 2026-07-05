@@ -177,7 +177,7 @@ export function WikiBadge() {
         fontWeight: 500,
       }}
     >
-      <Icon name="layers" size={10} color="var(--accent)" /> Wiki
+      <Icon name="wiki" size={10} color="var(--accent)" /> Wiki
     </span>
   );
 }
