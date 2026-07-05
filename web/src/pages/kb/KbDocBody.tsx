@@ -151,7 +151,7 @@ export function KbDocBody({
       )}
       {snippet && view === "file" && (
         <div className="kb-docviewer__cited">
-          <div className="kb-cites__label">Cited passage</div>
+          <div className="kb-cites__label">{t("kb.doc.citedPassage")}</div>
           <p>{snippet}</p>
         </div>
       )}

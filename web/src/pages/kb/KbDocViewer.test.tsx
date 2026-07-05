@@ -60,7 +60,7 @@ describe("KbDocViewer", () => {
         client={client}
       />,
     );
-    await waitFor(() => expect(screen.getByText("Cited passage")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("引用段落")).toBeInTheDocument());
     // the cited passage is highlighted in place within the rendered body
     await waitFor(() => {
       const mark = container.querySelector("mark.kb-hl");

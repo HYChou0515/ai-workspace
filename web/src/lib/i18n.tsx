@@ -237,6 +237,7 @@ export const messages = {
     "zh-TW": "這份文件目前無法載入，請稍後再試。",
     en: "This document couldn't be loaded. Try again in a moment.",
   },
+  "kb.doc.citedPassage": { "zh-TW": "引用段落", en: "Cited passage" },
 
   // #356 Tune parsing modal — user-facing framing is "adjust how the AI reads
   // this document" (root cause ③: no "parse"/"parsing" jargon in the entry).
