@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ItemChatSummary } from "../api/itemChats";
@@ -46,6 +46,13 @@ describe("ChatSwitcher", () => {
     render(<ChatSwitcher chats={chats} activeChatId="c1" onSelect={() => {}} onManage={() => {}} />);
     fireEvent.click(screen.getByTestId("chat-switcher-trigger"));
     expect(screen.getByTestId("chat-switcher-item-c2")).toHaveTextContent("awaiting");
+  });
+
+  it("exposes each chat's full name via title= on the clipped menu rows (#456)", () => {
+    render(<ChatSwitcher chats={chats} activeChatId="c2" onSelect={() => {}} onManage={() => {}} />);
+    fireEvent.click(screen.getByTestId("chat-switcher-trigger"));
+    const row = within(screen.getByTestId("chat-switcher-item-c1"));
+    expect(row.getByText("Compare Q3 and Q4")).toHaveAttribute("title", "Compare Q3 and Q4");
   });
 
   it("opens the manage modal from the footer item", () => {

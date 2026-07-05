@@ -174,7 +174,7 @@ export function ContextCardsTab({
           className="kb-cards__autogen"
           onClick={() => setShowAutoGen(true)}
         >
-          ⚡ 自動生成
+          {t("kb.cards.autogen")}
         </button>
         {showAutoGen && (
           <AutoGenerateCards

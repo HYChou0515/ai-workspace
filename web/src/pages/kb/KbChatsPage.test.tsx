@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { cleanup, render as rtlRender, screen, waitFor, within } from "@testing-library/react";
 
 import { QueryWrap } from "../../test/queryWrapper";
+import { DialogProvider } from "../../components/Dialog";
 
 // KB views read through TanStack Query — wrap every render with a client.
 const render = (ui: Parameters<typeof rtlRender>[0]) =>
@@ -64,6 +65,13 @@ describe("KbChatsPage", () => {
     expect(onOpenChat).toHaveBeenCalledWith(chat.resource_id);
   });
 
+  it("exposes a chat's full name via title= on the clipped row title (#456)", async () => {
+    await mockKbApi.createChat("Void thresholds across the reflow oven zones", ["col-1"]);
+    render(<KbChatsPage client={mockKbApi} />);
+    const title = await screen.findByText("Void thresholds across the reflow oven zones");
+    expect(title).toHaveAttribute("title", "Void thresholds across the reflow oven zones");
+  });
+
   it("disables only the in-flight row's delete button, leaving other rows clickable", async () => {
     await mockKbApi.createChat("Doomed", []);
     await mockKbApi.createChat("Safe", []);
@@ -86,6 +94,45 @@ describe("KbChatsPage", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /Doomed/ })).not.toBeInTheDocument(),
     );
+  });
+
+  it("confirms before deleting, and only deletes once confirmed (#456)", async () => {
+    await mockKbApi.createChat("Doomed", []);
+    const deleteChat = vi.fn((id: string) => mockKbApi.deleteChat(id));
+    const client = { ...mockKbApi, deleteChat } as typeof mockKbApi;
+    render(
+      <DialogProvider>
+        <KbChatsPage client={client} />
+      </DialogProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: /Delete Doomed/ }));
+    // a confirm dialog appears and NOTHING is deleted yet
+    const dialog = await screen.findByRole("dialog");
+    expect(deleteChat).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Delete Doomed/ })).toBeInTheDocument();
+    // confirming the destructive action deletes the conversation
+    await userEvent.click(within(dialog).getByRole("button", { name: /^Delete$/ }));
+    await waitFor(() => expect(deleteChat).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Delete Doomed/ })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("does not delete when the confirm is cancelled (#456)", async () => {
+    await mockKbApi.createChat("Doomed", []);
+    const deleteChat = vi.fn((id: string) => mockKbApi.deleteChat(id));
+    const client = { ...mockKbApi, deleteChat } as typeof mockKbApi;
+    render(
+      <DialogProvider>
+        <KbChatsPage client={client} />
+      </DialogProvider>,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: /Delete Doomed/ }));
+    await userEvent.click(
+      within(await screen.findByRole("dialog")).getByRole("button", { name: /Cancel/ }),
+    );
+    expect(deleteChat).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Delete Doomed/ })).toBeInTheDocument();
   });
 
   it("starts a new chat", async () => {

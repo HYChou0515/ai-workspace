@@ -38,7 +38,9 @@ describe("tokens.css drift guard", () => {
     const css = readTokens();
     expect(css).toMatch(/--text-paper:\s*#1A1B1F/);
     expect(css).toMatch(/--text-paper-d:\s*#5C5F66/);
-    expect(css).toMatch(/--text-paper-d2:\s*#8A8C90/);
+    // Darkened from #8A8C90 for a ≥4:1 contrast floor on cream (#456); the
+    // contrast.test.ts guard is what actually enforces the ratio.
+    expect(css).toMatch(/--text-paper-d2:\s*#6E7176/);
     expect(css).toMatch(/--text-dark:\s*#F1ECE0/);
     expect(css).toMatch(/--text-dark-d:\s*#9CA0AB/);
   });

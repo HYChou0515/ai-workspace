@@ -263,6 +263,7 @@ function SkillRow({
           </span>
         </div>
         <div
+          title={skill.description}
           style={{
             fontSize: pxToRem(11),
             color: "var(--text-paper-d)",

@@ -89,6 +89,14 @@ describe("SkillsModal (#380)", () => {
     expect(screen.getByTestId("skill-source-my-skill")).toHaveTextContent("workspace");
   });
 
+  it("exposes each skill's full description via title= so a clipped line is readable on hover (#456)", async () => {
+    renderModal();
+    expect(await screen.findByText("co-author a skill")).toHaveAttribute(
+      "title",
+      "co-author a skill",
+    );
+  });
+
   it("seeds the tri-state from the server-resolved pref", async () => {
     renderModal();
     expect(await screen.findByTestId("skill-designed-pptx-off")).toHaveAttribute(

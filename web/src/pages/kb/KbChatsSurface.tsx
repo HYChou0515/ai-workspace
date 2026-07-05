@@ -11,6 +11,7 @@ import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { kbApi, type KbApi } from "../../api/kb";
+import { DialogProvider } from "../../components/Dialog";
 import { useT } from "../../lib/i18n";
 import { KbChatsPage } from "./KbChatsPage";
 import { KbChatView } from "./KbChatView";
@@ -48,6 +49,7 @@ export function KbChatsSurface({ client = kbApi }: { client?: KbApi }) {
   };
 
   return (
+    <DialogProvider>
     <div className="kb-chats-split">
       <KbChatsPage
         client={client}
@@ -70,5 +72,6 @@ export function KbChatsSurface({ client = kbApi }: { client?: KbApi }) {
         )}
       </div>
     </div>
+    </DialogProvider>
   );
 }

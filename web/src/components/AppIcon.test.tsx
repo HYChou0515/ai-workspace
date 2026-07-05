@@ -23,4 +23,13 @@ describe("AppIcon", () => {
     // named icons resolve through the Icon component, not the emoji/svg-string paths
     expect(container.textContent).toBe("");
   });
+
+  it("renders a fallback glyph for an unknown icon key — never an empty tile (#456)", () => {
+    // A manifest icon key that isn't in the icon set (e.g. pm's "kanban" once was)
+    // must still draw something, not a hollow <svg>.
+    const { container } = render(<AppIcon icon="mysteryicon" />);
+    const svg = container.querySelector("svg");
+    expect(svg).toBeInTheDocument();
+    expect(svg?.querySelector("path, rect, circle")).toBeInTheDocument();
+  });
 });

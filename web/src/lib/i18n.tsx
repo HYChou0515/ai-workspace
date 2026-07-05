@@ -539,6 +539,18 @@ export const messages = {
     "zh-TW": "自動生成的卡片提案等你審核；套用後才會進入詞彙表。",
     en: "Auto-generated card proposals awaiting your review; applied ones join the glossary.",
   },
+  // Review inbox shell (CollectionReviewTab) — was hardcoded zh-TW (#456).
+  "kb.review.subtitle": {
+    "zh-TW": "自動生成的卡片提案與待釐清的問題；審核後套用、回答或略過。",
+    en: "Auto-generated card proposals and open questions to clarify — apply, answer, or skip after review.",
+  },
+  "kb.review.empty": {
+    "zh-TW": "目前沒有待審核項目。",
+    en: "Nothing to review right now.",
+  },
+  // Glossary auto-generate controls — were hardcoded zh-TW (#456).
+  "kb.cards.autogen": { "zh-TW": "⚡ 自動生成", en: "⚡ Auto-generate" },
+  "kb.cards.autogen.count": { "zh-TW": "自動生成（{n}）", en: "Auto-generate ({n})" },
   // Glossary (Context Cards) tab empty states.
   "kb.cards.empty.none": {
     "zh-TW": "還沒有詞彙卡。詞彙表讓你定義 AI 該照字面使用的詞——例如「COGS 一律指 Cost of Goods Sold」。用左側「＋ 新增」開始。",
