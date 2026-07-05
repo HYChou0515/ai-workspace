@@ -740,6 +740,15 @@ export const messages = {
     "zh-TW": "{mirror} 次鏡射 · {restore} 次還原取樣",
     en: "{mirror} mirror · {restore} restore samples",
   },
+
+  // Model sanity → fitness verdicts (#465).
+  "sanity.verdicts.title": { "zh-TW": "適配度評分", en: "Fitness scores" },
+  "sanity.verdicts.rescore": { "zh-TW": "重新 AI 評分", en: "Re-score with AI" },
+  "sanity.verdicts.scoring": { "zh-TW": "評分中…", en: "Scoring…" },
+  "sanity.verdicts.empty": {
+    "zh-TW": "尚無評分。跑題後按「重新 AI 評分」讓 AI 評估每個模型的適配度。",
+    en: "No scores yet. Run the questions, then Re-score with AI to rate how each model fits.",
+  },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { type SanityApi, type SanityVerdict, sanityApi } from "../api/sanity";
 import { qk } from "../api/queryKeys";
+import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
 function scoreColor(score: number): string {
@@ -55,6 +56,7 @@ function VerdictCard({ v }: { v: SanityVerdict }) {
 }
 
 export function SanityVerdicts({ client = sanityApi }: { client?: SanityApi }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const { data: meta } = useQuery({ queryKey: qk.sanity.meta, queryFn: () => client.getMeta() });
   const { data: verdicts } = useQuery({
@@ -76,7 +78,7 @@ export function SanityVerdicts({ client = sanityApi }: { client?: SanityApi }) {
   return (
     <div data-testid="sanity-verdicts" style={{ marginTop: 16 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <strong style={{ fontSize: pxToRem(13) }}>適配度評分</strong>
+        <strong style={{ fontSize: pxToRem(13) }}>{t("sanity.verdicts.title")}</strong>
         <button
           type="button"
           data-testid="rescore"
@@ -94,7 +96,7 @@ export function SanityVerdicts({ client = sanityApi }: { client?: SanityApi }) {
             opacity: rescore.isPending ? 0.6 : 1,
           }}
         >
-          {rescore.isPending ? "評分中…" : "重新 AI 評分"}
+          {rescore.isPending ? t("sanity.verdicts.scoring") : t("sanity.verdicts.rescore")}
         </button>
       </div>
       {verdicts && verdicts.length > 0 ? (
@@ -105,7 +107,7 @@ export function SanityVerdicts({ client = sanityApi }: { client?: SanityApi }) {
         </div>
       ) : (
         <p data-testid="verdicts-empty" style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
-          尚無評分。跑題後按「重新 AI 評分」讓 AI 評估每個模型的適配度。
+          {t("sanity.verdicts.empty")}
         </p>
       )}
     </div>
