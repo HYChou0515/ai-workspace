@@ -261,10 +261,10 @@ function KbDocIdeBody({
       // the resolved doc set, so a folder that expands to many docs also confirms.
       if (ids.size >= 2) {
         const choice = await dialog.confirm({
-          title: `Re-index ${ids.size} documents`,
-          body: `Re-index all ${ids.size} selected documents? This restarts indexing for every one.`,
+          title: `Re-read ${ids.size} documents`,
+          body: `Re-read all ${ids.size} selected documents? The AI reads each one again from scratch.`,
           actions: [
-            { id: "go", label: "Re-index", variant: "primary" },
+            { id: "go", label: "Re-read", variant: "primary" },
             { id: "cancel", label: "Cancel" },
           ],
         });
@@ -553,11 +553,11 @@ function KbEditorPane({
           <button
             type="button"
             className="kb-btn"
-            title="Re-chunk + re-embed this document"
+            title="Have the AI re-read this document — updates search and answers"
             disabled={doc.status === "indexing"}
             onClick={() => onReindex(doc.resource_id)}
           >
-            Reindex
+            Re-read
           </button>
         )}
         {doc && onTune && (

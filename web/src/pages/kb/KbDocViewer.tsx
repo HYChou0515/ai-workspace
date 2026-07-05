@@ -137,10 +137,11 @@ export function KbDocViewer({
           <button
             type="button"
             className="kb-btn kb-btn--sm"
+            title="Have the AI re-read this document so search and answers reflect its latest content"
             disabled={reindexMut.isPending}
             onClick={() => reindexMut.mutate()}
           >
-            <Icon name="refresh" size={13} /> Re-index
+            <Icon name="refresh" size={13} /> Re-read
           </button>
           <button
             type="button"

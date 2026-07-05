@@ -114,7 +114,7 @@ describe("<FileTree /> reindex (#98)", () => {
     await user.click(screen.getByText("b.md"));
     await user.keyboard("{/Control}");
     fireEvent.contextMenu(screen.getByText("b.md"));
-    await user.click(await screen.findByRole("button", { name: /^reindex$/i }));
+    await user.click(await screen.findByRole("button", { name: /^re-read$/i }));
     expect(onReindex).toHaveBeenCalledTimes(1);
     expect([...onReindex.mock.calls[0]![0]].sort()).toEqual(["/a.md", "/b.md"]);
   });
@@ -137,7 +137,7 @@ describe("<FileTree /> reindex (#98)", () => {
     const menu = screen.getByTestId("tree-context-menu");
     // selection-wide actions stay …
     expect(within(menu).getByRole("button", { name: /delete/i })).toBeInTheDocument();
-    expect(within(menu).getByRole("button", { name: /^reindex$/i })).toBeInTheDocument();
+    expect(within(menu).getByRole("button", { name: /^re-read$/i })).toBeInTheDocument();
     // … single-only actions are hidden
     expect(within(menu).queryByRole("button", { name: /rename/i })).not.toBeInTheDocument();
     expect(within(menu).queryByRole("button", { name: /new file/i })).not.toBeInTheDocument();
@@ -147,7 +147,7 @@ describe("<FileTree /> reindex (#98)", () => {
   it("offers no Reindex item when the service can't reindex (onReindex omitted)", () => {
     renderTree();
     fireEvent.contextMenu(screen.getByText("a.md"));
-    expect(screen.queryByRole("button", { name: /^reindex$/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^re-read$/i })).not.toBeInTheDocument();
   });
 });
 

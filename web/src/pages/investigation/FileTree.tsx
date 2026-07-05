@@ -1204,7 +1204,7 @@ function TreeContextMenu({
             would be ambiguous, so they're hidden (#98). */}
         {multi ? (
           <>
-            {onReindex && item("Reindex", () => onReindex(node))}
+            {onReindex && item("Re-read", () => onReindex(node))}
             {caps.delete && item("Delete", () => onDelete(node))}
           </>
         ) : (
@@ -1225,7 +1225,7 @@ function TreeContextMenu({
               {caps.upload && item("Upload files here…", () => onUploadHere(dir, "file"))}
               {caps.upload && item("Upload folder here…", () => onUploadHere(dir, "folder"))}
               {topGroup && mutateGroup && sep}
-              {onReindex && item("Reindex", () => onReindex(node))}
+              {onReindex && item("Re-read", () => onReindex(node))}
               {caps.move && item("Rename…", () => onRename(node))}
               {caps.delete && item("Delete", () => onDelete(node))}
               {(topGroup || mutateGroup) && sep}

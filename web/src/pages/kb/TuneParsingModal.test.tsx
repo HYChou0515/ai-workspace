@@ -136,7 +136,7 @@ describe("TuneParsingModal", () => {
       expect(client.setDocumentGuidance).toHaveBeenCalledWith("c1/u/a.pdf", "doc-only steering");
     });
     // the saved-not-in-effect nudge + reindex button appear
-    expect(await screen.findByRole("button", { name: /重新索引這份文件/ })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /重新讀取這份文件/ })).toBeInTheDocument();
   });
 
   it("saving doc-guidance refreshes the doc IDE's cached override (invalidates docMeta)", async () => {
@@ -209,7 +209,7 @@ describe("TuneParsingModal", () => {
     open(client);
     await screen.findByDisplayValue("BASE GUIDANCE");
     fireEvent.click(screen.getByRole("button", { name: /只套用到這份文件/ }));
-    const reindex = await screen.findByRole("button", { name: /重新索引這份文件/ });
+    const reindex = await screen.findByRole("button", { name: /重新讀取這份文件/ });
     fireEvent.click(reindex);
     await waitFor(() => expect(client.reindexDocument).toHaveBeenCalledWith("c1/u/a.pdf"));
   });

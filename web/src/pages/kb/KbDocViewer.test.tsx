@@ -113,7 +113,7 @@ describe("KbDocViewer", () => {
     );
     render(<KbDocViewer documentId="col-1/u/a.md" onClose={() => {}} client={client} />);
     await screen.findByText("a.md");
-    await userEvent.click(screen.getByRole("button", { name: "Re-index" }));
+    await userEvent.click(screen.getByRole("button", { name: "Re-read" }));
     expect(reindexDocument).toHaveBeenCalledWith("col-1/u/a.md");
   });
 

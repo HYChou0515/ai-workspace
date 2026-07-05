@@ -281,15 +281,15 @@ export const messages = {
     en: "Apply to whole collection",
   },
   "kb.tuneParsing.applyConfirm": {
-    "zh-TW": "這會改變整個 collection 之後所有文件的解析。確定要套用嗎?",
-    en: "This changes parsing for every document in the collection on the next re-index. Continue?",
+    "zh-TW": "這會改變整個 collection 之後所有文件的解讀方式。確定要套用嗎?",
+    en: "This changes how every document in the collection is read on the next re-read. Continue?",
   },
   "kb.tuneParsing.clearOverride": { "zh-TW": "清除專屬設定", en: "Clear document override" },
   "kb.tuneParsing.savedNudge": {
-    "zh-TW": "已儲存,尚未生效 — 重新索引後才會套用。",
-    en: "Saved — not in effect yet; re-index to apply.",
+    "zh-TW": "已儲存,尚未生效 — 讓 AI 重新讀取後才會套用。",
+    en: "Saved — not in effect yet; re-read to apply.",
   },
-  "kb.tuneParsing.reindexDoc": { "zh-TW": "重新索引這份文件", en: "Re-index this document" },
+  "kb.tuneParsing.reindexDoc": { "zh-TW": "重新讀取這份文件", en: "Re-read this document" },
   "kb.tuneParsing.running": { "zh-TW": "執行中…", en: "running…" },
   "kb.tuneParsing.applied": { "zh-TW": "已套用", en: "Applied" },
   "kb.tuneParsing.probeFailed": { "zh-TW": "探測失敗", en: "probe failed" },
@@ -491,7 +491,7 @@ export const messages = {
   },
 
   // KB collection page (KbCollectionPage) (#172)
-  "kb.reindexAll": { "zh-TW": "重新索引全部", en: "Re-index all" },
+  "kb.reindexAll": { "zh-TW": "全部重新讀取", en: "Re-read all" },
   "kb.uploadFiles": { "zh-TW": "上傳檔案", en: "Upload files" },
   "kb.uploadFolder": { "zh-TW": "上傳資料夾", en: "Upload folder" },
   "kb.dropToUpload": { "zh-TW": "放開以上傳", en: "Drop to upload" },
