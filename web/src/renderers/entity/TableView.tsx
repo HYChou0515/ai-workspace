@@ -9,7 +9,8 @@
 
 import { useState } from "react";
 
-import type { EntityInstance, EntityType } from "../../api/entities";
+import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
+import { pxToRem } from "../../lib/pxToRem";
 import { refOptions, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
@@ -81,6 +82,32 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
       return next;
     });
 
+  // ── multi-select + batch (§A1) ─────────────────────────────────────────────
+  const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
+  const visibleNumbers = rows.map((r) => r.number);
+  const allSelected = visibleNumbers.length > 0 && visibleNumbers.every((n) => selected.has(n));
+  const toggleRow = (n: number) =>
+    setSelected((s) => {
+      const next = new Set(s);
+      if (next.has(n)) next.delete(n);
+      else next.add(n);
+      return next;
+    });
+  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(visibleNumbers));
+
+  // The closed-domain roles the issue calls out for batch edits (§A1).
+  const batchFields = (type?.fields ?? []).filter((f) => f.role === "status" || f.role === "actor");
+  const batchOptions = (f: EntityFieldSpec): FilterOption[] =>
+    f.role === "status"
+      ? (f.values ?? []).map((v) => ({ value: v, label: v }))
+      : (users ?? []).map((u) => ({ value: u.id, label: u.name || u.id }));
+  // No backend batch endpoint (§A1): fan out N single `update`s — each rides the
+  // useEntityWrite conflict path, so a 409 on some rows shows in the shared
+  // conflict banner while the rest still land ("部分成功 / 部分衝突").
+  const applyBatch = (field: string, value: string) => {
+    for (const n of selected) onPatch(n, { [field]: value });
+  };
+
   return (
     <div>
       <div style={{ position: "relative", marginBottom: 8 }}>
@@ -115,9 +142,44 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
         )}
       </div>
 
+      {selected.size > 0 && (
+        <div
+          role="toolbar"
+          aria-label="batch actions"
+          style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}
+        >
+          <span style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>{selected.size} selected</span>
+          {batchFields.map((f) => (
+            <label key={f.name} style={{ fontSize: pxToRem(13) }}>
+              {f.name}:{" "}
+              <select
+                aria-label={`batch ${f.name}`}
+                value=""
+                onChange={(e) => {
+                  if (e.target.value !== "") applyBatch(f.name, e.target.value);
+                }}
+              >
+                <option value="">— set —</option>
+                {batchOptions(f).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+          <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => setSelected(new Set())}>
+            Clear selection
+          </button>
+        </div>
+      )}
+
       <table style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead>
           <tr>
+            <th style={cellStyle}>
+              <input type="checkbox" aria-label="select all" checked={allSelected} onChange={toggleAll} />
+            </th>
             <th style={cellStyle}>#</th>
             {columns.map((c) => (
               <th key={c} style={cellStyle}>
@@ -130,6 +192,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
           </tr>
           {hasFilters && (
             <tr>
+              <th style={cellStyle} />
               <th style={cellStyle} />
               {columns.map((c) => {
                 const domain = filterDomain(c);
@@ -161,6 +224,14 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
             const warn = warningsByField(e.diagnostics);
             return (
               <tr key={e.number}>
+                <td style={cellStyle}>
+                  <input
+                    type="checkbox"
+                    aria-label={`select ${e.number}`}
+                    checked={selected.has(e.number)}
+                    onChange={() => toggleRow(e.number)}
+                  />
+                </td>
                 <td style={cellStyle}>{e.number}</td>
                 {columns.map((c) => {
                   const warnMsg = warn[c];
@@ -207,6 +278,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, onPa
               silently; the raw body shows so the fix is visible. */}
           {(invalid ?? []).map((e) => (
             <tr key={`invalid-${e.number}`}>
+              <td style={cellStyle} />
               <td style={{ ...cellStyle, color: "var(--err)" }}>#{e.number}</td>
               <td colSpan={Math.max(columns.length, 1)} style={{ ...cellStyle, color: "var(--err)" }}>
                 {e.diagnostics

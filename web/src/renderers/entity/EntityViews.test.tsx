@@ -231,6 +231,43 @@ describe("table sort / filter / column visibility (§A1)", () => {
   });
 });
 
+describe("table multi-select + batch (§A1)", () => {
+  const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title", "status"] };
+  const two = [issue(1, { title: "A", status: "open" }), issue(2, { title: "B", status: "open" })];
+
+  it("selects rows individually and via select-all", () => {
+    render(<EntityViewBody spec={spec} type={issueType} entities={two} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("select all"));
+    expect(screen.getByLabelText("select 1")).toBeChecked();
+    expect(screen.getByLabelText("select 2")).toBeChecked();
+  });
+
+  it("shows the batch toolbar only when at least one row is selected", () => {
+    render(<EntityViewBody spec={spec} type={issueType} entities={two} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.queryByRole("toolbar", { name: "batch actions" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("select 1"));
+    expect(screen.getByRole("toolbar", { name: "batch actions" })).toBeInTheDocument();
+  });
+
+  it("batch-sets a status on every selected row via N update calls (fan-out, §A1)", () => {
+    const onPatch = vi.fn();
+    render(<EntityViewBody spec={spec} type={issueType} entities={two} onCreate={vi.fn()} onPatch={onPatch} />);
+    fireEvent.click(screen.getByLabelText("select all"));
+    fireEvent.change(screen.getByLabelText("batch status"), { target: { value: "done" } });
+    expect(onPatch).toHaveBeenCalledWith(1, { status: "done" });
+    expect(onPatch).toHaveBeenCalledWith(2, { status: "done" });
+    expect(onPatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("clears the selection with the clear button", () => {
+    render(<EntityViewBody spec={spec} type={issueType} entities={two} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    fireEvent.click(screen.getByLabelText("select 1"));
+    fireEvent.click(screen.getByRole("button", { name: /clear selection/i }));
+    expect(screen.getByLabelText("select 1")).not.toBeChecked();
+    expect(screen.queryByRole("toolbar", { name: "batch actions" })).not.toBeInTheDocument();
+  });
+});
+
 describe("ref-traversal in the table (§A4)", () => {
   const refType: EntityType = {
     name: "issue",
