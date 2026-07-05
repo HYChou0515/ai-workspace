@@ -48,6 +48,7 @@ import { ItemCrumbChips } from "./ItemCrumbChips";
 import { useCloseInvestigation } from "../../hooks/useInvestigationMutations";
 import { useUpdateItemField } from "../../hooks/useResources";
 import { formatMetrics } from "./agentLog";
+import { useIsNarrow } from "../../hooks/useMediaQuery";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { usePersistentDeque } from "../../hooks/usePersistentSet";
 import { usePersistentNumber } from "../../hooks/usePersistentNumber";
@@ -81,6 +82,15 @@ const RequestCloseContext = createContext<(groupId: string, path: string) => voi
 export function initialIdeCollapsed(manifest: AppManifest): boolean {
   if (!manifest.function.workspace) return true;
   return manifest.layout.primary_surface === "chat";
+}
+
+/** #464: whether the agent panel renders beside the IDE. On a wide viewport it
+ * always does. On a narrow one it only shows when the chat is already filling
+ * the row (the IDE is collapsed) — side-by-side, the fixed agent width would
+ * force horizontal overflow, so narrow makes the IDE and the chat mutually
+ * exclusive (switched via the TopBar `Workspace` toggle). */
+export function showAgentPanel(isNarrow: boolean, chatFills: boolean): boolean {
+  return !isNarrow || chatFills;
 }
 
 /** #419 §B5: the paths the workspace opens on entry as the main stage. A
@@ -237,6 +247,21 @@ function ShellBody({
   // the chat sits at its resizable width next to the editor.
   const chatFills = !manifest.function.workspace || ideCollapsed;
 
+  // #464: below 768px the 50 + sidebar + editor + agent columns can't coexist.
+  // The shell goes single-column — the agent panel and the IDE become mutually
+  // exclusive (toggled by the TopBar `Workspace` button), and the file-tree
+  // sidebar becomes a tap-to-open overlay so the editor keeps the full width.
+  const isNarrow = useIsNarrow();
+  useEffect(() => {
+    // Track the breakpoint symmetrically: narrow starts editor-first (the sidebar
+    // is a tap-to-open overlay), wide restores the persistent tree column. One-way
+    // (only closing on narrow) would strand a pointer-only user with the desktop
+    // sidebar collapsed after a wide→narrow→wide resize, since the only wide reopen
+    // is ⌘B and the ActivityBar reopen is gated to narrow (#464).
+    setSidebarOpen(!isNarrow);
+  }, [isNarrow]);
+  const agentVisible = showAgentPanel(isNarrow, chatFills);
+
   const recentFiles = usePersistentDeque(
     `rca:recent-files:${item.resource_id}`,
     10,
@@ -391,7 +416,7 @@ function ShellBody({
             }}
           />
         )}
-        <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
+        <div style={{ flex: 1, display: "flex", minHeight: 0, position: "relative" }}>
           {/* #89: the file IDE (activity bar + file tree + editor + bottom
               panel) renders only when the App enables `function.workspace`; a
               workspace=false App (chat-only) shows just the agent panel. The
@@ -400,10 +425,34 @@ function ShellBody({
               gated by allowed_tools), so there is no separate sandbox pane. */}
           {manifest.function.workspace && !ideCollapsed && (
             <>
-          <ActivityBar mode={activityMode} onMode={setActivityMode} />
+          <ActivityBar
+            mode={activityMode}
+            onMode={(m) => {
+              setActivityMode(m);
+              // On narrow the sidebar is a closed overlay; tapping an activity
+              // icon opens it (there's no persistent tree column to reveal).
+              if (isNarrow) setSidebarOpen(true);
+            }}
+          />
+          {isNarrow && sidebarOpen && (
+            // Backdrop behind the overlay sidebar — tap to dismiss (starts after
+            // the 50px activity bar so it stays tappable).
+            <button
+              type="button"
+              aria-label="Close file panel"
+              onClick={() => setSidebarOpen(false)}
+              style={{ position: "absolute", inset: "0 0 0 50px", zIndex: 15, background: "rgba(20,22,28,0.28)", border: "none", cursor: "pointer" }}
+            />
+          )}
           {sidebarOpen && (
             <>
-              <div style={{ width: sidebarW, flexShrink: 0, display: "flex", minWidth: 0 }}>
+              <div
+                style={
+                  isNarrow
+                    ? { position: "absolute", left: 50, top: 0, bottom: 0, zIndex: 20, width: "min(280px, 78vw)", display: "flex", minWidth: 0, background: "var(--paper)", borderRight: "1px solid var(--paper-3)", boxShadow: "6px 0 24px rgba(20,22,28,0.18)" }
+                    : { width: sidebarW, flexShrink: 0, display: "flex", minWidth: 0 }
+                }
+              >
                 <ActivitySidebar
                   mode={activityMode}
                   item={item}
@@ -422,14 +471,16 @@ function ShellBody({
                   }}
                 />
               </div>
-              <ResizeDivider
-                orientation="vertical"
-                ariaLabel="resize sidebar"
-                onResizeStart={() => {
-                  sidebarStart.current = sidebarW;
-                }}
-                onResize={(d) => setSidebarW(sidebarStart.current + d)}
-              />
+              {!isNarrow && (
+                <ResizeDivider
+                  orientation="vertical"
+                  ariaLabel="resize sidebar"
+                  onResizeStart={() => {
+                    sidebarStart.current = sidebarW;
+                  }}
+                  onResize={(d) => setSidebarW(sidebarStart.current + d)}
+                />
+              )}
             </>
           )}
           <EditorArea
@@ -445,19 +496,21 @@ function ShellBody({
             onResizeBottom={(d) => setBottomH(bottomStart.current - d)}
             onToggleBottom={() => setBottomOpen((v) => !v)}
           />
-          <ResizeDivider
-            orientation="vertical"
-            ariaLabel="resize agent panel"
-            onResizeStart={() => {
-              agentStart.current = effectiveAgentW;
-            }}
-            onResize={(d) => setAgentW(Math.min(maxChatW, agentStart.current - d))}
-            collapse={{
-              label: "Collapse workspace",
-              icon: "chev_l",
-              onToggle: () => setIdeCollapsed(true),
-            }}
-          />
+          {!isNarrow && (
+            <ResizeDivider
+              orientation="vertical"
+              ariaLabel="resize agent panel"
+              onResizeStart={() => {
+                agentStart.current = effectiveAgentW;
+              }}
+              onResize={(d) => setAgentW(Math.min(maxChatW, agentStart.current - d))}
+              collapse={{
+                label: "Collapse workspace",
+                icon: "chev_l",
+                onToggle: () => setIdeCollapsed(true),
+              }}
+            />
+          )}
             </>
           )}
           {/* #159: the old 16px collapsed-edge handle is gone — the discoverable
@@ -465,7 +518,12 @@ function ShellBody({
               back, so a near-invisible edge sliver is just noise. */}
           <div
             style={{
-              display: "flex",
+              // #464: on a narrow viewport the agent hides while the IDE is up
+              // (mutually exclusive, toggled via `Workspace`) so the fixed agent
+              // width can't force overflow. Hidden, not unmounted — the chat and
+              // its live stream survive the toggle. `display:none` also drops it
+              // from the flex row so it consumes no width.
+              display: agentVisible ? "flex" : "none",
               flexDirection: "column",
               height: "100%",
               minHeight: 0,
@@ -580,16 +638,24 @@ export function TopBar({
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
+  const isNarrow = useIsNarrow();
   return (
     <div
       style={{
-        height: 52,
+        // Narrow: the trailing control cluster (Workspace toggle + palette +
+        // Members + Close + Notifications + avatar) can't fit one 360px row, so
+        // wrap instead of overflowing — page-item clips overflow with no scroll,
+        // which would strand the Close (the only resolve entry point) (#464).
+        height: isNarrow ? "auto" : 52,
+        minHeight: 52,
         flexShrink: 0,
         background: "var(--white)",
         borderBottom: "1px solid var(--paper-3)",
         display: "flex",
         alignItems: "center",
-        padding: "0 16px",
+        flexWrap: isNarrow ? "wrap" : "nowrap",
+        rowGap: isNarrow ? 8 : undefined,
+        padding: isNarrow ? "8px 12px" : "0 16px",
         gap: 12,
       }}
     >
@@ -598,6 +664,10 @@ export function TopBar({
           display: "flex",
           alignItems: "center",
           gap: 8,
+          minWidth: 0,
+          flexShrink: 1,
+          flexWrap: isNarrow ? "wrap" : "nowrap",
+          rowGap: isNarrow ? 6 : undefined,
           fontSize: "var(--text-body-sm)",
           color: "var(--text-paper-d)",
         }}
@@ -671,7 +741,10 @@ export function TopBar({
           onClick={onCommandPalette}
           title={`Go to file (${modCombo("P")})`}
           style={{
-            width: 320,
+            // 320px fixed would overflow a 360px viewport; on narrow give it its
+            // own full-width row (flex-basis 100%) so it fits and stays usable.
+            width: isNarrow ? "auto" : 320,
+            flex: isNarrow ? "1 1 100%" : "0 0 auto",
             height: 28,
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",

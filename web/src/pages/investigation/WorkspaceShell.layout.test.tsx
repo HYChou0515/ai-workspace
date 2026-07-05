@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AppItem, AppManifest } from "../../api/types";
-import { TopBar, initialIdeCollapsed, mainSurfaceTabs } from "./WorkspaceShell";
+import { TopBar, initialIdeCollapsed, mainSurfaceTabs, showAgentPanel } from "./WorkspaceShell";
 
 // The TopBar hosts the live PresenceBar (#455), which opens an SSE subscription +
 // reads the current user through TanStack Query. These layout tests render TopBar
@@ -59,6 +59,23 @@ describe("initialIdeCollapsed (#159)", () => {
 
   it("opens the workspace up front for a views-first App (#419 §B5)", () => {
     expect(initialIdeCollapsed(manifest({ primary_surface: "views", views: ["/views/board.ai.yaml"] }))).toBe(false);
+  });
+});
+
+describe("showAgentPanel (#464)", () => {
+  it("always shows the agent beside the IDE on a wide viewport", () => {
+    expect(showAgentPanel(false, false)).toBe(true); // IDE open, wide
+    expect(showAgentPanel(false, true)).toBe(true); // chat filling, wide
+  });
+
+  it("hides the agent on a narrow viewport while the IDE is up (mutual exclusion)", () => {
+    // Narrow + IDE showing (chat not filling) → the fixed-width agent would force
+    // horizontal overflow, so it's hidden until the IDE is collapsed.
+    expect(showAgentPanel(true, false)).toBe(false);
+  });
+
+  it("shows the agent full-width on narrow once the IDE is collapsed", () => {
+    expect(showAgentPanel(true, true)).toBe(true);
   });
 });
 

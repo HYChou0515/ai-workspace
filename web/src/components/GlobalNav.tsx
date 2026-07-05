@@ -138,6 +138,10 @@ function Breadcrumbs() {
         alignItems: "center",
         gap: 6,
         minWidth: 0,
+        // #464: shrink + clip so a long crumb (e.g. the App title on a narrow
+        // viewport) can't push the whole global bar past the viewport edge.
+        flexShrink: 1,
+        overflow: "hidden",
         fontSize: "var(--text-body-sm)",
         color: "var(--text-paper-d)",
       }}
@@ -154,6 +158,12 @@ function Breadcrumbs() {
                   color: "var(--text-paper-d)",
                   textDecoration: "none",
                   whiteSpace: "nowrap",
+                  // An intermediate crumb shrinks + ellipsizes before the last
+                  // (current-page) one, which stays readable (#464).
+                  minWidth: 0,
+                  flexShrink: 1,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
                 }}
               >
                 {crumb.label}
@@ -166,6 +176,8 @@ function Breadcrumbs() {
                   whiteSpace: "nowrap",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
+                  minWidth: 0,
+                  flexShrink: 1,
                 }}
               >
                 {crumb.label}
