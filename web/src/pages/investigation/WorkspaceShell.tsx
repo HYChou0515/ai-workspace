@@ -16,6 +16,7 @@ import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
 import { Icon, type IconName } from "../../components/Icon";
+import { ModalShell } from "../../components/ModalShell";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
 import { CrossHandle } from "../../components/CrossHandle";
 import { ResizeDivider } from "../../components/ResizeDivider";
@@ -25,6 +26,7 @@ import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
+import { OpenFileProvider } from "../../hooks/openFile";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -373,6 +375,7 @@ function ShellBody({
   }, []);
 
   return (
+    <OpenFileProvider value={openFile}>
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
         data-testid="page-item"
@@ -568,13 +571,14 @@ function ShellBody({
         />
       </div>
     </RequestCloseContext.Provider>
+    </OpenFileProvider>
   );
 }
 
 /** "Edit details" modal — a schema-driven {@link ItemForm} for the App item
  * (#89 P7b), replacing the RCA-specific NewInvestigationModal. Submits the
  * non-empty values as a patch; the shell PUTs the merged item. */
-function EditItemModal({
+export function EditItemModal({
   manifest,
   item,
   onClose,
@@ -586,40 +590,23 @@ function EditItemModal({
   onSubmit: (patch: Record<string, unknown>) => void;
 }) {
   return (
-    <div
-      role="dialog"
-      aria-modal
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,.35)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 60,
-      }}
+    <ModalShell
+      onClose={onClose}
+      labelledBy="edit-item-title"
+      width={460}
+      panelStyle={{ padding: 20 }}
+      data-testid="edit-item"
     >
-      <div
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 460,
-          maxWidth: "90vw",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          padding: 20,
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-        }}
-      >
-        <h2 style={{ marginTop: 0, fontSize: pxToRem(18) }}>Edit {manifest.item.noun}</h2>
-        <ItemForm
-          manifest={manifest}
-          initialValues={item as Record<string, unknown>}
-          submitLabel="Save"
-          onSubmit={(values) => onSubmit(pruneEmpty(values))}
-        />
-      </div>
-    </div>
+      <h2 id="edit-item-title" style={{ marginTop: 0, fontSize: pxToRem(18) }}>
+        Edit {manifest.item.noun}
+      </h2>
+      <ItemForm
+        manifest={manifest}
+        initialValues={item as Record<string, unknown>}
+        submitLabel="Save"
+        onSubmit={(values) => onSubmit(pruneEmpty(values))}
+      />
+    </ModalShell>
   );
 }
 

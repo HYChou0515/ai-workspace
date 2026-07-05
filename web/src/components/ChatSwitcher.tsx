@@ -24,7 +24,9 @@ function ChatRow({ chat }: { chat: ItemChatSummary }) {
       {chat.run_id && (
         <Icon name="settings" size={12} color="var(--text-paper-d)" />
       )}
-      <span className="chat-switcher__label">{chatLabel(chat)}</span>
+      <span className="chat-switcher__label" title={chatLabel(chat)}>
+        {chatLabel(chat)}
+      </span>
       {badge && (
         <span className={`chat-switcher__badge chat-switcher__badge--${badge.tone}`}>
           {badge.symbol} {badge.label}
@@ -83,7 +85,9 @@ export function ChatSwitcher({
         onClick={() => setOpen((v) => !v)}
         data-testid="chat-switcher-trigger"
       >
-        <span className="chat-switcher__current">{active ? chatLabel(active) : "No chat"}</span>
+        <span className="chat-switcher__current" title={active ? chatLabel(active) : undefined}>
+          {active ? chatLabel(active) : "No chat"}
+        </span>
         <Icon name="chev_d" size={12} color="var(--text-paper-d)" />
       </button>
       {open && (

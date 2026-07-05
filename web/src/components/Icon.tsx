@@ -4,52 +4,23 @@
  * visual weight. Add new icons as the UI needs them.
  */
 
-export type IconName =
-  | "search"
-  | "plus"
-  | "minus"
-  | "x"
-  | "chev_d"
-  | "chev_r"
-  | "chev_l"
-  | "folder"
-  | "file"
-  | "chat"
-  | "play"
-  | "term"
-  | "user"
-  | "users"
-  | "settings"
-  | "bell"
-  | "branch"
-  | "sparkle"
-  | "arrow_r"
-  | "arrow_u"
-  | "arrow_d"
-  | "git"
-  | "dots_h"
-  | "dots_v"
-  | "eye"
-  | "pin"
-  | "clock"
-  | "check"
-  | "split"
-  | "panel_left"
-  | "kanban"
-  | "layers"
-  | "download"
-  | "upload"
-  | "filter"
-  | "tag"
-  | "bug"
-  | "flame"
-  | "refresh"
-  | "undo"
-  | "quote"
-  | "external"
-  | "paperclip"
-  | "pencil"
-  | "home";
+/** The registered icon keys, as a runtime tuple so callers holding an arbitrary
+ * string (e.g. an App manifest's `icon`) can test membership before rendering. */
+export const ICON_NAMES = [
+  "search", "plus", "minus", "x", "chev_d", "chev_r", "chev_l", "folder", "file", "chat",
+  "play", "term", "user", "users", "settings", "bell", "branch", "sparkle", "arrow_r", "arrow_u",
+  "arrow_d", "git", "dots_h", "dots_v", "eye", "pin", "clock", "check", "split", "panel_left",
+  "layers", "download", "upload", "filter", "tag", "bug", "flame", "refresh", "undo", "quote",
+  "external", "paperclip", "pencil", "home", "kanban", "trash",
+] as const;
+
+export type IconName = (typeof ICON_NAMES)[number];
+
+/** True when `x` is a registered icon key. Lets a caller route an unknown key to
+ * a fallback instead of `Icon` drawing (and now back-filling) a hollow svg (#456). */
+export function isIconName(x: string): x is IconName {
+  return (ICON_NAMES as readonly string[]).includes(x);
+}
 
 export function Icon({
   name,
@@ -268,6 +239,15 @@ export function Icon({
         <path d="M5 9.5 V20 H19 V9.5" {...sp} />
       </>
     ),
+    // trash — a bin (lid + body + slats). Signals destroy, unlike a bare "x".
+    trash: (
+      <>
+        <path d="M4 7 H20" {...sp} />
+        <path d="M9 7 V5 A1 1 0 0 1 10 4 H14 A1 1 0 0 1 15 5 V7" {...sp} />
+        <path d="M6 7 L7 20 A1 1 0 0 0 8 21 H16 A1 1 0 0 0 17 20 L18 7" {...sp} />
+        <path d="M10 11 V17 M14 11 V17" {...sp} />
+      </>
+    ),
     quote: (
       <path
         d="M7 7 H10 V12 Q10 15 7 16 M14 7 H17 V12 Q17 15 14 16"
@@ -291,7 +271,9 @@ export function Icon({
       style={{ display: "inline-block", verticalAlign: "middle", flexShrink: 0, ...style }}
       aria-hidden
     >
-      {paths[name]}
+      {/* An unregistered key (e.g. a manifest icon the set doesn't have) must not
+          render a hollow <svg> — fall back to a neutral tile glyph (#456). */}
+      {paths[name] ?? <rect x="4" y="4" width="16" height="16" rx="3" {...sp} />}
     </svg>
   );
 }

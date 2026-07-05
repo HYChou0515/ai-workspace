@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { KbContextCard } from "../../api/kb";
 import { _resetKbMock, mockKbApi } from "../../api/kbMock";
+import { LocaleProvider } from "../../lib/i18n";
 import { QueryWrap } from "../../test/queryWrapper";
 import { ContextCardsTab } from "./ContextCardsTab";
 
@@ -41,7 +42,27 @@ describe("ContextCardsTab (#106)", () => {
   beforeEach(() => _resetKbMock());
   afterEach(() => {
     cleanup();
+    localStorage.clear();
     vi.restoreAllMocks(); // spies are per-test — don't let call counts bleed across tests
+  });
+
+  it("localizes the auto-generate button — English under an English locale (#456)", async () => {
+    localStorage.setItem("ws.locale", "en");
+    rtlRender(
+      <LocaleProvider>
+        <MemoryRouter initialEntries={["/kb/collections/col-1/cards"]}>
+          <Routes>
+            <Route
+              path="/kb/collections/:cid/cards"
+              element={<ContextCardsTab collectionId="col-1" client={mockKbApi} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </LocaleProvider>,
+      { wrapper: QueryWrap },
+    );
+    expect(await screen.findByRole("button", { name: /Auto-generate/i })).toBeInTheDocument();
+    expect(screen.queryByText("⚡ 自動生成")).not.toBeInTheDocument();
   });
 
   it("shows a loading placeholder while cards are still fetching — not the empty copy", () => {

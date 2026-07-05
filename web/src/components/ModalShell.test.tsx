@@ -67,4 +67,61 @@ describe("ModalShell", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  it("moves focus into the modal on open (#467)", () => {
+    render(
+      <ModalShell onClose={() => {}} ariaLabel="m">
+        <button type="button">first</button>
+        <button type="button">second</button>
+      </ModalShell>,
+    );
+    expect(screen.getByText("first")).toHaveFocus();
+  });
+
+  it("restores focus to the trigger when it closes (#467)", () => {
+    const trigger = document.createElement("button");
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(trigger).toHaveFocus();
+
+    const { unmount } = render(
+      <ModalShell onClose={() => {}} ariaLabel="m">
+        <button type="button">inside</button>
+      </ModalShell>,
+    );
+    // focus was pulled into the modal, off the trigger
+    expect(trigger).not.toHaveFocus();
+
+    unmount();
+    expect(trigger).toHaveFocus();
+    trigger.remove();
+  });
+
+  it("traps Tab at the last focusable, wrapping to the first (#467)", () => {
+    render(
+      <ModalShell onClose={() => {}} ariaLabel="m">
+        <button type="button">first</button>
+        <button type="button">last</button>
+      </ModalShell>,
+    );
+    const first = screen.getByText("first");
+    const last = screen.getByText("last");
+    last.focus();
+    fireEvent.keyDown(last, { key: "Tab" });
+    expect(first).toHaveFocus();
+  });
+
+  it("traps Shift+Tab at the first focusable, wrapping to the last (#467)", () => {
+    render(
+      <ModalShell onClose={() => {}} ariaLabel="m">
+        <button type="button">first</button>
+        <button type="button">last</button>
+      </ModalShell>,
+    );
+    const first = screen.getByText("first");
+    const last = screen.getByText("last");
+    first.focus();
+    fireEvent.keyDown(first, { key: "Tab", shiftKey: true });
+    expect(last).toHaveFocus();
+  });
 });

@@ -13,19 +13,21 @@
  * structured preview (§E, #361).
  */
 
+import { useMemo } from "react";
+
+import type { EntityHealthFinding } from "../../api/entities";
 import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
-import {
-  useEntities,
-  useEntityCatalog,
-  useEntityHealth,
-  useEntityMutations,
-} from "../../hooks/useEntities";
+import { useOpenFile } from "../../hooks/openFile";
+import { useEntities, useEntityCatalog, useEntityHealth, useReferencedRecords } from "../../hooks/useEntities";
+import { useEntityWrite } from "../../hooks/useEntityWrite";
+import { useUsers } from "../../hooks/useUsers";
 import { useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { TextRenderer } from "../TextRenderer";
 import { YamlTree } from "../YamlTree";
 import { EntityViewBody, HealthView, parseViewSpec } from "./EntityViews";
+import { buildRefIndex, referencedTypes } from "./refTraversal";
 
 export function AiYamlRenderer({ path }: { path: string }) {
   const { isEditing } = useEditMode();
@@ -43,7 +45,16 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const catalogQ = useEntityCatalog(slug, itemId);
   const listQ = useEntities(slug, itemId, entityName);
   const healthQ = useEntityHealth(slug, itemId, isHealth);
-  const mut = useEntityMutations(slug, itemId, entityName);
+  const write = useEntityWrite(slug, itemId, entityName);
+  const users = useUsers();
+  const openFile = useOpenFile();
+
+  // Resolve the type + load its referenced types BEFORE the early returns, so the
+  // ref-record queries stay unconditional (rules of hooks). `milestone.title`
+  // columns + ref pickers read these at render time (§A4).
+  const type = catalogQ.data?.types.find((t) => t.name === entityName) ?? null;
+  const refTypes = useMemo(() => referencedTypes(type), [type]);
+  const refIndex = buildRefIndex(useReferencedRecords(slug, itemId, refTypes));
 
   if (isEditing(path)) return <TextRenderer path={path} />;
   if (entry.status === "loading") {
@@ -55,10 +66,18 @@ export function AiYamlRenderer({ path }: { path: string }) {
   if (!spec) return <YamlTree text={entry.text} />;
 
   if (spec.view === "health") {
-    return <HealthView title={spec.title} findings={healthQ.data?.findings ?? []} />;
+    // Click-to-fix: resolve the finding's type → `records_path` from the catalog
+    // and open its record file. Only offered when a shell publishes an opener
+    // (§F, #454); an unknown type just no-ops rather than opening a bad path.
+    const onJump = openFile
+      ? (finding: EntityHealthFinding) => {
+          const t = catalogQ.data?.types.find((ty) => ty.name === finding.type_name);
+          if (t) openFile(`/${t.records_path}/${finding.number}.md`);
+        }
+      : undefined;
+    return <HealthView title={spec.title} findings={healthQ.data?.findings ?? []} onJump={onJump} />;
   }
 
-  const type = catalogQ.data?.types.find((t) => t.name === spec.entity) ?? null;
   const list = listQ.data;
 
   return (
@@ -67,9 +86,16 @@ export function AiYamlRenderer({ path }: { path: string }) {
       type={type}
       entities={list?.entities ?? []}
       invalid={list?.invalid ?? []}
-      onCreate={(args) => mut.create(args)}
-      onPatch={(number, patch) => mut.patch(number, patch)}
-      busy={mut.isCreating || mut.isPatching}
+      users={users}
+      refIndex={refIndex}
+      catalogDiagnostics={catalogQ.data?.diagnostics ?? []}
+      // catalog loaded but this type isn't in it → its schema failed to load (§D).
+      schemaMissing={catalogQ.isSuccess && !type}
+      onCreate={write.create}
+      onPatch={write.patch}
+      busy={write.isBusy}
+      conflicts={write.conflicts}
+      onDismissConflict={write.dismissConflict}
     />
   );
 }

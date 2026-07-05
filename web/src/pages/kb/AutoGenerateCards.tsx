@@ -14,6 +14,7 @@ import { useMemo, useState } from "react";
 
 import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { useT } from "../../lib/i18n";
 import { FileTree } from "../investigation/FileTree";
 import { buildCardGenSources } from "./cardGenSources";
 import { fetchAllDocs } from "./useCollectionDocs";
@@ -30,6 +31,7 @@ export function AutoGenerateCards({
   /** Fired once the run is enqueued (e.g. to refresh the 待審核 tab's list). */
   onGenerated?: (runId: string) => void;
 }) {
+  const t = useT();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [term, setTerm] = useState("");
   const [started, setStarted] = useState(false);
@@ -141,7 +143,7 @@ export function AutoGenerateCards({
                 disabled={selected.size === 0 || generateMut.isPending}
                 onClick={() => generateMut.mutate()}
               >
-                自動生成（{selected.size}）
+                {t("kb.cards.autogen.count", { n: selected.size })}
               </button>
             </footer>
           </div>

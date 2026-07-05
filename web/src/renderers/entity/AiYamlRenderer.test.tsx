@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { EditModeProvider } from "../../hooks/editMode";
 import { FileBufferProvider, FileBufferStore } from "../../hooks/fileBuffer";
+import { type OpenFile, OpenFileProvider } from "../../hooks/openFile";
 import { WorkspaceSlugProvider } from "../../hooks/useWorkspaceSlug";
 import { QueryWrap } from "../../test/queryWrapper";
 
@@ -13,6 +14,7 @@ import { QueryWrap } from "../../test/queryWrapper";
 const mock = vi.hoisted(() => ({
   catalog: vi.fn(),
   list: vi.fn(),
+  health: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
 }));
@@ -31,6 +33,7 @@ const ISSUE_TYPE = {
 };
 
 const BOARD = "view: board\nentity: issue\ngroup_by: status\ncard:\n  title: title\n";
+const HEALTH = "view: health\ntitle: Project health\n";
 
 function storeWith(text: string, path: string): FileBufferStore {
   return new FileBufferStore({
@@ -39,10 +42,10 @@ function storeWith(text: string, path: string): FileBufferStore {
   });
 }
 
-function renderView(path: string, text: string) {
+function renderView(path: string, text: string, openFile?: OpenFile) {
   const store = storeWith(text, path);
   store.ensureLoaded(path);
-  return render(
+  const tree = (
     <QueryWrap>
       <WorkspaceSlugProvider value="pm">
         <FileServiceProvider value={investigationFileService("pm", "item1")}>
@@ -53,8 +56,9 @@ function renderView(path: string, text: string) {
           </EditModeProvider>
         </FileServiceProvider>
       </WorkspaceSlugProvider>
-    </QueryWrap>,
+    </QueryWrap>
   );
+  return render(openFile ? <OpenFileProvider value={openFile}>{tree}</OpenFileProvider> : tree);
 }
 
 afterEach(() => {
@@ -85,5 +89,33 @@ describe("AiYamlRenderer", () => {
     // the raw yaml tree shows the key; no entity fetch is attempted
     expect(await screen.findByText(/just/)).toBeInTheDocument();
     expect(mock.list).not.toHaveBeenCalled();
+  });
+
+  it("jumps a health finding to its record file via the openFile context", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.health.mockResolvedValue({
+      findings: [{ type_name: "issue", number: 2, level: "error", message: "boom" }],
+    });
+    const openFile = vi.fn();
+
+    renderView("/views/health.ai.yaml", HEALTH, openFile);
+
+    // the finding is a clickable button once catalog + health resolve
+    const btn = await screen.findByRole("button", { name: /issue #2/ });
+    fireEvent.click(btn);
+    // records_path "issues" + number 2 → the record file the operator must fix
+    expect(openFile).toHaveBeenCalledWith("/issues/2.md");
+  });
+
+  it("renders health findings as plain rows when no openFile context is present", async () => {
+    mock.catalog.mockResolvedValue({ types: [ISSUE_TYPE], diagnostics: [] });
+    mock.health.mockResolvedValue({
+      findings: [{ type_name: "issue", number: 2, level: "error", message: "boom" }],
+    });
+
+    renderView("/views/health.ai.yaml", HEALTH);
+
+    expect(await screen.findByText("boom")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /issue #2/ })).not.toBeInTheDocument();
   });
 });

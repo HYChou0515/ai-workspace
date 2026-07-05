@@ -46,4 +46,15 @@ describe("ToolsChecklist", () => {
     fireEvent.click(screen.getByTestId("tool-rca-tools-follow"));
     expect(onChange).toHaveBeenCalledWith({});
   });
+
+  it("exposes the full label + description via title= so a clipped row is readable on hover (#456)", () => {
+    // Pinned off → the row shows the tool's own description (not the follow hint),
+    // and both the label and that description are single-line clipped with ellipsis.
+    render(<ToolsChecklist tools={TOOLS} prefs={{ "rca-tools": false }} onChange={vi.fn()} />);
+    expect(screen.getByText("RCA Tools")).toHaveAttribute("title", "RCA Tools");
+    expect(screen.getByText("Bundled tools: Spc, Pareto.")).toHaveAttribute(
+      "title",
+      "Bundled tools: Spc, Pareto.",
+    );
+  });
 });

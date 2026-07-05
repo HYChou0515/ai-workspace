@@ -10,7 +10,10 @@
  * existing panel styles (width / padding / display / gap) via `panelStyle`,
  * which override the shell defaults, so its content renders exactly as before.
  */
-import { useEffect, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, type CSSProperties, type ReactNode } from "react";
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function ModalShell({
   onClose,
@@ -47,6 +50,8 @@ export function ModalShell({
   panelClassName?: string;
   "data-testid"?: string;
 }) {
+  const panelRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     if (!closeOnEscape) return;
     const onKey = (e: KeyboardEvent) => {
@@ -58,6 +63,43 @@ export function ModalShell({
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose, closeOnEscape]);
+
+  // Focus management (#467): pull focus into the panel on open, trap Tab within
+  // it so keyboard users can't tab out to the page behind, and restore focus to
+  // whatever was focused before (the trigger) on close. Runs once per open.
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel) return;
+    const restoreTo = document.activeElement as HTMLElement | null;
+    const focusables = () => Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE));
+
+    (focusables()[0] ?? panel).focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const els = focusables();
+      if (els.length === 0) {
+        e.preventDefault();
+        panel.focus();
+        return;
+      }
+      const first = els[0];
+      const last = els[els.length - 1];
+      const active = document.activeElement;
+      if (e.shiftKey && (active === first || !panel.contains(active))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && (active === last || !panel.contains(active))) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      restoreTo?.focus?.();
+    };
+  }, []);
 
   return (
     <div
@@ -77,12 +119,14 @@ export function ModalShell({
       }}
     >
       <div
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={ariaLabel}
         aria-labelledby={labelledBy}
         data-testid={testId}
         className={panelClassName}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         style={{
           background: "var(--white)",
