@@ -32,12 +32,15 @@ export function CollectionsButton({ count, onClick }: { count: number; onClick: 
         borderRadius: "var(--radius-btn)",
         cursor: "pointer",
         border: `1px solid ${empty ? "var(--accent)" : "var(--paper-3)"}`,
-        background: empty ? "var(--accent)" : "var(--white)",
-        color: empty ? "var(--white)" : "var(--text-paper)",
+        // Empty = a soft-accent NUDGE (tint + accent border/text), not a solid
+        // --accent fill — that weight is reserved for the page's primary action
+        // (#466). Matches the .btn[data-active] soft-accent convention.
+        background: empty ? "var(--accent-soft)" : "var(--white)",
+        color: empty ? "var(--accent)" : "var(--text-paper)",
         whiteSpace: "nowrap",
       }}
     >
-      <Icon name="layers" size={12} color={empty ? "var(--white)" : "var(--text-paper-d)"} />
+      <Icon name="layers" size={12} color={empty ? "var(--accent)" : "var(--text-paper-d)"} />
       <span>{label}</span>
     </button>
   );
