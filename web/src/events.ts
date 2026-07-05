@@ -104,6 +104,13 @@ export type FileChanged = {
   kind: "written" | "moved" | "copied" | "deleted" | "dir_created";
 };
 
+/** #455: the live roster of an item's stream — the distinct users currently
+ * subscribed. Broadcast when a viewer joins/leaves. Broadcast-only, per-pod. */
+export type Presence = {
+  type: "presence";
+  users: string[];
+};
+
 /* ------------------------------------------------------------------ */
 /* Workflow run events (#100, manual §12) — phase/step observability.   */
 /* Ride the same per-item stream; the FE overlays them on the manifest  */
@@ -189,6 +196,7 @@ export type AgentEvent =
   | FailoverSwitch
   | UserMessage
   | FileChanged
+  | Presence
   | WorkflowEvent;
 
 /** Terminal events close the SSE stream and re-enable the composer. */

@@ -34,6 +34,7 @@ from .events import (
     AgentMetrics,
     MaxTurnsExceeded,
     MessageDelta,
+    Presence,
     RepetitionStopped,
     RunCancelled,
     RunError,
@@ -366,12 +367,19 @@ class _WorkspaceSession:
     queue: asyncio.Queue[_QueueItem] = field(default_factory=asyncio.Queue)
     worker: asyncio.Task | None = None
     current_turn: asyncio.Task | None = None
-    subscribers: set[asyncio.Queue[AgentEvent]] = field(default_factory=set)
+    # queue → the subscriber's user id ("" for an anonymous stream, e.g. per-chat /
+    # workflow streams that don't participate in presence). #455 tracks it here so
+    # a join/leave can broadcast the roster.
+    subscribers: dict[asyncio.Queue[AgentEvent], str] = field(default_factory=dict)
 
     def publish(self, event: AgentEvent) -> None:
         """Fan one event out to every live subscriber (#43 broadcast)."""
         for q in self.subscribers:
             q.put_nowait(event)
+
+    def roster(self) -> list[str]:
+        """The distinct, non-anonymous viewers currently subscribed (#455 presence)."""
+        return sorted({u for u in self.subscribers.values() if u})
 
 
 class ChatTurnEngine:
@@ -552,28 +560,37 @@ class ChatTurnEngine:
         if session is not None:
             session.publish(event)
 
-    def subscribe(self, key: str) -> AsyncIterator[AgentEvent]:
+    def subscribe(self, key: str, user_id: str = "") -> AsyncIterator[AgentEvent]:
         """#43: register a live broadcast subscriber and return an async iterator
         of its events. The endpoint wraps this in an SSE response; all viewers of
         an investigation share its single event stream. Live-only — the caller
-        loads past messages via the conversation resource."""
+        loads past messages via the conversation resource.
+
+        #455: `user_id` tags this subscriber for the presence roster; a non-empty
+        id makes a join / leave broadcast the updated roster (`Presence`) to every
+        viewer (including this one, so it sees who's already here). An empty id (the
+        per-chat / workflow streams) subscribes without touching presence."""
         session = self._ws_session(key)
         q: asyncio.Queue[AgentEvent] = asyncio.Queue()
-        session.subscribers.add(q)
+        session.subscribers[q] = user_id
+        if user_id:
+            session.publish(Presence(users=session.roster()))
 
         async def _gen() -> AsyncIterator[AgentEvent]:
             try:
                 while True:
                     yield await q.get()
             finally:
-                session.subscribers.discard(q)
+                session.subscribers.pop(q, None)
+                if user_id:
+                    session.publish(Presence(users=session.roster()))
 
         return _gen()
 
-    def subscribe_sse(self, key: str) -> AsyncIterator[str]:
+    def subscribe_sse(self, key: str, user_id: str = "") -> AsyncIterator[str]:
         """#43: like `subscribe`, but yields SSE-encoded frames so the endpoint is
         a trivial `StreamingResponse(turn_engine.subscribe_sse(id))` wrapper."""
-        events = self.subscribe(key)
+        events = self.subscribe(key, user_id)
 
         async def _frames() -> AsyncIterator[str]:
             async for ev in events:

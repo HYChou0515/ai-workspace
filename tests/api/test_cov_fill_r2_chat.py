@@ -82,7 +82,7 @@ def _finite_sse(monkeypatch):
     ``require_chat`` + ``return StreamingResponse(subscribe_sse(...))``) still
     runs in full — which is the chat_routes.py coverage we're after."""
 
-    def _fake_subscribe_sse(self, key: str) -> AsyncIterator[str]:
+    def _fake_subscribe_sse(self, key: str, user_id: str = "") -> AsyncIterator[str]:
         async def _frames() -> AsyncIterator[str]:
             return
             yield  # pragma: no cover — marks this an async generator

@@ -16,6 +16,7 @@ import { ItemForm, pruneEmpty } from "../../components/ItemForm";
 import { ymd } from "../../lib/date";
 import { modCombo } from "../../lib/platform";
 import { ActivityFeed } from "../../components/ActivityFeed";
+import { PresenceBar } from "../../components/PresenceBar";
 import { Icon, type IconName } from "../../components/Icon";
 import { ModalShell } from "../../components/ModalShell";
 import { Popover, PopoverDivider, PopoverItem } from "../../components/Popover";
@@ -690,6 +691,10 @@ export function TopBar({
         </button>
       )}
 
+
+      {/* #455: live viewers of this item (who else is here right now) — distinct
+          from the declared Members count beside it. */}
+      <PresenceBar slug={manifest.slug} itemId={item.resource_id} />
 
       <Popover
         align="end"
