@@ -13,6 +13,7 @@ import {
   type CollectionEntry,
 } from "./collectionsFile";
 import { ModalShell } from "./ModalShell";
+import { useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
 /**
@@ -36,6 +37,7 @@ export function CollectionsPickerModal({
   onClose: () => void;
   client?: KbApi;
 }) {
+  const t = useT();
   const qc = useQueryClient();
   const collQ = useQuery({ queryKey: qk.kb.collections, queryFn: () => client.listCollections() });
   const fileQ = useItemCollections(fileService);
@@ -47,7 +49,7 @@ export function CollectionsPickerModal({
   const [tierOf, setTierOf] = useState<Map<string, number> | null>(null);
   const [initialTierOf, setInitialTierOf] = useState<Map<string, number> | null>(null);
   const [saving, setSaving] = useState(false);
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveFailed, setSaveFailed] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
   // Seed the editable selection + tier ranks once the file has been read on open.
@@ -144,7 +146,7 @@ export function CollectionsPickerModal({
       if (checked.has(e.id) && !available.some((c) => c.resource_id === e.id)) groups[rankOf(e.id)].push(e);
     const out = entriesFromGroups(groups);
     setSaving(true);
-    setSaveError(null);
+    setSaveFailed(false);
     try {
       await fileService.writeFile(COLLECTIONS_PATH, serializeCollectionsFile(out));
       await Promise.all([
@@ -152,8 +154,9 @@ export function CollectionsPickerModal({
         qc.invalidateQueries({ queryKey: qk.file(fileService.scopeId, COLLECTIONS_PATH) }),
       ]);
       onClose();
-    } catch (e) {
-      setSaveError((e as Error)?.message ?? "Save failed");
+    } catch {
+      // Show a friendly line, not the raw write error (#465).
+      setSaveFailed(true);
       setSaving(false);
     }
   };
@@ -161,7 +164,7 @@ export function CollectionsPickerModal({
   return (
     <ModalShell
       onClose={attemptClose}
-      ariaLabel="選擇知識庫"
+      ariaLabel={t("colpicker.title")}
       data-testid="collections-modal"
       width={460}
       maxWidth="92vw"
@@ -173,9 +176,9 @@ export function CollectionsPickerModal({
         minHeight: 0,
       }}
     >
-        <strong style={{ fontSize: pxToRem(14) }}>選擇知識庫</strong>
+        <strong style={{ fontSize: pxToRem(14) }}>{t("colpicker.title")}</strong>
         <p style={{ margin: 0, fontSize: pxToRem(12), color: "var(--text-paper-d)", lineHeight: 1.5 }}>
-          勾選這個主題要查詢的知識庫；選好才有內容可供 AI 檢索與引用。
+          {t("colpicker.note")}
         </p>
 
         {fileQ.data?.status === "invalid" && (
@@ -191,7 +194,7 @@ export function CollectionsPickerModal({
               background: "rgba(180,65,60,0.06)",
             }}
           >
-            collections.json 目前無法解析（可能正在手動編輯）。下方以空清單顯示；按「儲存」會以乾淨清單覆寫原內容。
+            {t("colpicker.invalid")}
           </div>
         )}
 
@@ -200,16 +203,16 @@ export function CollectionsPickerModal({
             data-testid="collections-empty-hint"
             style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}
           >
-            尚未選擇任何知識庫。
+            {t("colpicker.empty")}
           </div>
         )}
 
         {!ready ? (
           <div style={{ flex: 1, minHeight: 0 }}>
             {fileQ.isError ? (
-              <p style={{ fontSize: pxToRem(12), color: "var(--err)" }}>無法讀取 collections.json。</p>
+              <p style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{t("colpicker.readError")}</p>
             ) : (
-              <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>載入中…</p>
+              <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("colpicker.loading")}</p>
             )}
           </div>
         ) : (
@@ -228,7 +231,7 @@ export function CollectionsPickerModal({
             }}
           >
             <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-              搜尋優先順序（先查上層；找不到答案 AI 才往下層擴大）
+              {t("colpicker.tiers")}
             </span>
             {tierGroups.map((group, displayRank) => (
               <div
@@ -237,7 +240,7 @@ export function CollectionsPickerModal({
                 style={{ display: "flex", flexDirection: "column", gap: 2 }}
               >
                 <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)", fontWeight: 600 }}>
-                  優先層 {displayRank + 1}
+                  {t("colpicker.tier", { n: displayRank + 1 })}
                 </span>
                 {group.map((c) => (
                   <div
@@ -251,7 +254,7 @@ export function CollectionsPickerModal({
                     <button
                       type="button"
                       data-testid={`tier-up-${c.resource_id}`}
-                      aria-label={`Raise ${c.name} a tier`}
+                      aria-label={t("colpicker.raise", { name: c.name })}
                       onClick={() => bumpTier(c.resource_id, -1)}
                       disabled={(tierOf?.get(c.resource_id) ?? 0) === 0}
                       style={tierBtn()}
@@ -261,7 +264,7 @@ export function CollectionsPickerModal({
                     <button
                       type="button"
                       data-testid={`tier-down-${c.resource_id}`}
-                      aria-label={`Lower ${c.name} a tier`}
+                      aria-label={t("colpicker.lower", { name: c.name })}
                       onClick={() => bumpTier(c.resource_id, 1)}
                       style={tierBtn()}
                     >
@@ -276,7 +279,7 @@ export function CollectionsPickerModal({
 
         {ready && (fileQ.data?.ignored ?? 0) > 0 && (
           <div data-testid="collections-ignored-note" style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-            已忽略 {fileQ.data!.ignored} 筆無效項。
+            {t("colpicker.ignored", { n: fileQ.data!.ignored })}
           </div>
         )}
 
@@ -290,7 +293,7 @@ export function CollectionsPickerModal({
               gap: 4,
             }}
           >
-            <span style={{ fontSize: pxToRem(11), color: "var(--err)" }}>已不存在的知識庫（建議移除）</span>
+            <span style={{ fontSize: pxToRem(11), color: "var(--err)" }}>{t("colpicker.orphans")}</span>
             {orphans.map((e) => (
               <div
                 key={e.id}
@@ -298,7 +301,7 @@ export function CollectionsPickerModal({
                 style={{ display: "flex", alignItems: "center", gap: 8, fontSize: pxToRem(12) }}
               >
                 <span style={{ flex: 1, minWidth: 0, color: "var(--text-paper-d)" }}>
-                  {e.name || "(未命名)"} · <code style={{ fontSize: pxToRem(11) }}>{e.id}</code>
+                  {e.name || t("colpicker.unnamed")} · <code style={{ fontSize: pxToRem(11) }}>{e.id}</code>
                 </span>
                 <button
                   type="button"
@@ -308,21 +311,25 @@ export function CollectionsPickerModal({
                   data-variant="danger"
                   data-size="sm"
                 >
-                  移除
+                  {t("colpicker.remove")}
                 </button>
               </div>
             ))}
           </div>
         )}
 
-        {saveError && <div style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{saveError}</div>}
+        {saveFailed && (
+          <div style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{t("colpicker.saveError")}</div>
+        )}
 
         {confirming ? (
           <div
             data-testid="collections-discard-confirm"
             style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}
           >
-            <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>放棄未儲存的變更？</span>
+            <span style={{ flex: 1, fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
+              {t("colpicker.discardPrompt")}
+            </span>
             <button
               type="button"
               data-testid="discard-no"
@@ -331,7 +338,7 @@ export function CollectionsPickerModal({
               data-variant="secondary"
               data-size="sm"
             >
-              繼續編輯
+              {t("colpicker.keepEditing")}
             </button>
             <button
               type="button"
@@ -341,7 +348,7 @@ export function CollectionsPickerModal({
               data-variant="danger"
               data-size="sm"
             >
-              放棄變更
+              {t("colpicker.discard")}
             </button>
           </div>
         ) : (
@@ -354,7 +361,7 @@ export function CollectionsPickerModal({
               data-variant="secondary"
               data-size="sm"
             >
-              取消
+              {t("tools.cancel")}
             </button>
             <button
               type="button"
@@ -365,7 +372,7 @@ export function CollectionsPickerModal({
               data-variant="primary"
               data-size="sm"
             >
-              {saving ? "儲存中…" : "儲存"}
+              {saving ? t("colpicker.saving") : t("tools.save")}
             </button>
           </div>
         )}

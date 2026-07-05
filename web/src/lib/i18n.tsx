@@ -814,6 +814,46 @@ export const messages = {
   "sanity.q.disabled": { "zh-TW": " · 已停用", en: " · disabled" },
   "sanity.q.edit": { "zh-TW": "編輯", en: "Edit" },
   "sanity.q.delete": { "zh-TW": "刪除", en: "Delete" },
+
+  // Collection-set picker modal (#465) — opened by the "Set search scope" button.
+  "colpicker.title": { "zh-TW": "選擇知識庫", en: "Choose knowledge bases" },
+  "colpicker.note": {
+    "zh-TW": "勾選這個主題要查詢的知識庫；選好才有內容可供 AI 檢索與引用。",
+    en: "Check the knowledge bases this topic should search — the AI can only retrieve and cite from the ones you pick.",
+  },
+  "colpicker.invalid": {
+    "zh-TW":
+      "collections.json 目前無法解析（可能正在手動編輯）。下方以空清單顯示；按「儲存」會以乾淨清單覆寫原內容。",
+    en: "collections.json can't be parsed right now (it may be mid-edit). It's shown below as an empty list; Save will overwrite it with a clean one.",
+  },
+  "colpicker.empty": { "zh-TW": "尚未選擇任何知識庫。", en: "No knowledge bases selected yet." },
+  "colpicker.readError": {
+    "zh-TW": "無法讀取 collections.json。",
+    en: "Couldn't read collections.json.",
+  },
+  "colpicker.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "colpicker.tiers": {
+    "zh-TW": "搜尋優先順序（先查上層；找不到答案 AI 才往下層擴大）",
+    en: "Search priority (top tier first; the AI only widens to lower tiers if it can't answer).",
+  },
+  "colpicker.tier": { "zh-TW": "優先層 {n}", en: "Priority {n}" },
+  "colpicker.raise": { "zh-TW": "把 {name} 往上移一層", en: "Raise {name} a tier" },
+  "colpicker.lower": { "zh-TW": "把 {name} 往下移一層", en: "Lower {name} a tier" },
+  "colpicker.ignored": { "zh-TW": "已忽略 {n} 筆無效項。", en: "Ignored {n} invalid entries." },
+  "colpicker.orphans": {
+    "zh-TW": "已不存在的知識庫（建議移除）",
+    en: "Knowledge bases that no longer exist (remove suggested)",
+  },
+  "colpicker.unnamed": { "zh-TW": "（未命名）", en: "(unnamed)" },
+  "colpicker.remove": { "zh-TW": "移除", en: "Remove" },
+  "colpicker.saveError": {
+    "zh-TW": "儲存失敗，請稍後再試。",
+    en: "Couldn't save. Try again in a moment.",
+  },
+  "colpicker.discardPrompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
+  "colpicker.keepEditing": { "zh-TW": "繼續編輯", en: "Keep editing" },
+  "colpicker.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
+  "colpicker.saving": { "zh-TW": "儲存中…", en: "Saving…" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

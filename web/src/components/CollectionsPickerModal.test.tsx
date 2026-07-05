@@ -6,11 +6,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { FileService } from "../api/fileService";
 import type { KbApi, KbCollection } from "../api/kb";
 import type { FileContent } from "../api/types";
+import { LocaleProvider } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
 import { CollectionsPickerModal } from "./CollectionsPickerModal";
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -94,6 +96,19 @@ const render = (svc: FileService, onClose = vi.fn()) =>
   );
 
 describe("CollectionsPickerModal", () => {
+  it("localizes its chrome — English under the en locale (#465)", async () => {
+    localStorage.setItem("ws.locale", "en");
+    const { svc } = fakeFileService("[]");
+    renderWithQuery(
+      <LocaleProvider>
+        <CollectionsPickerModal fileService={svc} client={fakeClient()} onClose={vi.fn()} />
+      </LocaleProvider>,
+    );
+    expect(await screen.findByText("Choose knowledge bases")).toBeInTheDocument();
+    expect(screen.getByTestId("collections-save")).toHaveTextContent("Save");
+    expect(screen.queryByText("選擇知識庫")).not.toBeInTheDocument();
+  });
+
   it("lists every live collection with its doc count, and pre-checks the ones in collections.json", async () => {
     const { svc } = fakeFileService('[{"id":"b","name":"Beta"}]');
     render(svc);
