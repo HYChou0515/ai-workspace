@@ -306,7 +306,11 @@ export type KbRenderedDoc = {
  * the SourceDoc envelope so opening a doc never pays the heavy `renderDocument`
  * (full blob re-read + count queries) for a markdown body the IDE discards. */
 export type KbDocMeta = {
+  quality_score?: number | null;
   quality_rationale?: string;
+  /** #460 P8: per-dimension detail scores (keys named by the collection rubric),
+   * shown in the expandable quality panel. Rides the SourceDoc envelope. */
+  quality_breakdown?: Record<string, number>;
   parser_guidance_override?: string;
 };
 
@@ -889,7 +893,9 @@ export const realKbApi: KbApi = {
       await ok(await apiFetch(url), "read document meta")
     ).json();
     return {
+      quality_score: env.data.quality_score,
       quality_rationale: env.data.quality_rationale,
+      quality_breakdown: env.data.quality_breakdown,
       parser_guidance_override: env.data.parser_guidance_override,
     };
   },

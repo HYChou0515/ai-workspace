@@ -1475,12 +1475,56 @@
 .kb-ide__status-quality-label {
   color: var(--text-paper-d2);
 }
-.kb-ide__status-quality-why {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 22ch;
+/* #460 P7: the verdict word (good/ok/bad) shown as visible text, not just the
+   badge colour / a hover title. */
+.kb-ide__status-quality-verdict {
   color: var(--text-paper-d);
+}
+/* The whole verdict is a disclosure toggle; keep it looking like status text. */
+.kb-ide__status-quality-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.kb-ide__status-quality-toggle:hover {
+  color: var(--text-paper);
+}
+/* #460 P7+P8: the expandable panel pops UP from the bottom status bar with the
+   full (untruncated) rationale + the per-dimension breakdown. */
+.kb-ide__quality-panel {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: min(420px, 60vw);
+  padding: 10px 12px;
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--ink) 14%, transparent);
+  color: var(--text-paper);
+  white-space: normal;
+  text-align: left;
+}
+.kb-ide__quality-rationale {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-paper);
+}
+.kb-ide__quality-breakdown dt {
+  color: var(--text-paper-d);
+  font-size: 0.75rem;
 }
 
 /* aligned document table (design handoff) */
