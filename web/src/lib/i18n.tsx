@@ -231,6 +231,12 @@ export const messages = {
   "kb.doc.processing": { "zh-TW": "處理中…", en: "Processing…" },
   "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
   "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
+  // Shown when the rendered-document fetch fails — a friendly line instead of the
+  // raw "render document failed: 404" the API throws (#465).
+  "kb.doc.loadError": {
+    "zh-TW": "這份文件目前無法載入，請稍後再試。",
+    en: "This document couldn't be loaded. Try again in a moment.",
+  },
 
   // #356 Tune parsing modal — user-facing framing is "adjust how the AI reads
   // this document" (root cause ③: no "parse"/"parsing" jargon in the entry).

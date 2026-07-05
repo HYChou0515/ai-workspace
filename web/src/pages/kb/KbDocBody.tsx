@@ -14,6 +14,7 @@ import remarkGfm from "remark-gfm";
 import { kbApi, type KbApi, type KbRenderedDoc } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { useT } from "../../lib/i18n";
 import { parseCsv } from "../../renderers/csv";
 import { DataGrid } from "../../renderers/DataGrid";
 import { JsonlView } from "../../renderers/JsonlView";
@@ -67,6 +68,7 @@ export function KbDocBody({
   showChunks?: boolean;
   client?: KbApi;
 }) {
+  const t = useT();
   const [view, setView] = useState<"file" | "chunks">("file");
   const { data: doc, error: queryError } = useQuery({
     queryKey: qk.kb.doc(documentId),
@@ -79,11 +81,10 @@ export function KbDocBody({
     queryFn: () => client.getDocChunks(documentId),
     enabled: showChunks,
   });
-  const error = queryError
-    ? queryError instanceof Error
-      ? queryError.message
-      : String(queryError)
-    : null;
+  // A failed render shows a friendly line, never the raw "render document
+  // failed: 404" the API throws — that HTTP status / internal verb is developer
+  // noise and used to leak straight to the user (#465).
+  const failed = queryError != null;
 
   // Notify the parent (chrome shows the doc name) once the render resolves.
   useEffect(() => {
@@ -154,7 +155,7 @@ export function KbDocBody({
           <p>{snippet}</p>
         </div>
       )}
-      {error && <div className="kb-drawer__error">{error}</div>}
+      {failed && <div className="kb-drawer__error">{t("kb.doc.loadError")}</div>}
       {view === "chunks" ? (
         <div className="kb-chunks">
           {chunks.length === 0 && <p className="kb-cols__empty">No indexed chunks.</p>}
