@@ -1,9 +1,9 @@
-"""P4 (#435) — ``create_new`` (M2 token): a fresh entity per invocation. Mechanically it
+"""P4/P7 (#435) — ``create_new`` (M2 token): a fresh entity per invocation. Mechanically it
 is ``update`` with M1-AI cross-origin matching turned OFF, so it never dedups against
 another origin's entity; WITHIN an invocation the journal-first self-dedup still makes a
-revise reuse (never double-create). The cross-invocation "fresh per trigger" needs #429,
-so the DSL author surface is gated (tested in test_dsl_create_entity) — these exercise the
-handle mechanism directly.
+revise reuse (never double-create). P7 wires the per-invocation identity (``run_id``) so
+the cross-invocation "fresh per trigger" mints a NEW entity each separate invocation while
+a resume of the SAME invocation still reuses — these exercise the handle mechanism directly.
 """
 
 from __future__ import annotations
@@ -59,3 +59,52 @@ async def test_create_new_within_invocation_revise_reuses_not_double_creates() -
     store = wf._store  # type: ignore[attr-defined]
     assert not await store.exists("ws", "/issues/2.md")
     assert "Report v2" in (await store.read("ws", "/issues/1.md")).decode()  # revise overlaid
+
+
+async def _shared_store():  # type: ignore[no-untyped-def]
+    store = MemoryFileStore()
+    await store.write(
+        "ws", "/.entity/issue/schema.yaml", b"path: issues\nfields:\n  title: {role: text}\n"
+    )
+    await store.write("ws", "/.entity/issue/skeleton.md", b"---\ntitle: {{arg.title}}\n---\n")
+    return store
+
+
+async def test_create_new_across_invocations_mints_fresh_each_run() -> None:
+    """P7 — the #429-unlocked cross-invocation behavior: two SEPARATE invocations (distinct
+    ``run_id``) of the same create_new site each mint a FRESH entity — a daily "open a new
+    report" that must NOT collapse into one just because it re-uses the same journal
+    (workflow_id-scoped). The per-invocation ``run_id`` is what makes each mint fresh."""
+    store = await _shared_store()
+
+    async def run_once(run_id: str, title: str) -> int:
+        wf = WorkflowHandle(
+            store=store, workspace_id="ws", workflow_id="pm", user="alice", run_id=run_id
+        )
+        return await wf.create_entity(
+            "issue", {"title": title}, name="daily", on_duplicate="create_new"
+        )
+
+    first = await run_once("run-A", "Report 2026-07-05")
+    second = await run_once("run-B", "Report 2026-07-06")
+    assert first == 1
+    assert second == 2  # a fresh entity per invocation, not reused across runs
+
+    # a resume of the FIRST invocation (same run_id) reuses its entity, never a third
+    again = await run_once("run-A", "Report 2026-07-05 (clarified)")
+    assert again == 1
+    assert not await store.exists("ws", "/issues/3.md")
+
+
+async def test_create_new_token_verdict_carries_the_run_id() -> None:
+    """P7 — a create_new mint records the reserved ``token`` Verdict kind (M2 exactly-once)
+    with the invocation ``run_id`` as the token, so the ruling is self-describing (the
+    per-invocation idempotency key the shell reserved but nothing produced before)."""
+    store = await _shared_store()
+    wf = WorkflowHandle(
+        store=store, workspace_id="ws", workflow_id="pm", user="alice", run_id="run-Z"
+    )
+    await wf.create_entity("issue", {"title": "X"}, name="daily", on_duplicate="create_new")
+    verdict = await wf.read_json("/.workflow/pm/step_daily/main.decide.json")
+    assert verdict["result"]["kind"] == "token"
+    assert verdict["result"]["payload"]["token"] == "run-Z"

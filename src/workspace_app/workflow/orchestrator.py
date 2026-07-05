@@ -520,7 +520,13 @@ class WorkflowOrchestrator:
             )
         # #429 P9: read the run's trigger origin from its row (avoids threading it through
         # every drive/execute signature) so the handle stamps it onto this run's entity writes.
-        run = self._get(run_id)
+        # #435 P7: also expose this run's per-invocation identity — ``run_id`` (create_new's
+        # fresh-per-invocation token) and its resume-stable creation instant (``created_time``,
+        # which — unlike the driver's ``started`` — a resume never rewrites; backs
+        # send_notification's per-window fingerprint).
+        res = self._rm().get(run_id)
+        run = res.data
+        assert isinstance(run, WorkflowRun)
         wf = WorkflowHandle(
             store=self.store,
             workspace_id=item_id,
@@ -534,6 +540,8 @@ class WorkflowOrchestrator:
             entity_write_sink=self.entity_write_sink,
             origin_trigger=run.origin_trigger,
             trigger_depth=run.trigger_depth,
+            run_id=run_id,
+            run_started_at=res.info.created_time,
         )
         self.wire_handle(wf, run_id, item_id, captured_user, key)
         return wf

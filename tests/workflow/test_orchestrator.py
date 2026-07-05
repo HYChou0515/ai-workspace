@@ -146,6 +146,31 @@ async def test_inputs_and_handle_follow_the_profiles_upload_dir(spec_instance: S
     assert seen == {"upload_dir": "docs", "inputs": {"n": 7}}
 
 
+async def test_run_handle_carries_the_per_invocation_identity(spec_instance: SpecStar):
+    """#435 P7: the orchestrator exposes each run's per-invocation identity on the handle —
+    ``run_id`` (create_new's fresh-per-invocation token, DISTINCT per start) and a resume-
+    stable ``run_started_at`` (the run's creation instant, from specstar ``created_time``) —
+    so a non-idempotent capability can mint fresh / bucket a window per invocation."""
+    from datetime import datetime as _dt
+
+    seen: list[tuple[str, object]] = []
+
+    async def run(wf, inputs):
+        seen.append((wf.run_id, wf.run_started_at))
+        return {"ok": True}
+
+    store = MemoryFileStore()
+    await store.write("rca/i1", "/uploads/input.json", b"{}")
+    orch, _f = _orch(spec_instance, run, store=store)
+    rid1 = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    rid2 = await orch.start(slug="rca", item_id="rca/i1", profile="echo", captured_user="alice")
+    await asyncio.sleep(0)
+    assert [s[0] for s in seen] == [rid1, rid2]  # each run's own id — distinct per invocation
+    assert rid1 != rid2
+    assert all(isinstance(s[1], _dt) for s in seen)  # resume-stable creation instant
+
+
 async def test_explicit_input_json_overrides_the_upload_dir_default(spec_instance: SpecStar):
     """#198: a workflow that pins ``input_json`` reads exactly that path, ignoring the
     profile's ``upload_dir`` — the override branch of the derive-from-upload_dir rule."""
