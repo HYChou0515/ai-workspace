@@ -155,11 +155,14 @@ export const entitiesApi = {
     number: number,
     patch: Record<string, unknown>,
     expectedVersion?: string,
+    body?: string,
   ): Promise<EntityInstance> {
     // §C6: echo the record's version so a concurrent edit is reported (409)
-    // rather than silently clobbered. Omitted → last-write-wins.
-    const payload: { patch: Record<string, unknown>; expected_version?: string } = { patch };
+    // rather than silently clobbered. Omitted → last-write-wins. §C2: an optional
+    // body replaces the markdown body (the file editor); omitted preserves it.
+    const payload: { patch: Record<string, unknown>; expected_version?: string; body?: string } = { patch };
     if (expectedVersion !== undefined) payload.expected_version = expectedVersion;
+    if (body !== undefined) payload.body = body;
     const resp = await apiFetch(`${base(slug, itemId)}/${enc(type)}/${number}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
