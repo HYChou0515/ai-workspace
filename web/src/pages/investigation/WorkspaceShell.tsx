@@ -251,8 +251,12 @@ function ShellBody({
   // sidebar becomes a tap-to-open overlay so the editor keeps the full width.
   const isNarrow = useIsNarrow();
   useEffect(() => {
-    // Entering narrow, start editor-first: the overlay sidebar opens on demand.
-    if (isNarrow) setSidebarOpen(false);
+    // Track the breakpoint symmetrically: narrow starts editor-first (the sidebar
+    // is a tap-to-open overlay), wide restores the persistent tree column. One-way
+    // (only closing on narrow) would strand a pointer-only user with the desktop
+    // sidebar collapsed after a wide→narrow→wide resize, since the only wide reopen
+    // is ⌘B and the ActivityBar reopen is gated to narrow (#464).
+    setSidebarOpen(!isNarrow);
   }, [isNarrow]);
   const agentVisible = showAgentPanel(isNarrow, chatFills);
 
@@ -632,16 +636,24 @@ export function TopBar({
   onCommandPalette: () => void;
   onEdit: () => void;
 }) {
+  const isNarrow = useIsNarrow();
   return (
     <div
       style={{
-        height: 52,
+        // Narrow: the trailing control cluster (Workspace toggle + palette +
+        // Members + Close + Notifications + avatar) can't fit one 360px row, so
+        // wrap instead of overflowing — page-item clips overflow with no scroll,
+        // which would strand the Close (the only resolve entry point) (#464).
+        height: isNarrow ? "auto" : 52,
+        minHeight: 52,
         flexShrink: 0,
         background: "var(--white)",
         borderBottom: "1px solid var(--paper-3)",
         display: "flex",
         alignItems: "center",
-        padding: "0 16px",
+        flexWrap: isNarrow ? "wrap" : "nowrap",
+        rowGap: isNarrow ? 8 : undefined,
+        padding: isNarrow ? "8px 12px" : "0 16px",
         gap: 12,
       }}
     >
@@ -650,6 +662,10 @@ export function TopBar({
           display: "flex",
           alignItems: "center",
           gap: 8,
+          minWidth: 0,
+          flexShrink: 1,
+          flexWrap: isNarrow ? "wrap" : "nowrap",
+          rowGap: isNarrow ? 6 : undefined,
           fontSize: "var(--text-body-sm)",
           color: "var(--text-paper-d)",
         }}
@@ -723,7 +739,10 @@ export function TopBar({
           onClick={onCommandPalette}
           title={`Go to file (${modCombo("P")})`}
           style={{
-            width: 320,
+            // 320px fixed would overflow a 360px viewport; on narrow give it its
+            // own full-width row (flex-basis 100%) so it fits and stays usable.
+            width: isNarrow ? "auto" : 320,
+            flex: isNarrow ? "1 1 100%" : "0 0 auto",
             height: 28,
             border: "1px solid var(--paper-3)",
             borderRadius: "var(--radius-btn)",
