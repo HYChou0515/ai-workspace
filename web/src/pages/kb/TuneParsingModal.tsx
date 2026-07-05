@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 
 import { kbApi, type KbApi, type KbProbeResult, type KbProbeSide } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { ModalShell } from "../../components/ModalShell";
 import { useT } from "../../lib/i18n";
 import { pxToRem } from "../../lib/pxToRem";
 
@@ -146,39 +147,18 @@ export function TuneParsingModal({
   const saved = saveDocMut.isSuccess || clearDocMut.isSuccess || applyCollMut.isSuccess;
 
   return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={`${t("kb.tuneParsing.title")} — ${docPath}`}
+      width={640}
+      maxWidth="94vw"
+      panelStyle={{
+        padding: 20,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
+        flexDirection: "column",
+        gap: 12,
       }}
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${t("kb.tuneParsing.title")} — ${docPath}`}
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          width: 640,
-          maxWidth: "94vw",
-          maxHeight: "88vh",
-          overflow: "auto",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 20,
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
-        }}
-      >
         <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
           <strong style={{ fontSize: pxToRem(14) }}>{t("kb.tuneParsing.title")}</strong>
           <span className="mono" style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
@@ -341,8 +321,7 @@ export function TuneParsingModal({
             )}
           </div>
         )}
-      </div>
-    </div>
+    </ModalShell>
   );
 }
 

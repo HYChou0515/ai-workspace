@@ -8,7 +8,7 @@
  */
 
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import {
   type SanityApi,
@@ -18,6 +18,7 @@ import {
   sanityApi,
 } from "../api/sanity";
 import { qk } from "../api/queryKeys";
+import { ModalShell } from "../components/ModalShell";
 import { pxToRem } from "../lib/pxToRem";
 
 /** The levels a question is *expected* to be tested at — mirrors the backend's
@@ -110,90 +111,63 @@ function CellModal({
     .filter(Boolean)
     .join(" · ");
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
   return (
-    <div
-      role="presentation"
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.4)",
+    <ModalShell
+      onClose={onClose}
+      ariaLabel={`${levelLabel} · ${prompt}`}
+      data-testid="sanity-cell-modal"
+      width={720}
+      maxWidth="90vw"
+      panelStyle={{
+        padding: 20,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 200,
+        flexDirection: "column",
+        gap: 12,
       }}
     >
+      <strong style={{ fontSize: pxToRem(14) }}>
+        {row.model} · {levelLabel} · {prompt}
+      </strong>
       <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${levelLabel} · ${prompt}`}
-        data-testid="sanity-cell-modal"
-        onClick={(e) => e.stopPropagation()}
         style={{
-          width: 720,
-          maxWidth: "90vw",
-          maxHeight: "80vh",
-          background: "var(--white)",
-          borderRadius: "var(--radius-card)",
-          border: "1px solid var(--paper-3)",
-          boxShadow: "0 16px 40px rgba(0,0,0,0.22)",
-          padding: 20,
-          display: "flex",
-          flexDirection: "column",
-          gap: 12,
+          flex: 1,
+          minHeight: 0,
+          overflow: "auto",
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          fontSize: pxToRem(13),
+          lineHeight: 1.5,
+          color: cell?.error ? "var(--warn)" : "var(--text-paper)",
         }}
       >
-        <strong style={{ fontSize: pxToRem(14) }}>
-          {row.model} · {levelLabel} · {prompt}
-        </strong>
-        <div
+        {body}
+      </div>
+      {cell?.ai_note && (
+        <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
+          AI 評語：{cell.ai_note}
+        </div>
+      )}
+      <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{footer}</div>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <button
+          type="button"
+          data-testid="sanity-cell-close"
+          onClick={onClose}
           style={{
-            flex: 1,
-            minHeight: 0,
-            overflow: "auto",
-            whiteSpace: "pre-wrap",
-            overflowWrap: "anywhere",
+            height: 30,
+            padding: "0 14px",
+            borderRadius: "var(--radius-btn)",
             fontSize: pxToRem(13),
-            lineHeight: 1.5,
-            color: cell?.error ? "var(--warn)" : "var(--text-paper)",
+            cursor: "pointer",
+            border: "1px solid var(--paper-3)",
+            background: "var(--white)",
+            color: "var(--text-paper)",
           }}
         >
-          {body}
-        </div>
-        {cell?.ai_note && (
-          <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
-            AI 評語：{cell.ai_note}
-          </div>
-        )}
-        <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{footer}</div>
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            data-testid="sanity-cell-close"
-            onClick={onClose}
-            style={{
-              height: 30,
-              padding: "0 14px",
-              borderRadius: "var(--radius-btn)",
-              fontSize: pxToRem(13),
-              cursor: "pointer",
-              border: "1px solid var(--paper-3)",
-              background: "var(--white)",
-              color: "var(--text-paper)",
-            }}
-          >
-            關閉
-          </button>
-        </div>
+          關閉
+        </button>
       </div>
-    </div>
+    </ModalShell>
   );
 }
 

@@ -21,6 +21,7 @@ import { api } from "../api";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
 import { ItemForm, pruneEmpty } from "../components/ItemForm";
+import { ModalShell } from "../components/ModalShell";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useAppManifest } from "../hooks/useResources";
 import { pxToRem } from "../lib/pxToRem";
@@ -87,28 +88,21 @@ export function AppNewItem() {
   const article = /^[aeiou]/i.test(noun) ? "an" : "a";
 
   return (
-    <div
+    <ModalShell
+      onClose={close}
+      ariaLabel={`Start ${article} ${noun.toLowerCase()}`}
       data-testid="page-app-new"
-      onClick={close}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(20,22,28,0.55)",
-        backdropFilter: "blur(4px)",
+      width={620}
+      maxWidth="100%"
+      panelStyle={{
         display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: 24,
-        zIndex: 50,
+        flexDirection: "column",
+        minHeight: 0,
+        boxShadow: "0 12px 48px rgba(20,22,28,0.12)",
       }}
     >
       {manifest && (
-        <div
-          role="dialog"
-          aria-modal
-          onClick={(e) => e.stopPropagation()}
-          style={{ width: 620, maxWidth: "100%", maxHeight: "90%", background: "var(--paper)", borderRadius: "var(--radius-modal)", border: "1px solid var(--paper-3)", overflow: "hidden", display: "flex", flexDirection: "column", boxShadow: "0 12px 48px rgba(20,22,28,0.12)" }}
-        >
+        <>
           {/* Header (fixed) */}
           <div style={{ padding: "18px 22px 14px", borderBottom: "1px solid var(--paper-3)", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <div>
@@ -148,8 +142,8 @@ export function AppNewItem() {
               {create.isPending ? "Saving…" : "Create"}
             </button>
           </div>
-        </div>
+        </>
       )}
-    </div>
+    </ModalShell>
   );
 }
