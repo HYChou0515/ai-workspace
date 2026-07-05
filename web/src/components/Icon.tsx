@@ -34,6 +34,8 @@ export type IconName =
   | "clock"
   | "check"
   | "split"
+  | "panel_left"
+  | "kanban"
   | "layers"
   | "download"
   | "upload"
@@ -193,6 +195,27 @@ export function Icon({
       <>
         <rect x="3" y="4" width="18" height="16" rx="1.5" {...sp} />
         <path d="M12 4 V20" {...sp} />
+      </>
+    ),
+    // "toggle the side panel" — a framed area with a narrow left column (the
+    // file workspace) holding a short list. Distinct from `split` (a centred
+    // even divider = split view), so it reads as show/hide a side panel.
+    panel_left: (
+      <>
+        <rect x="3" y="4" width="18" height="16" rx="1.5" {...sp} />
+        <path d="M9 4 V20" {...sp} />
+        <path d="M5.4 9 H6.6 M5.4 12 H6.6 M5.4 15 H6.6" {...sp} />
+      </>
+    ),
+    // kanban board — a frame split into three columns, each holding a card of a
+    // different height (the "stages" metaphor). Used as the PM app's identity.
+    kanban: (
+      <>
+        <rect x="3" y="4" width="18" height="16" rx="1.5" {...sp} />
+        <path d="M9 4 V20 M15 4 V20" {...sp} />
+        <rect x="4.6" y="7" width="2.8" height="2.6" rx="0.6" {...sp} />
+        <rect x="10.6" y="7" width="2.8" height="4.2" rx="0.6" {...sp} />
+        <rect x="16.6" y="7" width="2.8" height="1.8" rx="0.6" {...sp} />
       </>
     ),
     layers: <path d="M12 3 L21 8 L12 13 L3 8 Z M3 13 L12 18 L21 13 M3 17 L12 22 L21 17" {...sp} />,

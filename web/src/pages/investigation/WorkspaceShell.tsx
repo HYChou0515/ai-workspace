@@ -649,7 +649,11 @@ export function TopBar({
           type="button"
           onClick={onToggleIde}
           aria-pressed={!ideCollapsed}
-          title={ideCollapsed ? "Show the file workspace" : "Hide the file workspace"}
+          title={
+            ideCollapsed
+              ? "Show the file workspace"
+              : "Hide the file workspace — the chat expands to fill"
+          }
           style={{
             height: 28,
             border: "1px solid var(--paper-3)",
@@ -664,7 +668,7 @@ export function TopBar({
             cursor: "pointer",
           }}
         >
-          <Icon name="split" size={13} />
+          <Icon name="panel_left" size={13} />
           <span>Workspace</span>
         </button>
       )}

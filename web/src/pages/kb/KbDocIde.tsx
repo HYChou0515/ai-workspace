@@ -19,7 +19,7 @@ import { FileServiceProvider } from "../../api/fileService";
 import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
 import { kbFileService, normPath } from "../../api/kbFileService";
 import { qk } from "../../api/queryKeys";
-import { DialogProvider } from "../../components/Dialog";
+import { DialogProvider, useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -88,20 +88,34 @@ function EmptyUploadCta({
   );
 }
 
-export function KbDocIde({
-  collectionId,
-  client = kbApi,
-  onPickFiles,
-  uploading = false,
-}: {
+type KbDocIdeProps = {
   collectionId: string;
   client?: KbApi;
   // #172: when the page wires these in, an empty collection shows an upload
   // call-to-action (drop hint + button) instead of passive text.
   onPickFiles?: () => void;
   uploading?: boolean;
-}) {
+};
+
+// The DialogProvider wraps the whole body (not just the file tree) so the bulk
+// re-index confirm — raised from `reindexPaths`, which resolves a tree
+// selection to its actual doc set — can reach the shared modal.
+export function KbDocIde(props: KbDocIdeProps) {
+  return (
+    <DialogProvider>
+      <KbDocIdeBody {...props} />
+    </DialogProvider>
+  );
+}
+
+function KbDocIdeBody({
+  collectionId,
+  client = kbApi,
+  onPickFiles,
+  uploading = false,
+}: KbDocIdeProps) {
   const qc = useQueryClient();
+  const dialog = useDialog();
   // #395: one-request fetch-all + a cheap status poll while anything indexes
   // (progress merges in client-side; the list refetches only on real change).
   const { docs, docsQuery } = useCollectionDocs(collectionId, client);
@@ -240,10 +254,25 @@ export function KbDocIde({
         if (exact) ids.add(exact.resource_id);
         else for (const d of docs) if (normPath(d.path).startsWith(np + "/")) ids.add(d.resource_id);
       }
+      if (ids.size === 0) return;
+      // Re-indexing >=2 documents at once restarts a lot of work — confirm first.
+      // A single doc (right-click one file) reindexes straight away. The count is
+      // the resolved doc set, so a folder that expands to many docs also confirms.
+      if (ids.size >= 2) {
+        const choice = await dialog.confirm({
+          title: `Re-index ${ids.size} documents`,
+          body: `Re-index all ${ids.size} selected documents? This restarts indexing for every one.`,
+          actions: [
+            { id: "go", label: "Re-index", variant: "primary" },
+            { id: "cancel", label: "Cancel" },
+          ],
+        });
+        if (choice !== "go") return;
+      }
       for (const id of ids) await client.reindexDocument(id);
       refetch();
     },
-    [docs, docByPath, client, refetch],
+    [docs, docByPath, client, refetch, dialog],
   );
   // #402: draggable tree width, persisted + clamped. Shared key with the wiki
   // IDE so the two KB trees remember one width. `treeStart` snapshots the width
@@ -271,8 +300,7 @@ export function KbDocIde({
     <FileServiceProvider value={service}>
       <FileBufferProvider store={bufferStore}>
         <EditModeProvider>
-          <DialogProvider>
-            <div className="kb-ide">
+          <div className="kb-ide">
               <div className="kb-ide__main">
                 <div className="kb-ide__tree" style={{ width: treeW, flexShrink: 0 }}>
                   <FileTree
@@ -347,8 +375,7 @@ export function KbDocIde({
                   onClose={() => setPermDoc(null)}
                 />
               )}
-            </div>
-          </DialogProvider>
+          </div>
         </EditModeProvider>
       </FileBufferProvider>
     </FileServiceProvider>
