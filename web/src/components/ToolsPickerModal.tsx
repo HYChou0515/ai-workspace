@@ -117,7 +117,7 @@ export function ToolsPickerModal({
         {!ready ? (
           <div style={{ flex: 1, minHeight: 0 }}>
             {toolsQ.isError ? (
-              <p style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>{t("tools.none")}</p>
+              <p style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{t("tools.none")}</p>
             ) : (
               <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>{t("tools.loading")}</p>
             )}
@@ -191,7 +191,7 @@ function btn(kind?: "primary" | "danger"): React.CSSProperties {
     return { ...base, background: "var(--accent)", color: "var(--white)", borderColor: "var(--accent)" };
   }
   if (kind === "danger") {
-    return { ...base, background: "var(--white)", color: "var(--danger, #b4413c)" };
+    return { ...base, background: "var(--white)", color: "var(--err)" };
   }
   return { ...base, background: "var(--white)", color: "var(--text-paper)" };
 }

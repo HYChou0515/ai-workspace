@@ -73,12 +73,12 @@ const STATUS_LABEL: Record<RowStatus, string> = {
 };
 const STATUS_COLOR: Record<RowStatus, string> = {
   missing: "var(--text-paper-d)",
-  done: "var(--ok, #2e9e5b)",
+  done: "var(--ok)",
   error: "var(--warn)",
 };
 
 function GradeTag({ grade }: { grade: string }) {
-  if (grade === "pass") return <span style={{ color: "var(--ok, #2e9e5b)" }}>pass</span>;
+  if (grade === "pass") return <span style={{ color: "var(--ok)" }}>pass</span>;
   if (grade === "fail") return <span style={{ color: "var(--warn)" }}>fail</span>;
   return <span style={{ color: "var(--text-paper-d)" }}>—</span>;
 }

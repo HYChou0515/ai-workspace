@@ -254,7 +254,7 @@ function CardDiffModal({
             style={{
               padding: "5px 12px",
               borderRadius: 6,
-              border: "1px solid var(--line)",
+              border: "1px solid var(--paper-3)",
               background: "var(--paper-2)",
               cursor: "pointer",
             }}
@@ -271,7 +271,7 @@ function CardDiffModal({
               style={{
                 padding: "5px 12px",
                 borderRadius: 6,
-                border: "1px solid var(--line)",
+                border: "1px solid var(--paper-3)",
                 cursor: busy ? "default" : "pointer",
                 background:
                   choice === "approve"

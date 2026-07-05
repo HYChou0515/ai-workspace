@@ -210,7 +210,7 @@ export function Launcher() {
                 gridColumn: "1 / -1",
                 padding: "18px 20px",
                 borderRadius: 12,
-                border: "1px dashed var(--line)",
+                border: "1px dashed var(--paper-3)",
                 background: "var(--paper-2)",
               }}
             >

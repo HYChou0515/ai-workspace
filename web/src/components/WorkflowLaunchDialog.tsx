@@ -205,7 +205,7 @@ function CheckRow({ check }: { check: PreflightCheckDTO }) {
   const advisory = check.severity === "advisory";
   // ok → green check; failed required → red; failed advisory → amber. The required vs
   // advisory distinction also reads in the badge label below, so the icon stays check/x.
-  const tone = !failed ? "var(--ok, #2e7d32)" : advisory ? "var(--warn, #b26a00)" : "var(--err)";
+  const tone = !failed ? "var(--ok)" : advisory ? "var(--warn)" : "var(--err)";
   const icon = failed ? "x" : "check";
   return (
     <li style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: pxToRem(12.5) }}>

@@ -308,7 +308,7 @@ function TableView({ spec, type, entities, onPatch, busy }: EntityViewProps) {
 }
 
 const cellStyle: React.CSSProperties = {
-  border: "1px solid var(--line, #ccc)",
+  border: "1px solid var(--paper-3)",
   padding: "4px 8px",
   textAlign: "left",
   verticalAlign: "top",
@@ -335,7 +335,7 @@ function BoardView({ spec, type, entities, onPatch, busy }: EntityViewProps) {
               {col === UNSET ? "(unset)" : col} <span style={{ color: "var(--text-paper-d)" }}>{cards.length}</span>
             </div>
             {cards.map((e) => (
-              <div key={e.number} style={{ border: "1px solid var(--line, #ccc)", borderRadius: 6, padding: 8, marginBottom: 8 }}>
+              <div key={e.number} style={{ border: "1px solid var(--paper-3)", borderRadius: 6, padding: 8, marginBottom: 8 }}>
                 <div style={{ fontWeight: 500 }}>{fieldText(e.fields[titleField]) || `#${e.number}`}</div>
                 {badges.map((b) => {
                   const bt = fieldText(e.fields[b]);
@@ -399,7 +399,7 @@ function GanttView({ spec, entities }: EntityViewProps) {
           <div style={{ width: 160, flex: "0 0 auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {fieldText(e.fields[labelField]) || `#${e.number}`}
           </div>
-          <div style={{ position: "relative", flex: 1, height: 18, background: "var(--paper-d, #f0f0f0)", borderRadius: 4 }}>
+          <div style={{ position: "relative", flex: 1, height: 18, background: "var(--paper-2)", borderRadius: 4 }}>
             <div
               data-testid={`bar-${e.number}`}
               title={fieldText(e.fields[spanField])}
@@ -409,7 +409,7 @@ function GanttView({ spec, entities }: EntityViewProps) {
                 width: `${Math.max(scale(span.end) - scale(span.start), 1)}%`,
                 top: 0,
                 bottom: 0,
-                background: "var(--accent, #3B82F6)",
+                background: "var(--accent)",
                 borderRadius: 4,
               }}
             />
@@ -431,7 +431,7 @@ export function EntityViewBody(props: EntityViewProps) {
         {type && spec.view !== "gantt" && <QuickCreate form={type.form} onCreate={onCreate} busy={busy} />}
       </div>
       {invalid && invalid.length > 0 && (
-        <div style={{ color: "var(--warn, #b8860b)", marginBottom: 8, fontSize: pxToRem(13) }}>
+        <div style={{ color: "var(--warn)", marginBottom: 8, fontSize: pxToRem(13) }}>
           {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be parsed and {invalid.length > 1 ? "are" : "is"} hidden.
         </div>
       )}
@@ -460,7 +460,7 @@ export function HealthView({ title, findings }: { title?: string; findings: Enti
     <div style={{ padding: 12 }}>
       <h3 style={{ margin: "0 0 10px" }}>{title ?? "Health"}</h3>
       {findings.length === 0 ? (
-        <div style={{ color: "var(--ok, #2e7d32)" }}>All records are healthy — no findings.</div>
+        <div style={{ color: "var(--ok)" }}>All records are healthy — no findings.</div>
       ) : (
         <>
           <div style={{ marginBottom: 8, fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
@@ -470,11 +470,11 @@ export function HealthView({ title, findings }: { title?: string; findings: Enti
             {findings.map((f, i) => (
               <li
                 key={`${f.type_name}-${f.number}-${i}`}
-                style={{ display: "flex", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--line, #eee)" }}
+                style={{ display: "flex", gap: 8, padding: "4px 0", borderBottom: "1px solid var(--paper-3)" }}
               >
                 <span
                   style={{
-                    color: f.level === "error" ? "var(--err, #c62828)" : "var(--warn, #b8860b)",
+                    color: f.level === "error" ? "var(--err)" : "var(--warn)",
                     fontWeight: 600,
                     minWidth: 64,
                   }}

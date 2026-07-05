@@ -127,7 +127,7 @@ function actionStyle(variant: DialogAction["variant"]): React.CSSProperties {
     return { ...base, background: "var(--accent)", borderColor: "var(--accent)", color: "var(--white)" };
   }
   if (variant === "danger") {
-    return { ...base, color: "var(--danger, #b4413c)", borderColor: "var(--danger, #b4413c)" };
+    return { ...base, color: "var(--err)", borderColor: "var(--err)" };
   }
   return base;
 }

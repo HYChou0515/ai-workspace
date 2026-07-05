@@ -195,7 +195,7 @@ export function SearchPanel({
 
       <div style={{ padding: "0 12px 6px", fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
         {error ? (
-          <span style={{ color: "var(--danger, #b4413c)" }}>{error}</span>
+          <span style={{ color: "var(--err)" }}>{error}</span>
         ) : query && results.length > 0 ? (
           `${totalMatches} result${totalMatches === 1 ? "" : "s"} in ${results.length} file${
             results.length === 1 ? "" : "s"

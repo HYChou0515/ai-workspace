@@ -126,7 +126,7 @@ export function ResizeDivider({
             cursor: "pointer",
             borderRadius: "var(--radius-chip, 6px)",
             border: "1px solid var(--paper-3)",
-            background: "var(--paper-1, var(--paper))",
+            background: "var(--paper)",
             color: "var(--text-paper-d)",
           }}
         >

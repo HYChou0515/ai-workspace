@@ -205,8 +205,8 @@ export function CollectionsPickerModal({
               lineHeight: 1.5,
               padding: "8px 10px",
               borderRadius: "var(--radius-btn)",
-              border: "1px solid var(--danger, #b4413c)",
-              color: "var(--danger, #b4413c)",
+              border: "1px solid var(--err)",
+              color: "var(--err)",
               background: "rgba(180,65,60,0.06)",
             }}
           >
@@ -226,7 +226,7 @@ export function CollectionsPickerModal({
         {!ready ? (
           <div style={{ flex: 1, minHeight: 0 }}>
             {fileQ.isError ? (
-              <p style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>無法讀取 collections.json。</p>
+              <p style={{ fontSize: pxToRem(12), color: "var(--err)" }}>無法讀取 collections.json。</p>
             ) : (
               <p style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>載入中…</p>
             )}
@@ -309,7 +309,7 @@ export function CollectionsPickerModal({
               gap: 4,
             }}
           >
-            <span style={{ fontSize: pxToRem(11), color: "var(--danger, #b4413c)" }}>已不存在的知識庫（建議移除）</span>
+            <span style={{ fontSize: pxToRem(11), color: "var(--err)" }}>已不存在的知識庫（建議移除）</span>
             {orphans.map((e) => (
               <div
                 key={e.id}
@@ -330,7 +330,7 @@ export function CollectionsPickerModal({
                     borderRadius: "var(--radius-btn)",
                     border: "1px solid var(--paper-3)",
                     background: "var(--white)",
-                    color: "var(--danger, #b4413c)",
+                    color: "var(--err)",
                     cursor: "pointer",
                   }}
                 >
@@ -341,7 +341,7 @@ export function CollectionsPickerModal({
           </div>
         )}
 
-        {saveError && <div style={{ fontSize: pxToRem(12), color: "var(--danger, #b4413c)" }}>{saveError}</div>}
+        {saveError && <div style={{ fontSize: pxToRem(12), color: "var(--err)" }}>{saveError}</div>}
 
         {confirming ? (
           <div
@@ -411,7 +411,7 @@ function btn(variant?: "primary" | "danger"): React.CSSProperties {
     };
   }
   if (variant === "danger") {
-    return { ...base, color: "var(--danger, #b4413c)", borderColor: "var(--danger, #b4413c)" };
+    return { ...base, color: "var(--err)", borderColor: "var(--err)" };
   }
   return base;
 }

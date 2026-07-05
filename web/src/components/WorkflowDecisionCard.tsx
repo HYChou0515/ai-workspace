@@ -124,7 +124,7 @@ export function WorkflowDecisionCard({
               style={{
                 padding: "5px 12px",
                 borderRadius: 6,
-                border: "1px solid var(--line)",
+                border: "1px solid var(--paper-3)",
                 cursor: busy ? "default" : "pointer",
                 background:
                   choice === "approve" ? "var(--ok)" : choice === "reject" ? "var(--err)" : "var(--paper-2)",

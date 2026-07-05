@@ -107,7 +107,7 @@ export function SteerConfirmCard({
           style={{
             padding: "5px 12px",
             borderRadius: 6,
-            border: "1px solid var(--line)",
+            border: "1px solid var(--paper-3)",
             cursor: busy ? "default" : "pointer",
             background: "var(--ok)",
             color: "#fff",
@@ -124,7 +124,7 @@ export function SteerConfirmCard({
           style={{
             padding: "5px 12px",
             borderRadius: 6,
-            border: "1px solid var(--line)",
+            border: "1px solid var(--paper-3)",
             cursor: busy ? "default" : "pointer",
             background: "var(--paper-2)",
             color: "var(--text-paper)",

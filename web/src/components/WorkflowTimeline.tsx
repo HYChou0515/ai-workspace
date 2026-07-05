@@ -23,11 +23,11 @@ const FALLBACK_W = 600;
 function statusColor(status: string): string {
   switch (status) {
     case "passed":
-      return "var(--ok, #2e7d32)";
+      return "var(--ok)";
     case "failed":
       return "var(--err)";
     case "retrying":
-      return "var(--warn, #b26a00)";
+      return "var(--warn)";
     case "skipped":
       return "var(--text-paper-d2)";
     default: // running

@@ -49,7 +49,7 @@ export function JsonlView({
           key={lineno}
           data-testid="jsonl-record"
           className="jsonl-record"
-          style={{ display: "flex", gap: 8, alignItems: "flex-start", borderBottom: "1px solid var(--rule)" }}
+          style={{ display: "flex", gap: 8, alignItems: "flex-start", borderBottom: "1px solid var(--paper-3)" }}
         >
           <span
             className="jsonl-record__no"

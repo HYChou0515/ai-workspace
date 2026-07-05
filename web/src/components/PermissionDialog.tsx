@@ -221,7 +221,7 @@ const grantRow: React.CSSProperties = { display: "flex", alignItems: "center", g
 const verbsBox: React.CSSProperties = {
   margin: 0,
   padding: 10,
-  background: "var(--paper-1)",
+  background: "var(--paper-2)",
   borderRadius: "var(--radius-btn)",
   fontSize: pxToRem(11),
   color: "var(--text-paper-d)",

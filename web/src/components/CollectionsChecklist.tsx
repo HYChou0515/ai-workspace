@@ -63,7 +63,7 @@ export function CollectionsChecklist({
           fontSize: pxToRem(13),
           borderRadius: "var(--radius-btn)",
           border: "1px solid var(--paper-3)",
-          background: "var(--paper-1, var(--white))",
+          background: "var(--white)",
           color: "var(--text-paper)",
         }}
       />
