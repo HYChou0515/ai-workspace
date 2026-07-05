@@ -649,7 +649,11 @@ export function TopBar({
           type="button"
           onClick={onToggleIde}
           aria-pressed={!ideCollapsed}
-          title={ideCollapsed ? "Show the file workspace" : "Hide the file workspace"}
+          title={
+            ideCollapsed
+              ? "Show the file workspace"
+              : "Hide the file workspace — the chat expands to fill"
+          }
           style={{
             height: 28,
             border: "1px solid var(--paper-3)",
@@ -664,7 +668,7 @@ export function TopBar({
             cursor: "pointer",
           }}
         >
-          <Icon name="split" size={13} />
+          <Icon name="panel_left" size={13} />
           <span>Workspace</span>
         </button>
       )}
@@ -2114,7 +2118,7 @@ function TabClose({ path, onClose }: { path: string; onClose: () => void }) {
         alignItems: "center",
         justifyContent: "center",
         color: "var(--text-paper-d2)",
-        borderRadius: 3,
+        borderRadius: "var(--radius-chip)",
       }}
     >
       {dirty && !hover ? (
@@ -2608,7 +2612,7 @@ function LogLine({
   );
 }
 
-function StatusBar({
+export function StatusBar({
   activeTab,
   investigationId,
 }: {
@@ -2632,10 +2636,6 @@ function StatusBar({
         fontSize: pxToRem(11),
       }}
     >
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-        <Icon name="branch" size={12} color="var(--text-dark)" /> main
-      </span>
-      <span>↑ 0 ↓ 0</span>
       <span style={{ flex: 1 }} />
       <span>{kind ? `lang: ${kind}` : ""}</span>
       {isNotebook && (
@@ -2690,7 +2690,7 @@ function KernelStatusPill({
           gap: 3,
           padding: "0 6px",
           height: 18,
-          borderRadius: 3,
+          borderRadius: "var(--radius-chip)",
           background: "transparent",
           border: "1px solid rgba(255,255,255,0.2)",
           color: "var(--text-dark)",

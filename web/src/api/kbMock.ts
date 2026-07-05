@@ -29,7 +29,11 @@ const nextId = (prefix: string) => `${prefix}-${(++seq).toString(36)}`;
 /** The mock's internal doc row keeps the open-a-document fields (#395 moved
  * them off the list wire) so renderDocument can serve them; listDocuments
  * strips them to mirror the real BE. */
-type MockDoc = KbDocument & { quality_rationale?: string; parser_guidance_override?: string };
+type MockDoc = KbDocument & {
+  quality_rationale?: string;
+  quality_breakdown?: Record<string, number>;
+  parser_guidance_override?: string;
+};
 
 const collections = new Map<string, KbCollection>();
 /** #310: per-collection access state (absent ⇒ public with no grants). */
@@ -385,7 +389,9 @@ export const mockKbApi: KbApi = {
     const collection_id = documentId.split("/")[0] ?? "";
     const doc = (documents.get(collection_id) ?? []).find((d) => d.resource_id === documentId);
     return {
+      quality_score: doc?.quality_score,
       quality_rationale: doc?.quality_rationale,
+      quality_breakdown: doc?.quality_breakdown,
       parser_guidance_override: doc?.parser_guidance_override,
     };
   },

@@ -10,6 +10,7 @@ import {
   type Visibility,
   grantsFromPermission,
   permissionFromGrants,
+  previewSubjects,
 } from "../lib/permission";
 import { pxToRem } from "../lib/pxToRem";
 import { ModalShell } from "./ModalShell";
@@ -150,7 +151,9 @@ export function PermissionDialog({
         </button>
         {advanced && (
           <pre data-testid="advanced-verbs" style={verbsBox}>
-            {ALL_VERBS.map((verb) => `${verb}: ${preview[verb].join(", ") || "—"}`).join("\n")}
+            {ALL_VERBS.map(
+              (verb) => `${verb}: ${previewSubjects(visibility, preview, verb).join(", ") || "—"}`,
+            ).join("\n")}
           </pre>
         )}
 

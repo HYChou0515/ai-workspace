@@ -130,4 +130,13 @@ describe("TopBar Workspace toggle (#159)", () => {
     renderTopBar({ workspace: true, ideCollapsed: false });
     expect(screen.getByRole("button", { name: /go to file/i })).toBeInTheDocument();
   });
+
+  it("names the chat effect in the tooltip so the toggle isn't a mystery control", () => {
+    // #: the control reads as "Workspace", but its visible effect is on the chat
+    // (it fills the row when the IDE folds away). Spell that out so it's obvious.
+    renderTopBar({ workspace: true, ideCollapsed: false });
+    expect(screen.getByRole("button", { name: /workspace/i }).getAttribute("title")).toMatch(
+      /chat/i,
+    );
+  });
 });

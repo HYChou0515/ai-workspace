@@ -53,6 +53,22 @@ describe("WikiBrowser (#50 P7)", () => {
     expect(screen.getByText("reflow-zone-3.md")).toBeInTheDocument();
   });
 
+  it("truncates a long collection name in the header but keeps the full name as a tooltip (#445)", async () => {
+    _seedWikiMock("col-long", { "/index.md": "# Wiki\n" });
+    const longName =
+      "A Very Long Collection Name That Would Otherwise Overflow The Wiki Header Bar";
+    render(<WikiBrowser collectionId="col-long" collectionName={longName} client={mockKbApi} />);
+
+    // The full name survives as a hover tooltip even when the cell ellipsizes.
+    const nameEl = await screen.findByTitle(longName);
+    expect(nameEl).toHaveTextContent(longName);
+    expect(nameEl).toHaveStyle({
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap",
+    });
+  });
+
   it("renders a clickable Sources footer that opens the source document", async () => {
     _seedWikiMock("col-3", {
       "/index.md": "# Wiki\n\nBody.\n\nSources: reflow.md\n",
@@ -118,6 +134,8 @@ describe("WikiBrowser (#50 P7)", () => {
       />,
     );
 
+    // #460 P5: the guidance panel is collapsed by default — expand it first.
+    await userEvent.click(await screen.findByRole("button", { name: /wiki guidance/i }));
     const writing = await screen.findByLabelText(/writing guidance/i);
     expect(writing).toHaveValue("Organize by zone."); // prefilled from props
     const answering = screen.getByLabelText(/answering guidance/i);

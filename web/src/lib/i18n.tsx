@@ -35,7 +35,7 @@ export const messages = {
   "settings.about": { "zh-TW": "關於", en: "About" },
   "about.product": { "zh-TW": "產品", en: "Product" },
   "about.signin": { "zh-TW": "登入方式", en: "Sign-in" },
-  "about.signin.value": { "zh-TW": "單人示範（免登入）", en: "Single-user demo (no sign-in)" },
+  "about.signin.value": { "zh-TW": "示範模式（尚未接 SSO）", en: "Demo mode (SSO not configured)" },
   "about.docs": { "zh-TW": "開發者文件", en: "Developer docs" },
   "about.docs.link": { "zh-TW": "API 文件", en: "API reference" },
 

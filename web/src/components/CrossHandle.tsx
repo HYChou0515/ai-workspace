@@ -80,7 +80,7 @@ export function CrossHandle({
         cursor: "move",
         background: bg,
         border: active ? "1px solid var(--accent)" : "1px solid transparent",
-        borderRadius: 3,
+        borderRadius: "var(--radius-chip)",
         transition: active ? "none" : "background 0.15s ease, border-color 0.15s ease",
       }}
     />

@@ -444,7 +444,29 @@ describe("KbCollectionsPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
     await userEvent.click(screen.getByRole("button", { name: "Collection settings" }));
     await userEvent.click(screen.getByRole("menuitem", { name: "重新索引全部" }));
+    // A whole-collection re-index confirms first, then fires on the primary.
+    const dialog = await screen.findByRole("dialog", { name: "Re-index all documents" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "重新索引全部" }));
     expect(reindexCollection).toHaveBeenCalledWith("c1");
+  });
+
+  it("does not re-index all when the confirm is cancelled", async () => {
+    const reindexCollection = vi.fn(async () => {});
+    const client = {
+      listCollections: async () => [col({ resource_id: "c1", name: "kb", doc_count: 1 })],
+      listDocuments: async () =>
+        page([
+          { resource_id: "c1/me/a.md", path: "a.md", content_type: "text/markdown", created_by: "me", status: "ready" },
+        ]),
+      reindexCollection,
+    } as unknown as Client;
+    renderKb(client);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Open kb" }));
+    await userEvent.click(await screen.findByTestId("kb-reindex-all"));
+    const dialog = await screen.findByRole("dialog", { name: "Re-index all documents" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(reindexCollection).not.toHaveBeenCalled();
   });
 
   it("surfaces Re-index all as a Documents-tab action that re-indexes the collection (#172)", async () => {
@@ -463,6 +485,8 @@ describe("KbCollectionsPage", () => {
     const btn = await screen.findByTestId("kb-reindex-all");
     expect(btn).toBeEnabled();
     await userEvent.click(btn);
+    const dialog = await screen.findByRole("dialog", { name: "Re-index all documents" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "重新索引全部" }));
     expect(reindexCollection).toHaveBeenCalledWith("c1");
   });
 
@@ -497,6 +521,8 @@ describe("KbCollectionsPage", () => {
     // failed docs (not the healthy `ready` one) — issue #223.
     const btn = await screen.findByTestId("kb-reindex-failed");
     await userEvent.click(btn);
+    const dialog = await screen.findByRole("dialog", { name: "Re-index failed documents" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "重試" }));
     expect(reindexCollection).toHaveBeenCalledWith("c1", { only: "failed" });
   });
 

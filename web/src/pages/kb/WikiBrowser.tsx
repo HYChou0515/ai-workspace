@@ -42,7 +42,7 @@ const _CODE_PHASE_KEYS = new Set(CODE_WIKI_PHASES.map(([k]) => k));
  * populated states, so guidance can be set BEFORE the first build (no
  * death-lock). Saving PATCHes the collection.
  */
-function WikiGuidanceEditor({
+export function WikiGuidanceEditor({
   collectionId,
   maintainerGuidance,
   readerGuidance,
@@ -54,6 +54,9 @@ function WikiGuidanceEditor({
   client: KbApi;
 }) {
   const qc = useQueryClient();
+  // #460 P5: collapsed by default so this settings panel doesn't grow inline
+  // directly below the file tree; it's a discoverable disclosure instead.
+  const [open, setOpen] = useState(false);
   const [writing, setWriting] = useState(maintainerGuidance);
   const [answering, setAnswering] = useState(readerGuidance);
   useEffect(() => {
@@ -92,7 +95,7 @@ function WikiGuidanceEditor({
       style={{
         textAlign: "left",
         border: "1px solid var(--paper-3)",
-        borderRadius: 10,
+        borderRadius: "var(--radius-card)",
         padding: 16,
         background: "var(--paper-2)",
         display: "flex",
@@ -101,55 +104,75 @@ function WikiGuidanceEditor({
         maxWidth: 560,
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          width: "100%",
+          padding: 0,
+          background: "none",
+          border: "none",
+          cursor: "pointer",
+          textAlign: "left",
+        }}
+      >
+        <Icon name={open ? "chev_d" : "chev_r"} size={12} color="var(--text-paper-d)" />
         <Icon name="sparkle" size={13} color="var(--accent-h)" />
         <span className="caps" style={{ fontSize: pxToRem(11) }}>
           Wiki guidance
         </span>
-      </div>
+      </button>
 
-      <label htmlFor="wiki-writing-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600 }}>
-        Writing guidance
-      </label>
-      <p style={hint}>
-        How pages are organised and written. Applies to documents added from now on — rebuild to
-        apply it to existing pages.
-      </p>
-      <textarea
-        id="wiki-writing-guidance"
-        value={writing}
-        placeholder="e.g. Group pages by reflow zone; keep an index of defect codes."
-        onChange={(e) => setWriting(e.target.value)}
-        style={ta}
-      />
+      {open && (
+        <>
+          <label htmlFor="wiki-writing-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
+            Writing guidance
+          </label>
+          <p style={hint}>
+            How pages are organised and written. Applies to documents added from now on — rebuild to
+            apply it to existing pages.
+          </p>
+          <textarea
+            id="wiki-writing-guidance"
+            value={writing}
+            placeholder="e.g. Group pages by reflow zone; keep an index of defect codes."
+            onChange={(e) => setWriting(e.target.value)}
+            style={ta}
+          />
 
-      <label htmlFor="wiki-answering-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
-        Answering guidance
-      </label>
-      <p style={hint}>How questions are answered. Takes effect on the next question.</p>
-      <textarea
-        id="wiki-answering-guidance"
-        value={answering}
-        placeholder="e.g. Lead with a one-line summary, then the detail."
-        onChange={(e) => setAnswering(e.target.value)}
-        style={ta}
-      />
+          <label htmlFor="wiki-answering-guidance" style={{ fontSize: pxToRem(12.5), fontWeight: 600, marginTop: 10 }}>
+            Answering guidance
+          </label>
+          <p style={hint}>How questions are answered. Takes effect on the next question.</p>
+          <textarea
+            id="wiki-answering-guidance"
+            value={answering}
+            placeholder="e.g. Lead with a one-line summary, then the detail."
+            onChange={(e) => setAnswering(e.target.value)}
+            style={ta}
+          />
 
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
-        <button
-          type="button"
-          className="kb-btn kb-btn--primary"
-          disabled={!dirty || saveMut.isPending}
-          onClick={() => saveMut.mutate()}
-        >
-          {saveMut.isPending ? "Saving…" : "Save guidance"}
-        </button>
-        {saveMut.isError && (
-          <span role="alert" style={{ fontSize: pxToRem(12), color: "var(--warn)" }}>
-            Couldn't save — try again.
-          </span>
-        )}
-      </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+            <button
+              type="button"
+              className="kb-btn kb-btn--primary"
+              disabled={!dirty || saveMut.isPending}
+              onClick={() => saveMut.mutate()}
+            >
+              {saveMut.isPending ? "Saving…" : "Save guidance"}
+            </button>
+            {saveMut.isError && (
+              <span role="alert" style={{ fontSize: pxToRem(12), color: "var(--warn)" }}>
+                Couldn't save — try again.
+              </span>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }
@@ -226,7 +249,7 @@ export function WikiBrowser({
         style={{
           width: 28,
           height: 28,
-          borderRadius: 7,
+          borderRadius: "var(--radius-btn)",
           background: "var(--ink)",
           display: "flex",
           alignItems: "center",
@@ -235,8 +258,24 @@ export function WikiBrowser({
       >
         <Icon name="layers" size={15} color="var(--accent)" />
       </div>
-      <div style={{ fontSize: pxToRem(14), fontWeight: 600, color: "var(--ink)" }}>
-        {collectionName} <span style={{ color: "var(--text-paper-d2)", fontWeight: 400 }}>· Wiki</span>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          gap: 4,
+          minWidth: 0,
+          fontSize: pxToRem(14),
+          fontWeight: 600,
+          color: "var(--ink)",
+        }}
+      >
+        <span
+          title={collectionName}
+          style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+        >
+          {collectionName}
+        </span>
+        <span style={{ flexShrink: 0, color: "var(--text-paper-d2)", fontWeight: 400 }}>· Wiki</span>
       </div>
       <span
         style={{
@@ -371,7 +410,7 @@ export function WikiBrowser({
       status?.phase && _CODE_PHASE_KEYS.has(status.phase) ? CODE_WIKI_PHASES : WIKI_PHASES;
     const activeIdx = STEPS.findIndex(([k]) => k === status?.phase);
     return (
-      <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: 10, overflow: "hidden" }}>
+      <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
         {header}
         <div
           style={{
@@ -468,7 +507,7 @@ export function WikiBrowser({
           style={{
             width: 52,
             height: 52,
-            borderRadius: 13,
+            borderRadius: "var(--radius-modal)",
             background: "var(--accent-soft)",
             display: "flex",
             alignItems: "center",
@@ -507,7 +546,7 @@ export function WikiBrowser({
 
   // ── ready (possibly mid-rebuild): the editable wiki IDE ─────────────
   return (
-    <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: 10, overflow: "hidden" }}>
+    <div className="kb-wiki" style={{ border: "1px solid var(--paper-3)", borderRadius: "var(--radius-card)", overflow: "hidden" }}>
       {header}
       {errorBanner && <div style={{ padding: "10px 14px 0" }}>{errorBanner}</div>}
       <KbWikiIde collectionId={collectionId} onOpenDoc={onOpenDoc} client={client} />

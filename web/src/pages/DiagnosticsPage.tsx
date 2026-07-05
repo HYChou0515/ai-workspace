@@ -168,7 +168,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
                 alignItems: "center",
                 gap: 6,
                 padding: "7px 14px",
-                borderRadius: 7,
+                borderRadius: "var(--radius-btn)",
                 border: "1px solid var(--paper-3)",
                 background: "var(--paper-2)",
                 cursor: running ? "default" : "pointer",
@@ -208,7 +208,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
               style={{
                 padding: "6px 12px",
                 border: "1px solid var(--paper-3)",
-                borderRadius: 7,
+                borderRadius: "var(--radius-btn)",
                 background: tab === id ? "var(--accent-soft)" : "transparent",
                 color: tab === id ? "var(--accent-h)" : "var(--text-paper-d)",
                 fontSize: "var(--text-body-sm)",
@@ -237,7 +237,7 @@ export function DiagnosticsPage({ client = healthApi }: { client?: HealthApi }) 
             style={{
               margin: "14px 0 0",
               padding: "8px 12px",
-              borderRadius: 7,
+              borderRadius: "var(--radius-btn)",
               background: "rgba(45,108,201,.08)",
               color: "var(--info)",
               fontSize: "var(--text-body-sm)",

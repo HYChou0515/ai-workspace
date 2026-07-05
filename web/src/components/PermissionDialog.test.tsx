@@ -107,6 +107,36 @@ describe("PermissionDialog", () => {
     expect(screen.getByTestId("advanced-verbs").textContent).toContain("read_content: user:alice");
   });
 
+  // #460 P6 — the advanced preview must follow the SELECTED visibility, not echo
+  // the stored Restricted grant list for every mode.
+  it("recomputes the advanced preview from the selected visibility", () => {
+    renderWithQuery(
+      <PermissionDialog
+        resourceName="Docs"
+        owner="bob"
+        value={perm({ read_meta: ["user:alice"], read_content: ["user:alice"], change_permission: ["user:carol"] })}
+        onSubmit={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("toggle-advanced"));
+    // Restricted (default): named grants.
+    expect(screen.getByTestId("advanced-verbs").textContent).toContain("read_content: user:alice");
+
+    // Public: everyone — except change_permission, which stays grant-list only.
+    fireEvent.click(screen.getByTestId("visibility-public"));
+    const pub = screen.getByTestId("advanced-verbs").textContent ?? "";
+    expect(pub).toContain("read_meta: everyone");
+    expect(pub).not.toContain("read_meta: user:alice");
+    expect(pub).toContain("change_permission: user:carol");
+
+    // Private: nobody — but change_permission still shows its grant list.
+    fireEvent.click(screen.getByTestId("visibility-private"));
+    const priv = screen.getByTestId("advanced-verbs").textContent ?? "";
+    expect(priv).toContain("read_meta: —");
+    expect(priv).toContain("change_permission: user:carol");
+  });
+
   // #308 — the per-doc override reuses this dialog with a narrower role set + copy.
   it("restricts the role picker to the roles it is given (DOC_ROLES = Viewer only)", () => {
     renderWithQuery(

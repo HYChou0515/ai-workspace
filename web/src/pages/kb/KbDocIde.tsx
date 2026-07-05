@@ -19,7 +19,7 @@ import { FileServiceProvider } from "../../api/fileService";
 import { kbApi, type KbApi, type KbDocument } from "../../api/kb";
 import { kbFileService, normPath } from "../../api/kbFileService";
 import { qk } from "../../api/queryKeys";
-import { DialogProvider } from "../../components/Dialog";
+import { DialogProvider, useDialog } from "../../components/Dialog";
 import { Icon } from "../../components/Icon";
 import { PermissionDialog } from "../../components/PermissionDialog";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -42,6 +42,7 @@ import { FileTree } from "../investigation/FileTree";
 import { TuneParsingModal } from "./TuneParsingModal";
 import { docHref } from "./kbLinks";
 import { QualityBadge } from "./QualityBadge";
+import { QualityDetails } from "./QualityDetails";
 import { decodeLeafPath, encodeLeafPath } from "./leafPath";
 import { pxToRem } from "../../lib/pxToRem";
 import { useCollectionDocs } from "./useCollectionDocs";
@@ -69,7 +70,7 @@ function EmptyUploadCta({
         padding: 40,
         margin: 12,
         border: "2px dashed var(--paper-3)",
-        borderRadius: 10,
+        borderRadius: "var(--radius-card)",
         color: "var(--text-paper-d)",
         textAlign: "center",
       }}
@@ -88,20 +89,34 @@ function EmptyUploadCta({
   );
 }
 
-export function KbDocIde({
-  collectionId,
-  client = kbApi,
-  onPickFiles,
-  uploading = false,
-}: {
+type KbDocIdeProps = {
   collectionId: string;
   client?: KbApi;
   // #172: when the page wires these in, an empty collection shows an upload
   // call-to-action (drop hint + button) instead of passive text.
   onPickFiles?: () => void;
   uploading?: boolean;
-}) {
+};
+
+// The DialogProvider wraps the whole body (not just the file tree) so the bulk
+// re-index confirm — raised from `reindexPaths`, which resolves a tree
+// selection to its actual doc set — can reach the shared modal.
+export function KbDocIde(props: KbDocIdeProps) {
+  return (
+    <DialogProvider>
+      <KbDocIdeBody {...props} />
+    </DialogProvider>
+  );
+}
+
+function KbDocIdeBody({
+  collectionId,
+  client = kbApi,
+  onPickFiles,
+  uploading = false,
+}: KbDocIdeProps) {
   const qc = useQueryClient();
+  const dialog = useDialog();
   // #395: one-request fetch-all + a cheap status poll while anything indexes
   // (progress merges in client-side; the list refetches only on real change).
   const { docs, docsQuery } = useCollectionDocs(collectionId, client);
@@ -240,10 +255,25 @@ export function KbDocIde({
         if (exact) ids.add(exact.resource_id);
         else for (const d of docs) if (normPath(d.path).startsWith(np + "/")) ids.add(d.resource_id);
       }
+      if (ids.size === 0) return;
+      // Re-indexing >=2 documents at once restarts a lot of work — confirm first.
+      // A single doc (right-click one file) reindexes straight away. The count is
+      // the resolved doc set, so a folder that expands to many docs also confirms.
+      if (ids.size >= 2) {
+        const choice = await dialog.confirm({
+          title: `Re-index ${ids.size} documents`,
+          body: `Re-index all ${ids.size} selected documents? This restarts indexing for every one.`,
+          actions: [
+            { id: "go", label: "Re-index", variant: "primary" },
+            { id: "cancel", label: "Cancel" },
+          ],
+        });
+        if (choice !== "go") return;
+      }
       for (const id of ids) await client.reindexDocument(id);
       refetch();
     },
-    [docs, docByPath, client, refetch],
+    [docs, docByPath, client, refetch, dialog],
   );
   // #402: draggable tree width, persisted + clamped. Shared key with the wiki
   // IDE so the two KB trees remember one width. `treeStart` snapshots the width
@@ -271,8 +301,7 @@ export function KbDocIde({
     <FileServiceProvider value={service}>
       <FileBufferProvider store={bufferStore}>
         <EditModeProvider>
-          <DialogProvider>
-            <div className="kb-ide">
+          <div className="kb-ide">
               <div className="kb-ide__main">
                 <div className="kb-ide__tree" style={{ width: treeW, flexShrink: 0 }}>
                   <FileTree
@@ -313,7 +342,11 @@ export function KbDocIde({
                   )}
                 </div>
               </div>
-              <KbStatusBar doc={activeDoc} rationale={docMetaQuery.data?.quality_rationale} />
+              <KbStatusBar
+                doc={activeDoc}
+                rationale={docMetaQuery.data?.quality_rationale}
+                breakdown={docMetaQuery.data?.quality_breakdown}
+              />
               {tuneDoc && (
                 <TuneParsingModal
                   collectionId={collectionId}
@@ -347,8 +380,7 @@ export function KbDocIde({
                   onClose={() => setPermDoc(null)}
                 />
               )}
-            </div>
-          </DialogProvider>
+          </div>
         </EditModeProvider>
       </FileBufferProvider>
     </FileServiceProvider>
@@ -365,7 +397,15 @@ function fmtBytes(n: number): string {
  * per-doc chunks / cited / size that used to live in the table column.
  * `rationale` (#105 "why good/bad") arrives from the open doc's render call —
  * #395 moved it off the list row. */
-function KbStatusBar({ doc, rationale }: { doc?: KbDocument; rationale?: string }) {
+function KbStatusBar({
+  doc,
+  rationale,
+  breakdown,
+}: {
+  doc?: KbDocument;
+  rationale?: string;
+  breakdown?: Record<string, number>;
+}) {
   const t = useT();
   if (!doc) {
     return <div className="kb-ide__status kb-ide__status--empty" data-testid="kb-ide-status" />;
@@ -410,17 +450,10 @@ function KbStatusBar({ doc, rationale }: { doc?: KbDocument; rationale?: string 
       )}
       <span className="kb-ide__status-state">{status}</span>
       {typeof doc.quality_score === "number" && (
-        // #105: the AI quality verdict — the coloured grade + a short rationale
-        // ("why good/bad"), title-truncated. Only when the doc has been judged.
-        <span className="kb-ide__status-quality" data-testid="kb-ide-quality">
-          <span className="kb-ide__status-quality-label">{t("kb.quality.heading")}</span>
-          <QualityBadge score={doc.quality_score} />
-          {rationale ? (
-            <span className="kb-ide__status-quality-why" title={rationale}>
-              {rationale}
-            </span>
-          ) : null}
-        </span>
+        // #105 / #460 P7+P8: the AI quality verdict — coloured grade + visible
+        // good/ok/bad label, expanding into the full rationale + per-dimension
+        // breakdown. Only when the doc has been judged.
+        <QualityDetails score={doc.quality_score} rationale={rationale} breakdown={breakdown} />
       )}
       {(chunksLabel || rest.length > 0) && (
         <span className="kb-ide__status-meta">

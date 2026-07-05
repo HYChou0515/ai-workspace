@@ -173,7 +173,7 @@ function CellModal({
 
 const btn = (primary = false) => ({
   padding: "6px 12px",
-  borderRadius: 7,
+  borderRadius: "var(--radius-btn)",
   border: "1px solid var(--paper-3)",
   background: primary ? "var(--accent-soft)" : "var(--paper-2)",
   color: primary ? "var(--accent-h)" : "var(--text-paper)",

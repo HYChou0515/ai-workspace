@@ -486,7 +486,7 @@ function MessageBlock({
             style={{
               width: 20,
               height: 20,
-              borderRadius: 3,
+              borderRadius: "var(--radius-chip)",
               background: "var(--ink)",
               display: "inline-flex",
               alignItems: "center",

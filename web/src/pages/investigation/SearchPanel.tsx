@@ -115,7 +115,7 @@ export function SearchPanel({
     });
 
   return (
-    <aside style={frame}>
+    <aside style={frame} data-testid="search-frame">
       <div style={header}>
         <span className="caps">Search</span>
         {busy && <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>searching…</span>}
@@ -131,8 +131,8 @@ export function SearchPanel({
         >
           <Icon name={showReplace ? "chev_d" : "chev_r"} size={12} />
         </button>
-        <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={fieldWrap}>
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={fieldWrap} data-testid="search-field">
             <input
               autoFocus
               value={query}
@@ -140,7 +140,7 @@ export function SearchPanel({
               placeholder="Search"
               style={input}
             />
-            <div style={{ display: "flex", gap: 2 }}>
+            <div style={{ display: "flex", gap: 2, flexShrink: 0 }} data-testid="search-toggles">
               <Toggle label="Match case" on={caseSensitive} onClick={() => setCaseSensitive((v) => !v)}>
                 Aa
               </Toggle>
@@ -316,6 +316,10 @@ const frame: React.CSSProperties = {
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
+  // Clip our own overflow so a narrow sidebar never lets the search field /
+  // toggles paint over the adjacent editor pane (#460 P2 — every other sidebar
+  // frame clips; this one didn't).
+  overflow: "hidden",
   background: "var(--paper)",
   borderRight: "1px solid var(--paper-3)",
 };
@@ -332,6 +336,9 @@ const fieldWrap: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 4,
+  // Allow the row to shrink below its content width so the input yields first
+  // (it has minWidth:0) instead of shoving the fixed-width toggles out (#460 P2).
+  minWidth: 0,
   border: "1px solid var(--paper-3)",
   borderRadius: "var(--radius-btn)",
   background: "var(--white)",
