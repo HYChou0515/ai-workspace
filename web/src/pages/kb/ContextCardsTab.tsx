@@ -15,6 +15,7 @@ import remarkGfm from "remark-gfm";
 
 import { kbApi, type KbApi, type KbContextCard } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { Icon } from "../../components/Icon";
 import { MonacoEditor } from "../../components/MonacoEditor";
 import { Skeleton } from "../../components/Skeleton";
 import { useT } from "../../lib/i18n";
@@ -167,7 +168,7 @@ export function ContextCardsTab({
           // The blank form is its own URL; the effect seeds the draft.
           onClick={() => navigate(`${cardsBase}/${NEW_CARD}`)}
         >
-          + New card
+          <Icon name="plus" size={13} /> New card
         </button>
         <button
           type="button"

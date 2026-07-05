@@ -157,6 +157,15 @@ describe("ContextCardsTab (#106)", () => {
     expect(screen.queryByLabelText("Explanation")).not.toBeInTheDocument();
   });
 
+  it("labels the create button consistently: a plus icon + 'New card', no bare + prefix (#466)", async () => {
+    render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
+    const btn = await screen.findByRole("button", { name: /new card/i });
+    // Matches the KbCollectionsGrid "New collection" pattern: icon carries the "+",
+    // the label is the object-scoped noun — not a textual "+ New card".
+    expect(btn.textContent?.trim()).toBe("New card"); // no textual "+"
+    expect(btn.querySelector('[data-icon="plus"]')).toBeInTheDocument();
+  });
+
   it("authors a new card and saves it through createContextCard", async () => {
     const spy = vi.spyOn(mockKbApi, "createContextCard");
     render(<ContextCardsTab collectionId="col-1" client={mockKbApi} />);
