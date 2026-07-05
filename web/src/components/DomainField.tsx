@@ -13,6 +13,7 @@
 import { useState } from "react";
 
 import type { FieldSpec } from "../api/types";
+import { Icon } from "./Icon";
 import { type ChipTone, chipStyle } from "./StatusChip";
 
 export function DomainField({
@@ -66,18 +67,52 @@ export function DomainField({
     );
   }
 
+  // Editable → a REAL <button> (keyboard-operable, cursor, focus) with a pencil
+  // hint, so an inline-editable value never masquerades as a passive chip/label
+  // (#466 ①). Read-only → a plain, non-interactive <span>.
   const open = onChange ? () => setEditing(true) : undefined;
   if (field.kind === "select") {
+    if (!open) {
+      return (
+        <span data-tone={tone} style={chipStyle(tone)}>
+          {text}
+        </span>
+      );
+    }
     return (
-      <span
+      <button
+        type="button"
         data-tone={tone}
-        style={chipStyle(tone)}
         onClick={open}
-        role={onChange ? "button" : undefined}
+        title="Click to edit"
+        style={{ ...chipStyle(tone), border: "none", cursor: "pointer" }}
       >
         {text}
-      </span>
+        <Icon name="pencil" size={9} />
+      </button>
     );
   }
-  return <span onClick={open}>{text}</span>;
+  if (!open) return <span>{text}</span>;
+  return (
+    <button
+      type="button"
+      onClick={open}
+      title="Click to edit"
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        padding: 0,
+        font: "inherit",
+        color: "inherit",
+        background: "none",
+        border: "none",
+        borderBottom: "1px dashed var(--paper-3)",
+        cursor: "pointer",
+      }}
+    >
+      {text || "—"}
+      <Icon name="pencil" size={9} color="var(--text-paper-d2)" />
+    </button>
+  );
 }
