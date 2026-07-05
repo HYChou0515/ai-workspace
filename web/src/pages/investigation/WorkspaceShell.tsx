@@ -26,6 +26,7 @@ import { DialogProvider, useDialog } from "../../components/Dialog";
 import { FileServiceProvider, investigationFileService } from "../../api/fileService";
 import { WorkspaceSlugProvider, useWorkspaceSlug } from "../../hooks/useWorkspaceSlug";
 import { EditModeProvider, useEditMode } from "../../hooks/editMode";
+import { OpenFileProvider } from "../../hooks/openFile";
 import {
   FileBufferProvider,
   FileBufferStore,
@@ -353,6 +354,7 @@ function ShellBody({
   }, []);
 
   return (
+    <OpenFileProvider value={openFile}>
     <RequestCloseContext.Provider value={requestCloseTab}>
       <div
         data-testid="page-item"
@@ -515,6 +517,7 @@ function ShellBody({
         />
       </div>
     </RequestCloseContext.Provider>
+    </OpenFileProvider>
   );
 }
 

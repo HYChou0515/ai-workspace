@@ -15,9 +15,11 @@
 
 import { useMemo } from "react";
 
+import type { EntityHealthFinding } from "../../api/entities";
 import { useFileService } from "../../api/fileService";
 import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
+import { useOpenFile } from "../../hooks/openFile";
 import { useEntities, useEntityCatalog, useEntityHealth, useReferencedRecords } from "../../hooks/useEntities";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
 import { useUsers } from "../../hooks/useUsers";
@@ -45,6 +47,7 @@ export function AiYamlRenderer({ path }: { path: string }) {
   const healthQ = useEntityHealth(slug, itemId, isHealth);
   const write = useEntityWrite(slug, itemId, entityName);
   const users = useUsers();
+  const openFile = useOpenFile();
 
   // Resolve the type + load its referenced types BEFORE the early returns, so the
   // ref-record queries stay unconditional (rules of hooks). `milestone.title`
@@ -63,7 +66,16 @@ export function AiYamlRenderer({ path }: { path: string }) {
   if (!spec) return <YamlTree text={entry.text} />;
 
   if (spec.view === "health") {
-    return <HealthView title={spec.title} findings={healthQ.data?.findings ?? []} />;
+    // Click-to-fix: resolve the finding's type → `records_path` from the catalog
+    // and open its record file. Only offered when a shell publishes an opener
+    // (§F, #454); an unknown type just no-ops rather than opening a bad path.
+    const onJump = openFile
+      ? (finding: EntityHealthFinding) => {
+          const t = catalogQ.data?.types.find((ty) => ty.name === finding.type_name);
+          if (t) openFile(`/${t.records_path}/${finding.number}.md`);
+        }
+      : undefined;
+    return <HealthView title={spec.title} findings={healthQ.data?.findings ?? []} onJump={onJump} />;
   }
 
   const list = listQ.data;
