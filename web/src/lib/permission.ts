@@ -154,3 +154,29 @@ export function permissionFromGrants(
   }
   return next;
 }
+
+/** Display token for "anyone in the workspace" in the advanced preview — public
+ * grants a verb to everyone without listing subjects (the backend just returns
+ * True), so the preview shows this rather than a user list. Display-only. */
+export const EVERYONE = "everyone";
+
+/** #460 P6 — the per-verb subjects to SHOW for a given selected `visibility`,
+ * mirroring the backend `authorize()` decision (perm/authorize.py) so the
+ * advanced preview tells the truth for the currently-chosen radio instead of
+ * echoing the stored grant lists:
+ *   • change_permission — never opened by visibility; always the grant list.
+ *   • public   — everyone (all other verbs).
+ *   • private  — nobody.
+ *   • restricted — the per-verb grant list verbatim.
+ * `perm` should be the pending permission (permissionFromGrants output) so the
+ * restricted case reflects unsaved edits. */
+export function previewSubjects(
+  visibility: Visibility,
+  perm: CollectionPermission,
+  verb: keyof Omit<CollectionPermission, "visibility">,
+): string[] {
+  if (verb === "change_permission") return perm.change_permission;
+  if (visibility === "public") return [EVERYONE];
+  if (visibility === "private") return [];
+  return perm[verb];
+}
