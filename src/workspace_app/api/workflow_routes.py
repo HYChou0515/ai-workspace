@@ -20,6 +20,8 @@ from starlette.datastructures import UploadFile
 
 from ..files import WorkspaceFiles
 from ..resources import Conversation
+from ..workflow.event_backfill import backfill_trigger_lag, find_trigger_lag
+from ..workflow.event_dispatch import EventTriggerDispatcher
 from ..workflow.handle import WorkflowHandle
 from ..workflow.inputs import resolve_inputs
 from ..workflow.orchestrator import (
@@ -97,9 +99,27 @@ def register_workflow_routes(
     turn_engine: ChatTurnEngine,
     workflow_orchestrator: WorkflowOrchestrator,
     workflow_executor: WorkflowExecutor,
+    event_dispatcher: EventTriggerDispatcher,
 ) -> None:
     """Mount the workflow profile + run routes onto ``app``."""
     conv_rm = spec.get_resource_manager(Conversation)
+
+    async def _item_entities_of(investigation_id: str):
+        """A ``type_name -> current parsed records`` resolver over the item's entity store —
+        the read side the P11 backfill walks to find lag. An undeclared type yields no records
+        (a trigger can name a type this item doesn't ship)."""
+        from ..entity.catalog import discover_catalog
+        from ..entity.store import EntityStore
+
+        catalog, _diags = await discover_catalog(files, investigation_id)
+        store = EntityStore(files, investigation_id, catalog)
+
+        async def go(type_name: str):
+            if type_name not in catalog:
+                return []
+            return (await store.query(type_name)).entities
+
+        return go
 
     async def _workflow_manifest_or_404(slug: str, item_id: str, workflow_id: str = ""):
         """Validate the item belongs to the slug AND carries the requested workflow —
@@ -412,3 +432,34 @@ def register_workflow_routes(
         except NotAwaitingSteer as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return _SteerConfirmOut(run_id=run_id, applied=body.approve)
+
+    @app.get("/a/{slug}/items/{item_id}/event-triggers/lag")
+    async def event_trigger_lag(slug: str, item_id: str) -> list[dict]:
+        """#429 P11 (D2d): the records each of this app's event triggers has NOT fired for on
+        this item — the watermark's discoverable lag (a run missed when a pod died mid-dispatch,
+        or a trigger added after the write). Read-only, so it doubles as the backfill dry-run."""
+        investigation_id = locator.require_item(slug, item_id)
+        triggers = [t for t in event_dispatcher.event_triggers() if t.slug == slug]
+        lag = await find_trigger_lag(
+            investigation_id,
+            triggers=triggers,
+            entities_of=await _item_entities_of(investigation_id),
+            watermark=event_dispatcher.watermark,
+        )
+        return [msgspec.to_builtins(tl) for tl in lag]
+
+    @app.post("/a/{slug}/items/{item_id}/event-triggers/backfill")
+    async def backfill_event_triggers(slug: str, item_id: str) -> dict:
+        """#429 P11 (D2d): re-dispatch every record its trigger's watermark is behind on,
+        catching the missed runs up. Idempotent — the dispatcher's once-per-version gate means
+        a version a live dispatch already handled is a no-op, so it's safe to re-run."""
+        investigation_id = locator.require_item(slug, item_id)
+        triggers = [t for t in event_dispatcher.event_triggers() if t.slug == slug]
+        report = await backfill_trigger_lag(
+            investigation_id,
+            triggers=triggers,
+            entities_of=await _item_entities_of(investigation_id),
+            watermark=event_dispatcher.watermark,
+            dispatch=event_dispatcher.dispatch,
+        )
+        return msgspec.to_builtins(report)

@@ -1352,7 +1352,12 @@ async def _entity_store(ctx: RunContextWrapper[AgentToolContext], type_name: str
             None,
             f"error: unknown entity type {type_name!r} (this workspace declares: {declared})",
         )
-    return EntityStore(files, ws, catalog, locks=_ENTITY_LOCKS), None
+    return (
+        EntityStore(
+            files, ws, catalog, locks=_ENTITY_LOCKS, on_write=ctx.context.entity_write_sink
+        ),
+        None,
+    )
 
 
 def _entity_diag_suffix(entity) -> str:
@@ -1380,7 +1385,11 @@ async def create_entity_impl(
     from datetime import UTC, datetime
 
     created = await store.create(
-        type_name, args, actor=ctx.context.acting_user, now=datetime.now(UTC).date().isoformat()
+        type_name,
+        args,
+        actor=ctx.context.acting_user,
+        now=datetime.now(UTC).date().isoformat(),
+        origin=ctx.context.entity_write_origin,
     )
     return f"Created {type_name} #{created.number}.{_entity_diag_suffix(created)}"
 
@@ -1405,7 +1414,12 @@ async def update_entity_impl(
         return err
     try:
         updated = await store.update(
-            type_name, number, patch, expected_version=expected_version or None
+            type_name,
+            number,
+            patch,
+            expected_version=expected_version or None,
+            actor=ctx.context.acting_user,
+            origin=ctx.context.entity_write_origin,
         )
     except FileNotFound:
         return f"error: no {type_name} #{number} in this workspace"
@@ -1447,7 +1461,13 @@ async def link_entity_impl(
     if store is None:
         return err
     try:
-        await store.update(type_name, number, {field: target})
+        await store.update(
+            type_name,
+            number,
+            {field: target},
+            actor=ctx.context.acting_user,
+            origin=ctx.context.entity_write_origin,
+        )
     except FileNotFound:
         return f"error: no {type_name} #{number} in this workspace"
     return f"Linked {type_name} #{number} {field} → #{target}."

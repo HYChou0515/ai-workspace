@@ -140,6 +140,17 @@ class EventTriggerDispatcher:
         self._watermark = watermark
         self._max_depth = max_depth
 
+    @property
+    def watermark(self) -> IEventWatermark:
+        """The processing high-water ledger — read by the P11 backfill to find lag."""
+        return self._watermark
+
+    def event_triggers(self) -> list[EventTrigger]:
+        """This dispatcher's current event triggers (re-scanned per call). The P11 backfill
+        reads them THROUGH the dispatcher so its lag query, its re-dispatch, and the live
+        dispatch all see one trigger set."""
+        return self._triggers()
+
     async def dispatch(self, event: EntityWriteEvent) -> None:
         """Fire every matching event trigger for ``event``. Errors from a single trigger are
         swallowed (logged) so one bad trigger can't turn a committed entity write into a 500 —

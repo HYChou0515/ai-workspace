@@ -771,15 +771,19 @@ def create_app(
     # #429 P9: entity-write event triggers. The dispatcher matches an entity create/update
     # against declared event triggers and fires runs (under each trigger's acting_user); the
     # orchestrator emits its runs' entity writes through it (carrying the recursion marker),
-    # and the entity routes emit a human's writes. The watermark model is registered in the
-    # lifespan (post-apply, so no CRUD routes) — see build_lifespan.
+    # and the entity routes emit a human's writes. The opaque watermark model is registered
+    # here (post-``spec.apply``, so no CRUD routes — like _SandboxActivity/_SandboxAddress) so
+    # the in-request watermark reads (P9 dispatch + the P11 backfill routes) never depend on the
+    # lifespan having run first; ``register_event_watermark`` is idempotent.
     from ..workflow.event_dispatch import (
         EventTriggerDispatcher,
         SpecstarEventWatermark,
         build_event_trigger_start,
+        register_event_watermark,
     )
     from ..workflow.triggers import discover_event_triggers
 
+    register_event_watermark(spec)
     event_dispatcher = EventTriggerDispatcher(
         triggers=discover_event_triggers,
         app_of_item=locator.slug_of,
@@ -787,6 +791,11 @@ def create_app(
         watermark=SpecstarEventWatermark(spec),
     )
     workflow_orchestrator.entity_write_sink = event_dispatcher.dispatch
+    # #429 P10: agent-tool entity writes (chat + workflow agent nodes) also fire event
+    # triggers — same dispatcher, so an AI edit is indistinguishable from a UI/workflow
+    # write. Set post-construction (the builder predates the dispatcher, like the
+    # orchestrator's sink above).
+    turn_ctx.entity_write_sink = event_dispatcher.dispatch
     app.state.event_dispatcher = event_dispatcher
 
     register_workflow_routes(
@@ -799,6 +808,7 @@ def create_app(
         turn_engine=turn_engine,
         workflow_orchestrator=workflow_orchestrator,
         workflow_executor=workflow_executor,
+        event_dispatcher=event_dispatcher,
     )
 
     chat_send_svc = ChatSendService(
