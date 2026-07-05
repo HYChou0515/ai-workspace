@@ -44,7 +44,7 @@ const headerBtnStyle: React.CSSProperties = {
 
 type FilterOption = { value: string; label: string };
 
-export function TableView({ spec, type, entities, users, refIndex, onPatch, busy }: EntityViewProps) {
+export function TableView({ spec, type, entities, invalid, users, refIndex, onPatch, busy }: EntityViewProps) {
   const allColumns = columnsFor(spec, type, entities);
   const [sort, setSort] = useState<{ column: string; dir: SortDir } | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
@@ -156,49 +156,80 @@ export function TableView({ spec, type, entities, users, refIndex, onPatch, busy
           )}
         </thead>
         <tbody>
-          {rows.map((e) => (
-            <tr key={e.number}>
-              <td style={cellStyle}>{e.number}</td>
-              {columns.map((c) => {
-                // A dotted `milestone.title` column follows the ref at render time
-                // (§A4); a dangling target degrades to a marker, never a crash (§D).
-                const traversal = refIndex ? traverseColumn(c, e, type, refIndex) : null;
-                if (traversal) {
+          {rows.map((e) => {
+            // A lint warning marks its field's cell yellow, still editable (§D).
+            const warn = warningsByField(e.diagnostics);
+            return (
+              <tr key={e.number}>
+                <td style={cellStyle}>{e.number}</td>
+                {columns.map((c) => {
+                  const warnMsg = warn[c];
+                  const td = warnMsg
+                    ? { style: { ...cellStyle, borderLeft: "3px solid var(--warn)" }, title: warnMsg }
+                    : { style: cellStyle };
+                  // A dotted `milestone.title` column follows the ref at render time
+                  // (§A4); a dangling target degrades to a marker, never a crash (§D).
+                  const traversal = refIndex ? traverseColumn(c, e, type, refIndex) : null;
+                  if (traversal) {
+                    return (
+                      <td key={c} {...td}>
+                        {traversal.dangling ? (
+                          <span title="referenced record not found" style={{ color: "var(--warn)" }}>
+                            {traversal.text}
+                          </span>
+                        ) : (
+                          traversal.text
+                        )}
+                      </td>
+                    );
+                  }
+                  const fieldSpec = roleOf(type, c);
+                  const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
                   return (
-                    <td key={c} style={cellStyle}>
-                      {traversal.dangling ? (
-                        <span title="referenced record not found" style={{ color: "var(--warn)" }}>
-                          {traversal.text}
-                        </span>
-                      ) : (
-                        traversal.text
-                      )}
+                    <td key={c} {...td}>
+                      <RoleField
+                        widget={fieldSpec ? widgetForRole(fieldSpec.role) : "readonly"}
+                        name={fieldSpec?.name ?? c}
+                        value={e.fields[c]}
+                        values={fieldSpec?.values}
+                        users={users}
+                        refOptions={opts}
+                        disabled={busy}
+                        onCommit={(next) => onPatch(e.number, { [c]: next })}
+                      />
                     </td>
                   );
-                }
-                const fieldSpec = roleOf(type, c);
-                const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
-                return (
-                  <td key={c} style={cellStyle}>
-                    <RoleField
-                      widget={fieldSpec ? widgetForRole(fieldSpec.role) : "readonly"}
-                      name={fieldSpec?.name ?? c}
-                      value={e.fields[c]}
-                      values={fieldSpec?.values}
-                      users={users}
-                      refOptions={opts}
-                      disabled={busy}
-                      onCommit={(next) => onPatch(e.number, { [c]: next })}
-                    />
-                  </td>
-                );
-              })}
+                })}
+              </tr>
+            );
+          })}
+          {/* Unparseable records degrade to an error row (§D) — never dropped
+              silently; the raw body shows so the fix is visible. */}
+          {(invalid ?? []).map((e) => (
+            <tr key={`invalid-${e.number}`}>
+              <td style={{ ...cellStyle, color: "var(--err)" }}>#{e.number}</td>
+              <td colSpan={Math.max(columns.length, 1)} style={{ ...cellStyle, color: "var(--err)" }}>
+                {e.diagnostics
+                  .filter((d) => d.level === "error")
+                  .map((d) => d.message)
+                  .join("; ") || "unparseable record"}
+                {e.body ? ` — ${e.body.slice(0, 80)}` : ""}
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
   );
+}
+
+/** Map each field with a lint warning to its message (for a yellow cell mark). */
+function warningsByField(diagnostics: EntityInstance["diagnostics"]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const d of diagnostics) {
+    if (d.level === "warning" && d.field) map[d.field] = d.message;
+  }
+  return map;
 }
 
 /** Distinct non-empty display values of a column across the records. */

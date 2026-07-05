@@ -76,6 +76,9 @@ export function AiYamlRenderer({ path }: { path: string }) {
       invalid={list?.invalid ?? []}
       users={users}
       refIndex={refIndex}
+      catalogDiagnostics={catalogQ.data?.diagnostics ?? []}
+      // catalog loaded but this type isn't in it → its schema failed to load (§D).
+      schemaMissing={catalogQ.isSuccess && !type}
       onCreate={write.create}
       onPatch={write.patch}
       busy={write.isBusy}

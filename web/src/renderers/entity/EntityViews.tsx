@@ -13,7 +13,7 @@
 
 import { useState } from "react";
 
-import type { EntityFormField } from "../../api/entities";
+import type { EntityDiagnostic, EntityFormField } from "../../api/entities";
 import type { User } from "../../api/types";
 import { pxToRem } from "../../lib/pxToRem";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
@@ -124,16 +124,41 @@ function ConflictBanner({ conflicts, onDismiss }: { conflicts: number[]; onDismi
   );
 }
 
+// ── diagnostics (§D) ────────────────────────────────────────────────────────
+
+/** A schema/view-level Diagnostic list (warning = yellow, still usable; error =
+ * red, dropped from the projection) — the "warning-not-death" surface (§D). */
+function DiagnosticBanner({ diagnostics }: { diagnostics: EntityDiagnostic[] }) {
+  return (
+    <ul
+      role="status"
+      style={{ listStyle: "none", padding: 8, margin: "0 0 8px", border: "1px solid var(--paper-3)", borderRadius: 6, fontSize: pxToRem(13) }}
+    >
+      {diagnostics.map((d, i) => (
+        <li key={i} style={{ color: d.level === "error" ? "var(--err)" : "var(--warn)" }}>
+          <strong>{d.level}</strong>: {d.message}
+          {d.field ? ` (${d.field})` : ""}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 // ── dispatcher ─────────────────────────────────────────────────────────────
 
 export type EntityViewBodyProps = EntityViewProps & {
   /** Record numbers whose write hit a 409 (§B2), shown as a dismissable banner. */
   conflicts?: number[];
   onDismissConflict?: (number: number) => void;
+  /** Schema/catalog-level diagnostics (§D schema layer). */
+  catalogDiagnostics?: EntityDiagnostic[];
+  /** The entity type has no usable schema — degrade to raw, read-only fields. */
+  schemaMissing?: boolean;
 };
 
 export function EntityViewBody(props: EntityViewBodyProps) {
-  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict } = props;
+  const { spec, type, entities, invalid, users, onCreate, busy, conflicts, onDismissConflict, catalogDiagnostics, schemaMissing } =
+    props;
   const renderer = resolveViewRenderer(spec.view);
   const { Component } = renderer;
   const showEmpty = entities.length === 0 && !renderer.ownsEmptyState;
@@ -144,9 +169,16 @@ export function EntityViewBody(props: EntityViewBodyProps) {
         {type && !renderer.suppressQuickCreate && <QuickCreate form={type.form} users={users} onCreate={onCreate} busy={busy} />}
       </div>
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
+      {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
+      {schemaMissing && (
+        <div style={{ color: "var(--warn)", marginBottom: 8, fontSize: pxToRem(13) }}>
+          No schema for {spec.entity} — showing raw fields (read-only).
+        </div>
+      )}
       {invalid && invalid.length > 0 && (
         <div style={{ color: "var(--warn)", marginBottom: 8, fontSize: pxToRem(13) }}>
-          {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be parsed and {invalid.length > 1 ? "are" : "is"} hidden.
+          {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be parsed and {invalid.length > 1 ? "are" : "is"} excluded
+          from the projection.
         </div>
       )}
       {showEmpty ? (

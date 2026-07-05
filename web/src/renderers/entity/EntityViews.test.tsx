@@ -371,3 +371,53 @@ describe("invalid records", () => {
     expect(screen.getByText(/1 record couldn't be parsed/)).toBeInTheDocument();
   });
 });
+
+describe("fault-tolerant degradation (§D)", () => {
+  it("shows an unparseable record as a degraded error row with its diagnostic", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title"] };
+    const bad: EntityInstance = {
+      number: 2,
+      type_name: "issue",
+      fields: {},
+      body: "raw body text",
+      diagnostics: [{ level: "error", message: "no frontmatter" }],
+    };
+    render(
+      <EntityViewBody spec={spec} type={issueType} entities={[issue(1, { title: "A" })]} invalid={[bad]} onCreate={vi.fn()} onPatch={vi.fn()} />,
+    );
+    expect(screen.getByText(/no frontmatter/)).toBeInTheDocument();
+  });
+
+  it("marks a cell that carries a lint warning (warning → field)", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["status"] };
+    const warned: EntityInstance = {
+      number: 1,
+      type_name: "issue",
+      fields: { status: "weird" },
+      body: "",
+      diagnostics: [{ level: "warning", message: "status off vocab", field: "status" }],
+    };
+    render(<EntityViewBody spec={spec} type={issueType} entities={[warned]} onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.getByTitle("status off vocab")).toBeInTheDocument();
+  });
+
+  it("shows schema-level diagnostics as a banner (schema → panel)", () => {
+    render(
+      <EntityViewBody
+        spec={tableSpec}
+        type={issueType}
+        entities={[]}
+        catalogDiagnostics={[{ level: "error", message: "bad schema.yaml" }]}
+        onCreate={vi.fn()}
+        onPatch={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(/bad schema\.yaml/)).toBeInTheDocument();
+  });
+
+  it("degrades to a no-schema note when the entity type has no schema", () => {
+    const spec: ViewSpec = { view: "table", entity: "issue", columns: ["title"] };
+    render(<EntityViewBody spec={spec} type={null} entities={[issue(1, { title: "A" })]} schemaMissing onCreate={vi.fn()} onPatch={vi.fn()} />);
+    expect(screen.getByText(/no schema/i)).toBeInTheDocument();
+  });
+});
