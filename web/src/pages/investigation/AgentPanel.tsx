@@ -59,6 +59,23 @@ const chatColumn: React.CSSProperties = {
   marginRight: "auto",
 };
 
+/** The header action buttons (New chat / Tools / Skills / Workflows / Export).
+ * `flexShrink: 0` + `whiteSpace: nowrap` keep each button intact so the wrapping
+ * header drops a whole button to the next row instead of shrinking it and
+ * letting its label wrap character-by-character at the narrow default width (#456). */
+const hdrBtn: React.CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  color: "var(--text-paper-d)",
+  fontSize: pxToRem(11),
+  background: "transparent",
+  border: "none",
+  cursor: "pointer",
+  flexShrink: 0,
+  whiteSpace: "nowrap",
+};
+
 export function AgentPanel({
   investigationId,
   agent: agentProp,
@@ -747,7 +764,7 @@ export function AgentPanel({
             fontFamily: "var(--font-body)",
           }}
         />
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", rowGap: 8 }}>
           <ModelEffortPicker
             models={pickerModels(picker)}
             selectedName={nameForPreset(picker, attachedPreset)}
@@ -951,6 +968,9 @@ export function AgentHeader({
         display: "flex",
         alignItems: "center",
         gap: 10,
+        // At the narrow default panel width the action buttons drop to a second
+        // row instead of overlapping the title (#456).
+        flexWrap: "wrap",
       }}
     >
       {showSkills && (
@@ -982,8 +1002,27 @@ export function AgentHeader({
       )}
       {appIcon ? <AppIcon icon={appIcon} color={appColor} size={20} /> : null}
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, fontSize: "var(--text-body-sm)" }}>{appTitle}</div>
-        <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
+        <div
+          style={{
+            fontWeight: 600,
+            fontSize: "var(--text-body-sm)",
+            // Ellipsize on one line — never wrap the App title word-by-word (#456).
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {appTitle}
+        </div>
+        <div
+          style={{
+            fontSize: pxToRem(11),
+            color: "var(--text-paper-d)",
+            overflow: "hidden",
+            whiteSpace: "nowrap",
+            textOverflow: "ellipsis",
+          }}
+        >
           {/* #159: action cue, not a vague status. Idle = "what do I do now?";
               streaming = an app-neutral "Replying…" (RCA's "investigating" leaked
               the domain into every App). The granular in-turn states live in the
@@ -1000,16 +1039,7 @@ export function AgentHeader({
           onClick={onNewChat}
           title="Start a fresh chat"
           aria-label="New chat"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            color: "var(--text-paper-d)",
-            fontSize: pxToRem(11),
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-          }}
+          style={hdrBtn}
         >
           <Icon name="plus" size={13} /> New chat
         </button>
@@ -1024,16 +1054,7 @@ export function AgentHeader({
           onClick={() => setShowTools(true)}
           title={t("tools.button.tip")}
           aria-label={t("tools.button")}
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: 4,
-            color: "var(--text-paper-d)",
-            fontSize: pxToRem(11),
-            background: "transparent",
-            border: "none",
-            cursor: "pointer",
-          }}
+          style={hdrBtn}
         >
           <Icon name="settings" size={13} /> {t("tools.button")}
         </button>
@@ -1046,16 +1067,7 @@ export function AgentHeader({
         onClick={() => setShowSkills(true)}
         title={t("skills.tip")}
         aria-label={t("skills.button")}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          color: "var(--text-paper-d)",
-          fontSize: pxToRem(11),
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-        }}
+        style={hdrBtn}
       >
         <Icon name="sparkle" size={13} /> {t("skills.button")}
       </button>
@@ -1067,16 +1079,7 @@ export function AgentHeader({
         onClick={() => setShowWorkflows(true)}
         title={t("workflows.tip")}
         aria-label={t("workflows.button")}
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          color: "var(--text-paper-d)",
-          fontSize: pxToRem(11),
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-        }}
+        style={hdrBtn}
       >
         <Icon name="layers" size={13} /> {t("workflows.button")}
       </button>
@@ -1095,16 +1098,7 @@ export function AgentHeader({
         }}
         title="Export this conversation"
         aria-label="Export conversation"
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 4,
-          color: "var(--text-paper-d)",
-          fontSize: pxToRem(11),
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-        }}
+        style={hdrBtn}
       >
         <Icon name="download" size={13} /> Export
       </button>
