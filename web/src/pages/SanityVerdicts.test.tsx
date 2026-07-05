@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SanityApi, SanityMeta, SanityVerdict } from "../api/sanity";
+import { LocaleProvider } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
 import { SanityVerdicts } from "./SanityVerdicts";
 
@@ -34,7 +35,22 @@ function fakeApi(over: Partial<SanityApi> = {}): SanityApi {
 }
 
 describe("SanityVerdicts", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("localizes its chrome — English under the en locale (#465)", async () => {
+    localStorage.setItem("ws.locale", "en");
+    renderWithQuery(
+      <LocaleProvider>
+        <SanityVerdicts client={fakeApi()} />
+      </LocaleProvider>,
+    );
+    expect(await screen.findByText("Fitness scores")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Re-score with AI/ })).toBeInTheDocument();
+    expect(screen.queryByText("適配度評分")).not.toBeInTheDocument();
+  });
 
   it("renders a fitness card per model with score + summary", async () => {
     renderWithQuery(<SanityVerdicts client={fakeApi()} />);

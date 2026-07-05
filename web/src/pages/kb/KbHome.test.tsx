@@ -104,7 +104,7 @@ describe("KbHome shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /send/i }));
     const cite = await screen.findByRole("button", { name: /reflow\.md/i });
     await userEvent.click(cite);
-    await waitFor(() => expect(screen.getByText("Cited passage")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("引用段落")).toBeInTheDocument());
     expect(col.resource_id).toBeTruthy();
   });
 

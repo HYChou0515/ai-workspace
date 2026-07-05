@@ -231,6 +231,13 @@ export const messages = {
   "kb.doc.processing": { "zh-TW": "處理中…", en: "Processing…" },
   "kb.doc.failed": { "zh-TW": "失敗", en: "Failed" },
   "kb.doc.processingFailed": { "zh-TW": "處理失敗", en: "Processing failed" },
+  // Shown when the rendered-document fetch fails — a friendly line instead of the
+  // raw "render document failed: 404" the API throws (#465).
+  "kb.doc.loadError": {
+    "zh-TW": "這份文件目前無法載入，請稍後再試。",
+    en: "This document couldn't be loaded. Try again in a moment.",
+  },
+  "kb.doc.citedPassage": { "zh-TW": "引用段落", en: "Cited passage" },
 
   // #356 Tune parsing modal — user-facing framing is "adjust how the AI reads
   // this document" (root cause ③: no "parse"/"parsing" jargon in the entry).
@@ -690,6 +697,167 @@ export const messages = {
     "zh-TW": "尚未儲存的變更會遺失，要關閉嗎？",
     en: "Discard unsaved changes?",
   },
+
+  // Diagnostics page (#465) — AI health checks + model sanity + activity.
+  "diag.crumb": { "zh-TW": "診斷", en: "Diagnostics" },
+  "diag.back": { "zh-TW": "返回", en: "Back" },
+  "diag.title": { "zh-TW": "AI 診斷", en: "AI diagnostics" },
+  "diag.subtitle": {
+    "zh-TW":
+      "快速檢查支撐這個工作區的 AI 功能是否正常回應並完成任務。這裡的警告不會擋住你，只是說明為什麼有些地方看起來怪怪的。",
+    en: "Quick checks that verify the AI features behind this workspace are responding and doing their jobs. A warning here never blocks you — it explains why something might look off.",
+  },
+  "diag.runAll": { "zh-TW": "全部重新檢查", en: "Run all checks" },
+  "diag.tab.checks": { "zh-TW": "健康檢查", en: "Health checks" },
+  "diag.tab.matrix": { "zh-TW": "模型體檢", en: "Model sanity" },
+  "diag.tab.activity": { "zh-TW": "活動", en: "Activity" },
+  "diag.viewAria": { "zh-TW": "診斷檢視", en: "Diagnostics view" },
+  "diag.checking": {
+    "zh-TW": "檢查中…每項檢查完成後會即時更新。",
+    en: "Checking… results update as each probe finishes.",
+  },
+  "diag.outcome.pass": { "zh-TW": "正常", en: "Normal" },
+  "diag.outcome.fail": { "zh-TW": "發現問題", en: "Issue found" },
+  "diag.outcome.error": { "zh-TW": "無法執行", en: "Couldn't run" },
+  "diag.outcome.skip": { "zh-TW": "未設定", en: "Not configured" },
+  "diag.outcome.none": { "zh-TW": "尚未檢查", en: "Not checked yet" },
+  "diag.lastChecked": { "zh-TW": "上次檢查 {when}", en: "Last checked {when}" },
+  "diag.took": { "zh-TW": " · 耗時 {sec}s", en: " · took {sec}s" },
+  "diag.rerunAria": { "zh-TW": "重新檢查：{name}", en: "Re-run: {name}" },
+  "diag.rerunTitle": { "zh-TW": "重新執行這項檢查", en: "Re-run this check" },
+
+  // Diagnostics → Activity tab: LLM-run traces + durable-store telemetry (#465).
+  "telemetry.span.tool": { "zh-TW": "工具", en: "tool" },
+  "telemetry.span.agent": { "zh-TW": "代理", en: "agent" },
+  "telemetry.span.handoff": { "zh-TW": "交接", en: "handoff" },
+  "telemetry.noSteps": { "zh-TW": "沒有記錄任何步驟。", en: "No steps recorded." },
+  "telemetry.step": { "zh-TW": "{n} 步", en: "{n} step" },
+  "telemetry.steps": { "zh-TW": "{n} 步", en: "{n} steps" },
+  "telemetry.live": { "zh-TW": "即時", en: "live" },
+  "telemetry.empty": {
+    "zh-TW": "目前沒有任何活動。跑一次 AI（對話、建立 wiki）後，它的 LLM 呼叫與工具呼叫就會即時出現在這裡。",
+    en: "No activity yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls appear here live.",
+  },
+  "telemetry.durable.aria": { "zh-TW": "持久儲存遙測", en: "Durable store telemetry" },
+  "telemetry.durable.title": { "zh-TW": "持久儲存", en: "Durable store" },
+  "telemetry.durable.files": { "zh-TW": "每次鏡射檔案數（p95）", en: "Files / mirror (p95)" },
+  "telemetry.durable.restore": { "zh-TW": "冷喚醒還原（p95）", en: "Cold-wake restore (p95)" },
+  "telemetry.durable.rows": { "zh-TW": "WorkspaceFile 列數", en: "WorkspaceFile rows" },
+  "telemetry.durable.trend": { "zh-TW": "WorkspaceFile 列數趨勢", en: "WorkspaceFile rows trend" },
+  "telemetry.durable.samples": {
+    "zh-TW": "{mirror} 次鏡射 · {restore} 次還原取樣",
+    en: "{mirror} mirror · {restore} restore samples",
+  },
+
+  // Model sanity → fitness verdicts (#465).
+  "sanity.verdicts.title": { "zh-TW": "適配度評分", en: "Fitness scores" },
+  "sanity.verdicts.rescore": { "zh-TW": "重新 AI 評分", en: "Re-score with AI" },
+  "sanity.verdicts.scoring": { "zh-TW": "評分中…", en: "Scoring…" },
+  "sanity.verdicts.empty": {
+    "zh-TW": "尚無評分。跑題後按「重新 AI 評分」讓 AI 評估每個模型的適配度。",
+    en: "No scores yet. Run the questions, then Re-score with AI to rate how each model fits.",
+  },
+
+  // Model sanity → coverage table (#465).
+  "sanity.table.noModels": {
+    "zh-TW": "尚未設定任何對話模型，這裡沒有東西可以檢查。",
+    en: "No chat models are configured, so there's nothing to check here.",
+  },
+  "sanity.table.models": { "zh-TW": "模型", en: "Models" },
+  "sanity.table.allCategories": { "zh-TW": "全部題組", en: "All categories" },
+  "sanity.table.onlyMissing": { "zh-TW": "只看未跑", en: "Only not-run" },
+  "sanity.table.runMissing": { "zh-TW": "跑掉所有未跑的", en: "Run all not-run" },
+  "sanity.table.run": { "zh-TW": "▶ 跑", en: "▶ Run" },
+  "sanity.table.status.missing": { "zh-TW": "未跑", en: "Not run" },
+  "sanity.table.status.done": { "zh-TW": "完成", en: "Done" },
+  "sanity.table.status.error": { "zh-TW": "錯誤", en: "Error" },
+  "sanity.table.grade.pass": { "zh-TW": "通過", en: "Pass" },
+  "sanity.table.grade.fail": { "zh-TW": "未通過", en: "Fail" },
+  "sanity.table.summary": { "zh-TW": "已測 {done} / {total} 格", en: "Ran {done} / {total} cells" },
+  "sanity.table.summaryRemaining": {
+    "zh-TW": " · 還有 {n} 格未跑",
+    en: " · {n} still not run",
+  },
+  "sanity.table.summaryAllRun": { "zh-TW": " · 全部跑過", en: " · all run" },
+  "sanity.table.col.category": { "zh-TW": "題組", en: "Category" },
+  "sanity.table.col.question": { "zh-TW": "題目", en: "Question" },
+  "sanity.table.col.model": { "zh-TW": "模型", en: "Model" },
+  "sanity.table.col.effort": { "zh-TW": "深度", en: "Effort" },
+  "sanity.table.col.status": { "zh-TW": "狀態", en: "Status" },
+  "sanity.table.col.grade": { "zh-TW": "機械", en: "Auto" },
+  "sanity.table.col.ai": { "zh-TW": "AI", en: "AI" },
+  "sanity.table.col.aiNote": { "zh-TW": "AI 評語", en: "AI note" },
+  "sanity.table.col.answer": { "zh-TW": "回答", en: "Answer" },
+  "sanity.table.col.expected": { "zh-TW": "參考答案", en: "Expected" },
+  "sanity.table.col.aux": { "zh-TW": "aux", en: "aux" },
+  "sanity.table.close": { "zh-TW": "關閉", en: "Close" },
+  "sanity.table.modal.aiNote": { "zh-TW": "AI 評語：{note}", en: "AI note: {note}" },
+  "sanity.table.modal.auto": { "zh-TW": "機械：{grade}", en: "Auto: {grade}" },
+  "sanity.table.modal.ai": { "zh-TW": "AI：{grade}", en: "AI: {grade}" },
+  "sanity.table.modal.reasoned": { "zh-TW": "有推理", en: "reasoned" },
+  "sanity.table.modal.noReasoning": { "zh-TW": "無推理", en: "no reasoning" },
+
+  // Model sanity → custom question manager (#465).
+  "sanity.q.title": { "zh-TW": "題目管理", en: "Question manager" },
+  "sanity.q.note": {
+    "zh-TW": "自訂題目由 AI 評分（無機械評分）。內建題目不可編輯。",
+    en: "Custom questions are graded by the AI (no mechanical grader). Built-in questions can't be edited.",
+  },
+  "sanity.q.ph.category": {
+    "zh-TW": "題組（例如：格式輸出）",
+    en: "Category (e.g. Formatting)",
+  },
+  "sanity.q.ph.prompt": { "zh-TW": "題目（給模型的提問）", en: "Question (the prompt sent to the model)" },
+  "sanity.q.ph.expected": {
+    "zh-TW": "參考答案 / 期望行為（餵給 AI 評審）",
+    en: "Expected answer / behavior (given to the AI judge)",
+  },
+  "sanity.q.levels": { "zh-TW": "要跑的深度", en: "Efforts to run" },
+  "sanity.q.create": { "zh-TW": "新增題目", en: "Add question" },
+  "sanity.q.update": { "zh-TW": "更新題目", en: "Update question" },
+  "sanity.q.disabled": { "zh-TW": " · 已停用", en: " · disabled" },
+  "sanity.q.edit": { "zh-TW": "編輯", en: "Edit" },
+  "sanity.q.delete": { "zh-TW": "刪除", en: "Delete" },
+
+  // Collection-set picker modal (#465) — opened by the "Set search scope" button.
+  "colpicker.title": { "zh-TW": "選擇知識庫", en: "Choose knowledge bases" },
+  "colpicker.note": {
+    "zh-TW": "勾選這個主題要查詢的知識庫；選好才有內容可供 AI 檢索與引用。",
+    en: "Check the knowledge bases this topic should search — the AI can only retrieve and cite from the ones you pick.",
+  },
+  "colpicker.invalid": {
+    "zh-TW":
+      "collections.json 目前無法解析（可能正在手動編輯）。下方以空清單顯示；按「儲存」會以乾淨清單覆寫原內容。",
+    en: "collections.json can't be parsed right now (it may be mid-edit). It's shown below as an empty list; Save will overwrite it with a clean one.",
+  },
+  "colpicker.empty": { "zh-TW": "尚未選擇任何知識庫。", en: "No knowledge bases selected yet." },
+  "colpicker.readError": {
+    "zh-TW": "無法讀取 collections.json。",
+    en: "Couldn't read collections.json.",
+  },
+  "colpicker.loading": { "zh-TW": "載入中…", en: "Loading…" },
+  "colpicker.tiers": {
+    "zh-TW": "搜尋優先順序（先查上層；找不到答案 AI 才往下層擴大）",
+    en: "Search priority (top tier first; the AI only widens to lower tiers if it can't answer).",
+  },
+  "colpicker.tier": { "zh-TW": "優先層 {n}", en: "Priority {n}" },
+  "colpicker.raise": { "zh-TW": "把 {name} 往上移一層", en: "Raise {name} a tier" },
+  "colpicker.lower": { "zh-TW": "把 {name} 往下移一層", en: "Lower {name} a tier" },
+  "colpicker.ignored": { "zh-TW": "已忽略 {n} 筆無效項。", en: "Ignored {n} invalid entries." },
+  "colpicker.orphans": {
+    "zh-TW": "已不存在的知識庫（建議移除）",
+    en: "Knowledge bases that no longer exist (remove suggested)",
+  },
+  "colpicker.unnamed": { "zh-TW": "（未命名）", en: "(unnamed)" },
+  "colpicker.remove": { "zh-TW": "移除", en: "Remove" },
+  "colpicker.saveError": {
+    "zh-TW": "儲存失敗，請稍後再試。",
+    en: "Couldn't save. Try again in a moment.",
+  },
+  "colpicker.discardPrompt": { "zh-TW": "放棄未儲存的變更？", en: "Discard unsaved changes?" },
+  "colpicker.keepEditing": { "zh-TW": "繼續編輯", en: "Keep editing" },
+  "colpicker.discard": { "zh-TW": "放棄變更", en: "Discard changes" },
+  "colpicker.saving": { "zh-TW": "儲存中…", en: "Saving…" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;

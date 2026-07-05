@@ -21,17 +21,20 @@ import {
 } from "../api/monitor";
 import { qk } from "../api/queryKeys";
 import { Icon } from "../components/Icon";
+import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
-const SPAN_LABEL: Record<string, string> = {
-  generation: "LLM",
-  function: "tool",
-  agent: "agent",
-  handoff: "handoff",
+// span.type → a localized label; `generation` reads as the literal "LLM".
+const SPAN_KEY: Record<string, MsgKey> = {
+  function: "telemetry.span.tool",
+  agent: "telemetry.span.agent",
+  handoff: "telemetry.span.handoff",
 };
 
 function SpanRow({ span }: { span: TraceSpan }) {
-  const kind = SPAN_LABEL[span.type] ?? span.type;
+  const t = useT();
+  const kind =
+    span.type === "generation" ? "LLM" : span.type in SPAN_KEY ? t(SPAN_KEY[span.type]) : span.type;
   const tokens =
     span.inputTokens != null || span.outputTokens != null
       ? `↑${span.inputTokens ?? 0} ↓${span.outputTokens ?? 0}`
@@ -69,8 +72,10 @@ function SpanRow({ span }: { span: TraceSpan }) {
 }
 
 function TraceRow({ trace }: { trace: Trace }) {
+  const t = useT();
   const [open, setOpen] = useState(false);
   const totalTokens = trace.inputTokens + trace.outputTokens;
+  const stepCount = trace.spans.length;
   return (
     <li style={{ borderBottom: "1px solid var(--paper-3)" }}>
       <button
@@ -122,7 +127,7 @@ function TraceRow({ trace }: { trace: Trace }) {
         )}
         <span style={{ flex: 1 }} />
         <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
-          {trace.spans.length} step{trace.spans.length === 1 ? "" : "s"}
+          {t(stepCount === 1 ? "telemetry.step" : "telemetry.steps", { n: stepCount })}
         </span>
         {totalTokens > 0 && (
           <span style={{ fontFamily: "var(--font-mono)", fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>
@@ -130,14 +135,14 @@ function TraceRow({ trace }: { trace: Trace }) {
           </span>
         )}
         {!trace.done && (
-          <span style={{ fontSize: pxToRem(10), color: "var(--accent-h)" }}>live</span>
+          <span style={{ fontSize: pxToRem(10), color: "var(--accent-h)" }}>{t("telemetry.live")}</span>
         )}
       </button>
       {open && (
         <div style={{ paddingBottom: 8 }}>
           {trace.spans.length === 0 ? (
             <div style={{ padding: "4px 10px 4px 30px", fontSize: pxToRem(12), color: "var(--text-paper-d2)" }}>
-              No steps recorded.
+              {t("telemetry.noSteps")}
             </div>
           ) : (
             trace.spans.map((s) => <SpanRow key={s.id} span={s} />)
@@ -161,6 +166,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 /** A dependency-free sparkline of the WorkspaceFile row-count trend (#407). */
 function Sparkline({ points }: { points: RowsPoint[] }) {
+  const t = useT();
   if (points.length < 2) return null;
   const rows = points.map((p) => p.rows);
   const min = Math.min(...rows);
@@ -175,7 +181,7 @@ function Sparkline({ points }: { points: RowsPoint[] }) {
     })
     .join(" ");
   return (
-    <svg width={w} height={h} role="img" aria-label="WorkspaceFile rows trend" style={{ overflow: "visible" }}>
+    <svg width={w} height={h} role="img" aria-label={t("telemetry.durable.trend")} style={{ overflow: "visible" }}>
       <path d={d} fill="none" stroke="var(--accent-h)" strokeWidth={1.5} />
     </svg>
   );
@@ -184,6 +190,7 @@ function Sparkline({ points }: { points: RowsPoint[] }) {
 /** #407: the durable-store cost card — the numbers the "archive vs keep the
  * per-file model" call (#376) is made on. Always shown, even with no samples. */
 function DurableStoreCard({ client }: { client: MonitorApi }) {
+  const t = useT();
   const { data: s } = useQuery({
     queryKey: qk.monitorSummary,
     queryFn: () => client.getSummary(),
@@ -192,7 +199,7 @@ function DurableStoreCard({ client }: { client: MonitorApi }) {
   const latestRows = s?.total_rows_trend.at(-1)?.rows;
   return (
     <section
-      aria-label="Durable store telemetry"
+      aria-label={t("telemetry.durable.aria")}
       style={{
         border: "1px solid var(--paper-3)",
         borderRadius: 8,
@@ -201,26 +208,37 @@ function DurableStoreCard({ client }: { client: MonitorApi }) {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-        <span style={{ fontSize: "var(--text-body-sm)", fontWeight: 600 }}>Durable store</span>
-        <span style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>#407</span>
+        <span style={{ fontSize: "var(--text-body-sm)", fontWeight: 600 }}>
+          {t("telemetry.durable.title")}
+        </span>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 20 }}>
-        <Stat label="Files / mirror (p95)" value={s?.p95_n_files != null ? String(s.p95_n_files) : dash} />
         <Stat
-          label="Cold-wake restore (p95)"
+          label={t("telemetry.durable.files")}
+          value={s?.p95_n_files != null ? String(s.p95_n_files) : dash}
+        />
+        <Stat
+          label={t("telemetry.durable.restore")}
           value={s?.p95_restore_ms != null ? `${s.p95_restore_ms} ms` : dash}
         />
-        <Stat label="WorkspaceFile rows" value={latestRows != null ? String(latestRows) : dash} />
+        <Stat
+          label={t("telemetry.durable.rows")}
+          value={latestRows != null ? String(latestRows) : dash}
+        />
         <Sparkline points={s?.total_rows_trend ?? []} />
       </div>
       <p style={{ margin: "10px 0 0", fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}>
-        {s?.n_mirror_samples ?? 0} mirror · {s?.n_restore_samples ?? 0} restore samples
+        {t("telemetry.durable.samples", {
+          mirror: s?.n_mirror_samples ?? 0,
+          restore: s?.n_restore_samples ?? 0,
+        })}
       </p>
     </section>
   );
 }
 
 export function TelemetryPanel({ client = monitorApi }: { client?: MonitorApi }) {
+  const t = useT();
   const [live, setLive] = useState<MonitorEvent[]>([]);
   const { data: history = [] } = useQuery({
     queryKey: qk.monitor,
@@ -252,13 +270,12 @@ export function TelemetryPanel({ client = monitorApi }: { client?: MonitorApi })
           role="status"
           style={{ marginTop: 24, color: "var(--text-paper-d)", fontSize: "var(--text-body-sm)" }}
         >
-          No activity yet. Run an agent turn (a chat, a wiki build) and its LLM calls + tool calls
-          appear here live.
+          {t("telemetry.empty")}
         </p>
       ) : (
         <ul style={{ listStyle: "none", margin: "18px 0 0", padding: 0 }}>
-          {traces.map((t) => (
-            <TraceRow key={t.traceId} trace={t} />
+          {traces.map((tr) => (
+            <TraceRow key={tr.traceId} trace={tr} />
           ))}
         </ul>
       )}

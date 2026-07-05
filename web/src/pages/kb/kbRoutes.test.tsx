@@ -167,7 +167,7 @@ describe("KB routes", () => {
     await userEvent.click(await screen.findByRole("button", { name: /reflow\.md/i }));
 
     // the citation opens the doc overlay AND records it in the URL
-    await waitFor(() => expect(screen.getByText("Cited passage")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("引用段落")).toBeInTheDocument());
     expect(screen.getByTestId("loc")).toHaveTextContent("doc=");
     expect(screen.getByTestId("loc")).toHaveTextContent("hl=");
   });
