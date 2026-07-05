@@ -65,6 +65,14 @@ describe("HealthDot", () => {
     expect(link.getAttribute("aria-label")).not.toMatch(/vlm|describe|check_id/i);
   });
 
+  it("reads as an interactive control, not decoration — carries button-like chrome (#466)", async () => {
+    renderDot(client([row({ check_id: "a" })]));
+    const link = await screen.findByRole("link", { name: /working normally/i });
+    // The `.health-dot` class supplies the hover/focus affordance that tells the
+    // user this dot is a clickable link to diagnostics (not a passive status pip).
+    expect(link.className).toContain("health-dot");
+  });
+
   it("shows an unknown state before any probe has run", async () => {
     renderDot(client([row({ status: null, checked_at: null })]));
     const link = await screen.findByRole("link", { name: /status/i });

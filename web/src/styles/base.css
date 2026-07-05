@@ -252,6 +252,23 @@ select {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.45; transform: scale(0.8); }
 }
+/* The dot is a LINK to /diagnostics, not decoration — give it the same
+   button-like hover/focus chrome as the other header controls so it reads as
+   interactive rather than a passive status pip (#466). */
+.health-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.health-dot:hover {
+  background: var(--paper-2);
+}
 
 /*
  * Global HTTP progress bar (#151): a thin indeterminate bar pinned to the very
