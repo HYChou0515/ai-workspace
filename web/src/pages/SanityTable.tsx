@@ -19,6 +19,7 @@ import {
 } from "../api/sanity";
 import { qk } from "../api/queryKeys";
 import { ModalShell } from "../components/ModalShell";
+import { type MsgKey, useT } from "../lib/i18n";
 import { pxToRem } from "../lib/pxToRem";
 
 /** The levels a question is *expected* to be tested at — mirrors the backend's
@@ -67,10 +68,10 @@ export function coverageStats(rows: CoverageRow[]): { done: number; total: numbe
   return { done: rows.filter((r) => r.status !== "missing").length, total: rows.length };
 }
 
-const STATUS_LABEL: Record<RowStatus, string> = {
-  missing: "未跑",
-  done: "完成",
-  error: "錯誤",
+const STATUS_KEY: Record<RowStatus, MsgKey> = {
+  missing: "sanity.table.status.missing",
+  done: "sanity.table.status.done",
+  error: "sanity.table.status.error",
 };
 const STATUS_COLOR: Record<RowStatus, string> = {
   missing: "var(--text-paper-d)",
@@ -98,13 +99,14 @@ function CellModal({
   levelLabel: string;
   onClose: () => void;
 }) {
+  const t = useT();
   const cell = row.cell;
   const prompt = row.question.messages[row.question.messages.length - 1]?.content ?? "";
   const body = cell?.error || cell?.output || "";
   const footer = [
-    cell?.grade ? `機械:${cell.grade}` : null,
-    cell?.ai_grade ? `AI:${cell.ai_grade}` : null,
-    cell?.reasoned ? "reasoned" : "no reasoning",
+    cell?.grade ? t("sanity.table.modal.auto", { grade: cell.grade }) : null,
+    cell?.ai_grade ? t("sanity.table.modal.ai", { grade: cell.ai_grade }) : null,
+    cell?.reasoned ? t("sanity.table.modal.reasoned") : t("sanity.table.modal.noReasoning"),
     cell?.aux || null,
     cell ? `${cell.latency_ms}ms` : null,
   ]
@@ -144,7 +146,7 @@ function CellModal({
       </div>
       {cell?.ai_note && (
         <div style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)" }}>
-          AI 評語：{cell.ai_note}
+          {t("sanity.table.modal.aiNote", { note: cell.ai_note })}
         </div>
       )}
       <div style={{ fontSize: pxToRem(11), color: "var(--text-paper-d)" }}>{footer}</div>
@@ -164,7 +166,7 @@ function CellModal({
             color: "var(--text-paper)",
           }}
         >
-          關閉
+          {t("sanity.table.close")}
         </button>
       </div>
     </ModalShell>
@@ -194,6 +196,7 @@ const th = {
 const td = { padding: "7px 8px", verticalAlign: "top" as const, borderTop: "1px solid var(--paper-3)" };
 
 export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
+  const t = useT();
   const queryClient = useQueryClient();
   const [selectedModels, setSelectedModels] = useState<Set<string> | null>(null);
   const [category, setCategory] = useState("");
@@ -240,7 +243,7 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
   if (models.length === 0) {
     return (
       <p data-testid="sanity-no-models" style={{ color: "var(--text-paper-d)", marginTop: 18 }}>
-        No chat models are configured, so there's nothing to check here.
+        {t("sanity.table.noModels")}
       </p>
     );
   }
@@ -265,7 +268,9 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
     <div data-testid="sanity-table" style={{ marginTop: 16 }}>
       {/* run / filter controls */}
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 10 }}>
-        <span style={{ fontSize: "var(--text-body-sm)", color: "var(--text-paper-d)" }}>Models</span>
+        <span style={{ fontSize: "var(--text-body-sm)", color: "var(--text-paper-d)" }}>
+          {t("sanity.table.models")}
+        </span>
         {models.map((m) => (
           <label
             key={m}
@@ -286,7 +291,7 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
           onChange={(e) => setCategory(e.target.value)}
           style={{ padding: "4px 8px", borderRadius: 6, border: "1px solid var(--paper-3)" }}
         >
-          <option value="">All 題組</option>
+          <option value="">{t("sanity.table.allCategories")}</option>
           {categories.map((c) => (
             <option key={c} value={c}>
               {c}
@@ -300,7 +305,7 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
             checked={onlyMissing}
             onChange={(e) => setOnlyMissing(e.target.checked)}
           />
-          只看未跑
+          {t("sanity.table.onlyMissing")}
         </label>
         <button
           type="button"
@@ -310,26 +315,40 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
           }
           style={{ ...btn(true), marginLeft: "auto" }}
         >
-          跑掉所有未跑的
+          {t("sanity.table.runMissing")}
         </button>
       </div>
 
       <div data-testid="coverage-summary" style={{ fontSize: pxToRem(12), color: "var(--text-paper-d)", marginBottom: 8 }}>
-        已測 {stats.done} / {stats.total} 格
-        {stats.total - stats.done > 0 ? ` · 還有 ${stats.total - stats.done} 格未跑` : " · 全部跑過"}
+        {t("sanity.table.summary", { done: stats.done, total: stats.total })}
+        {stats.total - stats.done > 0
+          ? t("sanity.table.summaryRemaining", { n: stats.total - stats.done })
+          : t("sanity.table.summaryAllRun")}
       </div>
 
       <div style={{ overflow: "auto", maxHeight: "62vh" }}>
         <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "var(--text-body-sm)" }}>
           <thead>
             <tr>
-              {["題組", "題目", "Model", "Effort", "狀態", "機械", "AI", "AI 評語", "回答", "參考答案", "aux"].map(
-                (h) => (
-                  <th key={h} style={th}>
-                    {h}
-                  </th>
-                ),
-              )}
+              {(
+                [
+                  "sanity.table.col.category",
+                  "sanity.table.col.question",
+                  "sanity.table.col.model",
+                  "sanity.table.col.effort",
+                  "sanity.table.col.status",
+                  "sanity.table.col.grade",
+                  "sanity.table.col.ai",
+                  "sanity.table.col.aiNote",
+                  "sanity.table.col.answer",
+                  "sanity.table.col.expected",
+                  "sanity.table.col.aux",
+                ] as const
+              ).map((key) => (
+                <th key={key} style={th}>
+                  {t(key)}
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>
@@ -343,7 +362,7 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
                 <td style={td}>{levelLabel(r.level)}</td>
                 <td style={{ ...td, color: STATUS_COLOR[r.status], fontWeight: 600, whiteSpace: "nowrap" }}>
                   <span data-testid={`status-${r.model}-${r.question.key}-${r.level}`}>
-                    {STATUS_LABEL[r.status]}
+                    {t(STATUS_KEY[r.status])}
                   </span>
                 </td>
                 <td style={td}>{r.cell ? <GradeTag grade={r.cell.grade} /> : "—"}</td>
@@ -380,7 +399,7 @@ export function SanityTable({ client = sanityApi }: { client?: SanityApi }) {
                       }
                       style={btn()}
                     >
-                      ▶ 跑
+                      {t("sanity.table.run")}
                     </button>
                   )}
                 </td>

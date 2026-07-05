@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { SanityApi, SanityCell, SanityMeta } from "../api/sanity";
+import { LocaleProvider } from "../lib/i18n";
 import { renderWithQuery } from "../test/queryWrapper";
 import { SanityTable, buildRows, coverageLevels } from "./SanityTable";
 
@@ -63,7 +64,23 @@ function fakeApi(over: Partial<SanityApi> = {}): SanityApi {
 }
 
 describe("SanityTable (coverage)", () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  it("localizes its chrome — English under the en locale (#465)", async () => {
+    localStorage.setItem("ws.locale", "en");
+    renderWithQuery(
+      <LocaleProvider>
+        <SanityTable client={fakeApi()} />
+      </LocaleProvider>,
+    );
+    expect(await screen.findByTestId(`status-${M0}-q1-none`)).toHaveTextContent("Done");
+    expect(screen.getByRole("columnheader", { name: "Question" })).toBeInTheDocument();
+    expect(screen.getByTestId("run-missing")).toHaveTextContent("Run all not-run");
+    expect(screen.queryByText("完成")).not.toBeInTheDocument();
+  });
 
   it("coverageLevels + buildRows produce the full expected grid with statuses", () => {
     expect(coverageLevels(meta.questions[0])).toEqual(["none", "medium"]);

@@ -749,6 +749,43 @@ export const messages = {
     "zh-TW": "尚無評分。跑題後按「重新 AI 評分」讓 AI 評估每個模型的適配度。",
     en: "No scores yet. Run the questions, then Re-score with AI to rate how each model fits.",
   },
+
+  // Model sanity → coverage table (#465).
+  "sanity.table.noModels": {
+    "zh-TW": "尚未設定任何對話模型，這裡沒有東西可以檢查。",
+    en: "No chat models are configured, so there's nothing to check here.",
+  },
+  "sanity.table.models": { "zh-TW": "模型", en: "Models" },
+  "sanity.table.allCategories": { "zh-TW": "全部題組", en: "All categories" },
+  "sanity.table.onlyMissing": { "zh-TW": "只看未跑", en: "Only not-run" },
+  "sanity.table.runMissing": { "zh-TW": "跑掉所有未跑的", en: "Run all not-run" },
+  "sanity.table.run": { "zh-TW": "▶ 跑", en: "▶ Run" },
+  "sanity.table.status.missing": { "zh-TW": "未跑", en: "Not run" },
+  "sanity.table.status.done": { "zh-TW": "完成", en: "Done" },
+  "sanity.table.status.error": { "zh-TW": "錯誤", en: "Error" },
+  "sanity.table.summary": { "zh-TW": "已測 {done} / {total} 格", en: "Ran {done} / {total} cells" },
+  "sanity.table.summaryRemaining": {
+    "zh-TW": " · 還有 {n} 格未跑",
+    en: " · {n} still not run",
+  },
+  "sanity.table.summaryAllRun": { "zh-TW": " · 全部跑過", en: " · all run" },
+  "sanity.table.col.category": { "zh-TW": "題組", en: "Category" },
+  "sanity.table.col.question": { "zh-TW": "題目", en: "Question" },
+  "sanity.table.col.model": { "zh-TW": "模型", en: "Model" },
+  "sanity.table.col.effort": { "zh-TW": "深度", en: "Effort" },
+  "sanity.table.col.status": { "zh-TW": "狀態", en: "Status" },
+  "sanity.table.col.grade": { "zh-TW": "機械", en: "Auto" },
+  "sanity.table.col.ai": { "zh-TW": "AI", en: "AI" },
+  "sanity.table.col.aiNote": { "zh-TW": "AI 評語", en: "AI note" },
+  "sanity.table.col.answer": { "zh-TW": "回答", en: "Answer" },
+  "sanity.table.col.expected": { "zh-TW": "參考答案", en: "Expected" },
+  "sanity.table.col.aux": { "zh-TW": "aux", en: "aux" },
+  "sanity.table.close": { "zh-TW": "關閉", en: "Close" },
+  "sanity.table.modal.aiNote": { "zh-TW": "AI 評語：{note}", en: "AI note: {note}" },
+  "sanity.table.modal.auto": { "zh-TW": "機械：{grade}", en: "Auto: {grade}" },
+  "sanity.table.modal.ai": { "zh-TW": "AI：{grade}", en: "AI: {grade}" },
+  "sanity.table.modal.reasoned": { "zh-TW": "有推理", en: "reasoned" },
+  "sanity.table.modal.noReasoning": { "zh-TW": "無推理", en: "no reasoning" },
 } satisfies Record<string, Entry>;
 
 export type MsgKey = keyof typeof messages;
