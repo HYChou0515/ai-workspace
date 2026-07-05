@@ -1,6 +1,10 @@
 # Plan — #435 非冪等 capability 的去重框架
 
-> 狀態:P1–P6 全數以 `/tdd` 完成(見文末 phase 表);flat integer phases。
+> 狀態:P1–P8 全數以 `/tdd` 完成(見文末 phase 表);flat integer phases。P1–P6 是初版;
+> P7/P8 是 follow-up——原本 defer 給 #429「per-invocation journal 邊界」的兩項(`create_new`
+> 跨 run、`send_notification` per-window),在 #429 落地後才發現它**並未**提供那條邊界(journal
+> 仍只 workflow_id-scoped),所以 P7/P8 自己把 per-invocation identity(`run_id` + 建立時刻)
+> 建到 handle 上,補齊這兩個缺口。
 > 背景:現有的 workflow capability 分兩種脾氣。`ingest_to_collection` / `upsert_context_card`
 > 是**冪等**的——action 是 upsert,重跑覆蓋掉就好,`run_step` 的「同 args 跳過」已足夠。
 > 但 `create_entity`(#419 的實體)/ `send_notification` 的 action **本質一次性**:再做一次
@@ -26,7 +30,7 @@
 | 機制 | 做什麼 | 用在哪 |
 |---|---|---|
 | **M1 — 查既有真實來源(store)** | 兩種味道:*deterministic fingerprint*(查一個確定的鍵)或 *AI-semantic*(問模型是不是同一個真實東西) | `send_notification` 用 `{recipient}:{topic}` 查通知 ledger;`create_entity` 用 AI 問跨來源是否同一實體 |
-| **M2 — idempotency token** | 呼叫綁一個調用 token(journal 身分);`create_new` = 「M1 減掉跨來源比對」 | `create_entity` 的 `on_duplicate="create_new"`(#429 前由 `workflow check` 靜態擋) |
+| **M2 — idempotency token** | 呼叫綁一個**每次 invocation 的 token**(該 run 的 `run_id`);`create_new` = 「M1 減掉跨來源比對」+ token fold 進 hash + per-run `created.json` | `create_entity` 的 `on_duplicate="create_new"`(P7 起上線:每次獨立 invocation 各開新號,同 run 內 revise 重用) |
 | **M3 — self-ledger(deferred)** | 給真正 blind 的外部 channel(送出去無法回查)自建 ledger | 目前無;in-app 通知不需要(見下) |
 
 **為什麼 in-app 通知不需要 M3**:那筆 Notification store record **本身**就同時是「送出」與
@@ -48,11 +52,16 @@
 demarcation,不需 schema 改動;(2) `create_new` 部分交付:#429(per-invocation journal 邊界)
 落地前,`workflow check` 加一道靜態門把它擋在啟動前。
 
-## Blocking:#429
+## ~~Blocking:#429~~ → 已由 P7/P8 自建(#429 並未提供邊界)
 
-`create_new` 的跨 run 版本、以及 `send_notification` 的「時間窗內只發一次」都需要
-**per-invocation 的 journal 邊界**(#429)——手動 re-Run 目前重用同一 journal(`workflow_id`
-是定義穩定的)。落地前這些走 `workflow check` 靜態門擋下,不讓半套語意在 runtime 出錯。
+原本判斷 `create_new` 的跨 run 版本、以及 `send_notification` 的「時間窗內只發一次」都需要
+**per-invocation 的 journal 邊界**,並以為 #429 會提供。**#429 落地後實際並未**——journal 仍只以
+`workflow_id` 為 key(手動 re-Run／re-trigger 重用同一 journal),且 driver 的 `started` 每次
+drive 都被覆寫、不是 resume-stable。所以 P7/P8 直接把 per-invocation identity 建到 handle:
+`run_id`(WorkflowRun resource_id,resume-stable、每次 firing 相異)+ `run_started_at`(specstar
+`created_time`,resume-stable)。`create_new` 把 `run_id` fold 進 dedup key(每次 invocation 各開
+新號);`send_notification` 把 `run_started_at` bucket 進 window fingerprint。P4 的 `workflow check`
+靜態門在 P7 退休。
 
 ## Phase 拆解(全數完成)
 
@@ -61,16 +70,20 @@ demarcation,不需 schema 改動;(2) `create_new` 部分交付:#429(per-invocati
 | **P1** | framework-locked 三態外殼 `nonidempotent.py`(`Verdict` / `Result` / `run_nonidempotent`,兩筆 `run_step`) | — |
 | **P2** | `create_entity` 改用 `name` 去重身分(取代 args-digest);journal-first 自我去重(`created.json`);DSL surface(`name` 必填、`on_duplicate`、outputs schema) | P1 |
 | **P3** | cross-origin M1-AI:`entity_dedup.py`(`match_prompt` / `parse_match` fail-open;圍欄覆寫 `replace_fenced_block`);`EntityStore.update(body=)` | P2 |
-| **P4** | `on_duplicate` 三值 + `create_new` 的 #429 靜態門(`workflow check`) | P2 |
+| **P4** | `on_duplicate` 三值 + `create_new` 的 #429 靜態門(`workflow check`)〔門於 P7 退休〕 | P2 |
 | **P5** | `send_notification`(M1 deterministic fingerprint `{recipient}:{topic}`);`Notification.dedup_key` indexed + `notification_sent` 查詢;driver 接線 | P1 |
 | **P6** | driver wire `ask_llm`(create_entity 跨來源 match 用 run 的模型,`asyncio.to_thread(collect)`;無模型 → 純 journal 自我去重);live canned integration check(decide-AI,`@pytest.mark.integration`);本文件 + `workflows-authoring.md` | P1–P5 |
+| **P7** | create_new 跨 invocation(M2 token):handle 曝 `run_id` + `run_started_at`(orchestrator `_build_handle` 從 `created_time` 灌入);`create_new` fold `run_id` 進 per-run `created.json` + shell input hash,`decide` 產 `token` verdict;lift P4 靜態門(`create_new` 進 `_CAP_ON_DUPLICATE`) | P4, #429 merged |
+| **P8** | send_notification per-window:抽 `triggers.window_key`(`fire_window` 委派);`send_notification(window=)` bucket `run_started_at` 進 fingerprint + fold `run_id` 讓 decide 每 invocation 重查 ledger;DSL `CapabilityStep.window` 欄位 + 驗證 | P5, P7 |
 
 ## 落點
 
 - `src/workspace_app/workflow/nonidempotent.py` — 三態外殼(P1)。
 - `src/workspace_app/workflow/entity_dedup.py` — cross-origin M1-AI 純函式(P3)。
-- `src/workspace_app/workflow/handle.py` — `create_entity` / `send_notification` capability。
-- `src/workspace_app/workflow/dsl.py` — DSL surface + 靜態驗證(`name` 必填、`create_new` 門)。
+- `src/workspace_app/workflow/handle.py` — `create_entity` / `send_notification` capability;`run_id` + `run_started_at` per-invocation identity(P7)。
+- `src/workspace_app/workflow/dsl.py` — DSL surface + 靜態驗證(`name` 必填、`on_duplicate` 含 `create_new`、`window` 政策)。
+- `src/workspace_app/workflow/triggers.py` — bare `window_key(every, now)`(P8,`fire_window` 委派)。
+- `src/workspace_app/workflow/orchestrator.py` — `_build_handle` 灌 `run_id` + `run_started_at`(P7)。
 - `src/workspace_app/api/workflow_exec.py` — driver 接線(notify ledger + `ask_llm`)。
 - `src/workspace_app/resources/notification.py` — `dedup_key` 欄位。
 - `tests/workflow/test_create_entity_dedup_live.py` — decide-AI live canned check。

@@ -71,10 +71,10 @@ def test_create_entity_on_duplicate_policy_is_validated_per_capability() -> None
     assert any("does not take an 'on_duplicate'" in e for e in on_idempotent)
 
 
-def test_create_new_is_gated_until_the_per_invocation_journal_boundary() -> None:
-    """P4 by-construction gate: ``on_duplicate: create_new`` is statically rejected until
-    #429's per-invocation journal boundary exists — otherwise a manual re-run would reuse
-    the journal and silently reuse the entity instead of minting a fresh one."""
+def test_create_new_is_accepted_now_the_per_invocation_token_exists() -> None:
+    """P7: the P4 by-construction gate is lifted — ``on_duplicate: create_new`` is now a
+    valid policy because the per-invocation ``run_id`` token makes each separate invocation
+    mint a fresh entity (a resume still reuses). It validates like update/skip do."""
     errs = _errs(
         [
             {
@@ -87,7 +87,7 @@ def test_create_new_is_gated_until_the_per_invocation_journal_boundary() -> None
             }
         ]
     )
-    assert any("create_new" in e and "#429" in e for e in errs)
+    assert errs == []
 
 
 def test_reference_to_unknown_capability_output_field_is_rejected() -> None:

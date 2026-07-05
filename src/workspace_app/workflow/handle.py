@@ -18,7 +18,10 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from fnmatch import fnmatch
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 from ..entity.events import EntityWriteSink
 from ..filestore.protocol import FileStore
@@ -125,6 +128,8 @@ class WorkflowHandle:
         entity_write_sink: EntityWriteSink | None = None,
         origin_trigger: str = "",
         trigger_depth: int = 0,
+        run_id: str = "",
+        run_started_at: datetime | None = None,
     ) -> None:
         self._store = store
         self._workspace_id = workspace_id
@@ -198,6 +203,17 @@ class WorkflowHandle:
         self._trigger_depth = trigger_depth
         """#429 P9: this run's depth in the event-trigger chain — stamped onto its writes so an
         indirect cycle hits the global depth cap."""
+        self.run_id = run_id
+        """#435 P7: this run's per-invocation identity (the ``WorkflowRun`` resource_id —
+        stable across a resume, DISTINCT per separate firing). ``create_new`` folds it into
+        its dedup key so each separate invocation mints a FRESH entity while a resume of the
+        same invocation reuses. "" ⇒ no per-invocation boundary (tests / legacy), so
+        ``create_new`` degrades to within-invocation self-dedup only."""
+        self.run_started_at = run_started_at
+        """#435 P7: this run's creation instant (specstar ``created_time`` — resume-stable,
+        unlike the driver's ``started`` which a resume overwrites). ``send_notification``'s
+        per-window fingerprint buckets it (once-per-window rather than once-ever). None ⇒ no
+        window source → the fingerprint stays once-ever."""
 
     @property
     def journal_dir(self) -> str:
@@ -337,7 +353,14 @@ class WorkflowHandle:
             self._store, self._workspace_id, catalog, on_write=self._entity_write_sink
         )
         records_path = catalog.get(type_name).records_path
-        created_path = f"{self.journal_dir}/step_{name}/{key or 'main'}.created.json"
+        # create_new (M2, 决议4): the dedup identity is per-INVOCATION. The created.json path
+        # is workflow_id-scoped, which a manual re-run reuses (→ silently reusing the entity);
+        # folding this run's token makes each SEPARATE invocation mint fresh while a resume
+        # (same run_id) still finds its created.json and reuses. "" (no run_id / not create_new)
+        # ⇒ the original workflow-scoped path (within-invocation self-dedup only).
+        token = self.run_id if on_duplicate == "create_new" else ""
+        token_suffix = f".{token}" if token else ""
+        created_path = f"{self.journal_dir}/step_{name}/{key or 'main'}{token_suffix}.created.json"
 
         async def _remembered_alive() -> int | None:
             """The number this site already minted, if its record still exists — else
@@ -372,14 +395,16 @@ class WorkflowHandle:
             if remembered is not None:
                 return Verdict(kind="duplicate", payload={"of": remembered, "origin": "self"})
             # create_new (M2, 决议4): a fresh entity per invocation — it must NOT dedup
-            # against another origin's entity, so skip M1-AI cross-matching. The
-            # created.json self-dedup above still makes a WITHIN-invocation revise reuse
-            # (never double-create); the cross-invocation "fresh per trigger" needs #429's
-            # per-invocation journal boundary (the DSL surface is gated until then).
-            if on_duplicate != "create_new":
-                matched = await _cross_match()  # M1-AI cross-origin (决议2, P3)
-                if matched is not None:
-                    return Verdict(kind="duplicate", payload={"of": matched, "origin": "cross"})
+            # against another origin's entity, so skip M1-AI cross-matching. The per-run
+            # created.json (above) + the run token folded into the shell input hash (below)
+            # make each SEPARATE invocation mint fresh while a resume/revise of THIS one
+            # reuses. The ruling is the reserved ``token`` kind (M2 exactly-once, carrying
+            # run_id) — the per-invocation idempotency key the shell reserved (P7).
+            if on_duplicate == "create_new":
+                return Verdict(kind="token", payload={"token": token})
+            matched = await _cross_match()  # M1-AI cross-origin (决议2, P3)
+            if matched is not None:
+                return Verdict(kind="duplicate", payload={"of": matched, "origin": "cross"})
             return Verdict(kind="new")
 
         async def _cross_merge(number: int) -> None:
@@ -427,8 +452,10 @@ class WorkflowHandle:
                 except EntityConflict as exc:
                     raise StepFailed(str(exc)) from exc
                 return Result(fields={"number": number, "created": False, "action": "merge"})
-            # new — guard the act-crash-before-journal window (§7): if this site already
-            # minted a (still-alive) entity, reuse it rather than mint a second.
+            # new / token — guard the act-crash-before-journal window (§7): if this site
+            # already minted a (still-alive) entity, reuse it rather than mint a second. For
+            # ``token`` (create_new) ``_remembered_alive`` reads the PER-RUN created.json, so
+            # this reuses only within the same invocation, never across separate runs.
             remembered = await _remembered_alive()
             if remembered is not None:
                 return Result(fields={"number": remembered, "created": False, "action": "resume"})
@@ -442,10 +469,16 @@ class WorkflowHandle:
             await self.write_json(created_path, {"number": created.number})
             return Result(fields={"number": created.number, "created": True, "action": "create"})
 
+        inputs: dict[str, Any] = {"type": type_name, "args": args, "on_duplicate": on_duplicate}
+        if token:
+            # Fold the per-invocation token into the shell input hash so a NEW invocation (the
+            # journal is workflow_id-scoped, else re-used) re-runs decide/act and re-mints
+            # instead of returning the cached prior-run result.
+            inputs["token"] = token
         result = await run_nonidempotent(
             self,
             name=name,
-            inputs={"type": type_name, "args": args, "on_duplicate": on_duplicate},
+            inputs=inputs,
             decide=decide,
             act=act,
             key=key,
@@ -462,23 +495,34 @@ class WorkflowHandle:
         name: str,
         title: str = "",
         body: str = "",
+        window: str = "",
         phase: str = "notify",
         key: str = "",
         cache: bool = True,
     ) -> dict[str, Any]:
         """Send one in-app notification as a non-idempotent capability on the #435 shell
-        (M1 send-once). ``decide`` queries the Notification store by the send-once
-        fingerprint ``{recipient}:{topic}`` — the store IS the ledger — so a replay or a
-        revise that changes only the title never re-notifies about the same topic; ``act``
-        creates the notification (send + ledger in one atomic write, so there is no
-        act-crash gap). A per-window fingerprint (once-per-day rather than once-ever) needs
-        #429's time-slicing; until then the fingerprint is once-ever per (recipient, topic).
+        (M1 send-once). ``decide`` queries the Notification store by the send fingerprint —
+        the store IS the ledger — so a replay or a revise that changes only the title never
+        re-notifies about the same topic; ``act`` creates the notification (send + ledger in
+        one atomic write, so there is no act-crash gap).
+
+        ``window`` (P8) buckets the run's creation instant into the fingerprint so a
+        recurring notify sends once per period instead of once-ever: ``""`` ⇒ once-ever
+        ``{recipient}:{topic}``; ``daily``/``weekly``/``monthly`` ⇒
+        ``{recipient}:{topic}:{window_key}`` (a new period → a fresh key → re-sends). Because
+        the journal is workflow_id-scoped (a re-trigger reuses it), the run's ``run_id`` is
+        folded into the shell inputs so ``decide`` re-consults the ledger each invocation
+        rather than journal-skipping — the ledger, not the journal, is the send authority.
         Returns ``{sent, action, notification_id}``. ``name`` is the capability's site."""
         if self._notify is None:
             raise RuntimeError("send_notification needs a capability (wired by the run driver)")
         notify_fn = self._notify
         sent_check = self._notification_sent
         fingerprint = f"{recipient}:{topic}"
+        if window and self.run_started_at is not None:
+            from .triggers import window_key
+
+            fingerprint = f"{fingerprint}:{window_key(window, self.run_started_at)}"
 
         async def decide(_feedback: str | None) -> Verdict:
             already = sent_check is not None and await sent_check(fingerprint)
@@ -490,10 +534,21 @@ class WorkflowHandle:
             nid = await notify_fn(recipient, title or topic, body, fingerprint)
             return Result(fields={"sent": True, "action": "send", "notification_id": nid})
 
+        inputs: dict[str, Any] = {
+            "recipient": recipient,
+            "topic": topic,
+            "title": title,
+            "body": body,
+        }
+        if self.run_id:
+            # Fold the per-invocation identity so decide re-runs (and re-queries the ledger)
+            # each invocation instead of returning the workflow_id-scoped journal's cached
+            # ruling — the ledger is the send authority (M1), not the journal.
+            inputs["run_id"] = self.run_id
         result = await run_nonidempotent(
             self,
             name=name,
-            inputs={"recipient": recipient, "topic": topic, "title": title, "body": body},
+            inputs=inputs,
             decide=decide,
             act=act,
             key=key,

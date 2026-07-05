@@ -58,9 +58,16 @@ _CAP_REQUIRED_ARGS: dict[str, tuple[str, ...]] = {
 # #435 决议4: a *non-idempotent* capability's ``on_duplicate`` policy set is a
 # per-capability interface — defined by the capability, NOT a strategy-layer default that
 # other capabilities inherit. Absent ⇒ the capability is idempotent and takes no
-# ``on_duplicate`` (setting one is a static error). ``create_new`` (M2 token) lands in P4.
+# ``on_duplicate`` (setting one is a static error). ``create_new`` (M2 token) is live as of
+# P7 — the per-invocation ``run_id`` mints a fresh entity each separate invocation.
 _CAP_ON_DUPLICATE: dict[str, tuple[str, ...]] = {
-    "create_entity": ("update", "skip"),
+    "create_entity": ("update", "skip", "create_new"),
+}
+# #435 P8: send_notification's per-window policy set — the periods #429's ``window_key``
+# buckets by. Absent from a capability ⇒ it takes no ``window`` (setting one is a static
+# error), same shape as ``_CAP_ON_DUPLICATE``.
+_CAP_WINDOW: dict[str, tuple[str, ...]] = {
+    "send_notification": ("daily", "weekly", "monthly"),
 }
 # #435: a capability's output fields are FIXED by the capability (owner-defined), not
 # author-declared — referenceable downstream as ``{steps.<name>.<field>}``. A named
@@ -176,6 +183,9 @@ class CapabilityStep(Struct, tag="capability", forbid_unknown_fields=True):
     # {steps.<name>.<field>} — and its per-capability on_duplicate policy.
     name: str = ""
     on_duplicate: str = ""
+    # #435 P8: send_notification's per-window dedup policy — "" (once-ever) or
+    # daily/weekly/monthly (once per period). A per-capability policy, like on_duplicate.
+    window: str = ""
 
 
 class MapStep(Struct, tag="map", forbid_unknown_fields=True):
@@ -652,6 +662,7 @@ async def _exec_capability(
             name=step.name,
             title=a.get("title", ""),
             body=a.get("body", ""),
+            window=step.window,  # #435 P8: per-window fingerprint (once-per-period)
             key=key,
             phase=step.phase,
         )
@@ -1048,17 +1059,9 @@ def _validate_step(
                 errs.append(
                     f"{where}: capability {step.call!r} needs a 'name' (#435 dedup identity)"
                 )
-            # #435 P4 by-construction gate: ``create_new`` (M2 token) means "a fresh entity
-            # per invocation", which needs #429's per-invocation journal boundary — absent
-            # it, a manual re-run reuses the journal and SILENTLY reuses the entity instead
-            # of minting a new one. Block the author surface until #429 lands rather than
-            # ship that silent-wrong behavior (the within-run mechanism is ready + tested).
-            elif step.on_duplicate == "create_new":
-                errs.append(
-                    f"{where}: capability {step.call!r} 'on_duplicate' = 'create_new' needs the "
-                    "per-invocation journal boundary (#429), not yet available"
-                )
             # #435 决议4: ``on_duplicate`` is validated against THIS capability's policy set.
+            # ``create_new`` (M2 token, P7) is now in the set — the per-invocation ``run_id``
+            # makes each separate invocation mint fresh, so the old P4 gate is retired.
             else:
                 allowed_pol = _CAP_ON_DUPLICATE.get(step.call, ())
                 if step.on_duplicate and step.on_duplicate not in allowed_pol:
@@ -1068,6 +1071,16 @@ def _validate_step(
                         if allowed_pol
                         else f"{where}: capability {step.call!r} does not take an 'on_duplicate'"
                     )
+            # #435 P8: ``window`` is validated against send_notification's period set — same
+            # per-capability shape as on_duplicate; a capability without a window policy
+            # rejects any window.
+            allowed_win = _CAP_WINDOW.get(step.call, ())
+            if step.window and step.window not in allowed_win:
+                errs.append(
+                    f"{where}: capability {step.call!r} 'window' must be one of {list(allowed_win)}"
+                    if allowed_win
+                    else f"{where}: capability {step.call!r} does not take a 'window'"
+                )
         _check_interp(
             [step.collection, step.path, step.title, step.body, step.keys, step.args, step.number],
             scope,
