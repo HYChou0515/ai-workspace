@@ -60,7 +60,7 @@ export function NewItemPicker({
         data-testid="new-item-button"
       >
         <Icon name="plus" size={12} color="var(--text-paper-d)" />
-        <span>New</span>
+        <span>New…</span>
         <Icon name="chev_d" size={12} color="var(--text-paper-d)" />
       </button>
       {open && (

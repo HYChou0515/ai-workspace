@@ -516,7 +516,7 @@ function KbCollectionPageBody({ client = kbApi }: { client?: KbApi }) {
                 aria-pressed={isPinned}
                 onClick={() => pinned.toggle(selected.resource_id)}
               >
-                <Icon name="pin" size={10} /> {isPinned ? "pinned" : "pin"}
+                <Icon name="pin" size={10} /> {isPinned ? "Pinned" : "Pin"}
               </button>
             </div>
             {editingName ? (
