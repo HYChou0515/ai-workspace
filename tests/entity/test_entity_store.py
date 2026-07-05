@@ -54,6 +54,9 @@ async def test_create_and_update_emit_write_events_for_the_trigger_hook() -> Non
     assert ce.fields["title"] == "A" and ce.origin == origin
     assert ue.action == "updated" and ue.actor == "bob" and ue.fields["status"] == "done"
     assert ue.version != ce.version  # the update changed the record's version
+    # #455 P2: the event carries the record's own file path so a broadcast sink
+    # can turn it into a FileChanged without re-resolving the catalog.
+    assert ce.path == "/issues/1.md" and ue.path == "/issues/1.md"
 
 
 async def test_no_write_sink_is_a_silent_noop() -> None:

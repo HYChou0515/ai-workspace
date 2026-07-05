@@ -21,6 +21,7 @@ import { useEditMode } from "../../hooks/editMode";
 import { useFileBuffer } from "../../hooks/fileBuffer";
 import { useOpenFile } from "../../hooks/openFile";
 import { useEntities, useEntityCatalog, useEntityHealth, useReferencedRecords } from "../../hooks/useEntities";
+import { useEntityLiveSync } from "../../hooks/useEntityLiveSync";
 import { useEntityWrite } from "../../hooks/useEntityWrite";
 import { useItemCanWrite } from "../../hooks/useItemCanWrite";
 import { useUsers } from "../../hooks/useUsers";
@@ -46,6 +47,10 @@ export function AiYamlRenderer({ path }: { path: string }) {
   // §E read-only gate: derive the item's write permission for this member; a
   // read-only viewer's write affordances are hidden and every write is a no-op.
   const canWrite = useItemCanWrite(slug, itemId);
+
+  // §C3/§E live-sync: while a view is open, refetch on a peer's / agent's entity
+  // write (broadcast as `file_changed` on the item stream).
+  useEntityLiveSync(slug, itemId, !!spec);
 
   const catalogQ = useEntityCatalog(slug, itemId);
   const listQ = useEntities(slug, itemId, entityName);

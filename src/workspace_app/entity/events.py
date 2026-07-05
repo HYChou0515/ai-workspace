@@ -27,7 +27,11 @@ class EntityWriteEvent(Struct):
     """One entity write, emitted by ``EntityStore`` post-commit (#429 P9). ``action`` is
     ``created`` / ``updated`` (matched against a trigger's ``on``); ``fields`` is the record's
     parsed fields (matched against ``where``); ``version`` is the entity's optimistic version
-    (the watermark's once-per-change key); ``origin`` is set only for a triggered run's writes."""
+    (the watermark's once-per-change key); ``origin`` is set only for a triggered run's writes.
+    ``path`` is the record's own workspace file path (``/{records_path}/{number}.md``) — the
+    store denormalises it so a #455 broadcast sink can raise a ``FileChanged`` without
+    re-resolving the catalog (empty only for a re-synthesised backfill event, which never
+    broadcasts)."""
 
     item_id: str
     type_name: str
@@ -37,6 +41,7 @@ class EntityWriteEvent(Struct):
     version: str
     fields: dict[str, Any]
     origin: EntityOrigin | None = None
+    path: str = ""
 
 
 # The sink the single write path calls after a committed create/update. Post-commit, in-request,

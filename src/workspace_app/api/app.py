@@ -46,6 +46,7 @@ from .chat_routes import register_chat_routes
 from .chat_send import ChatSendService
 from .context_card_routes import register_context_card_actions, register_context_card_routes
 from .doc_question_routes import register_doc_question_routes
+from .entity_broadcast import build_entity_write_sink
 from .entity_routes import register_entity_routes
 from .file_routes import register_file_routes
 from .health_routes import (
@@ -790,12 +791,16 @@ def create_app(
         start=build_event_trigger_start(workflow_orchestrator.start),
         watermark=SpecstarEventWatermark(spec),
     )
-    workflow_orchestrator.entity_write_sink = event_dispatcher.dispatch
+    # #455 P2: fan the single write path out to BOTH the P9 event-trigger dispatch
+    # and a FileChanged live-sync broadcast, so a peer's open board refetches and the
+    # file tree shows agent-created records. All three write surfaces share it.
+    entity_write_sink = build_entity_write_sink(event_dispatcher.dispatch, turn_engine)
+    workflow_orchestrator.entity_write_sink = entity_write_sink
     # #429 P10: agent-tool entity writes (chat + workflow agent nodes) also fire event
     # triggers — same dispatcher, so an AI edit is indistinguishable from a UI/workflow
     # write. Set post-construction (the builder predates the dispatcher, like the
     # orchestrator's sink above).
-    turn_ctx.entity_write_sink = event_dispatcher.dispatch
+    turn_ctx.entity_write_sink = entity_write_sink
     app.state.event_dispatcher = event_dispatcher
 
     register_workflow_routes(
@@ -904,7 +909,8 @@ def create_app(
         activity=activity,
         spec=spec,
         users=users,
-        on_entity_write=event_dispatcher.dispatch,  # #429 P9: human writes fire event triggers
+        # #429 P9 event triggers + #455 P2 live-sync broadcast (fanned out above).
+        on_entity_write=entity_write_sink,
     )
 
     # #177: now that EVERY route (specstar CRUD + all hand-written) is on the
