@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { _resetKbMock, _seedDocQuestionMock, mockKbApi } from "../../api/kbMock";
 import { qk } from "../../api/queryKeys";
+import { LocaleProvider } from "../../lib/i18n";
 import { QueryWrap, makeTestQueryClient } from "../../test/queryWrapper";
 import { CollectionReviewTab } from "./CollectionReviewTab";
 
@@ -21,11 +22,26 @@ async function seedRun() {
 
 describe("<CollectionReviewTab /> (#415)", () => {
   beforeEach(() => _resetKbMock());
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
 
   it("shows an empty state when nothing is awaiting review", async () => {
     renderTab();
     expect(await screen.findByText("目前沒有待審核項目。")).toBeInTheDocument();
+  });
+
+  it("localizes the panel — English strings under an English locale, no hardcoded Chinese (#456)", async () => {
+    localStorage.setItem("ws.locale", "en");
+    render(
+      <LocaleProvider>
+        <CollectionReviewTab collectionId="col-1" client={mockKbApi} />
+      </LocaleProvider>,
+      { wrapper: QueryWrap },
+    );
+    expect(await screen.findByText("Nothing to review right now.")).toBeInTheDocument();
+    expect(screen.queryByText("目前沒有待審核項目。")).not.toBeInTheDocument();
   });
 
   it("lists a finalized run as a reviewable item", async () => {

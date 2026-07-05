@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
+import { useT } from "../../lib/i18n";
 import { CardGenRunRow } from "./CardGenRunRow";
 import { DocQuestionRow } from "./DocQuestionRow";
 import { ReviewInbox } from "./ReviewInbox";
@@ -21,6 +22,7 @@ export function CollectionReviewTab({
   client?: KbApi;
 }) {
   const qc = useQueryClient();
+  const t = useT();
   const runsQ = useQuery({
     queryKey: qk.kb.cardGenRuns(collectionId),
     queryFn: () => client.listCardGenRuns(collectionId),
@@ -53,11 +55,11 @@ export function CollectionReviewTab({
 
   return (
     <ReviewInbox
-      title="待審核"
-      subtitle="自動生成的卡片提案與待釐清的問題；審核後套用、回答或略過。"
+      title={t("kb.tab.review")}
+      subtitle={t("kb.review.subtitle")}
       isLoading={runsQ.isPending || questionsQ.isPending}
       isEmpty={runs.length === 0 && questions.length === 0}
-      emptyText="目前沒有待審核項目。"
+      emptyText={t("kb.review.empty")}
     >
       {runs.map((run) => (
         <CardGenRunRow key={run.run_id} run={run} client={client} onResolved={onRunResolved} />
