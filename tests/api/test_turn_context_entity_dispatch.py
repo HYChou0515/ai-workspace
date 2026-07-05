@@ -8,9 +8,9 @@ the recursion depth cap. Built end-to-end through ``create_app`` so the real
 from __future__ import annotations
 
 import workspace_app.api.app as app_mod
+from workspace_app.agent import AgentToolContext
 from workspace_app.api import create_app
 from workspace_app.api.events import RunDone
-from workspace_app.agent import AgentToolContext
 from workspace_app.api.runner import ScriptedAgentRunner
 from workspace_app.apps.playground.model import PlaygroundItem
 from workspace_app.entity.events import EntityOrigin

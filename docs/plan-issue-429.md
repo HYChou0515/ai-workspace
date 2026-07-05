@@ -38,6 +38,7 @@ grill 前的三份 code 探勘改變了 #429 的樣貌,先記錄事實基礎:
 | P8 | 孤兒重拾 + 時效 abandon | 是 |
 | P9 | 事件觸發(event_handlers + where + 遞迴 guard + 水位) | 是 |
 | P10 | agent 工具寫入接上 event dispatch(補齊單一寫入路徑 + origin 傳遞) | 是 |
+| P11 | 事件觸發 D2d on-demand backfill(watermark 落後查詢 + 補跑 route) | 是 |
 
 ---
 
@@ -313,8 +314,35 @@ tz 或標為 known limitation。full cron 日後當**加法擴充**(schedule 也
   接真 `EventTriggerDispatcher`,驗證 depth=cap 的 agent 寫入 fire 不出東西、且不自觸發;對照 `origin=None`
   的第一層寫入會 fire(證明線是通的、是 origin 擋住而非斷線)。
 
-**仍延後(P10 之外)**:D2d on-demand backfill 的 operator route/CLI(watermark ledger 已具「可查落後」的
-基礎)維持獨立 follow-up。
+**仍延後(P10 之外)**:D2d on-demand backfill 的 operator route → **已於 P11 收掉**(見下)。
+
+---
+
+## P11 — 事件觸發 D2d on-demand backfill(watermark 落後查詢 + 補跑)
+
+**問題(P9 D2d 標記的接縫)**:P9 的事件 dispatch 是 in-request 一次性(不上 queue、不常駐 sweeper)。
+pod 在 entity commit ↔ dispatch 之間死掉 → 該 trigger 的 watermark 落在 entity 版本後面 = 一次靜默漏跑。
+P9 定調「可補但不主動補」:watermark ledger 已記錄落後,留 operator 按需 reconcile,但當時沒做查詢/補跑介面。
+
+**定案**:純函式 + operator route,建在 P9 已曝的元件上。
+
+- `find_trigger_lag`(查詢,唯讀):對某 item 的 app 的每條 event trigger,走訪 item 現有 entities,回報
+  「版本高於 trigger watermark」的那些(`where` 濾掉的不算落後——live 路徑本來就不會 fire)。純、可當
+  dry-run。
+- `backfill_trigger_lag`(補跑):把每個落後 entity 的 **current state** 合成 `EntityWriteEvent`
+  (`action=t.on` 讓 dispatcher 匹配;`origin=None` 讓 depth cap 從零起算,與原本漏掉的第一層寫入一致)餵回
+  dispatcher。**冪等**:dispatcher 自己的 once-per-version watermark 讓「已被 live dispatch 推進的版本」變 no-op,
+  operator 可安心重跑。
+- **一致的 trigger 來源**:route 透過 dispatcher 的公開 `event_triggers()` + `watermark` 讀,讓 lag 查詢、
+  補跑 re-dispatch、live dispatch 三者看到同一份 trigger 集合。
+- **route**(item-scoped operator 面):`GET /a/{slug}/items/{item_id}/event-triggers/lag`(dry-run 查落後)
+  與 `POST …/event-triggers/backfill`(補跑,回 per-trigger 計數)。entity 列舉由 `EntityStore.query` 供;
+  trigger 名一個 item 沒宣告的 type → 無記錄(不 crash)。
+- **watermark model 註冊移到 `create_app`**(post-`spec.apply`,idempotent):in-request 讀 watermark 的路徑
+  (P9 dispatch + P11 route)不再依賴 lifespan 先跑過。
+
+**仍延後**:跨全 item 的 backfill(entities 非全域索引,現為 item-scoped 由 operator 指定);CLI 包裝
+(純函式已可被 CLI 重用)。
 
 ---
 
@@ -328,9 +356,8 @@ tz 或標為 known limitation。full cron 日後當**加法擴充**(schedule 也
 - workflow-as-durable-JobType on worker pod(A 的 in-process v1 之外,讓 run 上 HPA、pod 重啟
   自動接手)。
 - DST tz 語意(不存在/重複本地時刻)。
-- ~~**P9 agent-tool 寫入路徑接上 event dispatch**~~ → **已於 P10 收掉**(見下)。
-- **P9 D2d on-demand backfill 的 route/CLI**:watermark ledger + `processed_version` 已具備「可查
-  落後」的基礎;把「version > watermark 卻無對應 run」做成一支 operator 查詢/補跑指令留 follow-up。
+- ~~**P9 agent-tool 寫入路徑接上 event dispatch**~~ → **已於 P10 收掉**(見上)。
+- ~~**P9 D2d on-demand backfill 的 route**~~ → **已於 P11 收掉**(見上);CLI 包裝與跨全 item backfill 仍延後。
 
 ---
 
