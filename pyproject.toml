@@ -50,6 +50,9 @@ dev = [
     "coverage>=7",
     "asgi-lifespan>=2.1.0",
     "pytest-xdist>=3.8.0",
+    # Generates CHANGELOG.md from Conventional Commits (#441). See cliff.toml +
+    # the `changelog-preview` / `release` Makefile targets.
+    "git-cliff>=2.0.0",
 ]
 # Documentation site (mkdocs + Material). Build: `uv run --group docs mkdocs build`;
 # serve locally: `uv run --group docs mkdocs serve`. Not needed by the app or the CI gate.
