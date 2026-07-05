@@ -22,6 +22,29 @@ vi.mock("../../api/entities", async () => {
   return { ...actual, entitiesApi: mock };
 });
 
+// The record editor's body + YAML ride the lazy Monaco stack — stub it with a
+// textarea keyed on `ariaLabel` (matching EntityFileEditor.test).
+vi.mock("../../components/MonacoEditor", () => ({
+  MonacoEditor: ({
+    value,
+    onChange,
+    readOnly,
+    ariaLabel,
+  }: {
+    value: string;
+    onChange?: (next: string) => void;
+    readOnly?: boolean;
+    ariaLabel?: string;
+  }) => (
+    <textarea
+      aria-label={ariaLabel}
+      value={value}
+      disabled={readOnly}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  ),
+}));
+
 import { EntityConflictError } from "../../api/entities";
 import { RecordFileRenderer } from "./RecordFileRenderer";
 

@@ -3,6 +3,29 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// The body + raw-YAML surfaces ride the lazy Monaco stack; swap it for a plain
+// textarea keyed on `ariaLabel` so the editor is drivable without Monaco.
+vi.mock("../../components/MonacoEditor", () => ({
+  MonacoEditor: ({
+    value,
+    onChange,
+    readOnly,
+    ariaLabel,
+  }: {
+    value: string;
+    onChange?: (next: string) => void;
+    readOnly?: boolean;
+    ariaLabel?: string;
+  }) => (
+    <textarea
+      aria-label={ariaLabel}
+      value={value}
+      disabled={readOnly}
+      onChange={(e) => onChange?.(e.target.value)}
+    />
+  ),
+}));
+
 import type { EntityInstance, EntityType } from "../../api/entities";
 import { EntityFileEditor } from "./EntityFileEditor";
 

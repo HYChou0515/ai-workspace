@@ -25,6 +25,9 @@ export type MonacoEditorProps = {
   /** Grow to fit content (notebook cells) vs fill the container (files). */
   autoHeight?: boolean;
   minHeight?: number;
+  /** Accessible name for the editor's textbox (a11y + lets multiple editors on
+   * one screen be told apart, e.g. the record editor's YAML vs body). */
+  ariaLabel?: string;
 };
 
 export function MonacoEditor(props: MonacoEditorProps) {

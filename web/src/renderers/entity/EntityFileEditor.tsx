@@ -17,6 +17,7 @@ import { dump, load } from "js-yaml";
 
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
+import { MonacoEditor } from "../../components/MonacoEditor";
 import { pxToRem } from "../../lib/pxToRem";
 import { RoleField, widgetForRole } from "./roleWidget";
 
@@ -38,16 +39,6 @@ function pickSettable(fields: Record<string, unknown>, type: EntityType): Record
   for (const f of settableFields(type)) out[f.name] = fields[f.name];
   return out;
 }
-
-const textareaStyle: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  fontFamily: "var(--font-mono, monospace)",
-  fontSize: pxToRem(13),
-  border: "1px solid var(--paper-3)",
-  borderRadius: 6,
-  padding: 8,
-};
 
 export function EntityFileEditor({ type, record, users, canWrite = true, busy, onSave }: EntityFileEditorProps) {
   const settable = settableFields(type);
@@ -133,13 +124,16 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, o
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-          <textarea
-            aria-label="frontmatter yaml"
+          {/* Raw-YAML frontmatter rides the same Monaco stack as the rest of the
+              IDE — the escape hatch for fields the widgets can't express. */}
+          <MonacoEditor
+            ariaLabel="frontmatter yaml"
             value={yamlText}
-            disabled={!canWrite}
-            rows={Math.max(settable.length + 1, 4)}
-            style={textareaStyle}
-            onChange={(e) => onYamlChange(e.target.value)}
+            onChange={onYamlChange}
+            language="yaml"
+            readOnly={!canWrite}
+            autoHeight
+            minHeight={120}
           />
           {yamlError && <div style={{ color: "var(--err)", fontSize: pxToRem(12) }}>{yamlError}</div>}
         </div>
@@ -147,13 +141,15 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, o
 
       <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: pxToRem(13) }}>
         <span style={{ color: "var(--text-paper-d)" }}>Body</span>
-        <textarea
-          aria-label="body"
+        {/* Free-writing markdown body in the shared Monaco editor (§C2). */}
+        <MonacoEditor
+          ariaLabel="body"
           value={body}
-          disabled={!canWrite}
-          rows={8}
-          style={textareaStyle}
-          onChange={(e) => setBody(e.target.value)}
+          onChange={setBody}
+          language="markdown"
+          readOnly={!canWrite}
+          autoHeight
+          minHeight={160}
         />
       </label>
     </div>
