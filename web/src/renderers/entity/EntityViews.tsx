@@ -184,7 +184,7 @@ function EditableCell({
 function CreateInput({ field, value, onChange }: { field: EntityFormField; value: string; onChange: (v: string) => void }) {
   if (field.widget === "select" && field.values && field.values.length > 0) {
     return (
-      <select aria-label={field.name} value={value} onChange={(e) => onChange(e.target.value)}>
+      <select className="inline-edit" aria-label={field.name} value={value} onChange={(e) => onChange(e.target.value)}>
         <option value="">—</option>
         {field.values.map((v) => (
           <option key={v} value={v}>
@@ -198,6 +198,7 @@ function CreateInput({ field, value, onChange }: { field: EntityFormField; value
   const placeholder = field.widget === "daterange" ? "start/end" : field.widget === "ref" ? "#" : "";
   return (
     <input
+      className="inline-edit"
       aria-label={field.name}
       type={type}
       value={value}
@@ -222,7 +223,7 @@ export function QuickCreate({
 
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)}>
+      <button type="button" className="btn" data-variant="secondary" data-size="sm" onClick={() => setOpen(true)}>
         + New
       </button>
     );
@@ -251,10 +252,10 @@ export function QuickCreate({
           <CreateInput field={f} value={draft[f.name] ?? ""} onChange={(v) => setDraft((d) => ({ ...d, [f.name]: v }))} />
         </label>
       ))}
-      <button type="submit" disabled={busy}>
+      <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>
         Create
       </button>
-      <button type="button" onClick={() => setOpen(false)}>
+      <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => setOpen(false)}>
         Cancel
       </button>
     </form>

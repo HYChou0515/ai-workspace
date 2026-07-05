@@ -146,6 +146,16 @@ select {
   background: var(--paper-2);
   color: var(--text-paper);
 }
+/* Destructive action — outlined error red that fills on hover. */
+.btn[data-variant="danger"] {
+  background: transparent;
+  color: var(--err);
+  border-color: var(--err);
+}
+.btn[data-variant="danger"]:hover:not(:disabled) {
+  background: var(--err);
+  color: var(--white);
+}
 /* Selected/toggled state wins over the variant resting + hover fills. */
 .btn[data-active],
 .btn[data-active]:hover:not(:disabled) {
@@ -155,6 +165,19 @@ select {
 }
 .btn[data-fullwidth] {
   width: 100%;
+}
+
+/* Compact inline editor — a select/input that replaces a chip or fills a
+   quick-create cell. Wears the token chrome (border/radius/surface) instead of
+   the bare native widget that broke the themed look mid-interaction (#445 #20).
+   Base resets already flip its font/color/background with the theme. */
+.inline-edit {
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
 }
 
 /* Print: isolate the report card so "Export PDF" (window.print) emits a
@@ -194,7 +217,11 @@ select {
 .md-body code { font-family: var(--font-mono); background: var(--paper-2); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
 .md-body pre { font-family: var(--font-mono); background: var(--paper-2); padding: 10px; border-radius: 6px; overflow: auto; font-size: 0.75rem; }
 .md-body pre code { background: transparent; padding: 0; }
-.md-body table { border-collapse: collapse; width: 100%; margin: 0 0 10px; }
+/* A wide GFM table scrolls inside its own box instead of overflowing the pane
+   (#445 #19). display:block + max-content lets overflow-x engage; max-width caps
+   it at the container so narrow tables stay their natural width. Covers every
+   .md-body markdown surface at once (10 ReactMarkdown call sites). */
+.md-body table { display: block; width: max-content; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 0 0 10px; }
 .md-body th, .md-body td { border: 1px solid var(--paper-3); padding: 5px 8px; text-align: left; }
 .md-body th { background: var(--paper-2); font-weight: 600; }
 .md-body blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-paper-d); margin: 0 0 10px; }
