@@ -18,7 +18,6 @@
 import { useState } from "react";
 
 import type { EntityInstance } from "../../api/entities";
-import { pxToRem } from "../../lib/pxToRem";
 import {
   applyDrag,
   daysBetween,
@@ -134,7 +133,7 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
 
   return (
     <div>
-      <div role="group" aria-label="zoom" style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+      <div role="group" aria-label="zoom" className="ev-gantt__toolbar" style={{ marginBottom: 8 }}>
         {ZOOMS.map((z) => (
           <button
             key={z}
@@ -151,31 +150,20 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
         ))}
       </div>
 
-      <div style={{ overflowX: "auto" }}>
-        <div style={{ display: "flex", minWidth: GUTTER + chartWidth }}>
+      <div className="ev-gantt__scroll scrollable">
+        <div className="ev-gantt__grid" style={{ minWidth: GUTTER + chartWidth }}>
           {/* left gutter: axis spacer + lane headers + row labels */}
-          <div style={{ width: GUTTER, flex: "0 0 auto" }}>
+          <div className="ev-gantt__gutter" style={{ width: GUTTER }}>
             <div style={{ height: AXIS_H }} />
             {lanes.map((lane) => (
               <div key={lane.key}>
                 {grouped && (
-                  <div style={{ height: LANE_H, fontWeight: 600, fontSize: pxToRem(13), display: "flex", alignItems: "center" }}>
+                  <div className="ev-gantt__lane-label" style={{ height: LANE_H }}>
                     {lane.label}
                   </div>
                 )}
                 {lane.rows.map((row) => (
-                  <div
-                    key={row.e.number}
-                    style={{
-                      height: ROW_H,
-                      display: "flex",
-                      alignItems: "center",
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                      paddingRight: 8,
-                    }}
-                  >
+                  <div key={row.e.number} className="ev-gantt__row-label" style={{ height: ROW_H }}>
                     {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
                   </div>
                 ))}
@@ -184,66 +172,51 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
           </div>
 
           {/* right timeline: axis ticks + today line + bars */}
-          <div style={{ position: "relative", width: chartWidth, flex: "0 0 auto" }}>
-            <div style={{ position: "relative", height: AXIS_H, borderBottom: "1px solid var(--paper-3)" }}>
+          <div className="ev-gantt__canvas" style={{ width: chartWidth }}>
+            <div className="ev-gantt__axis" style={{ height: AXIS_H }}>
               {ticks.map((t) => (
-                <span
-                  key={t}
-                  style={{ position: "absolute", left: xOf(t), fontSize: pxToRem(11), color: "var(--text-paper-d)", whiteSpace: "nowrap" }}
-                >
+                <span key={t} className="ev-gantt__tick" style={{ left: xOf(t) }}>
                   {t.slice(5)}
                 </span>
               ))}
             </div>
 
             {todayInRange && (
-              <div
-                data-testid="gantt-today"
-                title="today"
-                style={{ position: "absolute", top: 0, bottom: 0, left: xOf(today), width: 2, background: "var(--accent)", opacity: 0.5 }}
-              />
+              <div data-testid="gantt-today" title="today" className="ev-gantt__today" style={{ left: xOf(today) }} />
             )}
 
             {lanes.map((lane) => (
               <div key={lane.key}>
-                {grouped && <div style={{ height: LANE_H }} />}
+                {grouped && <div className="ev-gantt__lane-band" style={{ height: LANE_H }} />}
                 {lane.rows.map((row) => {
                   const ps = previewSpan(row);
                   const left = xOf(ps.start);
                   const width = Math.max(daysBetween(ps.start, ps.end), 1) * ppd;
                   return (
-                    <div key={row.e.number} style={{ position: "relative", height: ROW_H }}>
+                    <div key={row.e.number} className="ev-gantt__bar-row" style={{ height: ROW_H }}>
                       <div
                         data-testid={`bar-${row.e.number}`}
                         title={spanValue(ps)}
+                        className="ev-gantt__bar"
+                        data-busy={busy ? "1" : undefined}
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
-                        style={{
-                          position: "absolute",
-                          left,
-                          width,
-                          top: 3,
-                          bottom: 3,
-                          background: "var(--accent)",
-                          borderRadius: 4,
-                          cursor: busy ? "default" : "grab",
-                          touchAction: "none",
-                        }}
+                        style={{ left, width }}
                       >
                         <div
                           data-testid={`bar-${row.e.number}-start`}
+                          className="ev-gantt__handle ev-gantt__handle--start"
                           onPointerDown={(e) => {
                             e.stopPropagation();
                             startDrag(row.e.number, "start", e);
                           }}
-                          style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 6, cursor: busy ? "default" : "ew-resize" }}
                         />
                         <div
                           data-testid={`bar-${row.e.number}-end`}
+                          className="ev-gantt__handle ev-gantt__handle--end"
                           onPointerDown={(e) => {
                             e.stopPropagation();
                             startDrag(row.e.number, "end", e);
                           }}
-                          style={{ position: "absolute", right: 0, top: 0, bottom: 0, width: 6, cursor: busy ? "default" : "ew-resize" }}
                         />
                       </div>
                     </div>
