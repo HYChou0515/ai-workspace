@@ -10,9 +10,12 @@ from collections.abc import Iterator
 
 from workspace_app.kb.llm import ILlm
 from workspace_app.kb.wiki.reflect import (
+    PageDigest,
+    ReflectPlan,
     WikiReflector,
     _extract_links,
     _extract_sources,
+    _render_digest,
 )
 from workspace_app.kb.wiki.store import (
     CORRECTIONS_DIR,
@@ -92,3 +95,90 @@ def test_extract_links_dedupes_and_ignores_anchors():
 def test_extract_sources_splits_on_middot_and_comma():
     assert _extract_sources("Sources: a.pdf · b.md, c.txt") == ["a.pdf", "b.md", "c.txt"]
     assert _extract_sources("no sources line here") == []
+
+
+# ── P3: plan ────────────────────────────────────────────────────────────
+
+_DIGEST = [
+    PageDigest("/entities/zone-3.md", "Zone 3", "runs at 245 C", [], ["voiding"], 300),
+    PageDigest("/concepts/voiding.md", "Voiding", "a solder defect", [], [], 200),
+    PageDigest("/concepts/voids.md", "Voids", "solder voids (dup)", [], [], 180),
+    PageDigest("/entities/big.md", "Big", "a huge grab-bag page", [], [], 9000),
+]
+
+_GOOD_PLAN = """```json
+{"concepts":[{"title":"Voiding","sources":["/entities/zone-3.md","/nope.md"]}],
+ "merges":[{"keep":"/concepts/voiding.md","duplicates":["/concepts/voids.md"]}],
+ "splits":[{"page":"/entities/big.md","subtopics":["Setup","Runtime"]}],
+ "contradictions":["245 C vs 250 C"],
+ "notes":"lifted voiding; merged voids; split big"}
+```"""
+
+
+def test_plan_parses_json_and_keeps_valid_actions():
+    r = WikiReflector(make_spec(default_user="u"), _ScriptedLlm([_GOOD_PLAN]))
+    plan = r.plan(_DIGEST, collection_name="c")
+    assert plan.concepts[0].title == "Voiding"
+    # an unknown source page is dropped, the real one kept
+    assert plan.concepts[0].sources == ["/entities/zone-3.md"]
+    assert plan.merges[0].keep == "/concepts/voiding.md"
+    assert plan.merges[0].duplicates == ["/concepts/voids.md"]
+    assert plan.splits[0].page == "/entities/big.md"
+    assert plan.contradictions == ["245 C vs 250 C"]
+
+
+def test_plan_returns_empty_on_garbage_output():
+    # a model that narrates instead of emitting JSON → a no-op plan (idempotent)
+    r = WikiReflector(make_spec(default_user="u"), _ScriptedLlm(["I would reorganise the wiki..."]))
+    plan = r.plan(_DIGEST, collection_name="c")
+    assert plan == ReflectPlan()
+
+
+def test_plan_returns_empty_on_malformed_json():
+    # a brace is found but the payload doesn't match the schema → no-op (safe)
+    r = WikiReflector(make_spec(default_user="u"), _ScriptedLlm(['{"concepts": 5}']))
+    assert r.plan(_DIGEST, collection_name="c") == ReflectPlan()
+
+
+def test_plan_filters_degenerate_actions():
+    # empty title / self-merge / empty subtopics / blank contradiction all drop out
+    j = (
+        '{"concepts":[{"title":"","sources":[]}],'
+        '"merges":[{"keep":"/concepts/voiding.md","duplicates":["/concepts/voiding.md"]}],'
+        '"splits":[{"page":"/entities/big.md","subtopics":[""]}],'
+        '"contradictions":["   "]}'
+    )
+    r = WikiReflector(make_spec(default_user="u"), _ScriptedLlm([j]), split_min_chars=1)
+    assert r.plan(_DIGEST, collection_name="c") == ReflectPlan()
+
+
+def test_plan_drops_splits_below_the_size_threshold():
+    # hysteresis guard: only clearly-overgrown pages may be split, so a just-split
+    # small page can't be re-split next day. big.md (9000) stays; a small page drops.
+    j = '{"splits":[{"page":"/entities/big.md","subtopics":["A"]},'
+    j += '{"page":"/concepts/voiding.md","subtopics":["B"]}]}'
+    r = WikiReflector(make_spec(default_user="u"), _ScriptedLlm([j]), split_min_chars=4000)
+    plan = r.plan(_DIGEST, collection_name="c")
+    assert [s.page for s in plan.splits] == ["/entities/big.md"]
+
+
+def test_plan_drops_actions_referencing_unknown_pages():
+    j = '{"merges":[{"keep":"/nope.md","duplicates":["/concepts/voids.md"]},'
+    j += '{"keep":"/concepts/voiding.md","duplicates":["/gone.md"]}],'
+    j += '"splits":[{"page":"/missing.md","subtopics":["A"]}]}'
+    r = WikiReflector(make_spec(default_user="u"), _ScriptedLlm([j]), split_min_chars=1)
+    plan = r.plan(_DIGEST, collection_name="c")
+    assert plan.merges == []  # first keep unknown; second's only duplicate unknown → empty
+    assert plan.splits == []
+
+
+def test_render_digest_lists_each_page_with_signals():
+    digest = [
+        PageDigest("/entities/zone-3.md", "Zone 3", "runs at 245 C", ["spec.pdf"], ["voiding"], 300)
+    ]
+    out = _render_digest(digest)
+    assert "/entities/zone-3.md" in out
+    assert "Zone 3" in out
+    assert "voiding" in out  # link
+    assert "245 C" in out  # summary
+    assert "spec.pdf" in out  # source
