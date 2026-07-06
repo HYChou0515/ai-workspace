@@ -1020,6 +1020,7 @@ export function WikiTab() {
       maintainerGuidance={collection.wiki_maintainer_guidance}
       readerGuidance={collection.wiki_reader_guidance}
       isCodeWiki={!!collection.git_url}
+      lastReflectedAt={collection.last_reflected_at ?? ""}
     />
   );
 }

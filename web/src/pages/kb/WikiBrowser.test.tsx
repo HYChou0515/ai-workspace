@@ -250,4 +250,52 @@ describe("WikiBrowser (#50 P7)", () => {
     await screen.findByText(/AI 撰寫/);
     expect(screen.queryByText(/appear after the next rebuild/i)).not.toBeInTheDocument();
   });
+
+  // ── #479: daily reflection (consolidation) — Reflect now + last-reflected ──
+
+  it("consolidates a prose wiki on demand, without a confirm (#479)", async () => {
+    _seedWikiMock("col-rf", { "/index.md": "# Wiki\n" });
+    const reflect = vi.spyOn(mockKbApi, "reflectWiki");
+    render(<WikiBrowser collectionId="col-rf" client={mockKbApi} />);
+
+    // Reflect is a reorganisation of existing pages (not a rewrite from source),
+    // so unlike Rebuild it fires immediately — no confirm dialog.
+    await userEvent.click(await screen.findByRole("button", { name: /Reflect now/i }));
+    expect(reflect).toHaveBeenCalledWith("col-rf");
+    expect(screen.queryByRole("dialog", { name: /Confirm/i })).not.toBeInTheDocument();
+  });
+
+  it("offers no Reflect for a code wiki — it's regenerated from source (#479)", async () => {
+    _seedWikiMock("col-rfcode", { "/index.md": "# Wiki\n" });
+    render(<WikiBrowser collectionId="col-rfcode" client={mockKbApi} isCodeWiki />);
+
+    // Rebuild is still there; Reflect is not (a code wiki has no prose to consolidate).
+    expect(await screen.findByRole("button", { name: /Rebuild/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Reflect now/i })).not.toBeInTheDocument();
+  });
+
+  it("shows when the wiki was last reflected (#479)", async () => {
+    _seedWikiMock("col-rfwhen", { "/index.md": "# Wiki\n" });
+    render(
+      <WikiBrowser
+        collectionId="col-rfwhen"
+        client={mockKbApi}
+        lastReflectedAt="2026-07-06T12:00:00Z"
+      />,
+    );
+
+    expect(await screen.findByText(/Reflected 2026\//)).toBeInTheDocument();
+  });
+
+  it("labels the compact pill with the reflection phase, no unit counter (#479)", async () => {
+    // A reflect pass reports its own survey→plan→apply phases and is a single
+    // consolidation job (total 1), so the pill shows the phase but NOT "0 / 1".
+    _seedWikiMock("col-rfpill", { "/index.md": "# Wiki\n" });
+    _setWikiStatusMock("col-rfpill", { building: true, total: 1, done: 0, phase: "surveying" });
+    render(<WikiBrowser collectionId="col-rfpill" client={mockKbApi} />);
+
+    const pill = await screen.findByTestId("wiki-building");
+    expect(pill).toHaveTextContent(/Reviewing the wiki/i);
+    expect(pill.textContent ?? "").not.toMatch(/\d+\s*\/\s*\d+/);
+  });
 });

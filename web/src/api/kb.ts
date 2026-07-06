@@ -82,6 +82,10 @@ export type KbCollection = {
    * every prompt-driven parser's base prompt (e.g. "a fishbone diagram → emit
    * JSON"). Blank ⇒ no steering. Optional on the wire (BE defaults to ""). */
   parser_guidance?: string;
+  /** #479: ISO timestamp of the last daily-reflection run for this collection's
+   * prose wiki (stamped on every attempt, success or misconfig). Blank ⇒ never
+   * reflected. Optional on the wire (BE defaults to ""). */
+  last_reflected_at?: string;
 };
 
 /** #328 findability probe: where a doc's content ranks for a question, and how
@@ -140,6 +144,10 @@ export type WikiPage = { path: string; content: string };
 
 /** Result of triggering a wiki rebuild — how many sources were queued. */
 export type WikiRebuild = { queued: number; status: string };
+
+/** #479: result of triggering a wiki daily reflection (consolidation) — the
+ * single reflect job that was queued. */
+export type WikiReflect = { queued: number; status: string };
 
 /** #397: result of submitting a wiki correction — the immune corrections page it
  * was recorded on. The fix runs in the background. */
@@ -631,6 +639,10 @@ export interface KbApi {
   deleteWikiPage(collectionId: string, path: string): Promise<void>;
   /** Re-fold every source into the wiki (the manual "rebuild" button). */
   rebuildWiki(collectionId: string): Promise<WikiRebuild>;
+  /** #479: run a daily-reflection pass now — consolidate the prose wiki (lift
+   * concepts, merge duplicates, split bloated pages). Enqueues a single reflect
+   * job; progress surfaces via `getWikiStatus` (surveying/planning/applying). */
+  reflectWiki(collectionId: string): Promise<WikiReflect>;
   /** Live build progress, polled while a wiki is being (re)built. */
   getWikiStatus(collectionId: string): Promise<WikiStatus>;
   /** #355: re-sync a CODE collection — enqueues an async clone+ingest+build job
@@ -960,6 +972,10 @@ export const realKbApi: KbApi = {
   async rebuildWiki(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/rebuild`;
     return (await ok(await apiFetch(url, { method: "POST" }), "rebuild wiki")).json();
+  },
+  async reflectWiki(collectionId) {
+    const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/reflect`;
+    return (await ok(await apiFetch(url, { method: "POST" }), "reflect wiki")).json();
   },
   async getWikiStatus(collectionId) {
     const url = `/kb/collections/${encodeURIComponent(collectionId)}/wiki/status`;
