@@ -8,11 +8,12 @@ rank exactly as before)."""
 from __future__ import annotations
 
 import msgspec
+from specstar import QB
 
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.retriever import Retriever
-from workspace_app.resources.kb import Collection, SourceDoc
+from workspace_app.resources.kb import Collection, DocChunk, SourceDoc
 
 
 def _collection(spec) -> str:
@@ -38,12 +39,27 @@ def _rank(passages, cid, name):
     return ids.index(encode_doc_id(cid, name))
 
 
+def _force_chunk_embedding(spec, cid, name, vec):
+    """Overwrite a doc's chunk embeddings with `vec` — used to force a perfect
+    dense-relevance tie between two DISTINCT docs (see the tie-break test)."""
+    rm = spec.get_resource_manager(DocChunk)
+    doc_id = encode_doc_id(cid, name)
+    for r in rm.list_resources((QB["source_doc_id"] == doc_id).build()):
+        rm.update(r.info.resource_id, msgspec.structs.replace(r.data, embedding=list(vec)))
+
+
 def test_quality_prior_breaks_a_tie_in_favour_of_the_better_doc(spec, chunker, embedder):
-    # Two docs with IDENTICAL text ⇒ identical relevance; the only differentiator
-    # is quality, so the higher-quality doc must rank first.
+    # #104 dedups byte-identical content, so a relevance tie can't come from two
+    # identical docs. Build the tie from two DISTINCT docs instead: the same token
+    # multiset in a different order (→ identical BM25, different bytes so both are
+    # kept) with their chunk embeddings forced equal (→ identical dense score).
+    # The only remaining differentiator is quality, so the better doc ranks first.
     cid = _collection(spec)
     _ingest(spec, chunker, embedder, cid, "good.md", "alpha beta gamma")
-    _ingest(spec, chunker, embedder, cid, "bad.md", "alpha beta gamma")
+    _ingest(spec, chunker, embedder, cid, "bad.md", "gamma beta alpha")
+    tie_vec = embedder.embed_documents(["alpha beta gamma"])[0]
+    _force_chunk_embedding(spec, cid, "good.md", tie_vec)
+    _force_chunk_embedding(spec, cid, "bad.md", tie_vec)
     _set_quality(spec, cid, "good.md", 90)
     _set_quality(spec, cid, "bad.md", 10)
 
@@ -76,8 +92,10 @@ def test_low_quality_doc_is_not_hard_excluded_by_default(spec, chunker, embedder
 
 def test_hard_floor_excludes_below_threshold_when_configured(spec, chunker, embedder):
     cid = _collection(spec)
+    # Distinct bytes (reordered tokens) so #104 keeps both as separate, retrievable
+    # docs — the hard floor, not dedup, is what must exclude the low-quality one.
     _ingest(spec, chunker, embedder, cid, "ok.md", "alpha beta gamma")
-    _ingest(spec, chunker, embedder, cid, "garbage.md", "alpha beta gamma")
+    _ingest(spec, chunker, embedder, cid, "garbage.md", "gamma beta alpha")
     _set_quality(spec, cid, "ok.md", 60)
     _set_quality(spec, cid, "garbage.md", 5)
 

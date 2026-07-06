@@ -8,7 +8,7 @@ from specstar import QB, SpecStar
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.ingest import Ingestor
+from workspace_app.kb.ingest import Ingestor, rehome_shared_chunks
 from workspace_app.resources.kb import EMBED_DIM, Collection, DocChunk, SourceDoc
 
 
@@ -46,6 +46,96 @@ def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
     # #86: the converter text (here a noop decode+normalize) is persisted on
     # SourceDoc.text so the wiki reads the whole clean source, not the chunks.
     assert doc.text == text
+
+
+def test_ingested_chunks_carry_source_file_id_of_their_content(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: every chunk records the content hash (SourceDoc.content.file_id) of
+    # the bytes it was derived from, so identical content across paths can be
+    # deduped and resolved without depending on any single (deletable) SourceDoc.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    (doc_id,) = ing.ingest(collection_id=cid, user="a", filename="g.md", data=b"one two three four")
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+
+    chunks = _chunks_of(spec, doc_id)
+    assert chunks
+    assert doc.content.file_id  # the blob layer populated the content hash
+    assert all(c.source_file_id == doc.content.file_id for c in chunks)
+
+
+def test_identical_content_at_two_paths_shares_one_chunk_set(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: uploading the SAME bytes to a second path must NOT re-chunk/embed —
+    # the second doc aliases the first's chunk set (0 own chunks) instead of
+    # duplicating it, while both paths (SourceDocs) are kept and readable.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"alpha beta gamma delta epsilon zeta"
+    (a,) = ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
+    (b,) = ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
+
+    assert a != b  # two distinct SourceDocs — both paths kept
+    assert _chunks_of(spec, a)  # the canonical holds the shared chunk set
+    assert _chunks_of(spec, b) == []  # the alias holds none (deduped)
+
+    docs = spec.get_resource_manager(SourceDoc)
+    da, db = docs.get(a).data, docs.get(b).data
+    assert da.status == "ready" and db.status == "ready"
+    assert db.text == da.text  # alias carries the extracted text (wiki/retrieval read it)
+
+
+def test_deleting_the_owner_rehomes_shared_chunks_to_a_surviving_sibling(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: when the doc that OWNS a deduped chunk set is torn down, its chunks
+    # must be re-homed to a sibling path holding the same content — otherwise the
+    # aliases would go dark. rehome runs BEFORE the caller's cascade delete.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"alpha beta gamma delta epsilon zeta"
+    (owner,) = ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
+    (alias,) = ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
+    assert _chunks_of(spec, owner) and _chunks_of(spec, alias) == []
+
+    rehome_shared_chunks(spec, owner)
+
+    assert _chunks_of(spec, owner) == []  # the owner gave up the shared set
+    assert _chunks_of(spec, alias)  # the surviving sibling now holds it
+
+
+def test_rehome_is_a_noop_when_the_doc_is_an_alias(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # Deleting an ALIAS (0 own chunks) must not disturb the owner's chunk set.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"alpha beta gamma delta epsilon zeta"
+    (owner,) = ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
+    (alias,) = ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
+    before = _chunks_of(spec, owner)
+
+    rehome_shared_chunks(spec, alias)  # alias owns nothing → no-op
+
+    assert len(_chunks_of(spec, owner)) == len(before)  # owner untouched
+
+
+def test_rehome_is_a_noop_for_the_sole_holder_of_the_content(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # No sibling shares the content → nothing to re-home; the caller's cascade
+    # delete is correct and the chunks stay put until then.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    (only,) = ing.ingest(collection_id=cid, user="u", filename="solo.md", data=b"one two three")
+    before = _chunks_of(spec, only)
+    assert before
+
+    rehome_shared_chunks(spec, only)  # sole holder → no-op
+
+    assert len(_chunks_of(spec, only)) == len(before)
 
 
 def test_ingest_canonicalizes_path_so_one_logical_doc_is_one_id(

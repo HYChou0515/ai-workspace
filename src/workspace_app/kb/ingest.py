@@ -60,6 +60,61 @@ def chunk_id(doc_id: str, seq: int) -> str:
     return f"{doc_id}.c{seq}"
 
 
+def content_hash(data: bytes) -> str:
+    """#104: the content hash of raw bytes — identical to the ``file_id`` the
+    blob store stamps on ``SourceDoc.content`` (see the no-op check in
+    ``_store_file``). It is the dedup / chunk-ownership key: a chunk records it as
+    ``source_file_id`` so identical content across paths shares one chunk set."""
+    return xxhash.xxh3_128_hexdigest(data)
+
+
+def _doc_file_id(doc: SourceDoc) -> str:
+    """The stored content hash of a persisted ``SourceDoc`` — the blob layer
+    always populates ``content.file_id`` on write, so narrow away the ``UNSET``
+    the ``Binary`` default carries for the type checker."""
+    fid = doc.content.file_id
+    assert isinstance(fid, str)
+    return fid
+
+
+def rehome_shared_chunks(spec: SpecStar, doc_id: str) -> None:
+    """#104: call BEFORE tearing a doc down (delete / move). If the doc OWNS a
+    deduped chunk set — identical content also lives at other paths in the same
+    collection — re-home those chunks to a surviving sibling so the aliases stay
+    searchable instead of going dark when the owner's cascade drops them.
+
+    No-op when the doc owns no chunks (it is itself an alias, or empty) or is the
+    content's sole holder — there the caller's normal cascade delete is correct.
+    (A pre-#104 chunk carries ``source_file_id=""``, which matches no real
+    ``content.file_id``, so it naturally falls through to the sole-holder case.)"""
+    chrm = spec.get_resource_manager(DocChunk)
+    owned = chrm.list_resources((QB["source_doc_id"] == doc_id).limit(1).build())
+    if not owned:
+        return
+    chunk0 = owned[0].data
+    assert isinstance(chunk0, DocChunk)
+    srm = spec.get_resource_manager(SourceDoc)
+    owner = srm.get(doc_id).data
+    assert isinstance(owner, SourceDoc)
+    sibling: str | None = None
+    for r in srm.list_resources(
+        (
+            (QB["collection_id"] == owner.collection_id) & (QB["file_id"] == chunk0.source_file_id)
+        ).build()
+    ):
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        if rid != doc_id:
+            sibling = rid
+            break
+    if sibling is None:
+        return
+    for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        chrm.update(rid, msgspec.structs.replace(chunk, source_doc_id=sibling))
+
+
 class _IndexOutput(NamedTuple):
     """What one index pass hands back to ``index()``.
 
@@ -248,11 +303,13 @@ class Ingestor:
                 continue
             self._delete_chunks(doc_id)
             chrm = self._spec.get_resource_manager(DocChunk)
+            sfid = content_hash(body)
             for chunk_seq, n in enumerate(group):
                 chrm.create(
                     DocChunk(
                         collection_id=collection_id,
                         source_doc_id=doc_id,
+                        source_file_id=sfid,
                         seq=chunk_seq,
                         start=n.start_char_idx or 0,
                         end=n.end_char_idx or len(n.get_content()),
@@ -395,6 +452,11 @@ class Ingestor:
         )
         doc = drm.get(doc_id).data
         assert isinstance(doc, SourceDoc)
+        # #104 dedup gate: identical bytes already chunked in this collection →
+        # alias to the owner instead of re-chunking/embedding. Runs before the
+        # (expensive) blob restore so an alias never loads the content.
+        if self._alias_to_existing_content(doc_id, doc, source_doc_rm=drm):
+            return
         raw = drm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)
         try:
@@ -432,6 +494,52 @@ class Ingestor:
                 token_count=count_tokens(text or ""),  # #88: chunk-based token estimate
             ),
         )
+
+    def _alias_to_existing_content(
+        self, doc_id: str, doc: SourceDoc, *, source_doc_rm: IResourceManager[SourceDoc]
+    ) -> bool:
+        """#104 dedup gate: if this exact content is already chunked in the
+        collection by ANOTHER doc, alias to it — copy that owner's extracted
+        ``text`` (so the wiki + retrieval can read this path) and flip ``ready``
+        WITHOUT creating any chunks — and return True. The shared chunk set (keyed
+        by ``source_file_id``) already serves every path, so re-chunking/embedding
+        identical bytes is pure waste. Returns False (→ index normally) when this
+        is the content's first doc, or when this doc IS the chunk owner being
+        re-indexed (the ``!= doc_id`` clause excludes its own chunks)."""
+        sfid = _doc_file_id(doc)
+        chrm = self._spec.get_resource_manager(DocChunk)
+        existing = chrm.list_resources(
+            (
+                (QB["collection_id"] == doc.collection_id)
+                & (QB["source_file_id"] == sfid)
+                & (QB["source_doc_id"] != doc_id)
+            )
+            .limit(1)
+            .build()
+        )
+        if not existing:
+            return False
+        chunk = existing[0].data
+        assert isinstance(chunk, DocChunk)
+        owner = source_doc_rm.get(chunk.source_doc_id).data
+        assert isinstance(owner, SourceDoc)
+        self._delete_chunks(doc_id)  # drop any partial chunks from a prior attempt
+        source_doc_rm.update(
+            doc_id,
+            msgspec.structs.replace(
+                doc,
+                status="ready",
+                status_detail="",
+                # Carry the owner's derived render surfaces so this path reads +
+                # views identically without re-parsing: `text` feeds the wiki +
+                # retrieval, `preview` feeds the doc viewer (a pptx/PDF alias would
+                # otherwise show a download notice), `token_count` the #88 estimate.
+                text=owner.text,
+                preview=owner.preview,
+                token_count=owner.token_count,
+            ),
+        )
+        return True
 
     @staticmethod
     def _extract(mime: str, data: bytes) -> list[tuple[str, bytes]]:
@@ -569,11 +677,13 @@ class Ingestor:
         chunks = self._chunker.chunk(text)
         vectors = self._embedder.embed_documents([c.text for c in chunks])
         chrm = self._spec.get_resource_manager(DocChunk)
+        sfid = content_hash(data)
         for c, vec in zip(chunks, vectors, strict=True):
             chrm.create(
                 DocChunk(
                     collection_id=collection_id,
                     source_doc_id=doc_id,
+                    source_file_id=sfid,
                     seq=c.seq,
                     start=c.start,
                     end=c.end,
@@ -679,10 +789,17 @@ class Ingestor:
         # packets so adjacency-merge in retrieval stays meaningful
         # (parser A's last chunk is seq N; parser B's first is N+1).
         use_alt = self._use_alt_for(collection_id, path)
+        sfid = content_hash(data)
         seq_offset = 0
         for parser_id, docs in packets:
             seq_offset += self._emit_packet(
-                collection_id, doc_id, parser_id, docs, seq_base=seq_offset, use_alt=use_alt
+                collection_id,
+                doc_id,
+                parser_id,
+                docs,
+                seq_base=seq_offset,
+                use_alt=use_alt,
+                source_file_id=sfid,
             )
         return _IndexOutput(full_text or None, preview)
 
@@ -695,16 +812,24 @@ class Ingestor:
         *,
         seq_base: int,
         use_alt: bool,
+        source_file_id: str = "",
         deterministic: bool = False,
     ) -> int:
         """Split + embed one parser packet's Documents into ``DocChunk`` rows,
         numbering ``seq`` from ``seq_base``. Returns the node count so the caller
         can advance the offset. ``deterministic`` (#227) mints chunk ids from
         ``(doc_id, seq)`` so a redelivered fan-out process job OVERWRITES its
-        slice instead of duplicating it; the single-job path keeps auto ids."""
+        slice instead of duplicating it; the single-job path keeps auto ids.
+        ``source_file_id`` (#104) stamps each chunk with its content hash."""
         chrm = self._spec.get_resource_manager(DocChunk)
         chunks = self._build_chunks(
-            collection_id, doc_id, parser_id, docs, seq_base=seq_base, use_alt=use_alt
+            collection_id,
+            doc_id,
+            parser_id,
+            docs,
+            seq_base=seq_base,
+            use_alt=use_alt,
+            source_file_id=source_file_id,
         )
         for chunk in chunks:
             if deterministic:
@@ -722,6 +847,7 @@ class Ingestor:
         *,
         seq_base: int,
         use_alt: bool,
+        source_file_id: str = "",
     ) -> list[DocChunk]:
         """Split + embed a parser packet's Documents into ``DocChunk`` objects,
         numbering ``seq`` from ``seq_base`` — but NOT persisted. The shared core
@@ -745,6 +871,7 @@ class Ingestor:
                 DocChunk(
                     collection_id=collection_id,
                     source_doc_id=doc_id,
+                    source_file_id=source_file_id,
                     seq=seq_base + i,
                     start=start,
                     end=end,
@@ -809,7 +936,13 @@ class Ingestor:
         seq_offset = 0
         for parser_id, docs in packets:
             built = self._build_chunks(
-                doc.collection_id, doc_id, parser_id, docs, seq_base=seq_offset, use_alt=use_alt
+                doc.collection_id,
+                doc_id,
+                parser_id,
+                docs,
+                seq_base=seq_offset,
+                use_alt=use_alt,
+                source_file_id=_doc_file_id(doc),
             )
             chunks.extend(built)
             seq_offset += len(built)
@@ -891,6 +1024,11 @@ class Ingestor:
         drm = self._spec.get_resource_manager(SourceDoc)
         doc = drm.get(doc_id).data
         assert isinstance(doc, SourceDoc)
+        # #104 dedup: identical content already chunked in this collection → alias
+        # to the owner instead of copying a duplicate chunk set (the cache hit told
+        # us the content matches; the collection sibling owns the shared chunks).
+        if self._alias_to_existing_content(doc_id, doc, source_doc_rm=drm):
+            return True
         self._delete_chunks(doc_id)  # clear any partial chunks before the copy
         chrm = self._spec.get_resource_manager(DocChunk)
         for c in entry.chunks:
@@ -898,6 +1036,7 @@ class Ingestor:
                 DocChunk(
                     collection_id=doc.collection_id,
                     source_doc_id=doc_id,
+                    source_file_id=_doc_file_id(doc),
                     seq=c.seq,
                     start=c.start,
                     end=c.end,
@@ -1046,6 +1185,7 @@ class Ingestor:
             docs,
             seq_base=seq_base,
             use_alt=use_alt,
+            source_file_id=_doc_file_id(doc),
             deterministic=True,
         )
         return "\n\n".join(d.text for d in docs).strip()

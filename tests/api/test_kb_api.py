@@ -774,10 +774,12 @@ def test_move_document_canonicalizes_the_target_path():
 def test_reindex_collection_rebuilds_all_docs():
     client = _client()
     cid = _new_collection(client)
+    # Distinct bodies so both are real chunky docs (not #104 aliases) — the point
+    # here is that reindex rebuilds EVERY doc, so each must own chunks.
     for name in ("a.md", "b.md"):
         client.post(
             f"/kb/collections/{cid}/documents",
-            files={"file": (name, b"# one two three four", "text/markdown")},
+            files={"file": (name, f"# {name} one two three four".encode(), "text/markdown")},
         )
 
     r = client.post(f"/kb/collections/{cid}/reindex")
@@ -1217,6 +1219,32 @@ def test_delete_document_removes_doc_and_its_chunks():
     assert client.get("/kb/documents/chunks", params={"id": doc_id}).json() == []  # cascade
 
 
+def test_deleting_the_dedup_owner_rehomes_chunks_to_the_surviving_alias():
+    # #104: two paths share ONE chunk set (the alias holds 0). Deleting the path
+    # that OWNS the chunks must re-home them to the surviving sibling first, so the
+    # content stays searchable instead of vanishing with the deleted owner.
+    client = _client()
+    cid = _new_collection(client)
+    body = b"# Deck\nalpha beta gamma delta epsilon zeta"
+    for name in ("wk1/report.md", "wk2/report.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents", files={"file": (name, body, "text/markdown")}
+        )
+    _drain(client)
+    a, b = encode_doc_id(cid, "wk1/report.md"), encode_doc_id(cid, "wk2/report.md")
+
+    def _chunks(did):
+        return client.get("/kb/documents/chunks", params={"id": did}).json()
+
+    owner, alias = (a, b) if _chunks(a) else (b, a)
+    assert _chunks(owner) and _chunks(alias) == []  # dedup: one owns, the other aliases
+
+    assert client.delete("/kb/documents", params={"id": owner}).status_code == 200
+
+    assert _chunks(alias)  # re-homed: the surviving path now holds the shared set
+    assert client.get("/kb/documents", params={"id": owner}).status_code == 404  # owner gone
+
+
 def test_delete_routes_through_the_wiki_unfold_hook():
     """#43: deleting a doc calls the wiki coordinator's un-fold hook BEFORE the
     row is gone, so a deleted source can be scrubbed from the wiki."""
@@ -1365,10 +1393,13 @@ def test_list_documents_surfaces_scoped_cited_counts():
 
 def _upload_two_chunky_docs(client) -> str:
     cid = _new_collection(client)
+    # Distinct bodies per path: #104 dedups byte-identical content into ONE chunk
+    # set, but these tests want two docs that each independently chunk.
     for path in ("a.md", "b.md"):
+        body = f"# h {path}\none two three four five six seven".encode()
         client.post(
             f"/kb/collections/{cid}/documents",
-            files={"file": (path, b"# h\none two three four five six seven", "text/markdown")},
+            files={"file": (path, body, "text/markdown")},
         )
     _drain(client)
     return cid
@@ -1624,10 +1655,11 @@ def _chunk_ids(spec: SpecStar, doc_id: str) -> set[str]:
     }
 
 
-def test_upload_same_bytes_new_path_is_served_from_cache_without_a_reindex():
-    # #390: once content is indexed (cache populated), the SAME bytes at a DIFFERENT
-    # path are served from the cache synchronously on the request — the doc is
-    # already "ready" with chunks BEFORE any background consumer runs.
+def test_upload_same_bytes_new_path_is_deduped_without_a_reindex():
+    # #390 + #104: once content is indexed, the SAME bytes at a DIFFERENT path are
+    # handled synchronously on the request — but #104 now DEDUPS instead of copying
+    # a second chunk set. The new doc is "ready" as an ALIAS (0 own chunks, text
+    # carried) BEFORE any background consumer runs; the canonical keeps the chunks.
     client, spec = _client_and_spec()
     cid = _new_collection(client)
     body = b"# Doc\nalpha beta gamma delta epsilon"
@@ -1635,12 +1667,14 @@ def test_upload_same_bytes_new_path_is_served_from_cache_without_a_reindex():
     _drain(client)  # first index completes → its result is cached
 
     client.post(f"/kb/collections/{cid}/documents", files={"file": ("b.md", body, "text/markdown")})
-    # NO _drain: a cache hit copied the chunks on the request thread.
-    doc2_id = encode_doc_id(cid, "b.md")
+    # NO _drain: the dedup fast-path aliased on the request thread.
+    doc1_id, doc2_id = encode_doc_id(cid, "a.md"), encode_doc_id(cid, "b.md")
     doc2 = spec.get_resource_manager(SourceDoc).get(doc2_id).data
     assert isinstance(doc2, SourceDoc)
     assert doc2.status == "ready"  # ready without a background index
-    assert _chunk_ids(spec, doc2_id)  # reused chunks are present
+    assert doc2.text == body.decode()  # alias carries the extracted text
+    assert _chunk_ids(spec, doc2_id) == set()  # deduped: no duplicate chunk set
+    assert _chunk_ids(spec, doc1_id)  # the canonical still owns the shared chunks
 
 
 def test_move_document_is_served_from_cache_without_a_reindex():

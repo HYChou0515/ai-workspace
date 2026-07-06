@@ -43,7 +43,7 @@ from ..kb.findability import (
     doc_passages_in_top_k,
     probe_findability,
 )
-from ..kb.ingest import Ingestor
+from ..kb.ingest import Ingestor, rehome_shared_chunks
 from ..kb.links import rewrite_md_links
 from ..kb.llm import ILlm
 from ..kb.preview import is_structured_text, preview_markdown
@@ -1742,6 +1742,10 @@ def register_kb_routes(
         # always wires a coordinator.
         assert wiki_coordinator is not None
         await wiki_coordinator.on_doc_deleted(doc_id)
+        # #104: if this doc owns a deduped chunk set shared with other paths,
+        # re-home those chunks to a surviving sibling first so the aliases stay
+        # searchable (no-op for an alias or a sole-holder — see the helper).
+        rehome_shared_chunks(spec, doc_id)
         chrm = spec.get_resource_manager(DocChunk)
         for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
             chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
@@ -1801,6 +1805,9 @@ def register_kb_routes(
         # then its derived chunks, then the row).
         assert wiki_coordinator is not None
         await wiki_coordinator.on_doc_deleted(doc_id)
+        # #104: preserve a deduped chunk set shared with other paths (incl. the
+        # freshly-created new_id) across the move — re-home before teardown.
+        rehome_shared_chunks(spec, doc_id)
         chrm = spec.get_resource_manager(DocChunk)
         for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
             chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
