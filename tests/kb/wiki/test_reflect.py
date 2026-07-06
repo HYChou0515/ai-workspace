@@ -10,17 +10,22 @@ from collections.abc import Iterator
 
 from workspace_app.kb.llm import ILlm
 from workspace_app.kb.wiki.reflect import (
+    ConceptAction,
     PageDigest,
     ReflectPlan,
     WikiReflector,
     _extract_links,
     _extract_sources,
+    _find_orphans,
     _render_digest,
+    _render_journal,
 )
 from workspace_app.kb.wiki.store import (
+    CLARIFICATIONS_DIR,
     CORRECTIONS_DIR,
     REFLECTIONS_DIR,
     WikiFileStore,
+    reflection_page_path,
 )
 from workspace_app.resources import Collection, make_spec
 
@@ -36,6 +41,22 @@ class _ScriptedLlm(ILlm):
     def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
         self.prompts.append(prompt)
         yield (self._responses.pop(0) if self._responses else "x", False)
+
+
+class _RoutedLlm(ILlm):
+    """Response chosen by a substring of the prompt, so a multi-stage reflect run
+    needn't depend on call order."""
+
+    def __init__(self, routes: dict[str, str], default: str = "x") -> None:
+        self._routes = routes
+        self._default = default
+
+    def stream(self, prompt: str) -> Iterator[tuple[str, bool]]:
+        for key, val in self._routes.items():
+            if key in prompt:
+                yield (val, False)
+                return
+        yield (self._default, False)
 
 
 def _mk_prose(name: str = "c"):
@@ -182,3 +203,123 @@ def test_render_digest_lists_each_page_with_signals():
     assert "voiding" in out  # link
     assert "245 C" in out  # summary
     assert "spec.pdf" in out  # source
+
+
+# ── P4: apply + reflect ──────────────────────────────────────────────────
+
+_E2E_PLAN = (
+    '{"concepts":[{"title":"Thermal Profile","sources":["/entities/zone-a.md"]}],'
+    '"merges":[{"keep":"/concepts/voiding.md","duplicates":["/concepts/voids.md"]}],'
+    '"splits":[{"page":"/entities/big.md","subtopics":["Setup"]}],'
+    '"contradictions":["245 vs 250"],'
+    '"notes":"reflection notes"}'
+)
+
+_E2E_ROUTES = {
+    "reorganising a knowledge wiki": _E2E_PLAN,
+    "synthesised from the source pages": "The thermal profile is a temperature curve.",
+    "redundantly cover the SAME thing": "# Voiding\n\nMerged voiding facts.",
+    "grown too broad": "# Setup\n\nSetup details.",
+}
+
+
+async def _seed_wiki(spec, cid) -> WikiFileStore:
+    store = WikiFileStore(spec)
+    await store.write(
+        cid, "/entities/zone-a.md", b"# Zone A\n\nZone A. [[voiding]]\n\nSources: spec.pdf\n"
+    )
+    await store.write(cid, "/entities/zone-b.md", b"# Zone B\n\nZone B mentions [[voids]].\n")
+    await store.write(cid, "/concepts/voiding.md", b"# Voiding\n\nVoiding is a defect.\n")
+    await store.write(cid, "/concepts/voids.md", b"# Voids\n\nSolder voids (a duplicate).\n")
+    await store.write(cid, "/entities/big.md", b"# Big\n\n" + b"x" * 300)
+    # a reserved ground-truth page present during the run — repoint must skip it
+    await store.write(cid, CLARIFICATIONS_DIR + "q.md", b"# q\n\nhuman answer\n")
+    return store
+
+
+async def test_reflect_end_to_end_consolidates_the_wiki():
+    spec, cid = _mk_prose()
+    store = await _seed_wiki(spec, cid)
+    phases: list[str] = []
+    r = WikiReflector(spec, _RoutedLlm(_E2E_ROUTES), split_min_chars=100)
+
+    plan = await r.reflect(cid, today="2026-07-06", collection_name="c", on_phase=phases.append)
+
+    assert phases == ["surveying", "planning", "applying"]
+    # concept lifted into its own page, carrying the source page's provenance
+    concept = (await store.read(cid, "/concepts/thermal-profile.md")).decode()
+    assert concept.startswith("# Thermal Profile")  # heading synthesised (model omitted it)
+    assert "Sources: spec.pdf" in concept
+    # merge: keep rewritten, duplicate deleted, inbound [[voids]] repointed to [[voiding]]
+    assert (
+        await store.read(cid, "/concepts/voiding.md")
+    ).decode() == "# Voiding\n\nMerged voiding facts.\n"
+    assert not await store.exists(cid, "/concepts/voids.md")
+    assert "[[voiding]]" in (await store.read(cid, "/entities/zone-b.md")).decode()
+    # split: original becomes a hub linking the new subpage
+    assert "[[setup]]" in (await store.read(cid, "/entities/big.md")).decode()
+    assert await store.exists(cid, "/entities/setup.md")
+    # term index rebuilt + journal written under the reserved folder
+    assert "Concepts & Terms" in (await store.read(cid, "/glossary.md")).decode()
+    journal = (await store.read(cid, reflection_page_path("2026-07-06"))).decode()
+    assert "reflection notes" in journal and "245 vs 250" in journal and "Orphan pages" in journal
+    # the reserved human page was never touched by the link repoint
+    assert (await store.read(cid, CLARIFICATIONS_DIR + "q.md")).decode() == "# q\n\nhuman answer\n"
+    assert plan.notes == "reflection notes"
+
+
+async def test_write_page_suppresses_an_unchanged_write():
+    spec, cid = _mk_prose()
+    r = WikiReflector(spec, _ScriptedLlm())
+    assert await r._write_page(cid, "/concepts/x.md", "# X\n\nbody\n") is True  # new
+    assert await r._write_page(cid, "/concepts/x.md", "# X\n\nbody\n") is False  # unchanged → skip
+    assert await r._write_page(cid, "/concepts/x.md", "# X\n\nEDITED\n") is True  # changed → write
+
+
+async def test_apply_concept_without_sources_writes_no_footer():
+    spec, cid = _mk_prose()
+    store = WikiFileStore(spec)
+    await store.write(cid, "/entities/plain.md", b"# Plain\n\nno provenance line here.\n")
+    r = WikiReflector(spec, _RoutedLlm({"synthesised from the source pages": "# C\n\ndef."}))
+    digest = await r.survey(cid)
+    await r.apply(
+        cid, ReflectPlan(concepts=[ConceptAction("C", ["/entities/plain.md"])]), digest, today="d"
+    )
+    assert "Sources:" not in (await store.read(cid, "/concepts/c.md")).decode()
+
+
+async def test_apply_empty_plan_writes_only_the_journal():
+    # an empty plan (well-organised wiki / garbage output) is a near no-op: no
+    # glossary is written when there are no concept pages, just the journal.
+    spec, cid = _mk_prose()
+    store = WikiFileStore(spec)
+    await store.write(cid, "/entities/lone.md", b"# Lone\n\nonly page.\n")
+    r = WikiReflector(spec, _ScriptedLlm(["not json"]))
+    await r.reflect(cid, today="2026-07-06")  # no on_phase → covers the None branch
+    assert not await store.exists(cid, "/glossary.md")
+    assert await store.exists(cid, reflection_page_path("2026-07-06"))
+
+
+def test_find_orphans_flags_unlinked_non_root_pages():
+    digest = [
+        PageDigest("/index.md", "Home", "", [], ["voiding"], 10),  # root — excluded
+        PageDigest("/concepts/voiding.md", "Voiding", "", [], [], 10),  # inbound — kept
+        PageDigest("/entities/lonely.md", "Lonely", "", [], [], 10),  # no inbound → orphan
+    ]
+    assert _find_orphans(digest) == ["/entities/lonely.md"]
+
+
+def test_render_journal_variants():
+    full = _render_journal(
+        "2026-07-06",
+        ReflectPlan(contradictions=["a vs b"], notes="did things"),
+        ["concept: X → /concepts/x.md"],
+        ["/entities/orphan.md"],
+    )
+    assert "did things" in full
+    assert "concept: X" in full
+    assert "a vs b" in full
+    assert "/entities/orphan.md" in full
+    empty = _render_journal("2026-07-06", ReflectPlan(), [], [])
+    assert "(nothing to consolidate)" in empty
+    assert "Contradictions" not in empty and "Orphan" not in empty

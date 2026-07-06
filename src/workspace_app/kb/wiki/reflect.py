@@ -28,18 +28,29 @@ from __future__ import annotations
 
 import posixpath
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import msgspec
 
-from .code_wiki import _first_paragraph_after_h1, _unfence
-from .store import MaintainerWikiStore, WikiFileStore, _is_reserved, _norm_path
+from .code_wiki import _first_paragraph_after_h1, _slugify, _unfence
+from .store import (
+    MaintainerWikiStore,
+    WikiFileStore,
+    _is_reserved,
+    _norm_path,
+    reflection_page_path,
+)
 
 if TYPE_CHECKING:
     from specstar import SpecStar
 
     from ..llm import ILlm
+
+# Notified with the current stage name (surveying | planning | applying) as the
+# reflection progresses, so a caller can surface live status.
+OnPhase = Callable[[str], None]
 
 # Scaffolding pages that carry conventions / an ingest log, not knowledge — the
 # reflection has nothing to consolidate in them, so the survey skips them (the
@@ -197,6 +208,82 @@ def _parse_plan(raw: str) -> ReflectPlan:
         return ReflectPlan()
 
 
+# ── apply (program control-flow + a bounded collect per action) ──────────
+
+_CONCEPT_PROMPT = (
+    "Write a concise knowledge-wiki page for the general concept below, synthesised "
+    "from the source pages' content. Cover the concept itself — not the individual "
+    "entities it appears on. A few short paragraphs of factual, skimmable markdown. "
+    "Start with a `# {title}` heading. No preamble.\n\n"
+    "Concept: {title}\n\nSource pages:\n{material}\n"
+)
+
+_MERGE_PROMPT = (
+    "These wiki pages redundantly cover the SAME thing. Merge them into ONE coherent "
+    "page: keep every distinct fact, drop only the duplication, reconcile the order. "
+    "Start with a `# ` heading. Factual markdown, no preamble.\n\nPages:\n{material}\n"
+)
+
+_SPLIT_PROMPT = (
+    "The source page below has grown too broad. Write the focused wiki subpage for "
+    "just ONE subtopic of it: '{subtopic}'. Include only what's relevant to that "
+    "subtopic. Start with a `# {subtopic}` heading. Markdown, no preamble.\n\n"
+    "Source page ({page}):\n{content}\n"
+)
+
+# The reflection's own wiki-internal term index (#479 Q4): a concept·term index it
+# owns and rebuilds each pass, so the general concepts it lifts are discoverable
+# without fighting the fold maintainer over /index.md.
+_GLOSSARY_PAGE = "/glossary.md"
+# Entry-point pages that legitimately have no inbound [[links]] — never flagged as
+# orphans.
+_ROOT_STEMS = frozenset({"index", "glossary"})
+
+
+def _stem(path: str) -> str:
+    """A page's ``[[wikilink]]`` stem — its basename without the ``.md``."""
+    return posixpath.basename(path).removesuffix(".md")
+
+
+def _ensure_heading(body: str, title: str) -> str:
+    """A page body guaranteed to open with a ``# `` heading (the model usually
+    includes one; add ``# {title}`` when it doesn't) and end with one newline."""
+    b = body.strip()
+    if not b.startswith("# "):
+        b = f"# {title}\n\n{b}"
+    return b + "\n"
+
+
+def _find_orphans(digest: list[PageDigest]) -> list[str]:
+    """Pages nothing links to (deterministic, from the survey link graph) — flagged
+    in the journal for a human, never deleted (Q5 #7). Entry-point roots are
+    excluded (they legitimately have no inbound links)."""
+    inbound: set[str] = set()
+    for d in digest:
+        inbound.update(d.links)
+    return sorted(
+        d.path for d in digest if _stem(d.path) not in inbound and _stem(d.path) not in _ROOT_STEMS
+    )
+
+
+def _render_journal(today: str, plan: ReflectPlan, applied: list[str], orphans: list[str]) -> str:
+    """The ``/reflections/<date>.md`` page — a human-readable record of what this
+    pass reorganised, plus the contradictions + orphans it surfaced but left for a
+    person to act on."""
+    lines = [f"# Reflection {today}", ""]
+    if plan.notes.strip():
+        lines += [plan.notes.strip(), ""]
+    lines.append("## Actions")
+    lines += [f"- {a}" for a in applied] if applied else ["- (nothing to consolidate)"]
+    if plan.contradictions:
+        lines += ["", "## Contradictions (for a human)"]
+        lines += [f"- {c}" for c in plan.contradictions]
+    if orphans:
+        lines += ["", "## Orphan pages (unlinked — flagged, not deleted)"]
+        lines += [f"- {o}" for o in orphans]
+    return "\n".join(lines).rstrip() + "\n"
+
+
 class WikiReflector:
     """Consolidates one prose collection's wiki: survey → plan → apply."""
 
@@ -280,3 +367,154 @@ class WikiReflector:
             contradictions=[c.strip() for c in plan.contradictions if c.strip()],
             notes=plan.notes,
         )
+
+    # ── apply ────────────────────────────────────────────────────────────
+    async def reflect(
+        self,
+        collection_id: str,
+        *,
+        today: str,
+        collection_name: str = "",
+        on_phase: OnPhase | None = None,
+    ) -> ReflectPlan:
+        """Run one full reflection: survey → plan → apply. ``today`` dates the
+        journal page; ``on_phase`` (optional) is notified as each stage begins, so
+        the coordinator can surface live progress. Returns the executed plan."""
+
+        def phase(name: str) -> None:
+            if on_phase is not None:
+                on_phase(name)
+
+        phase("surveying")
+        digest = await self.survey(collection_id)
+        phase("planning")
+        plan = self.plan(digest, collection_name=collection_name)
+        phase("applying")
+        await self.apply(collection_id, plan, digest, today=today)
+        return plan
+
+    async def apply(
+        self, collection_id: str, plan: ReflectPlan, digest: list[PageDigest], *, today: str
+    ) -> None:
+        """Execute the plan: one bounded ``collect`` per concept/merge/split, the
+        program writing each page (through the guarded store, write-suppressed), then
+        rebuild the term index and record the pass in the journal. Deterministic
+        control flow — coverage of every action is guaranteed by iterating the plan,
+        not by the model's diligence."""
+        applied: list[str] = []
+        for c in plan.concepts:
+            applied.append(await self._apply_concept(collection_id, c, digest))
+        for m in plan.merges:
+            applied.append(await self._apply_merge(collection_id, m))
+        for s in plan.splits:
+            applied.append(await self._apply_split(collection_id, s))
+        await self._rebuild_glossary(collection_id)
+        journal = _render_journal(today, plan, applied, _find_orphans(digest))
+        # The journal lives under the reserved /reflections/ folder, so it's written
+        # through the RAW store (the guarded view would drop it) — the reflect pass
+        # owns that folder; the fold maintainer can't.
+        await self._raw.write(collection_id, reflection_page_path(today), journal.encode("utf-8"))
+
+    async def _read(self, cid: str, path: str) -> str:
+        return (await self._raw.read(cid, path)).decode("utf-8", errors="replace")
+
+    async def _write_page(self, cid: str, path: str, text: str) -> bool:
+        """Write a reorganised page through the guarded store, suppressing a no-op:
+        if the new bytes equal the current page, skip the write entirely (no
+        revision, no churn) — the deterministic half of the idempotency net (Q7a)."""
+        data = text.encode("utf-8")
+        prev = await self._raw.read_with_etag(cid, path)
+        if prev is not None and prev[0] == data:
+            return False
+        await self._store.write(cid, path, data)
+        return True
+
+    async def _apply_concept(self, cid: str, c: ConceptAction, digest: list[PageDigest]) -> str:
+        """Lift a general concept into its own /concepts page, synthesised from the
+        source pages it was scattered across; carry their provenance forward."""
+        by_path = {d.path: d for d in digest}
+        material_parts: list[str] = []
+        sources: list[str] = []
+        for p in c.sources:
+            material_parts.append(f"## {p}\n{await self._read(cid, p)}")
+            sources.extend(by_path[p].sources)
+        body = _unfence(
+            self._llm.collect(
+                _CONCEPT_PROMPT.replace("{title}", c.title).replace(
+                    "{material}", "\n\n".join(material_parts)
+                )
+            )
+        )
+        text = _ensure_heading(body, c.title)
+        if sources:
+            text = text.rstrip() + f"\n\nSources: {' · '.join(dict.fromkeys(sources))}\n"
+        page = f"/concepts/{_slugify(c.title)}.md"
+        await self._write_page(cid, page, text)
+        return f"concept: {c.title} → {page}"
+
+    async def _apply_merge(self, cid: str, m: MergeAction) -> str:
+        """Fold the duplicate pages into ``keep`` (content-preserving), delete them,
+        and repoint every inbound ``[[link]]`` from a duplicate's stem to keep's."""
+        material = f"## {m.keep}\n{await self._read(cid, m.keep)}"
+        for d in m.duplicates:
+            material += f"\n\n## {d}\n{await self._read(cid, d)}"
+        body = _unfence(self._llm.collect(_MERGE_PROMPT.replace("{material}", material)))
+        await self._write_page(cid, m.keep, _ensure_heading(body, _stem(m.keep)))
+        for d in m.duplicates:
+            await self._store.delete(cid, d)
+        await self._repoint_links(cid, [_stem(d) for d in m.duplicates], _stem(m.keep))
+        return f"merge: {', '.join(m.duplicates)} → {m.keep}"
+
+    async def _apply_split(self, cid: str, s: SplitAction) -> str:
+        """Split an overgrown page into focused subtopic pages, then rewrite the
+        original into a short hub that links them (so inbound links still resolve)."""
+        content = await self._read(cid, s.page)
+        directory = posixpath.dirname(s.page)
+        stems: list[str] = []
+        for sub in s.subtopics:
+            body = _unfence(
+                self._llm.collect(
+                    _SPLIT_PROMPT.replace("{subtopic}", sub)
+                    .replace("{page}", s.page)
+                    .replace("{content}", content)
+                )
+            )
+            slug = _slugify(sub)
+            await self._write_page(cid, f"{directory}/{slug}.md", _ensure_heading(body, sub))
+            stems.append(slug)
+        hub = (
+            f"# {_stem(s.page)}\n\nSplit into:\n" + "\n".join(f"- [[{st}]]" for st in stems) + "\n"
+        )
+        await self._write_page(cid, s.page, hub)
+        return f"split: {s.page} → {', '.join(stems)}"
+
+    async def _repoint_links(self, cid: str, old_stems: list[str], new_stem: str) -> None:
+        """Rewrite ``[[old]]`` → ``[[new]]`` across every page (preserving any
+        ``#anchor`` / ``|alias``) after a merge, so no link dangles. Skips the
+        reserved ground-truth / journal folders."""
+        patterns = [
+            (re.compile(r"\[\[" + re.escape(old) + r"(?=[\]|#])"), old) for old in old_stems
+        ]
+        for path in await self._raw.ls(cid):
+            if _is_reserved(path):
+                continue
+            text = await self._read(cid, path)
+            new = text
+            for pat, _old in patterns:
+                new = pat.sub("[[" + new_stem, new)
+            if new != text:
+                await self._write_page(cid, path, new)
+
+    async def _rebuild_glossary(self, cid: str) -> None:
+        """Rebuild the wiki-internal concept·term index (#479 Q4) from the current
+        /concepts pages — deterministic, 0 LLM. Skipped when there are no concept
+        pages yet (nothing to index)."""
+        concepts = sorted(p for p in await self._raw.ls(cid) if p.startswith("/concepts/"))
+        if not concepts:
+            return
+        lines = ["# Concepts & Terms", "", "Auto-maintained index of the wiki's concepts.", ""]
+        for p in concepts:
+            lines.append(
+                f"- [[{_stem(p)}]] — {_first_paragraph_after_h1(await self._read(cid, p))}"
+            )
+        await self._write_page(cid, _GLOSSARY_PAGE, "\n".join(lines).rstrip() + "\n")
