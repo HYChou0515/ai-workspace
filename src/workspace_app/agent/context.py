@@ -188,6 +188,13 @@ class AgentToolContext:
     # no-override context, so a turn nobody tightened per-doc pays nothing.
     exclude_doc_ids: frozenset[str] = field(default_factory=frozenset)
     kb_passages: list[RetrievedPassage] = field(default_factory=list)
+    # #484: resource-ids of the context cards already injected into this turn — by
+    # the #106 user-message pre-scan (seeded at the API boundary) AND by earlier
+    # `kb_search` calls. `kb_search` scans each result's passages for glossary
+    # terms and appends the authoritative card definitions, skipping any card
+    # already in this set, so a term the user asked about — or a passage retrieved
+    # twice — is defined exactly once per turn instead of re-injected every search.
+    injected_card_ids: set[str] = field(default_factory=set)
     # #195 / #334: this turn's kb_search budget. Default unlimited-but-counted;
     # the KB-chat turn and the ask_knowledge_base bridge seed `max_calls` from
     # `kb.max_searches_per_turn` (or the composer's per-message pick, #334). Once

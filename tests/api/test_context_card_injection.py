@@ -85,3 +85,52 @@ def test_no_card_match_leaves_the_message_clean():
     client.post(f"/kb/chats/{chat}/messages", json={"content": "hello there"})
 
     assert runner.prompt == "hello there"  # nothing matched → no injection
+
+
+class _CtxRecordingRunner:
+    """Captures the AgentToolContext the turn built, so tests can inspect the
+    turn-wide state the route seeded (e.g. `injected_card_ids`)."""
+
+    def __init__(self) -> None:
+        self.ctx: AgentToolContext | None = None
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.ctx = ctx
+        yield MessageDelta(text="ok")
+        yield RunDone()
+
+
+def test_message_prescan_seeds_injected_card_ids_for_turn_dedup():
+    # #484: the #106 user-message pre-scan records the cards it injected in
+    # `injected_card_ids`, so a term the user's question already defined is not
+    # injected a second time by a later kb_search in the same turn.
+    runner = _CtxRecordingRunner()
+    client = _client(runner)
+    cid = _collection(client)
+    card = client.post(
+        "/context-card/author",
+        json={"collection_id": cid, "keys": ["M4"], "body": "the capping over metal four"},
+    ).json()["resource_id"]
+    chat = client.post("/kb/chats", json={"title": "t", "collection_ids": [cid]}).json()[
+        "resource_id"
+    ]
+    client.post(f"/kb/chats/{chat}/messages", json={"content": "what is M4?"})
+
+    assert runner.ctx is not None
+    assert runner.ctx.injected_card_ids == {card}  # the matched card was recorded
+
+
+def test_no_match_seeds_no_injected_card_ids():
+    # #484: a message that matched nothing seeds an empty set — a later kb_search
+    # is free to inject any card it surfaces.
+    runner = _CtxRecordingRunner()
+    client = _client(runner)
+    cid = _collection(client)
+    client.post("/context-card/author", json={"collection_id": cid, "keys": ["M4"], "body": "x"})
+    chat = client.post("/kb/chats", json={"title": "t", "collection_ids": [cid]}).json()[
+        "resource_id"
+    ]
+    client.post(f"/kb/chats/{chat}/messages", json={"content": "hello there"})
+
+    assert runner.ctx is not None
+    assert runner.ctx.injected_card_ids == set()

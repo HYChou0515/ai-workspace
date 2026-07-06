@@ -5,12 +5,13 @@ from specstar import SpecStar
 
 from workspace_app.agent import AgentToolContext, KbSearchBudget, kb_search_impl
 from workspace_app.kb.chunker import FixedTokenChunker
+from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.llm import ILlm
 from workspace_app.kb.retriever import Retriever
-from workspace_app.resources.kb import Collection
+from workspace_app.resources.kb import Collection, ContextCard
 
 
 class _FakeLlm(ILlm):
@@ -206,3 +207,111 @@ async def test_kb_search_keeps_numbers_stable_across_calls(
 
     assert "[1]" in first and "[1]" in second  # same passage, same number
     assert len(ctx.context.kb_passages) == 1  # not double-registered
+
+
+# --- #484: glossary auto-injection over retrieved passages -------------------
+
+
+def _card(spec: SpecStar, cid: str, keys: list[str], *, title: str = "", body: str = "") -> str:
+    rm = spec.get_resource_manager(ContextCard)
+    card = ContextCard(
+        collection_id=cid, keys=keys, norm_keys=derive_norm_keys(keys), title=title, body=body
+    )
+    return rm.create(card).resource_id
+
+
+def _glossary_ctx(spec: SpecStar, embedder: HashEmbedder, collection_ids: list[str]):
+    # Like `_kb_ctx` but wires `spec` so the glossary pre-scan can load cards.
+    return RunContextWrapper(
+        AgentToolContext(
+            retriever=Retriever(spec, embedder=embedder),
+            collection_ids=collection_ids,
+            spec=spec,
+        )
+    )
+
+
+async def test_kb_search_injects_glossary_for_a_term_in_a_retrieved_passage(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #484: when a retrieved passage contains a term that has a glossary card, the
+    # authoritative definition is appended to the search result so the model uses
+    # it instead of inventing a meaning.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="wafer.md",
+        data=b"the reflow step deposits the capping layer over the metal stack",
+    )
+    _card(spec, cid, ["capping"], title="Capping layer", body="A protective dielectric cap.")
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = kb_search_impl(ctx, "capping layer")
+
+    assert "Internal glossary entries" in out  # the authoritative block was appended
+    assert "A protective dielectric cap." in out  # with the card body
+
+
+async def test_kb_search_injects_each_card_only_once_per_turn(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #484: a card the turn already defined (an earlier search here) is not
+    # re-injected when a later search re-surfaces the same term.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="wafer.md",
+        data=b"the reflow step deposits the capping layer over the metal stack",
+    )
+    _card(spec, cid, ["capping"], title="Capping layer", body="A protective dielectric cap.")
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    first = kb_search_impl(ctx, "capping layer")
+    second = kb_search_impl(ctx, "the capping over metal")  # re-finds the same passage
+
+    assert "A protective dielectric cap." in first  # defined on first sighting
+    assert "A protective dielectric cap." not in second  # not repeated the second time
+
+
+async def test_kb_search_skips_a_card_already_injected_upstream(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #484: the #106 user-message pre-scan seeds `injected_card_ids`; a card the
+    # user's own question already pulled in is not injected again from a passage.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="wafer.md",
+        data=b"the reflow step deposits the capping layer over the metal stack",
+    )
+    rid = _card(spec, cid, ["capping"], title="Capping layer", body="A protective dielectric cap.")
+    ctx = _glossary_ctx(spec, embedder, [cid])
+    ctx.context.injected_card_ids.add(rid)  # simulate the upstream #106 injection
+
+    out = kb_search_impl(ctx, "capping layer")
+
+    assert "[1]" in out  # passages still returned
+    assert "A protective dielectric cap." not in out  # but the card is not re-injected
+
+
+async def test_kb_search_without_glossary_cards_appends_nothing(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #484: no cards in the collection ⇒ result is exactly the passages (no block,
+    # no spurious header) — the injection is invisible when there's nothing to add.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    Ingestor(spec, chunker=chunker, embedder=embedder).ingest(
+        collection_id=cid,
+        user="u",
+        filename="wafer.md",
+        data=b"the reflow step deposits the capping layer over the metal stack",
+    )
+    ctx = _glossary_ctx(spec, embedder, [cid])
+
+    out = kb_search_impl(ctx, "capping layer")
+
+    assert "[1]" in out
+    assert "glossary" not in out.lower()

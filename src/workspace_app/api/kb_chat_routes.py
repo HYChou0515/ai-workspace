@@ -35,8 +35,11 @@ from ..agent.context import AgentToolContext, KbSearchBudget
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
-from ..kb.context_cards import build_vocab, card_context_block, cards_for_collections
-from ..kb.context_cards import match as match_cards
+from ..kb.context_cards import (
+    card_context_block,
+    cards_with_ids_for_collections,
+    match_with_ids,
+)
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
@@ -688,12 +691,16 @@ def register_kb_chat_routes(
         # appear in the message so a covered term is answered straight away,
         # without a kb_search round-trip. The persisted user message (above)
         # stays clean — only the content handed to the agent is augmented.
+        # #484: record the injected card ids in `ctx.injected_card_ids` so a later
+        # kb_search this turn doesn't define the same term a second time.
         agent_content = body.content
         if chat.collection_ids:
-            cards = cards_for_collections(spec, chat.collection_ids)
-            block = card_context_block(match_cards(body.content, build_vocab(cards)))
+            pairs = cards_with_ids_for_collections(spec, chat.collection_ids)
+            hits = match_with_ids(body.content, pairs)
+            block = card_context_block([card for _, card in hits])
             if block:
                 agent_content = f"{block}\n\n{body.content}"
+            ctx.injected_card_ids.update(rid for rid, _ in hits)
 
         return await engine.stream(chat_id, agent_content, ctx, on_complete=persist)
 
