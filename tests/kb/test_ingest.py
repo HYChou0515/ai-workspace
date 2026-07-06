@@ -48,6 +48,23 @@ def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
     assert doc.text == text
 
 
+def test_ingested_chunks_carry_source_file_id_of_their_content(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: every chunk records the content hash (SourceDoc.content.file_id) of
+    # the bytes it was derived from, so identical content across paths can be
+    # deduped and resolved without depending on any single (deletable) SourceDoc.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    (doc_id,) = ing.ingest(collection_id=cid, user="a", filename="g.md", data=b"one two three four")
+    doc = spec.get_resource_manager(SourceDoc).get(doc_id).data
+
+    chunks = _chunks_of(spec, doc_id)
+    assert chunks
+    assert doc.content.file_id  # the blob layer populated the content hash
+    assert all(c.source_file_id == doc.content.file_id for c in chunks)
+
+
 def test_ingest_canonicalizes_path_so_one_logical_doc_is_one_id(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

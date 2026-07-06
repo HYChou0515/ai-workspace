@@ -60,6 +60,23 @@ def chunk_id(doc_id: str, seq: int) -> str:
     return f"{doc_id}.c{seq}"
 
 
+def content_hash(data: bytes) -> str:
+    """#104: the content hash of raw bytes — identical to the ``file_id`` the
+    blob store stamps on ``SourceDoc.content`` (see the no-op check in
+    ``_store_file``). It is the dedup / chunk-ownership key: a chunk records it as
+    ``source_file_id`` so identical content across paths shares one chunk set."""
+    return xxhash.xxh3_128_hexdigest(data)
+
+
+def _doc_file_id(doc: SourceDoc) -> str:
+    """The stored content hash of a persisted ``SourceDoc`` — the blob layer
+    always populates ``content.file_id`` on write, so narrow away the ``UNSET``
+    the ``Binary`` default carries for the type checker."""
+    fid = doc.content.file_id
+    assert isinstance(fid, str)
+    return fid
+
+
 class _IndexOutput(NamedTuple):
     """What one index pass hands back to ``index()``.
 
@@ -248,11 +265,13 @@ class Ingestor:
                 continue
             self._delete_chunks(doc_id)
             chrm = self._spec.get_resource_manager(DocChunk)
+            sfid = content_hash(body)
             for chunk_seq, n in enumerate(group):
                 chrm.create(
                     DocChunk(
                         collection_id=collection_id,
                         source_doc_id=doc_id,
+                        source_file_id=sfid,
                         seq=chunk_seq,
                         start=n.start_char_idx or 0,
                         end=n.end_char_idx or len(n.get_content()),
@@ -569,11 +588,13 @@ class Ingestor:
         chunks = self._chunker.chunk(text)
         vectors = self._embedder.embed_documents([c.text for c in chunks])
         chrm = self._spec.get_resource_manager(DocChunk)
+        sfid = content_hash(data)
         for c, vec in zip(chunks, vectors, strict=True):
             chrm.create(
                 DocChunk(
                     collection_id=collection_id,
                     source_doc_id=doc_id,
+                    source_file_id=sfid,
                     seq=c.seq,
                     start=c.start,
                     end=c.end,
@@ -679,10 +700,17 @@ class Ingestor:
         # packets so adjacency-merge in retrieval stays meaningful
         # (parser A's last chunk is seq N; parser B's first is N+1).
         use_alt = self._use_alt_for(collection_id, path)
+        sfid = content_hash(data)
         seq_offset = 0
         for parser_id, docs in packets:
             seq_offset += self._emit_packet(
-                collection_id, doc_id, parser_id, docs, seq_base=seq_offset, use_alt=use_alt
+                collection_id,
+                doc_id,
+                parser_id,
+                docs,
+                seq_base=seq_offset,
+                use_alt=use_alt,
+                source_file_id=sfid,
             )
         return _IndexOutput(full_text or None, preview)
 
@@ -695,16 +723,24 @@ class Ingestor:
         *,
         seq_base: int,
         use_alt: bool,
+        source_file_id: str = "",
         deterministic: bool = False,
     ) -> int:
         """Split + embed one parser packet's Documents into ``DocChunk`` rows,
         numbering ``seq`` from ``seq_base``. Returns the node count so the caller
         can advance the offset. ``deterministic`` (#227) mints chunk ids from
         ``(doc_id, seq)`` so a redelivered fan-out process job OVERWRITES its
-        slice instead of duplicating it; the single-job path keeps auto ids."""
+        slice instead of duplicating it; the single-job path keeps auto ids.
+        ``source_file_id`` (#104) stamps each chunk with its content hash."""
         chrm = self._spec.get_resource_manager(DocChunk)
         chunks = self._build_chunks(
-            collection_id, doc_id, parser_id, docs, seq_base=seq_base, use_alt=use_alt
+            collection_id,
+            doc_id,
+            parser_id,
+            docs,
+            seq_base=seq_base,
+            use_alt=use_alt,
+            source_file_id=source_file_id,
         )
         for chunk in chunks:
             if deterministic:
@@ -722,6 +758,7 @@ class Ingestor:
         *,
         seq_base: int,
         use_alt: bool,
+        source_file_id: str = "",
     ) -> list[DocChunk]:
         """Split + embed a parser packet's Documents into ``DocChunk`` objects,
         numbering ``seq`` from ``seq_base`` — but NOT persisted. The shared core
@@ -745,6 +782,7 @@ class Ingestor:
                 DocChunk(
                     collection_id=collection_id,
                     source_doc_id=doc_id,
+                    source_file_id=source_file_id,
                     seq=seq_base + i,
                     start=start,
                     end=end,
@@ -809,7 +847,13 @@ class Ingestor:
         seq_offset = 0
         for parser_id, docs in packets:
             built = self._build_chunks(
-                doc.collection_id, doc_id, parser_id, docs, seq_base=seq_offset, use_alt=use_alt
+                doc.collection_id,
+                doc_id,
+                parser_id,
+                docs,
+                seq_base=seq_offset,
+                use_alt=use_alt,
+                source_file_id=_doc_file_id(doc),
             )
             chunks.extend(built)
             seq_offset += len(built)
@@ -898,6 +942,7 @@ class Ingestor:
                 DocChunk(
                     collection_id=doc.collection_id,
                     source_doc_id=doc_id,
+                    source_file_id=_doc_file_id(doc),
                     seq=c.seq,
                     start=c.start,
                     end=c.end,
@@ -1046,6 +1091,7 @@ class Ingestor:
             docs,
             seq_base=seq_base,
             use_alt=use_alt,
+            source_file_id=_doc_file_id(doc),
             deterministic=True,
         )
         return "\n\n".join(d.text for d in docs).strip()

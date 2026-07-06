@@ -361,12 +361,22 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # `provenance` already stored on each chunk, NOT re-parsing/re-embedding
     # (#263). DocChunk carried no Schema before, so its rows are version `None`;
     # the `v2` edge is defensive (harmless if no v2 row exists).
+    #
+    # #104: `source_file_id` (the chunk's content hash) indexed so the dedup GC
+    # can reclaim a content's chunks by hash and retrieval can expand a hit to
+    # every path sharing it. Schema v3 → v4 with a `_reindex_only` step: the field
+    # defaults "" on pre-#104 rows (re-extracts to "" — harmless, no real hash
+    # ever equals ""), and a fresh index stamps the real value. Backfilling the
+    # real hash onto old chunks is a reindex (denormalize-from-parent), not this
+    # migrate — see #104 plan P4.
     spec.add_model(
-        Schema(DocChunk, "v3")
+        Schema(DocChunk, "v4")
         .step(None, _reindex_only, to="v3", source_type=DocChunk)
-        .step("v2", _reindex_only, to="v3", source_type=DocChunk),
+        .step("v2", _reindex_only, to="v3", source_type=DocChunk)
+        .step("v3", _reindex_only, to="v4", source_type=DocChunk),
         indexed_fields=[
             "source_doc_id",
+            "source_file_id",
             "collection_id",
             IndexableField("provenance.page", int, index_key="page"),
             IndexableField("provenance.slide", int, index_key="slide"),

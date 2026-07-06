@@ -370,6 +370,12 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     start: int  # inclusive char offset into canonical text
     end: int  # exclusive char offset
     text: str
+    # #104: the content hash (== SourceDoc.content.file_id) of the bytes this
+    # chunk was derived from. Identical content uploaded to several paths shares
+    # ONE chunk set keyed by this; retrieval / GC resolve a chunk's content
+    # WITHOUT depending on a single (deletable) source_doc_id. Empty on pre-#104
+    # rows (populated on the next reindex); a fresh index always stamps it.
+    source_file_id: str = ""
     # Issue #39 / Q8c: the IParser subclass that produced this chunk
     # ("PdfParser" / "VlmImageParser" / a custom in-house parser's
     # class name). Empty string = legacy / non-parser path (the
