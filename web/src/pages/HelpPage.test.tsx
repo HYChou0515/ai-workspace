@@ -18,6 +18,7 @@ const helpClient = (over?: Partial<HelpApi>): HelpApi => ({
       { id: "d-rel", path: "CHANGELOG.md", title: "Changelog", kind: "release_notes" },
     ],
   }),
+  getReleases: async () => ({ releases: [] }),
   ...over,
 });
 
@@ -35,12 +36,14 @@ const renderPage = (client: HelpApi) =>
 afterEach(cleanup);
 
 describe("HelpPage (#230)", () => {
-  it("links each help document to the KB document viewer", async () => {
+  it("links guides to the KB viewer and release notes to the /help/releases view", async () => {
     renderPage(helpClient());
     const guide = await screen.findByRole("link", { name: /Getting started/ });
     expect(guide.getAttribute("href")).toContain("/kb/doc/d-guide");
-    const rel = screen.getByRole("link", { name: /Changelog/ });
-    expect(rel.getAttribute("href")).toContain("/kb/doc/d-rel");
+    // #441: release notes now open the dedicated per-version view, not the raw doc.
+    const links = screen.getAllByRole("link");
+    expect(links.some((l) => l.getAttribute("href")?.includes("/help/releases"))).toBe(true);
+    expect(screen.queryByRole("link", { name: /Changelog/ })).not.toBeInTheDocument();
   });
 
   it("embeds an AI chat with no collection picker (locked to the Help collection)", async () => {

@@ -701,6 +701,26 @@ export const messages = {
     en: "No help documents yet.",
   },
 
+  // #441: the /help/releases view (structured, per-version release notes).
+  "help.releaseNotes.view": { "zh-TW": "查看更新紀錄", en: "View release notes" },
+  "releases.title": { "zh-TW": "更新紀錄", en: "Release notes" },
+  "releases.intro": {
+    "zh-TW": "平台每次更新的重點,最新的在最上面。",
+    en: "What changed in each platform update, newest first.",
+  },
+  "releases.latest": { "zh-TW": "最新", en: "Latest" },
+  "releases.view.default": { "zh-TW": "重點", en: "Highlights" },
+  "releases.view.detailed": { "zh-TW": "詳細", en: "Detailed" },
+  "releases.empty": {
+    "zh-TW": "尚無發布版本。",
+    en: "No releases yet.",
+  },
+  "releases.group.added": { "zh-TW": "新增", en: "Added" },
+  "releases.group.fixed": { "zh-TW": "修復", en: "Fixed" },
+  "releases.group.performance": { "zh-TW": "效能", en: "Performance" },
+  "releases.group.changed": { "zh-TW": "變更", en: "Changed" },
+  "releases.group.documentation": { "zh-TW": "文件", en: "Documentation" },
+
   // #322: per-item tool picker — the AgentHeader button + the picker modal +
   // the per-tool tri-state control (Default / On / Off).
   "tools.button": { "zh-TW": "工具", en: "Tools" },
