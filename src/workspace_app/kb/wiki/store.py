@@ -52,8 +52,14 @@ _SLASH = "∕"  # division-slash look-alike (same convention as kb/doc_id.py)
 CLARIFICATIONS_PATH = "/clarifications.md"  # legacy single file (#377, pre-#397)
 CLARIFICATIONS_DIR = "/clarifications/"  # #397: one clarification page per question
 CORRECTIONS_DIR = "/corrections/"  # #397: one correction page per target wiki page
+# #479: the daily reflection pass's own journal (one page per reflection). It's
+# reserved like the ground-truth folders so the fold/unfold/correct maintainer
+# can't clobber it — but UNLIKE them it's machine-owned: the reflect pass writes
+# it through the RAW store, and the survey step skips it (we don't reflect on our
+# own logs). Reads stay open so the reader/browser can show what was reorganised.
+REFLECTIONS_DIR = "/reflections/"
 
-_RESERVED_DIRS = (CLARIFICATIONS_DIR, CORRECTIONS_DIR)
+_RESERVED_DIRS = (CLARIFICATIONS_DIR, CORRECTIONS_DIR, REFLECTIONS_DIR)
 
 
 def _norm_path(path: str) -> str:
@@ -86,6 +92,14 @@ def clarification_page_path(qid: str) -> str:
     """The reserved clarification page a description answer lands on (#397 Q14):
     one file per question under ``/clarifications/`` (was a single growing file)."""
     return CLARIFICATIONS_DIR + _slug(qid) + ".md"
+
+
+def reflection_page_path(date: str) -> str:
+    """The reserved journal page one reflection pass writes (#479): one file per
+    reflection under ``/reflections/``, named by date (``2026-07-06`` →
+    ``/reflections/2026-07-06.md``). A same-day re-reflect overwrites the day's
+    page (the latest reflection for that day wins)."""
+    return REFLECTIONS_DIR + _slug(date) + ".md"
 
 
 def correction_page_path(target_page: str | None) -> str:

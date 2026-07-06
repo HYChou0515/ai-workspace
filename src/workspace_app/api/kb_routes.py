@@ -179,6 +179,15 @@ class WikiRebuildOut(BaseModel):
     status: str = "rebuilding"
 
 
+class WikiReflectOut(BaseModel):
+    """Result of POST /kb/collections/:id/wiki/reflect (#479) — the manual "Reflect
+    now" handle. ``queued`` is 1 when a consolidation pass was enqueued, 0 (status
+    ``disabled``) when the collection isn't a prose wiki."""
+
+    queued: int
+    status: str = "reflecting"
+
+
 class WikiClearedOut(BaseModel):
     """Result of DELETE /kb/collections/:id/wiki — how many pages were wiped.
     The admin "start the wiki over from scratch" handle (rebuild is incremental;
@@ -1352,6 +1361,25 @@ def register_kb_routes(
             await wiki_coordinator.on_doc_indexed(r.info.resource_id)  # ty: ignore[unresolved-attribute]
             queued += 1
         return WikiRebuildOut(queued=queued)
+
+    @app.post("/kb/collections/{collection_id}/wiki/reflect")
+    async def reflect_wiki(collection_id: str) -> WikiReflectOut:
+        # #479: manual "Reflect now" — enqueue one consolidation pass (survey → plan
+        # → apply: lift general concepts, merge duplicates, split overgrown pages,
+        # fix links). PROSE wiki only (a code wiki is regenerated deterministically,
+        # not reflected); queued=0/disabled when the wiki path isn't enabled or it's
+        # a code collection. Progress shows on the same GET .../wiki/status poll.
+        coll_rm = spec.get_resource_manager(Collection)
+        try:
+            coll = coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if wiki_coordinator is None or not (
+            isinstance(coll, Collection) and coll.use_wiki and not coll.git_url
+        ):
+            return WikiReflectOut(queued=0, status="disabled")
+        wiki_coordinator.enqueue_reflect(collection_id, requested_by=get_user_id())
+        return WikiReflectOut(queued=1)
 
     @app.delete("/kb/collections/{collection_id}/wiki")
     async def clear_wiki(collection_id: str) -> WikiClearedOut:

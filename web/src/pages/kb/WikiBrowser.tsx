@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from "react";
 import { kbApi, type KbApi } from "../../api/kb";
 import { qk } from "../../api/queryKeys";
 import { Icon } from "../../components/Icon";
+import { ymd } from "../../lib/date";
 import { useT } from "../../lib/i18n";
 import { KbWikiIde } from "./KbWikiIde";
 import { pxToRem } from "../../lib/pxToRem";
@@ -30,11 +31,20 @@ const CODE_WIKI_PHASES: [string, string][] = [
   ["cards", "Summarising source files"],
   ["finalizing", "Assembling directory & architecture pages"],
 ];
+// #479: the daily-reflection (consolidation) pass runs the survey→plan→apply
+// pipeline, so it reports its own three phases (shown in the same header pill).
+const REFLECT_PHASES: [string, string][] = [
+  ["surveying", "Reviewing the wiki"],
+  ["planning", "Planning changes"],
+  ["applying", "Applying changes"],
+];
 const PHASE_LABEL: Record<string, string> = Object.fromEntries([
   ...WIKI_PHASES,
   ...CODE_WIKI_PHASES,
+  ...REFLECT_PHASES,
 ]);
 const _CODE_PHASE_KEYS = new Set(CODE_WIKI_PHASES.map(([k]) => k));
+const _REFLECT_PHASE_KEYS = new Set(REFLECT_PHASES.map(([k]) => k));
 
 /**
  * Issue #90: edit the collection's per-wiki guidance — text APPENDED onto the
@@ -185,6 +195,7 @@ export function WikiBrowser({
   maintainerGuidance = "",
   readerGuidance = "",
   isCodeWiki = false,
+  lastReflectedAt = "",
 }: {
   collectionId: string;
   collectionName?: string;
@@ -197,6 +208,9 @@ export function WikiBrowser({
    * and deletions appear after the next build, not immediately — so the header
    * carries a hint to that effect. */
   isCodeWiki?: boolean;
+  /** #479: ISO timestamp of the last daily-reflection pass (blank ⇒ never). Only
+   * a prose wiki reflects; drives the header's "Reflected …" strip. */
+  lastReflectedAt?: string;
 }) {
   const qc = useQueryClient();
   const t = useT();
@@ -232,6 +246,21 @@ export function WikiBrowser({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: qk.kb.wikiStatus(collectionId) });
       void qc.invalidateQueries({ queryKey: qk.kb.wikiPages(collectionId) });
+    },
+  });
+
+  // #479: fire a daily-reflection (consolidation) pass now. Unlike Rebuild it
+  // doesn't rewrite from sources — it reorganises existing pages — so it needs
+  // no confirm; progress surfaces via the same building pill. Only prose wikis
+  // reflect (a code wiki is regenerated from source, not consolidated).
+  const reflectMut = useMutation({
+    mutationFn: () => client.reflectWiki(collectionId),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: qk.kb.wikiStatus(collectionId) });
+      void qc.invalidateQueries({ queryKey: qk.kb.wikiPages(collectionId) });
+      // last_reflected_at lives on the collection record (served in the list the
+      // page reads), so refresh the list to pick up the new "Reflected …" time.
+      void qc.invalidateQueries({ queryKey: qk.kb.collections });
     },
   });
 
@@ -317,7 +346,9 @@ export function WikiBrowser({
               phase + source counter) shrunk to the header, not omitted. */}
           <Icon name="refresh" size={11} /> Updating
           {status?.phase && PHASE_LABEL[status.phase] ? ` · ${PHASE_LABEL[status.phase]}` : ""}
-          {(status?.total ?? 0) > 0 ? (
+          {/* #479: a reflection pass is a single consolidation job (total 1), so
+              its "0 / 1" carries no signal — the phase label alone shows progress. */}
+          {(status?.total ?? 0) > 0 && !(status?.phase && _REFLECT_PHASE_KEYS.has(status.phase)) ? (
             <span className="mono" style={{ opacity: 0.85 }}>
               · {status?.done ?? 0} / {status?.total ?? 0}
             </span>
@@ -350,15 +381,39 @@ export function WikiBrowser({
           </button>
         </span>
       ) : (
-        <button
-          type="button"
-          className="kb-btn"
-          title="Refresh the wiki from the documents"
-          disabled={rebuildMut.isPending}
-          onClick={() => setConfirmRebuild(true)}
-        >
-          <Icon name="refresh" size={13} /> Rebuild
-        </button>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          {/* #479: a prose wiki can be consolidated on demand ("Reflect now") —
+              lift shared concepts, merge duplicates, split bloated pages. A code
+              wiki is regenerated from source instead, so it has no reflect. */}
+          {!isCodeWiki && lastReflectedAt ? (
+            <span
+              style={{ fontSize: pxToRem(11), color: "var(--text-paper-d2)" }}
+              title={`Last reflected ${lastReflectedAt}`}
+            >
+              Reflected {ymd(lastReflectedAt)}
+            </span>
+          ) : null}
+          {!isCodeWiki ? (
+            <button
+              type="button"
+              className="kb-btn"
+              title="Consolidate the wiki — lift shared concepts, merge duplicates, split bloated pages"
+              disabled={reflectMut.isPending}
+              onClick={() => reflectMut.mutate()}
+            >
+              <Icon name="sparkle" size={13} /> {reflectMut.isPending ? "Reflecting…" : "Reflect now"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="kb-btn"
+            title="Refresh the wiki from the documents"
+            disabled={rebuildMut.isPending}
+            onClick={() => setConfirmRebuild(true)}
+          >
+            <Icon name="refresh" size={13} /> Rebuild
+          </button>
+        </span>
       )}
     </div>
   );

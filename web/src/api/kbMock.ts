@@ -544,6 +544,22 @@ export const mockKbApi: KbApi = {
     });
     return { queued: docs.length, status: "rebuilding" };
   },
+  async reflectWiki(collectionId) {
+    // #479: the mock reflection completes instantly — stamp last_reflected_at so
+    // the "Reflected …" strip updates, and report the build done.
+    const c = collections.get(collectionId);
+    if (c) collections.set(collectionId, { ...c, last_reflected_at: new Date().toISOString() });
+    wikiStatus.set(collectionId, {
+      building: false,
+      total: 1,
+      done: 1,
+      current: null,
+      phase: null,
+      errors: 0,
+      last_error: null,
+    });
+    return { queued: 1, status: "reflecting" };
+  },
   async getWikiStatus(collectionId) {
     return (
       wikiStatus.get(collectionId) ?? {

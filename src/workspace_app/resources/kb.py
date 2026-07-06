@@ -200,6 +200,12 @@ class Collection(Struct):  # → resource "collection"
     # filtered/sorted on), like `quality_rubric` — adding it needs no migration
     # (old rows decode with the False default).
     auto_digest: bool = False
+    # Issue #479: when the collection's prose wiki was last reflected (statistically
+    # consolidated) — an ISO-8601 UTC timestamp the daily/manual reflect pass stamps
+    # on completion, or "" if it has never run. Drives the FE "上次沉思" label.
+    # Non-indexed (never filtered/sorted on), like the wiki guidance / rubric above —
+    # adding it needs no migration (old rows decode with the empty default).
+    last_reflected_at: str = ""
 
 
 class WikiPage(Struct):  # → resource "wiki-page"

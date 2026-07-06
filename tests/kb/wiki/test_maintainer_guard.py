@@ -9,8 +9,10 @@ from workspace_app.kb.wiki.store import (
     CLARIFICATIONS_DIR,
     CLARIFICATIONS_PATH,
     CORRECTIONS_DIR,
+    REFLECTIONS_DIR,
     MaintainerWikiStore,
     WikiFileStore,
+    reflection_page_path,
 )
 from workspace_app.resources import make_spec
 
@@ -39,6 +41,24 @@ async def test_guard_ignores_agent_writes_under_the_reserved_folders():
     await guarded.delete("c", corr)  # ignored
     assert (await inner.read("c", clar)) == b"human answer"
     assert (await inner.read("c", corr)) == b"human correction"
+
+
+async def test_guard_blocks_maintainer_from_clobbering_the_reflection_journal():
+    # #479: the reflect pass owns /reflections/ and writes its journal there via the
+    # RAW store; the fold/unfold/correct maintainer (guarded view) must not touch it.
+    spec = make_spec(default_user="u")
+    inner = WikiFileStore(spec)
+    guarded = MaintainerWikiStore(inner)
+    page = reflection_page_path("2026-07-06")
+    assert page.startswith(REFLECTIONS_DIR)
+    await inner.write("c", page, b"reflection journal")  # reflect writes via raw store
+    await guarded.write("c", page, b"MAINTAINER CLOBBER")  # fold agent try → ignored
+    await guarded.delete("c", page)  # ignored
+    assert (await inner.read("c", page)) == b"reflection journal"
+
+
+async def test_reflection_page_path_slugifies_the_date():
+    assert reflection_page_path("2026-07-06") == f"{REFLECTIONS_DIR}2026-07-06.md"
 
 
 async def test_guard_allows_agent_writes_to_normal_pages():

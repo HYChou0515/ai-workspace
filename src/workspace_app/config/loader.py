@@ -392,6 +392,7 @@ _TOP_SCHEMA: dict[str, Any] = {
             "llm": "__retrieval_llm__",
             "maintainer_max_turns": set(),
             "reader_max_turns": set(),
+            "reflect_daily": set(),
         },
         "retrieval": {
             "enhancements": {
@@ -789,6 +790,7 @@ def _build_wiki(d: dict[str, Any]) -> WikiSettings:
         llm=_build_retrieval_llm(d["llm"]),
         maintainer_max_turns=d["maintainer_max_turns"],
         reader_max_turns=d["reader_max_turns"],
+        reflect_daily=d["reflect_daily"],
     )
 
 

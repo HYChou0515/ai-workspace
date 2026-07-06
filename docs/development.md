@@ -367,7 +367,47 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 13. Git 與 PR 慣例
+## 13. wiki 每日沉思（Reflection／統整，#479）
+
+散文 wiki 除了「增量 fold 新 source」外,還有一條**週期性統整**路徑:每日一次(或手動
+Reflect now)把整份 wiki 重新整理——抽出跨頁共用的 general concepts/terms、合併重複頁、
+拆過胖的頁——但**不從 source 重寫**(那是 Rebuild)。跟 code wiki 一樣走
+`ILlm.collect` 的 **survey → plan → apply**(`kb/wiki/reflect.py`):程式掌控流程、
+LLM 只做有界的逐單元判斷,繞開 #50「narrate 而不 write_file」的失敗模式。
+
+- **survey**:程式掃 `WikiFileStore` 每頁 → `PageDigest`(標題／連結／來源／字數),純程式零 LLM。
+- **plan**:一次 `collect` 餵所有 digest → `ReflectPlan`(抽哪些概念、合併哪些頁、拆哪些頁);
+  `_parse_plan` 容錯——解析失敗 = 空計畫 = no-op,不 crash。
+- **apply**:程式逐項執行——`_apply_concept` 生 `/concepts/<slug>.md`、`_apply_merge`
+  內容保留合併、`_apply_split` 依決定性門檻＋遲滯拆頁;每次寫檔 **byte-diff 抑制**(沒變不
+  寫 → 冪等)。收尾重建 `/glossary.md` 詞彙索引＋repoint 連結。
+
+**寫入分區**:動作紀錄寫 `/reflections/<date>.md`(reflect 自有命名空間,fold 不動它、
+survey 自跳過、reader 可讀);重整頁走 `MaintainerWikiStore`(擋 `_RESERVED_DIRS`),
+journal 走 raw `WikiFileStore`——兩者共用同一 `WikiPage` manager,一次 `acting_as` 就都覆蓋。
+
+**觸發**:
+
+- **每日**:`WikiReflectSweeper`(`kb/wiki/reflect_sweeper.py`,沿用 code sync 的
+  `_due_for_daily_sync` wall-clock 閘)在 `kb.wiki.reflect_daily`(`HH:MM`,預設 `04:00`;
+  `null` 關閉)過點後,對每個「到期且今天沒 reflect 過」的**散文** wiki collection enqueue 一個
+  coalesced `reflect` job。once-a-day 閘讀 `Collection.last_reflected_at`(每次嘗試都蓋章,
+  成功或設定錯誤都算,避免失敗風暴每 tick 重打)。
+- **手動**:wiki header 的 **Reflect now**(只散文 wiki;code wiki 是從 source 重生成,沒有
+  Reflect)→ `POST /kb/collections/{id}/wiki/reflect`;進度走既有 `getWikiStatus` 的 building
+  pill(surveying → planning → applying)。
+
+**模型**:用既有 `kb.wiki.llm`(與 wiki 維護／code wiki 同一 endpoint);`kb.wiki.llm: null`
+⇒ reflect job 在 `WikiBuildState` 記一筆 error(不 crash partition)。
+
+**手動 dogfood(live 驗證,Q8 已 waive canned check)**:設好 `kb.wiki.llm`(本地
+`ollama_chat/qwen3:14b` 即可)→ 建一個散文 collection、傳幾份有重疊概念的文件、Rebuild wiki →
+按 **Reflect now** → 看 `/concepts/*`、`/glossary.md`、`/reflections/<date>.md` 是否生出來,
+且再按一次 Reflect(內容沒變)不應改動任何頁(byte-diff 抑制)。
+
+---
+
+## 14. Git 與 PR 慣例
 
 - **本機 commit 是常態節奏**。**不要主動提議/詢問** push 或開 PR——但使用者明確要求時就照做。在預設分支
   (`master`)上要先開 branch。
@@ -381,7 +421,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 14. 禁區與地雷
+## 15. 禁區與地雷
 
 - **`configs/config.yaml` 是禁區**——live、gitignore、含明文 secret。只讀/改 `configs/config.example.yaml`。
   key 有變動時,把替換片段交給 operator 自己改 `config.yaml`(loader 的 strict-unknown-key 會對舊 config 報錯);
@@ -392,7 +432,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 15. 測試備註
+## 16. 測試備註
 
 - integration 測試(`@pytest.mark.integration`)在本機缺 daemon/工具時自動 skip;它們不在 CI 跑(見 §3)。
 - Ollama live 測試在 daemon/模型不在時自動 skip;它是唯一會真的打模型的測試(`# pragma: no cover` 圈住 live 路徑)。
@@ -403,7 +443,7 @@ KB 的可抽換點都在 `src/workspace_app/kb/`,皆為小介面:
 
 ---
 
-## 16. Definition of Done
+## 17. Definition of Done
 
 - [ ] 行為由 `/tdd` 驅動;目標測試綠 + `ruff check` + `ruff format --check` + 整專案 `ty check`。
 - [ ] 收尾跑一次全套 + **100% 覆蓋率** gate(`coverage run … && combine && report --fail-under=100`),

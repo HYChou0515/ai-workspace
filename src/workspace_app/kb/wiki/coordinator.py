@@ -34,6 +34,7 @@ import contextlib
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import msgspec
@@ -60,6 +61,7 @@ from .maintainer import (
     default_wiki_unfolder_config,
     run_wiki_maintainer,
 )
+from .reflect import WikiReflector
 from .sources import SpecstarWikiSources
 from .store import WikiFileStore
 
@@ -165,6 +167,7 @@ class WikiMaintenanceCoordinator:
         code_wiki_llm: ILlm | None = None,
         code_card_batch_chars: int = _DEFAULT_CARD_BATCH_CHARS,
         code_repo: CodeRepoIngestor | None = None,
+        now: Callable[[], datetime] | None = None,
     ) -> None:
         self._spec = spec
         self._runner = runner
@@ -187,6 +190,18 @@ class WikiMaintenanceCoordinator:
         # card jobs, smaller = more/lighter ones).
         self._code_run = CodeWikiBuildRunStore(spec)
         self._code_card_batch_chars = code_card_batch_chars
+        # #479: the prose-wiki reflection pass (survey→plan→apply). Reuses the SAME
+        # wiki LLM as the code builder (kb.wiki.llm) and the coordinator's raw wiki
+        # store (so acting_as covers both its journal + reorg writes). None ⇒ no
+        # wiki LLM wired ⇒ enqueue_reflect records a misconfig instead of building.
+        self._reflector = (
+            WikiReflector(spec, code_wiki_llm, wiki_store=self._wiki_store)
+            if code_wiki_llm is not None
+            else None
+        )
+        # Injectable clock (#479) — dates the /reflections journal + last_reflected_at
+        # stamp; tests pin it for a deterministic journal path.
+        self._now = now or (lambda: datetime.now(UTC))
         # #186: who an enqueue is credited to — the real user in a request
         # (resolved off the spec default any non-job manager still carries);
         # production injects the same get_user_id.
@@ -387,6 +402,47 @@ class WikiMaintenanceCoordinator:
                 )
             )
         return path
+
+    def enqueue_reflect(self, collection_id: str, *, requested_by: str | None = None) -> None:
+        """#479: enqueue a reflection pass — consolidate a PROSE wiki (survey → plan
+        → apply: lift concepts, merge duplicates, split overgrown pages, fix links).
+        No-op unless the collection is a prose wiki collection (``use_wiki`` on, no
+        ``git_url`` — a code wiki is regenerated deterministically, not reflected),
+        or when no wiki LLM is wired (records the misconfig, like a code build).
+        Coalesces onto any reflection already queued/running (``partition_key`` = the
+        collection id, so it also serialises with folds). Synchronous (a pure
+        specstar enqueue) so the daily sweeper's tick thread can call it directly."""
+        try:
+            coll = self._coll_rm.get(collection_id).data
+        except ResourceIDNotFoundError:
+            return
+        if not (isinstance(coll, Collection) and coll.use_wiki and not coll.git_url):
+            return  # not a prose wiki collection — nothing to reflect
+        actor = requested_by if requested_by is not None else self._get_user_id()
+        if self._reflector is None:
+            with self._state_rm.using(user=actor):
+                self._record_code_error(collection_id, "wiki LLM not configured (set kb.wiki.llm)")
+            return
+        with self._job_rm.using(user=actor):
+            if self._has_active_reflect(collection_id):
+                return  # a reflection is already queued/running — coalesce
+            self._job_rm.create(
+                WikiMaintenanceJob(
+                    payload=WikiJobPayload(
+                        collection_id=collection_id, source_path="", op="reflect"
+                    ),
+                    partition_key=collection_id,
+                )
+            )
+
+    def _has_active_reflect(self, cid: str) -> bool:
+        """Coalescing guard: a reflection is in flight if a cid-keyed ``reflect`` job
+        is still queued/running."""
+        q = (QB["status"].in_(_ACTIVE) & (QB["partition_key"] == cid)).build()
+        return any(
+            isinstance(r.data, WikiMaintenanceJob) and r.data.payload.op == "reflect"
+            for r in self._job_rm.list_resources(q)
+        )
 
     def enqueue_code_sync(self, collection_id: str, *, requested_by: str | None = None) -> None:
         """#355: enqueue a ``code_sync`` job — clone the collection's git_url +
@@ -600,6 +656,10 @@ class WikiMaintenanceCoordinator:
                 # #397: credit the correction's page edits to whoever submitted it
                 # (the job's creator), like an unfold — there's no source updater.
                 self._handle_correct(payload, triggered_by=actor)
+            elif payload.op == "reflect":
+                # #479: consolidate the prose wiki; page writes credited to the
+                # user who triggered the reflection (the job's creator).
+                self._handle_reflect(payload, triggered_by=actor)
             else:
                 self._handle_fold(payload)
 
@@ -736,6 +796,72 @@ class WikiMaintenanceCoordinator:
                 ),
             )
         self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
+
+    def _handle_reflect(self, payload, *, triggered_by: str) -> None:
+        """#479: consolidate the prose wiki. Resets the build epoch, drives the
+        reflector (survey → plan → apply) with live phase updates, and stamps
+        ``last_reflected_at`` on success. Failure is recorded + swallowed so a bad
+        reflection never wedges the partition (same discipline as a fold). Page
+        writes (reorg via the guarded store + the journal via the raw store) are
+        credited to the triggering user (#83) — both stores share the wiki store's
+        manager, so one ``acting_as`` covers the whole run.
+
+        ``last_reflected_at`` is stamped on every run — success OR failure — like
+        the code sync's ``git_last_pulled_at``, so the daily sweeper's once-a-day
+        gate fires a due collection at most once even if the reflection keeps
+        failing (no every-tick retry storm)."""
+        cid = payload.collection_id
+        if self._reflector is None:  # pragma: no cover — enqueue_reflect guards this
+            self._record_code_error(cid, "wiki LLM not configured (set kb.wiki.llm)")
+            return
+        # Fresh reflect epoch: a single-unit build so the status poll shows the live
+        # phase, not a stale N/M from the last fold batch.
+        self._update_state(cid, lambda s: WikiBuildState(collection_id=cid, total=1))
+        try:
+            with self._wiki_store.acting_as(triggered_by):
+                asyncio.run(
+                    self._reflector.reflect(
+                        cid,
+                        today=self._now().strftime("%Y-%m-%d"),
+                        collection_name=self._collection_name(cid),
+                        on_phase=lambda ph: self._update_state(
+                            cid, lambda s: msgspec.structs.replace(s, phase=ph, current="the wiki")
+                        ),
+                    )
+                )
+        except Exception:
+            _LOGGER.exception("wiki reflection failed for %s", cid)
+            self._update_state(
+                cid,
+                lambda s: msgspec.structs.replace(
+                    s, errors=s.errors + 1, last_error=s.last_error or "the reflection run failed"
+                ),
+            )
+        # Stamp on attempt (not only success) — the daily gate's once-a-day marker.
+        self._stamp_reflected(cid, triggered_by)
+        self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
+
+    def _collection_name(self, cid: str) -> str:
+        """The collection's display name (for the planner prompt), or ``""`` if it
+        vanished mid-job."""
+        try:
+            coll = self._coll_rm.get(cid).data
+        except ResourceIDNotFoundError:  # pragma: no cover — collection deleted mid-reflect
+            return ""
+        assert isinstance(coll, Collection)  # the Collection manager yields a Collection (ty)
+        return coll.name
+
+    def _stamp_reflected(self, cid: str, actor: str) -> None:
+        """Record when the wiki was last reflected on the Collection (for the FE
+        "last reflected" label), credited to the triggering user."""
+        stamp = self._now().isoformat()
+        with self._coll_rm.using(user=actor):
+            try:
+                coll = self._coll_rm.get(cid).data
+            except ResourceIDNotFoundError:  # pragma: no cover — deleted mid-reflect
+                return
+            assert isinstance(coll, Collection)
+            self._coll_rm.update(cid, msgspec.structs.replace(coll, last_reflected_at=stamp))
 
     def _handle_code_sync(self, payload, *, triggered_by: str) -> None:
         """#355: clone the collection's git_url + ingest it (on the wiki worker,

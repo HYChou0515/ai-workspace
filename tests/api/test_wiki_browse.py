@@ -141,6 +141,39 @@ async def test_rebuild_is_a_noop_for_a_non_wiki_collection():
         assert r.json() == {"queued": 0, "status": "disabled"}
 
 
+async def test_reflect_now_queues_a_consolidation_pass():
+    # #479: the manual "Reflect now" handle enqueues one consolidation pass for a
+    # prose wiki collection.
+    spec = make_spec(default_user="u")
+    app = _app(spec)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/collections", json={"name": "c", "use_wiki": True})).json()[
+            "resource_id"
+        ]
+        r = await c.post(f"/kb/collections/{cid}/wiki/reflect")
+        assert r.status_code == 200
+        assert r.json()["queued"] == 1
+
+
+async def test_reflect_now_is_disabled_for_a_non_wiki_collection():
+    spec = make_spec(default_user="u")
+    app = _app(spec)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        cid = (await c.post("/kb/collections", json={"name": "c", "use_wiki": False})).json()[
+            "resource_id"
+        ]
+        r = await c.post(f"/kb/collections/{cid}/wiki/reflect")
+        assert r.json() == {"queued": 0, "status": "disabled"}
+
+
+async def test_reflect_now_404s_for_a_missing_collection():
+    spec = make_spec(default_user="u")
+    app = _app(spec)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
+        r = await c.post("/kb/collections/does-not-exist/wiki/reflect")
+        assert r.status_code == 404
+
+
 async def test_wiki_status_reports_progress_then_idle():
     spec = make_spec(default_user="u")
     app = _app(spec)
