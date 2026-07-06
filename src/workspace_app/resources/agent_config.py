@@ -44,6 +44,15 @@ class AgentConfig(Struct):
     The runner-side fix (``litellm_runner._agent_for``) stops aliasing
     ``[]`` to ``None`` so the three states stay distinguishable."""
 
+    disabled_tools: list[str] = field(default_factory=list)
+    """#480: App-declared tools that resolve OFF for this turn — the ceiling
+    (``app.json`` ``tools``) minus the effective ``allowed_tools`` (profile +
+    per-item tri-state). NOT registered as callable; surfaced to the agent as a
+    prompt-only "available on request" section so it knows they exist, avoids
+    them by default, and can ask the user to enable one in the tool picker. A
+    derived value set by ``AppCatalog.resolve``; empty for stored/fallback
+    configs that never went through the ceiling resolve."""
+
     env: dict[str, str] = field(default_factory=dict)
     sandbox_image: str = "workspace-app/sandbox:py312-ds"
     """Default sandbox image built from `docker/Dockerfile.workspace`
