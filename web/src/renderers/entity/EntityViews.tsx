@@ -15,7 +15,6 @@ import { useState } from "react";
 
 import type { EntityDiagnostic, EntityFormField } from "../../api/entities";
 import type { User } from "../../api/types";
-import { pxToRem } from "../../lib/pxToRem";
 import { RoleCreateInput, type WidgetKind } from "./roleWidget";
 import { fieldText, parseSpan, parseViewSpec } from "./shared";
 import type { EntityViewProps, ViewKind, ViewSpec } from "./types";
@@ -64,12 +63,12 @@ export function QuickCreate({
   };
 
   return (
-    <form onSubmit={submit} style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+    <form onSubmit={submit} className="ev-quickcreate">
       {form.map((f) => (
-        <label key={f.name} style={{ display: "flex", flexDirection: "column", fontSize: pxToRem(12) }}>
-          <span style={{ color: "var(--text-paper-d)" }}>
+        <label key={f.name} className="ev-quickcreate__field">
+          <span className="ev-quickcreate__label">
             {f.name}
-            {f.required ? " *" : ""}
+            {f.required ? <span className="ev-quickcreate__req"> *</span> : ""}
           </span>
           <RoleCreateInput
             widget={f.widget as WidgetKind}
@@ -82,12 +81,14 @@ export function QuickCreate({
           />
         </label>
       ))}
-      <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>
-        Create
-      </button>
-      <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => setOpen(false)}>
-        Cancel
-      </button>
+      <div className="ev-quickcreate__actions">
+        <button type="button" className="btn" data-variant="ghost" data-size="sm" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+        <button type="submit" className="btn" data-variant="primary" data-size="sm" disabled={busy}>
+          Create
+        </button>
+      </div>
     </form>
   );
 }
@@ -99,27 +100,27 @@ export function QuickCreate({
  * tells the user their edit didn't land and lets them dismiss per record. */
 function ConflictBanner({ conflicts, onDismiss }: { conflicts: number[]; onDismiss?: (number: number) => void }) {
   return (
-    <div
-      role="alert"
-      style={{ border: "1px solid var(--warn)", borderRadius: 6, padding: 8, marginBottom: 8, fontSize: pxToRem(13) }}
-    >
-      Someone else changed {conflicts.length === 1 ? "this record" : "these records"} — your edit wasn't applied and the
-      latest {conflicts.length === 1 ? "value was" : "values were"} reloaded.
-      <span style={{ marginLeft: 8, display: "inline-flex", gap: 4 }}>
-        {conflicts.map((n) => (
-          <button
-            key={n}
-            type="button"
-            className="btn"
-            data-variant="ghost"
-            data-size="sm"
-            aria-label={`dismiss conflict ${n}`}
-            onClick={() => onDismiss?.(n)}
-          >
-            #{n} ✕
-          </button>
-        ))}
+    <div role="alert" className="ev-banner">
+      <span className="ev-banner__icon" aria-hidden>
+        ⚠
       </span>
+      <div className="ev-banner__body">
+        Someone else changed {conflicts.length === 1 ? "this record" : "these records"} — your edit wasn't applied and the
+        latest {conflicts.length === 1 ? "value was" : "values were"} reloaded.
+        <span className="ev-banner__actions">
+          {conflicts.map((n) => (
+            <button
+              key={n}
+              type="button"
+              className="ev-banner__chip"
+              aria-label={`dismiss conflict ${n}`}
+              onClick={() => onDismiss?.(n)}
+            >
+              #{n} ✕
+            </button>
+          ))}
+        </span>
+      </div>
     </div>
   );
 }
@@ -129,18 +130,21 @@ function ConflictBanner({ conflicts, onDismiss }: { conflicts: number[]; onDismi
 /** A schema/view-level Diagnostic list (warning = yellow, still usable; error =
  * red, dropped from the projection) — the "warning-not-death" surface (§D). */
 function DiagnosticBanner({ diagnostics }: { diagnostics: EntityDiagnostic[] }) {
+  const hasError = diagnostics.some((d) => d.level === "error");
   return (
-    <ul
-      role="status"
-      style={{ listStyle: "none", padding: 8, margin: "0 0 8px", border: "1px solid var(--paper-3)", borderRadius: 6, fontSize: pxToRem(13) }}
-    >
-      {diagnostics.map((d, i) => (
-        <li key={i} style={{ color: d.level === "error" ? "var(--err)" : "var(--warn)" }}>
-          <strong>{d.level}</strong>: {d.message}
-          {d.field ? ` (${d.field})` : ""}
-        </li>
-      ))}
-    </ul>
+    <div role="status" className={`ev-banner${hasError ? " ev-banner--err" : ""}`}>
+      <ul className="ev-diags">
+        {diagnostics.map((d, i) => (
+          <li key={i} className="ev-diags__item">
+            <span className={`ev-level ev-level--${d.level === "error" ? "error" : "warning"}`}>{d.level}</span>
+            <span>
+              {d.message}
+              {d.field ? ` (${d.field})` : ""}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -164,9 +168,12 @@ export function EntityViewBody(props: EntityViewBodyProps) {
   const { Component } = renderer;
   const showEmpty = entities.length === 0 && !renderer.ownsEmptyState;
   return (
-    <div style={{ padding: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <h3 style={{ margin: 0 }}>{spec.title ?? spec.entity}</h3>
+    <div className="ev-panel">
+      <div className="ev-panel__head">
+        <h3 className="ev-panel__title">
+          {spec.title ?? spec.entity}
+          {entities.length > 0 && <span className="ev-panel__count">{entities.length}</span>}
+        </h3>
         {type && !renderer.suppressQuickCreate && canWrite && (
           <QuickCreate form={type.form} users={users} onCreate={onCreate} busy={busy} />
         )}
@@ -174,18 +181,31 @@ export function EntityViewBody(props: EntityViewBodyProps) {
       {conflicts && conflicts.length > 0 && <ConflictBanner conflicts={conflicts} onDismiss={onDismissConflict} />}
       {catalogDiagnostics && catalogDiagnostics.length > 0 && <DiagnosticBanner diagnostics={catalogDiagnostics} />}
       {schemaMissing && (
-        <div style={{ color: "var(--warn)", marginBottom: 8, fontSize: pxToRem(13) }}>
-          No schema for {spec.entity} — showing raw fields (read-only).
+        <div role="status" className="ev-banner">
+          <span className="ev-banner__icon" aria-hidden>
+            ⚠
+          </span>
+          <div className="ev-banner__body">No schema for {spec.entity} — showing raw fields (read-only).</div>
         </div>
       )}
       {invalid && invalid.length > 0 && (
-        <div style={{ color: "var(--warn)", marginBottom: 8, fontSize: pxToRem(13) }}>
-          {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be parsed and {invalid.length > 1 ? "are" : "is"} excluded
-          from the projection.
+        <div role="status" className="ev-banner">
+          <span className="ev-banner__icon" aria-hidden>
+            ⚠
+          </span>
+          <div className="ev-banner__body">
+            {invalid.length} record{invalid.length > 1 ? "s" : ""} couldn't be parsed and{" "}
+            {invalid.length > 1 ? "are" : "is"} excluded from the projection.
+          </div>
         </div>
       )}
       {showEmpty ? (
-        <div style={{ color: "var(--text-paper-d)" }}>No {spec.entity} records yet.</div>
+        <div className="ev-empty">
+          <span className="ev-empty__icon" aria-hidden>
+            ◇
+          </span>
+          <div>No {spec.entity} records yet.</div>
+        </div>
       ) : (
         <Component {...props} />
       )}
