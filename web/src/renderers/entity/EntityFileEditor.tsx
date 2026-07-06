@@ -18,7 +18,6 @@ import { dump, load } from "js-yaml";
 import type { EntityInstance, EntityType } from "../../api/entities";
 import type { User } from "../../api/types";
 import { MonacoEditor } from "../../components/MonacoEditor";
-import { pxToRem } from "../../lib/pxToRem";
 import { RoleField, widgetForRole } from "./roleWidget";
 
 export type EntityFileEditorProps = {
@@ -81,10 +80,11 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, o
   };
 
   return (
-    <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <h3 style={{ margin: 0 }}>
-          #{record.number} {String(record.fields.title ?? type.name)}
+    <div className="ev-editor">
+      <div className="ev-editor__head">
+        <h3 className="ev-editor__title">
+          <span className="ev-editor__title-num">#{record.number}</span>
+          {String(record.fields.title ?? type.name)}
         </h3>
         <div style={{ display: "flex", gap: 8 }}>
           <button
@@ -103,10 +103,10 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, o
       </div>
 
       {mode === "form" ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div className="ev-editor__form">
           {settable.map((f) => (
-            <label key={f.name} style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: pxToRem(13) }}>
-              <span style={{ color: "var(--text-paper-d)" }}>
+            <label key={f.name} className="ev-editor__field">
+              <span className="ev-editor__label">
                 {f.name}
                 {f.required ? " *" : ""}
               </span>
@@ -123,7 +123,7 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, o
           ))}
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        <div className="ev-editor__field">
           {/* Raw-YAML frontmatter rides the same Monaco stack as the rest of the
               IDE — the escape hatch for fields the widgets can't express. */}
           <MonacoEditor
@@ -135,12 +135,19 @@ export function EntityFileEditor({ type, record, users, canWrite = true, busy, o
             autoHeight
             minHeight={120}
           />
-          {yamlError && <div style={{ color: "var(--err)", fontSize: pxToRem(12) }}>{yamlError}</div>}
+          {yamlError && (
+            <div role="alert" className="ev-banner ev-banner--err">
+              <span className="ev-banner__icon" aria-hidden>
+                ⚠
+              </span>
+              <div className="ev-banner__body">{yamlError}</div>
+            </div>
+          )}
         </div>
       )}
 
-      <label style={{ display: "flex", flexDirection: "column", gap: 2, fontSize: pxToRem(13) }}>
-        <span style={{ color: "var(--text-paper-d)" }}>Body</span>
+      <label className="ev-editor__field">
+        <span className="ev-editor__label">Body</span>
         {/* Free-writing markdown body in the shared Monaco editor (§C2). */}
         <MonacoEditor
           ariaLabel="body"

@@ -44,6 +44,16 @@ term, or when the question needs **facts from the documents** (a value, a step, 
 past event) rather than just the meaning of a term. In short: unknown term →
 `lookup_glossary` first; question needing document facts → `kb_search`.
 
+The same care applies to terms that show up **inside the passages you retrieve**.
+A `kb_search` result may carry an **Internal glossary entries** block appended
+after the passages — those definitions are authoritative, so read the passages
+through them. When a passage hinges on an in-house term whose meaning that block
+did not supply, call `lookup_glossary` on that term to get its curated meaning.
+If the glossary has no entry either, ground your answer in what the passages
+actually state and name the term as one whose in-house meaning you could not
+confirm — an honest "this term isn't defined in the knowledge base" is worth far
+more than a plausible-sounding guess.
+
 ## Searching
 
 `kb_search` is **semantic vector retrieval** over the documents — it matches on

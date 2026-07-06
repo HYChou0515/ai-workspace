@@ -410,9 +410,11 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
     ``Sources:`` provenance, and (as the reader) to ground an answer in the
     real document — cite the returned [n].
 
-    On a reader run the result is a numbered ``[n] filename: text`` reference
-    (so you cite claims with the matching [n], like kb_search); on a maintainer
-    run it's the plain text."""
+    On a reader run the result is a numbered ``[n] <source path>: text``
+    reference (so you cite claims with the matching [n], like kb_search); on a
+    maintainer run it's a ``Source path: <source path>`` header followed by the
+    plain text. Either way the full source path is shown so you know where the
+    material lives (#485)."""
     from ..resources.kb import RetrievedPassage
 
     sources = ctx.context.wiki_sources
@@ -420,14 +422,21 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
         return f"error: source not found: {path}"
 
     if not ctx.context.wiki_cite_sources:
-        # Maintainer path: plain text for cross-referencing.
+        # Maintainer path: plain text for cross-referencing, prefixed with the
+        # source's full path so the model knows WHERE the material lives (#485) —
+        # mirrors the `Source path:` header the coordinator adds to
+        # read_new_source. `resolved` is the path that actually read (the arg, or
+        # a /files/<src>.md card path coerced to its source, #281 P7); for a
+        # valid natural-key path it is the SourceDoc's own path.
+        resolved = path
         text = sources.read(path)
         if text is None and (coerced := _coerce_source_path(path)) != path:
-            text = sources.read(coerced)  # #281 P7: tolerate a /files/<src>.md card path
+            text, resolved = sources.read(coerced), coerced
         if text is None:
             return f"error: source not found: {path}"
         cap = ctx.context.exec_output_max_chars
-        return _truncate_middle(text, cap) if len(text) > cap else text
+        body = _truncate_middle(text, cap) if len(text) > cap else text
+        return f"Source path: {resolved}\n\n{body}"
 
     # Reader path: register the source as a citable passage (dedup by doc id,
     # whole-document granularity) and hand it back numbered so [n] resolves to
@@ -456,7 +465,46 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
         )
     cap = ctx.context.exec_output_max_chars
     body = ref.text if len(ref.text) <= cap else _truncate_middle(ref.text, cap)
-    return f"[{idx + 1}] {ref.path.rsplit('/', 1)[-1]}: {body}"
+    # #485: show the FULL source path (folder + name), not just the basename —
+    # where a doc lives is load-bearing (e.g. `2601_report.pptx/1.png`), and two
+    # sources can share a basename across folders.
+    return f"[{idx + 1}] {ref.path}: {body}"
+
+
+# #484: how many distinct glossary cards one kb_search may inject. A generous
+# sanity backstop (turn-level dedup is the real bound), sized for a large-context
+# model — see the grill decision; not a per-message knob.
+_GLOSSARY_INJECT_CAP = 50
+
+
+def _glossary_for_passages(ctx: AgentToolContext, passage_texts: list[str]) -> str:
+    """#484: scan the passages a `kb_search` just returned for terms that have a
+    glossary context card and render the authoritative definitions to append to
+    the result — so the model uses the curated meaning instead of inferring one
+    from the surrounding prose (the "AI just makes it up" gap).
+
+    Deduped across the turn via `ctx.injected_card_ids`: a card already injected
+    by the #106 user-message pre-scan or an earlier search is skipped, so a term
+    is defined exactly once per turn. Returns "" (nothing to append) when no spec/
+    collections/passages are wired or nothing matched.
+    """
+    spec = ctx.spec
+    if spec is None or not ctx.collection_ids or not passage_texts:
+        return ""
+    from ..kb.context_cards import (
+        card_context_block,
+        cards_with_ids_for_collections,
+        match_with_ids,
+    )
+
+    pairs = cards_with_ids_for_collections(spec, ctx.collection_ids)
+    hits = match_with_ids("\n".join(passage_texts), pairs, cap=_GLOSSARY_INJECT_CAP)
+    fresh = [(rid, card) for rid, card in hits if rid not in ctx.injected_card_ids]
+    block = card_context_block([card for _, card in fresh])
+    if not block:
+        return ""
+    ctx.injected_card_ids.update(rid for rid, _ in fresh)
+    return f"\n\n{block}"
 
 
 def kb_search_impl(
@@ -585,6 +633,7 @@ def kb_search_impl(
     budget.used += 1
 
     lines: list[str] = []
+    passage_texts: list[str] = []
     try:
         for passage in retriever.search(
             query,
@@ -605,6 +654,7 @@ def kb_search_impl(
             loc = format_location(passage.provenance)
             where = f"{passage.filename} ({loc})" if loc else passage.filename
             lines.append(f"[{idx + 1}] {where}: {passage.text}")
+            passage_texts.append(passage.text)
     except Exception:
         # Log the real cause (with traceback) to the server log so the
         # operator sees what actually broke — connection refused,
@@ -617,6 +667,7 @@ def kb_search_impl(
         raise
 
     body = "\n\n".join(lines) if lines else "No matching passages in the knowledge base."
+    body += _glossary_for_passages(ctx.context, passage_texts)
     if budget.max_calls is not None:
         body += (
             f"\n\n(Search budget: {budget.used} of {budget.max_calls} used, "
