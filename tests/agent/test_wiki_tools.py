@@ -113,6 +113,18 @@ async def test_list_and_read_sources():
     assert "not found" in (await read_source_impl(ctx, "missing.md")).lower()
 
 
+async def test_read_source_maintainer_prefixes_the_full_source_path():
+    # #485: the maintainer must know WHERE the source lives — its full folder
+    # path — mirroring the `Source path:` header the coordinator adds to
+    # read_new_source. A bare body loses the placement location entirely.
+    sources = _FakeSources({"manuals/reflow/guide.md": "Zone 3 setpoint 245C."})
+    ctx = _ctx(wiki_sources=sources)  # maintainer mode
+
+    out = await read_source_impl(ctx, "manuals/reflow/guide.md")
+    assert out.startswith("Source path: manuals/reflow/guide.md")
+    assert "245C" in out
+
+
 async def test_maintainer_reads_are_capped_so_one_huge_source_cannot_blow_context():
     """#86 defense-in-depth: even with clean extracted text, a very large source
     must not flood the maintainer's context. read_source (maintainer) and
@@ -145,6 +157,16 @@ async def test_read_source_registers_a_citable_passage_in_reader_mode():
     again = await read_source_impl(ctx, "reflow-spec.md")
     assert again.startswith("[1] ")
     assert len(ctx.context.kb_passages) == 1
+
+
+async def test_read_source_reader_shows_the_full_path_not_just_basename():
+    # #485: the placement location matters — two sources can share a basename in
+    # different folders, so the reader must see the FULL path, not just `guide.md`.
+    sources = _FakeSources({"manuals/reflow/guide.md": "Zone 3 setpoint 245C."})
+    ctx = _ctx(wiki_sources=sources, wiki_cite_sources=True)
+
+    out = await read_source_impl(ctx, "manuals/reflow/guide.md")
+    assert out.startswith("[1] manuals/reflow/guide.md:")
 
 
 async def test_reader_cites_the_source_it_read():

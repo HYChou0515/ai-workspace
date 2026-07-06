@@ -27,6 +27,11 @@ Work in this order:
    (`> ⚠ Conflict: …`) instead of overwriting. Use `read_source` / `list_sources`
    to cross-check other sources only when it changes what you'd write.
 
+Each source's `Source path:` tells you **where it lives**: treat documents in
+the same folder as one report or deck, and let the path help you ground a source
+whose name alone is opaque. Any collection-specific meaning carried by the paths
+is spelled out in this collection's own guidance.
+
 Conventions (the full version lives in `/WIKI.md` — read it only if you need the
 detail): lowercase-hyphenated file names; one entity/concept per page; link
 liberally with `[[stem]]`; end pages with `Sources:`; concise, factual, no filler.

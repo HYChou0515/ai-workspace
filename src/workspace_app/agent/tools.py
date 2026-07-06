@@ -410,9 +410,11 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
     ``Sources:`` provenance, and (as the reader) to ground an answer in the
     real document — cite the returned [n].
 
-    On a reader run the result is a numbered ``[n] filename: text`` reference
-    (so you cite claims with the matching [n], like kb_search); on a maintainer
-    run it's the plain text."""
+    On a reader run the result is a numbered ``[n] <source path>: text``
+    reference (so you cite claims with the matching [n], like kb_search); on a
+    maintainer run it's a ``Source path: <source path>`` header followed by the
+    plain text. Either way the full source path is shown so you know where the
+    material lives (#485)."""
     from ..resources.kb import RetrievedPassage
 
     sources = ctx.context.wiki_sources
@@ -420,14 +422,21 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
         return f"error: source not found: {path}"
 
     if not ctx.context.wiki_cite_sources:
-        # Maintainer path: plain text for cross-referencing.
+        # Maintainer path: plain text for cross-referencing, prefixed with the
+        # source's full path so the model knows WHERE the material lives (#485) —
+        # mirrors the `Source path:` header the coordinator adds to
+        # read_new_source. `resolved` is the path that actually read (the arg, or
+        # a /files/<src>.md card path coerced to its source, #281 P7); for a
+        # valid natural-key path it is the SourceDoc's own path.
+        resolved = path
         text = sources.read(path)
         if text is None and (coerced := _coerce_source_path(path)) != path:
-            text = sources.read(coerced)  # #281 P7: tolerate a /files/<src>.md card path
+            text, resolved = sources.read(coerced), coerced
         if text is None:
             return f"error: source not found: {path}"
         cap = ctx.context.exec_output_max_chars
-        return _truncate_middle(text, cap) if len(text) > cap else text
+        body = _truncate_middle(text, cap) if len(text) > cap else text
+        return f"Source path: {resolved}\n\n{body}"
 
     # Reader path: register the source as a citable passage (dedup by doc id,
     # whole-document granularity) and hand it back numbered so [n] resolves to
@@ -456,7 +465,10 @@ async def read_source_impl(ctx: RunContextWrapper[AgentToolContext], path: str) 
         )
     cap = ctx.context.exec_output_max_chars
     body = ref.text if len(ref.text) <= cap else _truncate_middle(ref.text, cap)
-    return f"[{idx + 1}] {ref.path.rsplit('/', 1)[-1]}: {body}"
+    # #485: show the FULL source path (folder + name), not just the basename —
+    # where a doc lives is load-bearing (e.g. `2601_report.pptx/1.png`), and two
+    # sources can share a basename across folders.
+    return f"[{idx + 1}] {ref.path}: {body}"
 
 
 # #484: how many distinct glossary cards one kb_search may inject. A generous
