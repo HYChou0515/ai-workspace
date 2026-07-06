@@ -12,6 +12,7 @@ import { Link, useLocation } from "react-router-dom";
 import type { HealthApi } from "../api/health";
 import { useT } from "../lib/i18n";
 import { useBreadcrumbTrail } from "../hooks/breadcrumbs";
+import { useReviewBadgeCount } from "../hooks/useReviewInbox";
 import { useApps } from "../hooks/useResources";
 import { AppIcon } from "./AppIcon";
 import { GlobalSettings } from "./GlobalSettings";
@@ -119,7 +120,7 @@ function Switcher() {
           ))}
           <div style={{ height: 1, background: "var(--paper-3)", margin: "6px 0" }} />
           <FixedLink to="/kb" icon="layers" label="Knowledge base" pathname={pathname} />
-          <FixedLink to="/clarifications" icon="chat" label={t("docq.title")} pathname={pathname} />
+          <FixedLink to="/review" icon="check" label={t("review.title")} pathname={pathname} />
           <FixedLink to="/diagnostics" icon="sparkle" label="Diagnostics" pathname={pathname} />
         </div>
       )}
@@ -217,6 +218,60 @@ function Brand() {
   );
 }
 
+/** #481: a persistent, always-visible 審核 entry with a live count of the items
+ * the user can act on — so pending reviews are discoverable from anywhere (the
+ * old per-collection tab / clarifications page were invisible). */
+function ReviewLink() {
+  const t = useT();
+  const { pathname } = useLocation();
+  const active = isActive(pathname, "/review");
+  const count = useReviewBadgeCount();
+  return (
+    <Link
+      to="/review"
+      title={count > 0 ? t("review.badge.tip", { n: count }) : t("review.title")}
+      style={{
+        position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "3px 10px",
+        borderRadius: "var(--radius-btn)",
+        border: "1px solid var(--paper-3)",
+        background: active ? "var(--paper-2)" : "var(--white)",
+        color: "var(--text-paper)",
+        fontSize: "var(--text-body-sm)",
+        fontWeight: active ? 700 : 500,
+        textDecoration: "none",
+        whiteSpace: "nowrap",
+        flexShrink: 0,
+      }}
+    >
+      <Icon name="check" size={14} color="var(--text-paper-d)" />
+      <span>{t("review.title")}</span>
+      {count > 0 && (
+        <span
+          aria-hidden
+          style={{
+            minWidth: 16,
+            height: 16,
+            padding: "0 4px",
+            borderRadius: 999,
+            background: "var(--accent)",
+            color: "var(--white)",
+            fontSize: "var(--text-xs)",
+            fontWeight: 700,
+            lineHeight: "16px",
+            textAlign: "center",
+          }}
+        >
+          {count > 99 ? "99+" : count}
+        </span>
+      )}
+    </Link>
+  );
+}
+
 /** #230: a persistent Help entry (a round "?" link) that always returns to the
  * platform help page — usage guides, release notes, and the AI help chat. */
 function HelpLink() {
@@ -269,6 +324,7 @@ export function GlobalNav({ healthClient }: { healthClient?: HealthApi }) {
       <span style={{ width: 1, height: 20, background: "var(--paper-3)" }} />
       <Breadcrumbs />
       <span style={{ flex: 1 }} />
+      <ReviewLink />
       <HelpLink />
       <HealthDot {...(healthClient ? { client: healthClient } : {})} />
       <GlobalSettings />

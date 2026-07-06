@@ -20,6 +20,8 @@ import type {
   KbDocument,
   KbProposedCard,
   KbRenderedDoc,
+  KbReviewCard,
+  KbReviewQuestion,
   SendKbMessageArgs,
 } from "./kb";
 
@@ -616,11 +618,12 @@ export const mockKbApi: KbApi = {
     // card with that normalised key makes it an `update`, mirroring the BE.
     const docs = documents.get(collectionId) ?? [];
     const existing = contextCards.get(collectionId) ?? [];
-    const proposals: KbProposedCard[] = docIds.map((docId) => {
+    const proposals: KbProposedCard[] = docIds.map((docId, i) => {
       const path = docs.find((d) => d.resource_id === docId)?.path ?? docId;
       const key = stem(path);
       const hit = existing.find((c) => c.norm_keys.includes(normKey(key)));
       return {
+        id: String(i),
         keys: [key],
         title: key,
         body: `Auto-drafted from ${path}.`,
@@ -686,6 +689,100 @@ export const mockKbApi: KbApi = {
   async dismissCardGen(jobId) {
     const j = cardGenJobs.get(jobId);
     if (j) j.resolved = true;
+  },
+
+  async getReviewInbox(opts) {
+    // #481: mirror the BE — a proposal is ACTIVE while pending/accepted; the
+    // default view keeps active items, `resolved` keeps the terminal ones. The
+    // mock has no permission model, so everything is actionable.
+    const resolved = opts?.resolved ?? false;
+    const scope = opts?.collectionId;
+    const isActive = (d: string) => d === "pending" || d === "accepted";
+    const cards: KbReviewCard[] = [];
+    for (const [run_id, j] of cardGenJobs) {
+      if (j.status !== "completed") continue;
+      if (scope && j.collectionId !== scope) continue;
+      const name = collections.get(j.collectionId)?.name ?? j.collectionId;
+      for (const card of j.proposals) {
+        if (isActive(card.decision) === resolved) continue;
+        cards.push({
+          run_id,
+          collection_id: j.collectionId,
+          collection_name: name,
+          can_act: true,
+          created_time: 0,
+          card,
+        });
+      }
+    }
+    const questions: KbReviewQuestion[] = [];
+    for (const q of docQuestions.values()) {
+      if (scope && q.collection_id !== scope) continue;
+      if ((q.status === "open") === resolved) continue;
+      const name = collections.get(q.collection_id)?.name ?? q.collection_id;
+      questions.push({
+        collection_id: q.collection_id,
+        collection_name: name,
+        can_act: true,
+        created_time: 0,
+        question: q,
+      });
+    }
+    return { cards, questions };
+  },
+  async decideCard(runId, cardId, decision) {
+    const j = cardGenJobs.get(runId);
+    const c = j?.proposals.find((p) => p.id === cardId);
+    if (c) c.decision = decision as KbProposedCard["decision"];
+    if (j) j.resolved = j.proposals.every((p) => p.decision === "committed" || p.decision === "rejected");
+    return { status: j?.status ?? "completed", proposals: j ? [...j.proposals] : [] };
+  },
+  async updateProposal(runId, card) {
+    const j = cardGenJobs.get(runId);
+    const idx = j?.proposals.findIndex((p) => p.id === card.id) ?? -1;
+    if (j && idx >= 0) j.proposals[idx] = { ...card };
+    if (j) j.resolved = j.proposals.every((p) => p.decision === "committed" || p.decision === "rejected");
+    return { status: j?.status ?? "completed", proposals: j ? [...j.proposals] : [] };
+  },
+  async commitCards(cards) {
+    let created = 0;
+    let updated = 0;
+    let skipped = 0;
+    const byRun = new Map<string, Set<string>>();
+    for (const { run_id, card_id } of cards) {
+      (byRun.get(run_id) ?? byRun.set(run_id, new Set()).get(run_id)!).add(card_id);
+    }
+    for (const [runId, ids] of byRun) {
+      const j = cardGenJobs.get(runId);
+      if (!j) continue;
+      for (const p of j.proposals) {
+        if (!ids.has(p.id)) continue;
+        const active = p.decision === "pending" || p.decision === "accepted";
+        if (!active || deriveNormKeys(p.keys).length === 0) {
+          skipped++;
+          continue;
+        }
+        if (p.mode === "update" && p.target_card_id) {
+          await this.updateContextCard(p.target_card_id, {
+            keys: p.keys,
+            title: p.title,
+            body: p.body,
+          });
+          updated++;
+        } else {
+          await this.createContextCard({
+            collection_id: j.collectionId,
+            keys: p.keys,
+            title: p.title,
+            body: p.body,
+          });
+          created++;
+        }
+        p.decision = "committed";
+      }
+      j.resolved = j.proposals.every((p) => p.decision === "committed" || p.decision === "rejected");
+    }
+    return { created, updated, skipped };
   },
 
   async getDocQuestions(collectionId) {

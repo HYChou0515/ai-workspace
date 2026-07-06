@@ -134,6 +134,17 @@ def register_card_gen_routes(app: FastAPI | APIRouter, coordinator: CardGenCoord
         r = coordinator.commit(job_id)
         return CommitOut(created=r.created, updated=r.updated, skipped=r.skipped)
 
+    @app.post("/kb/context-card-gen/{job_id}/proposals/{card_id}")
+    def update_context_card(job_id: str, card_id: str, body: ProposedCardIO) -> GenStatusOut:
+        """#481: persist the reviewer's edited proposal (drawer edit: body/title +
+        decision) by id; returns the run's refreshed proposals."""
+        coordinator.update_proposal(job_id, card_id, _from_io(body))
+        art = coordinator.proposals(job_id)
+        return GenStatusOut(
+            status=coordinator.status(job_id).value,
+            proposals=[_to_io(p) for p in art.proposals],
+        )
+
     @app.post("/kb/context-card-gen/{job_id}/decide")
     def decide_context_card(job_id: str, body: DecideBody) -> GenStatusOut:
         """#481: persist one card's inline accept/reject; returns the run's refreshed

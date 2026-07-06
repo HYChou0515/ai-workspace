@@ -184,6 +184,29 @@ def test_decide_route_sets_one_cards_decision():
     assert got["decision"] == "accepted"
 
 
+def test_update_proposal_route_persists_a_drawer_edit():
+    """#481: the drawer edit persists an edited card (body + decision) by id."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    client = ApiTestClient(app)
+    job_id = client.post(
+        f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]}
+    ).json()["job_id"]
+    asyncio.run(app.state.card_gen_coordinator.aclose())
+
+    prop = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]
+    prop["body"] = "edited body"
+    prop["decision"] = "accepted"
+    r = client.post(
+        f"/kb/context-card-gen/{job_id}/proposals/{prop['id']}", json=prop
+    )
+    assert r.status_code == 200
+    got = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]
+    assert got["body"] == "edited body"
+    assert got["decision"] == "accepted"
+
+
 def test_commit_cards_route_writes_referenced_cards():
     """#481: the multi-card commit takes ``cards: [{run_id, card_id}]`` and writes
     exactly those, returning the aggregated tallies."""
