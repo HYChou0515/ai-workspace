@@ -439,6 +439,8 @@ export type KbCardProvenance = { doc_id: string; path: string; snippet: string }
  * `confident=false` marks an uncertain draft (⚠️, defaulted out of commit);
  * `decision` is the reviewer's verdict, persisted on the job (resumable). */
 export type KbProposedCard = {
+  /** #481: stable per-run card id — the review table addresses one card by it. */
+  id: string;
   keys: string[];
   title: string;
   body: string;
@@ -446,7 +448,9 @@ export type KbProposedCard = {
   mode: "new" | "update";
   target_card_id: string | null;
   provenance: KbCardProvenance[];
-  decision: "pending" | "accepted" | "rejected";
+  // #481: `committed` = written to a card (terminal); a run leaves the queue once
+  // every proposal is terminal (committed / rejected).
+  decision: "pending" | "accepted" | "rejected" | "committed";
 };
 
 /** #175 — a generation run's status + its current proposals. */
@@ -476,6 +480,34 @@ export type KbDocQuestion = {
   source_doc_id: string;
   quote: string;
 };
+
+/** #481: one card-proposal row of the global 審核 inbox — the proposal plus its
+ * collection, the run it belongs to (the `run` column), and whether the caller
+ * may act on it (write permission on the collection). */
+export type KbReviewCard = {
+  run_id: string;
+  collection_id: string;
+  collection_name: string;
+  can_act: boolean;
+  created_time: number;
+  card: KbProposedCard;
+};
+
+/** #481: one clarification-question row of the global 審核 inbox. */
+export type KbReviewQuestion = {
+  collection_id: string;
+  collection_name: string;
+  can_act: boolean;
+  created_time: number;
+  question: KbDocQuestion;
+};
+
+/** #481: the global 審核 inbox — card proposals + questions, permission-filtered,
+ * newest first. */
+export type KbReviewInbox = { cards: KbReviewCard[]; questions: KbReviewQuestion[] };
+
+/** #481: a proposal to commit, addressed by its run + stable card id. */
+export type KbCardRef = { run_id: string; card_id: string };
 
 export interface KbApi {
   /** The KB agent picker (issue #32): an ARRAY of {name, model,
@@ -676,6 +708,22 @@ export interface KbApi {
   listCardGenRuns(collectionId: string): Promise<KbCardGenRun[]>;
   /** #415: discard a run's proposals — it leaves the queue, writing no cards. */
   dismissCardGen(jobId: string): Promise<void>;
+
+  /** #481: the global 審核 inbox — every pending-review item across every readable
+   * collection (`resolved` = the handled-item history; `collectionId` scopes it to
+   * one collection's tab). */
+  getReviewInbox(opts?: {
+    resolved?: boolean;
+    collectionId?: string;
+  }): Promise<KbReviewInbox>;
+  /** #481: inline accept/reject one proposal by id; returns the run's refreshed
+   * proposals (a settle may have resolved the run). */
+  decideCard(runId: string, cardId: string, decision: string): Promise<KbCardGenStatus>;
+  /** #481: persist a drawer edit (body/title + decision) for one proposal by id. */
+  updateProposal(runId: string, card: KbProposedCard): Promise<KbCardGenStatus>;
+  /** #481: commit an arbitrary set of proposal cards (per-run is the special case
+   * where every ref shares a run); returns the aggregated tallies. */
+  commitCards(cards: KbCardRef[]): Promise<KbCardGenCommit>;
 
   /** #377: the global "待釐清" inbox — every open clarification question the
    * digest raised across collections. */
@@ -1067,6 +1115,54 @@ export const realKbApi: KbApi = {
   async dismissCardGen(jobId) {
     const url = `/kb/context-card-gen/${encodeURIComponent(jobId)}/dismiss`;
     await ok(await apiFetch(url, { method: "POST" }), "dismiss card gen");
+  },
+
+  async getReviewInbox(opts) {
+    const p = new URLSearchParams();
+    if (opts?.resolved) p.set("resolved", "true");
+    if (opts?.collectionId) p.set("collection_id", opts.collectionId);
+    const q = p.toString();
+    return (
+      await ok(await apiFetch(`/kb/review-inbox${q ? `?${q}` : ""}`), "review inbox")
+    ).json();
+  },
+  async decideCard(runId, cardId, decision) {
+    const url = `/kb/context-card-gen/${encodeURIComponent(runId)}/decide`;
+    return (
+      await ok(
+        await apiFetch(url, {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ card_id: cardId, decision }),
+        }),
+        "decide card",
+      )
+    ).json();
+  },
+  async updateProposal(runId, card) {
+    const url = `/kb/context-card-gen/${encodeURIComponent(runId)}/proposals/${encodeURIComponent(card.id)}`;
+    return (
+      await ok(
+        await apiFetch(url, {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify(card),
+        }),
+        "update proposal",
+      )
+    ).json();
+  },
+  async commitCards(cards) {
+    return (
+      await ok(
+        await apiFetch("/kb/context-card-gen/commit", {
+          method: "POST",
+          headers: jsonHeaders,
+          body: JSON.stringify({ cards }),
+        }),
+        "commit cards",
+      )
+    ).json();
   },
 
   async getDocQuestions(collectionId) {

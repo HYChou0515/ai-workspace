@@ -66,6 +66,7 @@ from .meta_routes import register_meta_routes
 from .notifications import register_notification_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
+from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore
 from .sandbox_address import IAddressStore, SpecstarAddressStore
@@ -522,7 +523,12 @@ def create_app(
             else VerbatimAnswerFormatter()
         ),
         wiki_store=WikiFileStore(spec),
+        get_user_id=get_user_id,
+        superusers=superusers,
     )
+    # #481: the global 審核 inbox — every pending-review item (card-gen proposals +
+    # clarification questions) across every collection the caller may read.
+    register_review_inbox_routes(api, spec, get_user_id=get_user_id, superusers=superusers)
     # Model-sanity battery routes mount only when the live-LLM factory is wired.
     sanity_coordinator = coordinators.sanity
     if sanity_coordinator is not None:

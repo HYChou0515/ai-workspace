@@ -121,6 +121,123 @@ def test_set_proposals_replaces_the_run_proposals():
     assert p.keys == ["M4"]
 
 
+def test_set_proposals_assigns_stable_ids_to_proposals_missing_them():
+    """#481: every proposal needs a stable id so the review table can address one
+    card at a time. ``set_proposals`` fills a blank id with the card's position;
+    an id already present is preserved (so a re-saved list keeps its identities)."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = store.start(cid, ["d1"])
+    store.set_proposals(run_id, [ProposedCard(keys=["A"]), ProposedCard(id="keep", keys=["B"])])
+    a, b = _get(store, run_id).proposals
+    assert a.id == "0"  # blank → positional id
+    assert b.id == "keep"  # existing id preserved
+
+
+def _done_run(store: CardGenRunStore, cid: str, proposals: list[ProposedCard]) -> str:
+    """A finalized (``done``) run carrying ``proposals`` — the state a run is in
+    while it sits in the 待審核 queue."""
+    run_id = store.start(cid, ["d1"])
+    store.set_proposals(run_id, proposals)
+    store.finish(run_id, status="done")
+    return run_id
+
+
+def test_decide_sets_one_proposals_decision_by_id():
+    """#481 inline accept/reject: ``decide`` flips exactly the addressed card's
+    decision and leaves its siblings — and the list order — untouched."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = _done_run(store, cid, [ProposedCard(keys=["A"]), ProposedCard(keys=["B"])])
+    store.decide(run_id, "1", "accepted")
+    a, b = _get(store, run_id).proposals
+    assert (a.id, a.decision) == ("0", "pending")
+    assert (b.id, b.decision) == ("1", "accepted")
+
+
+def test_deciding_the_last_active_card_rejected_settles_the_run_out_of_the_queue():
+    """A run drops out of the queue once no proposal is active. Rejecting the last
+    undecided card with none committed resolves the run ``dismissed`` (#481)."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = _done_run(store, cid, [ProposedCard(keys=["A"])])
+    store.decide(run_id, "0", "rejected")
+    assert _get(store, run_id).status == "dismissed"
+
+
+def test_update_proposal_replaces_a_card_by_id_keeping_its_identity():
+    """#481 drawer edit: ``update_proposal`` swaps in the reviewer's edited card
+    (new body + decision) for the matching id, and the id stays authoritative."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = _done_run(store, cid, [ProposedCard(keys=["A"], body="old")])
+    store.update_proposal(run_id, "0", ProposedCard(keys=["A"], body="new", decision="accepted"))
+    (p,) = _get(store, run_id).proposals
+    assert (p.id, p.body, p.decision) == ("0", "new", "accepted")
+
+
+def test_deciding_an_unknown_card_is_a_noop():
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = _done_run(store, cid, [ProposedCard(keys=["A"])])
+    assert store.decide(run_id, "nope", "accepted") is None
+    assert _get(store, run_id).proposals[0].decision == "pending"
+
+
+def test_mark_proposals_committed_transitions_active_cards_and_settles_when_done():
+    """Committing the referenced active cards flips them ``committed``; when the
+    run has no active proposal left it resolves ``committed`` (some card written)
+    and drops out of the queue (#481)."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = _done_run(store, cid, [ProposedCard(keys=["A"]), ProposedCard(keys=["B"])])
+    store.decide(run_id, "1", "rejected")  # B rejected
+    store.mark_proposals_committed(run_id, ["0"])  # A written → committed
+    run = _get(store, run_id)
+    assert run.status == "committed"  # A committed, B rejected → all terminal
+    assert [p.decision for p in run.proposals] == ["committed", "rejected"]
+
+
+def test_partial_commit_leaves_the_run_in_the_queue():
+    """Committing some of a run's cards leaves the rest in the queue (#481): the
+    run stays ``done`` while any proposal is still active."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = _done_run(store, cid, [ProposedCard(keys=["A"]), ProposedCard(keys=["B"])])
+    store.mark_proposals_committed(run_id, ["0"])  # only A
+    run = _get(store, run_id)
+    assert run.status == "done"  # B still pending → run stays
+    assert [p.decision for p in run.proposals] == ["committed", "pending"]
+
+
+def test_committing_a_rejected_card_ref_is_skipped():
+    """A ref to a non-active card (already rejected/committed) doesn't transition —
+    ``mark_proposals_committed`` only advances active proposals (#481)."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = _done_run(store, cid, [ProposedCard(keys=["A"], decision="rejected")])
+    assert store.mark_proposals_committed(run_id, ["0"]) is None  # nothing to advance
+
+
+def test_decide_backfills_ids_on_a_legacy_run():
+    """A run finalized before ids existed (blank ids) is still addressable: the
+    positional id is backfilled on the first decide, then persists (#481)."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    run_id = store.start(cid, ["d1"])
+    # a run written the pre-#481 way — proposals with blank ids
+    store._cas(  # noqa: SLF001
+        run_id,
+        lambda run: __import__("msgspec").structs.replace(
+            run, proposals=[ProposedCard(keys=["A"]), ProposedCard(keys=["B"])], status="done"
+        ),
+    )
+    store.decide(run_id, "1", "accepted")
+    a, b = _get(store, run_id).proposals
+    assert a.id == "0" and b.id == "1"
+    assert b.decision == "accepted"
+
+
 def test_finish_sets_terminal_status():
     spec, cid = _spec_with_collection()
     store = CardGenRunStore(spec)

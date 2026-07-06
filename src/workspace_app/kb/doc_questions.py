@@ -123,6 +123,26 @@ def open_questions_for_collections(
     return out
 
 
+def questions_by_status(
+    spec: SpecStar, collection_ids: list[str], statuses: list[str]
+) -> list[tuple[str, float, DocQuestion]]:
+    """Every question in one of ``statuses`` across ``collection_ids``, as
+    ``(qid, created_epoch, question)`` — the global 審核 inbox's clarification
+    source (#481). Scoped per collection via the indexed ``(collection_id,
+    status)`` query, so it only reads the caller's readable collections."""
+    rm = spec.get_resource_manager(DocQuestion)
+    out: list[tuple[str, float, DocQuestion]] = []
+    for cid in collection_ids:
+        q = (QB["collection_id"] == cid) & QB["status"].in_(statuses)
+        for r in rm.list_resources(q.build()):
+            data = r.data
+            assert isinstance(data, DocQuestion)  # narrow Struct|Unset for ty
+            out.append(
+                (r.info.resource_id, r.info.created_time.timestamp(), data)  # ty: ignore[unresolved-attribute]
+            )
+    return out
+
+
 def list_open_questions(
     spec: SpecStar, *, collection_id: str | None = None
 ) -> list[tuple[str, DocQuestion]]:

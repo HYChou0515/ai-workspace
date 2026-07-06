@@ -133,6 +133,11 @@ export const qk = {
     // #377: the global "待釐清" clarification-question inbox.
     docQuestions: ["kb", "doc-questions"] as const,
     docQuestionsFor: (collectionId: string) => ["kb", "doc-questions", collectionId] as const,
+    // #481: the global 審核 review inbox (pending items, or the resolved history;
+    // optionally scoped to one collection's tab). Prefix `["kb","review-inbox"]`
+    // so any decide / commit / answer / discard can invalidate every variant.
+    reviewInbox: (opts?: { resolved?: boolean; collectionId?: string }) =>
+      ["kb", "review-inbox", opts?.resolved ?? false, opts?.collectionId ?? null] as const,
     // #325: browser-runnable upload-check descriptors (platform-wide, rarely
     // changes — fetched once and reused to pre-block encrypted uploads).
     uploadChecks: ["kb", "upload-checks"] as const,

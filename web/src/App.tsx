@@ -7,10 +7,10 @@ import { AppDashboard } from "./pages/AppDashboard";
 import { AppNewItem } from "./pages/AppNewItem";
 import { AppWorkspace } from "./pages/AppWorkspace";
 import { DiagnosticsPage } from "./pages/DiagnosticsPage";
-import { DocQuestionsPage } from "./pages/DocQuestionsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
+import { ReviewPage } from "./pages/kb/ReviewPage";
 import { Launcher } from "./pages/Launcher";
 import { ReleasesPage } from "./pages/ReleasesPage";
 
@@ -43,9 +43,11 @@ export function AppRoutes() {
         {kbRoutes()}
         <Route path="/kb/doc/*" element={<KbDocPage />} />
         <Route path="/diagnostics" element={<DiagnosticsPage />} />
-        {/* #377: the global clarification inbox — questions the digest raised
-            about terms / logic it couldn't safely infer, answered here. */}
-        <Route path="/clarifications" element={<DocQuestionsPage />} />
+        {/* #481: the global 審核 inbox — every pending-review item (card proposals +
+            clarification questions) across every readable collection, in one
+            filterable table. Absorbs the old (invisible) /clarifications page. */}
+        <Route path="/review" element={<ReviewPage />} />
+        <Route path="/clarifications" element={<Navigate to="/review" replace />} />
         {/* #230: the platform help / intro page (usage guides + release notes +
             an AI that answers how-to questions over the Help collection). */}
         <Route path="/help" element={<HelpPage />} />

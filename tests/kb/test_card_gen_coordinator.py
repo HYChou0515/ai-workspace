@@ -774,6 +774,160 @@ async def test_a_new_term_with_an_unrelated_existing_card_stays_new():
     assert p.target_card_id is None
 
 
+# ── #481: per-card decide + multi-card (cross-run) commit ────────────────────
+
+
+async def test_proposals_carry_stable_ids():
+    """#481: finalized proposals are addressable — each carries a stable id so the
+    review table can act on one card."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "x")
+    d2 = _add_source(spec, cid, "b.md", "y")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {
+            "a.md": [CardDraft(keys=["A"], snippet="s")],
+            "b.md": [CardDraft(keys=["B"], snippet="s")],
+        },
+        [d1, d2],
+    )
+    ids = [p.id for p in coord.proposals(jid).proposals]
+    assert all(ids) and len(set(ids)) == len(ids)  # non-empty and unique
+
+
+async def test_decide_persists_a_single_cards_decision():
+    """#481 inline accept/reject: ``decide`` flips one card's decision on the run;
+    a re-read restores it (the run is the durable store)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "x")
+    d2 = _add_source(spec, cid, "b.md", "y")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {
+            "a.md": [CardDraft(keys=["A"], snippet="s")],
+            "b.md": [CardDraft(keys=["B"], snippet="s")],
+        },
+        [d1, d2],
+    )
+    first, second = coord.proposals(jid).proposals
+    coord.decide(jid, first.id, "accepted")
+    again = {p.id: p.decision for p in coord.proposals(jid).proposals}
+    assert again[first.id] == "accepted"
+    assert again[second.id] == "pending"
+
+
+async def test_commit_cards_writes_only_the_referenced_cards():
+    """#481: the multi-card commit writes exactly the referenced cards (not the
+    whole run); a partial commit leaves the rest in the queue."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "x")
+    d2 = _add_source(spec, cid, "b.md", "y")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {
+            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+        },
+        [d1, d2],
+    )
+    a, _b = coord.proposals(jid).proposals
+    res = coord.commit_cards([(jid, a.id)])
+    assert (res.created, res.updated, res.skipped) == (1, 0, 0)
+    assert {c.keys[0] for c in _list_cards(spec, cid)} == {"A"}  # only A written
+    assert coord.pending_runs(cid)  # B still pending → run stays in the queue
+
+
+async def test_commit_cards_resolves_the_run_when_its_last_card_is_committed():
+    """#481: committing a run's last active card settles it out of the queue."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord, jid = await _run(
+        spec, cid, {"a.md": [CardDraft(keys=["A"], title="A", snippet="s")]}, [doc]
+    )
+    (a,) = coord.proposals(jid).proposals
+    coord.commit_cards([(jid, a.id)])
+    assert coord.pending_runs(cid) == []
+    assert len(_list_cards(spec, cid)) == 1
+
+
+async def test_commit_cards_spans_multiple_runs_in_one_call():
+    """#481: a single commit can carry cards from different runs — per-run commit
+    is just the special case where the refs share a run."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "x")
+    d2 = _add_source(spec, cid, "b.md", "y")
+    drafter = _FakeDrafter(
+        {
+            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+        }
+    )
+    coord = CardGenCoordinator(spec, drafter)
+    j1 = coord.enqueue(cid, [d1])
+    j2 = coord.enqueue(cid, [d2])
+    await coord.aclose()
+    (a,) = coord.proposals(j1).proposals
+    (b,) = coord.proposals(j2).proposals
+    res = coord.commit_cards([(j1, a.id), (j2, b.id)])
+    assert res.created == 2
+    assert coord.pending_runs(cid) == []  # both runs settled
+
+
+async def test_update_proposal_persists_a_drawer_edit():
+    """#481 drawer edit: editing a card's body + decision persists on the run."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord, jid = await _run(
+        spec, cid, {"a.md": [CardDraft(keys=["A"], body="old", snippet="s")]}, [doc]
+    )
+    (a,) = coord.proposals(jid).proposals
+    coord.update_proposal(jid, a.id, msgspec.structs.replace(a, body="edited", decision="accepted"))
+    (again,) = coord.proposals(jid).proposals
+    assert again.id == a.id
+    assert (again.body, again.decision) == ("edited", "accepted")
+
+
+async def test_commit_cards_ignores_a_gone_or_resolved_run():
+    """#481: refs to a vanished / already-resolved run are silently skipped — the
+    multi-card commit never blows up on a stale id the FE still holds."""
+    spec = make_spec(default_user="u")
+    coord = CardGenCoordinator(spec, _FakeDrafter({}))
+    res = coord.commit_cards([("nope", "0")])
+    assert (res.created, res.updated, res.skipped) == (0, 0, 0)
+
+
+async def test_commit_cards_skips_a_rejected_reference():
+    """#481: a ref to a rejected card writes nothing — the reviewer's rejection
+    wins over an accidental selection (the run stays open on its other card)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    d1 = _add_source(spec, cid, "a.md", "x")
+    d2 = _add_source(spec, cid, "b.md", "y")
+    coord, jid = await _run(
+        spec,
+        cid,
+        {
+            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+        },
+        [d1, d2],
+    )
+    a, _b = coord.proposals(jid).proposals
+    coord.decide(jid, a.id, "rejected")  # B stays pending → run stays done
+    res = coord.commit_cards([(jid, a.id)])
+    assert (res.created, res.skipped) == (0, 1)
+    assert _list_cards(spec, cid) == []
+
+
 async def test_start_consuming_is_idempotent_and_takes_an_explicit_queue_factory():
     """create_app starts the consumer eagerly with the config-selected queue
     factory; the call is idempotent."""
