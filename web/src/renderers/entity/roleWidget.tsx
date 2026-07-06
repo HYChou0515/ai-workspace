@@ -174,7 +174,7 @@ function DateRangeInput({
     else if (!s && !e) onCommit(null);
   };
   return (
-    <span style={{ display: "inline-flex", gap: 4 }}>
+    <span className="ev-field--range">
       <input
         aria-label={`${name} start`}
         className={className}
@@ -202,13 +202,6 @@ function DateRangeInput({
 }
 
 // ── inline editor (table / board): commit on blur, discrete on change ────────
-
-const inlineInputStyle: React.CSSProperties = {
-  width: "100%",
-  boxSizing: "border-box",
-  background: "transparent",
-  border: "none",
-};
 
 /** A ref rendered as a `#N <title>` picker over the target records, or a plain
  * numeric input when the target records aren't loaded (P4 fallback). */
@@ -264,15 +257,19 @@ export type RoleFieldProps = {
 };
 
 export function RoleField({ widget, name, value, values, users, refOptions, disabled, required, onCommit }: RoleFieldProps) {
-  if (widget === "readonly") return <span>{fieldText(value)}</span>;
+  if (widget === "readonly") return <span className="ev-readonly">{fieldText(value)}</span>;
   if (widget === "select")
-    return <StatusSelect name={name} value={value} values={values} disabled={disabled} required={required} onCommit={onCommit} />;
+    return (
+      <StatusSelect name={name} value={value} values={values} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />
+    );
   if (widget === "actor")
-    return <ActorSelect name={name} value={value} users={users} disabled={disabled} required={required} onCommit={onCommit} />;
+    return <ActorSelect name={name} value={value} users={users} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />;
   if (widget === "daterange")
-    return <DateRangeInput name={name} value={value} disabled={disabled} onCommit={onCommit} />;
+    return <DateRangeInput name={name} value={value} disabled={disabled} className="ev-field" onCommit={onCommit} />;
   if (widget === "ref" && refOptions && refOptions.length > 0)
-    return <RefSelect name={name} value={value} options={refOptions} disabled={disabled} required={required} onCommit={onCommit} />;
+    return (
+      <RefSelect name={name} value={value} options={refOptions} disabled={disabled} required={required} className="ev-field" onCommit={onCommit} />
+    );
 
   const text = fieldText(value);
   const numeric = NUMERIC.has(widget);
@@ -293,10 +290,10 @@ export function RoleField({ widget, name, value, values, users, refOptions, disa
     <input
       key={text}
       aria-label={name}
+      className="ev-field"
       type={numeric ? "number" : widget === "date" ? "date" : "text"}
       defaultValue={text}
       disabled={disabled}
-      style={inlineInputStyle}
       onBlur={(e) => commit(e.target.value)}
       onKeyDown={(e) => {
         if (e.key === "Enter") (e.target as HTMLInputElement).blur();
@@ -320,18 +317,18 @@ export type RoleCreateInputProps = {
 export function RoleCreateInput({ widget, name, value, values, users, required, onChange }: RoleCreateInputProps) {
   if (widget === "select")
     return (
-      <StatusSelect name={name} value={value} values={values} blank required={required} className="inline-edit" onCommit={onChange} />
+      <StatusSelect name={name} value={value} values={values} blank required={required} className="ev-field" onCommit={onChange} />
     );
   if (widget === "actor")
-    return <ActorSelect name={name} value={value} users={users} required={required} className="inline-edit" onCommit={onChange} />;
+    return <ActorSelect name={name} value={value} users={users} required={required} className="ev-field" onCommit={onChange} />;
   if (widget === "daterange")
-    return <DateRangeInput name={name} value={value} className="inline-edit" onCommit={(next) => onChange(next == null ? "" : String(next))} />;
+    return <DateRangeInput name={name} value={value} className="ev-field" onCommit={(next) => onChange(next == null ? "" : String(next))} />;
 
   const type = widget === "date" ? "date" : widget === "progress" || widget === "rank" || widget === "ref" ? "number" : "text";
   const placeholder = widget === "ref" ? "#" : "";
   return (
     <input
-      className="inline-edit"
+      className="ev-field"
       aria-label={name}
       type={type}
       value={value}
