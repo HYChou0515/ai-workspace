@@ -21,8 +21,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from agents import FunctionTool
+
+if TYPE_CHECKING:
+    from ..tooling.catalog import ToolMeta
 
 
 def format_tools_for_prompt(tools: Sequence[FunctionTool]) -> str:
@@ -52,4 +56,33 @@ def format_tools_for_prompt(tools: Sequence[FunctionTool]) -> str:
         lines.append(json.dumps(t.params_json_schema or {}, indent=2, ensure_ascii=False))
         lines.append("```")
         lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def format_disabled_tools_for_prompt(metas: Sequence[ToolMeta]) -> str:
+    """Render App-declared-but-off tools (#480) as a "Tools available on
+    request" section. These are NOT registered as callable tools — the section
+    just makes the agent aware they exist so it avoids them by default and can
+    ask the user to turn one on in the tool picker.
+
+    Only ``name — one-line description`` per tool (no JSON args schema): they
+    can't be called, so the schema is dead weight, and keeping the section lean
+    matters for small local models. Empty ``metas`` → empty string (caller skips
+    concatenation)."""
+    if not metas:
+        return ""
+    lines: list[str] = [
+        "## Tools available on request",
+        "",
+        (
+            "These tools belong to this workspace but are turned off right now, so "
+            "they are not in your callable set. If a task genuinely needs one, use "
+            "the tools you already have where you can, and tell the user which tool "
+            "to turn on in the tool picker (and why) so they can enable it for you."
+        ),
+        "",
+    ]
+    for m in metas:
+        desc = m.description.strip()
+        lines.append(f"- `{m.name}`" + (f" — {desc}" if desc else ""))
     return "\n".join(lines).rstrip() + "\n"

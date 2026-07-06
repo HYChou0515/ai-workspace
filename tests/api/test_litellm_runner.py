@@ -584,6 +584,74 @@ def test_agent_for_with_explicit_list_registers_only_those_tools():
     assert names == ["read_file"]
 
 
+def test_agent_for_advertises_disabled_tools_without_making_them_callable():
+    """#480: App-declared-but-off tools (``disabled_tools``) are surfaced in a
+    prompt section so the agent knows they exist and can ask the user to enable
+    one — but they are NOT registered as callable tools."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(
+        name="ws", system_prompt="Base.", allowed_tools=[], disabled_tools=["make_deck"]
+    )
+    agent = _agent_for(cfg)
+    assert isinstance(agent.instructions, str)
+    assert "## Tools available on request" in agent.instructions
+    assert "make_deck" in agent.instructions  # advertised by name
+    assert "make_deck" not in {t.name for t in agent.tools}  # but not callable
+
+
+def test_agent_for_disabled_section_is_whole_prompt_when_no_base():
+    """#480: with no base prompt and no callable tools, the disabled section
+    becomes the entire instructions (the empty-base branch)."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", system_prompt="", allowed_tools=[], disabled_tools=["make_deck"])
+    agent = _agent_for(cfg)
+    assert isinstance(agent.instructions, str)
+    assert agent.instructions.startswith("## Tools available on request")
+
+
+def test_agent_for_omits_disabled_section_when_none_disabled():
+    """#480: no disabled tools → no 'available on request' section at all."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    agent = _agent_for(AgentConfig(name="ws", allowed_tools=["read_file"]))
+    assert isinstance(agent.instructions, str)
+    assert "## Tools available on request" not in agent.instructions
+
+
+def test_agent_for_disabled_section_follows_the_callable_inventory():
+    """#480: the disabled section is rendered AFTER the callable '## Tools
+    available' inventory — enabled tools first, then what could be enabled."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", allowed_tools=["read_file"], disabled_tools=["make_deck"])
+    agent = _agent_for(cfg)
+    assert isinstance(agent.instructions, str)
+    assert agent.instructions.index("## Tools available") < agent.instructions.index(
+        "## Tools available on request"
+    )
+
+
+def test_agent_for_advertises_disabled_package_selector():
+    """#480: a disabled package selector (not a built-in) is advertised too —
+    metas come from the same picker catalog, so bundled tools surface with the
+    'Bundled tools: …' blurb the picker shows."""
+    from workspace_app.api.litellm_runner import _agent_for
+    from workspace_app.tooling.registry import CommandInfo, PackageInfo
+
+    pkg = PackageInfo(
+        name="rca-tools",
+        commands=(CommandInfo(name="pareto", description="Pareto chart.", params_json_schema={}),),
+        install_dir="/.tools/rca-tools",
+    )
+    cfg = AgentConfig(name="ws", allowed_tools=["read_file"], disabled_tools=["rca-tools"])
+    agent = _agent_for(cfg, packages=[pkg])
+    assert isinstance(agent.instructions, str)
+    assert "rca-tools" in agent.instructions
+    assert "rca-tools" not in {t.name for t in agent.tools}
+
+
 def test_agent_for_with_none_allowed_tools_registers_defaults():
     """The ``None`` (= "haven't specified") case — preserved behaviour
     so existing test fixtures + bundled RCA presets keep working."""

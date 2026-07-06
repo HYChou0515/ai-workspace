@@ -265,11 +265,25 @@ def _agent_for(
     # schema) to the system prompt so small local LLMs don't confuse
     # provisioned function tools with shell binaries (see plan §B.10 /
     # agent/tool_prompt.py).
-    from ..agent.tool_prompt import format_tools_for_prompt
+    from ..agent.tool_prompt import format_disabled_tools_for_prompt, format_tools_for_prompt
 
     tools_section = format_tools_for_prompt(tools)
     if tools_section:
         base = f"{base}\n\n{tools_section}".strip() if base else tools_section
+    # #480: after the callable inventory, advertise the App-declared tools that
+    # resolved OFF for this turn — name + one-line description only, NOT added to
+    # `tools`. The agent learns they exist (so it avoids them by default) and can
+    # ask the user to enable one in the tool picker. Metas come from the same
+    # display catalog the picker uses, so built-in + package selectors both work.
+    if config.disabled_tools:
+        from ..tooling.catalog import picker_units
+
+        # `picker_units` yields one meta per name and the renderer is non-empty
+        # for non-empty metas, so this is always a real section here.
+        disabled_section = format_disabled_tools_for_prompt(
+            picker_units(config.disabled_tools, packages or [])
+        )
+        base = f"{base}\n\n{disabled_section}".strip() if base else disabled_section
     # Defend against the streaming-aggregator bug (small models emit two
     # parallel tool_calls; LiteLLM merges their `arguments` into one JSON-
     # concatenated mess the SDK can't parse). Each tool is wrapped to peel

@@ -13,6 +13,7 @@ from workspace_app.apps.manifest import (
     FunctionToggles,
     ItemNouns,
     Layout,
+    load_app_manifest,
 )
 from workspace_app.config.schema import Preset
 
@@ -126,6 +127,92 @@ def test_resolve_raises_when_chosen_preset_not_declared():
     cat = AppCatalog(presets={"openai-mini": Preset(model="x")})
     with pytest.raises(ValueError, match="not declared"):
         cat.resolve(app_slug="rca", profile="default", attached_preset="claude-opus")
+
+
+# ─── #480 disabled-tool disclosure ──────────────────────────────────
+def test_profile_narrowing_populates_disabled_tools():
+    """#480: tools declared in the App ceiling but not in the effective
+    (enabled) set are surfaced on ``disabled_tools`` — so the agent can be
+    told they exist without being able to call them. tool-demo narrows the
+    RCA ceiling to a 9-tool subset, so the rest of the ceiling is disabled."""
+    cfg = AppCatalog(presets=_presets()).resolve(app_slug="rca", profile="tool-demo")
+    assert "rca-tools" in cfg.disabled_tools  # narrowed away → disabled
+    assert "make_deck" in cfg.disabled_tools  # ditto
+    assert "data-fetch" not in cfg.disabled_tools  # in the effective set
+
+
+def test_tool_prefs_force_off_moves_tool_into_disabled():
+    """#480: a per-item force-OFF makes an otherwise-enabled ceiling tool
+    disabled — that's exactly the tool the agent should ask the user to
+    re-enable."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca",
+        profile="default",
+        attached_preset="qwen3-local",
+        tool_prefs={"rca-tools": False},
+    )
+    assert "rca-tools" in cfg.disabled_tools
+    assert "exec" not in cfg.disabled_tools  # still enabled → not disabled
+
+
+def test_tool_prefs_force_on_removes_tool_from_disabled():
+    """#480: a per-item force-ON re-adds a profile-narrowed tool to the
+    effective set, so it must NOT appear as disabled."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="tool-demo", tool_prefs={"rca-tools": True}
+    )
+    assert "rca-tools" not in cfg.disabled_tools
+    assert "rca-tools" in (cfg.allowed_tools or [])
+
+
+def test_disabled_tools_preserve_ceiling_order():
+    """#480: disabled tools are emitted in App-ceiling order (deterministic
+    prompt rendering), same convention as ``allowed_tools``."""
+    cfg = AppCatalog(presets=_presets()).resolve(app_slug="rca", profile="tool-demo")
+    ceiling = [
+        "exec",
+        "read_file",
+        "read_image",
+        "write_file",
+        "edit_file",
+        "list_files",
+        "exists",
+        "delete_file",
+        "ask_knowledge_base",
+        "request_wiki_update",
+        "lookup_user",
+        "make_deck",
+        "data-fetch",
+        "csv-column-summary",
+        "sci-plot",
+        "rca-tools",
+        "python-stack",
+        "save_skill",
+        "save_workflow",
+    ]
+    order = {name: i for i, name in enumerate(ceiling)}
+    idxs = [order[t] for t in cfg.disabled_tools]
+    assert idxs == sorted(idxs)
+
+
+def test_allowed_and_disabled_partition_the_ceiling():
+    """#480 invariant: enabled + disabled are disjoint and together cover the
+    whole ceiling — a tool is either callable or advertised-as-off, never both
+    or neither."""
+    cfg = AppCatalog(presets=_presets()).resolve(app_slug="rca", profile="tool-demo")
+    allowed, disabled = set(cfg.allowed_tools or []), set(cfg.disabled_tools)
+    assert allowed.isdisjoint(disabled)
+    ceiling = set(load_app_manifest("rca").agent.tools)
+    assert allowed | disabled == ceiling
+
+
+def test_full_ceiling_leaves_no_disabled_tools():
+    """#480: when nothing is narrowed away (full-ceiling default profile, no
+    prefs), there are no disabled tools → the prompt section is omitted."""
+    cfg = AppCatalog(presets=_presets()).resolve(
+        app_slug="rca", profile="default", attached_preset="qwen3-local"
+    )
+    assert cfg.disabled_tools == []
 
 
 # ─── subset validation helper ───────────────────────────────────────

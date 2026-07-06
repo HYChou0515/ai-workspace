@@ -8,7 +8,11 @@ import json
 
 from agents import FunctionTool
 
-from workspace_app.agent.tool_prompt import format_tools_for_prompt
+from workspace_app.agent.tool_prompt import (
+    format_disabled_tools_for_prompt,
+    format_tools_for_prompt,
+)
+from workspace_app.tooling.catalog import ToolMeta
 
 
 def _ft(name: str, description: str, schema: dict) -> FunctionTool:
@@ -87,6 +91,57 @@ def test_tool_without_description_still_renders():
     out = format_tools_for_prompt(tools)
     assert "### `foo`" in out
     assert "_(no description)_" in out
+
+
+def _tm(name: str, description: str) -> ToolMeta:
+    return ToolMeta(name=name, label=name, description=description)
+
+
+# ─── #480 disabled-tool disclosure (known but not callable) ─────────
+def test_disabled_meta_renders_name_and_one_line_description():
+    """#480: a disabled tool shows up as `name — description` so the agent
+    knows it exists and what it's for, without it being a callable tool."""
+    out = format_disabled_tools_for_prompt([_tm("make_deck", "Build a .pptx deck.")])
+    assert "`make_deck`" in out
+    assert "Build a .pptx deck." in out
+
+
+def test_empty_disabled_metas_returns_empty_string():
+    """No disabled tools → empty string so the caller omits the whole section."""
+    assert format_disabled_tools_for_prompt([]) == ""
+
+
+def test_disabled_section_header_and_enable_reminder():
+    """#480: the section leads with its header and the positive instruction to
+    ask the user to enable a tool in the picker (not a 'do not use' ban)."""
+    out = format_disabled_tools_for_prompt([_tm("make_deck", "Build a deck.")])
+    assert out.startswith("## Tools available on request")
+    assert "tool picker" in out
+    assert "turn on" in out or "enable" in out
+
+
+def test_disabled_tools_carry_no_json_schema():
+    """#480: disabled tools are name+description only — no JSON args schema
+    (they can't be called, so the schema is dead weight for small models)."""
+    out = format_disabled_tools_for_prompt([_tm("make_deck", "Build a deck.")])
+    assert "```json" not in out
+    assert "Args (JSON schema)" not in out
+
+
+def test_disabled_metas_listed_in_given_order():
+    """Order is the caller's (ceiling order) — deterministic rendering."""
+    out = format_disabled_tools_for_prompt(
+        [_tm("make_deck", "a"), _tm("rca-tools", "b"), _tm("sci-plot", "c")]
+    )
+    assert out.index("`make_deck`") < out.index("`rca-tools`") < out.index("`sci-plot`")
+
+
+def test_disabled_meta_without_description_renders_bare_name():
+    """A tool with no available description still lists — just the name, no
+    trailing separator (deploy without that package built, etc.)."""
+    out = format_disabled_tools_for_prompt([_tm("mystery-pkg", "")])
+    assert "- `mystery-pkg`" in out
+    assert "`mystery-pkg` —" not in out  # no dangling em-dash
 
 
 def test_complex_schema_with_enum_and_nested_objects_round_trips():
