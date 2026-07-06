@@ -495,6 +495,25 @@ class Ingestor:
             ),
         )
 
+    def alias_if_duplicate(
+        self, doc_id: str, *, source_doc_rm: IResourceManager[SourceDoc] | None = None
+    ) -> bool:
+        """#104 public dedup gate: if ``doc_id``'s content is already chunked in
+        its collection by another doc, alias to it (0 chunks) and return True.
+
+        ``index()`` / ``copy_from_cache`` run the gate inline, but the fan-out
+        planner (``IndexCoordinator._handle_split``) does NOT — so a multi-unit
+        doc (a big deck) reindexed on a cache miss would re-chunk instead of
+        aliasing. The planner calls this BEFORE fanning out to close that hole."""
+        drm = (
+            source_doc_rm
+            if source_doc_rm is not None
+            else self._spec.get_resource_manager(SourceDoc)
+        )
+        doc = drm.get(doc_id).data
+        assert isinstance(doc, SourceDoc)
+        return self._alias_to_existing_content(doc_id, doc, source_doc_rm=drm)
+
     def _alias_to_existing_content(
         self, doc_id: str, doc: SourceDoc, *, source_doc_rm: IResourceManager[SourceDoc]
     ) -> bool:
@@ -1071,6 +1090,12 @@ class Ingestor:
         chrm = self._spec.get_resource_manager(DocChunk)
         rows = [r.data for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build())]
         chunks = sorted((c for c in rows if isinstance(c, DocChunk)), key=lambda c: c.seq)
+        if not chunks:
+            # #104: an alias owns 0 chunks and SHARES the owner's content-addressed
+            # cache key — never overwrite that shared entry with an empty set (a
+            # later copy_from_cache would then restore zero chunks). A no-parser
+            # doc (also 0 chunks) has nothing worth caching either. Skip.
+            return
         entry = IndexCache(
             chunks=[
                 CachedChunk(

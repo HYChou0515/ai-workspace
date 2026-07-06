@@ -328,6 +328,17 @@ class IndexCoordinator:
         if units <= 1:
             self._index_whole(doc_id, updater, requester, retries, max_retries)
             return
+        # #104: the alias dedup gate lives in Ingestor.index()/copy_from_cache,
+        # NOT here — so a MULTI-UNIT doc whose identical content is already chunked
+        # by a sibling would fan out and re-chunk (losing dedup) on a cache miss
+        # (e.g. after reindex_collection invalidates the cache). Gate BEFORE the
+        # fan-out: an alias flips ready with 0 chunks and skips the split entirely.
+        doc_rm = self._spec.get_resource_manager(SourceDoc)
+        with doc_rm.using(user=updater):
+            aliased = self._ingestor.alias_if_duplicate(doc_id, source_doc_rm=doc_rm)
+        if aliased:
+            self._post_index_hooks(doc_id, requester, updater)
+            return
         batch = self._unit_batch_sizes.get(parser_id, self._default_unit_batch)
         nbatches = math.ceil(units / batch)
         self._ingestor.prepare_fanout(doc_id)  # clear chunks ONCE before fan-out
@@ -393,6 +404,13 @@ class IndexCoordinator:
                 doc_id, updater, status="error", detail=f"{type(exc).__name__}: {exc!s}"[:240]
             )
             return
+        self._post_index_hooks(doc_id, requester, updater)
+
+    def _post_index_hooks(self, doc_id: str, requester: str, updater: str) -> None:
+        """The best-effort follow-ups every ready doc gets: cache snapshot (#390),
+        wiki fold (#43), quality score (#105), proactive digest (#377). Shared by
+        the whole-doc path and the #104 fan-out alias branch so an aliased
+        multi-unit doc folds into the wiki / digests exactly like a chunked one."""
         self._cache_hook(doc_id)
         self._wiki_hook(doc_id, requester)
         self._quality_hook(doc_id, updater)

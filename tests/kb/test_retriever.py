@@ -1,7 +1,7 @@
 from collections.abc import Iterator
 
 import msgspec
-from specstar import SpecStar
+from specstar import QB, SpecStar
 from specstar.types import Binary
 
 from workspace_app.config.schema import (
@@ -15,7 +15,7 @@ from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.ingest import Ingestor
 from workspace_app.kb.llm import ILlm
 from workspace_app.kb.retriever import Enhancements, Retriever
-from workspace_app.resources.kb import Collection, SourceDoc
+from workspace_app.resources.kb import Collection, DocChunk, SourceDoc
 
 
 def _ingest(spec, chunker, embedder, name, text):
@@ -24,6 +24,42 @@ def _ingest(spec, chunker, embedder, name, text):
         collection_id=cid, user="u", filename=name, data=text.encode()
     )
     return cid
+
+
+def test_search_drops_a_chunk_whose_source_doc_is_gone(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104 orphan defense: the interim keeps source_doc_id and re-homes it on
+    # delete; if a chunk ends up pointing at a doc that no longer exists (a
+    # re-home race, or a dangling ref — validate_refs is off), retrieval must DROP
+    # that hit, not crash the whole search (`_doc_path` had no guard and runs for
+    # every candidate before the text join that DOES guard).
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid, user="u", filename="live.md", data=b"reflow oven temperature zone three"
+    )
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="ghost.md",
+        data=b"reflow oven temperature zone four extra",
+    )
+    # Repoint ghost.md's chunks at a doc id that doesn't exist → a dangling ref
+    # (no cascade fires, since we rewrite rather than delete the row).
+    chrm = spec.get_resource_manager(DocChunk)
+    ghost = encode_doc_id(cid, "ghost.md")
+    for r in chrm.list_resources((QB["source_doc_id"] == ghost).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        chrm.update(rid, msgspec.structs.replace(chunk, source_doc_id="gone-doc"))
+
+    passages = Retriever(spec, embedder=embedder).search("reflow temperature", [cid])
+
+    ids = [p.document_id for p in passages]
+    assert encode_doc_id(cid, "live.md") in ids  # the live doc still surfaces
+    assert "gone-doc" not in ids  # the orphan hit is dropped, not a crash
 
 
 def test_hybrid_search_surfaces_the_keyword_matching_document(

@@ -153,6 +153,30 @@ def test_invalidate_drops_the_entry_and_is_noop_when_absent(spec, chunker, embed
     assert ing.copy_from_cache(doc2) is False
 
 
+def test_write_cache_skips_a_zero_chunk_alias_and_keeps_the_owners_entry(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104: an alias owns 0 chunks and SHARES the owner's content-addressed cache
+    # key. write_cache must not overwrite the shared entry with an empty chunk set
+    # — the coordinator runs _cache_hook after every index, alias included, so an
+    # unguarded write would clobber the real chunks to nothing under that key.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"hello world one two three four five"
+    [owner] = ing.ingest(collection_id=cid, user="u", filename="a.md", data=data)
+    ing.write_cache(owner)  # real chunks cached under the content-addressed key
+    key = ing.cache_key(owner)
+    seeded = IndexCacheStore(spec).get(key)
+    assert seeded is not None and len(seeded.chunks) > 0  # sanity: owner cached real chunks
+
+    [alias] = ing.ingest(collection_id=cid, user="u", filename="b.md", data=data)
+    assert _chunk_view(spec, alias) == []  # deduped: the alias owns nothing
+
+    ing.write_cache(alias)  # shares the key → must be a no-op, never a clobber
+    entry = IndexCacheStore(spec).get(key)
+    assert entry is not None and len(entry.chunks) > 0  # owner's chunks intact
+
+
 def test_cache_key_reflects_effective_guidance_and_configs(spec, chunker, embedder):
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
