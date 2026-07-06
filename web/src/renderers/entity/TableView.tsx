@@ -10,7 +10,6 @@
 import { useState } from "react";
 
 import type { EntityFieldSpec, EntityInstance, EntityType } from "../../api/entities";
-import { pxToRem } from "../../lib/pxToRem";
 import { refOptions, traverseColumn } from "./refTraversal";
 import { RoleField, widgetForRole } from "./roleWidget";
 import { fieldText, roleOf } from "./shared";
@@ -25,23 +24,6 @@ function columnsFor(spec: ViewSpec, type: EntityType | null, entities: EntityIns
   for (const e of entities) for (const k of Object.keys(e.fields)) seen.add(k);
   return [...seen];
 }
-
-const cellStyle: React.CSSProperties = {
-  border: "1px solid var(--paper-3)",
-  padding: "4px 8px",
-  textAlign: "left",
-  verticalAlign: "top",
-};
-
-const headerBtnStyle: React.CSSProperties = {
-  background: "none",
-  border: "none",
-  padding: 0,
-  font: "inherit",
-  fontWeight: 600,
-  cursor: "pointer",
-  color: "inherit",
-};
 
 type FilterOption = { value: string; label: string };
 
@@ -111,7 +93,7 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
 
   return (
     <div>
-      <div style={{ position: "relative", marginBottom: 8 }}>
+      <div className="ev-toolbar" style={{ position: "relative", marginBottom: 8 }}>
         <button
           type="button"
           className="btn"
@@ -122,20 +104,9 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
           Columns
         </button>
         {menuOpen && (
-          <div
-            role="menu"
-            style={{
-              position: "absolute",
-              zIndex: 1,
-              marginTop: 4,
-              padding: 8,
-              background: "var(--paper)",
-              border: "1px solid var(--paper-3)",
-              borderRadius: 6,
-            }}
-          >
+          <div role="menu" className="ev-menu" style={{ top: "100%" }}>
             {allColumns.map((c) => (
-              <label key={c} style={{ display: "block", whiteSpace: "nowrap" }}>
+              <label key={c} className="ev-menu__item">
                 <input type="checkbox" aria-label={`toggle ${c}`} checked={!hidden.has(c)} onChange={() => toggleColumn(c)} /> {c}
               </label>
             ))}
@@ -144,16 +115,13 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
       </div>
 
       {selected.size > 0 && (
-        <div
-          role="toolbar"
-          aria-label="batch actions"
-          style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}
-        >
-          <span style={{ fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>{selected.size} selected</span>
+        <div role="toolbar" aria-label="batch actions" className="ev-toolbar" style={{ marginBottom: 8 }}>
+          <span className="ev-toolbar__meta">{selected.size} selected</span>
           {batchFields.map((f) => (
-            <label key={f.name} style={{ fontSize: pxToRem(13) }}>
+            <label key={f.name} className="ev-health__filter">
               {f.name}:{" "}
               <select
+                className="ev-select"
                 aria-label={`batch ${f.name}`}
                 value=""
                 onChange={(e) => {
@@ -175,128 +143,136 @@ export function TableView({ spec, type, entities, invalid, users, refIndex, canW
         </div>
       )}
 
-      <table style={{ borderCollapse: "collapse", width: "100%" }}>
-        <thead>
-          <tr>
-            <th style={cellStyle}>
-              {/* §E — no multi-select / batch for a read-only member. */}
-              {!readOnly && (
-                <input type="checkbox" aria-label="select all" checked={allSelected} onChange={toggleAll} />
-              )}
-            </th>
-            <th style={cellStyle}>#</th>
-            {columns.map((c) => (
-              <th key={c} style={cellStyle}>
-                <button type="button" style={headerBtnStyle} onClick={() => cycleSort(c)}>
-                  {c}
-                  {sort?.column === c ? (sort.dir === "asc" ? " ▲" : " ▼") : ""}
-                </button>
-              </th>
-            ))}
-          </tr>
-          {hasFilters && (
+      <div className="ev-table-wrap scrollable">
+        <table className="ev-table">
+          <thead>
             <tr>
-              <th style={cellStyle} />
-              <th style={cellStyle} />
-              {columns.map((c) => {
-                const domain = filterDomain(c);
-                return (
-                  <th key={c} style={cellStyle}>
-                    {domain && (
-                      <select
-                        aria-label={`filter ${c}`}
-                        value={filters[c] ?? ""}
-                        onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
-                      >
-                        <option value="">All</option>
-                        {domain.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </th>
-                );
-              })}
+              <th className="ev-table__check">
+                {/* §E — no multi-select / batch for a read-only member. */}
+                {!readOnly && (
+                  <input type="checkbox" aria-label="select all" checked={allSelected} onChange={toggleAll} />
+                )}
+              </th>
+              <th className="ev-table__num">#</th>
+              {columns.map((c) => (
+                <th key={c}>
+                  <button
+                    type="button"
+                    className="ev-table__sort"
+                    data-sorted={sort?.column === c ? "" : undefined}
+                    onClick={() => cycleSort(c)}
+                  >
+                    {c}
+                    {sort?.column === c && <span className="ev-table__arrow">{sort.dir === "asc" ? "▲" : "▼"}</span>}
+                  </button>
+                </th>
+              ))}
             </tr>
-          )}
-        </thead>
-        <tbody>
-          {rows.map((e) => {
-            // A lint warning marks its field's cell yellow, still editable (§D).
-            const warn = warningsByField(e.diagnostics);
-            return (
-              <tr key={e.number}>
-                <td style={cellStyle}>
-                  {!readOnly && (
-                    <input
-                      type="checkbox"
-                      aria-label={`select ${e.number}`}
-                      checked={selected.has(e.number)}
-                      onChange={() => toggleRow(e.number)}
-                    />
-                  )}
-                </td>
-                <td style={cellStyle}>{e.number}</td>
+            {hasFilters && (
+              <tr className="ev-table__filters">
+                <th />
+                <th />
                 {columns.map((c) => {
-                  const warnMsg = warn[c];
-                  const td = warnMsg
-                    ? { style: { ...cellStyle, borderLeft: "3px solid var(--warn)" }, title: warnMsg }
-                    : { style: cellStyle };
-                  // A dotted `milestone.title` column follows the ref at render time
-                  // (§A4); a dangling target degrades to a marker, never a crash (§D).
-                  const traversal = refIndex ? traverseColumn(c, e, type, refIndex) : null;
-                  if (traversal) {
-                    return (
-                      <td key={c} {...td}>
-                        {traversal.dangling ? (
-                          <span title="referenced record not found" style={{ color: "var(--warn)" }}>
-                            {traversal.text}
-                          </span>
-                        ) : (
-                          traversal.text
-                        )}
-                      </td>
-                    );
-                  }
-                  const fieldSpec = roleOf(type, c);
-                  const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
+                  const domain = filterDomain(c);
                   return (
-                    <td key={c} {...td}>
-                      <RoleField
-                        widget={fieldSpec ? widgetForRole(fieldSpec.role) : "readonly"}
-                        name={fieldSpec?.name ?? c}
-                        value={e.fields[c]}
-                        values={fieldSpec?.values}
-                        users={users}
-                        refOptions={opts}
-                        disabled={busy || readOnly}
-                        onCommit={(next) => onPatch(e.number, { [c]: next })}
-                      />
-                    </td>
+                    <th key={c}>
+                      {domain && (
+                        <select
+                          className="ev-select"
+                          aria-label={`filter ${c}`}
+                          value={filters[c] ?? ""}
+                          onChange={(e) => setFilters((f) => ({ ...f, [c]: e.target.value }))}
+                        >
+                          <option value="">All</option>
+                          {domain.map((o) => (
+                            <option key={o.value} value={o.value}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </th>
                   );
                 })}
               </tr>
-            );
-          })}
-          {/* Unparseable records degrade to an error row (§D) — never dropped
-              silently; the raw body shows so the fix is visible. */}
-          {(invalid ?? []).map((e) => (
-            <tr key={`invalid-${e.number}`}>
-              <td style={cellStyle} />
-              <td style={{ ...cellStyle, color: "var(--err)" }}>#{e.number}</td>
-              <td colSpan={Math.max(columns.length, 1)} style={{ ...cellStyle, color: "var(--err)" }}>
-                {e.diagnostics
-                  .filter((d) => d.level === "error")
-                  .map((d) => d.message)
-                  .join("; ") || "unparseable record"}
-                {e.body ? ` — ${e.body.slice(0, 80)}` : ""}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+            )}
+          </thead>
+          <tbody>
+            {rows.map((e) => {
+              // A lint warning marks its field's cell yellow, still editable (§D).
+              const warn = warningsByField(e.diagnostics);
+              return (
+                <tr key={e.number}>
+                  <td className="ev-table__check">
+                    {!readOnly && (
+                      <input
+                        type="checkbox"
+                        aria-label={`select ${e.number}`}
+                        checked={selected.has(e.number)}
+                        onChange={() => toggleRow(e.number)}
+                      />
+                    )}
+                  </td>
+                  <td className="ev-table__num">{e.number}</td>
+                  {columns.map((c) => {
+                    const warnMsg = warn[c];
+                    const td = warnMsg
+                      ? { className: "ev-table__cell--warn", title: warnMsg }
+                      : {};
+                    // A dotted `milestone.title` column follows the ref at render time
+                    // (§A4); a dangling target degrades to a marker, never a crash (§D).
+                    const traversal = refIndex ? traverseColumn(c, e, type, refIndex) : null;
+                    if (traversal) {
+                      return (
+                        <td key={c} {...td}>
+                          {traversal.dangling ? (
+                            <span title="referenced record not found" style={{ color: "var(--warn)" }}>
+                              {traversal.text}
+                            </span>
+                          ) : (
+                            traversal.text
+                          )}
+                        </td>
+                      );
+                    }
+                    const fieldSpec = roleOf(type, c);
+                    const opts = fieldSpec?.role === "ref" && refIndex ? refOptions(fieldSpec, refIndex) : undefined;
+                    return (
+                      <td key={c} {...td}>
+                        <RoleField
+                          widget={fieldSpec ? widgetForRole(fieldSpec.role) : "readonly"}
+                          name={fieldSpec?.name ?? c}
+                          value={e.fields[c]}
+                          values={fieldSpec?.values}
+                          users={users}
+                          refOptions={opts}
+                          disabled={busy || readOnly}
+                          onCommit={(next) => onPatch(e.number, { [c]: next })}
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+            {/* Unparseable records degrade to an error row (§D) — never dropped
+                silently; the raw body shows so the fix is visible. */}
+            {(invalid ?? []).map((e) => (
+              <tr key={`invalid-${e.number}`} className="ev-table__row--error">
+                <td className="ev-table__check" />
+                <td className="ev-table__num">#{e.number}</td>
+                <td colSpan={Math.max(columns.length, 1)}>
+                  {e.diagnostics
+                    .filter((d) => d.level === "error")
+                    .map((d) => d.message)
+                    .join("; ") || "unparseable record"}
+                  {e.body ? ` — ${e.body.slice(0, 80)}` : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

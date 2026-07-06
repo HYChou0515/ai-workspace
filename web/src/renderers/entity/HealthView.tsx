@@ -13,21 +13,16 @@
 import { useMemo, useState } from "react";
 
 import type { EntityHealthFinding } from "../../api/entities";
-import { pxToRem } from "../../lib/pxToRem";
-
-const rowStyle: React.CSSProperties = { display: "flex", gap: 8, padding: "4px 0", width: "100%", textAlign: "left" };
 
 function FindingRow({ finding, onJump }: { finding: EntityHealthFinding; onJump?: (f: EntityHealthFinding) => void }) {
   const f = finding;
   const body = (
     <>
-      <span style={{ color: f.level === "error" ? "var(--err)" : "var(--warn)", fontWeight: 600, minWidth: 64 }}>
-        {f.level}
-      </span>
-      <span style={{ minWidth: 90 }}>
+      <span className={`ev-level ev-level--${f.level === "error" ? "error" : "warning"}`}>{f.level}</span>
+      <span className="ev-finding__loc">
         {f.type_name} #{f.number}
       </span>
-      <span>
+      <span className="ev-finding__msg">
         {f.message}
         {f.field ? ` (${f.field})` : ""}
       </span>
@@ -37,16 +32,15 @@ function FindingRow({ finding, onJump }: { finding: EntityHealthFinding; onJump?
   // `onJump` it stays a plain row (no dead a11y button).
   if (onJump) {
     return (
-      <button
-        type="button"
-        onClick={() => onJump(f)}
-        style={{ ...rowStyle, background: "none", border: "none", cursor: "pointer", font: "inherit", color: "inherit" }}
-      >
+      <button type="button" className="ev-finding" onClick={() => onJump(f)}>
         {body}
+        <span className="ev-finding__jump" aria-hidden>
+          →
+        </span>
       </button>
     );
   }
-  return <div style={rowStyle}>{body}</div>;
+  return <div className="ev-finding">{body}</div>;
 }
 
 export function HealthView({
@@ -79,27 +73,43 @@ export function HealthView({
   );
 
   return (
-    <div style={{ padding: 12 }}>
-      <h3 style={{ margin: "0 0 10px" }}>{title ?? "Health"}</h3>
+    <div className="ev-panel">
+      <div className="ev-panel__head">
+        <h3 className="ev-panel__title">{title ?? "Health"}</h3>
+      </div>
       {findings.length === 0 ? (
-        <div style={{ color: "var(--ok)" }}>All records are healthy — no findings.</div>
+        <div className="ev-empty">
+          <span className="ev-empty__icon" aria-hidden>
+            ✓
+          </span>
+          <div className="ev-ok">All records are healthy — no findings.</div>
+        </div>
       ) : (
         <>
-          <div style={{ marginBottom: 8, fontSize: pxToRem(13), color: "var(--text-paper-d)" }}>
-            {errors} error{errors === 1 ? "" : "s"}, {warnings} warning{warnings === 1 ? "" : "s"}
+          <div className="ev-health__summary">
+            {errors > 0 && (
+              <span className="ev-level ev-level--error">
+                {errors} error{errors === 1 ? "" : "s"}
+              </span>
+            )}
+            {warnings > 0 && (
+              <span className="ev-level ev-level--warning">
+                {warnings} warning{warnings === 1 ? "" : "s"}
+              </span>
+            )}
           </div>
-          <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap", fontSize: pxToRem(13) }}>
-            <label>
+          <div className="ev-health__filters">
+            <label className="ev-health__filter">
               level{" "}
-              <select aria-label="filter level" value={level} onChange={(e) => setLevel(e.target.value)}>
+              <select className="ev-select" aria-label="filter level" value={level} onChange={(e) => setLevel(e.target.value)}>
                 <option value="">all</option>
                 <option value="error">error</option>
                 <option value="warning">warning</option>
               </select>
             </label>
-            <label>
+            <label className="ev-health__filter">
               type{" "}
-              <select aria-label="filter type" value={type} onChange={(e) => setType(e.target.value)}>
+              <select className="ev-select" aria-label="filter type" value={type} onChange={(e) => setType(e.target.value)}>
                 <option value="">all</option>
                 {types.map((t) => (
                   <option key={t} value={t}>
@@ -108,9 +118,9 @@ export function HealthView({
                 ))}
               </select>
             </label>
-            <label>
+            <label className="ev-health__filter">
               field{" "}
-              <select aria-label="filter field" value={field} onChange={(e) => setField(e.target.value)}>
+              <select className="ev-select" aria-label="filter field" value={field} onChange={(e) => setField(e.target.value)}>
                 <option value="">all</option>
                 {fields.map((f) => (
                   <option key={f} value={f}>
@@ -121,11 +131,13 @@ export function HealthView({
             </label>
           </div>
           {shown.length === 0 ? (
-            <div style={{ color: "var(--text-paper-d)" }}>No findings match the current filters.</div>
+            <div className="ev-empty">
+              <div>No findings match the current filters.</div>
+            </div>
           ) : (
-            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+            <ul className="ev-health__list">
               {shown.map((f, i) => (
-                <li key={`${f.type_name}-${f.number}-${i}`} style={{ borderBottom: "1px solid var(--paper-3)" }}>
+                <li key={`${f.type_name}-${f.number}-${i}`} className="ev-health__item">
                   <FindingRow finding={f} onJump={onJump} />
                 </li>
               ))}
