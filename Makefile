@@ -34,8 +34,9 @@ release:
 	pep="$$(echo "$${new#v}" | sed -E 's/(^|\.)0+([0-9])/\1\2/g')"; \
 	echo "release → $$new  (pyproject version $$pep)"; \
 	sed -i "s/^version = .*/version = \"$$pep\"/" pyproject.toml; \
+	uv lock --quiet; \
 	uv run git-cliff --unreleased --tag "$$new" --prepend $(CHANGELOG_FILE); \
-	git add pyproject.toml $(CHANGELOG_FILE); \
+	git add pyproject.toml uv.lock $(CHANGELOG_FILE); \
 	git commit -m "bump $$new"; \
 	git tag "$$new"; \
 	echo "✅ 已 commit \"bump $$new\" 並建立本地 tag $$new。接著執行:"; \
