@@ -45,6 +45,10 @@ if TYPE_CHECKING:
 # consumer-ack timeout) so a slow-but-live run is never falsely failed.
 INDEX_SWEEP_INTERVAL_S = 300.0
 INDEX_STUCK_AFTER_S = 3600.0
+# #479: how often the daily-reflection sweeper wakes to check whether any prose
+# wiki collection is due (the actual cadence is once-a-day per collection, gated on
+# last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
+_WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
 
 
 def _utcnow() -> datetime:
@@ -68,6 +72,7 @@ def build_lifespan(
     max_workspace_bytes: int,
     code_sync_check_interval: timedelta | None,
     code_daily_sync: str | None = None,
+    wiki_reflect_daily: str | None = None,
     gc_interval: timedelta | None,
     gc_t1: str,
     gc_t2: str,
@@ -117,6 +122,29 @@ def build_lifespan(
                 # tick enqueues code_sync jobs; the jobs themselves clone+ingest
                 # and chain into the build (no per-cid trigger needed here).
                 await asyncio.to_thread(sweeper.tick)
+        except asyncio.CancelledError:
+            return
+
+    async def reflect_sweeper(app: FastAPI) -> None:
+        """#479: enqueue a ``reflect`` job for every prose wiki Collection due for
+        its daily wall-clock consolidation. A pure producer — the survey/plan/apply
+        runs in the enqueued job on the wiki worker (#312), not here. Read
+        ``app.state.wiki_coordinator`` post-construction, like ``code_sync_sweeper``.
+        Gated on ``wiki_reflect_daily`` being set (caller)."""
+        from ..kb.wiki.reflect_sweeper import WikiReflectSweeper
+
+        sweeper = WikiReflectSweeper(
+            spec,
+            enqueue=app.state.wiki_coordinator.enqueue_reflect,
+            reflect_daily=wiki_reflect_daily,
+        )
+        try:
+            while True:
+                # Tick first (then sleep): a pod that starts after the daily time
+                # catches up its due collections immediately instead of waiting a
+                # whole poll interval; the once-a-day gate prevents a re-run.
+                await asyncio.to_thread(sweeper.tick)
+                await asyncio.sleep(_WIKI_REFLECT_CHECK_INTERVAL_S)
         except asyncio.CancelledError:
             return
 
@@ -280,6 +308,10 @@ def build_lifespan(
         # trigger the heavy round on demand via the FE / POST /health/checks/run.
         if code_sync_check_interval is not None:
             bg.append(asyncio.create_task(code_sync_sweeper(app)))
+        if wiki_reflect_daily:
+            # #479: daily wiki-reflection producer (a code collection is skipped by
+            # the sweeper; "" / null in kb.wiki.reflect_daily disables it here).
+            bg.append(asyncio.create_task(reflect_sweeper(app)))
         if gc_interval is not None:
             # #245: seed the CAS lease, then run the orphan-blob GC on a schedule.
             register_gc_lease(spec)

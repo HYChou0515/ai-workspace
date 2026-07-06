@@ -804,7 +804,12 @@ class WikiMaintenanceCoordinator:
         reflection never wedges the partition (same discipline as a fold). Page
         writes (reorg via the guarded store + the journal via the raw store) are
         credited to the triggering user (#83) — both stores share the wiki store's
-        manager, so one ``acting_as`` covers the whole run."""
+        manager, so one ``acting_as`` covers the whole run.
+
+        ``last_reflected_at`` is stamped on every run — success OR failure — like
+        the code sync's ``git_last_pulled_at``, so the daily sweeper's once-a-day
+        gate fires a due collection at most once even if the reflection keeps
+        failing (no every-tick retry storm)."""
         cid = payload.collection_id
         if self._reflector is None:  # pragma: no cover — enqueue_reflect guards this
             self._record_code_error(cid, "wiki LLM not configured (set kb.wiki.llm)")
@@ -824,7 +829,6 @@ class WikiMaintenanceCoordinator:
                         ),
                     )
                 )
-            self._stamp_reflected(cid, triggered_by)
         except Exception:
             _LOGGER.exception("wiki reflection failed for %s", cid)
             self._update_state(
@@ -833,6 +837,8 @@ class WikiMaintenanceCoordinator:
                     s, errors=s.errors + 1, last_error=s.last_error or "the reflection run failed"
                 ),
             )
+        # Stamp on attempt (not only success) — the daily gate's once-a-day marker.
+        self._stamp_reflected(cid, triggered_by)
         self._update_state(cid, lambda s: msgspec.structs.replace(s, current=None, phase=None))
 
     def _collection_name(self, cid: str) -> str:

@@ -351,6 +351,11 @@ class WikiSettings:
     )
     maintainer_max_turns: int = 40
     reader_max_turns: int = 24
+    # Issue #479: server-local "HH:MM" wall-clock time the daily wiki *reflection*
+    # (consolidation) fires for every PROSE wiki collection — same shape as
+    # kb.git.daily_sync. Reuses the wiki `llm` above. "" / None ⇒ the daily reflect
+    # is OFF (manual POST /wiki/reflect only). A code collection is never reflected.
+    reflect_daily: str | None = "04:00"
 
 
 @dataclass(frozen=True)

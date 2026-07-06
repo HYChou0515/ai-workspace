@@ -300,6 +300,8 @@ def main() -> None:
             ),
             # #355: the server-local daily auto-sync time for code collections.
             code_daily_sync=settings.kb.git.daily_sync,
+            # #479: the server-local daily wiki-reflection time for prose collections.
+            wiki_reflect_daily=settings.kb.wiki.reflect_daily,
             # #429 P7: schedule-trigger sweeper cadence. 0 ⇒ off (headless time-triggered
             # workflows are opt-in per deploy).
             trigger_check_interval=(

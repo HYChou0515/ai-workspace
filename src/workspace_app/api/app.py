@@ -191,6 +191,10 @@ def create_app(
     # auto-sync fires (None ⇒ off). __main__ derives this from
     # Settings.kb.git.daily_sync.
     code_daily_sync: str | None = None,
+    # #479: server-local "HH:MM" wall-clock time the daily wiki reflection
+    # (consolidation) fires for prose wiki collections (None/"" ⇒ off). __main__
+    # derives this from Settings.kb.wiki.reflect_daily.
+    wiki_reflect_daily: str | None = None,
     read_file_max_lines: int = 2000,
     read_file_max_chars: int = 200_000,
     exec_output_max_chars: int = 30_000,
@@ -397,6 +401,7 @@ def create_app(
         max_workspace_bytes=max_workspace_bytes,
         code_sync_check_interval=code_sync_check_interval,
         code_daily_sync=code_daily_sync,
+        wiki_reflect_daily=wiki_reflect_daily,
         gc_interval=gc_interval,
         gc_t1=gc_t1,
         gc_t2=gc_t2,
