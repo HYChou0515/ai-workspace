@@ -77,6 +77,44 @@ def _doc_file_id(doc: SourceDoc) -> str:
     return fid
 
 
+def rehome_shared_chunks(spec: SpecStar, doc_id: str) -> None:
+    """#104: call BEFORE tearing a doc down (delete / move). If the doc OWNS a
+    deduped chunk set — identical content also lives at other paths in the same
+    collection — re-home those chunks to a surviving sibling so the aliases stay
+    searchable instead of going dark when the owner's cascade drops them.
+
+    No-op when the doc owns no chunks (it is itself an alias, or empty) or is the
+    content's sole holder — there the caller's normal cascade delete is correct.
+    (A pre-#104 chunk carries ``source_file_id=""``, which matches no real
+    ``content.file_id``, so it naturally falls through to the sole-holder case.)"""
+    chrm = spec.get_resource_manager(DocChunk)
+    owned = chrm.list_resources((QB["source_doc_id"] == doc_id).limit(1).build())
+    if not owned:
+        return
+    chunk0 = owned[0].data
+    assert isinstance(chunk0, DocChunk)
+    srm = spec.get_resource_manager(SourceDoc)
+    owner = srm.get(doc_id).data
+    assert isinstance(owner, SourceDoc)
+    sibling: str | None = None
+    for r in srm.list_resources(
+        (
+            (QB["collection_id"] == owner.collection_id) & (QB["file_id"] == chunk0.source_file_id)
+        ).build()
+    ):
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        if rid != doc_id:
+            sibling = rid
+            break
+    if sibling is None:
+        return
+    for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        chrm.update(rid, msgspec.structs.replace(chunk, source_doc_id=sibling))
+
+
 class _IndexOutput(NamedTuple):
     """What one index pass hands back to ``index()``.
 
@@ -414,6 +452,11 @@ class Ingestor:
         )
         doc = drm.get(doc_id).data
         assert isinstance(doc, SourceDoc)
+        # #104 dedup gate: identical bytes already chunked in this collection →
+        # alias to the owner instead of re-chunking/embedding. Runs before the
+        # (expensive) blob restore so an alias never loads the content.
+        if self._alias_to_existing_content(doc_id, doc, source_doc_rm=drm):
+            return
         raw = drm.restore_binary(doc).content.data
         assert isinstance(raw, bytes)
         try:
@@ -451,6 +494,52 @@ class Ingestor:
                 token_count=count_tokens(text or ""),  # #88: chunk-based token estimate
             ),
         )
+
+    def _alias_to_existing_content(
+        self, doc_id: str, doc: SourceDoc, *, source_doc_rm: IResourceManager[SourceDoc]
+    ) -> bool:
+        """#104 dedup gate: if this exact content is already chunked in the
+        collection by ANOTHER doc, alias to it — copy that owner's extracted
+        ``text`` (so the wiki + retrieval can read this path) and flip ``ready``
+        WITHOUT creating any chunks — and return True. The shared chunk set (keyed
+        by ``source_file_id``) already serves every path, so re-chunking/embedding
+        identical bytes is pure waste. Returns False (→ index normally) when this
+        is the content's first doc, or when this doc IS the chunk owner being
+        re-indexed (the ``!= doc_id`` clause excludes its own chunks)."""
+        sfid = _doc_file_id(doc)
+        chrm = self._spec.get_resource_manager(DocChunk)
+        existing = chrm.list_resources(
+            (
+                (QB["collection_id"] == doc.collection_id)
+                & (QB["source_file_id"] == sfid)
+                & (QB["source_doc_id"] != doc_id)
+            )
+            .limit(1)
+            .build()
+        )
+        if not existing:
+            return False
+        chunk = existing[0].data
+        assert isinstance(chunk, DocChunk)
+        owner = source_doc_rm.get(chunk.source_doc_id).data
+        assert isinstance(owner, SourceDoc)
+        self._delete_chunks(doc_id)  # drop any partial chunks from a prior attempt
+        source_doc_rm.update(
+            doc_id,
+            msgspec.structs.replace(
+                doc,
+                status="ready",
+                status_detail="",
+                # Carry the owner's derived render surfaces so this path reads +
+                # views identically without re-parsing: `text` feeds the wiki +
+                # retrieval, `preview` feeds the doc viewer (a pptx/PDF alias would
+                # otherwise show a download notice), `token_count` the #88 estimate.
+                text=owner.text,
+                preview=owner.preview,
+                token_count=owner.token_count,
+            ),
+        )
+        return True
 
     @staticmethod
     def _extract(mime: str, data: bytes) -> list[tuple[str, bytes]]:
@@ -935,6 +1024,11 @@ class Ingestor:
         drm = self._spec.get_resource_manager(SourceDoc)
         doc = drm.get(doc_id).data
         assert isinstance(doc, SourceDoc)
+        # #104 dedup: identical content already chunked in this collection → alias
+        # to the owner instead of copying a duplicate chunk set (the cache hit told
+        # us the content matches; the collection sibling owns the shared chunks).
+        if self._alias_to_existing_content(doc_id, doc, source_doc_rm=drm):
+            return True
         self._delete_chunks(doc_id)  # clear any partial chunks before the copy
         chrm = self._spec.get_resource_manager(DocChunk)
         for c in entry.chunks:

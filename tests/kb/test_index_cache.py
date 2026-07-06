@@ -108,11 +108,12 @@ def test_store_get_returns_none_on_miss(spec):
     assert IndexCacheStore(spec).get("no-such-key") is None
 
 
-def test_cache_roundtrip_reuses_chunks_across_paths(
+def test_cache_roundtrip_dedups_content_across_paths(
     spec, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
-    # Index a doc, cache its result, then a SECOND doc with the SAME bytes at a
-    # DIFFERENT path reuses those chunks via the cache — no re-index needed.
+    # #104: index a doc, cache its result, then a SECOND doc with the SAME bytes
+    # at a DIFFERENT path is DEDUPED via the cache fast-path — it aliases doc1's
+    # chunk set (0 own chunks) instead of copying a duplicate.
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
     data = b"hello world one two three four five"
@@ -123,12 +124,12 @@ def test_cache_roundtrip_reuses_chunks_across_paths(
     assert doc2 != doc1
     assert _chunk_view(spec, doc2) == []  # stored, not indexed yet
 
-    assert ing.copy_from_cache(doc2) is True
-    view1, view2 = _chunk_view(spec, doc1), _chunk_view(spec, doc2)
-    assert view2 and view2 == view1  # identical chunks + vectors, reused
+    assert ing.copy_from_cache(doc2) is True  # handled (aliased) — caller won't enqueue
+    assert _chunk_view(spec, doc2) == []  # deduped: no duplicate chunk set
+    assert _chunk_view(spec, doc1)  # the canonical still owns the shared chunks
     doc = spec.get_resource_manager(SourceDoc).get(doc2).data
     assert isinstance(doc, SourceDoc) and doc.status == "ready"
-    assert doc.text == data.decode()
+    assert doc.text == data.decode()  # alias carries the extracted text
 
 
 def test_copy_from_cache_miss_returns_false(spec, chunker, embedder):
