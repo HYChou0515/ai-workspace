@@ -278,11 +278,12 @@ def _agent_for(
     if config.disabled_tools:
         from ..tooling.catalog import picker_units
 
+        # `picker_units` yields one meta per name and the renderer is non-empty
+        # for non-empty metas, so this is always a real section here.
         disabled_section = format_disabled_tools_for_prompt(
             picker_units(config.disabled_tools, packages or [])
         )
-        if disabled_section:
-            base = f"{base}\n\n{disabled_section}".strip() if base else disabled_section
+        base = f"{base}\n\n{disabled_section}".strip() if base else disabled_section
     # Defend against the streaming-aggregator bug (small models emit two
     # parallel tool_calls; LiteLLM merges their `arguments` into one JSON-
     # concatenated mess the SDK can't parse). Each tool is wrapped to peel

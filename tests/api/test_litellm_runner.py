@@ -594,9 +594,21 @@ def test_agent_for_advertises_disabled_tools_without_making_them_callable():
         name="ws", system_prompt="Base.", allowed_tools=[], disabled_tools=["make_deck"]
     )
     agent = _agent_for(cfg)
+    assert isinstance(agent.instructions, str)
     assert "## Tools available on request" in agent.instructions
     assert "make_deck" in agent.instructions  # advertised by name
     assert "make_deck" not in {t.name for t in agent.tools}  # but not callable
+
+
+def test_agent_for_disabled_section_is_whole_prompt_when_no_base():
+    """#480: with no base prompt and no callable tools, the disabled section
+    becomes the entire instructions (the empty-base branch)."""
+    from workspace_app.api.litellm_runner import _agent_for
+
+    cfg = AgentConfig(name="ws", system_prompt="", allowed_tools=[], disabled_tools=["make_deck"])
+    agent = _agent_for(cfg)
+    assert isinstance(agent.instructions, str)
+    assert agent.instructions.startswith("## Tools available on request")
 
 
 def test_agent_for_omits_disabled_section_when_none_disabled():
@@ -604,6 +616,7 @@ def test_agent_for_omits_disabled_section_when_none_disabled():
     from workspace_app.api.litellm_runner import _agent_for
 
     agent = _agent_for(AgentConfig(name="ws", allowed_tools=["read_file"]))
+    assert isinstance(agent.instructions, str)
     assert "## Tools available on request" not in agent.instructions
 
 
@@ -614,6 +627,7 @@ def test_agent_for_disabled_section_follows_the_callable_inventory():
 
     cfg = AgentConfig(name="ws", allowed_tools=["read_file"], disabled_tools=["make_deck"])
     agent = _agent_for(cfg)
+    assert isinstance(agent.instructions, str)
     assert agent.instructions.index("## Tools available") < agent.instructions.index(
         "## Tools available on request"
     )
@@ -633,6 +647,7 @@ def test_agent_for_advertises_disabled_package_selector():
     )
     cfg = AgentConfig(name="ws", allowed_tools=["read_file"], disabled_tools=["rca-tools"])
     agent = _agent_for(cfg, packages=[pkg])
+    assert isinstance(agent.instructions, str)
     assert "rca-tools" in agent.instructions
     assert "rca-tools" not in {t.name for t in agent.tools}
 

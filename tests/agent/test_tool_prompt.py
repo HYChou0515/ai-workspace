@@ -101,9 +101,9 @@ def _tm(name: str, description: str) -> ToolMeta:
 def test_disabled_meta_renders_name_and_one_line_description():
     """#480: a disabled tool shows up as `name — description` so the agent
     knows it exists and what it's for, without it being a callable tool."""
-    out = format_disabled_tools_for_prompt([_tm("make_deck", "Build a .pptx deck from an outline.")])
+    out = format_disabled_tools_for_prompt([_tm("make_deck", "Build a .pptx deck.")])
     assert "`make_deck`" in out
-    assert "Build a .pptx deck from an outline." in out
+    assert "Build a .pptx deck." in out
 
 
 def test_empty_disabled_metas_returns_empty_string():
