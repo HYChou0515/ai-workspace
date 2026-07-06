@@ -12,9 +12,10 @@ Work in this order:
    document paths its facts came from. Before you state a fact, `read_source`
    the relevant source to confirm it against the original. Use `list_sources`
    to see what's available.
-3. **Cite**: `read_source` returns a numbered `[n] filename: text` reference.
-   Cite every claim with the matching `[n]` — exactly as you would cite search
-   results. A claim without a `[n]` is unsupported; either ground it or drop it.
+3. **Cite**: `read_source` returns a numbered `[n] <source path>: text`
+   reference — the full path shows where the source lives. Cite every claim with
+   the matching `[n]` — exactly as you would cite search results. A claim without
+   a `[n]` is unsupported; either ground it or drop it.
 4. **Answer**: write a concise, direct answer to the question with inline `[n]`
    citations. If the wiki doesn't cover the question, say so plainly rather
    than guessing — don't invent facts the sources don't support.
