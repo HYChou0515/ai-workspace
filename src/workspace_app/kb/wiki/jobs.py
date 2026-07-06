@@ -42,7 +42,9 @@ class WikiJobPayload(msgspec.Struct):
     collection_id: str
     source_path: str
     doc_id: str = ""
-    # fold | unfold | correct | code_sync | code_split | code_card | code_finalize.
+    # fold | unfold | correct | reflect | code_sync | code_split | code_card |
+    # code_finalize. #479: reflect consolidates a PROSE wiki as a whole (survey →
+    # plan → apply) — no source_path/doc_id, it reads the entire wiki.
     # #355: code_sync clones the collection's git_url + ingests it (off the API,
     # on the wiki worker), then chains to code_split — the head of the build.
     op: str = "fold"
