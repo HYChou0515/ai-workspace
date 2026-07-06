@@ -77,6 +77,26 @@ def test_help_tags_release_notes_vs_guides():
     assert all(d["id"] for d in docs.values())
 
 
+def test_help_releases_returns_structured_versions():
+    # #441: the /help/releases view reads the packaged CHANGELOG.md (git-cliff
+    # output) and returns it as structured releases. Needs no seed — it reads the
+    # packaged file, not the KB collection.
+    client, _ = _app()
+
+    r = client.get("/help/releases")
+
+    assert r.status_code == 200
+    releases = r.json()["releases"]
+    assert isinstance(releases, list)
+    # Every release carries the version + grouped sections shape the FE renders.
+    for rel in releases:
+        assert rel["version"]
+        assert isinstance(rel["unreleased"], bool)
+        for sec in rel["sections"]:
+            assert sec["group"]
+            assert isinstance(sec["items"], list)
+
+
 def test_help_works_before_anything_is_seeded():
     # No boot seed in this harness; the route still returns a usable collection
     # id (created on demand) and an empty document list — never a 404.

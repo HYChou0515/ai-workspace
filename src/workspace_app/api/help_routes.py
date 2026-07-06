@@ -14,7 +14,8 @@ from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 from specstar import QB, SpecStar
 
-from ..kb.help_collection import ensure_help_collection
+from ..kb.changelog import Release, parse_changelog
+from ..kb.help_collection import ensure_help_collection, help_content_dir
 from ..resources.kb import SourceDoc
 
 
@@ -31,6 +32,13 @@ class HelpDocument(BaseModel):
 class HelpInfo(BaseModel):
     collection_id: str
     documents: list[HelpDocument]
+
+
+class ReleasesInfo(BaseModel):
+    """The CHANGELOG parsed into structured, newest-first releases for the web
+    /help/releases view (#441)."""
+
+    releases: list[Release]
 
 
 def _kind(path: str) -> str:
@@ -64,3 +72,10 @@ def register_help_routes(app: FastAPI | APIRouter, spec: SpecStar) -> None:
         # Guides first, then release notes; stable by path within each group.
         docs.sort(key=lambda d: (d.kind == "release_notes", d.path))
         return HelpInfo(collection_id=cid, documents=docs)
+
+    @app.get("/help/releases")
+    async def help_releases() -> ReleasesInfo:
+        # The packaged CHANGELOG.md (git-cliff output) is the source of truth and
+        # ships with the wheel, so it is always readable — no KB round-trip.
+        text = (help_content_dir() / "CHANGELOG.md").read_text(encoding="utf-8")
+        return ReleasesInfo(releases=parse_changelog(text))

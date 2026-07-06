@@ -109,6 +109,7 @@ nav:
       - 擴充平台（Tools / Skills / Workflows）: extending-the-platform.md
       - 撰寫 Workflow: workflows-authoring.md
       - 共創 Skills: skills-authoring.md
+      - 發布與更新紀錄: releasing.md
   - 功能手冊:
       - Workflows 規格: workflows.md
       - Workflow 視覺手冊（全語法 + 動畫）: workflows-syntax.html

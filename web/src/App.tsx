@@ -12,6 +12,7 @@ import { HelpPage } from "./pages/HelpPage";
 import { KbDocPage } from "./pages/kb/KbDocPage";
 import { kbRoutes } from "./pages/kb/kbRoutes";
 import { Launcher } from "./pages/Launcher";
+import { ReleasesPage } from "./pages/ReleasesPage";
 
 /**
  * AppRoutes is router-agnostic — the host (production: <BrowserRouter>,
@@ -48,6 +49,8 @@ export function AppRoutes() {
         {/* #230: the platform help / intro page (usage guides + release notes +
             an AI that answers how-to questions over the Help collection). */}
         <Route path="/help" element={<HelpPage />} />
+        {/* #441: structured, per-version release notes (the /help card links here). */}
+        <Route path="/help/releases" element={<ReleasesPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Route>
     </Routes>

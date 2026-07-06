@@ -1,6 +1,6 @@
 [project]
 name = "workspace-app"
-version = "0.1.0"
+version = "2026.7.6"
 description = "Workspace management app with pluggable sandbox + agent runtime"
 requires-python = ">=3.12"
 dependencies = [
@@ -50,6 +50,9 @@ dev = [
     "coverage>=7",
     "asgi-lifespan>=2.1.0",
     "pytest-xdist>=3.8.0",
+    # Generates CHANGELOG.md from Conventional Commits (#441). See cliff.toml +
+    # the `changelog-preview` / `release` Makefile targets.
+    "git-cliff>=2.0.0",
 ]
 # Documentation site (mkdocs + Material). Build: `uv run --group docs mkdocs build`;
 # serve locally: `uv run --group docs mkdocs serve`. Not needed by the app or the CI gate.

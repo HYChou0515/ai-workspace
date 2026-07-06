@@ -71,7 +71,6 @@ export function HelpPage({
   const { data } = useQuery({ queryKey: qk.help, queryFn: () => client.getHelpInfo() });
   const docs = useMemo(() => data?.documents ?? [], [data]);
   const guides = useMemo(() => docs.filter((d) => d.kind !== "release_notes"), [docs]);
-  const releases = useMemo(() => docs.filter((d) => d.kind === "release_notes"), [docs]);
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto", padding: "24px 20px", width: "100%" }}>
@@ -90,7 +89,28 @@ export function HelpPage({
       >
         <div style={{ flex: "1 1 280px", minWidth: 240 }}>
           <DocList title={t("help.guides")} docs={guides} />
-          <DocList title={t("help.releaseNotes")} docs={releases} />
+          <section style={{ marginBottom: 20 }}>
+            <h2 style={{ fontSize: pxToRem(13), fontWeight: 700, color: "var(--text-paper-d)", margin: "0 0 8px" }}>
+              {t("help.releaseNotes")}
+            </h2>
+            <Link
+              to="/help/releases"
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                padding: "8px 12px",
+                border: "1px solid var(--paper-3)",
+                borderRadius: "var(--radius-card)",
+                background: "var(--white)",
+                color: "inherit",
+                textDecoration: "none",
+              }}
+            >
+              <Icon name="file" size={14} color="var(--text-paper-d)" />
+              {t("help.releaseNotes.view")}
+            </Link>
+          </section>
           {data && docs.length === 0 && (
             <p style={{ color: "var(--text-paper-d)" }}>{t("help.empty")}</p>
           )}

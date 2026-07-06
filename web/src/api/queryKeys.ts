@@ -91,6 +91,9 @@ export const qk = {
   // #230: the platform Help page payload (Help collection id + its documents).
   help: ["help"] as const,
 
+  // #441: the CHANGELOG parsed into structured releases for /help/releases.
+  helpReleases: ["help", "releases"] as const,
+
   kb: {
     all: ["kb"] as const,
     collections: ["kb", "collections"] as const,
