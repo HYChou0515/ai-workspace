@@ -544,6 +544,9 @@
 }
 .ev-gantt__scroll {
   overflow-x: auto;
+  /* hug the chart instead of stretching a half-empty card across the pane */
+  width: fit-content;
+  max-width: 100%;
   border: 1px solid var(--paper-3);
   border-radius: var(--radius-card);
   background: var(--white);
@@ -578,6 +581,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 var(--space-8);
+  /* hairline per row, aligned with the canvas rows for a continuous grid */
+  border-bottom: 1px solid color-mix(in srgb, var(--paper-3) 55%, transparent);
   font-size: var(--text-body-sm);
   color: var(--text-paper);
 }
@@ -588,8 +593,19 @@
   position: relative;
   flex: 0 0 auto;
 }
+/* full-height weekly gridlines behind the bars (painted over by the axis's own
+ * background above, so they read as ticks dropping down the chart). */
+.ev-gantt__gridline {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--paper-3) 65%, transparent);
+  pointer-events: none;
+}
 .ev-gantt__axis {
   position: relative;
+  z-index: 1;
   border-bottom: 1px solid var(--paper-3);
   background: var(--paper-2);
 }
@@ -600,14 +616,15 @@
   display: flex;
   align-items: center;
   padding-left: var(--space-4);
-  border-left: 1px solid var(--paper-3);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   color: var(--text-paper-d);
   white-space: nowrap;
 }
+/* a lane section divider spanning the whole chart width. */
 .ev-gantt__lane-band {
-  background: var(--paper-2);
+  background: color-mix(in srgb, var(--paper-2) 60%, transparent);
+  border-bottom: 1px solid var(--paper-3);
 }
 .ev-gantt__today {
   position: absolute;
@@ -616,29 +633,45 @@
   width: 2px;
   background: var(--accent);
   opacity: 0.7;
+  z-index: 2;
 }
 .ev-gantt__bar-row {
   position: relative;
-}
-.ev-gantt__bar-row:hover {
-  background: var(--paper-2);
+  border-bottom: 1px solid color-mix(in srgb, var(--paper-3) 55%, transparent);
 }
 .ev-gantt__bar {
   position: absolute;
-  top: 4px;
-  bottom: 4px;
-  background: var(--accent);
+  top: 5px;
+  bottom: 5px;
+  display: flex;
+  align-items: center;
+  /* a soft vertical gradient reads calmer than a flat slab of pure accent */
+  background: linear-gradient(180deg, var(--accent), var(--accent-h));
   border-radius: var(--radius-chip);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.14);
   cursor: grab;
   touch-action: none;
-  transition: filter 0.12s;
+  overflow: hidden;
+  transition: filter 0.12s, box-shadow 0.12s;
 }
 .ev-gantt__bar:hover {
-  filter: brightness(1.06);
+  filter: brightness(1.05);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 .ev-gantt__bar[data-busy="1"] {
   cursor: default;
+}
+/* the task name rides inside the bar (light text on accent) so you read the
+ * chart without cross-referencing the gutter; clipped when the bar is short. */
+.ev-gantt__bar-label {
+  padding: 0 var(--space-8);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
 }
 .ev-gantt__handle {
   position: absolute;
@@ -646,6 +679,7 @@
   bottom: 0;
   width: 7px;
   cursor: ew-resize;
+  z-index: 1;
 }
 .ev-gantt__handle--start {
   left: 0;

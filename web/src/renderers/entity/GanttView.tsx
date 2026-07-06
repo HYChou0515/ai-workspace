@@ -141,7 +141,7 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
             className="btn"
             data-variant={zoom === z ? "primary" : "secondary"}
             data-size="sm"
-            data-active={zoom === z}
+            data-active={zoom === z || undefined}
             aria-label={`zoom ${z}`}
             onClick={() => setZoom(z)}
           >
@@ -171,8 +171,11 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
             ))}
           </div>
 
-          {/* right timeline: axis ticks + today line + bars */}
+          {/* right timeline: gridlines + axis ticks + today line + bars */}
           <div className="ev-gantt__canvas" style={{ width: chartWidth }}>
+            {ticks.map((t) => (
+              <div key={`grid-${t}`} className="ev-gantt__gridline" style={{ left: xOf(t) }} />
+            ))}
             <div className="ev-gantt__axis" style={{ height: AXIS_H }}>
               {ticks.map((t) => (
                 <span key={t} className="ev-gantt__tick" style={{ left: xOf(t) }}>
@@ -202,6 +205,9 @@ export function GanttView({ spec, type, entities, refIndex, onPatch, busy }: Ent
                         onPointerDown={(e) => startDrag(row.e.number, "move", e)}
                         style={{ left, width }}
                       >
+                        <span className="ev-gantt__bar-label">
+                          {fieldText(row.e.fields[labelField]) || `#${row.e.number}`}
+                        </span>
                         <div
                           data-testid={`bar-${row.e.number}-start`}
                           className="ev-gantt__handle ev-gantt__handle--start"
