@@ -234,6 +234,12 @@ class AppCatalog:
         # override ceiling is the App's `tools`, NOT the profile — a force-ON can
         # re-add a tool the profile narrowed away. Keys outside the ceiling no-op.
         tools = _apply_tool_prefs(default_tools, manifest.agent.tools, tool_prefs)
+        # #480: the ceiling tools that resolved OFF. Surfaced to the agent as a
+        # prompt-only "available on request" section (not registered callable),
+        # so it knows they exist, avoids them by default, and can ask the user to
+        # enable one. Ceiling order preserved; disjoint from `tools`.
+        enabled = set(tools)
+        disabled_tools = [t for t in manifest.agent.tools if t not in enabled]
 
         # allowed presets — profile subset of the App picker, else the whole picker.
         picker_presets = [p.preset for p in manifest.agent.picker]
@@ -291,6 +297,7 @@ class AppCatalog:
             description=preset.description,
             suggestions=suggestions,
             allowed_tools=tools,
+            disabled_tools=disabled_tools,
             env=dict(preset.env),
             sandbox_image=preset.sandbox_image,
             idle_timeout_seconds=preset.idle_timeout_seconds,
