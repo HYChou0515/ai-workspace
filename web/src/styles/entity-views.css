@@ -1,0 +1,782 @@
+/*
+ * PM-app entity views (#448) — the visual layer for the declarative renderers
+ * (table / board / gantt / health) + their shared write chrome (quick-create,
+ * conflict / diagnostic banners, role widgets).
+ *
+ * WHY a stylesheet and not inline styles: the P1 renderers were styled with raw
+ * inline `style={{…}}` — bare 1px grid tables, native unstyled selects,
+ * container-less kanban columns, no hover / elevation / hierarchy. Inline styles
+ * can't express `:hover` / `:focus-within` / zebra / sticky, which is exactly
+ * what a data grid + board need to stop looking like dev scaffolding. This sheet
+ * gives the views the app's RCA look using only declared tokens (guarded by
+ * no-undefined-tokens.test.ts) so it themes for free.
+ *
+ * Everything is prefixed `.ev-` (entity views). Guarded by entity-views.test.ts.
+ */
+
+/* ── panel shell ─────────────────────────────────────────────────────────── */
+/* The chrome the dispatcher (`EntityViewBody`) draws around every view: a titled
+ * header with the create action on the right, then the body. */
+.ev-panel {
+  padding: var(--space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  min-width: 0;
+}
+.ev-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+  flex-wrap: wrap;
+}
+.ev-panel__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-display-sm);
+  line-height: var(--leading-display-sm);
+  letter-spacing: -0.02em;
+  color: var(--text-paper);
+}
+.ev-panel__count {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  margin-left: var(--space-8);
+  font-weight: 400;
+}
+
+/* ── empty state ─────────────────────────────────────────────────────────── */
+.ev-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-8);
+  padding: var(--space-48) var(--space-24);
+  border: 1px dashed var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+  color: var(--text-paper-d);
+  font-size: var(--text-body-sm);
+  text-align: center;
+}
+.ev-empty__icon {
+  font-size: var(--text-display-md);
+  line-height: 1;
+  opacity: 0.55;
+}
+
+/* ── banners: conflict / diagnostics / notices (§B2, §D) ─────────────────── */
+/* A left tone stripe + tinted fill so a warning reads as a soft aside and an
+ * error as a stop, without shouting. Base = warn (the common case: conflicts,
+ * excluded records, missing schema); `--err` escalates. */
+.ev-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12);
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: var(--radius-btn);
+  background: color-mix(in srgb, var(--warn) 8%, var(--white));
+  font-size: var(--text-body-sm);
+  line-height: var(--leading-body-sm);
+  color: var(--text-paper);
+}
+.ev-banner--err {
+  border-color: color-mix(in srgb, var(--err) 35%, transparent);
+  border-left-color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, var(--white));
+}
+.ev-banner__icon {
+  flex: 0 0 auto;
+  color: var(--warn);
+  font-weight: 700;
+  line-height: var(--leading-body-sm);
+}
+.ev-banner--err .ev-banner__icon {
+  color: var(--err);
+}
+.ev-banner__body {
+  flex: 1;
+  min-width: 0;
+}
+.ev-banner__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  margin-left: var(--space-8);
+}
+/* A per-record dismiss (conflict banner). */
+.ev-banner__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  height: 22px;
+  padding: 0 var(--space-8);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background 0.12s;
+}
+.ev-banner__chip:hover {
+  background: color-mix(in srgb, var(--warn) 14%, transparent);
+}
+
+/* Diagnostics list inside a banner (schema/view level). */
+.ev-diags {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.ev-diags__item {
+  display: flex;
+  gap: var(--space-8);
+  align-items: baseline;
+}
+
+/* ── level chip (error / warning) — shared by diagnostics + health ───────── */
+.ev-level {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 var(--space-8);
+  border-radius: var(--radius-chip);
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.ev-level--error {
+  background: color-mix(in srgb, var(--err) 16%, transparent);
+  color: var(--err);
+}
+.ev-level--warning {
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+}
+
+/* ── quick-create (§C1) ──────────────────────────────────────────────────── */
+/* Opens into a raised card of labelled role widgets rather than a bare inline
+ * row of native inputs. */
+.ev-quickcreate {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-12);
+  align-items: end;
+  padding: var(--space-16);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+}
+.ev-quickcreate__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.ev-quickcreate__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
+.ev-quickcreate__req {
+  color: var(--accent);
+}
+.ev-quickcreate__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: var(--space-8);
+  justify-content: flex-end;
+}
+
+/* ── role widgets — the single edit-control skin (§B3) ───────────────────── */
+/* Every field control (table inline cell, board card, quick-create, file
+ * editor) wears `.ev-field`. Default = token chrome (visible input). Inside a
+ * table cell we strip the chrome at rest and reveal it on hover/focus so the
+ * grid reads as data, not a wall of inputs. */
+.ev-field {
+  height: 28px;
+  max-width: 100%;
+  padding: 0 var(--space-8);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+  transition: border-color 0.12s, background 0.12s;
+}
+.ev-field:hover:not(:disabled) {
+  border-color: var(--text-paper-d2);
+}
+.ev-field:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.ev-field--range {
+  display: inline-flex;
+  gap: var(--space-4);
+  align-items: center;
+}
+.ev-field--range .ev-field {
+  min-width: 0;
+}
+/* Read-only role value (backref / rollup — compute-on-read). */
+.ev-readonly {
+  color: var(--text-paper-d);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── table (§A1) ─────────────────────────────────────────────────────────── */
+.ev-table-wrap {
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  overflow: auto;
+  background: var(--white);
+}
+.ev-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  font-size: var(--text-body-sm);
+}
+.ev-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--paper-2);
+  border-bottom: 1px solid var(--paper-3);
+  padding: var(--space-8) var(--space-12);
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+/* second header row (filters) shouldn't cast the caps styling. */
+.ev-table thead tr.ev-table__filters th {
+  top: 37px;
+  background: var(--white);
+  border-bottom: 1px solid var(--paper-3);
+  padding: var(--space-4) var(--space-8);
+}
+.ev-table__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-paper-d);
+  transition: color 0.12s;
+}
+.ev-table__sort:hover {
+  color: var(--text-paper);
+}
+.ev-table__sort[data-sorted] {
+  color: var(--accent-h);
+}
+.ev-table__arrow {
+  font-size: 0.9em;
+}
+.ev-table tbody td {
+  padding: var(--space-4) var(--space-12);
+  border-bottom: 1px solid var(--paper-3);
+  vertical-align: middle;
+}
+.ev-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+/* zebra + hover — the grid reads as rows, not a mesh of borders. */
+.ev-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--paper) 45%, transparent);
+}
+.ev-table tbody tr:hover td {
+  background: var(--paper-2);
+}
+.ev-table__num {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  text-align: right;
+  width: 1%;
+  white-space: nowrap;
+}
+.ev-table__check {
+  width: 1%;
+  white-space: nowrap;
+  text-align: center;
+}
+/* inline cells: chrome only on interaction, so data-heavy tables stay calm. */
+.ev-table tbody .ev-field {
+  height: 26px;
+  border-color: transparent;
+  background: transparent;
+}
+.ev-table tbody .ev-field:hover:not(:disabled),
+.ev-table tbody .ev-field:focus:not(:disabled),
+.ev-table tbody td:focus-within .ev-field {
+  border-color: var(--paper-3);
+  background: var(--white);
+}
+/* a lint-warning cell (§D) gets a warm left edge, still editable. */
+.ev-table__cell--warn {
+  box-shadow: inset 3px 0 0 var(--warn);
+}
+/* an unparseable record degrades to one error row (§D), never dropped silently. */
+.ev-table__row--error td {
+  background: color-mix(in srgb, var(--err) 7%, transparent);
+  color: var(--err);
+}
+
+/* toolbars above the table (columns menu, batch actions). */
+.ev-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  flex-wrap: wrap;
+}
+.ev-toolbar__meta {
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+/* columns show/hide popover. */
+.ev-menu {
+  position: absolute;
+  z-index: var(--z-modal);
+  margin-top: var(--space-4);
+  min-width: 160px;
+  padding: var(--space-4);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+.ev-menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-4) var(--space-8);
+  border-radius: var(--radius-btn);
+  white-space: nowrap;
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+}
+.ev-menu__item:hover {
+  background: var(--paper-2);
+}
+/* native selects in the filter row / batch bar wear the field chrome. */
+.ev-select {
+  height: 28px;
+  padding: 0 var(--space-8);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--white);
+  color: var(--text-paper);
+  font-size: var(--text-body-sm);
+}
+
+/* ── board / kanban (§A3) ────────────────────────────────────────────────── */
+.ev-board {
+  display: flex;
+  gap: var(--space-12);
+  overflow-x: auto;
+  align-items: flex-start;
+  padding-bottom: var(--space-8);
+}
+.ev-board__col {
+  min-width: 264px;
+  max-width: 264px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-8);
+  background: var(--paper-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-card);
+  transition: background 0.12s, border-color 0.12s;
+}
+/* drop target while dragging a card over the column. */
+.ev-board__col--over {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+/* out-of-vocabulary status (a lint warning): visible, not a drop target (§D). */
+.ev-board__col--degraded {
+  background: color-mix(in srgb, var(--warn) 10%, var(--paper-2));
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+.ev-board__col-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 0 var(--space-4);
+}
+.ev-board__col-name {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-paper-d);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ev-board__col--degraded .ev-board__col-name {
+  color: var(--warn);
+}
+.ev-board__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 var(--space-4);
+  border-radius: 999px;
+  background: var(--paper-3);
+  color: var(--text-paper-d);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  margin-left: auto;
+}
+.ev-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  cursor: grab;
+  transition: border-color 0.12s, box-shadow 0.12s, transform 0.06s;
+}
+.ev-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.1);
+}
+.ev-card:active {
+  cursor: grabbing;
+}
+.ev-card--readonly {
+  cursor: default;
+}
+.ev-card--readonly:hover {
+  transform: none;
+}
+.ev-card__title {
+  font-weight: 600;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+  line-height: var(--leading-body-sm);
+}
+.ev-card__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-8);
+  align-items: center;
+}
+.ev-card__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+}
+
+/* ── avatar / progress / chips (card faces + cells) ──────────────────────── */
+.ev-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-avatar);
+  background: var(--accent-soft);
+  background-size: cover;
+  background-position: center;
+  border: 1px solid var(--paper-3);
+  color: var(--accent-h);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.ev-progress {
+  display: inline-block;
+  width: 64px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--paper-3);
+  overflow: hidden;
+}
+.ev-progress__bar {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+/* ── gantt (§A2) ─────────────────────────────────────────────────────────── */
+.ev-gantt__toolbar {
+  display: flex;
+  gap: var(--space-4);
+  align-items: center;
+}
+.ev-gantt__scroll {
+  overflow-x: auto;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  background: var(--white);
+}
+.ev-gantt__grid {
+  display: flex;
+}
+.ev-gantt__gutter {
+  flex: 0 0 auto;
+  border-right: 1px solid var(--paper-3);
+  background: var(--white);
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+.ev-gantt__lane-label {
+  display: flex;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--text-paper-d);
+  padding: 0 var(--space-8);
+  background: var(--paper-2);
+}
+.ev-gantt__row-label {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--space-8);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper);
+}
+.ev-gantt__row-label:hover {
+  background: var(--paper-2);
+}
+.ev-gantt__canvas {
+  position: relative;
+  flex: 0 0 auto;
+}
+.ev-gantt__axis {
+  position: relative;
+  border-bottom: 1px solid var(--paper-3);
+  background: var(--paper-2);
+}
+.ev-gantt__tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  padding-left: var(--space-4);
+  border-left: 1px solid var(--paper-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  white-space: nowrap;
+}
+.ev-gantt__lane-band {
+  background: var(--paper-2);
+}
+.ev-gantt__today {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.7;
+}
+.ev-gantt__bar-row {
+  position: relative;
+}
+.ev-gantt__bar-row:hover {
+  background: var(--paper-2);
+}
+.ev-gantt__bar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  background: var(--accent);
+  border-radius: var(--radius-chip);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  cursor: grab;
+  touch-action: none;
+  transition: filter 0.12s;
+}
+.ev-gantt__bar:hover {
+  filter: brightness(1.06);
+}
+.ev-gantt__bar[data-busy="1"] {
+  cursor: default;
+}
+.ev-gantt__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+}
+.ev-gantt__handle--start {
+  left: 0;
+  border-radius: var(--radius-chip) 0 0 var(--radius-chip);
+}
+.ev-gantt__handle--end {
+  right: 0;
+  border-radius: 0 var(--radius-chip) var(--radius-chip) 0;
+}
+.ev-gantt__bar[data-busy="1"] .ev-gantt__handle {
+  cursor: default;
+}
+
+/* ── health view (§F) ────────────────────────────────────────────────────── */
+.ev-health__summary {
+  display: flex;
+  gap: var(--space-8);
+  align-items: center;
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+.ev-health__filters {
+  display: flex;
+  gap: var(--space-12);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.ev-health__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-4);
+  font-size: var(--text-body-sm);
+  color: var(--text-paper-d);
+}
+.ev-health__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--white);
+}
+.ev-health__item + .ev-health__item {
+  border-top: 1px solid var(--paper-3);
+}
+.ev-finding {
+  display: flex;
+  gap: var(--space-8);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-8) var(--space-12);
+  background: none;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: var(--text-paper);
+}
+button.ev-finding {
+  cursor: pointer;
+  transition: background 0.12s;
+}
+button.ev-finding:hover {
+  background: var(--paper-2);
+}
+.ev-finding__loc {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-paper-d);
+  min-width: 96px;
+  flex: 0 0 auto;
+}
+.ev-finding__msg {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-body-sm);
+}
+.ev-finding__jump {
+  margin-left: auto;
+  color: var(--text-paper-d2);
+  flex: 0 0 auto;
+}
+.ev-ok {
+  color: var(--ok);
+  font-size: var(--text-body-sm);
+}
+
+/* ── single-entity file editor (§C2) ─────────────────────────────────────── */
+.ev-editor {
+  padding: var(--space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-16);
+}
+.ev-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-12);
+}
+.ev-editor__title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-display-sm);
+  letter-spacing: -0.02em;
+}
+.ev-editor__title-num {
+  font-family: var(--font-mono);
+  color: var(--text-paper-d);
+  font-weight: 400;
+  margin-right: var(--space-8);
+}
+.ev-editor__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-12);
+  padding: var(--space-16);
+  background: var(--white);
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-card);
+}
+.ev-editor__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.ev-editor__label {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono-caps);
+  letter-spacing: var(--tracking-mono-caps);
+  text-transform: uppercase;
+  color: var(--text-paper-d);
+}
