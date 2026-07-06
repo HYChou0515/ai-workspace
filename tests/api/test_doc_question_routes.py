@@ -10,6 +10,7 @@ from workspace_app.api.doc_question_routes import register_doc_question_routes
 from workspace_app.kb.answer_formatter import VerbatimAnswerFormatter
 from workspace_app.kb.doc_questions import add_description_question, open_or_merge_term_question
 from workspace_app.kb.wiki.store import CLARIFICATIONS_DIR, WikiFileStore
+from workspace_app.perm.model import Permission
 from workspace_app.resources import Collection, ContextCard, DocQuestion, make_spec
 
 
@@ -54,6 +55,29 @@ def test_list_scopes_to_a_collection_with_the_query_param():
     assert len(client.get("/kb/doc-questions").json()) == 2  # global inbox
     scoped = client.get("/kb/doc-questions", params={"collection_id": a}).json()
     assert [q["id"] for q in scoped] == [qa]
+
+
+def test_list_hides_questions_from_collections_the_user_cannot_read():
+    """#481: the inbox is permission-filtered — a private collection's questions no
+    longer leak to a user who can't read it (the list used to return everything)."""
+    spec = make_spec(default_user="owner")
+    rm = spec.get_resource_manager(Collection)
+    with rm.using(user="owner"):
+        cid = rm.create(
+            Collection(name="secret", permission=Permission(visibility="private"))
+        ).resource_id
+    open_or_merge_term_question(
+        spec, collection_id=cid, term="M4", source_doc_id="d1", question_text="?"
+    )
+    app = FastAPI()
+    register_doc_question_routes(
+        app,
+        spec,
+        formatter=VerbatimAnswerFormatter(),
+        wiki_store=WikiFileStore(spec),
+        get_user_id=lambda: "outsider",
+    )
+    assert TestClient(app).get("/kb/doc-questions").json() == []  # not leaked
 
 
 def test_answering_a_term_question_creates_a_card_and_resolves_it():

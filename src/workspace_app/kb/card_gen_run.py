@@ -170,6 +170,21 @@ class CardGenRunStore:
             else None,
         )
 
+    def runs_by_status(self, statuses: list[str]) -> list[tuple[str, float, CardGenRun]]:
+        """Every run in one of ``statuses``, as ``(run_id, created_epoch, run)``,
+        newest first — the global 審核 inbox's card-gen source (#481). One indexed
+        ``status`` query (``in_``), so it never scans; the caller filters to the
+        user's readable collections in Python (``collection_id`` isn't indexed)."""
+        rows: list[tuple[str, float, CardGenRun]] = []
+        for r in self._rm.list_resources(QB["status"].in_(statuses).build()):
+            d = r.data
+            assert isinstance(d, CardGenRun)  # rm is CardGenRun-typed; narrows for ty
+            rows.append(
+                (r.info.resource_id, r.info.created_time.timestamp(), d)  # ty: ignore[unresolved-attribute]
+            )
+        rows.sort(key=lambda t: t[1], reverse=True)  # newest first
+        return rows
+
     def pending_for_collection(self, collection_id: str) -> list[tuple[str, CardGenRun]]:
         """The collection's runs finalized and awaiting review — the 待審核 queue
         (#415), newest first. Queries the indexed ``done`` status (bounded: only

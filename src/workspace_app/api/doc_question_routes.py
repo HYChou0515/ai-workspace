@@ -13,11 +13,13 @@ Card / page writes are credited to the request user (the spec's ``default_user``
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, FastAPI
 from pydantic import BaseModel
 
+from ..kb.collections import readable_collection_ids
 from ..kb.doc_questions import (
     discard_question,
     land_description_answer,
@@ -76,6 +78,8 @@ def register_doc_question_routes(
     *,
     formatter: AnswerCardFormatter,
     wiki_store: WikiFileStore,
+    get_user_id: Callable[[], str] = lambda: "default-user",
+    superusers: frozenset[str] = frozenset(),
 ) -> None:
     def _get(qid: str) -> DocQuestion:
         q = spec.get_resource_manager(DocQuestion).get(qid).data
@@ -85,8 +89,13 @@ def register_doc_question_routes(
     @app.get("/kb/doc-questions")
     def list_doc_questions(collection_id: str | None = None) -> list[DocQuestionIO]:
         # #415: `?collection_id=` scopes the inbox to the collection's 待審核 tab;
-        # omitted → the global "待釐清" inbox (#377).
-        return [_to_io(qid, q) for qid, q in list_open_questions(spec, collection_id=collection_id)]
+        # omitted → the global "待釐清" inbox (#377). #481: permission-filtered — a
+        # question only surfaces from a collection the caller may read (the list
+        # used to return every question to everyone).
+        rows = list_open_questions(spec, collection_id=collection_id)
+        cids = {q.collection_id for _, q in rows}
+        readable = set(readable_collection_ids(spec, cids, get_user_id(), superusers=superusers))
+        return [_to_io(qid, q) for qid, q in rows if q.collection_id in readable]
 
     @app.post("/kb/doc-questions/{qid}/answer")
     async def answer_doc_question(qid: str, body: AnswerBody) -> AnswerOut:
