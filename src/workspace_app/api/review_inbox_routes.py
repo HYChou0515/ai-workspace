@@ -90,9 +90,7 @@ def register_review_inbox_routes(
         return Actor.human(me, groups=groups_of(spec, me))
 
     @app.get("/kb/review-inbox")
-    def review_inbox(
-        resolved: bool = False, collection_id: str | None = None
-    ) -> ReviewInboxOut:
+    def review_inbox(resolved: bool = False, collection_id: str | None = None) -> ReviewInboxOut:
         """#481: the global review inbox — pending items across every readable
         collection (``resolved=true`` = the handled-item history; ``collection_id``
         scopes it to one collection's 待審核 tab)."""

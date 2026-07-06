@@ -159,8 +159,10 @@ async def test_inbox_can_scope_to_one_collection():
     c2 = _collection(spec, "Two")
     coord = _coord(
         spec,
-        {"one.md": [CardDraft(keys=["A"], title="A", snippet="s")],
-         "two.md": [CardDraft(keys=["B"], title="B", snippet="s")]},
+        {
+            "one.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+            "two.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+        },
     )
     d1 = _add_source(spec, c1, "one.md", "x")
     d2 = _add_source(spec, c2, "two.md", "y")

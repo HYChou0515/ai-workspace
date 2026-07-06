@@ -787,7 +787,10 @@ async def test_proposals_carry_stable_ids():
     coord, jid = await _run(
         spec,
         cid,
-        {"a.md": [CardDraft(keys=["A"], snippet="s")], "b.md": [CardDraft(keys=["B"], snippet="s")]},
+        {
+            "a.md": [CardDraft(keys=["A"], snippet="s")],
+            "b.md": [CardDraft(keys=["B"], snippet="s")],
+        },
         [d1, d2],
     )
     ids = [p.id for p in coord.proposals(jid).proposals]
@@ -804,7 +807,10 @@ async def test_decide_persists_a_single_cards_decision():
     coord, jid = await _run(
         spec,
         cid,
-        {"a.md": [CardDraft(keys=["A"], snippet="s")], "b.md": [CardDraft(keys=["B"], snippet="s")]},
+        {
+            "a.md": [CardDraft(keys=["A"], snippet="s")],
+            "b.md": [CardDraft(keys=["B"], snippet="s")],
+        },
         [d1, d2],
     )
     first, second = coord.proposals(jid).proposals
@@ -859,8 +865,10 @@ async def test_commit_cards_spans_multiple_runs_in_one_call():
     d1 = _add_source(spec, cid, "a.md", "x")
     d2 = _add_source(spec, cid, "b.md", "y")
     drafter = _FakeDrafter(
-        {"a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
-         "b.md": [CardDraft(keys=["B"], title="B", snippet="s")]}
+        {
+            "a.md": [CardDraft(keys=["A"], title="A", snippet="s")],
+            "b.md": [CardDraft(keys=["B"], title="B", snippet="s")],
+        }
     )
     coord = CardGenCoordinator(spec, drafter)
     j1 = coord.enqueue(cid, [d1])
@@ -882,9 +890,7 @@ async def test_update_proposal_persists_a_drawer_edit():
         spec, cid, {"a.md": [CardDraft(keys=["A"], body="old", snippet="s")]}, [doc]
     )
     (a,) = coord.proposals(jid).proposals
-    coord.update_proposal(
-        jid, a.id, msgspec.structs.replace(a, body="edited", decision="accepted")
-    )
+    coord.update_proposal(jid, a.id, msgspec.structs.replace(a, body="edited", decision="accepted"))
     (again,) = coord.proposals(jid).proposals
     assert again.id == a.id
     assert (again.body, again.decision) == ("edited", "accepted")

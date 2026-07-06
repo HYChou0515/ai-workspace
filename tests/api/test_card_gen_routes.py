@@ -198,9 +198,7 @@ def test_update_proposal_route_persists_a_drawer_edit():
     prop = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]
     prop["body"] = "edited body"
     prop["decision"] = "accepted"
-    r = client.post(
-        f"/kb/context-card-gen/{job_id}/proposals/{prop['id']}", json=prop
-    )
+    r = client.post(f"/kb/context-card-gen/{job_id}/proposals/{prop['id']}", json=prop)
     assert r.status_code == 200
     got = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]
     assert got["body"] == "edited body"

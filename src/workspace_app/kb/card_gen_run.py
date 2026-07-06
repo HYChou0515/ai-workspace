@@ -162,12 +162,14 @@ class CardGenRunStore:
         ids = set(card_ids)
         return self._cas(
             run_id,
-            lambda run: _apply_and_settle(
-                run,
-                lambda ps: _advance_committed(ps, ids),
-            )
-            if run.status == "done"
-            else None,
+            lambda run: (
+                _apply_and_settle(
+                    run,
+                    lambda ps: _advance_committed(ps, ids),
+                )
+                if run.status == "done"
+                else None
+            ),
         )
 
     def runs_by_status(self, statuses: list[str]) -> list[tuple[str, float, CardGenRun]]:
@@ -263,9 +265,7 @@ def _replace_by_id(
     return out
 
 
-def _advance_committed(
-    proposals: list[ProposedCard], ids: set[str]
-) -> list[ProposedCard] | None:
+def _advance_committed(proposals: list[ProposedCard], ids: set[str]) -> list[ProposedCard] | None:
     """Flip each referenced ACTIVE proposal to ``committed``; returns ``None`` if
     none changed (idempotent — a ref to an already-resolved card advances nothing)."""
     out = [

@@ -59,7 +59,6 @@ from .kb_chat_routes import (
     register_kb_chat_routes,
 )
 from .kb_routes import register_kb_routes
-from .review_inbox_routes import register_review_inbox_routes
 from .lifecycle import build_lifespan
 from .locator import ItemLocator
 from .mention import MentionService
@@ -67,6 +66,7 @@ from .meta_routes import register_meta_routes
 from .notifications import register_notification_routes
 from .registry import InvestigationRegistry
 from .replay_loaders import ReplayLoaders
+from .review_inbox_routes import register_review_inbox_routes
 from .runner import AgentRunner
 from .sandbox_activity import IActivityStore, SpecstarActivityStore
 from .sandbox_address import IAddressStore, SpecstarAddressStore

@@ -128,9 +128,7 @@ def test_set_proposals_assigns_stable_ids_to_proposals_missing_them():
     spec, cid = _spec_with_collection()
     store = CardGenRunStore(spec)
     run_id = store.start(cid, ["d1"])
-    store.set_proposals(
-        run_id, [ProposedCard(keys=["A"]), ProposedCard(id="keep", keys=["B"])]
-    )
+    store.set_proposals(run_id, [ProposedCard(keys=["A"]), ProposedCard(id="keep", keys=["B"])])
     a, b = _get(store, run_id).proposals
     assert a.id == "0"  # blank → positional id
     assert b.id == "keep"  # existing id preserved

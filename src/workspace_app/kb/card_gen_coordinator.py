@@ -227,9 +227,7 @@ class CardGenCoordinator:
         if run is None or run.status != "done":
             return CommitResult()  # gone, or already reviewed — no double card-write
         accepted = [p.id for p in ensure_proposal_ids(run.proposals) if p.decision == "accepted"]
-        return self._commit_run_cards(
-            run_id, run, accepted, committed_by, skip_unreferenced=True
-        )
+        return self._commit_run_cards(run_id, run, accepted, committed_by, skip_unreferenced=True)
 
     def commit_cards(
         self, cards: list[tuple[str, str]], *, committed_by: str | None = None
