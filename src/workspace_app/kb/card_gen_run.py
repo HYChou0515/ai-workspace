@@ -32,7 +32,7 @@ import msgspec
 from specstar import QB, SpecStar
 from specstar.types import PreconditionFailedError, ResourceIDNotFoundError, RevisionStatus
 
-from .card_gen import CardGenRun, ProposedCard
+from .card_gen import CardGenRun, ProposedCard, ensure_proposal_ids, is_active
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -107,8 +107,11 @@ class CardGenRunStore:
     def set_proposals(self, run_id: str, proposals: list[ProposedCard]) -> None:
         """Replace the run's reviewable proposals wholesale — finalize writes the
         merged/classified set; the review surface re-saves the reviewer's edited
-        set. Written under CAS so it never clobbers a concurrent join write."""
-        self._cas(run_id, lambda run: msgspec.structs.replace(run, proposals=list(proposals)))
+        set. Assigns each proposal a stable id (#481) so the review table can
+        address one card. Written under CAS so it never clobbers a concurrent join
+        write."""
+        stamped = ensure_proposal_ids(list(proposals))
+        self._cas(run_id, lambda run: msgspec.structs.replace(run, proposals=stamped))
 
     def finish(self, run_id: str, *, status: str) -> None:
         """Stamp the terminal status (``done`` / ``error``) once finalize has run
@@ -116,16 +119,56 @@ class CardGenRunStore:
         self._cas(run_id, lambda run: msgspec.structs.replace(run, status=status))
 
     # ── review resolution (#415: leave the 待審核 queue) ──────────────
-    def mark_committed(self, run_id: str) -> None:
-        """Resolve a reviewed run as ``committed`` — its accepted proposals were
-        written to cards, so it drops out of the review queue. Idempotent: only a
-        finalized (``done``) run resolves; re-committing is a no-op."""
-        self._cas(run_id, lambda run: _resolve(run, "committed"))
-
     def mark_dismissed(self, run_id: str) -> None:
         """Resolve a run as ``dismissed`` — the reviewer discarded its proposals;
         it leaves the queue without writing cards. Idempotent (only from ``done``)."""
         self._cas(run_id, lambda run: _resolve(run, "dismissed"))
+
+    # ── per-card review (#481: the review table addresses one card) ──
+    def decide(self, run_id: str, card_id: str, decision: str) -> CardGenRun | None:
+        """Set one proposal's decision by id (inline accept/reject), then settle the
+        run out of the queue if that made every proposal terminal (#481). A no-op
+        (returns ``None``) if the card id isn't found."""
+        return self._cas(
+            run_id,
+            lambda run: _apply_and_settle(
+                run, lambda ps: _replace_by_id(ps, card_id, lambda p: _redecide(p, decision))
+            ),
+        )
+
+    def update_proposal(
+        self, run_id: str, card_id: str, new_card: ProposedCard
+    ) -> CardGenRun | None:
+        """Replace one proposal by id with the reviewer's edited card (drawer edit:
+        body/title + decision), keeping the id authoritative, then settle (#481).
+        A no-op if the id isn't found."""
+        return self._cas(
+            run_id,
+            lambda run: _apply_and_settle(
+                run,
+                lambda ps: _replace_by_id(
+                    ps, card_id, lambda _p: msgspec.structs.replace(new_card, id=card_id)
+                ),
+            ),
+        )
+
+    def mark_proposals_committed(self, run_id: str, card_ids: list[str]) -> CardGenRun | None:
+        """Advance the referenced ACTIVE proposals to ``committed`` (their cards were
+        just written) and settle the run (#481). Only advances active cards, so a
+        ref to an already-resolved card is skipped; returns ``None`` if nothing
+        advanced (idempotent). The run resolves ``committed`` once no active card
+        remains, or stays ``done`` if some are still pending — the partial-commit
+        semantics: committed cards leave, the rest wait for another pass."""
+        ids = set(card_ids)
+        return self._cas(
+            run_id,
+            lambda run: _apply_and_settle(
+                run,
+                lambda ps: _advance_committed(ps, ids),
+            )
+            if run.status == "done"
+            else None,
+        )
 
     def pending_for_collection(self, collection_id: str) -> list[tuple[str, CardGenRun]]:
         """The collection's runs finalized and awaiting review — the 待審核 queue
@@ -186,6 +229,60 @@ def _resolve(run: CardGenRun, status: str) -> CardGenRun | None:
     if run.status != "done":
         return None
     return msgspec.structs.replace(run, status=status)
+
+
+def _redecide(p: ProposedCard, decision: str) -> ProposedCard:
+    return msgspec.structs.replace(p, decision=decision)
+
+
+def _replace_by_id(
+    proposals: list[ProposedCard], card_id: str, fn: Callable[[ProposedCard], ProposedCard]
+) -> list[ProposedCard] | None:
+    """Rebuild ``proposals`` with the one whose id is ``card_id`` passed through
+    ``fn``. Returns ``None`` (a no-op) if no proposal has that id."""
+    idx = next((i for i, p in enumerate(proposals) if p.id == card_id), None)
+    if idx is None:
+        return None
+    out = list(proposals)
+    out[idx] = fn(out[idx])
+    return out
+
+
+def _advance_committed(
+    proposals: list[ProposedCard], ids: set[str]
+) -> list[ProposedCard] | None:
+    """Flip each referenced ACTIVE proposal to ``committed``; returns ``None`` if
+    none changed (idempotent — a ref to an already-resolved card advances nothing)."""
+    out = [
+        msgspec.structs.replace(p, decision="committed") if (p.id in ids and is_active(p)) else p
+        for p in proposals
+    ]
+    return out if out != proposals else None
+
+
+def _settle(run: CardGenRun) -> CardGenRun:
+    """Resolve a finalized run out of the 待審核 queue once every proposal is
+    terminal (#481): ``committed`` if any card was written, else ``dismissed``. A
+    still-active or empty run is left ``done``. Only acts on a ``done`` run."""
+    if run.status != "done" or not run.proposals or any(is_active(p) for p in run.proposals):
+        return run
+    resolved = "committed" if any(p.decision == "committed" for p in run.proposals) else "dismissed"
+    return msgspec.structs.replace(run, status=resolved)
+
+
+def _apply_and_settle(
+    run: CardGenRun,
+    transform: Callable[[list[ProposedCard]], list[ProposedCard] | None],
+) -> CardGenRun | None:
+    """Rebuild the run's proposals through ``transform`` (which sees the id-filled
+    list — legacy blank ids are backfilled here and persisted on write, #481) and
+    settle the run if that made every proposal terminal. ``transform`` returns the
+    new list, or ``None`` to abort the CAS with no write."""
+    filled = ensure_proposal_ids([msgspec.structs.replace(p) for p in run.proposals])
+    new_proposals = transform(filled)
+    if new_proposals is None:
+        return None
+    return _settle(msgspec.structs.replace(run, proposals=new_proposals))
 
 
 def _with_index(run: CardGenRun, field_name: str, doc_index: int) -> CardGenRun | None:

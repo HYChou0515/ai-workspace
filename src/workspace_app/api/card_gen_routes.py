@@ -45,6 +45,7 @@ class ProvenanceIO(BaseModel):
 
 class ProposedCardIO(BaseModel):
     keys: list[str]
+    id: str = ""
     title: str = ""
     body: str = ""
     confident: bool = True
@@ -67,6 +68,27 @@ class CommitOut(BaseModel):
     created: int
     updated: int
     skipped: int
+
+
+class DecideBody(BaseModel):
+    """#481 inline accept/reject: flip one proposal's decision by id."""
+
+    card_id: str
+    decision: str
+
+
+class CardRef(BaseModel):
+    """#481: one proposal to commit, addressed by its run + stable card id."""
+
+    run_id: str
+    card_id: str
+
+
+class CommitCardsBody(BaseModel):
+    """#481: commit an arbitrary set of proposal cards; per-run commit is the
+    special case where every ref shares a run."""
+
+    cards: list[CardRef]
 
 
 class PendingRunOut(BaseModel):
@@ -110,6 +132,24 @@ def register_card_gen_routes(app: FastAPI | APIRouter, coordinator: CardGenCoord
     @app.post("/kb/context-card-gen/{job_id}/commit")
     def commit_context_card_gen(job_id: str) -> CommitOut:
         r = coordinator.commit(job_id)
+        return CommitOut(created=r.created, updated=r.updated, skipped=r.skipped)
+
+    @app.post("/kb/context-card-gen/{job_id}/decide")
+    def decide_context_card(job_id: str, body: DecideBody) -> GenStatusOut:
+        """#481: persist one card's inline accept/reject; returns the run's refreshed
+        proposals so the FE stays in sync (a settle may have resolved the run)."""
+        coordinator.decide(job_id, body.card_id, body.decision)
+        art = coordinator.proposals(job_id)
+        return GenStatusOut(
+            status=coordinator.status(job_id).value,
+            proposals=[_to_io(p) for p in art.proposals],
+        )
+
+    @app.post("/kb/context-card-gen/commit")
+    def commit_context_cards(body: CommitCardsBody) -> CommitOut:
+        """#481: the multi-card (cross-run) commit — write exactly the referenced
+        cards and settle each affected run."""
+        r = coordinator.commit_cards([(c.run_id, c.card_id) for c in body.cards])
         return CommitOut(created=r.created, updated=r.updated, skipped=r.skipped)
 
     @app.get("/kb/collections/{collection_id}/context-card-gen")

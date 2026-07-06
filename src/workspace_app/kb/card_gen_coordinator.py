@@ -56,6 +56,8 @@ from .card_gen import (
     DocDigest,
     ProposedCard,
     classify_against_existing,
+    ensure_proposal_ids,
+    is_active,
     merge_drafts,
 )
 from .card_gen_run import CardGenRunStore
@@ -174,11 +176,13 @@ class CardGenCoordinator:
         return _RUN_STATUS[run.status] if run is not None else TaskStatus.PENDING
 
     def proposals(self, run_id: str) -> CardGenArtifact:
-        """The run's reviewable proposals (empty until it finalizes)."""
+        """The run's reviewable proposals (empty until it finalizes), each carrying
+        a stable id so the review table can address one card — backfilled here for
+        runs finalized before ids existed (#481)."""
         run = self._runs.get(run_id)
         if run is None:
             return CardGenArtifact()
-        return CardGenArtifact(proposals=list(run.proposals))
+        return CardGenArtifact(proposals=ensure_proposal_ids(run.proposals))
 
     def _active_count(self) -> int:
         return self._job_rm.count_resources(QB["status"].in_(_ACTIVE).build())
@@ -193,42 +197,103 @@ class CardGenCoordinator:
         wholesale with what the FE sends back."""
         self._runs.set_proposals(run_id, proposals)
 
+    def _write_card(self, cardrm, cid: str, p: ProposedCard, result: CommitResult) -> None:
+        """Write one accepted proposal to a real ``ContextCard`` (#106 author/edit):
+        ``new`` → create, ``update`` → overwrite the target (re-deriving
+        ``norm_keys``); a target deleted since generation falls back to a create."""
+        card = ContextCard(
+            collection_id=cid,
+            keys=p.keys,
+            norm_keys=derive_norm_keys(p.keys),
+            title=p.title,
+            body=p.body,
+        )
+        if p.mode == "update" and p.target_card_id and _exists(cardrm, p.target_card_id):
+            # New COMMITTED revision of the target (create_or_update, not modify —
+            # modify refuses a committed→committed overwrite).
+            cardrm.create_or_update(p.target_card_id, card)
+            result.updated += 1
+        else:
+            # New card — or the update target vanished since generation.
+            cardrm.create(card)
+            result.created += 1
+
     def commit(self, run_id: str, *, committed_by: str | None = None) -> CommitResult:
-        """Write the run's ACCEPTED proposals to real ``ContextCard``s (#106's
-        author/edit semantics): ``new`` → create, ``update`` → overwrite the
-        target card (re-deriving ``norm_keys``); a target deleted since
-        generation falls back to a create. Proposals the reviewer didn't accept —
-        and any with no usable key — are skipped. Returns the tallies."""
+        """Write the run's ACCEPTED proposals to real cards and resolve the run out
+        of the queue once nothing active remains (#415/#481). Proposals the reviewer
+        didn't accept — and any with no usable key — are skipped. Returns the
+        tallies. Per-run convenience over :meth:`commit_cards`."""
         run = self._runs.get(run_id)
         if run is None or run.status != "done":
             return CommitResult()  # gone, or already reviewed — no double card-write
+        accepted = [p.id for p in ensure_proposal_ids(run.proposals) if p.decision == "accepted"]
+        return self._commit_run_cards(
+            run_id, run, accepted, committed_by, skip_unreferenced=True
+        )
+
+    def commit_cards(
+        self, cards: list[tuple[str, str]], *, committed_by: str | None = None
+    ) -> CommitResult:
+        """#481: write an arbitrary set of proposal cards, given as ``(run_id,
+        card_id)`` refs, and resolve each affected run if it settles. Per-run commit
+        is just the special case where every ref shares a run. Refs are grouped by
+        run so each run's cards are written + marked committed together. Returns the
+        aggregated tallies."""
+        by_run: dict[str, list[str]] = {}
+        for run_id, card_id in cards:
+            by_run.setdefault(run_id, []).append(card_id)
+        total = CommitResult()
+        for run_id, card_ids in by_run.items():
+            run = self._runs.get(run_id)
+            if run is None or run.status != "done":
+                continue  # gone or already reviewed
+            r = self._commit_run_cards(run_id, run, card_ids, committed_by, skip_unreferenced=False)
+            total.created += r.created
+            total.updated += r.updated
+            total.skipped += r.skipped
+        return total
+
+    def _commit_run_cards(
+        self,
+        run_id: str,
+        run,
+        card_ids: list[str],
+        committed_by: str | None,
+        *,
+        skip_unreferenced: bool,
+    ) -> CommitResult:
+        """Write the referenced ACTIVE proposals of one run to cards, mark them
+        committed, and settle the run. ``skip_unreferenced`` counts every other
+        proposal as skipped (the whole-run ``commit`` reports one tally over the run);
+        the multi-card path counts only the refs it was given."""
+        wanted = set(card_ids)
         cid = run.collection_id
         cardrm = self._spec.get_resource_manager(ContextCard)
         result = CommitResult()
+        written: list[str] = []
         with cardrm.using(user=committed_by or self._get_user_id()):
-            for p in run.proposals:
-                if p.decision != "accepted" or not derive_norm_keys(p.keys):
-                    result.skipped += 1
+            for p in ensure_proposal_ids(run.proposals):
+                if p.id not in wanted:
+                    if skip_unreferenced:
+                        result.skipped += 1
                     continue
-                card = ContextCard(
-                    collection_id=cid,
-                    keys=p.keys,
-                    norm_keys=derive_norm_keys(p.keys),
-                    title=p.title,
-                    body=p.body,
-                )
-                if p.mode == "update" and p.target_card_id and _exists(cardrm, p.target_card_id):
-                    # New COMMITTED revision of the target (create_or_update, not
-                    # modify — modify refuses a committed→committed overwrite).
-                    cardrm.create_or_update(p.target_card_id, card)
-                    result.updated += 1
-                else:
-                    # New card — or the update target vanished since generation.
-                    cardrm.create(card)
-                    result.created += 1
-        # #415: the run is reviewed — resolve it out of the 待審核 queue.
-        self._runs.mark_committed(run_id)
+                if not is_active(p) or not derive_norm_keys(p.keys):
+                    result.skipped += 1  # rejected / already committed / no usable key
+                    continue
+                self._write_card(cardrm, cid, p, result)
+                written.append(p.id)
+        self._runs.mark_proposals_committed(run_id, written)
         return result
+
+    def decide(self, run_id: str, card_id: str, decision: str) -> None:
+        """#481: persist one proposal's decision (inline accept/reject), settling the
+        run out of the queue if that resolved its last active card."""
+        self._runs.decide(run_id, card_id, decision)
+
+    def update_proposal(self, run_id: str, card_id: str, card: ProposedCard) -> None:
+        """#481: persist the reviewer's edited proposal (drawer edit: body/title +
+        decision) back onto the run, keyed by its id."""
+        self._runs.update_proposal(run_id, card_id, card)
 
     def dismiss(self, run_id: str) -> None:
         """#415: discard a run's proposals without writing any card — it leaves the

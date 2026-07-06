@@ -163,6 +163,52 @@ def test_dismiss_route_removes_a_run_from_the_queue():
     assert _list_cards(spec, cid) == []
 
 
+def test_decide_route_sets_one_cards_decision():
+    """#481: the inline accept/reject persists one card's decision by id."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    client = ApiTestClient(app)
+    job_id = client.post(
+        f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]}
+    ).json()["job_id"]
+    asyncio.run(app.state.card_gen_coordinator.aclose())
+
+    card_id = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]["id"]
+    r = client.post(
+        f"/kb/context-card-gen/{job_id}/decide", json={"card_id": card_id, "decision": "accepted"}
+    )
+    assert r.status_code == 200
+    got = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]
+    assert got["id"] == card_id
+    assert got["decision"] == "accepted"
+
+
+def test_commit_cards_route_writes_referenced_cards():
+    """#481: the multi-card commit takes ``cards: [{run_id, card_id}]`` and writes
+    exactly those, returning the aggregated tallies."""
+    spec, app = _make_app(_ONE_CARD)
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone.")
+    client = ApiTestClient(app)
+    job_id = client.post(
+        f"/kb/collections/{cid}/context-cards/generate", json={"doc_ids": [doc]}
+    ).json()["job_id"]
+    asyncio.run(app.state.card_gen_coordinator.aclose())
+
+    card_id = client.get(f"/kb/context-card-gen/{job_id}").json()["proposals"][0]["id"]
+    client.post(
+        f"/kb/context-card-gen/{job_id}/decide", json={"card_id": card_id, "decision": "accepted"}
+    )
+    r = client.post(
+        "/kb/context-card-gen/commit", json={"cards": [{"run_id": job_id, "card_id": card_id}]}
+    )
+    assert r.status_code == 200
+    assert r.json() == {"created": 1, "updated": 0, "skipped": 0}
+    assert len(_list_cards(spec, cid)) == 1
+    assert client.get(f"/kb/collections/{cid}/context-card-gen").json() == []  # run settled
+
+
 def test_generate_with_no_drafter_llm_completes_with_no_proposals():
     """With no card-drafting LLM wired the feature stays mounted but proposes
     nothing — the run still completes (the FE shows '沒有新卡片可建議')."""

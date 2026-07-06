@@ -111,13 +111,17 @@ class ProposedCard(msgspec.Struct):
     page and returning restores progress)."""
 
     keys: list[str]
+    id: str = ""  # #481: stable per-run card id, so the review table addresses one card
     title: str = ""
     body: str = ""
     confident: bool = True
     mode: str = "new"  # new | update
     target_card_id: str | None = None
     provenance: list[Provenance] = msgspec.field(default_factory=list)
-    decision: str = "pending"  # pending | accepted | rejected
+    # #481 review lifecycle: pending / accepted are ACTIVE (still in the queue);
+    # committed (written to a card) / rejected are TERMINAL — a run leaves the
+    # 待審核 queue only once every proposal is terminal.
+    decision: str = "pending"  # pending | accepted | rejected | committed
 
 
 class CardGenPayload(msgspec.Struct):
@@ -216,6 +220,32 @@ class CardGenRunSummary(msgspec.Struct):
     run_id: str
     collection_id: str
     proposal_count: int
+
+
+# ── review lifecycle helpers (#481) ──────────────────────────────────────────
+
+# A proposal's decision keeps it — and its run — in the 待審核 queue while it is
+# ACTIVE; a TERMINAL decision has been dealt with (written / discarded).
+_ACTIVE_DECISIONS = frozenset({"pending", "accepted"})
+
+
+def is_active(proposal: ProposedCard) -> bool:
+    """Whether a proposal still awaits resolution (pending, or accepted but not yet
+    committed). A run stays in the review queue while any of its proposals is
+    active; it drops out once every proposal is committed or rejected (#481)."""
+    return proposal.decision in _ACTIVE_DECISIONS
+
+
+def ensure_proposal_ids(proposals: list[ProposedCard]) -> list[ProposedCard]:
+    """Fill any blank proposal id with its stable position (#481), so the review
+    table can address one card at a time. Idempotent — an id already set is left
+    alone (a re-saved list keeps its identities), and the list is append-stable
+    (committed/rejected cards stay in place) so a positional id never shifts.
+    Backfills runs finalized before ids existed. Mutates + returns the list."""
+    for i, p in enumerate(proposals):
+        if not p.id:
+            p.id = str(i)
+    return proposals
 
 
 # ── deterministic core ───────────────────────────────────────────────────────
