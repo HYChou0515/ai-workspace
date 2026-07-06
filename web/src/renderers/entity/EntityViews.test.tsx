@@ -63,7 +63,9 @@ describe("HealthView", () => {
 
   it("lists findings with their level, record, and message", () => {
     render(<HealthView title="Health" findings={findings} />);
-    expect(screen.getByText(/1 error, 1 warning/)).toBeInTheDocument();
+    // The summary shows each level's count as its own chip (§F).
+    expect(screen.getByText("1 error")).toBeInTheDocument();
+    expect(screen.getByText("1 warning")).toBeInTheDocument();
     expect(screen.getByText("no frontmatter")).toBeInTheDocument();
     expect(screen.getByText(/status off/)).toBeInTheDocument();
   });
