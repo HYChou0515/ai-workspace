@@ -412,20 +412,24 @@ class Retriever:
 
         # The display filename is the basename of the SourceDoc's stored path —
         # the id is opaque and must not be parsed for it.
-        scored = [
-            ScoredChunk(
-                chunk_id=cid,
-                document_id=chunks[cid].source_doc_id,
-                collection_id=chunks[cid].collection_id,
-                filename=posixpath.basename(self._doc_path(chunks[cid].source_doc_id)),
-                seq=chunks[cid].seq,
-                start=chunks[cid].start,
-                end=chunks[cid].end,
-                score=score_of[cid],
-                provenance=chunks[cid].provenance,
+        scored = []
+        for cid in order:
+            path = self._doc_path(chunks[cid].source_doc_id)
+            if path is None:
+                continue  # #104: orphan chunk (owner doc gone) — drop, don't crash
+            scored.append(
+                ScoredChunk(
+                    chunk_id=cid,
+                    document_id=chunks[cid].source_doc_id,
+                    collection_id=chunks[cid].collection_id,
+                    filename=posixpath.basename(path),
+                    seq=chunks[cid].seq,
+                    start=chunks[cid].start,
+                    end=chunks[cid].end,
+                    score=score_of[cid],
+                    provenance=chunks[cid].provenance,
+                )
             )
-            for cid in order
-        ]
         # #328: for the overlay's shadowed doc, slice the re-parsed `virtual_text`
         # (the offsets index into it) instead of the stale persisted SourceDoc.text.
         if overlay is not None:
@@ -594,11 +598,17 @@ class Retriever:
                 out[r.info.resource_id] = data  # ty: ignore[unresolved-attribute]
         return out
 
-    def _doc_path(self, doc_id: str) -> str:
+    def _doc_path(self, doc_id: str) -> str | None:
         """The SourceDoc's stored path (a record field) — for the display
-        filename. Never derived by parsing the opaque id."""
+        filename. Never derived by parsing the opaque id. Returns ``None`` when
+        the doc is gone: an ORPHAN chunk whose owner was deleted (#104 re-home
+        keeps source_doc_id valid, but defend in depth — a dangling ref must drop
+        the hit here, not crash the whole search)."""
         rm = self._spec.get_resource_manager(SourceDoc)
-        doc = rm.get(doc_id).data
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError:
+            return None
         assert isinstance(doc, SourceDoc)
         return doc.path
 

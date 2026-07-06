@@ -56,6 +56,35 @@ def _chunks(spec: SpecStar, doc_id: str) -> list[DocChunk]:
     return [r.data for r in rm.list_resources((QB["source_doc_id"] == doc_id).build())]  # ty: ignore[invalid-return-type]
 
 
+async def test_fanout_dedups_identical_multiunit_content_instead_of_rechunking():
+    # #104: the alias dedup gate lives in index() / copy_from_cache, NOT the
+    # fan-out planner. A multi-unit doc (CSV = many units) enqueued DIRECTLY —
+    # e.g. a reindex after the #390 cache was invalidated, or a concurrent upload
+    # that missed the cache — must still alias to a sibling that already owns the
+    # identical content, not fan out into a second (duplicate) chunk set. This is
+    # exactly the weekly-slide-deck case (multi-page PPTX/PDF) #104 targets.
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    body = ("name\n" + "".join(f"r{i}\n" for i in range(5))).encode()
+    ingestor, coord = _build(spec, csv_batch=2)
+    (owner,) = ingestor.store(collection_id=cid, user="u", filename="wk1/people.csv", data=body)
+    (alias,) = ingestor.store(collection_id=cid, user="u", filename="wk2/people.csv", data=body)
+
+    # Index the owner whole+synchronously first, so its chunks exist BEFORE the
+    # alias's split runs the gate (avoids the concurrent-first-index race).
+    ingestor.index(owner)
+    assert len(_chunks(spec, owner)) == 5  # owner owns one chunk per row
+
+    coord.enqueue(alias, cid)
+    await coord.aclose()  # the alias's split must DEDUP via the fan-out gate
+
+    assert _chunks(spec, alias) == []  # deduped: no duplicate chunk set fanned out
+    docs = spec.get_resource_manager(SourceDoc)
+    da, db = docs.get(owner).data, docs.get(alias).data
+    assert da.status == "ready" and db.status == "ready"
+    assert db.text == da.text  # the alias carries the extracted text
+
+
 async def test_large_csv_fans_out_then_finalizes_to_ready():
     spec = make_spec(default_user="u")
     cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
