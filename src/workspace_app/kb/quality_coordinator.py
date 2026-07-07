@@ -17,6 +17,7 @@ hook's contract:
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, Any
 
 import msgspec
 from specstar import QB, SpecStar
@@ -24,6 +25,9 @@ from specstar.types import ResourceIDNotFoundError
 
 from ..resources.kb import Collection, DocChunk, SourceDoc
 from .quality import QualityScorer
+
+if TYPE_CHECKING:
+    from specstar.types import IResourceManager
 
 logger = logging.getLogger(__name__)
 
@@ -50,20 +54,75 @@ class QualityCoordinator:
             return  # collection is opt-out (no rubric) → doc stays un-scored
         chunks = self._chunk_texts(doc_id)
         if not chunks:
+            # #104: a dedup alias owns no chunks — it shares a content peer's set.
+            # Inherit that peer's already-computed verdict instead of leaving the
+            # alias neutral while the canonical shows a score (and without re-running
+            # the judge on identical text). No scored peer yet → stay neutral.
+            peer = self._scored_content_peer(doc, doc_id)
+            if peer is not None:
+                self._persist(
+                    doc_rm,
+                    doc_id,
+                    doc,
+                    acting_user,
+                    peer.quality_score,
+                    peer.quality_breakdown,
+                    peer.quality_rationale,
+                )
             return
         assessment = self._scorer.score(rubric=rubric, chunks=chunks)
         if assessment is None:
             return  # judge produced nothing usable → un-scored (neutral)
+        self._persist(
+            doc_rm,
+            doc_id,
+            doc,
+            acting_user,
+            assessment.score,
+            assessment.breakdown,
+            assessment.rationale,
+        )
+
+    def _persist(
+        self,
+        doc_rm: IResourceManager[SourceDoc],
+        doc_id: str,
+        doc: SourceDoc,
+        acting_user: str,
+        score: int | None,
+        breakdown: dict[str, Any],
+        rationale: str,
+    ) -> None:
         with doc_rm.using(user=acting_user):
             doc_rm.update(
                 doc_id,
                 msgspec.structs.replace(
                     doc,
-                    quality_score=assessment.score,
-                    quality_breakdown=assessment.breakdown,
-                    quality_rationale=assessment.rationale,
+                    quality_score=score,
+                    quality_breakdown=breakdown,
+                    quality_rationale=rationale,
                 ),
             )
+
+    def _scored_content_peer(self, doc: SourceDoc, doc_id: str) -> SourceDoc | None:
+        """A LIVE SourceDoc other than ``doc_id`` in the same collection sharing this
+        doc's ``content.file_id`` and already carrying a ``quality_score`` — the
+        verdict a chunk-less dedup alias inherits (#104). ``None`` when the content
+        has no key yet, or no peer has been scored."""
+        fid = doc.content.file_id
+        if not isinstance(fid, str) or not fid:
+            return None
+        drm = self._spec.get_resource_manager(SourceDoc)
+        for r in drm.list_resources(
+            ((QB["collection_id"] == doc.collection_id) & (QB["file_id"] == fid)).build()
+        ):
+            if r.info.resource_id == doc_id:  # ty: ignore[unresolved-attribute]
+                continue
+            peer = r.data
+            assert isinstance(peer, SourceDoc)
+            if peer.quality_score is not None:
+                return peer
+        return None
 
     def _rubric_for(self, collection_id: str) -> str:
         try:
