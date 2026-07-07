@@ -1671,7 +1671,6 @@ def register_kb_routes(
             markdown = rewrite_md_links(
                 text, doc_path=doc.path, collection_id=doc.collection_id, resolve=resolve
             )
-        chrm = spec.get_resource_manager(DocChunk)
         assert isinstance(doc.content.size, int)
         assert isinstance(doc.content.file_id, str)
         return RenderedDoc(
@@ -1682,7 +1681,12 @@ def register_kb_routes(
             file_id=doc.content.file_id,
             content_type=doc.content.content_type or "application/octet-stream",
             size=doc.content.size,
-            chunks=chrm.count_resources((QB["source_doc_id"] == doc_id).build()),
+            # #104: count by CONTENT (the same content-addressed tally as the doc
+            # list), not by source_doc_id — a dedup alias owns 0 chunks but must
+            # report the shared content's count, or detail disagrees with the list.
+            chunks=doc_chunks_for_ids(spec, doc.collection_id, {doc_id: doc.content.file_id}).get(
+                doc_id, 0
+            ),
             cited=doc_cited_count(spec, doc_id),
             created_by=user,
             updated_at=_ms(rev.info.updated_time),

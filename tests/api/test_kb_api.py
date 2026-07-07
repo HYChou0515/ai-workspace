@@ -1248,6 +1248,27 @@ def test_deleting_one_holder_of_shared_content_keeps_it_at_the_surviving_path():
     assert _chunk_ids(b)  # the surviving path still serves the shared content (no re-home)
 
 
+def test_render_document_reports_the_content_chunk_count_for_a_dedup_alias():
+    # #104: a dedup alias owns 0 chunks (it shares the canonical's content set), so
+    # counting by source_doc_id shows 0 — but the document LIST already counts by
+    # content. render_document must agree, or the same doc reads N in the list and
+    # 0 in its detail view. Both must report the shared content's chunk count.
+    client = _client()
+    cid = _new_collection(client)
+    body = b"# Deck\nalpha beta gamma delta epsilon zeta eta theta"
+    for name in ("wk1/report.md", "wk2/report.md"):
+        client.post(
+            f"/kb/collections/{cid}/documents", files={"file": (name, body, "text/markdown")}
+        )
+    _drain(client)
+    canon, alias = encode_doc_id(cid, "wk1/report.md"), encode_doc_id(cid, "wk2/report.md")
+
+    n = client.get("/kb/documents", params={"id": canon}).json()["chunks"]
+    assert n > 0
+    # the alias's detail view reports the SAME content chunk count, not its own 0
+    assert client.get("/kb/documents", params={"id": alias}).json()["chunks"] == n
+
+
 def test_delete_routes_through_the_wiki_unfold_hook():
     """#43: deleting a doc calls the wiki coordinator's un-fold hook BEFORE the
     row is gone, so a deleted source can be scrubbed from the wiki."""
