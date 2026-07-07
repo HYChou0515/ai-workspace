@@ -614,14 +614,39 @@ class ChatTurnEngine:
 
         return _gen()
 
-    def subscribe_sse(self, key: str, user_id: str = "") -> AsyncIterator[str]:
+    def subscribe_sse(
+        self, key: str, user_id: str = "", *, heartbeat_interval: float = 15.0
+    ) -> AsyncIterator[str]:
         """#43: like `subscribe`, but yields SSE-encoded frames so the endpoint is
-        a trivial `StreamingResponse(turn_engine.subscribe_sse(id))` wrapper."""
-        events = self.subscribe(key, user_id)
+        a trivial `StreamingResponse(turn_engine.subscribe_sse(id))` wrapper.
+
+        #493 symptom 1 (504): during a long, silent stretch of a turn (the model
+        thinking, a slow tool) NO event flows, and an idle ingress / proxy can cut
+        the SSE connection — the FE then looks 'stuck'. So when no event arrives
+        within `heartbeat_interval`, emit an SSE COMMENT frame (`: …`) — zero
+        payload, ignored by EventSource, but it keeps the connection (and any idle
+        timer) warm. This owns its queue directly (rather than wrapping
+        `subscribe`) so the per-event timeout cancels only a `Queue.get`, never a
+        shared broadcast generator."""
+        session = self._ws_session(key)
+        q: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        session.subscribers[q] = user_id
+        if user_id:
+            session.publish(Presence(users=session.roster()))
 
         async def _frames() -> AsyncIterator[str]:
-            async for ev in events:
-                yield to_sse(ev)
+            try:
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                    except TimeoutError:
+                        yield ": heartbeat\n\n"  # SSE comment — keeps the stream warm
+                        continue
+                    yield to_sse(ev)
+            finally:
+                session.subscribers.pop(q, None)
+                if user_id:
+                    session.publish(Presence(users=session.roster()))
 
         return _frames()
 

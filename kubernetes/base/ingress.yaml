@@ -6,6 +6,13 @@ metadata:
     # Root deploy by default. For a sub-path deploy the overlay rewrites the
     # prefix away so the backend sees "/" (see overlays/production).
     nginx.ingress.kubernetes.io/rewrite-target: /
+    # #493 symptom 1 (504): the long-lived agent SSE stream (GET .../stream) has
+    # silent stretches while the model thinks — the default 60s proxy-read-timeout
+    # cuts it and the chat looks 'stuck'. Raise it well past a turn's length; the
+    # app ALSO emits an SSE heartbeat every ~15s (subscribe_sse) so even a stricter
+    # proxy keeps the connection warm. The message POST no longer needs a long
+    # timeout — it detaches a long turn and returns 202 (send_await_timeout).
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     # Per-INVESTIGATION sticky routing (#16): the in-pod runtime (sandbox /
     # kernel / in-flight broadcast turn) lives on one pod, and an item is shared
     # across its users + chats — so every request for the same item must hit the

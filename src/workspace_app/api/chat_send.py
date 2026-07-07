@@ -16,6 +16,8 @@ citation-bubbling logic.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import TYPE_CHECKING
 
 from ..agent.context import KbSearchBudget
@@ -74,6 +76,7 @@ class ChatSendService:
         kb_max_searches_per_turn: int | None = None,
         kb_max_searches_ceiling: int = 10,
         flush_item: Callable[[str], Awaitable[None]],
+        send_await_timeout: float = 25.0,
     ) -> None:
         self._spec = spec
         self._locator = locator
@@ -93,6 +96,14 @@ class ChatSendService:
         # #492: flush this item's live sandbox to durable at turn-end (guarantee
         # (2)'s Y=1 turn) — a no-op when the item is cold.
         self._flush_item = flush_item
+        # #493 symptom 1 (504): how long the POST awaits its own turn before
+        # DETACHING it to the background. Snappy turns finish within this and the
+        # POST returns after the reply is persisted (the historical behaviour every
+        # test + the instant-reply UX rely on); a long agent turn detaches and the
+        # POST returns 202 well before an ingress `proxy-read-timeout` (default 60s)
+        # would 504 it — the turn keeps running on the engine's worker and the
+        # client watches the live SSE stream, refetching the thread on `done`.
+        self._send_await_timeout = send_await_timeout
         self._conv_rm = spec.get_resource_manager(Conversation)
 
     async def send(
@@ -301,10 +312,20 @@ class ChatSendService:
         # #492: flush the item's live sandbox to durable when THIS turn ends, so
         # durable lags by at most one turn (guarantee (2)). Runs on the engine's
         # worker, off this POST's back; a flush failure never fails the turn.
-        await self._turn_engine.enqueue(
+        fut = self._turn_engine.enqueue(
             engine_key,
             turn_content,
             ctx,
             on_complete=persist,
             on_turn_end=lambda: self._flush_item(investigation_id),
         )
+        # #493 symptom 1 (504): await THIS turn's completion, but only up to a
+        # deadline — then DETACH it so a long turn can't hang the POST until the
+        # ingress `proxy-read-timeout` fires a 504. `shield` keeps the turn's
+        # completion future alive across our timeout (the worker still resolves it
+        # via `fut.set_result`), so a detach is not a cancel. Fast turns resolve
+        # `fut` well within the deadline → the POST returns after the reply is
+        # persisted, exactly as before; slow turns run on in the background and the
+        # client follows the live SSE stream.
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(asyncio.shield(fut), timeout=self._send_await_timeout)

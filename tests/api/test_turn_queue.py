@@ -198,6 +198,25 @@ async def test_subscribe_sse_yields_sse_encoded_frames():
     assert '"message_delta"' in got[0]
 
 
+async def test_subscribe_sse_emits_a_heartbeat_when_the_turn_is_silent():
+    """#493 symptom 1 (504): during a silent stretch (no events) the stream emits
+    an SSE comment heartbeat so an idle ingress / proxy doesn't cut the connection
+    and leave the chat looking stuck."""
+
+    class _Runner:
+        async def run(self, content, ctx):  # pragma: no cover — no turn runs here
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+    frames = engine.subscribe_sse("inv", heartbeat_interval=0.01)
+    it = frames.__aiter__()
+    # No event is ever published, so the first frame the idle stream produces is a
+    # heartbeat (an SSE comment: `:` prefix, ignored by EventSource).
+    frame = await asyncio.wait_for(it.__anext__(), 3)
+    assert frame == ": heartbeat\n\n"
+    await frames.aclose()
+
+
 async def test_forget_on_an_unknown_key_is_a_noop():
     """forget for a key that never enqueued/subscribed (no workspace session)
     returns cleanly — e.g. closing a KB chat, which uses stream() not the queue."""

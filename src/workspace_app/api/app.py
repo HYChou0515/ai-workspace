@@ -191,6 +191,11 @@ def create_app(
     # (shared-vol local / non-http), unchanged. __main__ derives it from
     # settings.sandbox.kind == "http" and settings.sandbox.http.host_managed_durable.
     host_managed_durable: bool = False,
+    # #493 symptom 1 (504): how long a message POST awaits its own turn before
+    # detaching it to the engine's background worker and returning 202. Snappy
+    # turns finish within this (unchanged behaviour); a long turn detaches well
+    # before an ingress proxy-read-timeout (default 60s) would 504 the POST.
+    send_await_timeout: float = 25.0,
     # P3.0: background code-repo sync sweeper interval. None ⇒ sweeper
     # disabled (manual /sync only). __main__ derives this from
     # Settings.sync_check_interval_sec.
@@ -855,6 +860,8 @@ def create_app(
         kb_max_searches_ceiling=kb_max_searches_ceiling,
         # #492: flush the item's live sandbox to durable at turn-end (guarantee 2).
         flush_item=registry.flush,
+        # #493 symptom 1 (504): detach a long turn from its POST past this deadline.
+        send_await_timeout=send_await_timeout,
     )
 
     register_chat_routes(
