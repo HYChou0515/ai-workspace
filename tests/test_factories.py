@@ -40,6 +40,8 @@ from workspace_app.factories import (
     load_settings,
 )
 from workspace_app.filestore.memory import MemoryFileStore
+from workspace_app.filestore.migrating import MigratingFileStore
+from workspace_app.filestore.nfs_tree import NfsTreeFileStore
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.embedder import HashEmbedder, LitellmEmbedder
@@ -283,6 +285,50 @@ def test_get_filestore_dispatch():
     assert isinstance(get_filestore(spec_fs, spec), SpecstarFileStore)
     with pytest.raises(ValueError):
         get_filestore(bogus, spec)
+
+
+def test_get_filestore_nfs_tree(tmp_path):
+    """#492: kind: nfs_tree builds the on-disk tree store; migrate_from wraps it
+    in the M2 dual-read layer over specstar."""
+    spec = get_spec(Settings())
+    bare = replace(
+        Settings(),
+        filestore=replace(FilestoreSettings(), kind="nfs_tree", nfs_root=str(tmp_path / "nfs")),
+    )
+    assert isinstance(get_filestore(bare, spec), NfsTreeFileStore)
+
+    migrating = replace(
+        Settings(),
+        filestore=replace(
+            FilestoreSettings(),
+            kind="nfs_tree",
+            nfs_root=str(tmp_path / "nfs"),
+            migrate_from="specstar",
+        ),
+    )
+    assert isinstance(get_filestore(migrating, spec), MigratingFileStore)
+
+
+def test_get_filestore_nfs_tree_requires_root():
+    spec = get_spec(Settings())
+    no_root = replace(Settings(), filestore=replace(FilestoreSettings(), kind="nfs_tree"))
+    with pytest.raises(ValueError, match="nfs_root"):
+        get_filestore(no_root, spec)
+
+
+def test_get_filestore_nfs_tree_rejects_bad_migrate_from(tmp_path):
+    spec = get_spec(Settings())
+    bad = replace(
+        Settings(),
+        filestore=replace(
+            FilestoreSettings(),
+            kind="nfs_tree",
+            nfs_root=str(tmp_path / "nfs"),
+            migrate_from="bogus",
+        ),
+    )
+    with pytest.raises(ValueError, match="migrate_from"):
+        get_filestore(bad, spec)
 
 
 def test_get_spec_threads_superusers_from_settings():

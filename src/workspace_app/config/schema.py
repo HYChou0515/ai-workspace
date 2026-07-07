@@ -147,9 +147,18 @@ class SandboxHostSettings:
 # ─── filestore ──────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class FilestoreSettings:
-    kind: str = "memory"  # memory | specstar
+    kind: str = "memory"  # memory | specstar | nfs_tree
     pg_dsn: str = ""
     disk_root: str = ""
+    # #492: `kind: nfs_tree` — the durable workspace store is a plain on-disk
+    # tree under `nfs_root` (a ReadWriteMany NFS mount), so the sandbox host can
+    # rsync a sandbox's working dir straight to/from it (no per-file HTTP + DB
+    # write, which was the slow/hang-prone mirror). `migrate_from: specstar`
+    # wraps it in the M2 dual-read migration layer (read NFS, fall back to the
+    # specstar-blob store + lazy backfill) for a zero-downtime cut-over; "" ⇒
+    # bare tree (post-migration).
+    nfs_root: str = ""
+    migrate_from: str = ""  # "" | specstar
     # #208: libpq connect timeout (seconds) injected into pg_dsn so an
     # unreachable Postgres fails fast with a clear error instead of hanging the
     # boot silently for minutes at the first connection (specstar's engine sets

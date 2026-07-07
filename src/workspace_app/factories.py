@@ -44,6 +44,8 @@ from .failover.llm import FallbackLlm, FallbackVlm
 from .failover.observe import make_switch_logger
 from .failover.registry import get_cooldown_registry
 from .filestore.memory import MemoryFileStore
+from .filestore.migrating import MigratingFileStore
+from .filestore.nfs_tree import NfsTreeFileStore
 from .filestore.protocol import FileStore
 from .filestore.specstar_impl import SpecstarFileStore
 from .kb.chunker import Chunker, FixedTokenChunker
@@ -286,8 +288,26 @@ def get_filestore(settings: Settings, spec: SpecStar) -> FileStore:
             return MemoryFileStore()
         case "specstar":
             return SpecstarFileStore(spec)
+        case "nfs_tree":
+            return _build_nfs_tree_filestore(settings, spec)
         case other:
             raise ValueError(f"unknown filestore.kind: {other!r}")
+
+
+def _build_nfs_tree_filestore(settings: Settings, spec: SpecStar) -> FileStore:
+    """#492: the on-disk NFS-tree durable store, optionally wrapped in the M2
+    dual-read migration layer over the legacy specstar-blob store."""
+    fs = settings.filestore
+    if not fs.nfs_root:
+        raise ValueError("filestore.kind: nfs_tree requires filestore.nfs_root")
+    primary = NfsTreeFileStore(fs.nfs_root)
+    match fs.migrate_from:
+        case "":
+            return primary
+        case "specstar":
+            return MigratingFileStore(primary, SpecstarFileStore(spec))
+        case other:
+            raise ValueError(f"unknown filestore.migrate_from: {other!r}")
 
 
 def get_runner(settings: Settings) -> AgentRunner:
