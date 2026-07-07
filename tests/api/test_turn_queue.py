@@ -214,7 +214,7 @@ async def test_subscribe_sse_emits_a_heartbeat_when_the_turn_is_silent():
     # heartbeat (an SSE comment: `:` prefix, ignored by EventSource).
     frame = await asyncio.wait_for(it.__anext__(), 3)
     assert frame == ": heartbeat\n\n"
-    await frames.aclose()
+    await frames.aclose()  # ty: ignore[unresolved-attribute]
 
 
 async def test_forget_on_an_unknown_key_is_a_noop():

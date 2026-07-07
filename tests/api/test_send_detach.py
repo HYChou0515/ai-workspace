@@ -42,7 +42,7 @@ class _GatedRunner:
 
 def _conv_for(spec, iid: str) -> Conversation:
     rm = spec.get_resource_manager(Conversation)
-    for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+    for r in rm.list_resources(QB.all()):
         data = r.data
         assert isinstance(data, Conversation)
         if data.item_id == iid:
@@ -58,7 +58,7 @@ async def test_a_long_turn_detaches_from_the_post_and_returns_202():
         spec=spec,
         sandbox=MockSandbox(),
         filestore=MemoryFileStore(),
-        runner=_GatedRunner(gate),
+        runner=_GatedRunner(gate),  # ty: ignore[invalid-argument-type]
         # A short deadline so the still-gated turn outlives it and detaches.
         send_await_timeout=0.05,
     )
