@@ -55,6 +55,17 @@ def main() -> None:
         f"tools_dir={settings.tools_dir}",
         flush=True,
     )
+    # Echo the EFFECTIVE timeouts + archive so an operator can confirm the
+    # SANDBOX_HOST_* env actually took — the app's config.yaml does NOT reach
+    # here (#251/#493), so this print is the only external signal of what the
+    # host really runs (a long command is killed at exec_timeout, so a silent
+    # default of 60s looked like a mystery hang).
+    print(
+        f"→ timeouts: exec_timeout={settings.exec_timeout:g}s "
+        f"log_timeout={settings.log_timeout:g}s idle_ttl={settings.idle_ttl:g}s "
+        f"| nfs_root={settings.nfs_root}",
+        flush=True,
+    )
     check_cgroup_ready(cgroup_root)  # fail loud: isolation needs cgroup v2
     app = build_host_app(settings, pod_ip=os.environ.get("POD_IP"))
     print("✓ sandbox host ready", flush=True)

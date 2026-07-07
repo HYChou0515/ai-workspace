@@ -113,12 +113,16 @@
 #   #   read_timeout: 0          # 0 = no HTTP read deadline (host timeouts bound it)
 
 # ─── sandbox_host ─ MOVED to a standalone service (#251) ─────────────
-# The sandbox host is now its OWN project (`sandbox-host/`, own deps/image) and
-# is configured by `SANDBOX_HOST_*` ENV VARS, not this file — see
-# `deploy/sandbox-host.example.yaml` and `docs/sandbox-host.md`. The app only
-# needs `sandbox.kind: http` + `sandbox.http.base_url` above to reach it.
-# (This block is retained, commented, only so existing configs that still carry
-# a `sandbox_host:` section keep validating; the app no longer reads it.)
+# ⚠️  THE APP DOES NOT READ THIS SECTION. The sandbox host is now its OWN project
+# (`sandbox-host/`, own deps/image), configured ONLY by `SANDBOX_HOST_*` ENV VARS
+# on the HOST pod — NOT this file. Setting e.g. `exec_timeout` / `log_timeout`
+# here has NO EFFECT (#493): a long agent command is still killed at the host's
+# own default (60s) until you set `SANDBOX_HOST_EXEC_TIMEOUT` on the host pod and
+# rollout. The `→ env …` arrows below name the env var each field MAPS TO — set
+# THAT, in `deploy/sandbox-host.example.yaml` (see also `docs/sandbox-host.md`).
+# The app only needs `sandbox.kind: http` + `sandbox.http.base_url` above to
+# reach the host. (This block is retained, commented, only so existing configs
+# that still carry a `sandbox_host:` section keep validating.)
 # sandbox_host:
 #   bind: 0.0.0.0:8000         # → env SANDBOX_HOST_BIND on the host pod
 #   uid_min: 100000            # → SANDBOX_HOST_UID_MIN / _UID_MAX
