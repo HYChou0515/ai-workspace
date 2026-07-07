@@ -132,6 +132,44 @@ def test_teardown_of_an_alias_keeps_the_shared_content(
     assert _collection_chunk_ids(spec, cid) == before
 
 
+def test_teardown_deletes_a_legacy_docs_own_chunks_even_with_a_content_sibling(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # Existing-data (pre-reindex) case: before dedup runs, duplicate content lives
+    # as SEPARATE per-doc chunk sets carrying source_file_id == "" (no content
+    # key). Tearing down one such doc must delete ITS OWN legacy chunks even though
+    # a sibling shares the content.file_id — those chunks are not the shared set,
+    # so keeping them would orphan-leak (R6). The sibling's own chunks are untouched.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"alpha beta gamma delta epsilon zeta"
+    (a,) = ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
+    (b,) = ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
+    # Simulate the pre-#104 state: give BOTH docs their own legacy (sfid="") chunk
+    # set, as if indexed before content-addressing existed.
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["collection_id"] == cid).build()):
+        chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+    for did in (a, b):
+        chrm.create(
+            DocChunk(
+                collection_id=cid,
+                source_doc_id=did,
+                source_file_id="",  # legacy: no content key
+                seq=0,
+                start=0,
+                end=5,
+                text="alpha",
+                embedding=[0.0] * EMBED_DIM,
+            )
+        )
+
+    teardown_doc_chunks(spec, a)  # a shares content.file_id with b, but its chunks are its OWN
+
+    assert _chunks_of(spec, a) == []  # a's own legacy chunks removed (no leak)
+    assert _chunks_of(spec, b)  # the sibling's own chunks untouched
+
+
 def test_teardown_deletes_the_last_content_holders_chunks(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

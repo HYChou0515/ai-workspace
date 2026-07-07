@@ -84,9 +84,12 @@ def teardown_doc_chunks(spec: SpecStar, doc_id: str) -> None:
     not the (removed) source-doc cascade:
 
     - If ANOTHER path in the collection still holds this doc's content
-      (``content.file_id``), LEAVE the shared chunk set in place — it resolves to
-      that surviving sibling by file_id (no re-home; the interim
-      ``rehome_shared_chunks`` this replaces is gone).
+      (``content.file_id``), LEAVE the SHARED (content-addressed) chunk set in
+      place — it resolves to that surviving sibling by file_id (no re-home; the
+      interim ``rehome_shared_chunks`` this replaces is gone). But still drop this
+      doc's OWN legacy chunks (``source_file_id == ""``): pre-#104 duplicate
+      content lives as SEPARATE per-doc sets carrying no content key, so those are
+      not shared and would orphan-leak if kept (R6).
     - Otherwise this is the LAST holder, so delete the content's chunk set: the
       UNION of the doc's own chunks (``source_doc_id``) and any content-addressed
       chunks (``source_file_id``, collection-scoped) — covering legacy
@@ -101,7 +104,10 @@ def teardown_doc_chunks(spec: SpecStar, doc_id: str) -> None:
     assert isinstance(doc, SourceDoc)
     fid = _doc_file_id(doc)
     if fid and _content_has_other_holder(srm, doc.collection_id, fid, doc_id):
-        return  # a sibling still holds the content — keep the shared chunk set
+        # A sibling still holds the content — keep the shared (content-addressed)
+        # set, but the doc's own uncontent-keyed legacy chunks are not shared.
+        _delete_legacy_own_chunks(spec, doc_id)
+        return
     _delete_content_chunks(spec, doc.collection_id, doc_id, fid)
 
 
@@ -137,6 +143,18 @@ def _content_has_other_holder(
         if r.info.resource_id != doc_id:  # ty: ignore[unresolved-attribute]
             return True
     return False
+
+
+def _delete_legacy_own_chunks(spec: SpecStar, doc_id: str) -> None:
+    """Delete only this doc's OWN uncontent-keyed chunks (``source_doc_id ==
+    doc_id`` AND ``source_file_id == ""``). Used on the keep branch of teardown: a
+    content sibling survives, so the SHARED content-addressed set stays, but a
+    pre-#104 doc's own legacy chunks carry no content key and are not shared —
+    keeping them past the doc's deletion would orphan-leak (R6)."""
+    chrm = spec.get_resource_manager(DocChunk)
+    cond = (QB["source_doc_id"] == doc_id) & (QB["source_file_id"] == "")
+    for r in chrm.list_resources(cond.build()):
+        chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
 
 
 def _delete_content_chunks(spec: SpecStar, collection_id: str, doc_id: str, file_id: str) -> None:
