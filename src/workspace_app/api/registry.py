@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -30,7 +31,13 @@ class _SyncHook(Protocol):
     key, regardless of whether the caller calls it 'workspace' or
     'investigation'."""
 
-    async def restore(self, workspace_id: str, handle: SandboxHandle) -> int: ...
+    async def restore(
+        self,
+        workspace_id: str,
+        handle: SandboxHandle,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> int: ...
     async def mirror(self, workspace_id: str, handle: SandboxHandle) -> int: ...
 
 
@@ -147,10 +154,20 @@ class InvestigationRegistry:
             session.last_active = _utcnow()
         return session.handle
 
-    async def ensure_handle(self, session: InvestigationSession) -> SandboxHandle:
+    async def ensure_handle(
+        self,
+        session: InvestigationSession,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
         # this, N parallel POSTs to the same investigation would each spin
         # up their own container.
+        #
+        # #492 P11: `on_progress(done, total)` (the turn's restore-progress sink)
+        # threads down to the app-side SandboxSync.restore on a cold wake, so a
+        # slow restore streams "還原中 N/M" instead of a blank running card. None
+        # on non-turn wakes (file-op rebuild) / host-managed mode (host rsyncs).
         async with session.lock:
             # #366 face A: a shared-address (http) session's cached handle may be
             # DEAD — the host reaped the sandbox out from under us (30-min idle
@@ -161,7 +178,9 @@ class InvestigationRegistry:
             if session.handle is None or (
                 self.address is not None and not await self._alive(session.handle)
             ):
-                session.handle = await self._acquire(session.investigation_id)
+                session.handle = await self._acquire(
+                    session.investigation_id, on_progress=on_progress
+                )
             # Refresh the GLOBAL heartbeat on every wake/use (not just the first)
             # so another pod's idle reaper sees this item as live (#345).
             if self.activity is not None:
@@ -185,7 +204,9 @@ class InvestigationRegistry:
             return True  # reachable but slow ⇒ it exists — do not rebuild
         return True
 
-    async def _acquire(self, item: str) -> SandboxHandle:
+    async def _acquire(
+        self, item: str, *, on_progress: Callable[[int, int], None] | None = None
+    ) -> SandboxHandle:
         """Materialise (or converge on) the item's single live sandbox handle.
 
         #366: when an address store is wired (http backend), the handle is SHARED
@@ -213,7 +234,7 @@ class InvestigationRegistry:
         # skips its own per-file restore. Otherwise restore from the durable
         # snapshot when the dir was cold, as before.
         if fresh and self.sync is not None and not self.host_managed_durable:
-            await self.sync.restore(item, handle)
+            await self.sync.restore(item, handle, on_progress=on_progress)
         if self.address is not None:
             # Publish the fresh address AFTER restore. Swap (CAS on the dead one)
             # when replacing a reaped address, else claim the empty slot; either

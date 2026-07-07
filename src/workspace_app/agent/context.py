@@ -88,13 +88,23 @@ class AgentToolContext:
     sync: SandboxSync | None = None
     sandbox_spec: SandboxSpec = field(default_factory=SandboxSpec)
     handle: SandboxHandle | None = None
-    ensure_sandbox_via: Callable[[], Awaitable[SandboxHandle]] | None = None
+    # #492 P11: the wake hook receives the turn's restore-progress sink so a cold
+    # wake's snapshot restore can stream (done, total) back to the turn. Callers
+    # that don't care (tests) accept it and ignore it.
+    ensure_sandbox_via: (
+        Callable[[Callable[[int, int], None] | None], Awaitable[SandboxHandle]] | None
+    ) = None
     # The investigation's attached AgentConfig (model + prompt) for this
     # turn; when set, LitellmAgentRunner uses it instead of its default.
     agent_config: AgentConfig | None = None
     # Optional sink the exec tool streams a command's stdout to while it runs,
     # so the runner can emit live tool-log events. Set per-run by the runner.
     on_exec_output: OutputSink | None = None
+    # #492 P11: optional sink for cold-wake restore progress — called (done, total)
+    # per restored file so the runner can emit RestoreProgress events ("還原中 N/M")
+    # instead of leaving a blank running card. Set per-run by the runner (like
+    # on_exec_output); None ⇒ no progress surfaced (host-managed / non-turn wakes).
+    on_restore_progress: Callable[[int, int], None] | None = None
     # read_file caps (deploy config; the API layer sets these from Settings).
     # A read past either cap is truncated with a notice; the agent pages with
     # offset/limit. Defaults sized for a large-context model.
@@ -320,7 +330,9 @@ class AgentToolContext:
         assert self.sandbox is not None  # file/exec tools imply an RCA context
         if self.handle is None:
             if self.ensure_sandbox_via is not None:
-                self.handle = await self.ensure_sandbox_via()
+                # #492 P11: hand the wake hook the restore-progress sink so a slow
+                # cold-wake restore streams "還原中 N/M" to the turn.
+                self.handle = await self.ensure_sandbox_via(self.on_restore_progress)
             else:
                 self.handle = await self.sandbox.create(self.sandbox_spec)
             # Eagerly install the allowed packages into the fresh sandbox

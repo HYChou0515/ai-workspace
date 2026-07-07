@@ -269,7 +269,7 @@ class _FlakyMirrorSync:
         self.boom = boom
         self.mirrored: list[str] = []
 
-    async def restore(self, workspace_id: str, handle: SandboxHandle) -> int:
+    async def restore(self, workspace_id: str, handle: SandboxHandle, *, on_progress=None) -> int:
         return 0
 
     async def mirror(self, workspace_id: str, handle: SandboxHandle) -> int:
@@ -434,7 +434,7 @@ class _RecordingSync:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []  # (op, investigation_id)
 
-    async def restore(self, workspace_id, handle):
+    async def restore(self, workspace_id, handle, *, on_progress=None):
         self.calls.append(("restore", workspace_id))
         return 0
 
@@ -451,6 +451,35 @@ async def test_ensure_handle_calls_sync_restore_after_create():
     await registry.ensure_handle(s)
     assert sync.calls == [("restore", "ws-1")]
     assert sandbox.create_calls == 1
+
+
+async def test_ensure_handle_forwards_on_progress_to_sync_restore_492():
+    """#492 P11: a turn's restore-progress sink threads ensure_handle → _acquire
+    → sync.restore, so a slow cold wake can stream '還原中 N/M' to the turn's
+    stream instead of leaving a blank running card."""
+    sandbox = _CountingSandbox()
+    forwarded: list[object] = []
+
+    class _ProgressSync:
+        async def restore(self, workspace_id, handle, *, on_progress=None):
+            forwarded.append(on_progress)
+            if on_progress is not None:
+                on_progress(1, 2)  # simulate one restore tick
+            return 0
+
+        async def mirror(self, workspace_id, handle):
+            return 0
+
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), sync=_ProgressSync()
+    )
+    s = await registry.session("ws-1")
+    ticks: list[tuple[int, int]] = []
+    await registry.ensure_handle(s, on_progress=lambda d, t: ticks.append((d, t)))
+    # The sink is threaded through to sync.restore …
+    assert len(forwarded) == 1 and forwarded[0] is not None
+    # … and a tick it emits actually reaches the turn's sink.
+    assert ticks == [(1, 2)]
 
 
 async def test_ensure_handle_skips_restore_when_handle_already_alive():

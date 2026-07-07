@@ -18,7 +18,7 @@ import contextlib
 import os
 import tempfile
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -80,11 +80,25 @@ class SandboxSync:
             }
         )
 
-    async def restore(self, workspace_id: str, handle: SandboxHandle) -> int:
+    async def restore(
+        self,
+        workspace_id: str,
+        handle: SandboxHandle,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> int:
         started = time.monotonic()
         n = 0
         n_bytes = 0
-        for path in await self._fs.ls(workspace_id):
+        paths = await self._fs.ls(workspace_id)
+        total = len(paths)
+        # #492 P11: stream (done, total) so a slow cold wake shows "還原中 N/M"
+        # instead of a blank running card. A leading 0/total makes the card
+        # appear immediately with the fraction known upfront; then one tick per
+        # restored file. An empty workspace wakes instantly → no frame at all.
+        if on_progress is not None and total:
+            on_progress(0, total)
+        for path in paths:
             # Stream FileStore → sandbox through a staging file so a big file
             # never sits whole in RAM on wake (issue #219).
             with _staging_file() as tmp:
@@ -92,6 +106,8 @@ class SandboxSync:
                 await self._sb.upload_file(handle, tmp, path)
                 n_bytes += tmp.stat().st_size
             n += 1
+            if on_progress is not None:
+                on_progress(n, total)
         # Seed the diff state from the just-restored sandbox so the first mirror
         # after a wake is a no-op (nothing has changed yet).
         self._versions[workspace_id] = {

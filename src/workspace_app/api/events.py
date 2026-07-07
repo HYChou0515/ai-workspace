@@ -169,6 +169,20 @@ class FailoverSwitch:
 
 
 @dataclass(frozen=True)
+class RestoreProgress:
+    """#492 P11: the item's sandbox was cold, so before the turn can run its
+    durable snapshot is being restored file-by-file. `done`/`total` count files
+    copied so the FE shows "還原中 N/M" instead of a blank running card while a
+    slow cold wake completes. Ephemeral — a transient status line, never
+    persisted; the turn proceeds normally once restore finishes. Only the
+    app-side restore path emits these (host-managed rsync restore is fast)."""
+
+    done: int
+    total: int
+    type: Literal["restore_progress"] = "restore_progress"
+
+
+@dataclass(frozen=True)
 class Presence:
     """#455: the live roster of an item's stream — the distinct users currently
     subscribed to its `/stream`. Broadcast whenever a viewer joins or leaves, so
@@ -192,6 +206,7 @@ AgentEvent = (
     | RepetitionStopped  # #113: model degenerated into a repetition loop
     | AgentMetrics
     | FailoverSwitch  # #249/#131: chat model switched mid-turn (ephemeral notice)
+    | RestoreProgress  # #492 P11: cold-wake snapshot restore progress (ephemeral)
     | UserMessage  # #43: broadcast-only (a human's message on the shared stream)
     | FileChanged  # #43: broadcast-only (a workspace file changed)
     | Presence  # #455: broadcast-only (live viewer roster on the item stream)

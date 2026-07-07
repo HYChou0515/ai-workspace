@@ -20,6 +20,7 @@ from workspace_app.agent import AgentToolContext
 from workspace_app.api.events import (
     FailoverSwitch,
     MessageDelta,
+    RestoreProgress,
     RunDone,
     RunError,
     ToolEnd,
@@ -56,6 +57,14 @@ def test_failover_switch_serializes_to_an_sse_frame():
     frame = to_sse(FailoverSwitch(from_model="m1", reason="TimeoutError"))
     assert '"type": "failover_switch"' in frame
     assert '"from_model": "m1"' in frame and '"reason": "TimeoutError"' in frame
+
+
+def test_restore_progress_serializes_to_an_sse_frame():
+    """#492 P11: the cold-wake restore-progress event streams (done, total) so the
+    FE can render "還原中 N/M" instead of a blank running card."""
+    frame = to_sse(RestoreProgress(done=3, total=10))
+    assert '"type": "restore_progress"' in frame
+    assert '"done": 3' in frame and '"total": 10' in frame
 
 
 def test_final_tokens_prefers_exact_but_falls_back_when_zero_or_absent():
