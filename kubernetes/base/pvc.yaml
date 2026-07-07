@@ -41,3 +41,23 @@ spec:
     requests:
       storage: 20Gi
   # storageClassName: ""   # RWX class; may differ from rca-data's (scratch tier)
+# ---
+# #492 host-managed NFS durable (opt-in — an ALTERNATIVE to the local shared-dir
+# topology above). The durable workspace archive as a plain file tree, shared RWX
+# between the app pods (cold reads + uploads via FILESTORE_KIND=nfs_tree) and the
+# standalone sandbox-host (which rsyncs each item's live dir to/from it). Uncomment
+# this claim + the `workspaces` volume/mount in deployment.yaml + configmap.yaml,
+# and set the sandbox-host's SANDBOX_HOST_NFS_ROOT to the SAME tree. MUST be an
+# NFS-backed ReadWriteMany class (root_squash is fine — the host rsyncs WITHOUT
+# preserving ownership, then chowns on its local copy).
+# apiVersion: v1
+# kind: PersistentVolumeClaim
+# metadata:
+#   name: workspaces
+# spec:
+#   accessModes:
+#     - ReadWriteMany
+#   resources:
+#     requests:
+#       storage: 20Gi
+#   # storageClassName: nfs   # MUST be an NFS RWX class

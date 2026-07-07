@@ -45,6 +45,14 @@ spec:
             # archive. RWX so every replica reads/writes the same live dir.
             - name: scratch
               mountPath: /scratch
+            # #492 host-managed NFS durable (opt-in — see configmap.yaml). When the
+            # sandbox runs on the standalone HTTP host and FILESTORE_KIND=nfs_tree,
+            # the app reads/writes the durable workspace tree here (the SAME RWX/NFS
+            # PVC the host rsyncs to). Uncomment WITH the `workspaces` volume below
+            # and provision the PVC (pvc.yaml). Leave off for the local shared-dir
+            # topology (the default) — apply would fail without the claim.
+            # - name: workspaces
+            #   mountPath: /mnt/workspaces
           # #345 isolation (per-item OS-user + cgroup). The base runs WITHOUT it
           # (SANDBOX_ISOLATION_ENABLED="false"): most clusters forbid CAP_SETUID
           # and the cgroup write, and the shared-dir fix already cures the data
@@ -84,3 +92,9 @@ spec:
         - name: scratch
           persistentVolumeClaim:
             claimName: rca-scratch
+        # #492 host-managed NFS durable (opt-in): the SAME RWX/NFS claim the
+        # sandbox-host mounts (deploy/sandbox-host.example.yaml). Uncomment with the
+        # matching volumeMount above + the `workspaces` PVC (pvc.yaml).
+        # - name: workspaces
+        #   persistentVolumeClaim:
+        #     claimName: workspaces
