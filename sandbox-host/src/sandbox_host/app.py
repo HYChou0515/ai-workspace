@@ -201,23 +201,31 @@ class _HostController:
         handle = await self.sandbox.create(spec)
         self._last_active[handle.id] = self.clock()
         # #492: restore the durable archive into the fresh local dir (no-op when
-        # nothing archived yet — a brand-new item starts empty). Ready-marking
-        # stays the caller's job, done AFTER this returns, so a half-restore is
-        # never marked authoritative.
+        # nothing archived yet — a brand-new item starts empty), then mark the
+        # sandbox ready. rsync restore is SYNCHRONOUS here, so by the time create
+        # returns the dir is complete and authoritative — the host owns readiness
+        # in the archive path (the app no longer runs its own restore). mark_ready
+        # is written LAST so a crash mid-restore leaves it absent and persist
+        # (gated on ready) can't push a half-restored dir back over the archive.
         if self._archive is not None and item_id is not None:
             self._item_of[handle.id] = item_id
             await self._archive.restore(item_id, self.sandbox.workspace_dir(handle))
+            await self.sandbox.mark_ready(handle)
         return handle
 
     async def persist(self, rid: str, *, delete: bool) -> None:
         """#492: rsync the sandbox's live working dir → its durable NFS archive.
-        A no-op when no archive is wired or this handle has no item mapping."""
+        A no-op when no archive is wired, this handle has no item mapping, or the
+        sandbox is not ready (a half-restored dir must never overwrite the
+        archive — the #492 Q9 `.ready` gate on persist, so `--delete` can't wipe
+        durable data)."""
         item = self._item_of.get(rid)
         if self._archive is None or item is None:
             return
-        await self._archive.persist(
-            item, self.sandbox.workspace_dir(SandboxHandle(id=rid)), delete=delete
-        )
+        handle = SandboxHandle(id=rid)
+        if not await self.sandbox.is_ready(handle):
+            return
+        await self._archive.persist(item, self.sandbox.workspace_dir(handle), delete=delete)
 
     async def kill(self, rid: str) -> None:
         self._last_active.pop(rid, None)

@@ -99,3 +99,26 @@ async def test_kill_drops_the_item_mapping_so_a_later_persist_is_a_noop():
         await c.delete(f"/sandboxes/{rid}")
         await c.post(f"/sandboxes/{rid}/persist", json={"delete": True})
     assert archive.persisted == []
+
+
+async def test_create_with_item_marks_the_sandbox_ready():
+    """#492: rsync restore is synchronous, so the host marks the archive-restored
+    sandbox ready itself (the app no longer runs its own restore)."""
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url="http://h", archive=_FakeArchive())
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-42"})).json()["remote_id"]
+        assert (await c.get(f"/sandboxes/{rid}/ready")).json()["ready"] is True
+
+
+async def test_persist_is_gated_on_readiness():
+    """#492 Q9: persist must NOT push a not-ready (half-restored) dir back over
+    the archive — else a --delete could wipe durable data."""
+    backend = MockSandbox()
+    archive = _FakeArchive()
+    app = make_host_app(backend, advertise_url="http://h", archive=archive)
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-42"})).json()["remote_id"]
+        backend._ready.discard(rid)  # simulate a mid-restore / not-yet-ready sandbox
+        assert (await c.post(f"/sandboxes/{rid}/persist", json={"delete": True})).status_code == 204
+    assert archive.persisted == []  # gated out
