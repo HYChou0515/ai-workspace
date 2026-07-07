@@ -92,22 +92,31 @@ class HttpSandbox:
         raise exc_type(message)
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
-        # #345 `sandbox_id` is the local-sandbox-on-shared-vol affordance; the
-        # HTTP host owns its OWN per-sandbox lifecycle + storage and mints the
-        # handle (pod_url+remote_id), so the hint does not apply here — accepted
-        # for protocol compatibility and ignored.
-        del sandbox_id
+        # #492: `sandbox_id` is the workspace item id. The host now uses it to
+        # restore the item's durable working dir from the NFS archive into the
+        # fresh sandbox (and later persists it back), so pass it through as
+        # `item_id`. A host with no archive configured simply ignores it, and an
+        # older host ignores the extra field — so this stays backward-compatible.
         resp = await self._client.post(
             f"{self._base_url}/sandboxes",
             json={
                 "image": spec.image,
                 "env": spec.env,
                 "exposed_ports": list(spec.exposed_ports),
+                "item_id": sandbox_id,
             },
         )
         resp.raise_for_status()
         data = resp.json()
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
+
+    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+        # #492: ask the host to rsync this sandbox's live working dir → the
+        # durable NFS archive. Host-local, so the bulk copy never crosses this
+        # app↔host connection (it can't hang the way the old per-file mirror
+        # did). `delete` ⇒ --delete reconcile at a quiesced turn-end / reap;
+        # False ⇒ additive-only mid-turn checkpoint.
+        await self._request(handle, "POST", "/persist", json={"delete": delete})
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
         # The HTTP host owns its own per-sandbox lifecycle and mints handles

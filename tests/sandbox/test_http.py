@@ -24,7 +24,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import ASGITransport
 
-from workspace_app.sandbox.http_client import HttpSandbox, _encode_handle
+from workspace_app.sandbox.http_client import HttpSandbox, _decode_handle, _encode_handle
 from workspace_app.sandbox.mock import MockSandbox
 from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
 
@@ -40,6 +40,8 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     in-memory `MockSandbox`. Independent of the real host package — it exists so
     the client can be exercised against the contract the app defines."""
     app = FastAPI()
+    app.state.created_item_ids = []  # #492: item_ids seen by create
+    app.state.persisted = []  # #492: (rid, delete) seen by persist
 
     @app.exception_handler(SandboxNotFound)
     async def _nf(_r: Request, exc: SandboxNotFound) -> JSONResponse:
@@ -51,8 +53,15 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
 
     @app.post("/sandboxes")
     async def create(body: dict) -> dict[str, str]:
+        app.state.created_item_ids.append(body.get("item_id"))  # #492: capture for assertions
         h = await backend.create(SandboxSpec())
         return {"pod_url": advertise_url, "remote_id": h.id}
+
+    @app.post("/sandboxes/{rid}/persist", status_code=204)
+    async def persist(rid: str, body: dict) -> None:
+        # #492: record (rid, delete) so the client's persist call can be asserted.
+        backend._require(SandboxHandle(id=rid))  # raise SandboxNotFound for a dead handle
+        app.state.persisted.append((rid, bool(body.get("delete", False))))
 
     @app.delete("/sandboxes/{rid}", status_code=204)
     async def kill(rid: str) -> None:
@@ -154,6 +163,47 @@ async def test_create_returns_unique_handles(http_sandbox: HttpSandbox):
     h1 = await http_sandbox.create(SandboxSpec())
     h2 = await http_sandbox.create(SandboxSpec())
     assert h1.id != h2.id
+
+
+@pytest.fixture
+async def host_and_client():
+    """Like `http_sandbox` but also hands back the fake host app so #492 tests
+    can assert what item_id create sent and what persist recorded."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        yield HttpSandbox(base_url=_ADVERTISE, client=client), app
+
+
+async def test_create_passes_the_item_id_to_the_host(host_and_client):
+    """#492: the item id (sandbox_id) is forwarded as item_id so the host can
+    restore/persist that item's durable archive."""
+    sandbox, app = host_and_client
+    await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    assert app.state.created_item_ids == ["item-42"]
+
+
+async def test_create_without_item_id_sends_none(host_and_client):
+    sandbox, app = host_and_client
+    await sandbox.create(SandboxSpec())
+    assert app.state.created_item_ids == [None]
+
+
+async def test_persist_posts_delete_flag(host_and_client):
+    sandbox, app = host_and_client
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    await sandbox.persist(h, delete=True)
+    await sandbox.persist(h, delete=False)
+    _, remote_id = _decode_handle(h)
+    assert app.state.persisted == [(remote_id, True), (remote_id, False)]
+
+
+async def test_persist_on_dead_handle_raises_sandbox_not_found(host_and_client):
+    sandbox, app = host_and_client
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    await sandbox.kill(h)
+    with pytest.raises(SandboxNotFound):
+        await sandbox.persist(h, delete=True)
 
 
 def test_handle_for_id_is_none_345(http_sandbox: HttpSandbox):
