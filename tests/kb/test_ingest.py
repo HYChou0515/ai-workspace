@@ -8,7 +8,7 @@ from specstar import QB, SpecStar
 from workspace_app.kb.chunker import FixedTokenChunker
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.ingest import Ingestor, rehome_shared_chunks
+from workspace_app.kb.ingest import Ingestor, teardown_doc_chunks
 from workspace_app.resources.kb import EMBED_DIM, Collection, DocChunk, SourceDoc
 
 
@@ -20,6 +20,14 @@ def _chunks_of(spec: SpecStar, doc_id: str) -> list[DocChunk]:
     rm = spec.get_resource_manager(DocChunk)
     rs = rm.list_resources((QB["source_doc_id"] == doc_id).build())
     return [r.data for r in rs]  # ty: ignore[invalid-return-type]
+
+
+def _collection_chunk_ids(spec: SpecStar, cid: str) -> set[str]:
+    rm = spec.get_resource_manager(DocChunk)
+    return {
+        r.info.resource_id  # ty: ignore[unresolved-attribute]
+        for r in rm.list_resources((QB["collection_id"] == cid).build())
+    }
 
 
 def test_ingest_markdown_creates_sourcedoc_and_embedded_chunks(
@@ -87,55 +95,95 @@ def test_identical_content_at_two_paths_shares_one_chunk_set(
     assert db.text == da.text  # alias carries the extracted text (wiki/retrieval read it)
 
 
-def test_deleting_the_owner_rehomes_shared_chunks_to_a_surviving_sibling(
+def test_teardown_keeps_shared_chunks_when_a_sibling_still_holds_the_content(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
-    # #104: when the doc that OWNS a deduped chunk set is torn down, its chunks
-    # must be re-homed to a sibling path holding the same content — otherwise the
-    # aliases would go dark. rehome runs BEFORE the caller's cascade delete.
+    # #104: tearing down ONE holder of shared content must NOT delete the chunk
+    # set while another path still holds the same content — the chunks resolve to
+    # the surviving sibling by file_id (no re-home). Replaces the owner-rehome
+    # interim; deletion is now a collection-scoped content refcount.
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
     data = b"alpha beta gamma delta epsilon zeta"
     (owner,) = ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
-    (alias,) = ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
-    assert _chunks_of(spec, owner) and _chunks_of(spec, alias) == []
+    ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
+    before = _collection_chunk_ids(spec, cid)
+    assert before
 
-    rehome_shared_chunks(spec, owner)
+    teardown_doc_chunks(spec, owner)  # wk2 still holds the same content
 
-    assert _chunks_of(spec, owner) == []  # the owner gave up the shared set
-    assert _chunks_of(spec, alias)  # the surviving sibling now holds it
+    assert _collection_chunk_ids(spec, cid) == before  # shared chunk set preserved
 
 
-def test_rehome_is_a_noop_when_the_doc_is_an_alias(
+def test_teardown_of_an_alias_keeps_the_shared_content(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
-    # Deleting an ALIAS (0 own chunks) must not disturb the owner's chunk set.
+    # Symmetric: tearing down the alias path leaves the shared chunk set for the
+    # surviving sibling that still holds the content.
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
     data = b"alpha beta gamma delta epsilon zeta"
-    (owner,) = ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
+    ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
     (alias,) = ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
-    before = _chunks_of(spec, owner)
+    before = _collection_chunk_ids(spec, cid)
 
-    rehome_shared_chunks(spec, alias)  # alias owns nothing → no-op
+    teardown_doc_chunks(spec, alias)  # wk1 still holds the content
 
-    assert len(_chunks_of(spec, owner)) == len(before)  # owner untouched
+    assert _collection_chunk_ids(spec, cid) == before
 
 
-def test_rehome_is_a_noop_for_the_sole_holder_of_the_content(
+def test_teardown_deletes_a_legacy_docs_own_chunks_even_with_a_content_sibling(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
-    # No sibling shares the content → nothing to re-home; the caller's cascade
-    # delete is correct and the chunks stay put until then.
+    # Existing-data (pre-reindex) case: before dedup runs, duplicate content lives
+    # as SEPARATE per-doc chunk sets carrying source_file_id == "" (no content
+    # key). Tearing down one such doc must delete ITS OWN legacy chunks even though
+    # a sibling shares the content.file_id — those chunks are not the shared set,
+    # so keeping them would orphan-leak (R6). The sibling's own chunks are untouched.
+    cid = _new_collection(spec)
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    data = b"alpha beta gamma delta epsilon zeta"
+    (a,) = ing.ingest(collection_id=cid, user="u", filename="wk1/report.md", data=data)
+    (b,) = ing.ingest(collection_id=cid, user="u", filename="wk2/report.md", data=data)
+    # Simulate the pre-#104 state: give BOTH docs their own legacy (sfid="") chunk
+    # set, as if indexed before content-addressing existed.
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["collection_id"] == cid).build()):
+        chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+    for did in (a, b):
+        chrm.create(
+            DocChunk(
+                collection_id=cid,
+                source_doc_id=did,
+                source_file_id="",  # legacy: no content key
+                seq=0,
+                start=0,
+                end=5,
+                text="alpha",
+                embedding=[0.0] * EMBED_DIM,
+            )
+        )
+
+    teardown_doc_chunks(spec, a)  # a shares content.file_id with b, but its chunks are its OWN
+
+    assert _chunks_of(spec, a) == []  # a's own legacy chunks removed (no leak)
+    assert _chunks_of(spec, b)  # the sibling's own chunks untouched
+
+
+def test_teardown_deletes_the_last_content_holders_chunks(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # No sibling shares the content → this is the LAST holder, so teardown deletes
+    # the content chunk set (it governs deletion now that source_doc_id is not a
+    # cascade), covering both source_doc_id-owned and content-addressed chunks.
     cid = _new_collection(spec)
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
     (only,) = ing.ingest(collection_id=cid, user="u", filename="solo.md", data=b"one two three")
-    before = _chunks_of(spec, only)
-    assert before
+    assert _collection_chunk_ids(spec, cid)
 
-    rehome_shared_chunks(spec, only)  # sole holder → no-op
+    teardown_doc_chunks(spec, only)  # sole holder
 
-    assert len(_chunks_of(spec, only)) == len(before)
+    assert _collection_chunk_ids(spec, cid) == set()  # content chunk set removed
 
 
 def test_ingest_canonicalizes_path_so_one_logical_doc_is_one_id(

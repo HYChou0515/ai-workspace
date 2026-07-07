@@ -118,3 +118,58 @@ def test_doc_with_no_chunks_is_not_scored(spec):
     scorer = QualityScorer(_ScriptedLlm(['{"score": 50, "breakdown": {}, "rationale": "x"}']))
     QualityCoordinator(spec, scorer).score_doc(doc_id, "u")
     assert _doc(spec, doc_id).quality_score is None
+
+
+def test_dedup_alias_inherits_a_scored_content_peers_verdict(spec):
+    # #104: a dedup alias owns 0 chunks (it shares the canonical's content set), so
+    # the judge can't score it and it would sit neutral while the canonical shows a
+    # score — incoherent. Inherit the scored content peer's verdict instead of
+    # re-running the LLM on identical text.
+    crm = spec.get_resource_manager(Collection)
+    coll = crm.create(Collection(name="C", quality_rubric="Judge it.")).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    body = b"shared deck body alpha beta gamma"
+    # canonical: holds the content and is already scored
+    drm.create(
+        SourceDoc(
+            collection_id=coll,
+            path="wk1.md",
+            content=Binary(data=body),
+            status="ready",
+            quality_score=88,
+            quality_breakdown={"clarity": 0.8},
+            quality_rationale="solid",
+        )
+    )
+    # alias: SAME bytes → SAME content.file_id, but owns 0 chunks
+    alias = drm.create(
+        SourceDoc(collection_id=coll, path="wk2.md", content=Binary(data=body), status="ready")
+    ).resource_id
+
+    # A judge that WOULD score differently if it ran — proves inheritance, not a
+    # re-score (it is never reached: the alias owns no chunks).
+    scorer = QualityScorer(_ScriptedLlm(["n", '{"score": 11, "breakdown": {}, "rationale": "x"}']))
+    QualityCoordinator(spec, scorer).score_doc(alias, "u")
+
+    a = _doc(spec, alias)
+    assert a.quality_score == 88
+    assert a.quality_breakdown == {"clarity": 0.8}
+    assert a.quality_rationale == "solid"
+
+
+def test_no_chunks_and_no_scored_peer_stays_neutral(spec):
+    # The inheritance path must not invent a score: a chunk-less doc with no scored
+    # content peer stays un-scored (guards against a false-positive inherit).
+    crm = spec.get_resource_manager(Collection)
+    coll = crm.create(Collection(name="C", quality_rubric="Judge it.")).resource_id
+    drm = spec.get_resource_manager(SourceDoc)
+    # a lone unscored content peer exists, but it has no verdict to inherit
+    drm.create(
+        SourceDoc(collection_id=coll, path="wk1.md", content=Binary(data=b"twin"), status="ready")
+    )
+    alias = drm.create(
+        SourceDoc(collection_id=coll, path="wk2.md", content=Binary(data=b"twin"), status="ready")
+    ).resource_id
+    scorer = QualityScorer(_ScriptedLlm([]))
+    QualityCoordinator(spec, scorer).score_doc(alias, "u")
+    assert _doc(spec, alias).quality_score is None

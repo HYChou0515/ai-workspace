@@ -45,6 +45,7 @@ from .tokens import count_tokens
 from .upload_checks import UploadCheckRegistry, bundled_upload_checks
 
 if TYPE_CHECKING:
+    from specstar.query import ConditionBuilder
     from specstar.types import IResourceManager
 
     from .upload_checks import UploadCheckHint
@@ -77,42 +78,101 @@ def _doc_file_id(doc: SourceDoc) -> str:
     return fid
 
 
-def rehome_shared_chunks(spec: SpecStar, doc_id: str) -> None:
-    """#104: call BEFORE tearing a doc down (delete / move). If the doc OWNS a
-    deduped chunk set — identical content also lives at other paths in the same
-    collection — re-home those chunks to a surviving sibling so the aliases stay
-    searchable instead of going dark when the owner's cascade drops them.
+def teardown_doc_chunks(spec: SpecStar, doc_id: str) -> None:
+    """#104: call BEFORE tearing a doc down (delete / move). A chunk is bound to
+    CONTENT, so deletion is governed by a collection-scoped content **refcount**,
+    not the (removed) source-doc cascade:
 
-    No-op when the doc owns no chunks (it is itself an alias, or empty) or is the
-    content's sole holder — there the caller's normal cascade delete is correct.
-    (A pre-#104 chunk carries ``source_file_id=""``, which matches no real
-    ``content.file_id``, so it naturally falls through to the sole-holder case.)"""
-    chrm = spec.get_resource_manager(DocChunk)
-    owned = chrm.list_resources((QB["source_doc_id"] == doc_id).limit(1).build())
-    if not owned:
-        return
-    chunk0 = owned[0].data
-    assert isinstance(chunk0, DocChunk)
+    - If ANOTHER path in the collection still holds this doc's content
+      (``content.file_id``), LEAVE the SHARED (content-addressed) chunk set in
+      place — it resolves to that surviving sibling by file_id (no re-home; the
+      interim ``rehome_shared_chunks`` this replaces is gone). But still drop this
+      doc's OWN legacy chunks (``source_file_id == ""``): pre-#104 duplicate
+      content lives as SEPARATE per-doc sets carrying no content key, so those are
+      not shared and would orphan-leak if kept (R6).
+    - Otherwise this is the LAST holder, so delete the content's chunk set: the
+      UNION of the doc's own chunks (``source_doc_id``) and any content-addressed
+      chunks (``source_file_id``, collection-scoped) — covering legacy
+      ``source_file_id == ""`` chunks and stamped ones alike.
+
+    No-op when the doc is already gone."""
     srm = spec.get_resource_manager(SourceDoc)
-    owner = srm.get(doc_id).data
-    assert isinstance(owner, SourceDoc)
-    sibling: str | None = None
-    for r in srm.list_resources(
-        (
-            (QB["collection_id"] == owner.collection_id) & (QB["file_id"] == chunk0.source_file_id)
-        ).build()
-    ):
-        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-        if rid != doc_id:
-            sibling = rid
-            break
-    if sibling is None:
+    try:
+        doc = srm.get(doc_id).data
+    except ResourceIDNotFoundError:
         return
-    for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
-        chunk = r.data
-        assert isinstance(chunk, DocChunk)
-        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-        chrm.update(rid, msgspec.structs.replace(chunk, source_doc_id=sibling))
+    assert isinstance(doc, SourceDoc)
+    fid = _doc_file_id(doc)
+    if fid and _content_has_other_holder(srm, doc.collection_id, fid, doc_id):
+        # A sibling still holds the content — keep the shared (content-addressed)
+        # set, but the doc's own uncontent-keyed legacy chunks are not shared.
+        _delete_legacy_own_chunks(spec, doc_id)
+        return
+    _delete_content_chunks(spec, doc.collection_id, doc_id, fid)
+
+
+def _live_content_peer(
+    srm: IResourceManager[SourceDoc], collection_id: str, file_id: str, doc_id: str
+) -> SourceDoc | None:
+    """A LIVE SourceDoc (other than ``doc_id``) in ``collection_id`` holding
+    ``content.file_id == file_id`` and carrying extracted ``text`` — the source of
+    an alias's copied render surfaces (#104). ``None`` when no such sibling exists
+    yet (every holder deleted, or none indexed). Never reads a chunk's
+    ``source_doc_id``, so a deleted owner can't break the copy."""
+    for r in srm.list_resources(
+        ((QB["collection_id"] == collection_id) & (QB["file_id"] == file_id)).build()
+    ):
+        if r.info.resource_id == doc_id:  # ty: ignore[unresolved-attribute]
+            continue
+        sib = r.data
+        assert isinstance(sib, SourceDoc)
+        if sib.text:
+            return sib
+    return None
+
+
+def _content_has_other_holder(
+    srm: IResourceManager[SourceDoc], collection_id: str, file_id: str, doc_id: str
+) -> bool:
+    """True iff a SourceDoc OTHER than ``doc_id`` in ``collection_id`` holds
+    ``content.file_id == file_id`` — i.e. the content's refcount stays positive
+    after ``doc_id`` is torn down."""
+    for r in srm.list_resources(
+        ((QB["collection_id"] == collection_id) & (QB["file_id"] == file_id)).build()
+    ):
+        if r.info.resource_id != doc_id:  # ty: ignore[unresolved-attribute]
+            return True
+    return False
+
+
+def _delete_legacy_own_chunks(spec: SpecStar, doc_id: str) -> None:
+    """Delete only this doc's OWN uncontent-keyed chunks (``source_doc_id ==
+    doc_id`` AND ``source_file_id == ""``). Used on the keep branch of teardown: a
+    content sibling survives, so the SHARED content-addressed set stays, but a
+    pre-#104 doc's own legacy chunks carry no content key and are not shared —
+    keeping them past the doc's deletion would orphan-leak (R6)."""
+    chrm = spec.get_resource_manager(DocChunk)
+    cond = (QB["source_doc_id"] == doc_id) & (QB["source_file_id"] == "")
+    for r in chrm.list_resources(cond.build()):
+        chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+
+
+def _delete_content_chunks(spec: SpecStar, collection_id: str, doc_id: str, file_id: str) -> None:
+    """Delete the last holder's chunk set: the UNION of ``source_doc_id == doc_id``
+    (its own / legacy chunks) and the collection-scoped ``source_file_id ==
+    file_id`` (content-addressed chunks). file_id is a GLOBAL hash, so the content
+    arm is collection-scoped to avoid touching another collection's copy."""
+    chrm = spec.get_resource_manager(DocChunk)
+    conds: list[ConditionBuilder] = [QB["source_doc_id"] == doc_id]
+    if file_id:
+        conds.append((QB["collection_id"] == collection_id) & (QB["source_file_id"] == file_id))
+    seen: set[str] = set()
+    for cond in conds:
+        for r in chrm.list_resources(cond.build()):
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            if rid not in seen:
+                seen.add(rid)
+                chrm.permanently_delete(rid)
 
 
 class _IndexOutput(NamedTuple):
@@ -518,14 +578,17 @@ class Ingestor:
         self, doc_id: str, doc: SourceDoc, *, source_doc_rm: IResourceManager[SourceDoc]
     ) -> bool:
         """#104 dedup gate: if this exact content is already chunked in the
-        collection by ANOTHER doc, alias to it — copy that owner's extracted
+        collection by ANOTHER doc, alias to it — copy a LIVE sibling's extracted
         ``text`` (so the wiki + retrieval can read this path) and flip ``ready``
         WITHOUT creating any chunks — and return True. The shared chunk set (keyed
         by ``source_file_id``) already serves every path, so re-chunking/embedding
         identical bytes is pure waste. Returns False (→ index normally) when this
-        is the content's first doc, or when this doc IS the chunk owner being
-        re-indexed (the ``!= doc_id`` clause excludes its own chunks)."""
+        is the content's first doc, when this doc IS the chunk set's owner being
+        re-indexed (the ``!= doc_id`` clause excludes its own chunks), or when no
+        LIVE sibling holds the text yet (better to index than alias to nothing)."""
         sfid = _doc_file_id(doc)
+        if not sfid:
+            return False
         chrm = self._spec.get_resource_manager(DocChunk)
         existing = chrm.list_resources(
             (
@@ -538,10 +601,13 @@ class Ingestor:
         )
         if not existing:
             return False
-        chunk = existing[0].data
-        assert isinstance(chunk, DocChunk)
-        owner = source_doc_rm.get(chunk.source_doc_id).data
-        assert isinstance(owner, SourceDoc)
+        # #104: copy render surfaces from a LIVE sibling holding this content — NOT
+        # from the chunk's source_doc_id, which may name a DELETED owner (teardown
+        # leaves a shared set whose owner was removed; it resolves by file_id, no
+        # re-home). No live sibling with text yet ⇒ index normally.
+        peer = _live_content_peer(source_doc_rm, doc.collection_id, sfid, doc_id)
+        if peer is None:
+            return False
         self._delete_chunks(doc_id)  # drop any partial chunks from a prior attempt
         source_doc_rm.update(
             doc_id,
@@ -549,13 +615,13 @@ class Ingestor:
                 doc,
                 status="ready",
                 status_detail="",
-                # Carry the owner's derived render surfaces so this path reads +
+                # Carry the sibling's derived render surfaces so this path reads +
                 # views identically without re-parsing: `text` feeds the wiki +
                 # retrieval, `preview` feeds the doc viewer (a pptx/PDF alias would
                 # otherwise show a download notice), `token_count` the #88 estimate.
-                text=owner.text,
-                preview=owner.preview,
-                token_count=owner.token_count,
+                text=peer.text,
+                preview=peer.preview,
+                token_count=peer.token_count,
             ),
         )
         return True

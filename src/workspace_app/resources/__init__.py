@@ -347,6 +347,10 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # source_doc_id + collection_id indexed so counting a doc's chunks (and the
     # retriever's per-collection lookup) is a query — a non-indexed filter would
     # load + deserialize every chunk's embedding Vector, which is the hang.
+    # #104: source_doc_id is no longer a Ref/cascade (a chunk is bound to CONTENT,
+    # not a deletable doc); it stays indexed only as the legacy/coalescing FALLBACK
+    # for pre-#104 chunks whose source_file_id == "". Retiring it (stop writing,
+    # then physically drop) is a later PR once prod is reindexed — see #104 plan.
     # #263: provenance locators indexed so a chunk can be fetched by its
     # structural location (page range / sheet) — a deterministic WHERE that
     # composes with the dense/sparse retrieval (the same way collection_id

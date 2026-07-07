@@ -43,7 +43,7 @@ from ..kb.findability import (
     doc_passages_in_top_k,
     probe_findability,
 )
-from ..kb.ingest import Ingestor, rehome_shared_chunks
+from ..kb.ingest import Ingestor, teardown_doc_chunks
 from ..kb.links import rewrite_md_links
 from ..kb.llm import ILlm
 from ..kb.preview import is_structured_text, preview_markdown
@@ -1511,7 +1511,14 @@ def register_kb_routes(
         # `DocChunk.search_resources` loop streamed every chunk's text + two
         # embedding vectors into Python only to add 1).
         cited = doc_cited_for_ids(spec, ids)
-        chunk_counts = doc_chunks_for_ids(spec, ids)
+        # #104: a doc's chunks are keyed by CONTENT (file_id), so the count is
+        # resolved per file_id (shared content → shared count) with a legacy
+        # source_doc_id fallback. Each doc's file_id rides its indexed_data.
+        doc_file_ids = {
+            m.resource_id: (fid if isinstance(fid := _indexed_of(m).get("file_id"), str) else "")
+            for m in metas
+        }
+        chunk_counts = doc_chunks_for_ids(spec, collection_id, doc_file_ids)
 
         # #248/#395: unit progress for the docs still fanning out — ONE
         # collection-scoped metas search over the in-flight runs (their
@@ -1664,7 +1671,6 @@ def register_kb_routes(
             markdown = rewrite_md_links(
                 text, doc_path=doc.path, collection_id=doc.collection_id, resolve=resolve
             )
-        chrm = spec.get_resource_manager(DocChunk)
         assert isinstance(doc.content.size, int)
         assert isinstance(doc.content.file_id, str)
         return RenderedDoc(
@@ -1675,7 +1681,12 @@ def register_kb_routes(
             file_id=doc.content.file_id,
             content_type=doc.content.content_type or "application/octet-stream",
             size=doc.content.size,
-            chunks=chrm.count_resources((QB["source_doc_id"] == doc_id).build()),
+            # #104: count by CONTENT (the same content-addressed tally as the doc
+            # list), not by source_doc_id — a dedup alias owns 0 chunks but must
+            # report the shared content's count, or detail disagrees with the list.
+            chunks=doc_chunks_for_ids(spec, doc.collection_id, {doc_id: doc.content.file_id}).get(
+                doc_id, 0
+            ),
             cited=doc_cited_count(spec, doc_id),
             created_by=user,
             updated_at=_ms(rev.info.updated_time),
@@ -1742,13 +1753,11 @@ def register_kb_routes(
         # always wires a coordinator.
         assert wiki_coordinator is not None
         await wiki_coordinator.on_doc_deleted(doc_id)
-        # #104: if this doc owns a deduped chunk set shared with other paths,
-        # re-home those chunks to a surviving sibling first so the aliases stay
-        # searchable (no-op for an alias or a sole-holder — see the helper).
-        rehome_shared_chunks(spec, doc_id)
-        chrm = spec.get_resource_manager(DocChunk)
-        for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
-            chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+        # #104: delete this doc's content chunk set ONLY if it is the LAST holder
+        # of that content in the collection (a refcount), else leave the shared
+        # set for its surviving siblings — they resolve to it by file_id (no
+        # re-home). Governs the chunks now that source_doc_id is not a cascade.
+        teardown_doc_chunks(spec, doc_id)
         rm.permanently_delete(doc_id)
         return DocDeletedOut(deleted=doc_id)
 
@@ -1799,19 +1808,18 @@ def register_kb_routes(
             # the public default inside a restricted collection.
             **collection_mirror_fields(spec, old.collection_id),
         )
-        with rm.using(user=creator):
-            rm.create(new_doc, resource_id=new_id)
-        # Tear down the old doc, mirroring delete_document (wiki unfold first,
-        # then its derived chunks, then the row).
+        # Tear down the OLD doc (wiki unfold, then its content chunks per the
+        # refcount, then the row) BEFORE re-creating at new_id. #104: a pure rename
+        # (old was the sole content holder) thus drops the old chunk set and new_id
+        # rebuilds from the content cache — no duplicate, no dangling source_doc_id.
+        # When the content is genuinely shared with a THIRD path, teardown keeps the
+        # set and new_id aliases to that live sibling (no re-home).
         assert wiki_coordinator is not None
         await wiki_coordinator.on_doc_deleted(doc_id)
-        # #104: preserve a deduped chunk set shared with other paths (incl. the
-        # freshly-created new_id) across the move — re-home before teardown.
-        rehome_shared_chunks(spec, doc_id)
-        chrm = spec.get_resource_manager(DocChunk)
-        for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
-            chrm.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+        teardown_doc_chunks(spec, doc_id)
         rm.permanently_delete(doc_id)
+        with rm.using(user=creator):
+            rm.create(new_doc, resource_id=new_id)
         await _index_or_reuse(new_id, old.collection_id)
         return DocMovedOut(moved_from=doc_id, moved_to=new_id)
 
@@ -1834,8 +1842,22 @@ def register_kb_routes(
         _authorize_doc_content(sd)  # #308: a per-doc override may further hide it
         chrm = spec.get_resource_manager(DocChunk)
         cited = chunk_cited(spec, doc_id)
+        # #104: a doc's chunks are its OWN (source_doc_id) when it holds them, else
+        # its content's shared set (source_file_id, collection-scoped) — so an
+        # aliased/deduped path shows the content chunks it's backed by instead of
+        # an empty list.
+        resources = list(chrm.list_resources((QB["source_doc_id"] == doc_id).build()))
+        fid = sd.content.file_id
+        if not resources and isinstance(fid, str) and fid:
+            resources = list(
+                chrm.list_resources(
+                    (
+                        (QB["collection_id"] == sd.collection_id) & (QB["source_file_id"] == fid)
+                    ).build()
+                )
+            )
         rows: list[dict] = []
-        for r in chrm.list_resources((QB["source_doc_id"] == doc_id).build()):
+        for r in resources:
             d = r.data
             assert isinstance(d, DocChunk)
             rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
