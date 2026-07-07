@@ -75,14 +75,22 @@
   `Schema(DocChunk, "v5")`(**延長鏈、不可重寫**)。delete/move 兩處 `rehome_shared_chunks` → refcount 刪;
   移除 `rehome_shared_chunks`。測試:刪父 doc → 獨佔 chunk 被 refcount 收、共享 chunk 因 sibling 存活而留;
   **R9 回歸**:舊 v3/v4 row → v5 read/migrate 不 raise(照 `test_token_count.py:45`)。
-- **P4 gate 改 `(c,file_id)` + 刪除語意分離** — `_alias_to_existing_content`/`alias_if_duplicate` 只看
-  `(collection, file_id)`(保留自身 chunk 排除 guard);dedup peer text/preview 從任一 peer 取。**拆兩支刪除**(R2):
-  `_delete_own_chunks(doc_id)`(現 `_delete_chunks`,per-doc)沿用於 pre-write/alias-partial(304/463/545/1051/1153);
-  `_delete_content_chunks_if_orphan(c, file_id)` 僅 refcount==0 分支呼叫,`WHERE source_doc_id∈docs OR source_file_id==f`(UNION,涵蓋過渡期 sfid="")。
-- **P5 orphan + dup sweep** — 週期掃:同 `(c,file_id)` 多組 → 折疊成一;`sfid!=""` 無存活 doc → 刪;
-  `sfid==""` legacy → 僅當 `source_doc_id` 無法 resolve 到存活 doc 才刪(R6)。#491 檢索防呆保留。
-- **P6 FE 型別重生成 + docs** — 重跑 autocrud 生成(**預期良性純加法 diff**,R10);CHANGELOG [Unreleased];
-  修 `resources/__init__.py:358-360` 的 #263 comment 加註「reindex 前勿對 doc-chunk 跑 migrate」。
+- **P4 gate `(c,file_id)` + 刪除語意分離 ✅(隨 P3 一併落地 + 收尾)** — gate `_alias_to_existing_content`
+  只看 `(collection, file_id)` 且 dedup peer text/preview 由 `_live_content_peer`(任一存活 peer)取,
+  **不再 `get(chunk.source_doc_id)`**(避免刪掉的 owner 打斷 copy)。**兩支刪除已分離**(R2):
+  `_delete_chunks(doc_id)`(per-doc own,pre-write/reindex 重建沿用)vs `teardown_doc_chunks` 內
+  `_delete_content_chunks`(last-holder UNION `source_doc_id∈docs OR (c,source_file_id)`)。
+  **既有資料(pre-reindex)刪除洩漏(R6)就地修**:teardown 的 keep 分支仍刪本 doc 自有 legacy
+  chunk(`source_doc_id==doc AND sfid==""`,`_delete_legacy_own_chunks`)——避免累積 orphan,免依賴週期 sweep。
+  **display 一致性補完**:`render_document` chunk count 改 content-addressed(與 doc list 一致);
+  dedup alias 的 quality 徽章改 **peer-inheritance**(`_scored_content_peer` 繼承 canonical 已算分數,免重跑 LLM)。
+- **P5 orphan + dup sweep —(延後,非阻塞)** — 刪除路徑的既有資料洩漏(R6)已由 P4 teardown 就地處理;
+  剩「併發全新上傳同內容 → 兩組 chunk set」的罕見競態,靠 reindex 折疊即可。週期 sweeper 另開為安全網 follow-up。
+- **P6 docs ✅ / FE regen(延後)** — `resources/__init__.py` #263/#104 comment 補註 source_doc_id 現為
+  coalescing fallback(非 cascade);**修正 plan 前提**:`_reindex_only` 是 identity,migrate 不改 sfid 值
+  ⇒ 原 R4「reindex 前不可跑 migrate」硬警告**是假的**(identity migrate 恆安全),故不加。CHANGELOG **不手改**
+  (git-cliff 從 Conventional Commit 生成)。**FE autocrud regen 延後**:生成型別本就 stale(缺 #490 sfid /
+  #254 provenance),regen 會夾帶大量無關 drift 且無手寫 FE 消費 `DocChunk.source_doc_id`,另開維護 PR。
 
 ## 部署 runbook(修正版)
 
