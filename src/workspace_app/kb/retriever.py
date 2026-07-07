@@ -414,13 +414,14 @@ class Retriever:
         # the id is opaque and must not be parsed for it.
         scored = []
         for cid in order:
-            path = self._doc_path(chunks[cid].source_doc_id)
-            if path is None:
-                continue  # #104: orphan chunk (owner doc gone) — drop, don't crash
+            doc_id = self._resolve_doc_id(chunks[cid])
+            path = None if doc_id is None else self._doc_path(doc_id)
+            if doc_id is None or path is None:
+                continue  # #104: true orphan (neither file_id nor owner resolves) — drop
             scored.append(
                 ScoredChunk(
                     chunk_id=cid,
-                    document_id=chunks[cid].source_doc_id,
+                    document_id=doc_id,
                     collection_id=chunks[cid].collection_id,
                     filename=posixpath.basename(path),
                     seq=chunks[cid].seq,
@@ -484,7 +485,11 @@ class Retriever:
         cache: dict[str, int | None] = {}
 
         def q_of(cid: str) -> int | None:
-            doc_id = chunks[cid].source_doc_id
+            # #104: score by the chunk's RESOLVED (content→canonical) doc, so
+            # quality follows content exactly like citation resolution does.
+            doc_id = self._resolve_doc_id(chunks[cid])
+            if doc_id is None:
+                return None
             if doc_id not in cache:
                 cache[doc_id] = self._doc_quality(doc_id)
             return cache[doc_id]
@@ -597,6 +602,42 @@ class Retriever:
                 assert isinstance(data, DocChunk)
                 out[r.info.resource_id] = data  # ty: ignore[unresolved-attribute]
         return out
+
+    def _resolve_doc_id(self, chunk: DocChunk) -> str | None:
+        """#104 P1 — resolve a chunk to its live SourceDoc id by CONTENT, not by a
+        single (deletable) ``source_doc_id``. A COALESCING resolver:
+
+        - When the chunk carries a content ``source_file_id``, return the
+          canonical doc sharing that content in the same collection (see
+          ``_canonical_doc_id``) — so a dangling / stale ``source_doc_id`` no
+          longer drops the hit while the content still lives at a real path.
+        - Legacy chunks predating #104 (``source_file_id == ""``), or content
+          whose docs are all gone, fall back to the chunk's own ``source_doc_id``.
+
+        Returns the resolved id (its liveness is confirmed by the caller's
+        ``_doc_path`` guard) or ``None`` only when there is no id to try."""
+        if chunk.source_file_id:
+            canon = self._canonical_doc_id(chunk.collection_id, chunk.source_file_id)
+            if canon is not None:
+                return canon
+        return chunk.source_doc_id or None
+
+    def _canonical_doc_id(self, collection_id: str, file_id: str) -> str | None:
+        """The canonical live SourceDoc for a piece of content in a collection:
+        the earliest-created doc sharing ``(collection_id, content.file_id)``,
+        ``resource_id`` as a deterministic tiebreak. ``None`` when the content
+        has no live doc (every path deleted) — the chunk is then a true orphan."""
+        rm = self._spec.get_resource_manager(SourceDoc)
+        best_id: str | None = None
+        best_key: tuple[float, str] | None = None
+        for r in rm.list_resources(
+            ((QB["collection_id"] == collection_id) & (QB["file_id"] == file_id)).build()
+        ):
+            rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+            key = (r.info.created_time.timestamp(), rid)  # ty: ignore[unresolved-attribute]
+            if best_key is None or key < best_key:
+                best_key, best_id = key, rid
+        return best_id
 
     def _doc_path(self, doc_id: str) -> str | None:
         """The SourceDoc's stored path (a record field) — for the display

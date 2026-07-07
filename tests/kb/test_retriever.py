@@ -29,11 +29,13 @@ def _ingest(spec, chunker, embedder, name, text):
 def test_search_drops_a_chunk_whose_source_doc_is_gone(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):
-    # #104 orphan defense: the interim keeps source_doc_id and re-homes it on
-    # delete; if a chunk ends up pointing at a doc that no longer exists (a
-    # re-home race, or a dangling ref — validate_refs is off), retrieval must DROP
-    # that hit, not crash the whole search (`_doc_path` had no guard and runs for
-    # every candidate before the text join that DOES guard).
+    # #104 orphan defense: a TRUE orphan is a chunk that resolves through
+    # NEITHER path — its content `source_file_id` maps to no live doc AND its
+    # `source_doc_id` is dangling (a re-home race, a stale ref — validate_refs is
+    # off). Retrieval must DROP that hit, not crash the whole search (`_doc_path`
+    # runs for every candidate before the text join that DOES guard). (After P1's
+    # coalescing resolver, breaking source_doc_id alone no longer orphans a chunk
+    # — file_id would rescue it — so both resolvers must miss here.)
     cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
     ing = Ingestor(spec, chunker=chunker, embedder=embedder)
     ing.ingest(
@@ -45,21 +47,118 @@ def test_search_drops_a_chunk_whose_source_doc_is_gone(
         filename="ghost.md",
         data=b"reflow oven temperature zone four extra",
     )
-    # Repoint ghost.md's chunks at a doc id that doesn't exist → a dangling ref
-    # (no cascade fires, since we rewrite rather than delete the row).
+    # Break BOTH resolvers on ghost.md's chunks: a content hash with no live doc
+    # AND a dangling owner id (rewrite the row, so no cascade fires).
     chrm = spec.get_resource_manager(DocChunk)
     ghost = encode_doc_id(cid, "ghost.md")
     for r in chrm.list_resources((QB["source_doc_id"] == ghost).build()):
         chunk = r.data
         assert isinstance(chunk, DocChunk)
         rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
-        chrm.update(rid, msgspec.structs.replace(chunk, source_doc_id="gone-doc"))
+        chrm.update(
+            rid,
+            msgspec.structs.replace(
+                chunk, source_doc_id="gone-doc", source_file_id="no-such-content"
+            ),
+        )
 
     passages = Retriever(spec, embedder=embedder).search("reflow temperature", [cid])
 
     ids = [p.document_id for p in passages]
     assert encode_doc_id(cid, "live.md") in ids  # the live doc still surfaces
     assert "gone-doc" not in ids  # the orphan hit is dropped, not a crash
+
+
+def test_search_resolves_a_chunk_to_its_doc_by_content_file_id(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104 P1: chunk→doc resolution is COALESCING — a chunk carrying a
+    # `source_file_id` resolves to the live doc that shares that content
+    # (collection, file_id), INDEPENDENT of its own (deletable / stale)
+    # `source_doc_id`. This is the guarantee that lets retrieval stop depending
+    # on source_doc_id: even a dangling source_doc_id must NOT drop the hit while
+    # the content still lives at a real path. (The inverse of the orphan test
+    # above, which now needs BOTH resolvers to miss before a hit is dropped.)
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid,
+        user="u",
+        filename="keep.md",
+        data=b"reflow oven temperature zone three thermal profile",
+    )
+    keep = encode_doc_id(cid, "keep.md")
+    # Break the chunk's source_doc_id (as if it held a stale owner id) while it
+    # keeps its real content file_id — the row is rewritten, so no cascade fires.
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["source_doc_id"] == keep).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        assert chunk.source_file_id, "ingest must stamp the content file_id (#104)"
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        chrm.update(rid, msgspec.structs.replace(chunk, source_doc_id="stale-owner-id"))
+
+    passages = Retriever(spec, embedder=embedder).search("reflow temperature", [cid])
+
+    ids = [p.document_id for p in passages]
+    # Resolved to the live doc VIA content file_id, not the dangling source_doc_id.
+    assert keep in ids
+    assert "stale-owner-id" not in ids
+
+
+def test_search_cites_the_canonical_earliest_doc_for_shared_content(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104 P1: when identical content lives at several paths, a content-owned
+    # chunk cites the CANONICAL doc — the earliest-created path — regardless of
+    # which sibling its own source_doc_id names.
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    body = b"stencil aperture area ratio five to one design rule"
+    ing.ingest(collection_id=cid, user="u", filename="early.md", data=body)  # canonical (first)
+    ing.ingest(collection_id=cid, user="u", filename="late.md", data=body)  # dedup alias (0 chunks)
+    early = encode_doc_id(cid, "early.md")
+    late = encode_doc_id(cid, "late.md")
+    # Point the content-owned chunks at the LATER sibling to prove resolution
+    # follows content→canonical, not the chunk's own source_doc_id.
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["source_doc_id"] == early).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        chrm.update(rid, msgspec.structs.replace(chunk, source_doc_id=late))
+
+    passages = Retriever(spec, embedder=embedder).search("stencil aperture", [cid])
+
+    ids = [p.document_id for p in passages]
+    assert early in ids  # canonical = earliest created
+    assert late not in ids  # not the chunk's own (rewritten) source_doc_id
+
+
+def test_search_falls_back_to_source_doc_id_for_legacy_chunks(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104 P1: a pre-#104 chunk (source_file_id == "") has no content key, so it
+    # resolves via its source_doc_id — the fallback that keeps the whole existing
+    # corpus retrievable BEFORE a reindex stamps file_ids (the R1 blackout guard).
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    ing.ingest(
+        collection_id=cid, user="u", filename="legacy.md", data=b"paste viscosity thixotropic index"
+    )
+    legacy = encode_doc_id(cid, "legacy.md")
+    # Simulate a pre-#104 chunk: strip its content file_id.
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["source_doc_id"] == legacy).build()):
+        chunk = r.data
+        assert isinstance(chunk, DocChunk)
+        rid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        chrm.update(rid, msgspec.structs.replace(chunk, source_file_id=""))
+
+    passages = Retriever(spec, embedder=embedder).search("paste viscosity", [cid])
+
+    ids = [p.document_id for p in passages]
+    assert legacy in ids  # resolved via source_doc_id fallback (source_file_id == "")
 
 
 def test_hybrid_search_surfaces_the_keyword_matching_document(

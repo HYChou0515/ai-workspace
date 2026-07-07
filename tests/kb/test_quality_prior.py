@@ -90,6 +90,36 @@ def test_low_quality_doc_is_not_hard_excluded_by_default(spec, chunker, embedder
     assert any(p.document_id == encode_doc_id(cid, "only.md") for p in passages)
 
 
+def test_quality_floor_uses_the_resolved_canonical_docs_score(spec, chunker, embedder):
+    # #104 P1: the quality prior scores a chunk by its RESOLVED (content→canonical)
+    # doc, not by the chunk's own source_doc_id — quality follows content, exactly
+    # like citation resolution. A chunk of low-quality content must be floored out
+    # even if its source_doc_id happens to name a high-quality doc.
+    cid = _collection(spec)
+    _ingest(
+        spec, chunker, embedder, cid, "cheap.md", "alpha beta gamma"
+    )  # matches query, canonical
+    _ingest(spec, chunker, embedder, cid, "posh.md", "unrelated padding tokens only")  # distinct
+    _set_quality(spec, cid, "cheap.md", 5)
+    _set_quality(spec, cid, "posh.md", 90)
+    cheap = encode_doc_id(cid, "cheap.md")
+    posh = encode_doc_id(cid, "posh.md")
+    # Point cheap's content chunk at the high-quality sibling; the floor must still
+    # drop it, scoring by the content's canonical doc (cheap=5), not posh=90.
+    chrm = spec.get_resource_manager(DocChunk)
+    for r in chrm.list_resources((QB["source_doc_id"] == cheap).build()):
+        rm_chunk = r.data
+        assert isinstance(rm_chunk, DocChunk)
+        chrm.update(r.info.resource_id, msgspec.structs.replace(rm_chunk, source_doc_id=posh))
+
+    passages = Retriever(spec, embedder=embedder, quality_floor=20).search(
+        "alpha beta gamma", [cid]
+    )
+
+    ids = [p.document_id for p in passages]
+    assert cheap not in ids  # floored via canonical (cheap=5), not source_doc_id (posh=90)
+
+
 def test_hard_floor_excludes_below_threshold_when_configured(spec, chunker, embedder):
     cid = _collection(spec)
     # Distinct bytes (reordered tokens) so #104 keeps both as separate, retrievable
