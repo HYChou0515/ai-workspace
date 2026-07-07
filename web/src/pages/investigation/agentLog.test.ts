@@ -699,3 +699,40 @@ describe("failover switch (#249/#131)", () => {
     expect(same.failover).toEqual({ at: 1 });
   });
 });
+
+describe("restore progress (#492 P11)", () => {
+  const restoring = (): AgentLog =>
+    reduceAgent({ ...EMPTY_LOG, streaming: true }, { type: "restore_progress", done: 3, total: 10 });
+
+  it("records restore_progress as a transient field, NOT a transcript entry", () => {
+    const log = restoring();
+    expect(log.restore).toEqual({ done: 3, total: 10 });
+    expect(log.entries).toHaveLength(0); // ephemeral — never enters the transcript
+  });
+
+  it("clears once the woken tool streams output (tool_log)", () => {
+    const log = reduceAgent(restoring(), { type: "tool_log", text: "hi", call_id: "c1" });
+    expect(log.restore).toBeNull();
+  });
+
+  it("clears once the woken tool finishes (tool_end)", () => {
+    const log = reduceAgent(restoring(), { type: "tool_end", call_id: "c1", output: "ok" });
+    expect(log.restore).toBeNull();
+  });
+
+  it("clears once the model starts producing content (message_delta)", () => {
+    const log = reduceAgent(restoring(), { type: "message_delta", text: "answer" });
+    expect(log.restore).toBeNull();
+  });
+
+  it("clears when the next turn opens (agent_metrics 'up')", () => {
+    const next = reduceAgent(restoring(), {
+      type: "agent_metrics",
+      phase: "up",
+      prompt_tokens: 10,
+      completion_tokens: 0,
+      elapsed_ms: 0,
+    });
+    expect(next.restore).toBeNull(); // a fresh turn starts clean
+  });
+});

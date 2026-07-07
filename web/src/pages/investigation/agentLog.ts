@@ -75,6 +75,10 @@ export type AgentLog = {
    * notice shown while we wait for the next model's first token. NEVER persisted
    * (cleared at each turn start); reset on reload. */
   failover: { at: number } | null;
+  /** #492 P11: set while a cold sandbox is being restored before the turn runs —
+   * a transient "還原中 N/M" line instead of a blank running card. NEVER persisted
+   * (cleared once the model starts / at each turn start); reset on reload. */
+  restore: { done: number; total: number } | null;
 };
 
 export const EMPTY_LOG: AgentLog = {
@@ -83,6 +87,7 @@ export const EMPTY_LOG: AgentLog = {
   error: null,
   metrics: null,
   failover: null,
+  restore: null,
 };
 
 export function logFromMessages(messages: readonly Message[]): AgentLog {
@@ -124,7 +129,7 @@ export function logFromMessages(messages: readonly Message[]): AgentLog {
       entries.push({ kind: "message", message: m, at: m.created_at ?? undefined });
     }
   }
-  return { entries, streaming: false, error: null, metrics: null, failover: null };
+  return { entries, streaming: false, error: null, metrics: null, failover: null, restore: null };
 }
 
 /** How many whole turns to undo to remove everything from `entries[index]`
@@ -256,9 +261,10 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
     case "agent_metrics":
       return {
         ...log,
-        // The "up" tick opens a fresh turn — drop any stale failover notice from
-        // the previous one so it can't bleed into this turn's wait (#249).
+        // The "up" tick opens a fresh turn — drop any stale failover / restore
+        // notice from the previous one so it can't bleed into this turn (#249/#492).
         failover: ev.phase === "up" ? null : log.failover,
+        restore: ev.phase === "up" ? null : log.restore,
         metrics: {
           phase: ev.phase,
           promptTokens: ev.prompt_tokens,
@@ -272,6 +278,13 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
       // show a transient "model busy, switched" line while the next model warms
       // up. NOT pushed to `entries`: it never enters the transcript.
       return { ...log, failover: { at: now } };
+
+    case "restore_progress":
+      // #492 P11: ephemeral — record the cold-wake restore's (done, total) so
+      // TurnStatus shows "還原中 N/M" instead of a blank running card. NOT pushed
+      // to `entries`: it never enters the transcript. Cleared once the turn
+      // resumes real output (message/tool) or a fresh turn starts.
+      return { ...log, restore: { done: ev.done, total: ev.total } };
 
     case "message_delta": {
       const idx = lastAssistantIdx(entries);
@@ -293,7 +306,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
             : { role: "assistant", content: ev.text, author: "RCA Agent" },
         });
       }
-      return { ...log, entries };
+      // #492 P11: the model is producing output ⇒ any cold-wake restore is over.
+      return { ...log, entries, restore: null };
     }
 
     case "tool_start":
@@ -323,7 +337,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           };
         }
       }
-      return { ...log, entries };
+      // #492 P11: the tool that woke the sandbox has finished ⇒ restore is over.
+      return { ...log, entries, restore: null };
     }
 
     case "tool_log": {
@@ -337,7 +352,8 @@ export function reduceAgent(log: AgentLog, ev: AgentEvent, now: number = Date.no
           };
         }
       }
-      return { ...log, entries };
+      // #492 P11: the woken tool is now streaming output ⇒ restore is over.
+      return { ...log, entries, restore: null };
     }
 
     case "tool_call_parse_error": {

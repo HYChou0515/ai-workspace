@@ -50,6 +50,7 @@ from .events import (
     FailoverSwitch,
     MaxTurnsExceeded,
     MessageDelta,
+    RestoreProgress,
     RunDone,
     RunError,
     ToolCallParseError,
@@ -775,6 +776,11 @@ class LitellmAgentRunner:
         queue: asyncio.Queue[AgentEvent | object] = asyncio.Queue()
         done = object()
         ctx.on_exec_output = lambda b: queue.put_nowait(ToolLog(text=b.decode("utf-8", "replace")))
+        # #492 P11: a cold wake's snapshot restore streams (done, total) here so the
+        # FE shows "還原中 N/M" instead of a blank running card while it completes.
+        ctx.on_restore_progress = lambda done, total: queue.put_nowait(
+            RestoreProgress(done=done, total=total)
+        )
         agent = _agent_for(
             ctx.agent_config,
             ctx.packages,

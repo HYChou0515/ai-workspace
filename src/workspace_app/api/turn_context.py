@@ -129,8 +129,11 @@ class TurnContextBuilder:
             handle=session.handle,
             # Route lazy-create through the registry so session.handle is set
             # (so idle-kill/close_all can find it) and the restore-after-create
-            # hook fires.
-            ensure_sandbox_via=lambda: self._registry.ensure_handle(session),
+            # hook fires. #492 P11: forward the turn's restore-progress sink so a
+            # cold-wake restore streams "還原中 N/M" into this turn's stream.
+            ensure_sandbox_via=lambda on_progress: self._registry.ensure_handle(
+                session, on_progress=on_progress
+            ),
             agent_config=agent_config,
             run_subagent=run_subagent,
             mention=self._agent_mention,

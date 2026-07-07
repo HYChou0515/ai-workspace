@@ -129,6 +129,35 @@ async def test_exec_lazy_creates_sandbox_on_first_call(
     assert ctx.context.handle is not None
 
 
+async def test_ensure_sandbox_hands_restore_progress_sink_to_the_wake_hook_492():
+    """#492 P11: the ctx's restore-progress sink is passed to the wake hook, so a
+    cold-wake restore's (done, total) ticks reach the turn's stream instead of
+    leaving a blank running card."""
+    from workspace_app.sandbox.mock import MockSandbox
+    from workspace_app.sandbox.protocol import SandboxSpec
+
+    sandbox = MockSandbox()
+    received: list[object] = []
+
+    async def wake(on_progress=None):
+        received.append(on_progress)
+        return await sandbox.create(SandboxSpec())
+
+    def sink(done: int, total: int) -> None:  # a turn's restore-progress sink
+        return None
+
+    ctx = RunContextWrapper(
+        AgentToolContext(
+            investigation_id="inv-1",
+            sandbox=sandbox,
+            ensure_sandbox_via=wake,
+            on_restore_progress=sink,
+        )
+    )
+    await ctx.context.ensure_sandbox()
+    assert received == [sink]  # the exact sink flowed to the wake hook
+
+
 async def test_no_drift_between_file_tools_and_exec():
     """P2 regression: with a liveness-routing facade, the agent's file tools and
     exec share ONE view — cold writes survive the wake, and files the shell
@@ -145,7 +174,7 @@ async def test_no_drift_between_file_tools_and_exec():
 
     files = WorkspaceFiles(fs, sandbox, _resolve)
 
-    async def wake() -> SandboxHandle:  # mimic registry.ensure_handle: create + restore snapshot
+    async def wake(on_progress=None) -> SandboxHandle:  # mimic registry.ensure_handle
         h = await sandbox.create(SandboxSpec())
         for p in await fs.ls("inv-1"):
             await sandbox.upload(h, await fs.read("inv-1", p), p)

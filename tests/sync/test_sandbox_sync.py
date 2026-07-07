@@ -52,6 +52,34 @@ async def test_restore_seeds_versions_so_first_mirror_is_noop(
     assert await sync.mirror("ws", h) == 0
 
 
+async def test_restore_reports_per_file_progress(fs: SpecstarFileStore, sandbox: MockSandbox):
+    """#492 P11: restore streams (done, total) so the FE can show '還原中 N/M'
+    instead of a blank running card while a cold sandbox is restored. A leading
+    0/total (so the card shows immediately, with the fraction known upfront) then
+    one tick per restored file."""
+    await fs.write("ws", "/a.txt", b"A")
+    await fs.write("ws", "/sub/b.txt", b"BB")
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    seen: list[tuple[int, int]] = []
+    await sync.restore("ws", h, on_progress=lambda done, total: seen.append((done, total)))
+    # done ticks 0→2 regardless of ls() order; total is always the full count.
+    assert seen == [(0, 2), (1, 2), (2, 2)]
+
+
+async def test_restore_empty_workspace_emits_no_progress(
+    fs: SpecstarFileStore, sandbox: MockSandbox
+):
+    """No files ⇒ instant wake ⇒ no progress frames (the FE never flashes a
+    '還原中 0/0' card for an empty workspace)."""
+    h = await sandbox.create(SandboxSpec())
+    sync = SandboxSync(filestore=fs, sandbox=sandbox)
+    seen: list[tuple[int, int]] = []
+    n = await sync.restore("never", h, on_progress=lambda d, t: seen.append((d, t)))
+    assert n == 0
+    assert seen == []
+
+
 # ---- mirror (PULL, version-diff, deletion-aware) ----
 
 

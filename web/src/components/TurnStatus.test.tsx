@@ -107,4 +107,27 @@ describe("TurnStatus", () => {
     render(<TurnStatus log={{ ...log, streaming: true, metrics: down, failover: { at: 1 } }} />);
     expect(screen.queryByText(/已自動切換/)).not.toBeInTheDocument(); // a token arrived → gone
   });
+
+  it("shows '還原工作區… N/M' while a cold sandbox restores, over the tool line (#492 P11)", () => {
+    // The restore happens INSIDE the first tool's lazy wake, so a tool is
+    // 'running' with metrics present — yet the restore line must take precedence.
+    const log = fold([
+      { type: "tool_start", call_id: "t1", name: "exec", args: {} },
+      { type: "restore_progress", done: 3, total: 10 },
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true, metrics: down }} />);
+    expect(screen.getByText(/還原工作區/)).toHaveTextContent("3/10");
+    expect(screen.queryByText(/running/)).not.toBeInTheDocument(); // restore replaces it
+  });
+
+  it("reverts to the running-tool line once restore completes (#492 P11)", () => {
+    const log = fold([
+      { type: "tool_start", call_id: "t1", name: "exec", args: {} },
+      { type: "restore_progress", done: 10, total: 10 },
+      { type: "tool_log", text: "output", call_id: "t1" }, // clears restore
+    ]);
+    render(<TurnStatus log={{ ...log, streaming: true, metrics: down }} />);
+    expect(screen.queryByText(/還原工作區/)).not.toBeInTheDocument();
+    expect(screen.getByText(/running/)).toBeInTheDocument();
+  });
 });

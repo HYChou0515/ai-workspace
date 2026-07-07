@@ -85,6 +85,15 @@ export type FailoverSwitch = {
   reason?: string;
 };
 
+/** #492 P11: the item's sandbox was cold, so its durable snapshot is being
+ * restored file-by-file before the turn runs. Ephemeral — a transient "還原中 N/M"
+ * status line while a slow cold wake completes, NEVER added to the transcript. */
+export type RestoreProgress = {
+  type: "restore_progress";
+  done: number;
+  total: number;
+};
+
 /** #43: a human message posted to a SHARED investigation, broadcast on the
  * per-investigation stream so every viewer sees who said what — live, before
  * the agent turn it triggers. Broadcast-only (GET /investigations/{id}/stream). */
@@ -194,6 +203,7 @@ export type AgentEvent =
   | RepetitionStopped
   | AgentMetrics
   | FailoverSwitch
+  | RestoreProgress
   | UserMessage
   | FileChanged
   | Presence

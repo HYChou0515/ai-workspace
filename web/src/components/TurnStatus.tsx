@@ -42,6 +42,21 @@ export function TurnStatus({ log, className }: { log: AgentLog; className?: stri
     padding: "2px 0 0 28px",
   } as const;
 
+  const elapsedSec = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
+
+  // #492 P11: a cold sandbox is being restored from its durable snapshot before
+  // the turn can run — show "還原工作區… N/M" instead of a blank running card.
+  // Takes precedence over the tool-running metrics line below because the restore
+  // happens INSIDE the first tool call's lazy wake (so a tool is "running").
+  if (log.restore != null) {
+    return (
+      <div className={className} style={box}>
+        還原工作區… {log.restore.done}/{log.restore.total}
+        {elapsedSec >= 1 && <span style={{ opacity: 0.7 }}> · {elapsedSec}s</span>}
+      </div>
+    );
+  }
+
   // The model has produced output and is answering (or is mid tool-call): the
   // existing token line (↑/↓ tok · tok/s, or "running…") is the right signal.
   if (phase === "answering" || toolRunning) {
@@ -53,7 +68,6 @@ export function TurnStatus({ log, className }: { log: AgentLog; className?: stri
     );
   }
 
-  const elapsedSec = startRef.current ? Math.floor((Date.now() - startRef.current) / 1000) : 0;
   // #249/#131: while we wait on the model and it just failed over, say so —
   // a transient, de-jargoned reassurance (never the raw model id).
   const switched = phase === "waiting" && log.failover != null;
