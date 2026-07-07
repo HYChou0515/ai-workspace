@@ -287,8 +287,18 @@ class Retriever:
         # native-vector query below, so a hidden doc never reaches ranking/answer.
         chunks = self._load_chunks(collection_ids, loc, exclude_doc_ids)
         if overlay is not None:
+            # #104: the shadowed doc's REAL chunks are its CONTENT chunks — match
+            # by the shadow doc's file_id (an aliased doc's content is owned by a
+            # canonical sibling, so a source_doc_id match alone would miss them),
+            # with a source_doc_id fallback for legacy (source_file_id == "") chunks.
+            shadow_fid = self._doc_file_id(overlay.shadow_doc_id)
             chunks = {
-                cid: ch for cid, ch in chunks.items() if ch.source_doc_id != overlay.shadow_doc_id
+                cid: ch
+                for cid, ch in chunks.items()
+                if not (
+                    (shadow_fid and ch.source_file_id == shadow_fid)
+                    or ch.source_doc_id == overlay.shadow_doc_id
+                )
             }
             for i, vc in enumerate(overlay.virtual_chunks):
                 chunks[f"__overlay__{i}"] = vc
@@ -621,6 +631,18 @@ class Retriever:
             if canon is not None:
                 return canon
         return chunk.source_doc_id or None
+
+    def _doc_file_id(self, doc_id: str) -> str:
+        """A doc's content hash (``content.file_id``), or ``""`` if the doc is
+        gone / unset — used to match its content-addressed chunks (#104)."""
+        rm = self._spec.get_resource_manager(SourceDoc)
+        try:
+            doc = rm.get(doc_id).data
+        except ResourceIDNotFoundError:
+            return ""
+        assert isinstance(doc, SourceDoc)
+        fid = doc.content.file_id
+        return fid if isinstance(fid, str) else ""
 
     def _canonical_doc_id(self, collection_id: str, file_id: str) -> str | None:
         """The canonical live SourceDoc for a piece of content in a collection:

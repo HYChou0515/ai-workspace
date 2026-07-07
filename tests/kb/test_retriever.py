@@ -256,6 +256,39 @@ def test_overlay_swaps_a_docs_chunks_for_virtual_ones(
     assert not any("reflow" in p.text for p in on_old)
 
 
+def test_overlay_shadows_shared_content_when_probing_an_aliased_doc(
+    spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
+):
+    # #104 P2 / R7: probing an ALIASED doc (its content chunks are owned by a
+    # canonical sibling) must still shadow those SHARED content chunks — resolved
+    # by the shadow doc's content file_id, not its source_doc_id — else the
+    # findability preview double-counts real content alongside the virtual chunk.
+    from workspace_app.kb.retriever import Overlay
+
+    cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
+    ing = Ingestor(spec, chunker=chunker, embedder=embedder)
+    body = b"reflow oven temperature drifted in zone three"
+    ing.ingest(collection_id=cid, user="u", filename="canon.md", data=body)  # owns the chunks
+    ing.ingest(collection_id=cid, user="u", filename="alias.md", data=body)  # dedup alias, 0 chunks
+    alias = encode_doc_id(cid, "alias.md")
+
+    vtext = "hydraulic actuator pressure loss"
+    virtual = DocChunk(
+        collection_id=cid,
+        source_doc_id=alias,
+        seq=0,
+        start=0,
+        end=len(vtext),
+        text=vtext,
+        embedding=embedder.embed_documents([vtext])[0],
+    )
+    overlay = Overlay(virtual_chunks=[virtual], shadow_doc_id=alias, virtual_text=vtext)
+    r = Retriever(spec, embedder=embedder)
+
+    on_old = r.search("reflow temperature", [cid], overlay=overlay)
+    assert not any("reflow" in p.text for p in on_old)  # shared content shadowed via file_id
+
+
 def test_image_doc_passage_uses_parsed_text_not_raw_bytes(
     spec: SpecStar, chunker: FixedTokenChunker, embedder: HashEmbedder
 ):

@@ -1511,7 +1511,14 @@ def register_kb_routes(
         # `DocChunk.search_resources` loop streamed every chunk's text + two
         # embedding vectors into Python only to add 1).
         cited = doc_cited_for_ids(spec, ids)
-        chunk_counts = doc_chunks_for_ids(spec, ids)
+        # #104: a doc's chunks are keyed by CONTENT (file_id), so the count is
+        # resolved per file_id (shared content → shared count) with a legacy
+        # source_doc_id fallback. Each doc's file_id rides its indexed_data.
+        doc_file_ids = {
+            m.resource_id: (fid if isinstance(fid := _indexed_of(m).get("file_id"), str) else "")
+            for m in metas
+        }
+        chunk_counts = doc_chunks_for_ids(spec, collection_id, doc_file_ids)
 
         # #248/#395: unit progress for the docs still fanning out — ONE
         # collection-scoped metas search over the in-flight runs (their
