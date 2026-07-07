@@ -20,14 +20,12 @@ jobs:
       # libmagic is needed by the tabular/magic-sniff parser path.
       - name: Install libmagic
         run: |
-          # GitHub runners preload third-party apt repos (azure-cli / ms-prod)
-          # whose mirrors intermittently serve an invalid InRelease and fail the
-          # whole `apt-get update` with exit 100 (unrelated to us). Drop them
-          # (libmagic1 is in the base Ubuntu repos) and retry update once, so a
-          # flaky third-party mirror can't kill the whole CI run.
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
-                     /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update || sudo apt-get update
+          # GitHub runners preload a Microsoft (azure-cli) apt repo whose mirror
+          # intermittently serves an invalid InRelease, so `apt-get update` exits
+          # 100 — even though the BASE Ubuntu repos (where libmagic1 lives) update
+          # fine. Tolerate that non-zero (the base index is still refreshed), then
+          # install; a genuine install failure still fails the step loudly.
+          sudo apt-get update || true
           sudo apt-get install -y --no-install-recommends libmagic1
 
       - name: Install uv
@@ -100,14 +98,12 @@ jobs:
       # libmagic is needed by the tabular/magic-sniff parser path.
       - name: Install libmagic
         run: |
-          # GitHub runners preload third-party apt repos (azure-cli / ms-prod)
-          # whose mirrors intermittently serve an invalid InRelease and fail the
-          # whole `apt-get update` with exit 100 (unrelated to us). Drop them
-          # (libmagic1 is in the base Ubuntu repos) and retry update once, so a
-          # flaky third-party mirror can't kill the whole CI run.
-          sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list \
-                     /etc/apt/sources.list.d/azure-cli.list || true
-          sudo apt-get update || sudo apt-get update
+          # GitHub runners preload a Microsoft (azure-cli) apt repo whose mirror
+          # intermittently serves an invalid InRelease, so `apt-get update` exits
+          # 100 — even though the BASE Ubuntu repos (where libmagic1 lives) update
+          # fine. Tolerate that non-zero (the base index is still refreshed), then
+          # install; a genuine install failure still fails the step loudly.
+          sudo apt-get update || true
           sudo apt-get install -y --no-install-recommends libmagic1
 
       - name: Install uv
