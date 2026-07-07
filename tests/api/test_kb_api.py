@@ -1219,10 +1219,11 @@ def test_delete_document_removes_doc_and_its_chunks():
     assert client.get("/kb/documents/chunks", params={"id": doc_id}).json() == []  # cascade
 
 
-def test_deleting_the_dedup_owner_rehomes_chunks_to_the_surviving_alias():
-    # #104: two paths share ONE chunk set (the alias holds 0). Deleting the path
-    # that OWNS the chunks must re-home them to the surviving sibling first, so the
-    # content stays searchable instead of vanishing with the deleted owner.
+def test_deleting_one_holder_of_shared_content_keeps_it_at_the_surviving_path():
+    # #104: two paths share ONE content chunk set. Deleting one path must NOT
+    # delete the content — a collection-scoped refcount leaves the shared set for
+    # the surviving sibling, which serves it by file_id (no re-home). Both paths
+    # surface the SAME content-addressed chunks through the chunk view.
     client = _client()
     cid = _new_collection(client)
     body = b"# Deck\nalpha beta gamma delta epsilon zeta"
@@ -1233,16 +1234,18 @@ def test_deleting_the_dedup_owner_rehomes_chunks_to_the_surviving_alias():
     _drain(client)
     a, b = encode_doc_id(cid, "wk1/report.md"), encode_doc_id(cid, "wk2/report.md")
 
-    def _chunks(did):
-        return client.get("/kb/documents/chunks", params={"id": did}).json()
+    def _chunk_ids(did):
+        return [
+            c["chunk_id"] for c in client.get("/kb/documents/chunks", params={"id": did}).json()
+        ]
 
-    owner, alias = (a, b) if _chunks(a) else (b, a)
-    assert _chunks(owner) and _chunks(alias) == []  # dedup: one owns, the other aliases
+    # both paths surface the same shared content chunk set (content-addressed)
+    assert _chunk_ids(a) and _chunk_ids(a) == _chunk_ids(b)
 
-    assert client.delete("/kb/documents", params={"id": owner}).status_code == 200
+    assert client.delete("/kb/documents", params={"id": a}).status_code == 200
 
-    assert _chunks(alias)  # re-homed: the surviving path now holds the shared set
-    assert client.get("/kb/documents", params={"id": owner}).status_code == 404  # owner gone
+    assert client.get("/kb/documents", params={"id": a}).status_code == 404  # deleted path gone
+    assert _chunk_ids(b)  # the surviving path still serves the shared content (no re-home)
 
 
 def test_delete_routes_through_the_wiki_unfold_hook():

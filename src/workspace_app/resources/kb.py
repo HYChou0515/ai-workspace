@@ -365,7 +365,15 @@ class DocChunk(Struct):  # → resource "doc-chunk"
     """
 
     collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
-    source_doc_id: Annotated[str, Ref("source-doc", on_delete=OnDelete.cascade)]
+    # #104: NOT a Ref/cascade any more — a chunk is bound to CONTENT
+    # (source_file_id), not to one deletable doc. Deletion is governed by a
+    # collection-scoped content refcount (`ingest.teardown_doc_chunks`), not the
+    # source-doc cascade, so tearing down one holder of shared content leaves the
+    # chunk set for the surviving siblings (resolved by file_id — no re-home).
+    # Still WRITTEN (= the owning doc id) and INDEXED as a plain string: it is the
+    # legacy / coalescing fallback for pre-#104 chunks whose source_file_id == "".
+    # Physically dropping the field is a later PR (once prod is reindexed).
+    source_doc_id: str
     seq: int  # 0-based order within the doc (adjacency merge)
     start: int  # inclusive char offset into canonical text
     end: int  # exclusive char offset
