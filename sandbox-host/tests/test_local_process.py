@@ -22,6 +22,15 @@ async def test_create_returns_unique_handles(sandbox: LocalProcessSandbox):
     assert h1.id != h2.id
 
 
+async def test_workspace_dir_is_the_handles_root_subdir(sandbox: LocalProcessSandbox, tmp_path):
+    """#492: the host rsyncs THIS dir to/from the NFS archive — it must be the
+    same `root` subdir walk/file ops are scoped to (never the infra area)."""
+    h = await sandbox.create(SandboxSpec())
+    ws = sandbox.workspace_dir(h)
+    assert ws == tmp_path / h.id / "root"
+    assert ws.is_dir()
+
+
 async def test_exec_real_echo(sandbox: LocalProcessSandbox):
     h = await sandbox.create(SandboxSpec())
     r = await sandbox.exec(h, ["echo", "hello"])

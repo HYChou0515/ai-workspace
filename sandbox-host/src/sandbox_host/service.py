@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from .app import check_cgroup_ready, make_host_app
 from .config import SandboxHostSettings
 from .isolated_process import IsolatedProcessSandbox
+from .nfs_archive import NfsArchive
 
 # Where a pod's own delegated cgroup v2 subtree is mounted when the operator
 # doesn't pin `cgroup_root` explicitly.
@@ -57,6 +58,12 @@ def build_sandbox(settings: SandboxHostSettings) -> IsolatedProcessSandbox:
     )
 
 
+def build_archive(settings: SandboxHostSettings) -> NfsArchive | None:
+    """#492: the durable NFS archive, or None when `nfs_root` is unset (the
+    transitional / local-dev default — no restore-on-create, no persist)."""
+    return NfsArchive(settings.nfs_root) if settings.nfs_root else None
+
+
 def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> FastAPI:
     sandbox = build_sandbox(settings)
     cgroup_root = resolve_cgroup_root(settings)
@@ -65,4 +72,5 @@ def build_host_app(settings: SandboxHostSettings, *, pod_ip: str | None) -> Fast
         advertise_url=advertise_url(settings.bind, pod_ip),
         idle_ttl=settings.idle_ttl,
         readiness=lambda: check_cgroup_ready(cgroup_root),
+        archive=build_archive(settings),
     )
