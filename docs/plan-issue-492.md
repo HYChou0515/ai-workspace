@@ -80,7 +80,7 @@ app pod                                   sandbox-host pod (root, item-aware)
 |---|---|
 | durable 只靠逐檔 HTTP mirror，會 hang（`read_timeout=0`） | persist 是 host-local rsync，**不走 app↔host 網路**，不會 hang |
 | chat turn 結束不 flush | **turn-end persist**（Q7）+ 30s checkpoint |
-| 讀取用 pod-local session → 無 sticky 就閃現 | **warm 讀改走 address store 唯一 handle**（Q6） |
+| 讀取用 pod-local session → 無 sticky 就閃現 | 擁有者 pod：session handle→**live sandbox**（最新）；非擁有者 pod：無 session→**直接讀 NFS 樹**（host 保持 ≤30s 新鮮，本機掛載、零跨 pod HTTP）。**不再是永遠 stale 的 specstar snapshot**，最壞 ≤30s（Q6/使用者接受） |
 | mirror 從一次 walk 推論刪除 → 連到錯/空 sandbox 洗 durable | 刪除改由**擁有者 host 對自己本機目錄** `rsync --delete`，靜止 + `.ready` gate；**不可能連到錯 sandbox** |
 | per-pod `_versions` 基準不可靠 | rsync 真相來源是**實體目錄**，非記憶體快取 |
 
@@ -90,37 +90,38 @@ app pod                                   sandbox-host pod (root, item-aware)
 
 ### #492 核心：NFS 持久層重構
 
-- **P1 · `NfsTreeFileStore`**（純 app-side，零 infra 依賴）
+- **P1 · `NfsTreeFileStore`**（純 app-side，零 infra 依賴） ✅
   實作 `FileStore` Protocol over 檔案樹：`write/read/read_to_file/write_from_path/ls/delete/exists/is_dir/listdir/size`。路徑對映 `workspace_id + path → {nfs_root}/{item}/{path}`（用**真實 `/`**，不需 specstar 的 U+2215 swap）。**path-traversal 安全**（拒 `../` 逃出 item 目錄）、**atomic write**（temp + rename）。tmpdir 單元測試。
 
-- **P2 · M2 遷移安全網**
+- **P2 · M2 遷移安全網** ✅
   一個 `FileStore` wrapper：讀先打 NFS，miss → fallback specstar-blob **並惰性複製到 NFS**；寫一律 NFS。背景 `_nfs_backfill_sweeper`（lease-gated，比照 blob_gc）把未被讀到的 stragglers 補完，全部驗證後才可手動退役 specstar。單元測試涵蓋 miss/hit/回填/寫入。
 
-- **P3 · sandbox-host item-aware + rsync ops**（`sandbox-host/`，跨服務改動）
+- **P3 · sandbox-host item-aware + rsync ops**（`sandbox-host/`，跨服務改動） ✅（+Q9 readiness gate）
   - `create` 收 `item_id`（HTTP 目前忽略 sandbox_id）；handle 仍 `pod_url + remote_id`。
   - cold create 時 `restore`：`rsync {nfs}/{item}/ → local` + `chown -R uid` + 寫 `.ready`。
   - 新 `POST /sandboxes/{id}/persist`（body: `{delete: bool}`）→ `rsync -rlptD [--delete] local → {nfs}/{item}/`，`.ready` gate。
   - host 掛 NFS mount。**真 rsync 的 integration 測試**（root-gated，比照既有 isolated_process 測試）。
 
-- **P4 · app 接線（含(1)讀取修法）**
-  - `registry.peek_handle` / facade `_warm`：**warm 改用 address store 解析唯一 handle**（async），不再先回 pod-local session。
-  - cold 讀寫走 `NfsTreeFileStore`（P1）+ M2 wrapper（P2）。
-  - `registry.flush` / `kill_idle` / `enforce_quota` / `close_all` 的「write-back」改呼叫 **host persist**（P3），退役舊的逐檔 `SandboxSync.mirror` HTTP loop（`kind:local`/mock 保留原路徑）。
-  - `restore` 改由 host 端 rsync（P3），退役 app 端逐檔 upload。
+- **P4 · app 接線（含(1)讀取修法）** ✅
+  - **讀取修法（實作結果，優於原構想）**：durable 改成 NFS 樹（`FILESTORE_KIND=nfs_tree`）後，facade `_warm` 對非擁有者 pod（HTTP `handle_for_id`→None、無 session）回 None → 直接讀**本機掛載的 NFS 樹**（host persist 保持 ≤30s 新鮮）；擁有者 pod 仍讀自己的 live sandbox。這一步同時堵掉「永遠 stale 的 specstar snapshot」與跨 pod HTTP hang。
+    - **拒絕的替代**：把 `peek_handle` 改 async、非擁有者讀也解析 address store 的唯一 handle → 會把每次非擁有者讀變成「跨 pod HTTP `download` 到別台的 sandbox」，正是本重構要消滅的 hang / 504 來源。NFS 樹 fallback（本機讀、≤30s、使用者已接受）嚴格更優，故不改 async。
+  - cold 讀寫走 `NfsTreeFileStore`（P1）+ M2 wrapper（P2）。✅
+  - `registry.flush` / `mirror_warm` / `kill_idle` / `enforce_quota` / `close_all` / `close_session` 的「write-back」改呼叫 **host persist**（P3），退役舊的逐檔 `SandboxSync.mirror` HTTP loop（`host_managed_durable` gate；`kind:local`/mock 保留原路徑）。✅ P4b
+  - `restore` 改由 host 端 rsync（P3），`_acquire` 在 host-managed 模式跳過 app 端逐檔 upload。✅ P4b
 
-- **P5 · persist 觸發策略**
+- **P5 · persist 觸發策略** ✅
   - **turn-end reconcile**：`ChatTurnEngine` 加 optional async `on_turn_end` hook，在 `_run_turn` finally 於 `on_complete` 後 await；`ChatSendService` 注入 registry、傳 `on_turn_end=lambda: registry.flush(item, delete=True)`；KB chat 傳 None（engine 維持 app-agnostic）。
   - **30s 週期 upload-only**：`mirror_warm` sweeper 改呼叫 host persist(`delete=False`)，間隔 30s。
   - idle-reap / shutdown：`delete=True` + time-box。
   - `HttpSandbox` 給**有限 `read_timeout`**（擋殘餘 warm-read HTTP hang；bulk 已不走 HTTP）。
 
-- **P6 · quota + GC 收尾**
-  #245 workspace quota 改 `du` on `{nfs}/{item}/`（取代 specstar `Sum` aggregate）；**退役 workspace blob GC**（檔案就是檔案，刪除 = `rm`）。KB/wiki 的 blob GC 不動。
+- **P6 · quota + GC 收尾** ✅（by construction）
+  #245 workspace quota 改 `du` on `{nfs}/{item}/`（取代 specstar `Sum` aggregate）——已由 P1 `NfsTreeFileStore.workspace_usage`（du）+ P2 `MigratingFileStore.workspace_usage`（legacy∪primary `stat_all`）交付，facade duck-type 之，含單元測試。**退役 workspace blob GC**：`nfs_tree` 下 `WorkspaceFile` 不再是 specstar blob 模型，故 `spec.gc(reconcile)` 自然掃不到 workspace blob（emergent no-op，無碼可刪）；M2 期間 legacy `SpecstarFileStore` 仍註冊 `WorkspaceFile` → blob GC **繼續保護** legacy workspace blob（正確，遷移完成前不可退役）。KB/wiki 的 blob GC 完全不動。
 
-- **P7 · k8s + ops env**
+- **P7 · k8s + ops env** ✅
   NFS PVC（`ReadWriteMany`）掛 sandbox-host + app；`deploy/sandbox-host.example.yaml` 加 NFS volume。**順手補症狀 2/3 的 ops env**（見下）進範例 + `config.example.yaml` 註解醒目化。
 
-- **P8 · integration 測試（證明保證成立）**
+- **P8 · integration 測試（證明保證成立）** ⏳
   - 模擬 host rollout：turn 中殺 sandbox → 斷言 durable 遺失 ≤ 30s、restore 後全回。
   - 非擁有 pod 讀：斷言解析到同一 handle、無閃現。
   - 併發 turn + `--delete`：斷言不誤刪對方檔案。
@@ -128,13 +129,13 @@ app pod                                   sandbox-host pod (root, item-aware)
 
 ### #493 其餘三症狀（獨立、較小，可平行）
 
-- **P9 · 症狀 1（504 假死）** — 獨立小 PR，與 NFS 無關
+- **P9 · 症狀 1（504 假死）** — 獨立小 PR，與 NFS 無關 ⏳
   - `send_into` 改 **fire-and-forget**：`enqueue` 後 route 立刻回 202，不再 await turn future。
   - 前端 504／送出失敗**不當 turn 失敗**（不關 `streaming`、不關 #202 store-poll fallback）。
   - `subscribe_sse` 加**週期 heartbeat**（防 ingress idle 斷 SSE）；前端非 Abort 的 stream error 走 backoff **自動重連 + rehydrate**。
   - ops 止血：ingress `proxy-read-timeout`。
 
-- **P10 · 症狀 2（60s exec 被砍）** — 純 ops（併入 P7 範例 + 文件）
+- **P10 · 症狀 2（60s exec 被砍）** — 純 ops（併入 P7 範例 + 文件） ✅
   真兇 = 獨立 sandbox-host 服務自己的 `exec_timeout=60.0` 預設，使用者調的 config 全沒抵達 host。
   - **設 sandbox-host pod env**：`SANDBOX_HOST_EXEC_TIMEOUT=3600`、`SANDBOX_HOST_LOG_TIMEOUT=1500`。
   - `deploy/sandbox-host.example.yaml` 補這兩個 env（目前缺 = 誤導來源）；`config.example.yaml` 的 `sandbox_host:` 註解標明「app 不讀、要設 host pod env」。
