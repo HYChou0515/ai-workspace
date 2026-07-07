@@ -121,7 +121,7 @@ app pod                                   sandbox-host pod (root, item-aware)
 - **P7 · k8s + ops env** ✅
   NFS PVC（`ReadWriteMany`）掛 sandbox-host + app；`deploy/sandbox-host.example.yaml` 加 NFS volume。**順手補症狀 2/3 的 ops env**（見下）進範例 + `config.example.yaml` 註解醒目化。
 
-- **P8 · integration 測試（證明保證成立）** ⏳
+- **P8 · integration 測試（證明保證成立）** ✅
   - 模擬 host rollout：turn 中殺 sandbox → 斷言 durable 遺失 ≤ 30s、restore 後全回。
   - 非擁有 pod 讀：斷言解析到同一 handle、無閃現。
   - 併發 turn + `--delete`：斷言不誤刪對方檔案。
@@ -129,7 +129,7 @@ app pod                                   sandbox-host pod (root, item-aware)
 
 ### #493 其餘三症狀（獨立、較小，可平行）
 
-- **P9 · 症狀 1（504 假死）** — 獨立小 PR，與 NFS 無關 ⏳
+- **P9 · 症狀 1（504 假死）** — 獨立小 PR，與 NFS 無關 ✅（backend detach+heartbeat+ingress；frontend 重連+gateway 容忍）
   - `send_into` 改 **fire-and-forget**：`enqueue` 後 route 立刻回 202，不再 await turn future。
   - 前端 504／送出失敗**不當 turn 失敗**（不關 `streaming`、不關 #202 store-poll fallback）。
   - `subscribe_sse` 加**週期 heartbeat**（防 ingress idle 斷 SSE）；前端非 Abort 的 stream error 走 backoff **自動重連 + rehydrate**。
