@@ -845,6 +845,8 @@ def create_app(
         # across the turn's ask_knowledge_base calls); default + ceiling from config.
         kb_max_searches_per_turn=kb_max_searches_per_turn,
         kb_max_searches_ceiling=kb_max_searches_ceiling,
+        # #492: flush the item's live sandbox to durable at turn-end (guarantee 2).
+        flush_item=registry.flush,
     )
 
     register_chat_routes(

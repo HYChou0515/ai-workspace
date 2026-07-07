@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -352,8 +352,17 @@ class _TurnSession:
     current_turn: asyncio.Task | None = None
 
 
+# #492: fired once, off the POST's back, after a turn's messages are persisted —
+# the surface flushes the item's live sandbox to durable here (turn-end reconcile,
+# guarantee (2)'s Y=1 turn). Best-effort: a flush failure never fails the turn.
+OnTurnEnd = Callable[[], Awaitable[None]]
+
 _QueueItem = tuple[
-    str, AgentToolContext, Callable[[list[TurnMessage]], None], "asyncio.Future[None]"
+    str,
+    AgentToolContext,
+    Callable[[list[TurnMessage]], None],
+    "OnTurnEnd | None",
+    "asyncio.Future[None]",
 ]
 
 
@@ -469,18 +478,24 @@ class ChatTurnEngine:
         ctx: AgentToolContext,
         *,
         on_complete: Callable[[list[TurnMessage]], None],
+        on_turn_end: OnTurnEnd | None = None,
     ) -> asyncio.Future[None]:
         """#43: append a message to the investigation's FIFO turn queue and
         ensure its worker is running. Unlike `stream()`, a new message does NOT
         cancel the in-flight turn — concurrent users serialize, they don't kill
         each other's work (Stop is the explicit `cancel_current`). Returns a
         future that resolves when THIS message's turn ends, so the caller can
-        await its own turn while later messages queue behind it."""
+        await its own turn while later messages queue behind it.
+
+        #492: `on_turn_end` (optional) runs once after the turn's messages are
+        persisted — the surface flushes the item's live sandbox to durable
+        (turn-end reconcile). It runs on the worker, off the POST's back, and a
+        failure is swallowed so durability best-effort never fails the turn."""
         session = self._ws_session(key)
         if session.worker is None or session.worker.done():
             session.worker = asyncio.create_task(self._worker(session, key))
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        session.queue.put_nowait((content, ctx, on_complete, fut))
+        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut))
         return fut
 
     async def _worker(self, session: _WorkspaceSession, key: str) -> None:
@@ -489,13 +504,15 @@ class ChatTurnEngine:
         cancellable task so `cancel_current` stops only the running turn and the
         worker proceeds to the next; its completion future is then resolved."""
         while True:
-            content, ctx, on_complete, fut = await session.queue.get()
+            content, ctx, on_complete, on_turn_end, fut = await session.queue.get()
             # #349: stamp the CURRENT epoch without bumping — a new collaborative
             # message must NOT supersede the running turn (they serialize via this
             # queue), but an explicit Stop (which DOES bump) on any pod still
             # aborts it through the watcher.
             my_epoch = await self._turn_control.current(key)
-            turn = asyncio.create_task(self._run_turn(content, ctx, on_complete, session.publish))
+            turn = asyncio.create_task(
+                self._run_turn(content, ctx, on_complete, on_turn_end, session.publish)
+            )
             session.current_turn = turn
             self._spawn_watcher(key, my_epoch, turn)
             # The turn persists its own (partial) result via on_complete even
@@ -511,6 +528,7 @@ class ChatTurnEngine:
         content: str,
         ctx: AgentToolContext,
         on_complete: Callable[[list[TurnMessage]], None],
+        on_turn_end: OnTurnEnd | None,
         publish: Callable[[AgentEvent], None],
     ) -> None:
         """Drive one turn through the runner, reducing events into persistable
@@ -533,6 +551,15 @@ class ChatTurnEngine:
             publish(err)
         finally:
             on_complete(reducer.produced)
+            # #492: flush the item's live sandbox to durable at turn-end — the
+            # turn-end reconcile of guarantee (2). Runs on completion and on error
+            # (the partial work is real). Guarded so best-effort durability never
+            # turns a finished turn into a failure; on an active cancel the flush
+            # may be skipped, but the periodic checkpoint + next turn still cover it.
+            if on_turn_end is not None:
+                # A flush failure is not a turn failure (best-effort durability).
+                with contextlib.suppress(Exception):
+                    await on_turn_end()
 
     async def cancel_current(self, key: str) -> None:
         """#43 Stop: interrupt the investigation's in-flight turn (anyone may do

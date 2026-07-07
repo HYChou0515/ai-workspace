@@ -46,6 +46,61 @@ async def test_enqueue_runs_queued_turns_in_fifo_order_without_cancelling():
     assert results[1][0].content == "b"
 
 
+async def test_on_turn_end_runs_after_the_turn_persists():
+    """#492: the turn-end flush hook fires once, AFTER on_complete, so durable
+    lags by at most one turn (guarantee 2)."""
+    seq: list[str] = []
+    done = asyncio.Event()
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text=content)
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+
+    def on_complete(msgs):
+        seq.append("persist")
+
+    async def on_turn_end():
+        seq.append("flush")
+        done.set()
+
+    engine.enqueue("inv", "a", AgentToolContext(), on_complete=on_complete, on_turn_end=on_turn_end)
+    await asyncio.wait_for(done.wait(), 3)
+    await engine.forget("inv")
+    assert seq == ["persist", "flush"]
+
+
+async def test_on_turn_end_failure_does_not_fail_the_turn():
+    """A flush failure is best-effort — it must never turn a finished turn into a
+    failure or wedge the queue's worker."""
+    persisted: list[str] = []
+    second_done = asyncio.Event()
+
+    class _Runner:
+        async def run(self, content, ctx):
+            yield MessageDelta(text=content)
+            yield RunDone()
+
+    engine = ChatTurnEngine(_Runner())  # ty: ignore[invalid-argument-type]
+
+    def on_complete(msgs):
+        persisted.append(msgs[0].content)
+        if len(persisted) == 2:
+            second_done.set()
+
+    async def boom():
+        raise RuntimeError("nfs down")
+
+    # First turn's flush raises; the worker must survive and run the second turn.
+    engine.enqueue("inv", "a", AgentToolContext(), on_complete=on_complete, on_turn_end=boom)
+    engine.enqueue("inv", "b", AgentToolContext(), on_complete=on_complete)
+    await asyncio.wait_for(second_done.wait(), 3)
+    await engine.forget("inv")
+    assert persisted == ["a", "b"]  # both turns completed despite the flush error
+
+
 async def test_cancel_current_stops_only_the_running_turn_then_next_runs():
     """Stop cancels the in-flight turn (persisted with a cancelled marker) and
     the worker proceeds to the next queued message — one person's Stop doesn't

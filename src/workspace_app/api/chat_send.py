@@ -33,7 +33,7 @@ from .rca_messages import bubble_kb_citations, to_rca_message
 from .timeutil import now_ms
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from specstar import SpecStar
 
@@ -73,6 +73,7 @@ class ChatSendService:
         infer_modules_reasoning_effort: str | None,
         kb_max_searches_per_turn: int | None = None,
         kb_max_searches_ceiling: int = 10,
+        flush_item: Callable[[str], Awaitable[None]],
     ) -> None:
         self._spec = spec
         self._locator = locator
@@ -89,6 +90,9 @@ class ChatSendService:
         self._infer_modules_reasoning_effort = infer_modules_reasoning_effort
         self._kb_max_searches_per_turn = kb_max_searches_per_turn
         self._kb_max_searches_ceiling = kb_max_searches_ceiling
+        # #492: flush this item's live sandbox to durable at turn-end (guarantee
+        # (2)'s Y=1 turn) — a no-op when the item is cold.
+        self._flush_item = flush_item
         self._conv_rm = spec.get_resource_manager(Conversation)
 
     async def send(
@@ -294,4 +298,13 @@ class ChatSendService:
             engine_key,
             UserMessage(author=author, content=body.content, created_at=created),
         )
-        await self._turn_engine.enqueue(engine_key, turn_content, ctx, on_complete=persist)
+        # #492: flush the item's live sandbox to durable when THIS turn ends, so
+        # durable lags by at most one turn (guarantee (2)). Runs on the engine's
+        # worker, off this POST's back; a flush failure never fails the turn.
+        await self._turn_engine.enqueue(
+            engine_key,
+            turn_content,
+            ctx,
+            on_complete=persist,
+            on_turn_end=lambda: self._flush_item(investigation_id),
+        )
