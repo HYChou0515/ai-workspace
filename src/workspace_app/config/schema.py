@@ -70,6 +70,15 @@ class HttpSandboxSettings:
 
     base_url: str = ""
     read_timeout: float = 0.0
+    # #492: the host owns durable — it restores a sandbox's working dir from the
+    # NFS archive on create and rsyncs it back on persist (host-local, so the
+    # bulk copy never crosses this app↔host wire and can't hang). Set this ⇒ the
+    # app skips its own per-file restore/mirror and writes back via the host's
+    # /persist instead. Requires SANDBOX_HOST_NFS_ROOT set on the host, and the
+    # app's `filestore.kind: nfs_tree` pointing at the SAME NFS tree so cold
+    # reads and uploads agree with what the host rsyncs. False ⇒ the app-side
+    # SandboxSync mirror, unchanged.
+    host_managed_durable: bool = False
 
 
 @dataclass(frozen=True)

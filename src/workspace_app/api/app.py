@@ -184,6 +184,13 @@ def create_app(
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
     # Threaded from settings.sandbox.max_workspace_bytes.
     max_workspace_bytes: int = 0,
+    # #492: when the HTTP sandbox-host owns durable via an NFS archive (it rsyncs
+    # each item's working dir to/from a shared PVC host-side), the app must NOT run
+    # its own restore/mirror — write-back goes through `sandbox.persist` and the
+    # host restores on create. Default False = the app-side SandboxSync path
+    # (shared-vol local / non-http), unchanged. __main__ derives it from
+    # settings.sandbox.kind == "http" and settings.sandbox.http.host_managed_durable.
+    host_managed_durable: bool = False,
     # P3.0: background code-repo sync sweeper interval. None ⇒ sweeper
     # disabled (manual /sync only). __main__ derives this from
     # Settings.sync_check_interval_sec.
@@ -356,6 +363,7 @@ def create_app(
         sync=sync,
         activity=activity_store,
         address=address_store,
+        host_managed_durable=host_managed_durable,
     )
     # The single chokepoint for workspace file ops (agent tools + file routes):
     # routes to the live sandbox (single source of truth) when one is up for the

@@ -793,6 +793,91 @@ async def test_ensure_handle_reacquires_when_host_reaped_the_sandbox_366():
     assert sandbox.create_calls == 2  # created the replacement
 
 
+# ---- host-managed durable (#492): the host rsyncs its own dir to the NFS
+# archive, so the app skips its restore/mirror and writes back via sandbox.persist ----
+
+
+class _PersistSandbox(_HttpStyleSandbox):
+    """#492: an http-style backend that ALSO owns durable — it exposes a
+    `persist(handle, *, delete)` the registry calls (the host rsyncs its own
+    working dir to/from the NFS archive) in place of the app-side sync.mirror."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.persisted: list[tuple[str, bool]] = []
+
+    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+        self.persisted.append((handle.id, delete))
+
+
+async def test_host_managed_ensure_handle_skips_app_side_restore_492():
+    # The host restored the archive into the fresh sandbox during create, so the
+    # app must NOT run its own restore (that would fight the host's copy).
+    sandbox = _PersistSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, host_managed_durable=True
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+    assert sync.calls == []  # no app-side restore in host-managed mode
+
+
+async def test_host_managed_flush_persists_via_host_with_delete_492():
+    # turn-end reconcile ⇒ persist(delete=True) through the host, NOT sync.mirror.
+    sandbox = _PersistSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    h = await registry.ensure_handle(s)
+    await registry.flush("ws-1")
+    assert sandbox.persisted == [(h.id, True)]  # host rsync reconcile
+    assert [c for c in sync.calls if c[0] == "mirror"] == []  # never the app-side mirror
+
+
+async def test_host_managed_mirror_warm_is_additive_checkpoint_492():
+    # The periodic sweep is an ADDITIVE checkpoint (delete=False) — mid-turn the
+    # dir isn't quiesced, so it never reconciles deletions. Also proves the
+    # write-back works with NO app-side sync wired (routed via `_has_durable`).
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    h = await registry.ensure_handle(s)
+    mirrored = await registry.mirror_warm()
+    assert mirrored == ["ws-1"]
+    assert sandbox.persisted == [(h.id, False)]  # additive, never delete mid-turn
+
+
+async def test_host_managed_kill_idle_persists_before_reap_492():
+    from datetime import UTC, datetime, timedelta
+
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    h = await registry.ensure_handle(s)
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+    assert killed == ["ws-1"]
+    assert sandbox.persisted == [(h.id, True)]  # reconcile (host-side) before rmtree
+
+
+async def test_host_managed_without_persist_method_is_a_noop_492():
+    # Defensive: host-managed is set but the backend exposes no `persist`
+    # (misconfig / non-http double) — write-back silently no-ops, never raises.
+    sandbox = _CountingSandbox()  # MockSandbox: no persist method
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    await registry.flush("ws-1")  # must not raise
+
+
 async def test_http_ensure_handle_reuses_live_handle_without_churn_366():
     # With a shared address wired, a still-live session handle is kept as-is — the
     # liveness probe must NOT rebuild a healthy sandbox on every wake.
