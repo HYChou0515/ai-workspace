@@ -1,5 +1,7 @@
 # Workflow 表達語言對齊計畫 — node contract、verify、與 Claude-Code-shaped 詞彙
 
+> **追蹤 issue：** #499。
+>
 > **狀態：** 設計 / 計畫草案（以終為始）。本文件是 *目標* 也是 *驗收標準*：當實作的
 > 可觀察行為符合這裡的規則時就算「完成」。它延伸並在若干點上 **修正**
 > [`workflows.md`](workflows.md)（#100 spec）、[`workflow-reference-model.md`](workflow-reference-model.md)（#428）、
