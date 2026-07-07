@@ -33,6 +33,11 @@ class SandboxHostSettings:
     log_timeout: float = 60.0
     tools_dir: str | None = None
     idle_ttl: float = 1800.0
+    # #492: the durable NFS archive root. When set, a sandbox restores its
+    # working dir from `{nfs_root}/{item}` on cold create and the host persists
+    # it back via rsync (host-local, so no app↔host network in the bulk path).
+    # None = no archive (the transitional / local-dev default).
+    nfs_root: str | None = None
 
 
 def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
@@ -66,4 +71,5 @@ def load_settings(env: Mapping[str, str]) -> SandboxHostSettings:
         log_timeout=f("SANDBOX_HOST_LOG_TIMEOUT", 60.0),
         tools_dir=opt("SANDBOX_HOST_TOOLS_DIR"),
         idle_ttl=f("SANDBOX_HOST_IDLE_TTL", 1800.0),
+        nfs_root=opt("SANDBOX_HOST_NFS_ROOT"),
     )

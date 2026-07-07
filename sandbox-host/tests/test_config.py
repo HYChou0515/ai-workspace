@@ -29,6 +29,7 @@ def test_reads_all_sandbox_host_env_vars():
         "SANDBOX_HOST_LOG_TIMEOUT": "30",
         "SANDBOX_HOST_TOOLS_DIR": "/opt/tools",
         "SANDBOX_HOST_IDLE_TTL": "900",
+        "SANDBOX_HOST_NFS_ROOT": "/mnt/nfs/workspaces",
     }
     s = load_settings(env)
     assert s == SandboxHostSettings(
@@ -44,6 +45,7 @@ def test_reads_all_sandbox_host_env_vars():
         log_timeout=30.0,
         tools_dir="/opt/tools",
         idle_ttl=900.0,
+        nfs_root="/mnt/nfs/workspaces",
     )
 
 
