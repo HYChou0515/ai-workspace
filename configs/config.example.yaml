@@ -110,15 +110,29 @@
 #   # kind: http — run sandboxes in a separate host pod (see sandbox_host).
 #   # http:
 #   #   base_url: http://sandbox-host:8000   # the host's ClusterIP Service
-#   #   read_timeout: 0          # 0 = no HTTP read deadline (host timeouts bound it)
+#   #   read_timeout: 0          # 0 = no HTTP read deadline for exec (host bounds it)
+#   #   host_managed_durable: false  # #492 true ⇒ host owns durable (NFS rsync);
+#   #                                # pair with filestore.kind: nfs_tree on the SAME tree
+#   #   # #492 busy-host (read-timeout) retry for the idempotent file ops: each try
+#   #   # gets a longer read deadline + backoff, capped, then fails loud (no rebuild
+#   #   # of a live-but-busy sandbox, no cold write). Defaults are sane — tune if hot.
+#   #   io_attempts: 4           # how many tries before giving up (SandboxBusy)
+#   #   io_timeout_base_s: 10    # 1st-attempt read deadline; doubles each retry…
+#   #   io_timeout_cap_s: 40     # …capped here
+#   #   io_backoff_base_s: 1     # sleep after the 1st failure; doubles each retry…
+#   #   io_backoff_cap_s: 8      # …capped here
 
 # ─── sandbox_host ─ MOVED to a standalone service (#251) ─────────────
-# The sandbox host is now its OWN project (`sandbox-host/`, own deps/image) and
-# is configured by `SANDBOX_HOST_*` ENV VARS, not this file — see
-# `deploy/sandbox-host.example.yaml` and `docs/sandbox-host.md`. The app only
-# needs `sandbox.kind: http` + `sandbox.http.base_url` above to reach it.
-# (This block is retained, commented, only so existing configs that still carry
-# a `sandbox_host:` section keep validating; the app no longer reads it.)
+# ⚠️  THE APP DOES NOT READ THIS SECTION. The sandbox host is now its OWN project
+# (`sandbox-host/`, own deps/image), configured ONLY by `SANDBOX_HOST_*` ENV VARS
+# on the HOST pod — NOT this file. Setting e.g. `exec_timeout` / `log_timeout`
+# here has NO EFFECT (#493): a long agent command is still killed at the host's
+# own default (60s) until you set `SANDBOX_HOST_EXEC_TIMEOUT` on the host pod and
+# rollout. The `→ env …` arrows below name the env var each field MAPS TO — set
+# THAT, in `deploy/sandbox-host.example.yaml` (see also `docs/sandbox-host.md`).
+# The app only needs `sandbox.kind: http` + `sandbox.http.base_url` above to
+# reach the host. (This block is retained, commented, only so existing configs
+# that still carry a `sandbox_host:` section keep validating.)
 # sandbox_host:
 #   bind: 0.0.0.0:8000         # → env SANDBOX_HOST_BIND on the host pod
 #   uid_min: 100000            # → SANDBOX_HOST_UID_MIN / _UID_MAX

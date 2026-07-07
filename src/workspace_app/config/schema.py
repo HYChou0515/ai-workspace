@@ -70,6 +70,26 @@ class HttpSandboxSettings:
 
     base_url: str = ""
     read_timeout: float = 0.0
+    # #492: the host owns durable — it restores a sandbox's working dir from the
+    # NFS archive on create and rsyncs it back on persist (host-local, so the
+    # bulk copy never crosses this app↔host wire and can't hang). Set this ⇒ the
+    # app skips its own per-file restore/mirror and writes back via the host's
+    # /persist instead. Requires SANDBOX_HOST_NFS_ROOT set on the host, and the
+    # app's `filestore.kind: nfs_tree` pointing at the SAME NFS tree so cold
+    # reads and uploads agree with what the host rsyncs. False ⇒ the app-side
+    # SandboxSync mirror, unchanged.
+    host_managed_durable: bool = False
+    # #492: how the idempotent file/probe ops retry a BUSY host (a read timeout ⇒
+    # reachable but slow). Each retry gets a LONGER read deadline (a busy host
+    # needs room, not another short hammer) and a longer backoff, both capped so a
+    # stuck host still fails loud in bounded time rather than hanging (the original
+    # #492 symptom). A connection failure / 404 (gone/reaped) is never retried
+    # here — it rebuilds. Defaults are sane; tune only if the host runs hot.
+    io_attempts: int = 4
+    io_timeout_base_s: float = 10.0
+    io_timeout_cap_s: float = 40.0
+    io_backoff_base_s: float = 1.0
+    io_backoff_cap_s: float = 8.0
 
 
 @dataclass(frozen=True)
@@ -147,9 +167,18 @@ class SandboxHostSettings:
 # ─── filestore ──────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class FilestoreSettings:
-    kind: str = "memory"  # memory | specstar
+    kind: str = "memory"  # memory | specstar | nfs_tree
     pg_dsn: str = ""
     disk_root: str = ""
+    # #492: `kind: nfs_tree` — the durable workspace store is a plain on-disk
+    # tree under `nfs_root` (a ReadWriteMany NFS mount), so the sandbox host can
+    # rsync a sandbox's working dir straight to/from it (no per-file HTTP + DB
+    # write, which was the slow/hang-prone mirror). `migrate_from: specstar`
+    # wraps it in the M2 dual-read migration layer (read NFS, fall back to the
+    # specstar-blob store + lazy backfill) for a zero-downtime cut-over; "" ⇒
+    # bare tree (post-migration).
+    nfs_root: str = ""
+    migrate_from: str = ""  # "" | specstar
     # #208: libpq connect timeout (seconds) injected into pg_dsn so an
     # unreachable Postgres fails fast with a clear error instead of hanging the
     # boot silently for minutes at the first connection (specstar's engine sets

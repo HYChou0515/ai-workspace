@@ -234,6 +234,12 @@ class LocalProcessSandbox:
         sandbox root (the infra area, outside this) are never seen or synced."""
         return self._require(handle) / _WORKSPACE
 
+    def workspace_dir(self, handle: SandboxHandle) -> Path:
+        """#492: the local working dir the host rsyncs to/from the NFS archive —
+        the SAME subdir `walk`/file ops are scoped to (the agent's cwd), so the
+        archive mirrors exactly the user's files and nothing in the infra area."""
+        return self._workspace(handle)
+
     async def create(self, spec: SandboxSpec) -> SandboxHandle:
         handle = SandboxHandle(id=str(uuid.uuid4()))
         path = self._root / handle.id

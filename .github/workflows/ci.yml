@@ -19,7 +19,14 @@ jobs:
 
       # libmagic is needed by the tabular/magic-sniff parser path.
       - name: Install libmagic
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmagic1
+        run: |
+          # GitHub runners preload a Microsoft (azure-cli) apt repo whose mirror
+          # intermittently serves an invalid InRelease, so `apt-get update` exits
+          # 100 — even though the BASE Ubuntu repos (where libmagic1 lives) update
+          # fine. Tolerate that non-zero (the base index is still refreshed), then
+          # install; a genuine install failure still fails the step loudly.
+          sudo apt-get update || true
+          sudo apt-get install -y --no-install-recommends libmagic1
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
@@ -90,7 +97,14 @@ jobs:
 
       # libmagic is needed by the tabular/magic-sniff parser path.
       - name: Install libmagic
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libmagic1
+        run: |
+          # GitHub runners preload a Microsoft (azure-cli) apt repo whose mirror
+          # intermittently serves an invalid InRelease, so `apt-get update` exits
+          # 100 — even though the BASE Ubuntu repos (where libmagic1 lives) update
+          # fine. Tolerate that non-zero (the base index is still refreshed), then
+          # install; a genuine install failure still fails the step loudly.
+          sudo apt-get update || true
+          sudo apt-get install -y --no-install-recommends libmagic1
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5

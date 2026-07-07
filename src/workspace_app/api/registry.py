@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound, SandboxSpec
 from .sandbox_activity import IActivityStore
 from .sandbox_address import IAddressStore
 
@@ -63,7 +63,37 @@ class InvestigationRegistry:
     # address per item instead of each minting a diverging sandbox. None → the
     # local shared-vol / single-process behaviour (the item-keyed dir converges).
     address: IAddressStore | None = None
+    # #492: when the HOST owns durable (http + an NFS archive), the host rsyncs a
+    # sandbox's working dir to/from the archive itself (host-local — can't hang
+    # like the old per-file HTTP mirror). Then the app must NOT run its own
+    # restore (the host restored on create) or mirror (write-back goes through
+    # `sandbox.persist`). None/False → the app-side SandboxSync path (shared-vol
+    # local / non-http), unchanged.
+    host_managed_durable: bool = False
     _sessions: dict[str, InvestigationSession] = field(default_factory=dict)
+
+    @property
+    def _has_durable(self) -> bool:
+        """Whether a write-back has anywhere to go: the app-side SandboxSync
+        mirror, OR (#492) the host's own rsync-to-NFS-archive. Gates every
+        reconcile/checkpoint site so host-managed mode works even without an
+        app-side sync wired (the write-back routes through `sandbox.persist`)."""
+        return self.sync is not None or self.host_managed_durable
+
+    async def _writeback(self, inv_id: str, handle: SandboxHandle, *, delete: bool) -> None:
+        """#492: persist an item's live sandbox to durable. Host-managed ⇒ ask the
+        host to rsync its own dir to the NFS archive (`delete` reconciles at a
+        quiesced point; False is the additive mid-turn checkpoint). Else the
+        app-side SandboxSync mirrors it, as before."""
+        if self.host_managed_durable:
+            persist = getattr(self.sandbox, "persist", None)
+            if persist is not None:
+                await persist(handle, delete=delete)
+            return
+        # Every non-host-managed caller gates on `_has_durable`, which in this
+        # branch (host_managed_durable False) means the app-side sync IS wired.
+        assert self.sync is not None
+        await self.sync.mirror(inv_id, handle)
 
     async def session(self, investigation_id: str) -> InvestigationSession:
         if investigation_id not in self._sessions:
@@ -79,18 +109,43 @@ class InvestigationRegistry:
         fn = getattr(self.sandbox, "handle_for_id", None)
         return fn(investigation_id) if fn is not None else None
 
-    def peek_handle(self, investigation_id: str) -> SandboxHandle | None:
-        """The handle WorkspaceFiles routes a file op through — WITHOUT creating
-        a sandbox. This pod's session handle when it owns one; otherwise the
-        shared-vol handle derived from the id, so a read on ANY pod hits the
-        live shared dir (the facade falls back to the snapshot when that dir is
-        cold) instead of a stale snapshot (#345 — correctness no longer depends
-        on sticky routing). None when the backend isn't id-addressable and this
-        pod has no session."""
+    async def resolve_io_handle(self, investigation_id: str) -> SandboxHandle | None:
+        """The handle a file op routes through, resolved GLOBALLY so reads AND
+        writes hit the SAME source (#492) — WITHOUT waking a cold sandbox.
+
+        Tiers: (1) this pod's live session handle; (2) http — the shared address
+        store's published handle (``address.get``), so a NON-owning pod reads/
+        writes the item's ONE live sandbox rather than a per-pod cold durable
+        write the host's ``--delete`` mirror would later reconcile away; (3) local
+        shared-vol — the id-derived handle (any pod resolves the same dir).
+
+        ``None`` means no handle is published. For http that is ``¬P``, and since
+        a live sandbox is ALWAYS published (``Q→P``, `_acquire` publishes after
+        create), ``¬P`` proves the item is globally cold (``¬Q``) — so a durable
+        write is safe (no sandbox exists to reconcile it). The returned handle is
+        NOT liveness-probed here: the facade discovers liveness by running the op
+        (a busy host retries, a gone one triggers `rebuild_io_handle`)."""
         s = self._sessions.get(investigation_id)
         if s is not None and s.handle is not None:
             return s.handle
+        if self.address is not None:
+            return await self.address.get(investigation_id)
         return self._handle_for_id(investigation_id)
+
+    async def rebuild_io_handle(self, investigation_id: str) -> SandboxHandle:
+        """Force a fresh live handle after a file op hit ``SandboxNotFound`` (the
+        published sandbox was reaped/gone). #492: the facade calls this INSTEAD of
+        cold-writing to durable — the item is globally warm (its address is
+        published), so a cold write would be reconciled away by the host's
+        ``--delete`` mirror. ``_acquire`` converges on another pod's live address
+        or rebuilds from the durable archive and republishes (CAS)."""
+        session = await self.session(investigation_id)
+        async with session.lock:
+            session.handle = await self._acquire(investigation_id)
+            if self.activity is not None:
+                await self.activity.bump(investigation_id)
+            session.last_active = _utcnow()
+        return session.handle
 
     async def ensure_handle(self, session: InvestigationSession) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
@@ -115,13 +170,19 @@ class InvestigationRegistry:
         return session.handle
 
     async def _alive(self, handle: SandboxHandle) -> bool:
-        """True when the sandbox behind ``handle`` still exists — a cheap
-        existence probe. A reaped/dead handle raises ``SandboxNotFound`` (the
-        item was recycled by the host or another pod), which means 'rebuild'."""
+        """True when the sandbox behind ``handle`` still EXISTS — a cheap probe.
+
+        Only a ``SandboxNotFound`` (reaped by the host / another pod, or the pod
+        is gone) is 'rebuild'. A ``SandboxBusy`` (reachable but slow) means the
+        sandbox is ALIVE — treat it as such (#492): rebuilding a merely-busy
+        sandbox would spin up a SECOND live one (split-brain), so a transient
+        overload must never be mistaken for death (the #493 g1 false-positive)."""
         try:
             await self.sandbox.exists(handle, "/")
         except SandboxNotFound:
             return False
+        except SandboxBusy:
+            return True  # reachable but slow ⇒ it exists — do not rebuild
         return True
 
     async def _acquire(self, item: str) -> SandboxHandle:
@@ -147,7 +208,11 @@ class InvestigationRegistry:
                 stale = existing  # dead address → rebuild + swap it out below
         fresh = await self._is_cold(item)
         handle = await self.sandbox.create(self.default_spec, sandbox_id=item)
-        if fresh and self.sync is not None:
+        # #492: in host-managed mode the host already restored this item's archive
+        # into the fresh sandbox during create (and marked it ready), so the app
+        # skips its own per-file restore. Otherwise restore from the durable
+        # snapshot when the dir was cold, as before.
+        if fresh and self.sync is not None and not self.host_managed_durable:
             await self.sync.restore(item, handle)
         if self.address is not None:
             # Publish the fresh address AFTER restore. Swap (CAS on the dead one)
@@ -181,9 +246,9 @@ class InvestigationRegistry:
         """Mirror this investigation's live sandbox to the snapshot right now
         (explicit refresh / turn-end). No-op when cold."""
         s = self._sessions.get(investigation_id)
-        if s is None or s.handle is None or self.sync is None:
+        if s is None or s.handle is None or not self._has_durable:
             return
-        await self.sync.mirror(investigation_id, s.handle)
+        await self._writeback(investigation_id, s.handle, delete=True)  # turn-end reconcile
 
     async def mirror_warm(self) -> list[str]:
         """Throttle sweep: mirror every warm session to the snapshot via a
@@ -194,10 +259,13 @@ class InvestigationRegistry:
         mirrored: list[str] = []
         for inv_id in list(self._sessions):
             s = self._sessions.get(inv_id)
-            if s is None or s.handle is None or self.sync is None:
+            if s is None or s.handle is None or not self._has_durable:
                 continue
             try:
-                await self.sync.mirror(inv_id, s.handle)
+                # #492: the periodic sweep is an ADDITIVE checkpoint (delete=False)
+                # — mid-turn the dir isn't quiesced, so never reconcile deletions
+                # here; turn-end / reap do that at a ready, settled sandbox.
+                await self._writeback(inv_id, s.handle, delete=False)
             except Exception:  # noqa: BLE001 — #366: one bad item must not abort the sweep
                 continue
             mirrored.append(inv_id)
@@ -225,8 +293,9 @@ class InvestigationRegistry:
                     del self._sessions[inv_id]
                     continue
                 if s.handle is not None:
-                    if self.sync is not None:
-                        await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
+                    if self._has_durable:
+                        # write-back before rmtree (reconcile — the dir is settled)
+                        await self._writeback(inv_id, s.handle, delete=True)
                     # #366: a handle the host already reaped (idle TTL) raises
                     # SandboxNotFound — that IS the goal, so still drop the session.
                     with contextlib.suppress(SandboxNotFound):
@@ -262,8 +331,9 @@ class InvestigationRegistry:
             try:
                 if await self._scratch_usage(s.handle) <= max_bytes:
                     continue
-                if self.sync is not None:
-                    await self.sync.mirror(inv_id, s.handle)  # write-back before rmtree
+                if self._has_durable:
+                    # write-back before rmtree (reconcile — the dir is settled)
+                    await self._writeback(inv_id, s.handle, delete=True)
                 with contextlib.suppress(SandboxNotFound):  # #366: already-reaped is fine
                     await self.sandbox.kill(s.handle)
                 if self.activity is not None:
@@ -297,8 +367,8 @@ class InvestigationRegistry:
         for inv_id in list(self._sessions):
             s = self._sessions.pop(inv_id)
             if s.handle is not None:
-                if self.sync is not None:
-                    await self.sync.mirror(inv_id, s.handle)
+                if self._has_durable:
+                    await self._writeback(inv_id, s.handle, delete=True)
                 await self.sandbox.kill(s.handle)
 
     async def close_session(self, investigation_id: str) -> None:
@@ -309,8 +379,8 @@ class InvestigationRegistry:
         if s is None:
             return
         if s.handle is not None:
-            if self.sync is not None:
-                await self.sync.mirror(investigation_id, s.handle)
+            if self._has_durable:
+                await self._writeback(investigation_id, s.handle, delete=True)
             await self.sandbox.kill(s.handle)
             if self.activity is not None:
                 await self.activity.forget(investigation_id)

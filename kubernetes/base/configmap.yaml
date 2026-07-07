@@ -43,6 +43,22 @@ data:
   # File store. "memory" = volatile (resets on restart). For durable
   # investigations/conversations/KB data, see the README note on persistence.
   FILESTORE_KIND: "memory"
+  # #492 host-managed NFS durable (an ALTERNATIVE topology to the local shared-dir
+  # above): run the sandbox on the standalone HTTP host (deploy/sandbox-host.example.yaml)
+  # and make the durable workspace store a plain file tree on the SAME RWX/NFS PVC
+  # the host rsyncs to. The host owns restore/persist; the app only does cold reads
+  # + uploads through the tree, and skips its own per-file restore/mirror. To adopt:
+  #   SANDBOX_KIND: "http"  (+ SANDBOX_HTTP_BASE_URL: "http://sandbox-host:8000")
+  #   SANDBOX_HTTP_HOST_MANAGED_DURABLE: "true"
+  #   FILESTORE_KIND: "nfs_tree"
+  #   FILESTORE_NFS_ROOT: "/mnt/workspaces"     # mount the `workspaces` PVC here
+  #   FILESTORE_MIGRATE_FROM: "specstar"        # M2 read-through safety net until retired
+  # Map in config.yaml as e.g.
+  #   sandbox:   { kind: ${SANDBOX_KIND}, http: { base_url: ${SANDBOX_HTTP_BASE_URL},
+  #                host_managed_durable: ${SANDBOX_HTTP_HOST_MANAGED_DURABLE} } }
+  #   filestore: { kind: ${FILESTORE_KIND}, nfs_root: ${FILESTORE_NFS_ROOT},
+  #                migrate_from: ${FILESTORE_MIGRATE_FROM} }
+  # and mount the `workspaces` PVC on this Deployment (see deployment.yaml + pvc.yaml).
 
   # KB: point LiteLLM at the Ollama service. The embedder model MUST match the
   # dim the image was built with, and a real embedder requires the model pulled

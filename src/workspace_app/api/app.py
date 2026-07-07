@@ -184,6 +184,18 @@ def create_app(
     # scratch volume the whole fleet shares. 0 ⇒ disabled (the lenient default).
     # Threaded from settings.sandbox.max_workspace_bytes.
     max_workspace_bytes: int = 0,
+    # #492: when the HTTP sandbox-host owns durable via an NFS archive (it rsyncs
+    # each item's working dir to/from a shared PVC host-side), the app must NOT run
+    # its own restore/mirror — write-back goes through `sandbox.persist` and the
+    # host restores on create. Default False = the app-side SandboxSync path
+    # (shared-vol local / non-http), unchanged. __main__ derives it from
+    # settings.sandbox.kind == "http" and settings.sandbox.http.host_managed_durable.
+    host_managed_durable: bool = False,
+    # #493 symptom 1 (504): how long a message POST awaits its own turn before
+    # detaching it to the engine's background worker and returning 202. Snappy
+    # turns finish within this (unchanged behaviour); a long turn detaches well
+    # before an ingress proxy-read-timeout (default 60s) would 504 the POST.
+    send_await_timeout: float = 25.0,
     # P3.0: background code-repo sync sweeper interval. None ⇒ sweeper
     # disabled (manual /sync only). __main__ derives this from
     # Settings.sync_check_interval_sec.
@@ -350,18 +362,40 @@ def create_app(
     address_store: IAddressStore | None = (
         SpecstarAddressStore(spec) if isinstance(sandbox, HttpSandbox) else None
     )
+    # #492: fail LOUD at boot on a host-managed-durable misconfig. Without a
+    # `persist` op on the sandbox the registry's write-back would silently no-op
+    # and NOTHING would ever reach durable — data loss with no error. A backend
+    # that owns durable MUST expose persist (HttpSandbox does); refuse to start
+    # otherwise instead of losing every workspace on the next reap.
+    if host_managed_durable and not callable(getattr(sandbox, "persist", None)):
+        raise RuntimeError(
+            "host_managed_durable is set but the sandbox backend has no `persist` "
+            "operation — durable write-back would silently no-op (data loss). Use "
+            "sandbox.kind: http (with SANDBOX_HOST_NFS_ROOT on the host) or unset it."
+        )
     registry = InvestigationRegistry(
         sandbox=sandbox,
         default_spec=SandboxSpec(),
         sync=sync,
         activity=activity_store,
         address=address_store,
+        host_managed_durable=host_managed_durable,
     )
     # The single chokepoint for workspace file ops (agent tools + file routes):
-    # routes to the live sandbox (single source of truth) when one is up for the
-    # investigation, else to the FileStore snapshot. registry.peek_handle reads
-    # liveness without waking — only exec wakes a cold sandbox.
-    files = WorkspaceFiles(filestore, sandbox, registry.peek_handle)
+    # reads AND writes route to the item's ONE live sandbox (resolved globally via
+    # `resolve_io_handle` — this pod's session / the shared address / the id-derived
+    # shared dir), else the durable store when the item is globally cold (#492
+    # same-source). `rebuild_io_handle` is wired ONLY when the host owns durable
+    # (http), so a reaped-but-globally-warm item rebuilds from the archive instead
+    # of a cold durable write the host's `--delete` mirror would reconcile away;
+    # local shared-vol has no host reconcile, so it keeps the cold-dir→durable
+    # fallback (rebuild=None). Resolution never wakes a cold sandbox — only exec does.
+    files = WorkspaceFiles(
+        filestore,
+        sandbox,
+        registry.resolve_io_handle,
+        rebuild=registry.rebuild_io_handle if host_managed_durable else None,
+    )
     kernels = KernelService()
     activity = ActivityLog()
     # Feed the monitor (resolved above) from the OpenAI Agents SDK's own tracing
@@ -845,6 +879,10 @@ def create_app(
         # across the turn's ask_knowledge_base calls); default + ceiling from config.
         kb_max_searches_per_turn=kb_max_searches_per_turn,
         kb_max_searches_ceiling=kb_max_searches_ceiling,
+        # #492: flush the item's live sandbox to durable at turn-end (guarantee 2).
+        flush_item=registry.flush,
+        # #493 symptom 1 (504): detach a long turn from its POST past this deadline.
+        send_await_timeout=send_await_timeout,
     )
 
     register_chat_routes(

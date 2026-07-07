@@ -3,6 +3,7 @@ subprocess/uid/cgroup needed to exercise `app.py`'s routing + error mapping."""
 
 import hashlib
 import uuid
+from pathlib import Path
 
 from .protocol import (
     ExecResult,
@@ -35,6 +36,12 @@ class MockSandbox:
         handle = SandboxHandle(id=str(uuid.uuid4()))
         self._fs[handle.id] = {}
         return handle
+
+    def workspace_dir(self, handle: SandboxHandle) -> Path:
+        # #492: a nominal per-handle path — the in-memory mock has no real dir,
+        # but the host controller only passes it to the (fake) archive in tests.
+        self._require(handle)
+        return Path("/mock-sandbox") / handle.id / "root"
 
     async def kill(self, handle: SandboxHandle) -> None:
         self._require(handle)

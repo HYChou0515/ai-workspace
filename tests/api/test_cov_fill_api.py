@@ -9,14 +9,15 @@ Targets (uncovered before this file):
     per-doc chunk-count loop runs (553->547 / 554).
   - litellm_runner.py: _agent_for wraps the model in DecideThenActModel when the
     WORKSPACE_AGENT_DECIDE_THEN_ACT toggle is on (317-319).
-  - turns.py: subscribe_sse drains a finite event iterator to exhaustion
-    (the loop-exit branch, 458->exit).
+  - turns.py: subscribe_sse SSE-encodes a broadcast event (the `yield to_sse(ev)`
+    branch); it owns its queue + heartbeats, so it's consumed bounded, not drained.
 
 All wiring uses ScriptedAgentRunner / MockSandbox / HashEmbedder — no real LLM.
 """
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
@@ -242,20 +243,22 @@ def test_agent_for_uses_decide_then_act_model_when_toggled(monkeypatch):
     assert isinstance(agent.model, DecideThenActModel)
 
 
-# ── turns.py: subscribe_sse drains a finite stream ───────────────────
+# ── turns.py: subscribe_sse SSE-encodes each broadcast event ─────────
 
 
-async def test_subscribe_sse_exits_when_event_stream_exhausts(monkeypatch):
-    """branch 458->exit: subscribe_sse's frame loop ends cleanly when the
-    underlying event iterator is exhausted (vs. the infinite live queue)."""
+async def test_subscribe_sse_encodes_a_published_event_frame():
+    """subscribe_sse SSE-encodes each event published to the session's live
+    broadcast (the `yield to_sse(ev)` branch).
+
+    NOTE it does NOT self-exit on 'stream exhaustion' — #493 P9 made it OWN its
+    queue and loop with heartbeats until the client disconnects (the endpoint's
+    StreamingResponse cancels it), so draining it to exhaustion would heartbeat
+    forever. Hence bounded consumption via __anext__ (a long heartbeat_interval
+    so the published event, not a heartbeat, is the frame under test)."""
     engine = ChatTurnEngine(_NoopRunner())
-
-    async def finite_events(_key: str, _user_id: str = "") -> AsyncIterator[AgentEvent]:
-        yield MessageDelta(text="hi")
-        yield RunDone()
-        # generator returns here → the for-loop in _frames hits its exit branch
-
-    monkeypatch.setattr(engine, "subscribe", finite_events)
-    frames = [f async for f in engine.subscribe_sse("inv")]
-    assert frames == [to_sse(MessageDelta(text="hi")), to_sse(RunDone())]
-    assert all(f.startswith("data: ") for f in frames)
+    frames = engine.subscribe_sse("inv", heartbeat_interval=5.0)
+    it = frames.__aiter__()
+    engine._ws_session("inv").publish(MessageDelta(text="hi"))
+    frame = await asyncio.wait_for(it.__anext__(), 3)
+    await frames.aclose()  # ty: ignore[unresolved-attribute]
+    assert frame == to_sse(MessageDelta(text="hi"))

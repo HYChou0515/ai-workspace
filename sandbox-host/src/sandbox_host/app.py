@@ -28,6 +28,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
+from .nfs_archive import NfsArchive
 from .protocol import ExecResult, Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
 
 # A readiness probe: raises with a reason when the host can't safely serve.
@@ -41,6 +42,16 @@ class _CreateBody(BaseModel):
     image: str = "python:3.12-slim"
     env: dict[str, str] | None = None
     exposed_ports: tuple[int, ...] = ()
+    # #492: the workspace item this sandbox serves. When the host has an NFS
+    # archive, create restores `{nfs_root}/{item_id}` into the fresh sandbox and
+    # later persists it back. Optional (older clients omit it ⇒ no archive).
+    item_id: str | None = None
+
+
+class _PersistBody(BaseModel):
+    # #492: `delete` ⇒ rsync --delete (turn-end / reap reconcile, at a quiesced
+    # ready sandbox); False ⇒ additive-only mid-turn durability checkpoint.
+    delete: bool = False
 
 
 class _CreateReply(BaseModel):
@@ -159,12 +170,25 @@ class _HostController:
     idle-reaper), whether we're draining, and the activity clock. Create/kill
     flow through it so the reaper can see every handle."""
 
-    def __init__(self, sandbox: Sandbox, *, idle_ttl: float, clock: Callable[[], float]) -> None:
+    def __init__(
+        self,
+        sandbox: Sandbox,
+        *,
+        idle_ttl: float,
+        clock: Callable[[], float],
+        archive: NfsArchive | None = None,
+    ) -> None:
         self.sandbox = sandbox
         self.idle_ttl = idle_ttl
         self.clock = clock
         self.draining = False
         self._last_active: dict[str, float] = {}
+        # #492: when an NFS archive is wired, a create with an `item_id` restores
+        # that item's durable working dir into the fresh sandbox, and `persist`
+        # rsyncs it back. `_item_of` maps a live handle → its item so persist/reap
+        # know which archive dir to write.
+        self._archive = archive
+        self._item_of: dict[str, str] = {}
 
     def start_draining(self) -> None:
         self.draining = True
@@ -173,13 +197,39 @@ class _HostController:
         if rid in self._last_active:
             self._last_active[rid] = self.clock()
 
-    async def create(self, spec: SandboxSpec) -> SandboxHandle:
+    async def create(self, spec: SandboxSpec, item_id: str | None = None) -> SandboxHandle:
         handle = await self.sandbox.create(spec)
         self._last_active[handle.id] = self.clock()
+        # #492: restore the durable archive into the fresh local dir (no-op when
+        # nothing archived yet — a brand-new item starts empty), then mark the
+        # sandbox ready. rsync restore is SYNCHRONOUS here, so by the time create
+        # returns the dir is complete and authoritative — the host owns readiness
+        # in the archive path (the app no longer runs its own restore). mark_ready
+        # is written LAST so a crash mid-restore leaves it absent and persist
+        # (gated on ready) can't push a half-restored dir back over the archive.
+        if self._archive is not None and item_id is not None:
+            self._item_of[handle.id] = item_id
+            await self._archive.restore(item_id, self.sandbox.workspace_dir(handle))
+            await self.sandbox.mark_ready(handle)
         return handle
+
+    async def persist(self, rid: str, *, delete: bool) -> None:
+        """#492: rsync the sandbox's live working dir → its durable NFS archive.
+        A no-op when no archive is wired, this handle has no item mapping, or the
+        sandbox is not ready (a half-restored dir must never overwrite the
+        archive — the #492 Q9 `.ready` gate on persist, so `--delete` can't wipe
+        durable data)."""
+        item = self._item_of.get(rid)
+        if self._archive is None or item is None:
+            return
+        handle = SandboxHandle(id=rid)
+        if not await self.sandbox.is_ready(handle):
+            return
+        await self._archive.persist(item, self.sandbox.workspace_dir(handle), delete=delete)
 
     async def kill(self, rid: str) -> None:
         self._last_active.pop(rid, None)
+        self._item_of.pop(rid, None)
         await self.sandbox.kill(SandboxHandle(id=rid))
 
     async def reap_idle(self) -> list[str]:
@@ -202,9 +252,10 @@ def make_host_app(
     idle_ttl: float = 0.0,
     clock: Callable[[], float] = time.monotonic,
     readiness: ReadinessCheck | None = None,
+    archive: NfsArchive | None = None,
 ) -> FastAPI:
     app = FastAPI()
-    controller = _HostController(sandbox, idle_ttl=idle_ttl, clock=clock)
+    controller = _HostController(sandbox, idle_ttl=idle_ttl, clock=clock, archive=archive)
     app.state.controller = controller
 
     @app.middleware("http")
@@ -251,8 +302,14 @@ def make_host_app(
             # on until idle or the pod's termination grace deadline.
             return JSONResponse(status_code=503, content={"error": "draining"})
         spec = SandboxSpec(image=body.image, env=body.env, exposed_ports=tuple(body.exposed_ports))
-        handle = await controller.create(spec)
+        handle = await controller.create(spec, body.item_id)
         return JSONResponse(_CreateReply(pod_url=advertise_url, remote_id=handle.id).model_dump())
+
+    @app.post("/sandboxes/{rid}/persist", status_code=204)
+    async def persist(rid: str, body: _PersistBody) -> None:
+        # #492: rsync the sandbox's live working dir → its durable NFS archive.
+        # Host-local, so no app↔host network in the bulk path (can't hang).
+        await controller.persist(rid, delete=body.delete)
 
     @app.delete("/sandboxes/{rid}", status_code=204)
     async def kill(rid: str) -> None:

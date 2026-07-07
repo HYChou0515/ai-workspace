@@ -95,39 +95,70 @@ export function useAgentInternal(
 
   // #43: open the persistent broadcast subscription. Every viewer subscribes
   // here and the stream drives the log — turns posted by anyone show up live.
+  //
+  // #493 symptom 1 (504): the SSE stream can drop mid-turn — an idle ingress cut
+  // (now rarer thanks to the server heartbeat), or a pod rollover. A dropped
+  // stream USED to be swallowed and left the viewer stuck forever. Instead,
+  // AUTO-RECONNECT with capped backoff: on any non-abort end/error, wait, then
+  // re-hydrate the persisted thread (so turns that completed during the gap show
+  // up) and re-subscribe. Only controller.abort() (unmount / investigation
+  // switch) stops the loop.
   useEffect(() => {
     const controller = new AbortController();
+    let stopped = false;
+    const sleep = (ms: number) =>
+      new Promise<void>((r) => setTimeout(r, ms));
     (async () => {
-      try {
-        for await (const ev of api.subscribeInvestigation(slug, investigationId, controller.signal)) {
-          // A live event means this viewer IS on the turn's pod — record it so
-          // the #202 store-poll fallback stays dormant while the stream flows.
-          lastEventAtRef.current = Date.now();
-          if (ev.type === "file_changed") {
-            // A human edited a workspace file — refetch the file tree. Don't
-            // fold it into the agent log (it's a side effect, not a turn event).
-            qc.invalidateQueries({ queryKey: qk.files(investigationId) });
-            continue;
-          }
-          setLog((prev) => reduceAgent(prev, ev));
-          if (isTerminal(ev)) {
-            // Re-snapshot from the persisted conversation — it carries the BE-
-            // attached `ask_knowledge_base` citations the SSE stream doesn't
-            // emit. Mirrors the old done-handler.
-            const fresh = await api.getConversation(investigationId);
-            if (fresh) {
-              qc.setQueryData(qk.conversation(investigationId), fresh);
-              setLog(logFromMessages(fresh.messages));
+      let backoff = 1000;
+      while (!stopped) {
+        try {
+          for await (const ev of api.subscribeInvestigation(slug, investigationId, controller.signal)) {
+            backoff = 1000; // a healthy stream resets the backoff
+            // A live event means this viewer IS on the turn's pod — record it so
+            // the #202 store-poll fallback stays dormant while the stream flows.
+            lastEventAtRef.current = Date.now();
+            if (ev.type === "file_changed") {
+              // A human edited a workspace file — refetch the file tree. Don't
+              // fold it into the agent log (it's a side effect, not a turn event).
+              qc.invalidateQueries({ queryKey: qk.files(investigationId) });
+              continue;
+            }
+            setLog((prev) => reduceAgent(prev, ev));
+            if (isTerminal(ev)) {
+              // Re-snapshot from the persisted conversation — it carries the BE-
+              // attached `ask_knowledge_base` citations the SSE stream doesn't
+              // emit. Mirrors the old done-handler.
+              const fresh = await api.getConversation(investigationId);
+              if (fresh) {
+                qc.setQueryData(qk.conversation(investigationId), fresh);
+                setLog(logFromMessages(fresh.messages));
+              }
             }
           }
+        } catch (err: unknown) {
+          // Torn down on unmount / investigation-switch via controller.abort() —
+          // stop the reconnect loop on the resulting AbortError.
+          if ((err as { name?: string } | null)?.name === "AbortError") return;
+          // Any other error → fall through to the reconnect delay below.
         }
-      } catch (err: unknown) {
-        // The subscription is torn down on unmount/investigation-switch via
-        // controller.abort() — swallow the resulting AbortError.
-        if ((err as { name?: string } | null)?.name === "AbortError") return;
+        if (stopped) return;
+        // The stream ended (server closed it) or errored: back off, then
+        // re-hydrate so a turn that finished during the gap isn't lost, and loop
+        // to re-subscribe.
+        await sleep(backoff);
+        if (stopped) return;
+        const fresh = await api.getConversation(investigationId).catch(() => null);
+        if (fresh && !stopped) {
+          qc.setQueryData(qk.conversation(investigationId), fresh);
+          setLog(logFromMessages(fresh.messages));
+        }
+        backoff = Math.min(backoff * 2, 15000);
       }
     })();
-    return () => controller.abort();
+    return () => {
+      stopped = true;
+      controller.abort();
+    };
   }, [investigationId, qc]);
 
   // #202 cross-pod safety net: when this viewer's broadcast is on a pod that
@@ -190,6 +221,16 @@ export function useAgentInternal(
         });
       } catch (err: unknown) {
         if ((err as { name?: string } | null)?.name === "AbortError") return;
+        // #493 symptom 1 (504): a gateway/timeout error (502/503/504) or a bare
+        // network drop (status 0) does NOT mean the turn failed — the POST may
+        // have been cut by an idle proxy while the turn runs on server-side. Stay
+        // in "streaming" so the live SSE stream + #202 store-poll fallback surface
+        // the result, instead of falsely flipping to an error the user must clear.
+        const status = (err as { status?: number } | null)?.status;
+        if (status === 0 || status === 502 || status === 503 || status === 504) {
+          lastEventAtRef.current = Date.now(); // give the poll a grace cycle
+          return;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         setLog((prev) => ({ ...prev, streaming: false, error: msg }));
       }

@@ -209,6 +209,14 @@ def main() -> None:
             # working dir grows past this (0 ⇒ off), so one runaway workspace can't
             # fill the shared scratch volume the whole fleet shares.
             max_workspace_bytes=settings.sandbox.max_workspace_bytes,
+            # #492: when the HTTP sandbox-host owns durable via its NFS archive, the
+            # app skips its own restore/mirror and writes back through the host's
+            # /persist. Only meaningful for kind: http (other backends ignore it).
+            host_managed_durable=(
+                settings.sandbox.kind == "http"
+                and settings.sandbox.http is not None
+                and settings.sandbox.http.host_managed_durable
+            ),
             # #245: blob-GC sweeper — reclaims orphaned blobs (0 ⇒ off).
             gc_interval=(
                 timedelta(seconds=settings.filestore.gc_interval_sec)

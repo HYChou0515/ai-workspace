@@ -48,8 +48,36 @@ spec:
             - { name: SANDBOX_HOST_CPU_CORES, value: "1.0" }
             - { name: SANDBOX_HOST_PIDS_MAX, value: "512" }
             # cgroup_root unset ⇒ the host auto-detects this pod's own delegated
-            # cgroup v2 subtree. idle_ttl reaps sandboxes orphaned by an app crash.
-            - { name: SANDBOX_HOST_IDLE_TTL, value: "1800" }
+            # cgroup v2 subtree.
+            #
+            # #493 exec/log timeouts — THE HOST ONLY READS THESE ENV VARS. The
+            # app's config.yaml `sandbox_host:`/`sandbox:` sections do NOT reach
+            # here (the host is a separate service/image, #251), so a long agent
+            # command is killed at the DEFAULT 60s unless you set these. Set them
+            # here, on the HOST pod, and rollout — editing config.yaml has no
+            # effect on the http backend.
+            #   exec_timeout = TOTAL wall-clock cap per command (0 = no cap)
+            #   log_timeout  = IDLE cap: kill if no output for this long (0 = off)
+            - { name: SANDBOX_HOST_EXEC_TIMEOUT, value: "3600" }
+            - { name: SANDBOX_HOST_LOG_TIMEOUT, value: "1500" }
+            # #493 idle_ttl reaps sandboxes orphaned by an app-pod CRASH — it is a
+            # backstop, so keep it LONGER than the app's own idle_timeout (8h),
+            # else this reaps still-live sessions out from under the app and the
+            # user's next question waits on a full restore (0 = off).
+            - { name: SANDBOX_HOST_IDLE_TTL, value: "36000" }
+            # #492 durable NFS archive root — a per-item rsync target on the
+            # ReadWriteMany NFS PVC mounted below. Set ⇒ the host restores a
+            # sandbox's working dir from `{nfs_root}/{item}` on cold create and
+            # persists it back via rsync (host-local, so no app↔host network in
+            # the bulk path). Unset ⇒ no archive (transitional / local-dev).
+            - { name: SANDBOX_HOST_NFS_ROOT, value: "/mnt/workspaces" }
+          volumeMounts:
+            # #492 the durable archive lives on a shared RWX (NFS) volume. It is
+            # the ARCHIVE, written by this root process via rsync WITHOUT
+            # preserving ownership (root_squash-safe) — NOT the per-uid live
+            # sandbox dir (that stays on the pod's ephemeral disk under
+            # SANDBOX_HOST_ROOT), so isolation is unaffected.
+            - { name: workspaces, mountPath: /mnt/workspaces }
           securityContext:
             # The host must setuid/chown to foreign uids and write the cgroup
             # subtree, so it runs as root. Per-sandbox isolation is uid + cgroup
@@ -70,6 +98,15 @@ spec:
           resources:
             requests: { cpu: "500m", memory: "512Mi" }
             limits: { cpu: "2", memory: "2Gi" }
+      volumes:
+        # #492 the durable workspace archive — a ReadWriteMany (NFS) claim so
+        # every host replica writes its own items' subdirs. The SAME claim is
+        # mounted read-write on the app pods (for cold reads + user uploads);
+        # both agree on the `{nfs_root}/{item}/{path}` layout. Provision an
+        # NFS-backed PVC (`accessModes: [ReadWriteMany]`) named `workspaces`.
+        - name: workspaces
+          persistentVolumeClaim:
+            claimName: workspaces
 ---
 apiVersion: v1
 kind: Service

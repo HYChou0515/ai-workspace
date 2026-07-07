@@ -40,6 +40,21 @@ class SandboxNotFound(LookupError):
     was never `create()`d or it was already `kill()`ed."""
 
 
+class SandboxBusy(RuntimeError):
+    """Raised when the sandbox is ALIVE but not responding in time — the host is
+    overloaded / the op is mid-transfer and keeps timing out (#492).
+
+    Distinct from `SandboxNotFound` on purpose: a busy sandbox must NOT be rebuilt
+    (that would spin up a second live sandbox = split-brain) and its item must NOT
+    fall back to a cold durable write (the item is globally warm, so a durable
+    write would be reconciled away by the host's `--delete` mirror). The only safe
+    responses are *retry* (the http client does this internally, with an escalating
+    per-attempt timeout so a busy host isn't hammered) and, once retries are spent,
+    *fail loud* — surface it so the caller retries later rather than corrupting
+    state. Only the http backend distinguishes this; id-addressable local backends
+    have no "reachable but slow" state and never raise it."""
+
+
 @dataclass(frozen=True)
 class SandboxHandle:
     """Opaque pointer to one live sandbox. `id` is unique per `create()`; do

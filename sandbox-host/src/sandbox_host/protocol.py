@@ -14,6 +14,7 @@ network-service path in v1, and the wire API exposes no such endpoint.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 # Sink for streaming a command's stdout/stderr as it arrives. `exec` calls it
@@ -73,6 +74,10 @@ class Sandbox(Protocol):
 
     async def create(self, spec: SandboxSpec) -> SandboxHandle: ...
     async def kill(self, handle: SandboxHandle) -> None: ...
+    # #492: the sandbox's LOCAL working dir on this pod's disk — the source/target
+    # of the host's rsync to/from the durable NFS archive. Raises SandboxNotFound
+    # for an unknown handle.
+    def workspace_dir(self, handle: SandboxHandle) -> Path: ...
     async def exec(
         self, handle: SandboxHandle, cmd: list[str], on_output: OutputSink | None = None
     ) -> ExecResult: ...

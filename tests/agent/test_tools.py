@@ -139,7 +139,11 @@ async def test_no_drift_between_file_tools_and_exec():
     fs = MemoryFileStore()
     sandbox = MockSandbox()
     handle: dict[str, SandboxHandle] = {}
-    files = WorkspaceFiles(fs, sandbox, lambda ws: handle.get(ws))
+
+    async def _resolve(ws: str) -> SandboxHandle | None:
+        return handle.get(ws)
+
+    files = WorkspaceFiles(fs, sandbox, _resolve)
 
     async def wake() -> SandboxHandle:  # mimic registry.ensure_handle: create + restore snapshot
         h = await sandbox.create(SandboxSpec())

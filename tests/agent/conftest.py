@@ -20,7 +20,11 @@ def ctx() -> RunContextWrapper[AgentToolContext]:
     filestore = SpecstarFileStore(spec)
     sync = SandboxSync(filestore=filestore, sandbox=sandbox)
     holder: dict[str, SandboxHandle] = {}
-    files = WorkspaceFiles(filestore, sandbox, lambda ws: holder.get(ws))
+
+    async def _resolve(ws: str) -> SandboxHandle | None:
+        return holder.get(ws)
+
+    files = WorkspaceFiles(filestore, sandbox, _resolve)
 
     async def wake() -> SandboxHandle:
         h = await sandbox.create(SandboxSpec())

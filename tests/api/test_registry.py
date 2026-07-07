@@ -58,29 +58,76 @@ async def test_same_investigation_id_returns_same_session_instance():
     assert a is b
 
 
-async def test_peek_handle_routes_to_shared_dir_then_session_handle_345():
-    # #345: file ops route through peek_handle. With a shared per-item dir, even
-    # a pod with NO local session must route reads to the shared dir (id-derived
-    # handle) — the facade falls back to the snapshot if it's cold — instead of
-    # reading a stale snapshot. Once this pod warms a session, its handle is used.
+async def test_resolve_io_handle_routes_to_shared_dir_then_session_handle_345():
+    # #345: file ops route through resolve_io_handle. With a shared per-item dir,
+    # even a pod with NO local session must route to the shared dir (id-derived
+    # handle) — the facade falls back to the snapshot if it's cold — instead of a
+    # stale snapshot. Once this pod warms a session, its handle is used.
     registry = InvestigationRegistry(sandbox=MockSandbox(), default_spec=SandboxSpec())
-    derived = registry.peek_handle("ws-1")
+    derived = await registry.resolve_io_handle("ws-1")
     assert derived is not None and derived.id == "ws-1"  # no session, still routable
     session = await registry.session("ws-1")
     handle = await registry.ensure_handle(session)
-    assert registry.peek_handle("ws-1") is handle  # this pod's session handle once warm
+    assert await registry.resolve_io_handle("ws-1") is handle  # session handle once warm
 
 
-async def test_peek_handle_is_none_when_sandbox_not_id_addressable_345():
-    # An HTTP-style backend mints its own handles (no shared-vol id addressing):
-    # peek_handle has nothing to derive before a session, so it stays None and
-    # reads fall back to the snapshot — the old per-pod behaviour for that kind.
+async def test_resolve_io_handle_is_none_when_no_handle_and_no_address_345():
+    # An HTTP-style backend mints its own handles (no shared-vol id addressing)
+    # and no address store is wired: resolve_io_handle has nothing to derive
+    # before a session, so it stays None (¬P) and reads fall back to the snapshot.
     class _NoIdSandbox(MockSandbox):
         def handle_for_id(self, sandbox_id):
             return None
 
     registry = InvestigationRegistry(sandbox=_NoIdSandbox(), default_spec=SandboxSpec())
-    assert registry.peek_handle("ws-1") is None
+    assert await registry.resolve_io_handle("ws-1") is None
+
+
+async def test_resolve_io_handle_reads_the_shared_address_on_a_non_owning_pod_492():
+    # #492 core: an http item that is warm on pod A must resolve to pod A's ONE
+    # sandbox on pod B too — so pod B's writes land in the live sandbox, not a
+    # per-pod cold durable write the host's --delete mirror would reconcile away.
+    # A non-owning pod has no session, so it resolves via the shared address (P).
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    pod_a = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+    pod_b = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+
+    # Nothing published yet ⇒ globally cold (¬P) ⇒ None (durable write is safe).
+    assert await pod_b.resolve_io_handle("ws-1") is None
+
+    ha = await pod_a.ensure_handle(await pod_a.session("ws-1"))  # pod A warms + publishes
+    # Pod B, with no session of its own, resolves the SAME live handle via the DB.
+    assert await pod_b.resolve_io_handle("ws-1") == ha
+
+
+async def test_rebuild_io_handle_rebuilds_when_the_published_sandbox_was_reaped_492():
+    # #492: when a file op hits SandboxNotFound (the published sandbox was reaped),
+    # the facade calls rebuild_io_handle INSTEAD of cold-writing durable — it
+    # re-acquires a live sandbox (from the archive) and republishes the address.
+    from specstar import SpecStar
+
+    from workspace_app.api.sandbox_address import SpecstarAddressStore, register_sandbox_address
+
+    spec = SpecStar()
+    register_sandbox_address(spec)
+    addr = SpecstarAddressStore(spec)
+    sandbox = _HttpStyleSandbox()
+    registry = InvestigationRegistry(sandbox=sandbox, default_spec=SandboxSpec(), address=addr)
+
+    h1 = await registry.ensure_handle(await registry.session("ws-1"))
+    await sandbox.kill(h1)  # host reaps it → a later op would raise SandboxNotFound
+
+    h2 = await registry.rebuild_io_handle("ws-1")
+    assert h2 != h1  # a fresh live sandbox
+    assert await sandbox.exists(h2, "/") is False  # alive (not SandboxNotFound)
+    assert await addr.get("ws-1") == h2  # the shared address now points to the rebuild
 
 
 async def test_different_investigation_ids_return_distinct_sessions():
@@ -791,6 +838,91 @@ async def test_ensure_handle_reacquires_when_host_reaped_the_sandbox_366():
     assert h2 != h1  # rebuilt a fresh sandbox
     assert await sandbox.exists(h2, "/") is False  # h2 is alive (no SandboxNotFound)
     assert sandbox.create_calls == 2  # created the replacement
+
+
+# ---- host-managed durable (#492): the host rsyncs its own dir to the NFS
+# archive, so the app skips its restore/mirror and writes back via sandbox.persist ----
+
+
+class _PersistSandbox(_HttpStyleSandbox):
+    """#492: an http-style backend that ALSO owns durable — it exposes a
+    `persist(handle, *, delete)` the registry calls (the host rsyncs its own
+    working dir to/from the NFS archive) in place of the app-side sync.mirror."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.persisted: list[tuple[str, bool]] = []
+
+    async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
+        self.persisted.append((handle.id, delete))
+
+
+async def test_host_managed_ensure_handle_skips_app_side_restore_492():
+    # The host restored the archive into the fresh sandbox during create, so the
+    # app must NOT run its own restore (that would fight the host's copy).
+    sandbox = _PersistSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, host_managed_durable=True
+    )
+    await registry.ensure_handle(await registry.session("ws-1"))
+    assert sync.calls == []  # no app-side restore in host-managed mode
+
+
+async def test_host_managed_flush_persists_via_host_with_delete_492():
+    # turn-end reconcile ⇒ persist(delete=True) through the host, NOT sync.mirror.
+    sandbox = _PersistSandbox()
+    sync = _RecordingSync()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), sync=sync, host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    h = await registry.ensure_handle(s)
+    await registry.flush("ws-1")
+    assert sandbox.persisted == [(h.id, True)]  # host rsync reconcile
+    assert [c for c in sync.calls if c[0] == "mirror"] == []  # never the app-side mirror
+
+
+async def test_host_managed_mirror_warm_is_additive_checkpoint_492():
+    # The periodic sweep is an ADDITIVE checkpoint (delete=False) — mid-turn the
+    # dir isn't quiesced, so it never reconciles deletions. Also proves the
+    # write-back works with NO app-side sync wired (routed via `_has_durable`).
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    h = await registry.ensure_handle(s)
+    mirrored = await registry.mirror_warm()
+    assert mirrored == ["ws-1"]
+    assert sandbox.persisted == [(h.id, False)]  # additive, never delete mid-turn
+
+
+async def test_host_managed_kill_idle_persists_before_reap_492():
+    from datetime import UTC, datetime, timedelta
+
+    sandbox = _PersistSandbox()
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    h = await registry.ensure_handle(s)
+    s.last_active = datetime.now(UTC) - timedelta(minutes=30)
+    killed = await registry.kill_idle(threshold=timedelta(minutes=15))
+    assert killed == ["ws-1"]
+    assert sandbox.persisted == [(h.id, True)]  # reconcile (host-side) before rmtree
+
+
+async def test_host_managed_without_persist_method_is_a_noop_492():
+    # Defensive: host-managed is set but the backend exposes no `persist`
+    # (misconfig / non-http double) — write-back silently no-ops, never raises.
+    sandbox = _CountingSandbox()  # MockSandbox: no persist method
+    registry = InvestigationRegistry(
+        sandbox=sandbox, default_spec=SandboxSpec(), host_managed_durable=True
+    )
+    s = await registry.session("ws-1")
+    await registry.ensure_handle(s)
+    await registry.flush("ws-1")  # must not raise
 
 
 async def test_http_ensure_handle_reuses_live_handle_without_churn_366():

@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -352,8 +352,17 @@ class _TurnSession:
     current_turn: asyncio.Task | None = None
 
 
+# #492: fired once, off the POST's back, after a turn's messages are persisted —
+# the surface flushes the item's live sandbox to durable here (turn-end reconcile,
+# guarantee (2)'s Y=1 turn). Best-effort: a flush failure never fails the turn.
+OnTurnEnd = Callable[[], Awaitable[None]]
+
 _QueueItem = tuple[
-    str, AgentToolContext, Callable[[list[TurnMessage]], None], "asyncio.Future[None]"
+    str,
+    AgentToolContext,
+    Callable[[list[TurnMessage]], None],
+    "OnTurnEnd | None",
+    "asyncio.Future[None]",
 ]
 
 
@@ -469,18 +478,24 @@ class ChatTurnEngine:
         ctx: AgentToolContext,
         *,
         on_complete: Callable[[list[TurnMessage]], None],
+        on_turn_end: OnTurnEnd | None = None,
     ) -> asyncio.Future[None]:
         """#43: append a message to the investigation's FIFO turn queue and
         ensure its worker is running. Unlike `stream()`, a new message does NOT
         cancel the in-flight turn — concurrent users serialize, they don't kill
         each other's work (Stop is the explicit `cancel_current`). Returns a
         future that resolves when THIS message's turn ends, so the caller can
-        await its own turn while later messages queue behind it."""
+        await its own turn while later messages queue behind it.
+
+        #492: `on_turn_end` (optional) runs once after the turn's messages are
+        persisted — the surface flushes the item's live sandbox to durable
+        (turn-end reconcile). It runs on the worker, off the POST's back, and a
+        failure is swallowed so durability best-effort never fails the turn."""
         session = self._ws_session(key)
         if session.worker is None or session.worker.done():
             session.worker = asyncio.create_task(self._worker(session, key))
         fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        session.queue.put_nowait((content, ctx, on_complete, fut))
+        session.queue.put_nowait((content, ctx, on_complete, on_turn_end, fut))
         return fut
 
     async def _worker(self, session: _WorkspaceSession, key: str) -> None:
@@ -489,13 +504,15 @@ class ChatTurnEngine:
         cancellable task so `cancel_current` stops only the running turn and the
         worker proceeds to the next; its completion future is then resolved."""
         while True:
-            content, ctx, on_complete, fut = await session.queue.get()
+            content, ctx, on_complete, on_turn_end, fut = await session.queue.get()
             # #349: stamp the CURRENT epoch without bumping — a new collaborative
             # message must NOT supersede the running turn (they serialize via this
             # queue), but an explicit Stop (which DOES bump) on any pod still
             # aborts it through the watcher.
             my_epoch = await self._turn_control.current(key)
-            turn = asyncio.create_task(self._run_turn(content, ctx, on_complete, session.publish))
+            turn = asyncio.create_task(
+                self._run_turn(content, ctx, on_complete, on_turn_end, session.publish)
+            )
             session.current_turn = turn
             self._spawn_watcher(key, my_epoch, turn)
             # The turn persists its own (partial) result via on_complete even
@@ -511,6 +528,7 @@ class ChatTurnEngine:
         content: str,
         ctx: AgentToolContext,
         on_complete: Callable[[list[TurnMessage]], None],
+        on_turn_end: OnTurnEnd | None,
         publish: Callable[[AgentEvent], None],
     ) -> None:
         """Drive one turn through the runner, reducing events into persistable
@@ -533,6 +551,15 @@ class ChatTurnEngine:
             publish(err)
         finally:
             on_complete(reducer.produced)
+            # #492: flush the item's live sandbox to durable at turn-end — the
+            # turn-end reconcile of guarantee (2). Runs on completion and on error
+            # (the partial work is real). Guarded so best-effort durability never
+            # turns a finished turn into a failure; on an active cancel the flush
+            # may be skipped, but the periodic checkpoint + next turn still cover it.
+            if on_turn_end is not None:
+                # A flush failure is not a turn failure (best-effort durability).
+                with contextlib.suppress(Exception):
+                    await on_turn_end()
 
     async def cancel_current(self, key: str) -> None:
         """#43 Stop: interrupt the investigation's in-flight turn (anyone may do
@@ -587,14 +614,39 @@ class ChatTurnEngine:
 
         return _gen()
 
-    def subscribe_sse(self, key: str, user_id: str = "") -> AsyncIterator[str]:
+    def subscribe_sse(
+        self, key: str, user_id: str = "", *, heartbeat_interval: float = 15.0
+    ) -> AsyncIterator[str]:
         """#43: like `subscribe`, but yields SSE-encoded frames so the endpoint is
-        a trivial `StreamingResponse(turn_engine.subscribe_sse(id))` wrapper."""
-        events = self.subscribe(key, user_id)
+        a trivial `StreamingResponse(turn_engine.subscribe_sse(id))` wrapper.
+
+        #493 symptom 1 (504): during a long, silent stretch of a turn (the model
+        thinking, a slow tool) NO event flows, and an idle ingress / proxy can cut
+        the SSE connection — the FE then looks 'stuck'. So when no event arrives
+        within `heartbeat_interval`, emit an SSE COMMENT frame (`: …`) — zero
+        payload, ignored by EventSource, but it keeps the connection (and any idle
+        timer) warm. This owns its queue directly (rather than wrapping
+        `subscribe`) so the per-event timeout cancels only a `Queue.get`, never a
+        shared broadcast generator."""
+        session = self._ws_session(key)
+        q: asyncio.Queue[AgentEvent] = asyncio.Queue()
+        session.subscribers[q] = user_id
+        if user_id:
+            session.publish(Presence(users=session.roster()))
 
         async def _frames() -> AsyncIterator[str]:
-            async for ev in events:
-                yield to_sse(ev)
+            try:
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(q.get(), timeout=heartbeat_interval)
+                    except TimeoutError:
+                        yield ": heartbeat\n\n"  # SSE comment — keeps the stream warm
+                        continue
+                    yield to_sse(ev)
+            finally:
+                session.subscribers.pop(q, None)
+                if user_id:
+                    session.publish(Presence(users=session.roster()))
 
         return _frames()
 

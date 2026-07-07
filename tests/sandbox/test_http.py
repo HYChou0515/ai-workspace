@@ -24,9 +24,19 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import ASGITransport
 
-from workspace_app.sandbox.http_client import HttpSandbox, _encode_handle
+from workspace_app.sandbox.http_client import (
+    HttpSandbox,
+    IoRetryPolicy,
+    _decode_handle,
+    _encode_handle,
+)
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
+from workspace_app.sandbox.protocol import (
+    SandboxBusy,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 _ADVERTISE = "http://sandbox-host-pod:8000"
 
@@ -40,6 +50,8 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
     in-memory `MockSandbox`. Independent of the real host package — it exists so
     the client can be exercised against the contract the app defines."""
     app = FastAPI()
+    app.state.created_item_ids = []  # #492: item_ids seen by create
+    app.state.persisted = []  # #492: (rid, delete) seen by persist
 
     @app.exception_handler(SandboxNotFound)
     async def _nf(_r: Request, exc: SandboxNotFound) -> JSONResponse:
@@ -51,8 +63,15 @@ def _fake_host(backend: MockSandbox, advertise_url: str) -> FastAPI:
 
     @app.post("/sandboxes")
     async def create(body: dict) -> dict[str, str]:
+        app.state.created_item_ids.append(body.get("item_id"))  # #492: capture for assertions
         h = await backend.create(SandboxSpec())
         return {"pod_url": advertise_url, "remote_id": h.id}
+
+    @app.post("/sandboxes/{rid}/persist", status_code=204)
+    async def persist(rid: str, body: dict) -> None:
+        # #492: record (rid, delete) so the client's persist call can be asserted.
+        backend._require(SandboxHandle(id=rid))  # raise SandboxNotFound for a dead handle
+        app.state.persisted.append((rid, bool(body.get("delete", False))))
 
     @app.delete("/sandboxes/{rid}", status_code=204)
     async def kill(rid: str) -> None:
@@ -154,6 +173,47 @@ async def test_create_returns_unique_handles(http_sandbox: HttpSandbox):
     h1 = await http_sandbox.create(SandboxSpec())
     h2 = await http_sandbox.create(SandboxSpec())
     assert h1.id != h2.id
+
+
+@pytest.fixture
+async def host_and_client():
+    """Like `http_sandbox` but also hands back the fake host app so #492 tests
+    can assert what item_id create sent and what persist recorded."""
+    backend = MockSandbox()
+    app = _fake_host(backend, _ADVERTISE)
+    async with httpx.AsyncClient(transport=ASGITransport(app=app)) as client:
+        yield HttpSandbox(base_url=_ADVERTISE, client=client), app
+
+
+async def test_create_passes_the_item_id_to_the_host(host_and_client):
+    """#492: the item id (sandbox_id) is forwarded as item_id so the host can
+    restore/persist that item's durable archive."""
+    sandbox, app = host_and_client
+    await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    assert app.state.created_item_ids == ["item-42"]
+
+
+async def test_create_without_item_id_sends_none(host_and_client):
+    sandbox, app = host_and_client
+    await sandbox.create(SandboxSpec())
+    assert app.state.created_item_ids == [None]
+
+
+async def test_persist_posts_delete_flag(host_and_client):
+    sandbox, app = host_and_client
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    await sandbox.persist(h, delete=True)
+    await sandbox.persist(h, delete=False)
+    _, remote_id = _decode_handle(h)
+    assert app.state.persisted == [(remote_id, True), (remote_id, False)]
+
+
+async def test_persist_on_dead_handle_raises_sandbox_not_found(host_and_client):
+    sandbox, app = host_and_client
+    h = await sandbox.create(SandboxSpec(), sandbox_id="item-42")
+    await sandbox.kill(h)
+    with pytest.raises(SandboxNotFound):
+        await sandbox.persist(h, delete=True)
 
 
 def test_handle_for_id_is_none_345(http_sandbox: HttpSandbox):
@@ -350,3 +410,82 @@ async def test_constructs_its_own_client_for_both_timeout_modes():
         sb = HttpSandbox(base_url="http://x", read_timeout=read_timeout)
         assert sb._client is not None
         await sb._client.aclose()
+
+
+# ---- #492: busy (timeout) vs gone (connect-fail/404) on the idempotent ops ----
+
+# A small, fast policy so the escalation is easy to read in the assertions.
+_FAST_IO = IoRetryPolicy(
+    attempts=3,
+    timeout_base_s=1.0,
+    timeout_factor=2.0,
+    timeout_cap_s=3.0,
+    backoff_base_s=0.5,
+    backoff_factor=2.0,
+    backoff_cap_s=2.0,
+)
+
+
+def _rid_handle() -> SandboxHandle:
+    return SandboxHandle(id=_encode_handle(_ADVERTISE, "rid"))
+
+
+async def test_busy_op_retries_with_escalating_deadline_then_raises_busy():
+    """A read timeout means the host is BUSY, not gone: the op retries with a
+    longer per-attempt read deadline (so the busy host gets room, not another
+    short hammer) and a longer backoff, both capped; after `attempts` the last
+    SandboxBusy propagates so the caller fails loud (never rebuild / cold-write)."""
+    reads: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        reads.append(request.extensions["timeout"]["read"])
+        raise httpx.ReadTimeout("slow", request=request)
+
+    sleeps: list[float] = []
+
+    async def _sleep(s: float) -> None:
+        sleeps.append(s)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client, io_retry=_FAST_IO, sleep=_sleep)
+        with pytest.raises(SandboxBusy):
+            await sb.exists(_rid_handle(), "/")
+
+    assert reads == [1.0, 2.0, 3.0]  # escalating, capped at timeout_cap_s
+    assert sleeps == [0.5, 1.0]  # escalating backoff between the 3 attempts
+
+
+async def test_busy_op_recovers_on_a_later_attempt():
+    """If the host stops being busy, a retry succeeds — no error surfaces."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json={"exists": True})
+
+    async def _sleep(_s: float) -> None:
+        return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client, io_retry=_FAST_IO, sleep=_sleep)
+        assert await sb.exists(_rid_handle(), "/") is True
+    assert calls["n"] == 3
+
+
+async def test_connect_failure_is_not_retried_and_maps_to_not_found():
+    """A connection failure means the pod is GONE (deleted): map straight to
+    SandboxNotFound so the caller rebuilds — do NOT burn the busy-retry budget on
+    it (retrying a dead pod is pointless)."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ConnectError("refused", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client, io_retry=_FAST_IO)
+        with pytest.raises(SandboxNotFound):
+            await sb.exists(_rid_handle(), "/")
+    assert calls["n"] == 1  # gone → rebuild, never retried
