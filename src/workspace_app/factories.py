@@ -275,9 +275,19 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
                     "sandbox.kind=http requires sandbox.http.base_url (the "
                     "sandbox host's Service URL)"
                 )
-            from .sandbox.http_client import HttpSandbox
+            from .sandbox.http_client import HttpSandbox, IoRetryPolicy
 
-            return HttpSandbox(base_url=sb.http.base_url, read_timeout=sb.http.read_timeout)
+            return HttpSandbox(
+                base_url=sb.http.base_url,
+                read_timeout=sb.http.read_timeout,
+                io_retry=IoRetryPolicy(
+                    attempts=sb.http.io_attempts,
+                    timeout_base_s=sb.http.io_timeout_base_s,
+                    timeout_cap_s=sb.http.io_timeout_cap_s,
+                    backoff_base_s=sb.http.io_backoff_base_s,
+                    backoff_cap_s=sb.http.io_backoff_cap_s,
+                ),
+            )
         case other:
             raise ValueError(f"unknown sandbox.kind: {other!r}")
 

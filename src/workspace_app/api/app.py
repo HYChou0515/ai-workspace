@@ -362,6 +362,17 @@ def create_app(
     address_store: IAddressStore | None = (
         SpecstarAddressStore(spec) if isinstance(sandbox, HttpSandbox) else None
     )
+    # #492: fail LOUD at boot on a host-managed-durable misconfig. Without a
+    # `persist` op on the sandbox the registry's write-back would silently no-op
+    # and NOTHING would ever reach durable — data loss with no error. A backend
+    # that owns durable MUST expose persist (HttpSandbox does); refuse to start
+    # otherwise instead of losing every workspace on the next reap.
+    if host_managed_durable and not callable(getattr(sandbox, "persist", None)):
+        raise RuntimeError(
+            "host_managed_durable is set but the sandbox backend has no `persist` "
+            "operation — durable write-back would silently no-op (data loss). Use "
+            "sandbox.kind: http (with SANDBOX_HOST_NFS_ROOT on the host) or unset it."
+        )
     registry = InvestigationRegistry(
         sandbox=sandbox,
         default_spec=SandboxSpec(),
@@ -371,10 +382,20 @@ def create_app(
         host_managed_durable=host_managed_durable,
     )
     # The single chokepoint for workspace file ops (agent tools + file routes):
-    # routes to the live sandbox (single source of truth) when one is up for the
-    # investigation, else to the FileStore snapshot. registry.peek_handle reads
-    # liveness without waking — only exec wakes a cold sandbox.
-    files = WorkspaceFiles(filestore, sandbox, registry.peek_handle)
+    # reads AND writes route to the item's ONE live sandbox (resolved globally via
+    # `resolve_io_handle` — this pod's session / the shared address / the id-derived
+    # shared dir), else the durable store when the item is globally cold (#492
+    # same-source). `rebuild_io_handle` is wired ONLY when the host owns durable
+    # (http), so a reaped-but-globally-warm item rebuilds from the archive instead
+    # of a cold durable write the host's `--delete` mirror would reconcile away;
+    # local shared-vol has no host reconcile, so it keeps the cold-dir→durable
+    # fallback (rebuild=None). Resolution never wakes a cold sandbox — only exec does.
+    files = WorkspaceFiles(
+        filestore,
+        sandbox,
+        registry.resolve_io_handle,
+        rebuild=registry.rebuild_io_handle if host_managed_durable else None,
+    )
     kernels = KernelService()
     activity = ActivityLog()
     # Feed the monitor (resolved above) from the OpenAI Agents SDK's own tracing

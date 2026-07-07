@@ -50,10 +50,10 @@ app pod                                   sandbox-host pod (root, item-aware)
 │     .flush(item) ─────────┼──HTTP ctl──▶│   0700)                             │
 │ registry                  │  (小訊號)  │      │ rsync -rlptD [--delete]        │
 │  └ _acquire: address CAS  │            │      ▼                               │
-│  read path (warm):        │            │  NFS archive: {nfs}/{item}/...       │
-│   peek_handle → address ──┼── probe ──▶│  (nobody:nobody, 純檔案樹)          │
-│   store → live sandbox    │            │      ▲ rsync + chown 成 item uid     │
-│  read path (cold):        │            │      │ (.ready gate)                 │
+│  read/write (warm, 同源): │            │  NFS archive: {nfs}/{item}/...       │
+│   resolve_io_handle →     ┼── op ─────▶│  (nobody:nobody, 純檔案樹)          │
+│   address → live sandbox  │            │      ▲ rsync + chown 成 item uid     │
+│  read/write (cold, ¬P):   │            │      │ (.ready gate)                 │
 │   NfsTreeFileStore ───────┼────────────┼──────┘  restore on cold create      │
 │    直接讀 {nfs}/{item}/   │  (app 也掛 NFS RO/RW)                             │
 └───────────────────────────┘            └────────────────────────────────────┘
@@ -66,13 +66,28 @@ app pod                                   sandbox-host pod (root, item-aware)
 ### 1.1 資料流
 
 - **cold create（restore）**：host `rsync {nfs}/{item}/ → {local}/{item}/root/` + `chown -R uid` + 寫 `.ready`。
-- **warm read**：app `peek_handle` → **address store 拿唯一 handle** → probe → 讀 live sandbox（即時）。
-- **cold read**：app 直接讀 `NfsTreeFileStore`（`{nfs}/{item}/...`）；M2 期間 miss → fallback specstar-blob + 回填。
+- **讀寫同源解析（`resolve_io_handle`）**：讀**與**寫走**同一個** resolver（`registry.resolve_io_handle`），所以永不「寫進 sandbox、讀到舊 NFS」。分三層：① 本 pod live session；② http → address store 的唯一 handle（**非 owner pod 也導向那一個 live sandbox**）；③ local 共享卷 → id 推導 handle。回 `None` = **全域 cold**。
+- **warm read/write**：resolve 回 handle → 讀/寫那個 live sandbox（即時、同源）；下次 persist 帶回 NFS。
+- **cold read/write（含上傳 endpoint）**：**僅當 resolve 回 `None`（全域 cold）**才直接讀寫 `NfsTreeFileStore`（`{nfs}/{item}/`，atomic temp+rename）；M2 期間讀 miss → fallback specstar-blob + 回填。
 - **persist**：
   - turn-end / idle-reap / shutdown：`rsync --delete`（reconcile，含刪除），`.ready` gate + time-box。
   - turn 中途每 30s：`rsync`（upload-only，無 `--delete`）。
-- **write（warm）**：走 live sandbox（經 address store handle）；下次 persist 帶回 NFS。
-- **write（cold，如上傳 endpoint）**：`NfsTreeFileStore` 直接寫 `{nfs}/{item}/`（atomic temp+rename）。
+
+#### 1.1.1 為什麼 cold-write 只在 `¬P` 才安全（`Q→P`）
+
+令 **P** = 「address store 有此 item 的 handle」、**Q** = 「有 live sandbox」。`_acquire` 是唯一生 sandbox 處，且**先 create 再 publish、輸 CAS 就自殺**，故 **`Q→P`**（活著⇒DB 有 handle），且對「我方 reap 不 forget」「host TTL reap」皆免疫（只造成 P 真 Q 假）。逆否 **`¬P→¬Q`**：**DB 空 ⟹ 一定沒有 live sandbox** ⟹ cold-write 進 NFS 絕對安全（沒人會 `--delete` 它）。所以 cold 判定**只看 DB 空不空**，不靠探活——`resolve_io_handle` 回 `None` 就是 `¬P`。這修掉了舊 `peek_handle` 在非 owner pod 上「per-pod 認 cold → 直寫 NFS → 被 turn-end `--delete` 抹掉」的失血洞。
+
+#### 1.1.2 `P 但連不上 handle` 的處置（busy vs gone）
+
+resolve 回了 handle（P），但那個 sandbox 連不上時，**讀寫做同一件事**，並靠錯誤型別分流（`http_client` 解開 `TransportError` 的等號）：
+
+| 症狀 | 診斷 | 動作 |
+|---|---|---|
+| **timeout**（read timeout） | pod 忙、還活著 | **`SandboxBusy` → retry**：每次 read deadline 遞增、backoff 遞增（皆 capped），用光 → **fail loud**（**不** rebuild=避免 split-brain、**不** cold-write=避免被 `--delete` 抹） |
+| **連不上**（connect fail） | pod 被刪 | `SandboxNotFound` → **rebuild**（`rebuild_io_handle` → `_acquire` 從 NFS restore + 重 publish） |
+| **連得到、無資料夾**（404） | 被 reap | `SandboxNotFound` → **rebuild**（同上） |
+
+`_alive` 也據此把 `SandboxBusy` 視為「活著」（busy≠dead），修掉 #493 g1「暫時性錯誤誤判成 dead → 開第二個 sandbox」。
 
 ### 1.2 為什麼這樣就不會再「資料全沒」
 

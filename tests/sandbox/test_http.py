@@ -24,9 +24,19 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from httpx import ASGITransport
 
-from workspace_app.sandbox.http_client import HttpSandbox, _decode_handle, _encode_handle
+from workspace_app.sandbox.http_client import (
+    HttpSandbox,
+    IoRetryPolicy,
+    _decode_handle,
+    _encode_handle,
+)
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxNotFound, SandboxSpec
+from workspace_app.sandbox.protocol import (
+    SandboxBusy,
+    SandboxHandle,
+    SandboxNotFound,
+    SandboxSpec,
+)
 
 _ADVERTISE = "http://sandbox-host-pod:8000"
 
@@ -400,3 +410,82 @@ async def test_constructs_its_own_client_for_both_timeout_modes():
         sb = HttpSandbox(base_url="http://x", read_timeout=read_timeout)
         assert sb._client is not None
         await sb._client.aclose()
+
+
+# ---- #492: busy (timeout) vs gone (connect-fail/404) on the idempotent ops ----
+
+# A small, fast policy so the escalation is easy to read in the assertions.
+_FAST_IO = IoRetryPolicy(
+    attempts=3,
+    timeout_base_s=1.0,
+    timeout_factor=2.0,
+    timeout_cap_s=3.0,
+    backoff_base_s=0.5,
+    backoff_factor=2.0,
+    backoff_cap_s=2.0,
+)
+
+
+def _rid_handle() -> SandboxHandle:
+    return SandboxHandle(id=_encode_handle(_ADVERTISE, "rid"))
+
+
+async def test_busy_op_retries_with_escalating_deadline_then_raises_busy():
+    """A read timeout means the host is BUSY, not gone: the op retries with a
+    longer per-attempt read deadline (so the busy host gets room, not another
+    short hammer) and a longer backoff, both capped; after `attempts` the last
+    SandboxBusy propagates so the caller fails loud (never rebuild / cold-write)."""
+    reads: list[float | None] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        reads.append(request.extensions["timeout"]["read"])
+        raise httpx.ReadTimeout("slow", request=request)
+
+    sleeps: list[float] = []
+
+    async def _sleep(s: float) -> None:
+        sleeps.append(s)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client, io_retry=_FAST_IO, sleep=_sleep)
+        with pytest.raises(SandboxBusy):
+            await sb.exists(_rid_handle(), "/")
+
+    assert reads == [1.0, 2.0, 3.0]  # escalating, capped at timeout_cap_s
+    assert sleeps == [0.5, 1.0]  # escalating backoff between the 3 attempts
+
+
+async def test_busy_op_recovers_on_a_later_attempt():
+    """If the host stops being busy, a retry succeeds — no error surfaces."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json={"exists": True})
+
+    async def _sleep(_s: float) -> None:
+        return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client, io_retry=_FAST_IO, sleep=_sleep)
+        assert await sb.exists(_rid_handle(), "/") is True
+    assert calls["n"] == 3
+
+
+async def test_connect_failure_is_not_retried_and_maps_to_not_found():
+    """A connection failure means the pod is GONE (deleted): map straight to
+    SandboxNotFound so the caller rebuilds — do NOT burn the busy-retry budget on
+    it (retrying a dead pod is pointless)."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        raise httpx.ConnectError("refused", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        sb = HttpSandbox(base_url=_ADVERTISE, client=client, io_retry=_FAST_IO)
+        with pytest.raises(SandboxNotFound):
+            await sb.exists(_rid_handle(), "/")
+    assert calls["n"] == 1  # gone → rebuild, never retried

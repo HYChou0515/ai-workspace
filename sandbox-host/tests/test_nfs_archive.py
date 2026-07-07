@@ -65,6 +65,48 @@ async def test_persist_with_delete_reconciles(
     assert "--delete" in argv
 
 
+async def test_persist_delete_refuses_to_wipe_archive_from_an_empty_source(
+    archive: NfsArchive, runner: _FakeRunner, tmp_path: Path
+):
+    """#492 safety valve: an EMPTY source over a NON-empty archive must NOT run
+    `--delete` (that would wipe durable data — a silently-failed / half restore is
+    indistinguishable from a real empty here). Downgrade to additive."""
+    archived = tmp_path / "nfs" / "item-1"
+    archived.mkdir(parents=True)
+    (archived / "precious.txt").write_text("hours of work")  # non-empty archive
+    empty_ws = tmp_path / "ws"
+    empty_ws.mkdir()  # empty source (e.g. a restore that copied nothing)
+    await archive.persist("item-1", empty_ws, delete=True)
+    (argv,) = runner.calls
+    assert "--delete" not in argv  # the destructive reconcile was refused
+
+
+async def test_persist_delete_still_reconciles_from_a_non_empty_source(
+    archive: NfsArchive, runner: _FakeRunner, tmp_path: Path
+):
+    """The guard only fires on an EMPTY source — a normal non-empty workspace
+    still reconciles deletions (removing one file among many is legitimate)."""
+    (tmp_path / "nfs" / "item-1").mkdir(parents=True)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "keep.txt").write_text("x")  # non-empty source
+    await archive.persist("item-1", ws, delete=True)
+    (argv,) = runner.calls
+    assert "--delete" in argv
+
+
+async def test_persist_delete_reconciles_a_fresh_empty_item(
+    archive: NfsArchive, runner: _FakeRunner, tmp_path: Path
+):
+    """Empty source AND empty/absent archive ⇒ nothing to protect, so `--delete`
+    still passes (a genuinely brand-new empty item)."""
+    ws = tmp_path / "ws"
+    ws.mkdir()  # empty source, archive dir does not exist yet
+    await archive.persist("fresh", ws, delete=True)
+    (argv,) = runner.calls
+    assert "--delete" in argv
+
+
 async def test_persist_creates_the_item_dir(archive: NfsArchive, tmp_path: Path):
     ws = tmp_path / "ws"
     ws.mkdir()

@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from ..sandbox.protocol import Sandbox, SandboxHandle, SandboxNotFound, SandboxSpec
+from ..sandbox.protocol import Sandbox, SandboxBusy, SandboxHandle, SandboxNotFound, SandboxSpec
 from .sandbox_activity import IActivityStore
 from .sandbox_address import IAddressStore
 
@@ -109,18 +109,43 @@ class InvestigationRegistry:
         fn = getattr(self.sandbox, "handle_for_id", None)
         return fn(investigation_id) if fn is not None else None
 
-    def peek_handle(self, investigation_id: str) -> SandboxHandle | None:
-        """The handle WorkspaceFiles routes a file op through — WITHOUT creating
-        a sandbox. This pod's session handle when it owns one; otherwise the
-        shared-vol handle derived from the id, so a read on ANY pod hits the
-        live shared dir (the facade falls back to the snapshot when that dir is
-        cold) instead of a stale snapshot (#345 — correctness no longer depends
-        on sticky routing). None when the backend isn't id-addressable and this
-        pod has no session."""
+    async def resolve_io_handle(self, investigation_id: str) -> SandboxHandle | None:
+        """The handle a file op routes through, resolved GLOBALLY so reads AND
+        writes hit the SAME source (#492) — WITHOUT waking a cold sandbox.
+
+        Tiers: (1) this pod's live session handle; (2) http — the shared address
+        store's published handle (``address.get``), so a NON-owning pod reads/
+        writes the item's ONE live sandbox rather than a per-pod cold durable
+        write the host's ``--delete`` mirror would later reconcile away; (3) local
+        shared-vol — the id-derived handle (any pod resolves the same dir).
+
+        ``None`` means no handle is published. For http that is ``¬P``, and since
+        a live sandbox is ALWAYS published (``Q→P``, `_acquire` publishes after
+        create), ``¬P`` proves the item is globally cold (``¬Q``) — so a durable
+        write is safe (no sandbox exists to reconcile it). The returned handle is
+        NOT liveness-probed here: the facade discovers liveness by running the op
+        (a busy host retries, a gone one triggers `rebuild_io_handle`)."""
         s = self._sessions.get(investigation_id)
         if s is not None and s.handle is not None:
             return s.handle
+        if self.address is not None:
+            return await self.address.get(investigation_id)
         return self._handle_for_id(investigation_id)
+
+    async def rebuild_io_handle(self, investigation_id: str) -> SandboxHandle:
+        """Force a fresh live handle after a file op hit ``SandboxNotFound`` (the
+        published sandbox was reaped/gone). #492: the facade calls this INSTEAD of
+        cold-writing to durable — the item is globally warm (its address is
+        published), so a cold write would be reconciled away by the host's
+        ``--delete`` mirror. ``_acquire`` converges on another pod's live address
+        or rebuilds from the durable archive and republishes (CAS)."""
+        session = await self.session(investigation_id)
+        async with session.lock:
+            session.handle = await self._acquire(investigation_id)
+            if self.activity is not None:
+                await self.activity.bump(investigation_id)
+            session.last_active = _utcnow()
+        return session.handle
 
     async def ensure_handle(self, session: InvestigationSession) -> SandboxHandle:
         # Lock so concurrent callers see a single Sandbox.create — without
@@ -145,13 +170,19 @@ class InvestigationRegistry:
         return session.handle
 
     async def _alive(self, handle: SandboxHandle) -> bool:
-        """True when the sandbox behind ``handle`` still exists — a cheap
-        existence probe. A reaped/dead handle raises ``SandboxNotFound`` (the
-        item was recycled by the host or another pod), which means 'rebuild'."""
+        """True when the sandbox behind ``handle`` still EXISTS — a cheap probe.
+
+        Only a ``SandboxNotFound`` (reaped by the host / another pod, or the pod
+        is gone) is 'rebuild'. A ``SandboxBusy`` (reachable but slow) means the
+        sandbox is ALIVE — treat it as such (#492): rebuilding a merely-busy
+        sandbox would spin up a SECOND live one (split-brain), so a transient
+        overload must never be mistaken for death (the #493 g1 false-positive)."""
         try:
             await self.sandbox.exists(handle, "/")
         except SandboxNotFound:
             return False
+        except SandboxBusy:
+            return True  # reachable but slow ⇒ it exists — do not rebuild
         return True
 
     async def _acquire(self, item: str) -> SandboxHandle:

@@ -46,33 +46,56 @@ class WorkspaceFiles:
         self,
         filestore: FileStore,
         sandbox: Sandbox | None = None,
-        handle_for: Callable[[str], SandboxHandle | None] | None = None,
+        handle_for: Callable[[str], Awaitable[SandboxHandle | None]] | None = None,
+        rebuild: Callable[[str], Awaitable[SandboxHandle]] | None = None,
     ) -> None:
         self._fs = filestore
         self._sb = sandbox
+        # Async resolver: item → the handle its ONE live sandbox is reachable at,
+        # or None when the item is globally cold (#492 same-source resolution).
         self._handle_for = handle_for
+        # Async rebuild: item → a FRESH live handle when the resolved one turns out
+        # reaped. Wired ONLY for a host-managed-durable (http) backend, where a
+        # reaped-but-globally-warm item must NOT fall back to a cold durable write
+        # (the host's `--delete` mirror would reconcile it away). None ⇒ the local
+        # shared-vol backend, whose durable is the FileStore snapshot with no
+        # host-side reconcile, so a cold dir safely falls back to durable (#345).
+        self._rebuild = rebuild
         # Per-(workspace, path) lock so a compare-and-swap (read → check →
         # write) is atomic against other writers going through this facade.
         self._locks: dict[tuple[str, str], asyncio.Lock] = defaultdict(asyncio.Lock)
 
     async def _warm(self, workspace_id: str) -> tuple[Sandbox, SandboxHandle] | None:
-        """The live sandbox for this workspace, or None when there's no sandbox,
-        no routable handle, or the shared dir is cold.
+        """The item's ONE live sandbox, or None when it is globally cold (so the
+        op uses the durable store). Reads AND writes route through here, so both
+        hit the SAME source (#492) — a write never lands somewhere a later read
+        wouldn't see, and never in a cold durable copy the host would reconcile
+        away while a live sandbox exists.
 
-        #345: `handle_for` may hand back a handle that is merely *derivable* (any
-        pod can route an item to its shared dir), so we probe — a cold dir raises
-        `SandboxNotFound` and the op falls back to the durable snapshot. With a
-        shared per-item dir the probe is what keeps a read on a non-owning pod
-        consistent instead of reading a stale snapshot."""
+        `handle_for` resolves the handle GLOBALLY (this pod's session / the shared
+        address / the id-derived shared dir); None means globally cold (¬P) → the
+        durable store. A resolved handle is probed for liveness:
+
+        - alive ⇒ route the op to it.
+        - `SandboxNotFound` (reaped/gone) with a `rebuild` wired (http) ⇒ rebuild
+          from the durable archive and route to the fresh sandbox — NOT the cold
+          durable store (the item is globally warm; a cold write would be lost).
+        - `SandboxNotFound` with no rebuild (local shared-vol) ⇒ the shared dir is
+          cold ⇒ fall back to the durable snapshot, as before (#345).
+        - `SandboxBusy` (reachable but slow) propagates: the http client already
+          retried with an escalating deadline, so this fails loud rather than
+          rebuilding a live sandbox (split-brain) or cold-writing (data loss)."""
         if self._sb is None or self._handle_for is None:
             return None
-        handle = self._handle_for(workspace_id)
+        handle = await self._handle_for(workspace_id)
         if handle is None:
             return None
         try:
-            await self._sb.exists(handle, "/")  # raises SandboxNotFound when cold
+            await self._sb.exists(handle, "/")  # SandboxNotFound = gone; SandboxBusy propagates
         except SandboxNotFound:
-            return None
+            if self._rebuild is None:
+                return None  # local shared-vol cold dir → durable snapshot (#345)
+            handle = await self._rebuild(workspace_id)  # http: reaped but warm → rebuild
         return (self._sb, handle)
 
     async def read(self, workspace_id: str, path: str) -> bytes:

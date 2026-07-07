@@ -63,12 +63,41 @@ class NfsArchive:
         additive only (the 30 s mid-turn durability checkpoint)."""
         dst = self._item_dir(item_id)
         await asyncio.to_thread(dst.mkdir, parents=True, exist_ok=True)
+        # #492 safety valve: a ``--delete`` from an EMPTY source over a NON-empty
+        # archive wipes durable data — the exact disaster this feature exists to
+        # prevent. An empty source is indistinguishable here from a silently-failed
+        # / half restore (a stale NFS handle, a reaped dir), so REFUSE the
+        # destructive reconcile in that case (downgrade to an additive copy, which
+        # from an empty source is a no-op) and leave the archive intact. A
+        # genuinely-emptied workspace keeping its old archive (zombie files) is a
+        # strictly safer, recoverable failure than an irreversible wipe. The host's
+        # ``.ready`` gate already blocks the half-restore case; this is
+        # defence-in-depth for the residual "rsync restore exited 0 but copied
+        # nothing" edge.
+        reconcile = delete and not await self._would_wipe(Path(workspace_dir), dst)
         argv = [self._rsync, _RSYNC_FLAGS]
-        if delete:
+        if reconcile:
             argv.append("--delete")
         # Trailing slashes: copy the CONTENTS of workspace_dir into the item dir.
         argv += [f"{workspace_dir}/", f"{dst}/"]
         await self._invoke(argv)
+
+    async def _would_wipe(self, src: Path, dst: Path) -> bool:
+        """True when a ``--delete`` reconcile would WIPE durable data: the source
+        dir is empty (a vanished / silently-failed restore) while the archive is
+        not. Both probes run off the loop (NFS stat)."""
+        return await asyncio.to_thread(self._is_empty, src) and not await asyncio.to_thread(
+            self._is_empty, dst
+        )
+
+    @staticmethod
+    def _is_empty(path: Path) -> bool:
+        """True when ``path`` has no entries (or does not exist) — the guard basis
+        for refusing a destructive reconcile from a vanished/half-restored dir."""
+        try:
+            return not any(path.iterdir())
+        except FileNotFoundError:
+            return True
 
     async def restore(self, item_id: str, workspace_dir: Path) -> bool:
         """rsync the item's NFS archive → a freshly-created local working dir.

@@ -110,7 +110,17 @@
 #   # kind: http — run sandboxes in a separate host pod (see sandbox_host).
 #   # http:
 #   #   base_url: http://sandbox-host:8000   # the host's ClusterIP Service
-#   #   read_timeout: 0          # 0 = no HTTP read deadline (host timeouts bound it)
+#   #   read_timeout: 0          # 0 = no HTTP read deadline for exec (host bounds it)
+#   #   host_managed_durable: false  # #492 true ⇒ host owns durable (NFS rsync);
+#   #                                # pair with filestore.kind: nfs_tree on the SAME tree
+#   #   # #492 busy-host (read-timeout) retry for the idempotent file ops: each try
+#   #   # gets a longer read deadline + backoff, capped, then fails loud (no rebuild
+#   #   # of a live-but-busy sandbox, no cold write). Defaults are sane — tune if hot.
+#   #   io_attempts: 4           # how many tries before giving up (SandboxBusy)
+#   #   io_timeout_base_s: 10    # 1st-attempt read deadline; doubles each retry…
+#   #   io_timeout_cap_s: 40     # …capped here
+#   #   io_backoff_base_s: 1     # sleep after the 1st failure; doubles each retry…
+#   #   io_backoff_cap_s: 8      # …capped here
 
 # ─── sandbox_host ─ MOVED to a standalone service (#251) ─────────────
 # ⚠️  THE APP DOES NOT READ THIS SECTION. The sandbox host is now its OWN project

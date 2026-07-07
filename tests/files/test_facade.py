@@ -8,9 +8,20 @@ from workspace_app.files import WorkspaceFiles
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.filestore.protocol import FileNotFound
 from workspace_app.sandbox.mock import MockSandbox
-from workspace_app.sandbox.protocol import SandboxHandle, SandboxSpec
+from workspace_app.sandbox.protocol import SandboxBusy, SandboxHandle, SandboxSpec
 
 WS = "inv-1"
+
+
+def _resolver(fn):
+    """Adapt a sync ``item → handle`` function into the async resolver the facade
+    now expects (#492: resolution is global/async so it can consult the shared
+    address store). Reads ``fn`` at call time so tests can mutate the handle."""
+
+    async def _resolve(ws):
+        return fn(ws)
+
+    return _resolve
 
 
 async def _files() -> WorkspaceFiles:
@@ -57,7 +68,7 @@ async def _wired() -> tuple[WorkspaceFiles, MemoryFileStore, MockSandbox, dict]:
     fs = MemoryFileStore()
     sb = MockSandbox()
     handle = {"h": None}  # mutate to simulate wake/idle-kill
-    files = WorkspaceFiles(fs, sandbox=sb, handle_for=lambda _ws: handle["h"])
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolver(lambda _ws: handle["h"]))
     return files, fs, sb, handle
 
 
@@ -71,14 +82,14 @@ async def test_cold_ops_hit_snapshot():
 
 
 async def test_derivable_handle_for_cold_sandbox_falls_back_to_snapshot_345():
-    # #345: peek_handle hands back a derivable (id-based) handle even when the
+    # #345: resolve_io_handle hands back a derivable (id-based) handle even when the
     # item's shared dir is cold (e.g. a read on a pod that never woke it). The
     # facade probes, hits SandboxNotFound, and serves the durable snapshot
     # instead of erroring — so a cross-pod read stays consistent.
     fs = MemoryFileStore()
     sb = MockSandbox()
     await fs.write(WS, "/archived.txt", b"from snapshot")
-    files = WorkspaceFiles(fs, sandbox=sb, handle_for=lambda ws: SandboxHandle(id=ws))
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolver(lambda ws: SandboxHandle(id=ws)))
     assert await files.read(WS, "/archived.txt") == b"from snapshot"
     assert await files.ls(WS) == ["/archived.txt"]
     assert await files.exists(WS, "/archived.txt") is True
@@ -225,7 +236,7 @@ async def test_stat_all_warm_reports_sizes_from_walk_without_reading_bytes():
     fs = MemoryFileStore()
     sb = _CountingSandbox()
     handle: dict[str, SandboxHandle | None] = {"h": None}
-    files = WorkspaceFiles(fs, sandbox=sb, handle_for=lambda _ws: handle["h"])
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolver(lambda _ws: handle["h"]))
     handle["h"] = await sb.create(SandboxSpec())
     await files.write(WS, "/a.txt", b"hello")  # 5 bytes
     await files.write(WS, "/sub/b.txt", b"world!")  # 6 bytes
@@ -238,7 +249,7 @@ async def test_stat_all_warm_honours_prefix():
     fs = MemoryFileStore()
     sb = _CountingSandbox()
     handle: dict[str, SandboxHandle | None] = {"h": None}
-    files = WorkspaceFiles(fs, sandbox=sb, handle_for=lambda _ws: handle["h"])
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolver(lambda _ws: handle["h"]))
     handle["h"] = await sb.create(SandboxSpec())
     await files.write(WS, "/a.txt", b"x")
     await files.write(WS, "/sub/b.txt", b"yy")
@@ -300,3 +311,64 @@ async def test_normalize_helper_canonicalises_all_three_forms():
     assert _norm("./data/x.csv") == "/data/x.csv"
     # A bare `.brief.md` (no slash) keeps the leading dot — only `./` strips.
     assert _norm(".brief.md") == "/.brief.md"
+
+
+# ---------------- #492: host-managed durable — same-source, never cold-write ----------------
+
+
+async def test_warm_write_rebuilds_a_reaped_sandbox_instead_of_cold_writing_492():
+    """#492 core: on a host-managed (http) backend, an item that is globally warm
+    but whose resolved handle was reaped must REBUILD and write into the fresh
+    live sandbox — NOT fall back to a cold durable write the host's `--delete`
+    mirror would reconcile away. The `rebuild` callback is what makes this an
+    http-only behaviour (local shared-vol has rebuild=None → cold-dir→durable)."""
+    fs = MemoryFileStore()
+    sb = MockSandbox()
+    dead = SandboxHandle(id="reaped")  # never created ⇒ exists raises SandboxNotFound
+    live = await sb.create(SandboxSpec())
+    rebuilt = {"n": 0}
+
+    async def _resolve(_ws):
+        return dead  # the address still points at the reaped handle
+
+    async def _rebuild(_ws):
+        rebuilt["n"] += 1
+        return live  # ...but rebuild yields a fresh live sandbox
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, rebuild=_rebuild)
+    await files.write(WS, "/x.txt", b"warm")
+
+    assert rebuilt["n"] == 1  # reaped-but-warm ⇒ rebuilt, not cold
+    assert await sb.download(live, "/x.txt") == b"warm"  # landed in the LIVE sandbox
+    assert await fs.exists(WS, "/x.txt") is False  # NOT a cold durable write
+    # And a subsequent read routes to the same rebuilt sandbox (same source).
+    assert await files.read(WS, "/x.txt") == b"warm"
+
+
+async def test_warm_op_propagates_busy_and_never_cold_writes_or_rebuilds_492():
+    """#492: a BUSY host (SandboxBusy — reachable but slow, already retried by the
+    http client) must fail loud, NOT cold-write (the item is warm, a cold write is
+    lost to `--delete`) and NOT rebuild (the sandbox is alive → split-brain)."""
+
+    class _BusyOnProbe(MockSandbox):
+        async def exists(self, handle: SandboxHandle, path: str) -> bool:
+            raise SandboxBusy(handle.id)
+
+    fs = MemoryFileStore()
+    sb = _BusyOnProbe()
+    h = await sb.create(SandboxSpec())
+    rebuilt = {"n": 0}
+
+    async def _resolve(_ws):
+        return h
+
+    async def _rebuild(_ws):  # pragma: no cover — must NOT be called for a busy host
+        rebuilt["n"] += 1
+        return h
+
+    files = WorkspaceFiles(fs, sandbox=sb, handle_for=_resolve, rebuild=_rebuild)
+    with pytest.raises(SandboxBusy):
+        await files.write(WS, "/x.txt", b"warm")
+
+    assert rebuilt["n"] == 0  # never rebuilt a live (busy) sandbox
+    assert await fs.exists(WS, "/x.txt") is False  # never cold-wrote

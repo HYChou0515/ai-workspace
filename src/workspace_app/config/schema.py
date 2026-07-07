@@ -79,6 +79,17 @@ class HttpSandboxSettings:
     # reads and uploads agree with what the host rsyncs. False ⇒ the app-side
     # SandboxSync mirror, unchanged.
     host_managed_durable: bool = False
+    # #492: how the idempotent file/probe ops retry a BUSY host (a read timeout ⇒
+    # reachable but slow). Each retry gets a LONGER read deadline (a busy host
+    # needs room, not another short hammer) and a longer backoff, both capped so a
+    # stuck host still fails loud in bounded time rather than hanging (the original
+    # #492 symptom). A connection failure / 404 (gone/reaped) is never retried
+    # here — it rebuilds. Defaults are sane; tune only if the host runs hot.
+    io_attempts: int = 4
+    io_timeout_base_s: float = 10.0
+    io_timeout_cap_s: float = 40.0
+    io_backoff_base_s: float = 1.0
+    io_backoff_cap_s: float = 8.0
 
 
 @dataclass(frozen=True)
