@@ -104,6 +104,10 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     prompt: str
     phase: str
     out: str = ""
+    # plan §2.3: the artifact format of a channel-P ``out`` — its default gate is
+    # ``artifact_valid(out, kind)`` (structured kinds PARSE-validate; prose kinds check
+    # non-empty). Defaults to ``text`` (non-empty) when ``out`` is set without a ``kind``.
+    kind: str = ""
     tools: list[str] = field(default_factory=list)
     check: dict[str, Any] | None = None
     retries: int = 0
@@ -792,6 +796,7 @@ async def _exec_step(
             prompt=prompt,
             phase=step.phase,
             out=await _resolve(step.out, ns, wf) if step.out else "",
+            kind=step.kind or "text",
             tools=tools,
             name=step.name or None,
             key=key,

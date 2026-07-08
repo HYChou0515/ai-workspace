@@ -9,11 +9,79 @@ predicates (``exec``) arrive with their phases.
 
 from __future__ import annotations
 
+import csv
+import io
+import json
 from typing import Any
 
 from ..filestore.protocol import FileNotFound
 from .engine import Check, CheckResult
 from .handle import WorkflowHandle
+
+# The artifact formats a channel-P (prose) ``out`` may declare (plan §2.3). The
+# structured kinds (json/yaml/csv) are validated by PARSING — so a reply that leaks
+# conversational text ("Sure! {…}") fails to parse and the gate rejects it, which is
+# exactly how the "file content is the AI's reply" bug is caught. The prose kinds
+# (markdown/text/code) have no strong machine format, so L1 only checks non-emptiness;
+# their structural strength comes from a producer-declared ``requires`` (plan §2.3 L2).
+ARTIFACT_KINDS = ("markdown", "json", "csv", "yaml", "code", "text")
+
+
+def _valid_json(text: str) -> str:
+    try:
+        json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return "is not valid JSON (did the reply include conversational text around it?)"
+    return ""
+
+
+def _valid_yaml(text: str) -> str:
+    import yaml
+
+    try:
+        yaml.safe_load(text)
+    except yaml.YAMLError:
+        return "is not valid YAML (did the reply include conversational text around it?)"
+    return ""
+
+
+def _valid_csv(text: str) -> str:
+    try:
+        rows = list(csv.reader(io.StringIO(text)))
+    except csv.Error:
+        return "is not valid CSV"
+    if not any(row for row in rows):
+        return "has no CSV rows"
+    return ""
+
+
+def artifact_valid(path: str, kind: str) -> Check:
+    """The channel-P (prose ``out``) default gate (plan §2.3 L1): the written file exists,
+    is non-empty, and — for a structured ``kind`` — PARSES as that format. It never
+    rewrites the file (no sanitize, plan §2.4): a polluted artifact FAILS the gate and its
+    reason is fed back into the step's retry, so the model re-produces clean output at the
+    source instead of the platform silently munging it."""
+
+    async def _check(wf: WorkflowHandle, _result: Any) -> CheckResult:
+        try:
+            data = await wf.read(path)
+        except FileNotFound:
+            return CheckResult(False, f"expected file {path} was not written")
+        if not data.strip():
+            return CheckResult(False, f"file {path} is empty")
+        text = data.decode("utf-8", "replace")
+        problem = ""
+        if kind == "json":
+            problem = _valid_json(text)
+        elif kind == "yaml":
+            problem = _valid_yaml(text)
+        elif kind == "csv":
+            problem = _valid_csv(text)
+        if problem:
+            return CheckResult(False, f"file {path} {problem}")
+        return CheckResult(True)
+
+    return _check
 
 
 def file_nonempty(path: str) -> Check:

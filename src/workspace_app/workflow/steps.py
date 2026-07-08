@@ -14,7 +14,7 @@ import hashlib
 import json
 from typing import Any
 
-from .checks import file_nonempty
+from .checks import artifact_valid
 from .engine import Check, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
@@ -121,6 +121,7 @@ async def agent_write_step(
     prompt: str,
     phase: str,
     out: str = "",
+    kind: str = "text",
     name: str | None = None,
     key: str = "",
     tools: list[str] | None = None,
@@ -135,9 +136,13 @@ async def agent_write_step(
     deterministic write commits that text to ``out``. This avoids routing long
     content through a tool argument, which models (small *and* large) emit
     unreliably: the call comes back as plain text and never executes, so the file
-    is silently left unwritten. Gated on the written file (``file_nonempty(out)``
-    by default). Journaled like any step (re-run skips); the input-hash covers the
-    prompt + tools + out, so editing any of them re-runs it (§9).
+    is silently left unwritten. Gated by default on ``artifact_valid(out, kind)``
+    (plan §2.2): the written file must exist, be non-empty, and — for a structured
+    ``kind`` (json/yaml/csv) — PARSE as that format, so a reply that leaks
+    conversational text fails and retries instead of flowing downstream polluted.
+    ``kind`` defaults to ``text`` (non-empty, like the old ``file_nonempty``).
+    Journaled like any step (re-run skips); the input-hash covers the prompt +
+    tools + out, so editing any of them re-runs it (§9).
 
     Give it read-only ``tools`` (e.g. ``["read_file"]``) — the agent reads what it
     needs and answers with the content; the step writes it."""
@@ -167,6 +172,7 @@ async def agent_write_step(
         "prompt": prompt,
         "tools": tools,
         "out": out,
+        "kind": kind,
         "outputs": outputs,
         "phase": phase,
     }
@@ -180,7 +186,7 @@ async def agent_write_step(
         phase=phase,
         args=args,
         execute=execute,
-        check=check or file_nonempty(out),
+        check=check or artifact_valid(out, kind),
         retries=retries,
         cache=cache,
     )
