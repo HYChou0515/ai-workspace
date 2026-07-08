@@ -247,10 +247,12 @@ def _balanced_objects(text: str) -> list[str]:
 
 
 def _try_object(candidate: str) -> dict[str, Any] | None:
-    """``json.loads(candidate)`` if it is a JSON object, else ``None`` (a JSON
-    array/scalar isn't a digest)."""
+    """``json.loads(candidate)`` if it parses, else ``None``. ``candidate`` is a
+    brace-balanced ``{…}`` from :func:`_balanced_objects`, so a successful parse is
+    always a JSON object (never an array/scalar) — narrowed for ty."""
     try:
         obj = json.loads(candidate)
     except (json.JSONDecodeError, ValueError):
         return None
-    return obj if isinstance(obj, dict) else None
+    assert isinstance(obj, dict)  # a balanced {…} always parses to a JSON object
+    return obj
