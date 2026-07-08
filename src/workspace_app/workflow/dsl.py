@@ -1405,7 +1405,7 @@ _STEP_CLASSES = (AgentStep, SandboxStep, GateStep, CapabilityStep, MapStep, Swit
 
 
 def _first_sentence(doc: str | None) -> str:
-    if not doc:
+    if not doc:  # pragma: no cover - every step Struct is documented; guards __doc__ is None
         return ""
     text = " ".join(doc.split())
     end = text.find(". ")

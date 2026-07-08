@@ -46,12 +46,17 @@ def _valid_yaml(text: str) -> str:
 
 
 def _valid_csv(text: str) -> str:
+    # ``csv.reader`` is extremely permissive — it happily reads a chatty preamble line as a
+    # one-cell row — so parseability alone can't catch pollution. A real table is rectangular,
+    # so an inconsistent column count is the deterministic tell that a conversational line
+    # ("Sure, here you go:") was prepended (plan §2.3 L1). ``text`` is already non-empty here
+    # (``artifact_valid`` rejected blank input first), so at least one row is present.
     try:
-        rows = list(csv.reader(io.StringIO(text)))
-    except csv.Error:
+        rows = [row for row in csv.reader(io.StringIO(text)) if row]
+    except csv.Error:  # pragma: no cover - defensive; csv.reader accepts almost any text
         return "is not valid CSV"
-    if not any(row for row in rows):
-        return "has no CSV rows"
+    if len({len(row) for row in rows}) > 1:
+        return "has inconsistent column counts (did the reply prepend conversational text?)"
     return ""
 
 

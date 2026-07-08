@@ -78,6 +78,17 @@ async def test_artifact_valid_csv_rejects_and_passes(wf: WorkflowHandle):
     assert (await artifact_valid("/t.csv", "csv")(wf, None)).ok
 
 
+async def test_artifact_valid_csv_rejects_prepended_prose(wf: WorkflowHandle):
+    """Plan §2.3 L1: csv.reader alone accepts a chatty reply ("Sure, here you go:\\n…") as a
+    valid one-cell row, so it can't catch the "file = the AI's reply" pollution. The gate
+    instead rejects an inconsistent column count — the prose preamble line has a different
+    width than the real data rows — which is what actually fails the polluted artifact."""
+    await wf.write("/t.csv", "Here is the CSV you asked for:\nname,count\nnotes,3\n")
+    verdict = await artifact_valid("/t.csv", "csv")(wf, None)
+    assert not verdict.ok
+    assert "column" in verdict.reason.lower()
+
+
 async def test_artifact_valid_markdown_passes_any_nonempty(wf: WorkflowHandle):
     """Prose kinds have no strong machine format — L1 only checks non-emptiness; their
     structural strength comes from a producer-declared 'requires' (plan §2.3 L2)."""

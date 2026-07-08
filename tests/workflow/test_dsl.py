@@ -285,12 +285,13 @@ def test_validate_requires_rejects_custom_check_and_bad_shape():
                 "out": "r.md",
                 "kind": "markdown",
                 "check": {"file_nonempty": {"path": "r.md"}},
-                "requires": {"contains": "x", "bogus": 1},
+                "requires": {"contains": "x", "min_length": -1, "bogus": 1},
             }
         ]
     )
     assert any("not both" in e for e in errs)  # requires + custom check
     assert any("must be a list of strings" in e for e in errs)  # contains shape
+    assert any("must be a non-negative integer" in e for e in errs)  # min_length shape
     assert any("unknown 'requires' key" in e for e in errs)  # bogus key
 
 
