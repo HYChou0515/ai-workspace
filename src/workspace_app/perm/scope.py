@@ -63,7 +63,20 @@ def _visibility_scope(
         owner = QB.created_by() == user if owner_field is None else QB[owner_field] == user
         granted = QB[read_meta_field].contains_any(subjects_of(user, groups))
         return (
-            QB[visibility_field].is_null()  # absent visibility ≡ public
+            # An ABSENT visibility index cell ≡ public (legacy / un-backfilled
+            # rows). This MUST be `isna()` (absent-OR-json-null), NOT `is_null()`
+            # (present-AND-json-null): on postgres/sqlite a field added to
+            # `indexed_fields` after a row was written has NO cell for that row,
+            # and `is_null()` does not match an absent cell — so a pre-#303/#308
+            # SourceDoc (or pre-#262 collection) never run through the migrate
+            # backfill would be HIDDEN from every non-owner even though its
+            # collection is public (the "visible in list + viewer, 404 on open"
+            # bug, #494). The in-memory test backend treats absent as null so
+            # `is_null()` passed there — which is exactly why this regressed
+            # unseen; real backends do not. `isna()` is a no-op for a row that
+            # DOES carry the cell (a fresh doc mirrors "public"), so this only
+            # ever admits legacy rows the mirror never reached.
+            QB[visibility_field].isna()
             | (QB[visibility_field] == "public")
             | owner
             | ((QB[visibility_field] == "restricted") & granted)
@@ -119,8 +132,8 @@ def source_doc_override_scope(
     fields, with the OWNER branch matched against the mirrored
     ``collection_created_by`` (the collection owner — the override's authority, who
     always sees the doc; the doc's uploader is NOT special, per #308/D4). A doc
-    with no override (``permission is None`` → null ``permission.visibility``)
-    passes via the ``is_null()`` clause, so this predicate only ever HIDES an
+    with no override (``permission is None`` → absent/null ``permission.visibility``)
+    passes via the ``isna()`` clause, so this predicate only ever HIDES an
     explicitly-overridden doc — the intersect that can tighten, never loosen."""
     return _visibility_scope(
         visibility_field="permission.visibility",
@@ -174,7 +187,12 @@ def kbchat_access_scope(
             (QB.created_by() == user)  # the owner — absent-permission ≡ private
             | (QB["permission.visibility"] == "public")
             | ((QB["permission.visibility"] == "restricted") & granted)
-            | (QB["permission.visibility"].is_null() & QB["shared_with"].contains(user))
+            # `isna()` (absent-OR-null), NOT `is_null()`: a pre-#304 chat whose
+            # `permission.visibility` cell was never indexed has it ABSENT, and
+            # `is_null()` misses an absent cell on postgres/sqlite — which would
+            # make its legacy `shared_with` grants unreadable until migrated (the
+            # #494 footgun class). `isna()` keeps the legacy share readable.
+            | (QB["permission.visibility"].isna() & QB["shared_with"].contains(user))
         )
 
     return scope

@@ -377,6 +377,13 @@ class CardGenCoordinator:
         finalize gate still closes (#414 partial tolerance)."""
         ref = sources.ref_by_id(doc_id)
         if ref is None:
+            _LOGGER.info(
+                "CardGen: doc %s not resolvable (deleted before run %s, index %d) — "
+                "nothing to digest",
+                doc_id,
+                run_id,
+                doc_index,
+            )
             self._runs.mark_done(run_id, doc_index)  # doc deleted before run — nothing to digest
             return
         try:
@@ -385,6 +392,30 @@ class CardGenCoordinator:
             _LOGGER.exception("CardGen: digest failed for doc %s (run %s)", doc_id, run_id)
             self._runs.mark_failed(run_id, doc_index)
             return
+        # #494 observability: a doc that HAS text but digests to nothing is the
+        # silent zero-output failure — surface it (WARNING) with the doc + text
+        # length instead of a falsely-green run; a healthy digest logs at INFO.
+        n_cards = len(digest.cards)
+        n_questions = len(digest.term_questions) + len(digest.description_questions)
+        if ref.text.strip() and not (n_cards or n_questions):
+            _LOGGER.warning(
+                "CardGen: doc %s (run %s, index %d) has text (%d chars) but digested "
+                "to 0 cards and 0 questions — the drafter/LLM produced nothing usable",
+                doc_id,
+                run_id,
+                doc_index,
+                len(ref.text),
+            )
+        else:
+            _LOGGER.info(
+                "CardGen: doc %s (run %s, index %d) → %d cards, %d questions (text=%d chars)",
+                doc_id,
+                run_id,
+                doc_index,
+                n_cards,
+                n_questions,
+                len(ref.text),
+            )
         self._stage_unit(run_id, doc_index, doc_id, ref.path, digest)
         self._runs.mark_done(run_id, doc_index)
 
@@ -430,7 +461,25 @@ class CardGenCoordinator:
         # All documents failed (none digested) → the run failed; else it produced
         # proposals (possibly partial, if some docs failed) → done.
         all_failed = run.total > 0 and len(run.done) == 0
-        self._runs.finish(run_id, status="error" if all_failed else "done")
+        status = "error" if all_failed else "done"
+        # #494 observability: one structured line records the whole funnel so a run
+        # that produced nothing (0 proposals over N text-bearing docs) is
+        # diagnosable end-to-end without re-deriving it from scattered state.
+        n_questions = sum(len(d.term_questions) + len(d.description_questions) for _, d in per_doc)
+        _LOGGER.info(
+            "CardGen finalize: run=%s n_units=%d n_raw_drafts=%d n_proposals=%d "
+            "n_questions=%d total=%d done=%d failed=%d final_status=%s",
+            run_id,
+            len(units),
+            len(raw),
+            len(kept),
+            n_questions,
+            run.total,
+            len(run.done),
+            len(run.failed),
+            status,
+        )
+        self._runs.finish(run_id, status=status)
 
     # ── fan-out staging (per-doc digests, #414) ──────────────────────
     def _stage_unit(

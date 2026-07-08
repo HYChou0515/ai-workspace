@@ -30,6 +30,41 @@ def test_collect_without_callback_still_works():
     assert _FakeLlm([("a", False), ("b", False)]).collect("p") == "ab"
 
 
+def test_collect_recovers_the_answer_from_reasoning_when_opted_in(caplog):
+    # #494 S2: a vLLM reasoning model can route its whole answer (JSON included)
+    # into the reasoning channel — e.g. it hits max_tokens before the closing
+    # </think>, so every content delta is empty. Dropping reasoning then returned
+    # "", which silently zeroed the card-gen digest. A structured caller opts into
+    # recovery so collect() hands the reasoning text to the parser, and logs it.
+    llm = _FakeLlm([("<think>the answer is ", True), ('{"cards": []}', True)])
+    with caplog.at_level("WARNING"):
+        text = llm.collect("p", recover_reasoning=True)
+    assert text == '<think>the answer is {"cards": []}'  # recovered, not ""
+    assert any("reasoning" in r.message.lower() for r in caplog.records)
+
+
+def test_collect_does_not_recover_reasoning_by_default():
+    # Recovery is OPT-IN: without the flag a reasoning-only reply stays "" so a
+    # caller whose blank reply is a legitimate outcome (an LLM judge's "no
+    # verdict") keeps the strict content-only contract.
+    llm = _FakeLlm([("<think>weighing</think>", True)])
+    assert llm.collect("p") == ""
+
+
+def test_collect_prefers_content_and_does_not_append_reasoning_when_content_present():
+    # The recovery is a fallback ONLY: when the model emits real content, the
+    # reasoning stays out of the result even when opted in (no double-count).
+    llm = _FakeLlm([("<think>scratch", True), ("real answer", False)])
+    assert llm.collect("p", recover_reasoning=True) == "real answer"
+
+
+def test_collect_returns_empty_when_the_model_emits_nothing_even_opted_in():
+    # Genuinely empty (no content, no reasoning) still returns "" — the recovery
+    # only fires when there IS reasoning to fall back to.
+    assert _FakeLlm([]).collect("p", recover_reasoning=True) == ""
+    assert _FakeLlm([("", False), ("", True)]).collect("p", recover_reasoning=True) == ""
+
+
 def _capture_completion_kwargs(monkeypatch) -> dict:
     """Patch litellm.completion to record kwargs and yield nothing."""
     captured: dict = {}

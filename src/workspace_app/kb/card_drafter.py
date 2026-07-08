@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -50,10 +51,15 @@ class LlmCardDrafter:
         self._max_cards = max_cards
 
     def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
+        # recover_reasoning (#494): a vLLM reasoning model can route the JSON reply
+        # into the reasoning channel (max_tokens before </think>), leaving content
+        # empty; recover it so the drafter parses the answer instead of silently
+        # digesting nothing.
         raw = self._llm.collect(
-            drafting_prompt(doc_text, doc_path=doc_path, template=self._template)
+            drafting_prompt(doc_text, doc_path=doc_path, template=self._template),
+            recover_reasoning=True,
         )
-        return _parse_digest(raw, max_cards=self._max_cards)
+        return _parse_digest(raw, max_cards=self._max_cards, doc_path=doc_path)
 
 
 class NullCardDrafter:
@@ -66,24 +72,44 @@ class NullCardDrafter:
         return DocDigest()
 
 
-def _parse_digest(raw: str, *, max_cards: int) -> DocDigest:
+def _parse_digest(raw: str, *, max_cards: int, doc_path: str = "") -> DocDigest:
     """Parse the LLM's ``{"cards": [...], "term_questions": [...],
     "description_questions": [...]}`` response into a ``DocDigest`` (#377).
-    Tolerant of leading prose / fenced blocks (peel the first ``{...}``); each
-    section is parsed independently and malformed items are dropped. Any
-    unrecoverable parse error yields an EMPTY digest — never raises. (``obj`` is
-    always a ``dict``: ``_extract_json_object`` only ever returns a ``{``-led
-    balanced object, so a successful ``json.loads`` can't be a non-object.)"""
-    try:
-        obj = json.loads(_extract_json_object(raw))
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("CardDrafter: LLM response was not parseable JSON")
+    Tolerant of reasoning ``<think>…</think>`` spans, code fences, and preamble
+    braces (see ``_find_digest_object``); each section is parsed independently and
+    malformed items are dropped. Any unrecoverable parse error yields an EMPTY
+    digest — never raises.
+
+    #494 observability: a digest that ends up empty is the exact silent failure
+    that produced a green card-gen run with 0 cards + 0 questions. Distinguish and
+    LOG the two ways it happens — no parseable object at all vs. a parsed-but-empty
+    one — each tied to ``doc_path`` with a prefix of the raw reply, so the next
+    occurrence is diagnosable instead of invisible."""
+    obj = _find_digest_object(raw)
+    if obj is None:
+        logger.warning(
+            "CardDrafter: no parseable digest JSON in the response "
+            "(doc_path=%s raw_len=%d prefix=%r) — nothing to draft from",
+            doc_path,
+            len(raw),
+            raw[:200],
+        )
         return DocDigest()
-    return DocDigest(
+    digest = DocDigest(
         cards=_parse_cards(obj.get("cards", []), max_n=max_cards),
         term_questions=_parse_term_questions(obj.get("term_questions", [])),
         description_questions=_parse_description_questions(obj.get("description_questions", [])),
     )
+    if not (digest.cards or digest.term_questions or digest.description_questions):
+        logger.warning(
+            "CardDrafter: parsed the response but the digest is EMPTY (0 cards, 0 "
+            "questions) (doc_path=%s raw_len=%d keys=%s) — the document yielded "
+            "nothing, or the response shape was unexpected",
+            doc_path,
+            len(raw),
+            sorted(obj.keys())[:10],
+        )
+    return digest
 
 
 def _parse_cards(items: Any, *, max_n: int) -> list[CardDraft]:
@@ -151,21 +177,82 @@ def _parse_description_questions(items: Any) -> list[DescriptionQuestionDraft]:
     return out
 
 
-def _extract_json_object(raw: str) -> str:
-    """Return the substring from the first ``{`` to its matching ``}``. Tolerates
-    a ```json fence or a preamble around the object. (Mirrors the helper in
-    ``insight_extractor`` — kept local so this lean drafter doesn't import the
-    LlamaIndex-heavy module.)"""
-    start = raw.find("{")
-    if start == -1:
-        raise ValueError("no JSON object in response")
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_DIGEST_KEYS = ("cards", "term_questions", "description_questions")
+
+
+def _find_digest_object(raw: str) -> dict[str, Any] | None:
+    """The digest object in a raw LLM reply, tolerant of the ways a reasoning
+    model (#494) mangles it. Returns the parsed ``dict``, or ``None`` when nothing
+    parseable is present.
+
+    - **Strips well-formed** ``<think>…</think>`` spans first, so a SCRATCH object
+      the model drafted inside its thinking never shadows the real answer after
+      it. An UNTERMINATED ``<think>`` (the reply that landed in the reasoning
+      channel and was recovered by ``collect``) is left intact so its JSON is
+      still found.
+    - **Scans every top-level balanced** ``{…}`` (string-aware, so a ``}`` inside
+      a JSON string value doesn't close the object early — the old first-``{``
+      extractor mis-handled both this and a preamble brace).
+    - **Prefers a digest-shaped object** (one carrying ``cards`` /
+      ``term_questions`` / ``description_questions``) over a stray ``{…}`` in
+      prose; falls back to the first parseable object so a genuinely off-shape
+      reply still parses to an (empty) digest the caller logs, rather than
+      raising."""
+    stripped = _THINK_RE.sub("", raw)
+    texts = [stripped] if stripped == raw else [stripped, raw]
+    fallback: dict[str, Any] | None = None
+    for text in texts:
+        for candidate in _balanced_objects(text):
+            obj = _try_object(candidate)
+            if obj is None:
+                continue
+            if any(k in obj for k in _DIGEST_KEYS):
+                return obj
+            if fallback is None:
+                fallback = obj
+    return fallback
+
+
+def _balanced_objects(text: str) -> list[str]:
+    """Every top-level, brace-balanced ``{…}`` substring of ``text``, left to
+    right. String-aware: braces inside a double-quoted JSON string (respecting
+    ``\\`` escapes) don't move the depth, so a ``}`` in a value can't close the
+    object early."""
+    out: list[str] = []
     depth = 0
-    for i in range(start, len(raw)):
-        c = raw[i]
-        if c == "{":
+    start = -1
+    in_str = False
+    escaped = False
+    for i, c in enumerate(text):
+        if in_str:
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            if depth == 0:
+                start = i
             depth += 1
-        elif c == "}":
+        elif c == "}" and depth > 0:
             depth -= 1
             if depth == 0:
-                return raw[start : i + 1]
-    raise ValueError("unterminated JSON object")
+                out.append(text[start : i + 1])
+    return out
+
+
+def _try_object(candidate: str) -> dict[str, Any] | None:
+    """``json.loads(candidate)`` if it parses, else ``None``. ``candidate`` is a
+    brace-balanced ``{…}`` from :func:`_balanced_objects`, so a successful parse is
+    always a JSON object (never an array/scalar) — narrowed for ty."""
+    try:
+        obj = json.loads(candidate)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    assert isinstance(obj, dict)  # a balanced {…} always parses to a JSON object
+    return obj

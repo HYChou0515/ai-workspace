@@ -497,6 +497,42 @@ async def test_a_single_doc_run_short_circuits_without_fanning_out():
     assert p.keys == ["X"]
 
 
+async def test_a_text_bearing_doc_that_digests_to_nothing_is_logged(caplog):
+    """#494 observability: a doc that HAS text but produces 0 cards and 0
+    questions on a COMPLETED run is the exact silent failure we could not
+    attribute — it must WARN with the doc id and the text length, not pass
+    unremarked."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "lots of real text here")
+    coord = CardGenCoordinator(spec, _FakeDrafter({}))  # drafter yields an empty digest
+    with caplog.at_level("WARNING"):
+        jid = coord.enqueue(cid, [doc])
+        await coord.aclose()
+
+    assert coord.status(jid) == TaskStatus.COMPLETED  # still a green run…
+    assert coord.proposals(jid).proposals == []  # …that produced nothing
+    rec = next((r for r in caplog.records if "0 cards" in r.message), None)
+    assert rec is not None and doc in rec.message  # …but now it is visible
+
+
+async def test_finalize_logs_the_funnel_counts(caplog):
+    """#494: one structured line at finalize records the whole funnel (units,
+    drafts, proposals, questions, done/failed, final status) so a run that
+    produced nothing is diagnosable end-to-end."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord = CardGenCoordinator(spec, _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]}))
+    with caplog.at_level("INFO"):
+        coord.enqueue(cid, [doc])
+        await coord.aclose()
+
+    rec = next((r for r in caplog.records if "finalize" in r.message.lower()), None)
+    assert rec is not None
+    assert "final_status=done" in rec.message and "n_proposals=1" in rec.message
+
+
 async def test_a_doc_whose_digest_fails_does_not_sink_the_run():
     """#414 partial tolerance: one document the drafter gives up on is recorded
     failed, but the surviving documents' proposals still land and the run

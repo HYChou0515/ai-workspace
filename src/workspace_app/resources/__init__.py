@@ -292,10 +292,12 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # #303: `collection_visibility` + `collection_read_meta` + `collection_created_by`
     # indexed so the `source_doc` access_scope filters a doc by its (denormalized)
     # collection visibility at the storage layer (hiding even the auto-CRUD
-    # `GET /source-doc/{id}`). Bumped v6 → v7 with a no-op reindex step: the three
-    # fields carry a "public" / empty default, so a pre-#303 row decodes to
-    # public (its legacy "anyone can read" state) and needs no data change — the
-    # migrate route only re-extracts indexed_data. The actual per-collection
+    # `GET /source-doc/{id}`). Bumped v6 → v7 with a reindex step. NOTE (#494):
+    # a pre-#303 row has NO `collection_visibility` cell at all (the field wasn't
+    # indexed when it was written), so the access scope's "absent ≡ public" clause
+    # MUST be `isna()` (absent-OR-null), NOT `is_null()` (present-null only) —
+    # `is_null()` does not match an absent cell on postgres/sqlite, which 404'd
+    # legacy docs on open until it was fixed to `isna()`. The actual per-collection
     # values are backfilled by the fan-out (doc-create + the collection permission
     # setter), NOT by migrate (a migrate step can't load the parent collection).
     #
@@ -306,10 +308,10 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # `denied_doc_ids` denylist (list + AI-retrieval) queries overridden docs by
     # `permission.visibility IS NOT NULL` and authorizes each from its indexed grant
     # lists — a METAS-ONLY read (no data blob), so it stays inside the #395 list budget.
-    # Bumped v7 → v8 with a no-op reindex step: `permission` defaults to `None`, so
-    # a pre-#308 row's `permission.visibility` extracts to null ≡ "no override"
-    # (the storage-scope's `is_null()` clause passes it through), needing no data
-    # change — the migrate route only re-extracts indexed_data. Real overrides are
+    # Bumped v7 → v8 with a reindex step: `permission` defaults to `None`, so a
+    # pre-#308 row's `permission.visibility` is absent/null ≡ "no override" — the
+    # storage-scope's `isna()` clause (absent-OR-null, #494) passes it through on
+    # every backend. Real overrides are
     # written fresh at v8 by the doc-permission endpoint, never by migrate.
     spec.add_model(
         Schema(SourceDoc, "v8")
