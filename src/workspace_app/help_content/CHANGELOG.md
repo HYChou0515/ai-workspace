@@ -11,6 +11,96 @@ code, so the running version is always current. Do not hand-edit generated
 sections — they are regenerated on the next `make release`.
 
 ---
+## [2026.07.09] — 2026-07-08
+
+
+### Added
+
+- P1 — resolve disabled_tools (ceiling − effective)
+- P2 — format_disabled_tools_for_prompt renderer
+- P3 — advertise disabled tools in the agent prompt
+- P1 — per-card decide + multi-card (cross-run) commit + run lifecycle
+- P2 — global review-inbox aggregation + permission filter + close doc-question leak
+- P3-P6 — global 審核 review page (filterable table + drawer), nav entry, reuse in collection tab
+- P1 — /reflections reserved namespace + Collection.last_reflected_at
+- P2 — WikiReflector.survey (deterministic digest, 0 LLM)
+- P3 — ReflectPlan schema + WikiReflector.plan
+- P4 — WikiReflector.apply + reflect() orchestrator
+- P5 — coordinator reflect op (enqueue + handler + reflector)
+- P6 — POST /wiki/reflect manual 'Reflect now' route
+- P7 — daily reflect_sweeper + kb.wiki.reflect_daily config
+- P8 — FE Reflect now button + last-reflected + phase labels
+- Record source_file_id (content hash) on every DocChunk
+- Dedup identical content — alias instead of re-chunking, re-home on delete
+- Inject glossary definitions for terms found in kb_search passages
+- Read_source always shows the full source path
+- P1 — entity-views.css design layer + drift guard
+- P2 — restyle view dispatcher, quick-create + banners
+- P3 — shared role-widget skin + table redesign
+- P4 — board redesign into a real kanban
+- P5 — gantt redesign
+- P6 — health view + single-entity editor restyle
+- Retriever resolves chunk→doc by content (coalescing), not source_doc_id
+- Per-content chunk counts + content-addressed overlay shadow
+- Delete chunks by content refcount, not the source-doc cascade — remove re-home
+- A dedup alias inherits its scored content peer's quality verdict
+- P1 — NfsTreeFileStore, a filesystem-tree FileStore
+- P2 — MigratingFileStore, the M2 dual-read migration wrapper
+- P3 — NfsArchive, host-side rsync persist/restore + nfs_root config
+- P3 wiring — item-aware create + persist endpoint on the host
+- P5 (turn-end flush) — ChatTurnEngine on_turn_end hook
+- P4 (client half) — HttpSandbox.persist + item-aware create
+- P7 (composition) — opt-in filestore.kind: nfs_tree + M2 wrap
+- P3 (Q9) — host owns readiness + persist gated on .ready
+- P4b — registry host-managed durable (skip app restore/mirror)
+- P9 (backend) — detach long turns + SSE heartbeat, kill the 504
+- P9 (frontend) — SSE auto-reconnect + gateway-tolerant send
+- P11 — cold-wake restore progress ("還原中 N/M") + idle-TTL ops
+- Card-gen pipeline observability — per-doc + finalize funnel logs
+- Log permission denials on the KB doc/collection read gate
+- Artifact_valid(kind) gate for channel-P prose out
+- Strict default gates — no node can silently pass
+- Producer-declared L2 'requires' contract on prose out
+- Authoring overhaul — purpose-only skill + machine-derived grammar + per-app boundaries
+- P1-P2 — split sandbox durable filestore from the API specstar filestore
+- P3 — wire __main__ to build the API + sandbox filestores separately
+
+
+### Changed
+
+- Drop unreachable guard, narrow test types, cover empty-base
+- Give retiring DocChunk.source_doc_id an empty-string default
+
+
+### Documentation
+
+- Plan — wiki daily reflection (consolidation layer)
+- P9 — document the wiki daily-reflection flow + manual dogfood
+- Tell the KB agent to trust injected glossary blocks and not guess
+- Teach the wiki agents to use the Source path
+- Note source_doc_id is now the coalescing fallback, not a cascade
+- P10 — surface the host timeout/idle/NFS env (the 60s mystery)
+- P7 (app side) — opt-in NFS durable wiring on the app manifests
+- Record P4 read-path decision + P6 by-construction; phase markers
+- Mark P8/P9 complete
+- Workflow language-alignment plan (node contract + verify + CC-shaped vocab)
+- Link plan to tracking issue #499
+- Revise plan after grill — keep JSON, drop Tier 2, verify + authoring
+- P4 — move nfs_tree config to sandbox.durable in examples + docs
+
+
+### Fixed
+
+- Polish the gantt — gridlines, in-bar labels, fix zoom toggle
+- Dedup multi-unit content on the fan-out path + drop orphan chunks in retrieval
+- Teardown drops a legacy doc's own chunks even when a content sibling survives
+- Render_document counts chunks by content, matching the doc list
+- Same-source global resolve — writes never cold-write when warm
+- Access scope treats an ABSENT visibility cell as public (isna, not is_null)
+- Recover the answer when a reasoning model empties the content channel
+- Robust digest extraction + empty-digest logging in the card drafter
+- CSV L1 detects prepended prose via column-count; close coverage gaps
+
 ## [2026.07.06] — 2026-07-06
 
 
