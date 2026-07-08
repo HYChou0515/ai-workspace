@@ -89,9 +89,7 @@ async def test_artifact_valid_requires_contains_missing_section_fails(wf: Workfl
     """L2 (plan §2.3, P3): the producer declares required structure — a missing section
     fails the gate, feeding the reason back so the model adds it on retry."""
     await wf.write("/report.md", "# Report\n\nsome body without the section")
-    verdict = await artifact_valid("/report.md", "markdown", {"contains": ["## Summary"]})(
-        wf, None
-    )
+    verdict = await artifact_valid("/report.md", "markdown", {"contains": ["## Summary"]})(wf, None)
     assert not verdict.ok
     assert "## Summary" in verdict.reason
 
