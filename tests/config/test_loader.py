@@ -899,3 +899,36 @@ def test_sandbox_isolation_block_loads_as_typed_dataclass_345(tmp_path: Path):
     assert iso.memory_max == "1G"
     assert iso.cpu_cores == 2.0
     assert iso.uid_base == 1_000_000  # untouched key keeps its default
+
+
+def test_sandbox_durable_block_loads_as_typed_dataclass_501(tmp_path: Path):
+    """#501: the sandbox durable-store selection (nfs_tree lives HERE, scoped to
+    the sandbox — NOT on the global filestore.kind) must construct a nested
+    `SandboxDurableSettings`, so the API's specstar filestore stays untouched."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text(
+        dedent("""
+            sandbox:
+              durable:
+                kind: nfs_tree
+                nfs_root: /mnt/nfs/workspaces
+                migrate_from: specstar
+        """),
+        encoding="utf-8",
+    )
+    s = load(config_path=cfg, env={})
+    d = s.sandbox.durable
+    assert d.kind == "nfs_tree"
+    assert d.nfs_root == "/mnt/nfs/workspaces"
+    assert d.migrate_from == "specstar"
+
+
+def test_sandbox_durable_defaults_to_following_the_api_filestore_501(tmp_path: Path):
+    """#501: no durable block ⇒ kind "" — sandbox persistence follows the API
+    specstar filestore (zero behaviour change for existing deploys)."""
+    cfg = tmp_path / "config.yaml"
+    cfg.write_text("sandbox:\n  kind: local\n", encoding="utf-8")
+    s = load(config_path=cfg, env={})
+    assert s.sandbox.durable.kind == ""
+    assert s.sandbox.durable.nfs_root == ""
+    assert s.sandbox.durable.migrate_from == ""
