@@ -168,6 +168,19 @@ async def test_sandbox_node_gate_fails_on_nonzero_exit(wf: WorkflowHandle):
         await sandbox_node(wf, run="false", phase="check", check=exit_zero)
 
 
+async def test_sandbox_node_default_gate_fails_on_nonzero_exit(wf: WorkflowHandle):
+    """plan §2.2 (P2): a sandbox node with no explicit check defaults to exit_code==0,
+    so a failing command fails the gate instead of silently 'succeeding' and letting the
+    runner continue (closing the check=None→always-ok hole)."""
+
+    async def run_sandbox(cmd: str, on_output=None) -> tuple[int, str]:
+        return (1, "boom")
+
+    wf.run_sandbox = run_sandbox
+    with pytest.raises(StepFailed):
+        await sandbox_node(wf, run="false", phase="p")  # no check → default exit_code==0
+
+
 async def test_sandbox_node_without_a_wired_runner_is_a_clear_error(wf: WorkflowHandle):
     with pytest.raises(RuntimeError, match="sandbox runner"):
         await sandbox_node(wf, run="echo", phase="p")

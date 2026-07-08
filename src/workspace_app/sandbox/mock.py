@@ -1,4 +1,5 @@
 import hashlib
+import shlex
 import uuid
 from pathlib import Path
 
@@ -92,6 +93,20 @@ class MockSandbox:
     @staticmethod
     def _exec_result(fs: dict[str, bytes], cmd: list[str]) -> ExecResult:
         match cmd:
+            case ["sh", "-lc", script]:
+                # The workflow run wiring wraps a deterministic node's command as
+                # ``sh -lc "export WF_TOKEN=…; <run>"`` (workflow_exec). Model that shell so
+                # a mock sandbox node behaves like the real one (echo → 0) — which the
+                # default ``exit_code == 0`` gate (plan §2.2) now verifies. Run the last
+                # ``;``-separated simple command (the actual node command, after the
+                # credential export). ``-lc`` is workflow-only, so this does not affect the
+                # agent/provision paths (which use ``sh -c``).
+                last = script.rsplit(";", 1)[-1].strip()
+                return (
+                    MockSandbox._exec_result(fs, shlex.split(last))
+                    if last
+                    else ExecResult(exit_code=0)
+                )
             case ["echo", *args]:
                 text = " ".join(args)
                 return ExecResult(exit_code=0, stdout=(text + "\n").encode())

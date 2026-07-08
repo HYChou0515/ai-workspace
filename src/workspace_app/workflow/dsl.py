@@ -31,7 +31,7 @@ from .engine import Check, CheckResult, StepFailed, _artifact_path
 from .gate import _decision_path, human_gate
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
-from .steps import agent_step, agent_write_step, sandbox_node
+from .steps import agent_write_step, sandbox_node
 
 # The capability calls a user DSL may invoke (manual §22, Q4). Each maps to a
 # ``WorkflowHandle`` method that runs under the captured user's authz; a ``sandbox``
@@ -616,6 +616,11 @@ async def _build_check(spec: dict[str, Any], ns: dict[str, Any], wf: WorkflowHan
 async def _gate_summary(wf: WorkflowHandle, step: GateStep, ns: dict[str, Any]) -> Any:
     if not step.summary_from:
         return ""
+    # plan §2.1: a summary may be a single reference (e.g. ``{steps.classify.outputs}``) so a
+    # channel-D decision map can be reviewed at a gate WITHOUT also writing redundant files;
+    # otherwise it is a file glob whose matched files are shown.
+    if _TOKEN.fullmatch(step.summary_from.strip()):
+        return await _resolve(step.summary_from, ns, wf)
     summary: dict[str, Any] = {}
     for p in await wf.glob(await _resolve(step.summary_from, ns, wf)):
         summary[p] = await wf.read_json(p) if p.lower().endswith(".json") else await wf.read_text(p)
@@ -778,48 +783,34 @@ async def _exec_step(
             cache=step.cache,
         )
         return
-    # AgentStep
+    # AgentStep — validate_def guarantees exactly one output kind: ``outputs`` (channel D)
+    # XOR ``out``+``kind`` (channel P), §2.1. So every agent routes through agent_write_step.
     prompt = await _resolve(step.prompt, ns, wf)
     tools = step.tools or None
-    # #428 §1.2: an ``outputs`` step parses its reply into result.fields, gated on it;
-    # otherwise fall back to the author's ``check``.
+    # #428 §1.2: an ``outputs`` step parses its reply into result.fields, gated on it; a
+    # prose ``out`` step defaults to artifact_valid(out, kind) (plan §2.2) unless the
+    # author gives an explicit ``check``.
     if step.outputs:
         check: Check | None = _outputs_check(step.outputs)
     elif step.check:
         check = await _build_check(step.check, ns, wf)
     else:
         check = None
-    reads = await _resolve_reads(step.reads, ns, wf)
-    if step.out or step.outputs:
-        await agent_write_step(
-            wf,
-            prompt=prompt,
-            phase=step.phase,
-            out=await _resolve(step.out, ns, wf) if step.out else "",
-            kind=step.kind or "text",
-            tools=tools,
-            name=step.name or None,
-            key=key,
-            retries=step.retries,
-            check=check,
-            outputs=step.outputs or None,
-            reads=reads,
-            cache=step.cache,
-        )
-    else:  # plain agent_step — ``check`` is required (validate_def guarantees it)
-        assert check is not None
-        await agent_step(
-            wf,
-            prompt=prompt,
-            phase=step.phase,
-            check=check,
-            tools=tools,
-            name=step.name or None,
-            key=key,
-            retries=step.retries,
-            reads=reads,
-            cache=step.cache,
-        )
+    await agent_write_step(
+        wf,
+        prompt=prompt,
+        phase=step.phase,
+        out=await _resolve(step.out, ns, wf) if step.out else "",
+        kind=step.kind or "text",
+        tools=tools,
+        name=step.name or None,
+        key=key,
+        retries=step.retries,
+        check=check,
+        outputs=step.outputs or None,
+        reads=await _resolve_reads(step.reads, ns, wf),
+        cache=step.cache,
+    )
 
 
 def build_run(d: WorkflowDef):
@@ -1103,13 +1094,21 @@ def _validate_step(
         _validate_outputs(step.outputs, where, errs)
         _validate_reads(step.reads, scope, where, errs, steps_seen)
         return
-    # AgentStep
+    # AgentStep — plan §2.1 (P2): exactly ONE output kind, so a node is either a
+    # structured decision (``outputs``, channel D) OR a prose artifact (``out``+``kind``,
+    # channel P), never both and never neither. This closes 'no verify' (a node with no
+    # output has no gate) and 'two output kinds in one turn' (unreliable on local models).
     if not step.prompt:
         errs.append(f"{where}: agent needs a 'prompt'")
-    if not step.out and not step.outputs and step.check is None:
+    if step.out and step.outputs:
         errs.append(
-            f"{where}: an agent step without 'out' needs a 'check' or 'outputs' "
-            "(a gate is mandatory, §5.1)"
+            f"{where}: an agent step declares ONE output kind — 'outputs' (structured "
+            "decision) XOR 'out'+'kind' (prose artifact), not both (plan §2.1)"
+        )
+    elif not step.out and not step.outputs:
+        errs.append(
+            f"{where}: an agent step must produce an output — declare 'outputs' "
+            "(structured decision) or 'out'+'kind' (prose artifact) (plan §2.1)"
         )
     if step.retries < 0:
         errs.append(f"{where}: retries cannot be negative")

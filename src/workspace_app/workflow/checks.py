@@ -84,6 +84,21 @@ def artifact_valid(path: str, kind: str) -> Check:
     return _check
 
 
+def exit_zero() -> Check:
+    """A deterministic node's default gate (plan §2.2, P2): its command exited 0. A
+    non-zero exit fails the step (with the code fed back) instead of silently
+    'succeeding' — closing the ``check=None`` hole that let a failed command let the
+    runner continue."""
+
+    async def _check(_wf: WorkflowHandle, result: Any) -> CheckResult:
+        code = result.get("exit_code") if isinstance(result, dict) else None
+        if code == 0:
+            return CheckResult(True)
+        return CheckResult(False, f"command exited with code {code}")
+
+    return _check
+
+
 def file_nonempty(path: str) -> Check:
     """The agent actually wrote ``path`` and it has content."""
 

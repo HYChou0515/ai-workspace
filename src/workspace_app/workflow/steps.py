@@ -14,7 +14,7 @@ import hashlib
 import json
 from typing import Any
 
-from .checks import artifact_valid
+from .checks import artifact_valid, exit_zero
 from .engine import Check, StepFailed, _emit, run_step
 from .events import StepOutput
 from .handle import WorkflowHandle
@@ -205,9 +205,10 @@ async def sandbox_node(
     reads: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run one deterministic node — a command in the sandbox, no LLM (manual §5.2).
-    Journals ``{exit_code, stdout}``; an optional ``check`` gates it (a deterministic
-    node is often its own check). Reaches platform capabilities over HTTP from inside
-    the sandbox (later phases).
+    Journals ``{exit_code, stdout}``; gated by default on ``exit_code == 0`` (plan §2.2)
+    so a failed command fails the step instead of silently 'succeeding' — a custom
+    ``check`` overrides. Reaches platform capabilities over HTTP from inside the sandbox
+    (later phases).
 
     ``reads`` (#429 P1) DECLARES the files this command depends on: the engine folds
     their content fingerprint into the input-hash, so editing a declared file's content
@@ -245,6 +246,6 @@ async def sandbox_node(
         phase=phase,
         args=args,
         execute=execute,
-        check=check,
+        check=check or exit_zero(),
         cache=cache,
     )

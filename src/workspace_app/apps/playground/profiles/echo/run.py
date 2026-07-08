@@ -66,7 +66,7 @@ async def run(wf: WorkflowHandle, inputs: dict[str, Any]) -> dict[str, Any]:
     )
     if inputs.get("sandbox"):
         # Deterministic node in the sandbox (manual §5.2) — exercises the run-scoped
-        # credential injection. No gate (a command is often its own check).
+        # credential injection. Gated by default on exit_code == 0 (plan §2.2).
         await sandbox_node(wf, phase="think", run="echo hello")
     if inputs.get("ingest"):
         # Reliable side-effect (manual §8): write → ingest → verify it landed.
