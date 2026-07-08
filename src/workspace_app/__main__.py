@@ -42,6 +42,7 @@ from workspace_app.factories import (
     get_replay_service,
     get_runner,
     get_sandbox,
+    get_sandbox_filestore,
     get_sanity_judge_llm,
     get_sanity_llm_factory,
     get_sanity_models,
@@ -193,6 +194,13 @@ def main() -> None:
     with boot_step("init sandbox"):
         sandbox = get_sandbox(settings, tools_dir=tools_dir)
     with boot_step("build app (create_app)"):
+        # #501: the API's SPECSTAR filestore (WorkspaceFile registration / blob GC /
+        # #219 / shared blob pool with KB·wiki) is DISTINCT from the SANDBOX's durable
+        # store. Build the API one first — constructing it registers WorkspaceFile — then
+        # the sandbox durable store, which REUSES it as the nfs_tree M2 fallback. Default
+        # (sandbox.durable.kind "") ⇒ sandbox_filestore IS api_filestore (unchanged).
+        api_filestore = get_filestore(settings, spec)
+        sandbox_filestore = get_sandbox_filestore(settings, spec, api_filestore)
         app = create_app(
             spec=spec,
             get_user_id=get_user_id,
@@ -200,7 +208,7 @@ def main() -> None:
             # route-level authorize() guards agree with the storage access_scope.
             superusers=frozenset(settings.server.superusers),
             sandbox=sandbox,
-            filestore=get_filestore(settings, spec),
+            filestore=sandbox_filestore,
             # #219: single-file upload cap (streaming keeps RAM flat regardless).
             max_file_size=settings.filestore.max_file_size,
             # #245: per-workspace total-size quota (protects the shared disk root).
