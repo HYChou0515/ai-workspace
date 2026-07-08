@@ -15,10 +15,13 @@ truncation is applied downstream by the turn reducer from the same marker.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 
 from ..agent.repetition import RepetitionDetector
 from .events import AgentEvent, MessageDelta, RepetitionStopped, RunDone, ToolStart
+
+logger = logging.getLogger(__name__)
 
 
 async def guard_repetition(
@@ -61,6 +64,11 @@ async def guard_repetition(
                 channel = "reasoning" if ev.reasoning else "content"
                 hit = detectors[channel].feed(ev.text)
                 if hit is not None:
+                    logger.warning(
+                        "repetition guard: stopped %s channel loop (loop_length=%d)",
+                        channel,
+                        hit.loop_length,
+                    )
                     yield RepetitionStopped(loop_length=hit.loop_length, channel=channel)
                     yield RunDone()
                     return

@@ -7,6 +7,7 @@ function is the gate. See `docs/plan-permissions.md`.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 from .model import (
@@ -18,6 +19,8 @@ from .model import (
     group_subject,
     user_subject,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -84,13 +87,18 @@ def authorize(
     """
     # 1. Hard bars on the AI — never, whatever the ceiling / owner / superuser.
     if actor.is_ai and verb in AI_FORBIDDEN:
+        logger.warning("authorize: ai-forbidden verb %s denied for user %s", verb, actor.user_id)
         return False
     # 2. A direct human superuser bypasses everything (an AI *driven by* one does
     #    not — it stays ceiling ∩ speaker).
     if not actor.is_ai and actor.user_id in superusers:
+        logger.debug("authorize: superuser %s bypass -> %s granted", actor.user_id, verb)
         return True
     # 3. The preset ceiling caps which verbs the AI may ever do.
     if actor.is_ai and actor.ceiling is not None and verb not in actor.ceiling:
+        logger.warning(
+            "authorize: verb %s outside ai ceiling, denied for user %s", verb, actor.user_id
+        )
         return False
     # 4. The owner controls their own resource (all verbs, incl. change_permission).
     if actor.user_id == created_by:

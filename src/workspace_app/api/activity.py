@@ -10,9 +10,12 @@ history is ever needed.
 
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,7 @@ class ActivityLog:
         self._entries: deque[ActivityEntry] = deque(maxlen=maxlen)
 
     def record(self, kind: str, text: str, ref: dict[str, str | int] | None = None) -> None:
+        logger.debug("activity log: recorded %s -> %s", kind, text)
         self._entries.appendleft(
             ActivityEntry(
                 ts=datetime.now(UTC).isoformat(),

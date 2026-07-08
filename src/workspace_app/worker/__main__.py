@@ -9,6 +9,7 @@ package's `__init__`.
 from __future__ import annotations
 
 import argparse
+import logging
 import signal
 import threading
 from pathlib import Path
@@ -16,6 +17,8 @@ from pathlib import Path
 from ..config.schema import Settings
 from ..coordinators import CoordinatorBundle, build_coordinators, build_ingestor
 from . import _JOBTYPE_ATTR, consume_until_stopped, select_coordinator
+
+logger = logging.getLogger(__name__)
 
 
 def build_bundle(
@@ -27,6 +30,7 @@ def build_bundle(
     use for)."""
     from .. import factories as f
 
+    logger.info("worker: building coordinator bundle from settings")
     embedder = f.get_embedder(settings)
     kb_llm = f.get_kb_llm(settings)
     wiki_model, wiki_base, wiki_key = f.get_wiki_endpoint(settings)
@@ -94,12 +98,17 @@ def main(argv: list[str] | None = None) -> None:
     spec = get_spec(settings, get_user_id=get_user_id)
     bundle = build_bundle(settings, spec, config_dir=config_dir)
     coordinator = select_coordinator(bundle, args.jobtype)
+    logger.info(
+        "worker: booted jobtype=%s coordinator=%s", args.jobtype, type(coordinator).__name__
+    )
 
     stop = threading.Event()
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, lambda *_: stop.set())
+    logger.info("worker: consuming jobtype=%s, blocking until SIGTERM/SIGINT", args.jobtype)
     print(f"worker: consuming {args.jobtype!r} — block until SIGTERM/SIGINT", flush=True)
     consume_until_stopped(coordinator, stop)
+    logger.info("worker: jobtype=%s drained and stopped", args.jobtype)
     print(f"worker: {args.jobtype!r} drained and stopped", flush=True)
 
 

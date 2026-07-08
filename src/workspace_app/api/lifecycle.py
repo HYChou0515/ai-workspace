@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -49,6 +50,8 @@ INDEX_STUCK_AFTER_S = 3600.0
 # wiki collection is due (the actual cadence is once-a-day per collection, gated on
 # last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
 _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
+
+logger = logging.getLogger(__name__)
 
 
 def _utcnow() -> datetime:
@@ -246,6 +249,7 @@ def build_lifespan(
         # connectivity instead of hammering the local model every boot.
         # #208: each step narrates (→/✓) so a stall in the lifespan names itself
         # instead of looking like a silent hang.
+        logger.info("lifespan: startup - running connectivity checks")
         with boot_step("health: connectivity checks"):
             await asyncio.to_thread(health_service.run_fast_sync)
         # #312: in-process consumers run only when `run_consumers` is on. Default
@@ -253,6 +257,7 @@ def build_lifespan(
         # the API is a pure producer and dedicated worker pods drain each JobType.
         # The shared, partitioned queues drain regardless of which process
         # enqueued, so a worker pod (or another all-in-one pod) picks the jobs up.
+        logger.info("lifespan: run_consumers=%s", run_consumers)
         if run_consumers:
             # #59: wiki-maintenance consumer. Idempotent + non-blocking.
             with boot_step("start wiki-maintenance consumer"):
@@ -289,11 +294,13 @@ def build_lifespan(
         # the #245 blob-GC lease below).
         if registry.activity is not None:
             register_sandbox_activity(spec)
+            logger.debug("lifespan: registered sandbox-activity heartbeat model")
         # #366: register the shared per-item sandbox-address model (only when the
         # registry uses it — the HTTP sandbox-host backend). Same post-apply
         # timing so its CRUD routes are never emitted.
         if registry.address is not None:
             register_sandbox_address(spec)
+            logger.debug("lifespan: registered sandbox-address model")
         # #429 P9: the event-trigger processing high-water model (idempotent + the D2d
         # discoverable-lag ledger). Registered post-apply so its CRUD routes are never emitted,
         # like the coordination models above. Event dispatch is in-request (not swept), so this
@@ -308,14 +315,17 @@ def build_lifespan(
         # trigger the heavy round on demand via the FE / POST /health/checks/run.
         if code_sync_check_interval is not None:
             bg.append(asyncio.create_task(code_sync_sweeper(app)))
+            logger.debug("lifespan: code-sync sweeper enabled")
         if wiki_reflect_daily:
             # #479: daily wiki-reflection producer (a code collection is skipped by
             # the sweeper; "" / null in kb.wiki.reflect_daily disables it here).
             bg.append(asyncio.create_task(reflect_sweeper(app)))
+            logger.debug("lifespan: wiki-reflect sweeper enabled")
         if gc_interval is not None:
             # #245: seed the CAS lease, then run the orphan-blob GC on a schedule.
             register_gc_lease(spec)
             bg.append(asyncio.create_task(blob_gc_sweeper()))
+            logger.debug("lifespan: blob-GC sweeper enabled")
         if trigger_check_interval is not None:
             # #429 P7: register the shared window-ledger model (post-apply, so its CRUD
             # routes are never emitted — same reason as the blob-GC lease above), then run
@@ -324,14 +334,17 @@ def build_lifespan(
 
             register_trigger_store(spec)
             bg.append(asyncio.create_task(trigger_sweeper(app)))
+            logger.debug("lifespan: schedule-trigger sweeper enabled")
         try:
             yield
         finally:
+            logger.info("lifespan: shutdown - cancelling %d background tasks", len(bg))
             for t in bg:
                 t.cancel()
             for t in bg:
                 with contextlib.suppress(BaseException):
                     await t
+            logger.debug("lifespan: draining coordinators + kernels")
             # Drain in-flight wiki maintenance before exit (bounded). Pending
             # jobs are durable — they survive to be picked up after restart.
             with contextlib.suppress(BaseException):
@@ -345,5 +358,6 @@ def build_lifespan(
                 await app.state.card_gen_coordinator.aclose()
             await kernels.shutdown_all()
             await registry.close_all()
+            logger.info("lifespan: shutdown complete")
 
     return lifespan

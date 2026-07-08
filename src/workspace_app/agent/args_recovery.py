@@ -180,6 +180,9 @@ def wrap_with_args_recovery(tool: FunctionTool) -> FunctionTool:
                 call_id=call_id,
             ) from e
         if not isinstance(value, dict):
+            _LOGGER.info(
+                "args_recovery: non-object args on %s: %s", tool.name, type(value).__name__
+            )
             raise NonObjectToolArgsError(
                 f"The arguments for tool `{tool.name}` must be a single JSON object, "
                 f"not a {type(value).__name__}.",

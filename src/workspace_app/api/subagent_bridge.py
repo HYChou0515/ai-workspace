@@ -10,6 +10,7 @@ turn-driving glue and the workflow executor share one instance.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 from specstar import QB, SpecStar
@@ -28,6 +29,8 @@ from ..sandbox.protocol import OutputSink
 from .events import AgentEvent
 from .kb_chat_routes import answer_question, kb_progress
 from .runner import AgentRunner
+
+logger = logging.getLogger(__name__)
 
 
 class SubagentBridge:
@@ -84,6 +87,7 @@ class SubagentBridge:
         stashes the citations into `ctx.subagent_citations[purpose]`."""
         cfg = self._catalog.default_for(purpose) or self._purpose_fallbacks.get(purpose)
         if cfg is None:
+            logger.warning("subagent_bridge: no AgentConfig registered for purpose %r", purpose)
             raise ValueError(
                 f"no AgentConfig registered for sub-agent purpose {purpose!r} "
                 f"(catalog has: {sorted(self._catalog.purposes())}; bundled fallbacks: "
@@ -115,6 +119,11 @@ class SubagentBridge:
         speaker = self._get_user_id()
         readable = readable_collection_ids(self._spec, ids, speaker, superusers=self._superusers)
         if ids and not readable:
+            logger.warning(
+                "subagent_bridge: speaker %s can read none of the collections for purpose %r",
+                speaker,
+                purpose,
+            )
             return "No accessible knowledge sources for this query.", []
         ids = readable
         # #308: beyond the collection-level gate above, resolve which individual
@@ -148,6 +157,13 @@ class SubagentBridge:
             )
             captured.extend(cites)
 
+        logger.info(
+            "subagent_bridge: running %s sub-agent for origin %s (speaker %s, wiki=%s)",
+            purpose,
+            origin_id,
+            speaker,
+            wiki_query,
+        )
         # When the query opted into the wiki, drive the lookup with the
         # wiki-aware runner (chunk / wiki / both routing); otherwise the plain
         # base runner (chunk-RAG only).
@@ -172,5 +188,11 @@ class SubagentBridge:
             budget=budget,
             # #308: the speaker's per-doc-override exclusion (resolved above).
             exclude_doc_ids=exclude_doc_ids,
+        )
+        logger.debug(
+            "subagent_bridge: %s sub-agent returned %d citations for origin %s",
+            purpose,
+            len(captured),
+            origin_id,
         )
         return answer, captured

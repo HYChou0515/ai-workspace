@@ -12,6 +12,7 @@ and calls this; per-phase progress + events arrive in a later phase.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -22,6 +23,8 @@ from specstar import SpecStar
 from .gate import AwaitingHuman
 from .handle import WorkflowHandle
 from .run import PendingDecision, RunStatus, WorkflowRun
+
+logger = logging.getLogger(__name__)
 
 ProfileRun = Callable[[WorkflowHandle, Any], Awaitable[Any]]
 
@@ -51,6 +54,7 @@ async def run_workflow(
         rm.update(run_id, msgspec.structs.replace(current, **changes))
 
     _patch(status=RunStatus.RUNNING, started=now())
+    logger.info("run %s started", run_id)
     try:
         result = await profile_run(wf, inputs)
     except AwaitingHuman as gate:
@@ -62,11 +66,14 @@ async def run_workflow(
                 phase=gate.phase, title=gate.title, summary=gate.summary, allow=gate.allow
             ),
         )
+        logger.info("run %s awaiting human at gate %s", run_id, gate.phase)
         return
     except asyncio.CancelledError:
         _patch(status=RunStatus.CANCELLED, ended=now())
+        logger.info("run %s cancelled", run_id)
         raise
     except Exception as exc:  # noqa: BLE001 — surface any run() failure as a terminal status
+        logger.exception("run %s failed", run_id)
         _patch(
             status=RunStatus.ERROR,
             ended=now(),
@@ -78,3 +85,4 @@ async def run_workflow(
         ended=now(),
         result=result if isinstance(result, dict) else {"result": result},
     )
+    logger.info("run %s done", run_id)

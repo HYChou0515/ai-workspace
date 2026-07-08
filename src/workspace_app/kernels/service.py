@@ -19,6 +19,7 @@ InvestigationRegistry.
 from __future__ import annotations
 
 import asyncio
+import logging
 import queue as _queue
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ from ..api.events import CellDisplayData, CellDone, CellError, CellEvent, CellSt
 
 if TYPE_CHECKING:
     from jupyter_client import AsyncKernelClient, AsyncKernelManager
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -54,6 +57,7 @@ class KernelService:
         async with self._lock:
             existing = self._kernels.get(key)
             if existing is not None:
+                logger.debug("kernel: reuse existing %s/%s", investigation_id, notebook_path)
                 return existing
             handle = await self._spawn(investigation_id, notebook_path)
             self._kernels[key] = handle
@@ -73,6 +77,7 @@ class KernelService:
         client = manager.client()
         client.start_channels()
         await client.wait_for_ready(timeout=30)
+        logger.info("kernel: started %s/%s", investigation_id, notebook_path)
         return KernelHandle(
             investigation_id=investigation_id,
             notebook_path=notebook_path,
@@ -84,6 +89,12 @@ class KernelService:
         async with handle.lock:
             handle.last_cell_run = datetime.now(UTC)
             msg_id = handle.client.execute(code)
+            logger.debug(
+                "kernel: exec cell in %s/%s (%d chars)",
+                handle.investigation_id,
+                handle.notebook_path,
+                len(code),
+            )
             async for ev in self._drain_iopub_until_idle(handle.client, msg_id):
                 yield ev
 
@@ -121,11 +132,13 @@ class KernelService:
                 return
 
     async def interrupt(self, handle: KernelHandle) -> None:
+        logger.info("kernel: interrupt %s/%s", handle.investigation_id, handle.notebook_path)
         await handle.manager.interrupt_kernel()
 
     async def restart(self, handle: KernelHandle) -> KernelHandle:
         """Replace the underlying kernel; same dict key, same notebook."""
         async with self._lock:
+            logger.info("kernel: restart %s/%s", handle.investigation_id, handle.notebook_path)
             await self._teardown(handle)
             new = await self._spawn(handle.investigation_id, handle.notebook_path)
             self._kernels[(handle.investigation_id, handle.notebook_path)] = new
@@ -133,11 +146,13 @@ class KernelService:
 
     async def shutdown(self, handle: KernelHandle) -> None:
         async with self._lock:
+            logger.info("kernel: shutdown %s/%s", handle.investigation_id, handle.notebook_path)
             await self._teardown(handle)
             self._kernels.pop((handle.investigation_id, handle.notebook_path), None)
 
     async def shutdown_all(self) -> None:
         async with self._lock:
+            logger.info("kernel: shutdown all (%d live)", len(self._kernels))
             for handle in list(self._kernels.values()):
                 await self._teardown(handle)
             self._kernels.clear()
@@ -159,4 +174,5 @@ class KernelService:
             for k, h in stale:
                 await self._teardown(h)
                 self._kernels.pop(k, None)
+                logger.info("kernel: reaped idle %s/%s", k[0], k[1])
             return [k for k, _ in stale]

@@ -40,6 +40,7 @@ as the collection owner (see ``kb.code_repo``) so it passes ``write_meta``.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from typing import Any
 
@@ -66,6 +67,8 @@ _OWNER_ACTIONS: frozenset[ResourceAction] = frozenset(
         ResourceAction.restore,
     }
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _current(context: Any) -> Any | None:
@@ -180,9 +183,20 @@ class CollectionPermissionChecker(IPermissionChecker):
         if self._rewrites_permission(context, stored) and not authorize(
             actor, "change_permission", stored, created_by=created_by, superusers=self._superusers
         ):
+            logger.warning(
+                "checker: change_permission denied for %s on collection owned by %s",
+                actor.user_id,
+                created_by,
+            )
             return PermissionResult.deny
         ok = authorize(
             actor, "write_meta", stored, created_by=created_by, superusers=self._superusers
+        )
+        logger.debug(
+            "checker: collection write_meta by %s (owner %s) -> ok=%s",
+            actor.user_id,
+            created_by,
+            ok,
         )
         return PermissionResult.allow if ok else PermissionResult.deny
 
@@ -193,6 +207,11 @@ class CollectionPermissionChecker(IPermissionChecker):
         user = _context_user(context)
         if user == snap.meta.created_by or user in self._superusers:
             return PermissionResult.allow
+        logger.warning(
+            "checker: owner-only action denied for %s (collection owner %s)",
+            user,
+            snap.meta.created_by,
+        )
         return PermissionResult.deny
 
 
@@ -234,6 +253,11 @@ class SourceDocPermissionChecker(IPermissionChecker):
         owner = getattr(snap.data, "collection_created_by", "")
         if user == owner or user in self._superusers:
             return PermissionResult.allow
+        logger.warning(
+            "checker: source-doc permission override change denied for %s (collection owner %s)",
+            user,
+            owner,
+        )
         return PermissionResult.deny
 
     def required_resource_parts(self, action: ResourceAction) -> frozenset[ResourcePart]:

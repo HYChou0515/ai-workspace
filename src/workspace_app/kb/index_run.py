@@ -51,6 +51,13 @@ class IndexRunStore:
         run = IndexRun(
             doc_id=doc_id, collection_id=collection_id, total=total, units_total=units_total
         )
+        _LOGGER.info(
+            "index_run: seed doc=%s collection=%s total=%d units_total=%d",
+            doc_id,
+            collection_id,
+            total,
+            units_total,
+        )
         self._rm.create_or_update(doc_id, run, status=RevisionStatus.draft)
 
     def get(self, doc_id: str) -> IndexRun | None:
@@ -73,12 +80,16 @@ class IndexRunStore:
         ``batch_units`` to the run's ``units_done`` (#248). Re-running the same
         process job (at-least-once redelivery) is a no-op — the unit count is
         bumped once, under the same CAS, only when the batch is newly recorded."""
+        _LOGGER.debug(
+            "index_run: doc=%s batch %d done (+%d units)", doc_id, batch_index, batch_units
+        )
         self._cas(doc_id, lambda run: _with_done(run, batch_index, batch_units))
 
     def mark_failed(self, doc_id: str, batch_index: int) -> None:
         """Idempotently record that batch ``batch_index`` gave up (dead-lettered
         / non-retryable). Counts toward the finalize gate so a failed batch can't
         wedge the doc in ``indexing`` forever."""
+        _LOGGER.warning("index_run: doc=%s batch %d failed (dead-lettered)", doc_id, batch_index)
         self._cas(doc_id, lambda run: _with_index(run, "failed", batch_index))
 
     def claim_finalize(self, doc_id: str) -> bool:
@@ -101,11 +112,13 @@ class IndexRunStore:
             return msgspec.structs.replace(run, finalized=True)
 
         self._cas(doc_id, mutate)
+        _LOGGER.info("index_run: doc=%s finalize claim won=%s", doc_id, claimed)
         return claimed
 
     def finish(self, doc_id: str, *, status: str) -> None:
         """Stamp the terminal status (``done`` / ``error``) once finalize has run
         — this is what closes the active-run guard."""
+        _LOGGER.info("index_run: doc=%s finished status=%s", doc_id, status)
         self._cas(doc_id, lambda run: msgspec.structs.replace(run, status=status))
 
     # ── machinery ────────────────────────────────────────────────────
@@ -117,6 +130,7 @@ class IndexRunStore:
             try:
                 res = self._rm.get(doc_id)
             except ResourceIDNotFoundError:
+                _LOGGER.debug("index_run: doc=%s vanished mid-CAS (doc deleted)", doc_id)
                 return None  # run cascaded away (doc deleted mid-flight)
             run = res.data
             assert isinstance(run, IndexRun)
@@ -132,6 +146,7 @@ class IndexRunStore:
                 )
                 return new
             except PreconditionFailedError:
+                _LOGGER.debug("index_run: doc=%s CAS contended, retrying", doc_id)
                 continue  # another writer won the race — re-read and retry
         raise RuntimeError(f"IndexRun CAS exhausted retries for {doc_id}")  # pragma: no cover
 
@@ -142,6 +157,12 @@ def _with_index(run: IndexRun, field_name: str, batch_index: int) -> IndexRun | 
     skipped entirely."""
     current: list[int] = getattr(run, field_name)
     if batch_index in current:
+        _LOGGER.debug(
+            "index_run: doc=%s batch %d already in %s (redelivery no-op)",
+            run.doc_id,
+            batch_index,
+            field_name,
+        )
         return None
     return msgspec.structs.replace(run, **{field_name: [*current, batch_index]})
 
@@ -151,6 +172,11 @@ def _with_done(run: IndexRun, batch_index: int, batch_units: int) -> IndexRun | 
     ``units_done`` (#248) — both under one CAS so the progress aggregate moves
     in lockstep with the batch set and is never double-counted on redelivery."""
     if batch_index in run.done:
+        _LOGGER.debug(
+            "index_run: doc=%s batch %d already done (redelivery no-op)",
+            run.doc_id,
+            batch_index,
+        )
         return None  # idempotent — already counted, including its units
     return msgspec.structs.replace(
         run, done=[*run.done, batch_index], units_done=run.units_done + batch_units

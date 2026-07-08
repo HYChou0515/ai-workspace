@@ -108,6 +108,9 @@ class SanityBatteryCoordinator:
                 partition_key=model,
             )
         )
+        _LOGGER.info(
+            "sanity: enqueued cell model=%s question=%s level=%s", model, question_key, level
+        )
 
     def run_battery(self, model: str) -> None:
         """Queue the auto-run battery for one model (every auto_run question at
@@ -115,6 +118,7 @@ class SanityBatteryCoordinator:
         self._job_rm.create(
             SanityRun(payload=SanityRunPayload(model=model, scope="battery"), partition_key=model)
         )
+        _LOGGER.info("sanity: enqueued battery for model=%s", model)
 
     # ── read (the FE hydrates the matrix from this) ──────────────────
     def list_results(self, model: str) -> list[SanityResult]:
@@ -179,6 +183,7 @@ class SanityBatteryCoordinator:
                 if (question_key(q), level) not in have:
                     self.run_cell(model, question_key(q), level)
                     queued += 1
+        _LOGGER.info("sanity: enqueued %d missing cell(s) for model=%s", queued, model)
         return queued
 
     def rescore(self, model: str) -> int:
@@ -186,6 +191,7 @@ class SanityBatteryCoordinator:
         model re-run) and refresh the verdict — the '重新 AI 評分' action. Returns
         the number of cells re-judged. No judge ⇒ 0."""
         if self._judge is None:
+            _LOGGER.debug("sanity: rescore skipped for model=%s, no judge wired", model)
             return 0
         rejudged = 0
         for c in self.list_results(model):
@@ -204,6 +210,7 @@ class SanityBatteryCoordinator:
             )
             rejudged += 1
         self.generate_verdict(model)
+        _LOGGER.info("sanity: rescored %d cell(s) for model=%s", rejudged, model)
         return rejudged
 
     # ── per-model fitness verdict (#231) ─────────────────────────────
@@ -225,8 +232,10 @@ class SanityBatteryCoordinator:
             return
         score, summary = judge_verdict(self._judge, model=model, digest=self._verdict_digest(cells))
         if not summary:
+            _LOGGER.warning("sanity: verdict skipped for model=%s, judge reply unusable", model)
             return  # the judge produced nothing usable — don't write a misleading verdict
         verdict = SanityVerdict(model=model, score=score, summary=summary)
+        _LOGGER.info("sanity: upserting verdict for model=%s score=%s", model, score)
         rid = sanity_verdict_id(model)
         if self._verdict_rm.exists(rid):
             self._verdict_rm.update(rid, verdict)
@@ -249,6 +258,7 @@ class SanityBatteryCoordinator:
     # ── consume (handler — runs on the consumer thread) ──────────────
     def _handle(self, job) -> None:  # job: Resource[SanityRun]
         payload = job.data.payload
+        _LOGGER.info("sanity: handling job scope=%s model=%s", payload.scope, payload.model)
         if payload.scope == "battery":
             # #227: fan out one short cell job per cell instead of running the
             # whole battery inline. A full battery (every auto question × level,
@@ -257,9 +267,13 @@ class SanityBatteryCoordinator:
             # each cell upserts its own SanityResult so no join is needed.
             for q, level in auto_run_cells():
                 self.run_cell(payload.model, question_key(q), level)
+            _LOGGER.info("sanity: fanned out battery cells for model=%s", payload.model)
             return
         q = self.find_question(payload.question_key)
         if q is None:
+            _LOGGER.info(
+                "sanity: skip stale cell, question %s no longer exists", payload.question_key
+            )
             return  # the prompt was edited away between enqueue and run
         self._run_one(payload.model, q, payload.level)
 
@@ -268,6 +282,7 @@ class SanityBatteryCoordinator:
         result (current-only). ``reasoned`` = the model emitted thinking, exactly
         as ``ILlm.stream`` flags it for kb_search."""
         key = question_key(q)
+        _LOGGER.info("sanity: running cell model=%s question=%s level=%s", model, key, level)
         output, reasoned, latency, error = "", False, 0, ""
         try:
             llm = self._llm_factory(model, level)
@@ -309,6 +324,14 @@ class SanityBatteryCoordinator:
             error=error,
             latency_ms=latency,
         )
+        _LOGGER.info(
+            "sanity: cell done model=%s question=%s level=%s grade=%s latency=%dms",
+            model,
+            key,
+            level,
+            grade,
+            latency,
+        )
         rid = sanity_result_id(model, key, level)
         if self._result_rm.exists(rid):
             self._result_rm.update(rid, result)
@@ -332,6 +355,7 @@ class SanityBatteryCoordinator:
         try:
             return q.aux(output)
         except Exception:  # noqa: BLE001
+            _LOGGER.warning("sanity: aux extractor raised for %s", q.category, exc_info=True)
             return ""
 
     # ── lifecycle (mirror IndexCoordinator) ──────────────────────────
@@ -342,6 +366,7 @@ class SanityBatteryCoordinator:
         if not self._consuming:
             self._consuming = True
             self._job_rm.start_consume(block=False)
+            _LOGGER.info("sanity: background consumer started")
 
     def start_consuming(self) -> None:
         self._ensure_consuming()
@@ -365,6 +390,7 @@ class SanityBatteryCoordinator:
 
     def _stop_consuming(self) -> None:
         self._consuming = False
+        _LOGGER.info("sanity: background consumer stopped")
         with contextlib.suppress(RuntimeError):
             self._job_rm.message_queue.stop_consuming()  # ty: ignore[unresolved-attribute]
 

@@ -13,7 +13,11 @@ flock, or CAS file is needed — the FS's own exclusive-create is the arbiter.
 
 from __future__ import annotations
 
+import logging
+
 from ..filestore.protocol import FileExists, FileNotFound, FileStore
+
+logger = logging.getLogger(__name__)
 
 
 def _counter_path(records_path: str) -> str:
@@ -34,6 +38,11 @@ async def _read_high_water(store: FileStore, workspace_id: str, records_path: st
     try:
         raw = await store.read(workspace_id, _counter_path(records_path))
     except FileNotFound:
+        logger.debug(
+            "numbering: no high-water counter for %s in %s, starting at 0",
+            records_path,
+            workspace_id,
+        )
         return 0
     text = raw.decode("utf-8", errors="replace").strip()
     return int(text) if text.isdigit() else 0
@@ -45,6 +54,12 @@ async def next_number(store: FileStore, workspace_id: str, records_path: str) ->
     exclusively created, so a race is resolved by `create_exclusive`, not here."""
     high_water = await _read_high_water(store, workspace_id, records_path)
     existing = await _max_existing(store, workspace_id, records_path)
+    logger.debug(
+        "numbering: %s next candidate (high_water=%d, max_existing=%d)",
+        records_path,
+        high_water,
+        existing,
+    )
     return max(high_water, existing) + 1
 
 
@@ -55,6 +70,12 @@ async def record_high_water(
     hard-delete of the top record can't let its number be reissued (§N2). Only
     ever moves forward (callers pass the just-claimed number)."""
     await store.write(workspace_id, _counter_path(records_path), str(number).encode())
+    logger.debug(
+        "numbering: high-water for %s in %s advanced to %d",
+        records_path,
+        workspace_id,
+        number,
+    )
 
 
 async def create_exclusive(store: FileStore, workspace_id: str, path: str, data: bytes) -> None:

@@ -696,6 +696,10 @@ class LitellmAgentRunner:
         # catalogs). A None here means resolution failed upstream — fail loud
         # rather than run some default agent the operator never picked.
         if ctx.agent_config is None:
+            _LOGGER.warning(
+                "litellm_runner: no agent config resolved for turn (investigation=%s)",
+                ctx.investigation_id,
+            )
             yield RunError(
                 message="no agent config resolved for this turn — the item could not "
                 "be matched to an App (check the item id / App registration)"
@@ -730,6 +734,10 @@ class LitellmAgentRunner:
                 # The agent burned through its turn budget — terminal, no
                 # retry would help. The SDK exception only carries a message,
                 # so we report our own configured ceiling (never a bare 0).
+                _LOGGER.warning(
+                    "litellm_runner: turn exceeded max turns (investigation=%s) — terminal",
+                    ctx.investigation_id,
+                )
                 yield MaxTurnsExceeded(turns=ctx.max_turns or self._max_turns)
                 yield RunDone()
                 return
@@ -738,6 +746,13 @@ class LitellmAgentRunner:
                 if not _should_retry(
                     progress_made=progress_made, attempt=attempt, max_retries=self._max_retries
                 ):
+                    _LOGGER.warning(
+                        "litellm_runner: turn stopped after %d attempt(s), not retrying "
+                        "(%r) (investigation=%s)",
+                        attempt,
+                        exc,
+                        ctx.investigation_id,
+                    )
                     if progress_made:
                         # Don't pretend "giving up after N attempts" — we
                         # made exactly one attempt; it produced output and
@@ -750,6 +765,13 @@ class LitellmAgentRunner:
                         )
                     yield RunDone()
                     return
+                _LOGGER.warning(
+                    "litellm_runner: turn attempt %d failed (%r) — retrying with hint "
+                    "(investigation=%s)",
+                    attempt,
+                    exc,
+                    ctx.investigation_id,
+                )
                 feedback = diagnose_error(exc)
                 yield classify_retry_event(exc, feedback)
 

@@ -9,12 +9,15 @@ implementation may fold in structural context, so it need not equal the span).
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Protocol
 
 from msgspec import Struct
 
 _TOKEN = re.compile(r"\S+")
+
+logger = logging.getLogger(__name__)
 
 
 class Chunk(Struct, frozen=True):
@@ -49,6 +52,7 @@ class FixedTokenChunker:
     def chunk(self, text: str) -> list[Chunk]:
         spans = [(m.start(), m.end()) for m in _TOKEN.finditer(text)]
         if not spans:
+            logger.debug("chunker: empty text, 0 chunks")
             return []
         step = max(1, self._max - self._overlap)
         n = len(spans)
@@ -61,4 +65,5 @@ class FixedTokenChunker:
             if end_idx >= n:
                 break
             i += step
+        logger.debug("chunker: split %d tokens into %d chunks", n, len(chunks))
         return chunks

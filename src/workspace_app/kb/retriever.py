@@ -13,6 +13,7 @@ the shared metric, so the dense order matches the stored vectors' geometry.
 
 from __future__ import annotations
 
+import logging
 import posixpath
 from dataclasses import dataclass
 
@@ -31,6 +32,8 @@ from .llm import ILlm, OnChunk
 from .merge import ScoredChunk, merge_passages
 from .query import expand_queries, hypothetical_document
 from .rerank import rerank_passages
+
+logger = logging.getLogger(__name__)
 
 # Shown in place of a legacy binary doc that has no extracted text — so the
 # LLM (and the user) see a clear "nothing to read here" note instead of a
@@ -282,6 +285,12 @@ class Retriever:
         mmr_k = depth if depth is not None else self._top_k * 3
         limit = depth if depth is not None else self._top_k
         loc = location if location is not None and not location.is_empty() else None
+        logger.info(
+            "retriever: search start query=%r collections=%s candidates=%d",
+            query,
+            collection_ids,
+            cand,
+        )
         # {chunk_id: DocChunk}; #308 excludes chunks of docs the speaker's per-doc
         # override blocks, from BOTH the BM25/MMR corpus (this dict) and the dense
         # native-vector query below, so a hidden doc never reaches ranking/answer.
@@ -302,6 +311,7 @@ class Retriever:
             }
             for i, vc in enumerate(overlay.virtual_chunks):
                 chunks[f"__overlay__{i}"] = vc
+        logger.debug("retriever: candidate chunk universe size=%d", len(chunks))
         if not chunks:
             return []
 
@@ -322,6 +332,7 @@ class Retriever:
         if resolved.expand > 0:
             assert self._llm is not None  # resolved.expand>0 implies llm wired
             step("\n↻ expanding query\n")
+            logger.debug("retriever: multi-query expand into %d variants", resolved.expand)
             queries = expand_queries(self._llm, query, n=resolved.expand, on_progress=on_progress)
         else:
             queries = [query]
@@ -364,6 +375,7 @@ class Retriever:
             assert self._llm is not None
             llm = self._llm
             step("\n↻ HyDE\n")
+            logger.debug("retriever: HyDE generating %d hypothetical docs", resolved.hyde)
             hyde_docs = [
                 doc
                 for doc in (
@@ -399,6 +411,11 @@ class Retriever:
 
         fused_score = rrf_scores(ranked_lists)
         fused = sorted(fused_score, key=lambda key: (-fused_score[key], key))[:cand]
+        logger.debug(
+            "retriever: RRF fused %d candidates from %d ranked lists",
+            len(fused),
+            len(ranked_lists),
+        )
 
         # RRF order → descending relevance scores; MMR for diversity (cosine of
         # the stored chunk vectors as the similarity).
@@ -456,7 +473,9 @@ class Retriever:
         if resolved.rerank:
             assert self._llm is not None
             step("\n↻ rerank\n")
+            logger.debug("retriever: reranking %d merged passages via llm", len(passages))
             passages = rerank_passages(self._llm, query, passages, on_progress=on_progress)
+        logger.info("retriever: search complete, ranked=%d limit=%d", len(passages), limit)
         return passages[:limit]
 
     def _apply_quality_prior(
@@ -639,6 +658,7 @@ class Retriever:
         try:
             doc = rm.get(doc_id).data
         except ResourceIDNotFoundError:
+            logger.debug("retriever: doc %s gone, no content file_id", doc_id)
             return ""
         assert isinstance(doc, SourceDoc)
         fid = doc.content.file_id
@@ -671,6 +691,7 @@ class Retriever:
         try:
             doc = rm.get(doc_id).data
         except ResourceIDNotFoundError:
+            logger.debug("retriever: doc %s path unresolved (deleted), dropping hit", doc_id)
             return None
         assert isinstance(doc, SourceDoc)
         return doc.path
@@ -697,4 +718,5 @@ class Retriever:
         try:
             return normalize_text(raw.decode("utf-8"))
         except UnicodeDecodeError:
+            logger.debug("retriever: doc %s has no extractable text (binary blob)", doc_id)
             return _NO_EXTRACTABLE_TEXT

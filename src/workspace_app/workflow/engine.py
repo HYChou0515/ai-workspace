@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, NoReturn
 
@@ -27,6 +28,8 @@ from .events import StepPassed, StepRetrying, StepSkipped, StepStarted
 
 if TYPE_CHECKING:
     from .handle import WorkflowHandle
+
+logger = logging.getLogger(__name__)
 
 
 class StepFailed(Exception):
@@ -99,10 +102,12 @@ async def run_step(
     if cache and await wf.exists(path):
         record = await wf.read_json(path)
         if isinstance(record, dict) and record.get("hash") == h:
+            logger.debug("step: skip %s/%s (cached, hash match)", name, key)
             _emit(wf, StepSkipped(phase=phase, name=name, key=key))
             return record.get("result")  # SKIP — cached, identical inputs
 
     _emit(wf, StepStarted(phase=phase, name=name, key=key))
+    logger.info("step: start %s/%s (phase %s)", name, key, phase)
     feedback: str | None = None
     reason = ""
     for attempt in range(retries + 1):
@@ -111,11 +116,14 @@ async def run_step(
         if verdict.ok:
             await wf.write_json(path, {"hash": h, "result": result})
             _emit(wf, StepPassed(phase=phase, name=name, key=key))
+            logger.info("step: pass %s/%s", name, key)
             return result
         reason = verdict.reason
         feedback = verdict.reason
         if attempt < retries:
+            logger.warning("step: retry %s/%s after failed gate: %s", name, key, reason)
             _emit(wf, StepRetrying(phase=phase, name=name, reason=reason, key=key))
 
     _emit(wf, StepFailedEv(phase=phase, name=name, reason=reason, key=key))
+    logger.warning("step: fail %s/%s (gate never passed): %s", name, key, reason)
     raise StepFailed(reason or f"step {name!r} did not pass its gate")

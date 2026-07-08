@@ -16,6 +16,7 @@ from __future__ import annotations
 import abc
 import asyncio
 import contextlib
+import logging
 
 from msgspec import Struct
 from specstar import SpecStar
@@ -33,6 +34,8 @@ from ..sandbox.protocol import SandboxHandle
 # microseconds when its sandbox dies, so a generous cap is only brushed under
 # pathological churn (mirrors SpecstarTurnControl's epoch CAS).
 _MAX_CAS_RETRIES = 100
+
+logger = logging.getLogger(__name__)
 
 
 class IAddressStore(abc.ABC):
@@ -109,18 +112,27 @@ class SpecstarAddressStore(IAddressStore):
             # race for the one slot; the loser gets DuplicateResourceError and
             # converges on the winner's address (so an item has ONE sandbox).
             rm.create(rec, resource_id=item_id, if_not_exists=True)  # ty: ignore[unknown-argument]
+            logger.info("address: item %s claimed handle %s (won empty slot)", item_id, handle.id)
             return handle  # we won the claim (slot was empty)
         except DuplicateResourceError:
-            pass  # a row exists — a live winner to converge on, or a released slot
+            logger.debug("address: item %s already has a row, resolving winner", item_id)
         try:
             res = rm.get(item_id)
         except ResourceIsDeletedError:
+            logger.info(
+                "address: item %s reclaiming released slot -> handle %s", item_id, handle.id
+            )
             # forget()-released slot (tombstone) → reclaim it for our fresh sandbox
             rm.restore(item_id)
             rm.modify(item_id, rec, status=RevisionStatus.draft)
             return handle
         data = res.data
         assert isinstance(data, _SandboxAddress)
+        logger.info(
+            "address: item %s already claimed by handle %s, converging",
+            item_id,
+            data.handle_id,
+        )
         return SandboxHandle(id=data.handle_id)  # live → converge on the winner
 
     async def swap(
@@ -136,11 +148,17 @@ class SpecstarAddressStore(IAddressStore):
             try:
                 res = rm.get(item_id)
             except (ResourceIDNotFoundError, ResourceIsDeletedError):
+                logger.debug("address: swap item %s slot freed, claiming fresh", item_id)
                 return self._claim_sync(item_id, new)  # slot freed mid-flight → claim fresh
             data = res.data
             assert isinstance(data, _SandboxAddress)
             current = SandboxHandle(id=data.handle_id)
             if current != expected:
+                logger.info(
+                    "address: swap item %s lost CAS -> peer address %s, converging",
+                    item_id,
+                    current.id,
+                )
                 return current  # a peer already refreshed → converge on theirs
             try:
                 rm.modify(
@@ -149,6 +167,7 @@ class SpecstarAddressStore(IAddressStore):
                     status=RevisionStatus.draft,
                     expected_etag=res.info.etag,  # ty: ignore[unknown-argument]
                 )
+                logger.info("address: swap item %s -> handle %s (won CAS)", item_id, new.id)
                 return new  # we won the swap
             except PreconditionFailedError:  # pragma: no cover - cross-pod CAS race
                 continue  # a peer modified between our get and modify → re-read
@@ -161,5 +180,6 @@ class SpecstarAddressStore(IAddressStore):
 
     def _forget_sync(self, item_id: str) -> None:
         rm = self._spec.get_resource_manager(_SandboxAddress)
+        logger.debug("address: forget item %s (releasing address slot)", item_id)
         with contextlib.suppress(ResourceIDNotFoundError, ResourceIsDeletedError):
             rm.delete(item_id)

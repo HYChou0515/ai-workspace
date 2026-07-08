@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import os
 import shutil
 import signal
@@ -38,6 +39,8 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
 )
+
+logger = logging.getLogger(__name__)
 
 # Bootstrap run (as namespace-root) before chroot: overlay the host's system
 # dirs read-only onto the sandbox root, wire up a usable /dev + ephemeral
@@ -271,6 +274,7 @@ class LocalProcessSandbox:
         if self._tools_dir is not None and not self._isolate and not tools_link.exists():
             tools_link.symlink_to(self._tools_dir)
         self._dirs[hid] = path
+        logger.info("local_process: created sandbox %s (isolate=%s)", hid, self._isolate)
         return SandboxHandle(id=hid)
 
     def _install_python_shim(self, root: Path) -> None:
@@ -323,6 +327,7 @@ class LocalProcessSandbox:
         await asyncio.to_thread((path / _READY_MARKER).unlink, missing_ok=True)
         await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
         self._dirs.pop(handle.id, None)
+        logger.info("local_process: reaped sandbox %s", handle.id)
 
     async def mark_ready(self, handle: SandboxHandle) -> None:
         """#366: mark the sandbox authoritative — an empty file at the sandbox
@@ -330,6 +335,7 @@ class LocalProcessSandbox:
         walked/synced nor shown in the file tree, and no user file can forge it."""
         marker = self._require(handle) / _READY_MARKER
         await asyncio.to_thread(marker.touch)
+        logger.info("local_process: marked sandbox %s ready", handle.id)
 
     async def is_ready(self, handle: SandboxHandle) -> bool:
         """#366: True once `mark_ready` ran (and the sandbox dir still exists)."""
@@ -411,6 +417,7 @@ class LocalProcessSandbox:
             # translate to POSIX-standard exit 127 (command not found) with a
             # stderr message — the /exec endpoint and the agent's exec tool
             # then see a normal command failure, not a 500.
+            logger.warning("local_process: exec %s: %s not found (exit 127)", handle.id, cmd[0])
             return ExecResult(
                 exit_code=127,
                 stdout=b"",
@@ -419,6 +426,12 @@ class LocalProcessSandbox:
         except PermissionError as exc:
             # The binary exists but isn't executable (no x-bit, or the jail
             # blocks it). POSIX exit 126 = "found but not executable".
+            logger.warning(
+                "local_process: exec %s: %s not executable (exit 126): %s",
+                handle.id,
+                cmd[0],
+                exc,
+            )
             return ExecResult(
                 exit_code=126,
                 stdout=b"",
@@ -518,9 +531,15 @@ class LocalProcessSandbox:
                 note = f"timed out after {self._exec_timeout:g}s (total) and was killed\n"
             else:
                 note = f"no output for {self._log_timeout:g}s; assumed hung and killed\n"
+            logger.warning(
+                "local_process: exec %s killed: %s timeout (exit 124)",
+                handle.id,
+                timed_out,
+            )
             return ExecResult(
                 exit_code=124, stdout=stdout, stderr=b"".join(err_buf) + note.encode()
             )
+        logger.debug("local_process: exec %s: %s -> exit %s", handle.id, cmd, proc.returncode)
         return ExecResult(
             exit_code=proc.returncode if proc.returncode is not None else -1,
             stdout=stdout,

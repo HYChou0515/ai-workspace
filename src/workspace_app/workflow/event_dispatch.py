@@ -75,6 +75,15 @@ def build_event_trigger_start(start_run: OrchestratorStart) -> EventTriggerStart
     from .orchestrator import ActiveRunExists
 
     async def start(t: EventTrigger, event: EntityWriteEvent, depth: int) -> str | None:
+        _log.info(
+            "event trigger %s: firing workflow %s on item %s for %s #%d (depth %d)",
+            trigger_key(t),
+            t.workflow_id,
+            event.item_id,
+            event.type_name,
+            event.number,
+            depth,
+        )
         try:
             return await start_run(
                 slug=t.slug,
@@ -169,6 +178,12 @@ class EventTriggerDispatcher:
             return
         slug = await asyncio.to_thread(self._app_of_item, event.item_id)
         if slug is None:
+            _log.debug(
+                "event dispatch: item %s has no resolvable app — skipping %s #%d",
+                event.item_id,
+                event.type_name,
+                event.number,
+            )
             return  # the item's app can't be resolved → nothing to match against
         for t in await asyncio.to_thread(self._triggers):
             with contextlib.suppress(Exception):
@@ -188,6 +203,7 @@ class EventTriggerDispatcher:
         # Guard 1 (self-trigger): a run does not re-fire the very trigger that spawned it — the
         # direct A→A loop. (Indirect cycles are caught by the depth cap above.)
         if origin is not None and origin.trigger == key:
+            _log.debug("event dispatch: trigger %s would re-fire itself — skipped (guard 1)", key)
             return
         if not where_matches(t.where, event.fields):
             return  # narrowed out (a trivial edit that doesn't meet the condition)
@@ -195,6 +211,12 @@ class EventTriggerDispatcher:
         # re-dispatch (back-fill) of an already-handled version is a no-op.
         ekey = entity_key(event.item_id, event.type_name, event.number)
         if not await asyncio.to_thread(self._watermark.try_advance, key, ekey, event.version):
+            _log.debug(
+                "event dispatch: trigger %s already fired for %s@%s — dedup skip",
+                key,
+                ekey,
+                event.version,
+            )
             return
         await self._start(t, event, next_depth)
 

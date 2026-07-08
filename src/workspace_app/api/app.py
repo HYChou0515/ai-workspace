@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
@@ -78,6 +79,8 @@ from .turns import ChatTurnEngine
 from .workflow_exec import WorkflowExecutor
 from .workflow_routes import register_workflow_routes
 
+logger = logging.getLogger(__name__)
+
 
 def _ensure_insights_collection(spec: SpecStar, name: str) -> str:
     """Idempotently ensure the chat-insights collection exists, returning its
@@ -92,6 +95,7 @@ def _ensure_insights_collection(spec: SpecStar, name: str) -> str:
     for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
         if r.data.name == name:  # ty: ignore[unresolved-attribute]
             return r.info.resource_id  # ty: ignore[unresolved-attribute]
+    logger.info("boot: creating insights collection %r", name)
     return rm.create(Collection(name=name)).resource_id
 
 
@@ -287,6 +291,11 @@ def create_app(
     # per deploy). A real deploy sets a cadence (e.g. 60 s) to enable time-triggered workflows.
     trigger_check_interval: timedelta | None = None,
 ) -> FastAPI:
+    logger.info(
+        "boot: composing app (run_consumers=%s, host_managed_durable=%s)",
+        run_consumers,
+        host_managed_durable,
+    )
     # Current-user seam: real deploys inject a reader of the auth middleware;
     # the default is the single dev tenant. UserDirectory resolves ids → people.
     # The same `get_user_id` should have been threaded into `make_spec`
@@ -368,6 +377,10 @@ def create_app(
     # that owns durable MUST expose persist (HttpSandbox does); refuse to start
     # otherwise instead of losing every workspace on the next reap.
     if host_managed_durable and not callable(getattr(sandbox, "persist", None)):
+        logger.error(
+            "boot: host_managed_durable set but sandbox backend lacks persist op - "
+            "refusing to start (durable write-back would silently no-op)"
+        )
         raise RuntimeError(
             "host_managed_durable is set but the sandbox backend has no `persist` "
             "operation — durable write-back would silently no-op (data loss). Use "
@@ -996,4 +1009,5 @@ def create_app(
     if spa_dist.is_dir() and (spa_dist / "index.html").is_file():
         app.mount("/", SpaStaticFiles(directory=spa_dist, html=True), name="spa")
 
+    logger.info("boot: app composition complete")
     return app

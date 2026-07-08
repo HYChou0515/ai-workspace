@@ -15,11 +15,14 @@ empty (different) table.
 from __future__ import annotations
 
 import contextlib
+import logging
 
 from msgspec import Struct, field
 from specstar import SpecStar
 
 from .specstar_impl import SpecstarFileStore
+
+logger = logging.getLogger(__name__)
 
 
 class _WorkspaceFiles(Struct):
@@ -49,5 +52,7 @@ def migrate_inline_to_binary(spec: SpecStar) -> int:
         if rec.dirs:
             store._add_dirs(rec.workspace_id, rec.dirs)
         rm_old.permanently_delete(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+        logger.debug("migrate: workspace %s migrated (%d files)", rec.workspace_id, len(rec.files))
         migrated += 1
+    logger.info("migrate: inline->binary migration complete, %d workspaces", migrated)
     return migrated

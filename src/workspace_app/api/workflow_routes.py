@@ -9,6 +9,7 @@ mechanics live behind the ``WorkflowOrchestrator`` and the ``WorkflowExecutor``.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 
 import msgspec
@@ -49,6 +50,8 @@ from .timeutil import now_ms
 from .turns import ChatTurnEngine
 from .workflow_exec import WorkflowExecutor
 
+logger = logging.getLogger(__name__)
+
 
 async def _staged_run_uploads(
     request: Request, workflow_id: str
@@ -80,6 +83,7 @@ async def _staged_run_uploads(
         try:
             rel = canonical_path(part.filename)
         except ValueError as exc:
+            logger.warning("workflow_routes: upload path escapes workspace: %r", part.filename)
             raise HTTPException(
                 status_code=400,
                 detail=f"upload path escapes the workspace: {part.filename!r}",
@@ -219,6 +223,7 @@ def register_workflow_routes(
                 f"Wrote {norm}",
                 {"investigation_id": investigation_id, "path": norm},
             )
+            logger.debug("workflow_routes: staged upload %s to item %s", norm, investigation_id)
             turn_engine.publish(
                 investigation_id, FileChanged(path=norm, by=get_user_id(), kind="written")
             )
@@ -243,6 +248,11 @@ def register_workflow_routes(
                 chat_id=target_chat_id,
             )
         except ActiveRunExists as exc:
+            logger.warning(
+                "workflow_routes: run rejected on item %s, active run exists: %s",
+                investigation_id,
+                exc,
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         chat = conv_rm.get(target_chat_id).data
         assert isinstance(chat, Conversation)
@@ -252,6 +262,13 @@ def register_workflow_routes(
             "workflow_started",
             "Started a workflow run",
             {"item_id": investigation_id, "run_id": run_id, "chat_id": target_chat_id},
+        )
+        logger.info(
+            "workflow_routes: workflow run %s started on item %s (workflow=%r chat=%s)",
+            run_id,
+            investigation_id,
+            workflow_id,
+            target_chat_id,
         )
         return {"run_id": run_id, "item_id": investigation_id, "chat_id": target_chat_id}
 
@@ -358,6 +375,9 @@ def register_workflow_routes(
         """#100 (manual §10): Stop a run — it goes terminal (cancelled) and the item
         opens to interactive use. Idempotent (a no-op when nothing is running)."""
         investigation_id = locator.require_item(slug, item_id)
+        logger.info(
+            "workflow_routes: cancel requested for run %s on item %s", run_id, investigation_id
+        )
         await workflow_orchestrator.cancel(run_id, investigation_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -382,7 +402,16 @@ def register_workflow_routes(
                 decided_by=get_user_id(),
             )
         except NotAwaitingDecision as exc:
+            logger.warning(
+                "workflow_routes: decision for run %s not awaiting a gate: %s", run_id, exc
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        logger.info(
+            "workflow_routes: decision %r recorded for run %s on item %s",
+            body.choice,
+            run_id,
+            investigation_id,
+        )
         return {"run_id": run_id, "resumed": True}
 
     @app.post(
@@ -406,7 +435,11 @@ def register_workflow_routes(
                 instruction=body.instruction,
             )
         except ResourceIDNotFoundError as exc:
+            logger.warning("workflow_routes: steer for unknown run %s: %s", run_id, exc)
             raise HTTPException(status_code=404, detail=f"unknown run: {run_id!r}") from exc
+        logger.info(
+            "workflow_routes: steer requested for run %s on item %s", run_id, investigation_id
+        )
         return _SteerAck(run_id=run_id)
 
     @app.post(
@@ -430,7 +463,13 @@ def register_workflow_routes(
                 decided_by=get_user_id(),
             )
         except NotAwaitingSteer as exc:
+            logger.warning(
+                "workflow_routes: steer confirm for run %s not awaiting: %s", run_id, exc
+            )
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        logger.info(
+            "workflow_routes: steer confirmed for run %s (approve=%s)", run_id, body.approve
+        )
         return _SteerConfirmOut(run_id=run_id, applied=body.approve)
 
     @app.get("/a/{slug}/items/{item_id}/event-triggers/lag")
@@ -461,5 +500,10 @@ def register_workflow_routes(
             entities_of=await _item_entities_of(investigation_id),
             watermark=event_dispatcher.watermark,
             dispatch=event_dispatcher.dispatch,
+        )
+        logger.info(
+            "workflow_routes: event-trigger backfill run for item %s of app %s",
+            investigation_id,
+            slug,
         )
         return msgspec.to_builtins(report)

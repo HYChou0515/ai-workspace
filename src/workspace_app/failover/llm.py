@@ -9,6 +9,7 @@ cooling endpoint is never even constructed.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Iterator, Sequence
 from typing import TYPE_CHECKING
@@ -17,6 +18,8 @@ from ..kb.llm import ILlm
 from ..kb.vlm.protocol import IVlm
 from .core import CallProvider, OnSwitch, Provider, failover_stream
 from .retry import call_with_failover
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..factories import LlmEndpoint
@@ -67,6 +70,7 @@ class FallbackLlm(ILlm):
         # Re-sweep rounds + total deadline are chain-level — read from the head
         # endpoint (a fallback's own round budget is ignored, like its fallbacks).
         head = self._endpoints[0]
+        logger.debug("failover-llm: streaming via chain head=%s", head.model)
         yield from failover_stream(
             providers,
             self._registry,
@@ -114,6 +118,7 @@ class FallbackVlm(IVlm):
                 degrade(provider.label, cause)
 
         head = self._endpoints[0]
+        logger.debug("failover-vlm: describe via chain head=%s", head.model)
         text = call_with_failover(
             providers,
             m=head.num_retries + 1,

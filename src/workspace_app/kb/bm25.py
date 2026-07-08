@@ -5,12 +5,15 @@ docs that match no query term (they only dilute the fused ranking).
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from collections import Counter
 from collections.abc import Sequence
 
 _WORD = re.compile(r"\w+")
+
+logger = logging.getLogger(__name__)
 
 
 def _tokens(text: str) -> list[str]:
@@ -24,6 +27,7 @@ def bm25_rank(
     score, ties broken by id. Docs scoring 0 (no query term) are excluded."""
     q_terms = set(_tokens(query))
     if not q_terms or not corpus:
+        logger.debug("bm25: no query terms or empty corpus, 0 ranked")
         return []
     docs = [(doc_id, _tokens(text)) for doc_id, text in corpus]
     n = len(docs)
@@ -43,4 +47,5 @@ def bm25_rank(
             score += idf * (tf[t] * (k1 + 1)) / denom
         if score > 0:
             scores[doc_id] = score
+    logger.debug("bm25: ranked %d of %d docs", len(scores), n)
     return sorted(scores, key=lambda doc_id: (-scores[doc_id], doc_id))

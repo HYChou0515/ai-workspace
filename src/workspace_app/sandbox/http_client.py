@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,8 @@ from .protocol import (
     SandboxNotFound,
     SandboxSpec,
 )
+
+logger = logging.getLogger(__name__)
 
 # Maps the host's structured `{"error": <type>}` discriminator back to the
 # exception type the Sandbox Protocol promises callers.
@@ -127,12 +130,22 @@ class HttpSandbox:
         try:
             resp = await self._client.request(method, url, **kwargs)
         except httpx.TimeoutException as exc:  # subclass of TransportError — catch FIRST
+            logger.warning(
+                "sandbox-http: %s %s busy (timeout) -> SandboxBusy %s", method, suffix, handle.id
+            )
             raise SandboxBusy(handle.id) from exc
         except httpx.TransportError as exc:
+            logger.warning(
+                "sandbox-http: %s %s transport error -> SandboxNotFound %s",
+                method,
+                suffix,
+                handle.id,
+            )
             raise SandboxNotFound(handle.id) from exc
         if resp.status_code == 404:
             self._raise_mapped(resp, handle)
         resp.raise_for_status()
+        logger.debug("sandbox-http: %s %s -> %d", method, suffix, resp.status_code)
         return resp
 
     async def _io_request(
@@ -172,6 +185,9 @@ class HttpSandbox:
         body = resp.json()
         exc_type = _ERRORS.get(body.get("error", ""), SandboxNotFound)
         message = body.get("detail") or handle.id
+        logger.warning(
+            "sandbox-http: 404 for sandbox %s -> %s (rebuild)", handle.id, exc_type.__name__
+        )
         raise exc_type(message)
 
     async def create(self, spec: SandboxSpec, sandbox_id: str | None = None) -> SandboxHandle:
@@ -191,6 +207,7 @@ class HttpSandbox:
         )
         resp.raise_for_status()
         data = resp.json()
+        logger.info("sandbox-http: created sandbox for item %s", sandbox_id)
         return SandboxHandle(id=_encode_handle(data["pod_url"], data["remote_id"]))
 
     async def persist(self, handle: SandboxHandle, *, delete: bool) -> None:
@@ -199,6 +216,7 @@ class HttpSandbox:
         # app↔host connection (it can't hang the way the old per-file mirror
         # did). `delete` ⇒ --delete reconcile at a quiesced turn-end / reap;
         # False ⇒ additive-only mid-turn checkpoint.
+        logger.info("sandbox-http: persist sandbox %s delete=%s", handle.id, delete)
         await self._request(handle, "POST", "/persist", json={"delete": delete})
 
     def handle_for_id(self, sandbox_id: str) -> SandboxHandle | None:
@@ -209,6 +227,7 @@ class HttpSandbox:
         return None
 
     async def kill(self, handle: SandboxHandle) -> None:
+        logger.info("sandbox-http: kill sandbox %s", handle.id)
         await self._request(handle, "DELETE", "")
 
     async def exec(
@@ -216,6 +235,7 @@ class HttpSandbox:
     ) -> ExecResult:
         pod_url, remote_id = _decode_handle(handle)
         url = f"{pod_url}/sandboxes/{remote_id}/exec"
+        logger.debug("sandbox-http: exec sandbox %s cmd=%s", handle.id, cmd)
         try:
             async with self._client.stream("POST", url, json={"cmd": cmd}) as resp:
                 resp.raise_for_status()
@@ -229,16 +249,26 @@ class HttpSandbox:
                             on_output(chunk)
                     elif "error" in frame:
                         exc_type = _ERRORS.get(frame["error"], SandboxNotFound)
+                        logger.warning(
+                            "sandbox-http: exec sandbox %s host error %s", handle.id, frame["error"]
+                        )
                         raise exc_type(frame.get("detail") or handle.id)
                     else:  # final {"exit","out","err"} frame
+                        logger.info(
+                            "sandbox-http: exec sandbox %s exit=%s", handle.id, frame["exit"]
+                        )
                         return ExecResult(
                             exit_code=frame["exit"],
                             stdout=base64.b64decode(frame["out"]),
                             stderr=base64.b64decode(frame["err"]),
                         )
         except httpx.TransportError as exc:
+            logger.warning(
+                "sandbox-http: exec sandbox %s transport error -> SandboxNotFound", handle.id
+            )
             raise SandboxNotFound(handle.id) from exc
         # Stream closed before the final frame ⇒ the pod died mid-exec.
+        logger.warning("sandbox-http: exec sandbox %s stream closed before final frame", handle.id)
         raise SandboxNotFound(handle.id)
 
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:

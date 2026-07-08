@@ -54,6 +54,7 @@ class HealthService:
 
     def run_fast_sync(self) -> None:
         """The startup-blocking part: connectivity-grade checks only."""
+        logger.info("health: running fast (startup) sanity checks")
         for check in self._registry.checks(fast_only=True):
             self._record(run_check(check))
 
@@ -63,14 +64,17 @@ class HealthService:
         flight."""
         with self._lock:
             if self._running:
+                logger.info("health: run_round refused — a round is already in flight")
                 return False
             self._running = True
         try:
             checks = [c for c in self._registry.checks() if only is None or c.check_id == only]
+            logger.info("health: running sanity check round (only=%s)", only)
             for check in checks:
                 # Sequential by design: capability probes target the same
                 # local model; parallelism would just contend.
                 self._record(await asyncio.to_thread(run_check, check))
+            logger.info("health: sanity check round complete (only=%s)", only)
             return True
         finally:
             self._running = False

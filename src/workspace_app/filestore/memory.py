@@ -14,10 +14,13 @@ when persistence matters.
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections import defaultdict
 from pathlib import Path
 
 from .protocol import FileExists, FileNotFound, dir_ancestors
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryFileStore:
@@ -38,6 +41,7 @@ class MemoryFileStore:
         claimants can't both win one path."""
         async with self._lock:
             if path in self._files.get(workspace_id, {}):
+                logger.debug("memory: create_exclusive %s:%s rejected, exists", workspace_id, path)
                 raise FileExists(path)
             self._files[workspace_id][path] = data
             self._dirs[workspace_id].update(dir_ancestors(path))
@@ -118,6 +122,7 @@ class MemoryFileStore:
             if path not in dirs:
                 raise FileNotFound(f"{workspace_id}:{path}")
             under = path + "/"
+            logger.debug("memory: rmdir %s:%s removing subtree", workspace_id, path)
             dirs.difference_update({d for d in dirs if d == path or d.startswith(under)})
             files = self._files.get(workspace_id, {})
             for p in [p for p in files if p.startswith(under)]:
