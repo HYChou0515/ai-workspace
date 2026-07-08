@@ -90,6 +90,22 @@ async def test_exec_empty_cmd_exits_127():
     assert result.stderr
 
 
+async def test_exec_sh_lc_runs_the_node_command_after_the_credential_export():
+    """The workflow run wiring wraps a node's command as `sh -lc "export WF_TOKEN=…;
+    <run>"`; the mock models that shell so a node behaves like the real one (echo → 0),
+    which the default exit_code==0 gate now verifies (plan §2.2)."""
+    sandbox = MockSandbox()
+    h = await sandbox.create(SandboxSpec())
+    ok = await sandbox.exec(h, ["sh", "-lc", "export WF_TOKEN='t'; echo hello"])
+    assert ok.exit_code == 0 and ok.stdout == b"hello\n"
+    # a failing node command still surfaces its non-zero exit through the wrapper
+    bad = await sandbox.exec(h, ["sh", "-lc", "export WF_TOKEN='t'; false"])
+    assert bad.exit_code == 1
+    # a bare export (no node command) succeeds
+    empty = await sandbox.exec(h, ["sh", "-lc", "export WF_TOKEN='t'; "])
+    assert empty.exit_code == 0
+
+
 async def test_exec_cat_missing_file_exits_1():
     sandbox = MockSandbox()
     h = await sandbox.create(SandboxSpec())

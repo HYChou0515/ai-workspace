@@ -285,6 +285,22 @@ def effective_item_skills(
     return out
 
 
+def augment_shared_skill_body(
+    name: str, body: str, app_slug: str | None, profile: str | None
+) -> str:
+    """Append machine-derived, always-current detail to a shared skill whose static body is
+    deliberately purpose-only (plan §3). ``author-workflow`` gets the DSL grammar (derived
+    from the schema — P5) + this app's capability/tool boundaries (P6), so the AI drafts
+    against the real grammar and knows what it can/can't do, without the skill drifting."""
+    if name != "author-workflow":
+        return body
+    from ..agent.tools import _profile_tool_ceiling
+    from ..workflow.dsl import describe_dsl_grammar, describe_workflow_boundaries
+
+    ceiling = _profile_tool_ceiling(app_slug, profile)
+    return "\n\n".join([body, describe_dsl_grammar(), describe_workflow_boundaries(ceiling)])
+
+
 async def resolve_skill_body(
     files: WorkspaceFiles,
     workspace_id: str,
@@ -303,7 +319,7 @@ async def resolve_skill_body(
     if body is not None:
         return body
     if name in SHARED_SKILLS:
-        return load_shared_skill(name)
+        return augment_shared_skill_body(name, load_shared_skill(name), app_slug, profile)
     if app_slug is not None and profile is not None:
         try:
             return load_skill(app_slug, profile, name)

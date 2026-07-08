@@ -24,7 +24,6 @@
           "name": "plan",
           "prompt": "Read {file}. Choose a collection from {config.collections} and write a one-line digest. Reply with a JSON object holding keys collection, digest, and source (set source to {file}).",
           "phase": "classify",
-          "out": "plan/{file}.json",
           "tools": ["read_file"],
           "outputs": {
             "collection": { "type": "str", "enum": ["notes"] },
@@ -39,7 +38,7 @@
       "type": "gate",
       "phase": "review",
       "title": "File these into the collection?",
-      "summary_from": "plan/*.json",
+      "summary_from": "{steps.classify.outputs}",
       "allow": ["approve", "reject"]
     },
     {

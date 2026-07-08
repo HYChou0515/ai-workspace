@@ -209,11 +209,90 @@ def test_validate_phase_not_declared():
     )
 
 
-def test_validate_agent_needs_prompt_check_and_nonneg_retries():
+def test_describe_dsl_grammar_is_machine_derived_and_current():
+    """plan §3.2 (P5): the grammar reference is derived from the schema, so it stays
+    current — it must cover every step type + the reference model + the newer fields the
+    hand-written skill drifted away from."""
+    from workspace_app.workflow.dsl import describe_dsl_grammar
+
+    g = describe_dsl_grammar()
+    for step_type in ("agent", "sandbox", "gate", "capability", "map", "switch"):
+        assert step_type in g
+    for token in ("{steps.", "outputs", "requires", "kind", "revise_to", "over"):
+        assert token in g  # newer fields / reference model that drifted out of the skill
+    assert "ingest_to_collection" in g  # a capability, from the registry
+    assert "markdown" in g  # an artifact kind, from the registry
+
+
+def test_describe_workflow_boundaries_lists_ceiling_and_capabilities():
+    """plan §3.2 (P6): the per-app boundary tells the AI what it can/can't do."""
+    from workspace_app.workflow.dsl import describe_workflow_boundaries
+
+    b = describe_workflow_boundaries({"read_file", "ask_knowledge_base"})
+    assert "read_file" in b and "ask_knowledge_base" in b
+    assert "ingest_to_collection" in b  # available capabilities
+    # None ceiling → "all" wording, never a crash
+    assert describe_workflow_boundaries(None)
+
+
+def test_validate_agent_needs_prompt_output_and_nonneg_retries():
     errs = _errs([{"type": "agent", "prompt": "", "phase": "p", "retries": -1}])
     assert any("needs a 'prompt'" in e for e in errs)
-    assert any("needs a 'check'" in e for e in errs)
+    assert any("must produce an output" in e for e in errs)  # §2.1: outputs XOR out
     assert any("retries cannot be negative" in e for e in errs)
+
+
+def test_validate_agent_rejects_both_output_kinds():
+    """§2.1 (P2): one output kind — declaring both 'outputs' and 'out' is a static error."""
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "prompt": "p",
+                "phase": "p",
+                "out": "r.md",
+                "outputs": {"x": "str"},
+            }
+        ]
+    )
+    assert any("not both" in e for e in errs)
+
+
+def test_validate_requires_only_on_prose_out():
+    """§2.3 (P3): a producer 'requires' contract is a channel-P (prose 'out') concept —
+    declaring it on a structured 'outputs' step is a static error."""
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "prompt": "p",
+                "phase": "p",
+                "outputs": {"x": "str"},
+                "requires": {"contains": ["#"]},
+            }
+        ]
+    )
+    assert any("only valid on a prose 'out'" in e for e in errs)
+
+
+def test_validate_requires_rejects_custom_check_and_bad_shape():
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "prompt": "p",
+                "phase": "p",
+                "out": "r.md",
+                "kind": "markdown",
+                "check": {"file_nonempty": {"path": "r.md"}},
+                "requires": {"contains": "x", "min_length": -1, "bogus": 1},
+            }
+        ]
+    )
+    assert any("not both" in e for e in errs)  # requires + custom check
+    assert any("must be a list of strings" in e for e in errs)  # contains shape
+    assert any("must be a non-negative integer" in e for e in errs)  # min_length shape
+    assert any("unknown 'requires' key" in e for e in errs)  # bogus key
 
 
 def test_validate_agent_tool_ceiling():
@@ -489,6 +568,113 @@ async def test_run_produce_gate_commit_happy_path():
     assert ingested == [("a", "/uploads/a.log")]
 
 
+async def test_run_requires_retries_until_the_structure_is_present():
+    """§2.3 (P3): a prose 'out' with a 'requires' contract fails until the artifact has the
+    required structure, feeding the reason back so the model adds it on retry."""
+    store = MemoryFileStore()
+    replies = iter(["# Report\n\nno summary yet", "# Report\n\n## Summary\n\ndone"])
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return next(replies)
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "draft"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "draft",
+                        "prompt": "write report",
+                        "phase": "draft",
+                        "out": "report.md",
+                        "kind": "markdown",
+                        "requires": {"contains": ["## Summary"]},
+                        "retries": 2,
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert "## Summary" in await wf.read_text("/report.md")
+
+
+async def test_run_gate_summary_from_structured_outputs_reference():
+    """§2.1: a channel-D decision map is reviewed at a gate via a {steps.map.outputs}
+    reference — the decision lives in the journal, no redundant per-file writes needed."""
+    store = MemoryFileStore()
+    ingested: list[tuple[str, str]] = []
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return json.dumps({"collection": "a", "source": "uploads/x.log"})
+
+    async def ingest(collection: str, path: str) -> str:
+        ingested.append((collection, path))
+        return "doc1"
+
+    wf = make_wf(store, drive_turn=drive_turn, _ingest=ingest)
+    await wf.write("/uploads/x.log", "data")
+    await record_decision(wf, phase="review", choice="approve")
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "config": {"collections": ["a"]},
+                "phases": [{"id": "classify"}, {"id": "review"}, {"id": "commit"}],
+                "steps": [
+                    {
+                        "type": "map",
+                        "name": "classify",
+                        "over": "uploads/*",
+                        "as": "file",
+                        "phase": "classify",
+                        "do": [
+                            {
+                                "type": "agent",
+                                "name": "plan",
+                                "prompt": "classify {file}",
+                                "phase": "classify",
+                                "outputs": {
+                                    "collection": {"type": "str", "enum": ["a"]},
+                                    "source": "str",
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "type": "gate",
+                        "phase": "review",
+                        "title": "Approve?",
+                        "summary_from": "{steps.classify.outputs}",
+                    },
+                    {
+                        "type": "map",
+                        "over": "{steps.classify.outputs}",
+                        "as": "p",
+                        "phase": "commit",
+                        "do": [
+                            {
+                                "type": "capability",
+                                "call": "ingest_to_collection",
+                                "phase": "commit",
+                                "collection": "{p.collection}",
+                                "path": "{p.source}",
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert ingested == [("a", "uploads/x.log")]
+
+
 async def test_run_gate_reject_stops_before_commit():
     store = MemoryFileStore()
     wf = make_wf(store)
@@ -549,8 +735,7 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
         return 0, "done"
 
     async def drive_turn(prompt: str, tools: list[str] | None) -> str:
-        await wf.write("/note.md", "content")
-        return "ok"
+        return "content"  # channel P: the reply IS the artifact content
 
     async def upsert(collection: str, keys: list[str], title: str, body: str) -> str:
         cards.append((collection, keys))
@@ -585,7 +770,7 @@ async def test_run_sandbox_and_agent_step_and_upsert_and_collection_has():
                         "prompt": "write note",
                         "phase": "p",
                         "name": "note",
-                        "check": {"file_nonempty": {"path": "note.md"}},
+                        "out": "note.md",
                     },
                     {
                         "type": "capability",

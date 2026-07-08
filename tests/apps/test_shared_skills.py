@@ -112,3 +112,20 @@ def test_validate_function_coherence_rejects_unknown_shared_skill(tmp_registry):
     )
     with pytest.raises(ValueError, match="ghost"):
         validate_function_coherence(manifest)
+
+
+def test_augment_author_workflow_appends_grammar_and_boundaries():
+    """plan §3.2: the purpose-only author-workflow skill body is augmented at load with the
+    machine-derived DSL grammar (P5) + this app's capability/tool boundaries (P6)."""
+    from workspace_app.apps.skills import augment_shared_skill_body
+
+    out = augment_shared_skill_body("author-workflow", "PURPOSE-ONLY", None, None)
+    assert "PURPOSE-ONLY" in out
+    assert "machine-derived reference" in out  # the grammar (P5)
+    assert "can and cannot do" in out  # the boundaries (P6)
+
+
+def test_augment_leaves_other_shared_skills_unchanged():
+    from workspace_app.apps.skills import augment_shared_skill_body
+
+    assert augment_shared_skill_body("author-skill", "BODY", "playground", "dsl") == "BODY"

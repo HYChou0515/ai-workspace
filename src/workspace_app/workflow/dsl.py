@@ -26,12 +26,12 @@ from typing import Any
 import msgspec
 from msgspec import Struct, field
 
-from .checks import choice_in, collection_has, file_nonempty
+from .checks import ARTIFACT_KINDS, choice_in, collection_has, file_nonempty
 from .engine import Check, CheckResult, StepFailed, _artifact_path
 from .gate import _decision_path, human_gate
 from .handle import WorkflowHandle
 from .manifest import WorkflowManifest, WorkflowPhase
-from .steps import agent_step, agent_write_step, sandbox_node
+from .steps import agent_write_step, sandbox_node
 
 # The capability calls a user DSL may invoke (manual §22, Q4). Each maps to a
 # ``WorkflowHandle`` method that runs under the captured user's authz; a ``sandbox``
@@ -104,6 +104,14 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     prompt: str
     phase: str
     out: str = ""
+    # plan §2.3: the artifact format of a channel-P ``out`` — its default gate is
+    # ``artifact_valid(out, kind)`` (structured kinds PARSE-validate; prose kinds check
+    # non-empty). Defaults to ``text`` (non-empty) when ``out`` is set without a ``kind``.
+    kind: str = ""
+    # plan §2.3 (L2, P3): a producer-declared structural contract on the prose ``out`` —
+    # ``contains`` (required substrings/headings) + ``min_length`` — folded into the default
+    # gate so a missing section fails and retries. Only valid on a channel-P (``out``) step.
+    requires: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     check: dict[str, Any] | None = None
     retries: int = 0
@@ -612,6 +620,11 @@ async def _build_check(spec: dict[str, Any], ns: dict[str, Any], wf: WorkflowHan
 async def _gate_summary(wf: WorkflowHandle, step: GateStep, ns: dict[str, Any]) -> Any:
     if not step.summary_from:
         return ""
+    # plan §2.1: a summary may be a single reference (e.g. ``{steps.classify.outputs}``) so a
+    # channel-D decision map can be reviewed at a gate WITHOUT also writing redundant files;
+    # otherwise it is a file glob whose matched files are shown.
+    if _TOKEN.fullmatch(step.summary_from.strip()):
+        return await _resolve(step.summary_from, ns, wf)
     summary: dict[str, Any] = {}
     for p in await wf.glob(await _resolve(step.summary_from, ns, wf)):
         summary[p] = await wf.read_json(p) if p.lower().endswith(".json") else await wf.read_text(p)
@@ -774,47 +787,35 @@ async def _exec_step(
             cache=step.cache,
         )
         return
-    # AgentStep
+    # AgentStep — validate_def guarantees exactly one output kind: ``outputs`` (channel D)
+    # XOR ``out``+``kind`` (channel P), §2.1. So every agent routes through agent_write_step.
     prompt = await _resolve(step.prompt, ns, wf)
     tools = step.tools or None
-    # #428 §1.2: an ``outputs`` step parses its reply into result.fields, gated on it;
-    # otherwise fall back to the author's ``check``.
+    # #428 §1.2: an ``outputs`` step parses its reply into result.fields, gated on it; a
+    # prose ``out`` step defaults to artifact_valid(out, kind) (plan §2.2) unless the
+    # author gives an explicit ``check``.
     if step.outputs:
         check: Check | None = _outputs_check(step.outputs)
     elif step.check:
         check = await _build_check(step.check, ns, wf)
     else:
         check = None
-    reads = await _resolve_reads(step.reads, ns, wf)
-    if step.out or step.outputs:
-        await agent_write_step(
-            wf,
-            prompt=prompt,
-            phase=step.phase,
-            out=await _resolve(step.out, ns, wf) if step.out else "",
-            tools=tools,
-            name=step.name or None,
-            key=key,
-            retries=step.retries,
-            check=check,
-            outputs=step.outputs or None,
-            reads=reads,
-            cache=step.cache,
-        )
-    else:  # plain agent_step — ``check`` is required (validate_def guarantees it)
-        assert check is not None
-        await agent_step(
-            wf,
-            prompt=prompt,
-            phase=step.phase,
-            check=check,
-            tools=tools,
-            name=step.name or None,
-            key=key,
-            retries=step.retries,
-            reads=reads,
-            cache=step.cache,
-        )
+    await agent_write_step(
+        wf,
+        prompt=prompt,
+        phase=step.phase,
+        out=await _resolve(step.out, ns, wf) if step.out else "",
+        kind=step.kind or "text",
+        requires=step.requires or None,
+        tools=tools,
+        name=step.name or None,
+        key=key,
+        retries=step.retries,
+        check=check,
+        outputs=step.outputs or None,
+        reads=await _resolve_reads(step.reads, ns, wf),
+        cache=step.cache,
+    )
 
 
 def build_run(d: WorkflowDef):
@@ -912,6 +913,25 @@ def _validate_outputs(outputs: dict[str, Any], where: str, errs: list[str]) -> N
             )
         if enum is not None and tname in ("list", "obj"):
             errs.append(f"{where}: output {name!r} enum is only allowed on scalar types")
+
+
+_REQUIRES_KEYS = ("contains", "min_length")
+
+
+def _validate_requires(requires: dict[str, Any], where: str, errs: list[str]) -> None:
+    """Static check of a channel-P ``requires`` contract (plan §2.3 L2): only known keys;
+    ``contains`` a list of strings; ``min_length`` a non-negative int."""
+    for k in requires:
+        if k not in _REQUIRES_KEYS:
+            errs.append(f"{where}: unknown 'requires' key {k!r} (one of {list(_REQUIRES_KEYS)})")
+    contains = requires.get("contains")
+    if contains is not None and not (
+        isinstance(contains, list) and all(isinstance(s, str) for s in contains)
+    ):
+        errs.append(f"{where}: 'requires.contains' must be a list of strings")
+    ml = requires.get("min_length")
+    if ml is not None and not (isinstance(ml, int) and not isinstance(ml, bool) and ml >= 0):
+        errs.append(f"{where}: 'requires.min_length' must be a non-negative integer")
 
 
 def _validate_check(
@@ -1098,14 +1118,31 @@ def _validate_step(
         _validate_outputs(step.outputs, where, errs)
         _validate_reads(step.reads, scope, where, errs, steps_seen)
         return
-    # AgentStep
+    # AgentStep — plan §2.1 (P2): exactly ONE output kind, so a node is either a
+    # structured decision (``outputs``, channel D) OR a prose artifact (``out``+``kind``,
+    # channel P), never both and never neither. This closes 'no verify' (a node with no
+    # output has no gate) and 'two output kinds in one turn' (unreliable on local models).
     if not step.prompt:
         errs.append(f"{where}: agent needs a 'prompt'")
-    if not step.out and not step.outputs and step.check is None:
+    if step.out and step.outputs:
         errs.append(
-            f"{where}: an agent step without 'out' needs a 'check' or 'outputs' "
-            "(a gate is mandatory, §5.1)"
+            f"{where}: an agent step declares ONE output kind — 'outputs' (structured "
+            "decision) XOR 'out'+'kind' (prose artifact), not both (plan §2.1)"
         )
+    elif not step.out and not step.outputs:
+        errs.append(
+            f"{where}: an agent step must produce an output — declare 'outputs' "
+            "(structured decision) or 'out'+'kind' (prose artifact) (plan §2.1)"
+        )
+    if step.requires:  # plan §2.3 L2: only on a channel-P ``out`` step, folds into its gate
+        if not step.out:
+            errs.append(f"{where}: 'requires' is only valid on a prose 'out' step (plan §2.3)")
+        if step.check is not None:
+            errs.append(
+                f"{where}: 'requires' folds into the default gate — use 'requires' OR a "
+                "custom 'check', not both"
+            )
+        _validate_requires(step.requires, where, errs)
     if step.retries < 0:
         errs.append(f"{where}: retries cannot be negative")
     if tool_ceiling is not None:
@@ -1360,6 +1397,77 @@ def validate_def(
     )
     _validate_revise(d.steps, errs)
     return errs
+
+
+# ─── authoring reference (machine-derived; plan §3.2 P5/P6) ───────────────────
+
+_STEP_CLASSES = (AgentStep, SandboxStep, GateStep, CapabilityStep, MapStep, SwitchStep)
+
+
+def _first_sentence(doc: str | None) -> str:
+    if not doc:  # pragma: no cover - every step Struct is documented; guards __doc__ is None
+        return ""
+    text = " ".join(doc.split())
+    end = text.find(". ")
+    return text[: end + 1] if end != -1 else text
+
+
+def describe_dsl_grammar() -> str:
+    """A machine-derived reference for authoring a ``workflow.json`` (plan §3.2, P5).
+    Derived from the schema — the step Structs + the capability/check/type registries — so
+    it never drifts from what the interpreter actually accepts, unlike a hand-maintained
+    list. The ``author-workflow`` skill stays purpose-only and appends this at load time."""
+    lines = [
+        "## Workflow DSL — machine-derived reference (always current)",
+        "",
+        'A workflow.json is: {"id", "title", "phases": [{"id","title"}], "config": {…}, '
+        '"steps": [ …ordered steps… ]}.',
+        "",
+        "Fill a value with a read-only lookup (no logic, no expressions): {config.X} (from "
+        "config), {inputs.Y} (from the trigger), {item} / {item.field} (the current map "
+        "element), or {steps.NAME.FIELD} (a named earlier step's declared output field).",
+        "",
+        'Each step\'s "type" is one of:',
+    ]
+    for cls in _STEP_CLASSES:
+        tag = cls.__struct_config__.tag
+        fields = msgspec.structs.fields(cls)
+        req = [f.encode_name for f in fields if f.required]
+        opt = [f.encode_name for f in fields if not f.required]
+        lines.append(f"- **{tag}** — {_first_sentence(cls.__doc__)}")
+        lines.append(f"  - required: {', '.join(req) or '(none)'}")
+        lines.append(f"  - optional: {', '.join(opt) or '(none)'}")
+    lines += [
+        "",
+        f"capability `call` ∈ {list(CAPABILITIES)}.",
+        f"deterministic `check` ∈ {list(_CHECKS)} (an agent may instead declare `outputs`).",
+        f'`outputs` field types ∈ {list(_OUTPUT_TYPES)} (optionally {{"type":…, "enum":[…]}}).',
+        f"prose `out` `kind` ∈ {list(ARTIFACT_KINDS)}; `requires` keys ∈ {list(_REQUIRES_KEYS)}.",
+        "An agent step declares exactly ONE output kind: `outputs` (structured) XOR "
+        "`out`+`kind` (prose).",
+    ]
+    return "\n".join(lines)
+
+
+def describe_workflow_boundaries(tool_ceiling: set[str] | None) -> str:
+    """What a workflow authored for this app can and cannot do (plan §3.2, P6): the agent-
+    step tool ceiling (save_workflow rejects anything outside it) and the available
+    capabilities. ``None`` ceiling ⇒ no per-profile clamp is known (all profile tools)."""
+    tools = (
+        "all of the profile's tools"
+        if tool_ceiling is None
+        else (", ".join(sorted(tool_ceiling)) or "(none)")
+    )
+    return "\n".join(
+        [
+            "## What a workflow here can and cannot do (this app)",
+            "",
+            f"- an `agent` step's `tools` must be within: {tools} "
+            "(save_workflow rejects anything outside — don't guess).",
+            f"- reliable side-effects go ONLY through a `capability`: {', '.join(CAPABILITIES)}.",
+            "- a `sandbox` step is compute-only (no credential); it cannot reach collections.",
+        ]
+    )
 
 
 # ─── stale-cache lint (#429 P1) ──────────────────────────────────────────────
