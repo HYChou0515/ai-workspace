@@ -209,6 +209,32 @@ def test_validate_phase_not_declared():
     )
 
 
+def test_describe_dsl_grammar_is_machine_derived_and_current():
+    """plan §3.2 (P5): the grammar reference is derived from the schema, so it stays
+    current — it must cover every step type + the reference model + the newer fields the
+    hand-written skill drifted away from."""
+    from workspace_app.workflow.dsl import describe_dsl_grammar
+
+    g = describe_dsl_grammar()
+    for step_type in ("agent", "sandbox", "gate", "capability", "map", "switch"):
+        assert step_type in g
+    for token in ("{steps.", "outputs", "requires", "kind", "revise_to", "over"):
+        assert token in g  # newer fields / reference model that drifted out of the skill
+    assert "ingest_to_collection" in g  # a capability, from the registry
+    assert "markdown" in g  # an artifact kind, from the registry
+
+
+def test_describe_workflow_boundaries_lists_ceiling_and_capabilities():
+    """plan §3.2 (P6): the per-app boundary tells the AI what it can/can't do."""
+    from workspace_app.workflow.dsl import describe_workflow_boundaries
+
+    b = describe_workflow_boundaries({"read_file", "ask_knowledge_base"})
+    assert "read_file" in b and "ask_knowledge_base" in b
+    assert "ingest_to_collection" in b  # available capabilities
+    # None ceiling → "all" wording, never a crash
+    assert describe_workflow_boundaries(None)
+
+
 def test_validate_agent_needs_prompt_output_and_nonneg_retries():
     errs = _errs([{"type": "agent", "prompt": "", "phase": "p", "retries": -1}])
     assert any("needs a 'prompt'" in e for e in errs)

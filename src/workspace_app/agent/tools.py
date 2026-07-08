@@ -1013,10 +1013,18 @@ async def read_skill_impl(ctx: RunContextWrapper[AgentToolContext], name: str) -
 
     # #298 Q7: a built-in (shared) skill the App opted into — author-skill etc.
     from ..apps.shared_skills import SHARED_SKILLS, load_shared_skill
+    from ..apps.skills import augment_shared_skill_body
 
     if name in SHARED_SKILLS:
         try:
-            return load_shared_skill(name)
+            # plan §3.2: author-workflow's static body is purpose-only; append the
+            # machine-derived DSL grammar + this app's capability/tool boundaries.
+            return augment_shared_skill_body(
+                name,
+                load_shared_skill(name),
+                ctx.context.app_slug,
+                ctx.context.template_profile,
+            )
         except SkillError as e:
             return f"error: {e}"
 

@@ -26,7 +26,7 @@ from typing import Any
 import msgspec
 from msgspec import Struct, field
 
-from .checks import choice_in, collection_has, file_nonempty
+from .checks import ARTIFACT_KINDS, choice_in, collection_has, file_nonempty
 from .engine import Check, CheckResult, StepFailed, _artifact_path
 from .gate import _decision_path, human_gate
 from .handle import WorkflowHandle
@@ -1397,6 +1397,77 @@ def validate_def(
     )
     _validate_revise(d.steps, errs)
     return errs
+
+
+# ─── authoring reference (machine-derived; plan §3.2 P5/P6) ───────────────────
+
+_STEP_CLASSES = (AgentStep, SandboxStep, GateStep, CapabilityStep, MapStep, SwitchStep)
+
+
+def _first_sentence(doc: str | None) -> str:
+    if not doc:
+        return ""
+    text = " ".join(doc.split())
+    end = text.find(". ")
+    return text[: end + 1] if end != -1 else text
+
+
+def describe_dsl_grammar() -> str:
+    """A machine-derived reference for authoring a ``workflow.json`` (plan §3.2, P5).
+    Derived from the schema — the step Structs + the capability/check/type registries — so
+    it never drifts from what the interpreter actually accepts, unlike a hand-maintained
+    list. The ``author-workflow`` skill stays purpose-only and appends this at load time."""
+    lines = [
+        "## Workflow DSL — machine-derived reference (always current)",
+        "",
+        'A workflow.json is: {"id", "title", "phases": [{"id","title"}], "config": {…}, '
+        '"steps": [ …ordered steps… ]}.',
+        "",
+        "Fill a value with a read-only lookup (no logic, no expressions): {config.X} (from "
+        "config), {inputs.Y} (from the trigger), {item} / {item.field} (the current map "
+        "element), or {steps.NAME.FIELD} (a named earlier step's declared output field).",
+        "",
+        'Each step\'s "type" is one of:',
+    ]
+    for cls in _STEP_CLASSES:
+        tag = cls.__struct_config__.tag
+        fields = msgspec.structs.fields(cls)
+        req = [f.encode_name for f in fields if f.required]
+        opt = [f.encode_name for f in fields if not f.required]
+        lines.append(f"- **{tag}** — {_first_sentence(cls.__doc__)}")
+        lines.append(f"  - required: {', '.join(req) or '(none)'}")
+        lines.append(f"  - optional: {', '.join(opt) or '(none)'}")
+    lines += [
+        "",
+        f"capability `call` ∈ {list(CAPABILITIES)}.",
+        f"deterministic `check` ∈ {list(_CHECKS)} (an agent may instead declare `outputs`).",
+        f'`outputs` field types ∈ {list(_OUTPUT_TYPES)} (optionally {{"type":…, "enum":[…]}}).',
+        f"prose `out` `kind` ∈ {list(ARTIFACT_KINDS)}; `requires` keys ∈ {list(_REQUIRES_KEYS)}.",
+        "An agent step declares exactly ONE output kind: `outputs` (structured) XOR "
+        "`out`+`kind` (prose).",
+    ]
+    return "\n".join(lines)
+
+
+def describe_workflow_boundaries(tool_ceiling: set[str] | None) -> str:
+    """What a workflow authored for this app can and cannot do (plan §3.2, P6): the agent-
+    step tool ceiling (save_workflow rejects anything outside it) and the available
+    capabilities. ``None`` ceiling ⇒ no per-profile clamp is known (all profile tools)."""
+    tools = (
+        "all of the profile's tools"
+        if tool_ceiling is None
+        else (", ".join(sorted(tool_ceiling)) or "(none)")
+    )
+    return "\n".join(
+        [
+            "## What a workflow here can and cannot do (this app)",
+            "",
+            f"- an `agent` step's `tools` must be within: {tools} "
+            "(save_workflow rejects anything outside — don't guess).",
+            f"- reliable side-effects go ONLY through a `capability`: {', '.join(CAPABILITIES)}.",
+            "- a `sandbox` step is compute-only (no credential); it cannot reach collections.",
+        ]
+    )
 
 
 # ─── stale-cache lint (#429 P1) ──────────────────────────────────────────────
