@@ -69,6 +69,7 @@ __all__ = [
     "get_spec",
     "get_sandbox",
     "get_filestore",
+    "get_sandbox_filestore",
     "get_runner",
     "get_agent_config_catalog",
     "get_app_catalog",
@@ -293,31 +294,50 @@ def get_sandbox(settings: Settings, tools_dir: Path | None = None) -> Sandbox:
 
 
 def get_filestore(settings: Settings, spec: SpecStar) -> FileStore:
+    """#501: the API's general (specstar) filestore — the durable blob store the
+    WorkspaceFile model, blob GC, and the #219 migration hang off, sharing specstar's
+    blob pool with KB/wiki. NOTE the sandbox's own durable store (incl. #492's
+    ``nfs_tree``) is built SEPARATELY by ``get_sandbox_filestore`` — selecting an
+    NFS workspace tree must never swap out this specstar filestore."""
     match settings.filestore.kind:
         case "memory":
             return MemoryFileStore()
         case "specstar":
             return SpecstarFileStore(spec)
-        case "nfs_tree":
-            return _build_nfs_tree_filestore(settings, spec)
         case other:
             raise ValueError(f"unknown filestore.kind: {other!r}")
 
 
-def _build_nfs_tree_filestore(settings: Settings, spec: SpecStar) -> FileStore:
-    """#492: the on-disk NFS-tree durable store, optionally wrapped in the M2
-    dual-read migration layer over the legacy specstar-blob store."""
-    fs = settings.filestore
-    if not fs.nfs_root:
-        raise ValueError("filestore.kind: nfs_tree requires filestore.nfs_root")
-    primary = NfsTreeFileStore(fs.nfs_root)
-    match fs.migrate_from:
+def get_sandbox_filestore(
+    settings: Settings, spec: SpecStar, api_filestore: FileStore
+) -> FileStore:
+    """#501/#492: the SANDBOX's durable workspace store — where a warm sandbox's files
+    persist and a cold wake restores from. Distinct from the API specstar filestore
+    (``api_filestore``), which is passed in so the ``nfs_tree`` M2 fallback REUSES that
+    one instance (no second ``SpecstarFileStore``).
+
+    - ``sandbox.durable.kind: ""`` (default) — follow the API filestore: return the
+      SAME ``api_filestore``, so existing deploys are unchanged.
+    - ``nfs_tree`` — a plain on-disk tree under ``nfs_root`` (host rsyncs to/from it);
+      ``migrate_from: specstar`` wraps it in the M2 dual-read layer over
+      ``api_filestore``."""
+    d = settings.sandbox.durable
+    match d.kind:
         case "":
-            return primary
-        case "specstar":
-            return MigratingFileStore(primary, SpecstarFileStore(spec))
+            return api_filestore
+        case "nfs_tree":
+            if not d.nfs_root:
+                raise ValueError("sandbox.durable.kind: nfs_tree requires sandbox.durable.nfs_root")
+            primary = NfsTreeFileStore(d.nfs_root)
+            match d.migrate_from:
+                case "":
+                    return primary
+                case "specstar":
+                    return MigratingFileStore(primary, api_filestore)
+                case other:
+                    raise ValueError(f"unknown sandbox.durable.migrate_from: {other!r}")
         case other:
-            raise ValueError(f"unknown filestore.migrate_from: {other!r}")
+            raise ValueError(f"unknown sandbox.durable.kind: {other!r}")
 
 
 def get_runner(settings: Settings) -> AgentRunner:

@@ -52,6 +52,7 @@ from .schema import (
     RetrievalLlmRef,
     RetrievalSettings,
     RunnerSettings,
+    SandboxDurableSettings,
     SandboxHostSettings,
     SandboxIsolationSettings,
     SandboxSettings,
@@ -358,9 +359,14 @@ def _dataclass_keys(cls) -> set[str]:
 _TOP_SCHEMA: dict[str, Any] = {
     "server": _dataclass_keys(ServerSettings),
     "sandbox": {
-        **{k: None for k in _dataclass_keys(SandboxSettings) if k not in ("http", "isolation")},
+        **{
+            k: None
+            for k in _dataclass_keys(SandboxSettings)
+            if k not in ("http", "isolation", "durable")
+        },
         "http": _dataclass_keys(HttpSandboxSettings),
         "isolation": _dataclass_keys(SandboxIsolationSettings),
+        "durable": _dataclass_keys(SandboxDurableSettings),
     },
     "sandbox_host": _dataclass_keys(SandboxHostSettings),
     "tools": _dataclass_keys(ToolsSettings),
@@ -721,19 +727,23 @@ def _build(cls, sub: dict[str, Any]):
 
 
 def _build_sandbox(d: dict[str, Any]) -> SandboxSettings:
-    """`sandbox` has two nested dataclasses (`http`, #345 `isolation`), so it
-    can't use the flat `_build`. `http` is None unless `kind: http` declares the
-    client block; `isolation` always builds (its own defaults when the operator
-    omits the block)."""
+    """`sandbox` has nested dataclasses (`http`, #345 `isolation`, #501 `durable`),
+    so it can't use the flat `_build`. `http` is None unless `kind: http` declares
+    the client block; `isolation` + `durable` always build (their own defaults when
+    the operator omits the block)."""
     http = d.get("http")
     iso = d.get("isolation")
-    flat = {k: v for k, v in d.items() if k not in ("http", "isolation")}
+    durable = d.get("durable")
+    flat = {k: v for k, v in d.items() if k not in ("http", "isolation", "durable")}
     return SandboxSettings(
         **flat,
         http=HttpSandboxSettings(**http) if http is not None else None,
         isolation=SandboxIsolationSettings(**iso)
         if iso is not None
         else SandboxIsolationSettings(),
+        durable=SandboxDurableSettings(**durable)
+        if durable is not None
+        else SandboxDurableSettings(),
     )
 
 

@@ -120,6 +120,29 @@ class SandboxIsolationSettings:
 
 
 @dataclass(frozen=True)
+class SandboxDurableSettings:
+    """#501: the SANDBOX's durable workspace store — kept DISTINCT from the API's
+    general `filestore` (the specstar blob store KB/wiki + WorkspaceFile registration
+    + blob GC share). #492's `nfs_tree` is a sandbox-scoped persistence mechanism, so
+    it lives here, NOT on the global `filestore.kind` (which stays specstar).
+
+    - ``kind: ""`` (default) — sandbox persistence FOLLOWS the API filestore
+      (`filestore.kind`); zero behaviour change for existing deploys.
+    - ``kind: nfs_tree`` — the durable workspace store is a plain on-disk tree under
+      ``nfs_root`` (a ReadWriteMany NFS mount) so the sandbox host can rsync a
+      sandbox's working dir straight to/from it. Pairs with
+      ``sandbox.http.host_managed_durable: true`` on the SAME tree.
+    - ``migrate_from: specstar`` — wraps the tree in the M2 dual-read migration layer
+      (read NFS, fall back to the API specstar filestore + lazy backfill) for a
+      zero-downtime cut-over; "" ⇒ bare tree (post-migration).
+    """
+
+    kind: str = ""  # "" (follow filestore.kind) | nfs_tree
+    nfs_root: str = ""
+    migrate_from: str = ""  # "" | specstar
+
+
+@dataclass(frozen=True)
 class SandboxSettings:
     kind: str = "local"  # local | docker | mock | http
     root: str | None = None  # null → tmpdir per sandbox
@@ -139,6 +162,9 @@ class SandboxSettings:
     max_workspace_bytes: int = 0
     # #345: per-item OS-user + cgroup isolation for the shared-vol local sandbox.
     isolation: SandboxIsolationSettings = field(default_factory=SandboxIsolationSettings)
+    # #501: the sandbox's durable workspace store (nfs_tree lives HERE, scoped to the
+    # sandbox — NOT on the global filestore.kind). Default "" ⇒ follow filestore.kind.
+    durable: SandboxDurableSettings = field(default_factory=SandboxDurableSettings)
     http: HttpSandboxSettings | None = None  # only when kind == "http"
 
 
@@ -167,18 +193,13 @@ class SandboxHostSettings:
 # ─── filestore ──────────────────────────────────────────────────────────
 @dataclass(frozen=True)
 class FilestoreSettings:
-    kind: str = "memory"  # memory | specstar | nfs_tree
+    # The API's general durable store (the specstar blob store KB/wiki + the
+    # WorkspaceFile model + blob GC all share). #501: the SANDBOX's durable store
+    # (incl. #492's nfs_tree) is configured SEPARATELY under `sandbox.durable`, so
+    # selecting an NFS workspace tree never swaps out this specstar filestore.
+    kind: str = "memory"  # memory | specstar
     pg_dsn: str = ""
     disk_root: str = ""
-    # #492: `kind: nfs_tree` — the durable workspace store is a plain on-disk
-    # tree under `nfs_root` (a ReadWriteMany NFS mount), so the sandbox host can
-    # rsync a sandbox's working dir straight to/from it (no per-file HTTP + DB
-    # write, which was the slow/hang-prone mirror). `migrate_from: specstar`
-    # wraps it in the M2 dual-read migration layer (read NFS, fall back to the
-    # specstar-blob store + lazy backfill) for a zero-downtime cut-over; "" ⇒
-    # bare tree (post-migration).
-    nfs_root: str = ""
-    migrate_from: str = ""  # "" | specstar
     # #208: libpq connect timeout (seconds) injected into pg_dsn so an
     # unreachable Postgres fails fast with a clear error instead of hanging the
     # boot silently for minutes at the first connection (specstar's engine sets

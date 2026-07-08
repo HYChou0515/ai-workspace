@@ -21,6 +21,7 @@ from workspace_app.config.schema import (
     FilestoreSettings,
     PresetLlmSettings,
     RetrievalLlmRef,
+    SandboxDurableSettings,
     SandboxSettings,
     Settings,
     ToolsSettings,
@@ -36,6 +37,7 @@ from workspace_app.factories import (
     get_kb_llm,
     get_runner,
     get_sandbox,
+    get_sandbox_filestore,
     get_spec,
     load_settings,
 )
@@ -277,58 +279,107 @@ def test_get_infer_modules_run_config_resolves_per_step_keys():
 
 
 def test_get_filestore_dispatch():
+    """#501: get_filestore is the API's SPECSTAR filestore — memory | specstar only.
+    nfs_tree is a sandbox-durable choice (get_sandbox_filestore), so it's rejected
+    here just like any other unknown kind."""
     spec = get_spec(Settings())
     mem = replace(Settings(), filestore=replace(FilestoreSettings(), kind="memory"))
     spec_fs = replace(Settings(), filestore=replace(FilestoreSettings(), kind="specstar"))
     bogus = replace(Settings(), filestore=replace(FilestoreSettings(), kind="bogus"))
+    nfs = replace(Settings(), filestore=replace(FilestoreSettings(), kind="nfs_tree"))
     assert isinstance(get_filestore(mem, spec), MemoryFileStore)
     assert isinstance(get_filestore(spec_fs, spec), SpecstarFileStore)
     with pytest.raises(ValueError):
         get_filestore(bogus, spec)
+    with pytest.raises(ValueError):  # nfs_tree no longer belongs on filestore.kind
+        get_filestore(nfs, spec)
 
 
-def test_get_filestore_nfs_tree(tmp_path):
-    """#492: kind: nfs_tree builds the on-disk tree store; migrate_from wraps it
-    in the M2 dual-read layer over specstar."""
+def test_get_sandbox_filestore_follows_api_filestore_by_default():
+    """#501: no sandbox.durable block ⇒ the sandbox durable store IS the API
+    specstar filestore (same instance) — zero behaviour change for existing deploys."""
     spec = get_spec(Settings())
+    api_fs = get_filestore(
+        replace(Settings(), filestore=replace(FilestoreSettings(), kind="specstar")), spec
+    )
+    settings = Settings()  # sandbox.durable.kind defaults to ""
+    assert get_sandbox_filestore(settings, spec, api_fs) is api_fs
+
+
+def test_get_sandbox_filestore_nfs_tree(tmp_path):
+    """#501/#492: sandbox.durable.kind: nfs_tree builds the on-disk tree; it does
+    NOT touch the API specstar filestore that was passed in."""
+    spec = get_spec(Settings())
+    api_fs = MemoryFileStore()
     bare = replace(
         Settings(),
-        filestore=replace(FilestoreSettings(), kind="nfs_tree", nfs_root=str(tmp_path / "nfs")),
-    )
-    assert isinstance(get_filestore(bare, spec), NfsTreeFileStore)
-
-    migrating = replace(
-        Settings(),
-        filestore=replace(
-            FilestoreSettings(),
-            kind="nfs_tree",
-            nfs_root=str(tmp_path / "nfs"),
-            migrate_from="specstar",
+        sandbox=replace(
+            SandboxSettings(),
+            durable=replace(
+                SandboxDurableSettings(), kind="nfs_tree", nfs_root=str(tmp_path / "nfs")
+            ),
         ),
     )
-    assert isinstance(get_filestore(migrating, spec), MigratingFileStore)
+    assert isinstance(get_sandbox_filestore(bare, spec, api_fs), NfsTreeFileStore)
 
 
-def test_get_filestore_nfs_tree_requires_root():
+def test_get_sandbox_filestore_nfs_tree_migrate_reuses_the_api_filestore(tmp_path):
+    """#501: migrate_from: specstar wraps the tree in the M2 layer — and the M2
+    fallback REUSES the passed-in API filestore instance (no second SpecstarFileStore)."""
     spec = get_spec(Settings())
-    no_root = replace(Settings(), filestore=replace(FilestoreSettings(), kind="nfs_tree"))
-    with pytest.raises(ValueError, match="nfs_root"):
-        get_filestore(no_root, spec)
-
-
-def test_get_filestore_nfs_tree_rejects_bad_migrate_from(tmp_path):
-    spec = get_spec(Settings())
-    bad = replace(
+    api_fs = SpecstarFileStore(spec)
+    migrating = replace(
         Settings(),
-        filestore=replace(
-            FilestoreSettings(),
-            kind="nfs_tree",
-            nfs_root=str(tmp_path / "nfs"),
-            migrate_from="bogus",
+        sandbox=replace(
+            SandboxSettings(),
+            durable=replace(
+                SandboxDurableSettings(),
+                kind="nfs_tree",
+                nfs_root=str(tmp_path / "nfs"),
+                migrate_from="specstar",
+            ),
+        ),
+    )
+    fs = get_sandbox_filestore(migrating, spec, api_fs)
+    assert isinstance(fs, MigratingFileStore)
+    assert fs._legacy is api_fs  # the fallback is the SAME api specstar filestore
+
+
+def test_get_sandbox_filestore_nfs_tree_requires_root():
+    spec = get_spec(Settings())
+    no_root = replace(
+        Settings(),
+        sandbox=replace(
+            SandboxSettings(), durable=replace(SandboxDurableSettings(), kind="nfs_tree")
+        ),
+    )
+    with pytest.raises(ValueError, match="nfs_root"):
+        get_sandbox_filestore(no_root, spec, MemoryFileStore())
+
+
+def test_get_sandbox_filestore_rejects_bad_kind_and_migrate_from(tmp_path):
+    spec = get_spec(Settings())
+    bad_migrate = replace(
+        Settings(),
+        sandbox=replace(
+            SandboxSettings(),
+            durable=replace(
+                SandboxDurableSettings(),
+                kind="nfs_tree",
+                nfs_root=str(tmp_path / "nfs"),
+                migrate_from="bogus",
+            ),
         ),
     )
     with pytest.raises(ValueError, match="migrate_from"):
-        get_filestore(bad, spec)
+        get_sandbox_filestore(bad_migrate, spec, MemoryFileStore())
+
+    bad_kind = replace(
+        Settings(),
+        sandbox=replace(SandboxSettings(), durable=replace(SandboxDurableSettings(), kind="bogus")),
+    )
+    with pytest.raises(ValueError, match="durable"):
+        get_sandbox_filestore(bad_kind, spec, MemoryFileStore())
 
 
 def test_get_spec_threads_superusers_from_settings():
