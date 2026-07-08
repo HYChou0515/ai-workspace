@@ -11,7 +11,10 @@ text use `collect()`, which still streams under the hood.
 from __future__ import annotations
 
 import abc
+import logging
 from collections.abc import Callable, Iterator
+
+_LOGGER = logging.getLogger(__name__)
 
 # Live-progress sink for streamed chunks: (text, is_reasoning).
 OnChunk = Callable[[str, bool], None]
@@ -26,18 +29,45 @@ class ILlm(abc.ABC):
         raise for an empty/garbage result — yield what you have."""
         ...
 
-    def collect(self, prompt: str, on_chunk: OnChunk | None = None) -> str:
+    def collect(
+        self, prompt: str, on_chunk: OnChunk | None = None, *, recover_reasoning: bool = False
+    ) -> str:
         """Drain ``stream()``: forward every chunk to ``on_chunk`` (so the live
-        thinking can be surfaced) and return the joined **non-reasoning**
-        content for the caller to parse. Built on ``stream()`` — not a separate
-        non-streaming call."""
-        out: list[str] = []
+        thinking can be surfaced) and return the joined **non-reasoning** content
+        for the caller to parse. Built on ``stream()`` — not a separate
+        non-streaming call.
+
+        ``recover_reasoning`` (#494) — a fallback for STRUCTURED callers that need
+        the model's answer even if it lands in the wrong channel. A vLLM reasoning
+        model can route its whole reply — the JSON the caller must parse — into
+        ``reasoning_content`` (classically when it hits ``max_tokens`` before the
+        closing ``</think>``, so no ``content`` delta ever arrives). With the flag
+        set, an EMPTY content channel falls back to the reasoning text (with a
+        WARNING) instead of returning ``""`` — which is what silently zeroed the
+        card-gen digest and reported a falsely-green run. Left OFF by default so
+        callers whose blank reply is a legitimate outcome (e.g. an LLM judge's
+        "no verdict") keep the strict content-only contract."""
+        content: list[str] = []
+        reasoning_only: list[str] = []
         for text, reasoning in self.stream(prompt):
             if on_chunk is not None:
                 on_chunk(text, reasoning)
-            if not reasoning:
-                out.append(text)
-        return "".join(out)
+            (reasoning_only if reasoning else content).append(text)
+        body = "".join(content)
+        if body.strip() or not recover_reasoning:
+            return body
+        thinking = "".join(reasoning_only)
+        if thinking.strip():
+            _LOGGER.warning(
+                "ILlm.collect: model emitted no content, only reasoning "
+                "(content_bytes=%d reasoning_bytes=%d) — recovering the answer from "
+                "the reasoning channel (vLLM routed the reply into reasoning_content, "
+                "e.g. max_tokens before </think>)",
+                len(body),
+                len(thinking),
+            )
+            return thinking
+        return body  # genuinely empty — nothing to recover
 
 
 class LitellmLlm(ILlm):

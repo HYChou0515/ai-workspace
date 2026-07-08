@@ -50,8 +50,13 @@ class LlmCardDrafter:
         self._max_cards = max_cards
 
     def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
+        # recover_reasoning (#494): a vLLM reasoning model can route the JSON reply
+        # into the reasoning channel (max_tokens before </think>), leaving content
+        # empty; recover it so the drafter parses the answer instead of silently
+        # digesting nothing.
         raw = self._llm.collect(
-            drafting_prompt(doc_text, doc_path=doc_path, template=self._template)
+            drafting_prompt(doc_text, doc_path=doc_path, template=self._template),
+            recover_reasoning=True,
         )
         return _parse_digest(raw, max_cards=self._max_cards)
 
