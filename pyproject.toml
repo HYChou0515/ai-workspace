@@ -50,9 +50,6 @@ dev = [
     "coverage>=7",
     "asgi-lifespan>=2.1.0",
     "pytest-xdist>=3.8.0",
-    # Generates CHANGELOG.md from Conventional Commits (#441). See cliff.toml +
-    # the `changelog-preview` / `release` Makefile targets.
-    "git-cliff>=2.0.0",
 ]
 # Documentation site (mkdocs + Material). Build: `uv run --group docs mkdocs build`;
 # serve locally: `uv run --group docs mkdocs serve`. Not needed by the app or the CI gate.
@@ -74,6 +71,7 @@ omit = [
     "src/workspace_app/__main__.py",
     "src/workspace_app/workflow/__main__.py",
     "src/workspace_app/worker/__main__.py",  # #312: settings-driven composition + CLI glue
+    "src/workspace_app/changelog/__main__.py",  # #441: git-log walk + file IO glue
 ]
 # parallel + sitecustomize's process_startup() let each pytest-xdist worker
 # subprocess record its own .coverage.* file; `coverage combine` merges them.
