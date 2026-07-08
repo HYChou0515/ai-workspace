@@ -97,10 +97,7 @@ def test_ignores_a_think_block_and_parses_the_real_object_after_it():
     # #494: a reasoning model may draft SCRATCH json inside <think>…</think>, then
     # emit the real answer. The naive first-"{" extractor grabbed the scratch; we
     # must strip the think span and parse the real object.
-    raw = (
-        '<think>let me draft {"cards": [{"keys": ["SCRATCH"], "title": "wrong"}]}</think>'
-        + _GOOD
-    )
+    raw = '<think>let me draft {"cards": [{"keys": ["SCRATCH"], "title": "wrong"}]}</think>' + _GOOD
     (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
     assert card.keys == ["M4", "Metal 4"]  # the REAL card, not the scratch
 
@@ -109,7 +106,7 @@ def test_recovers_json_from_unterminated_reasoning():
     # #494 recovery path: collect() hands back the reasoning text (the answer that
     # landed in the reasoning channel), which has an UNTERMINATED <think> — the
     # JSON must still be found, not stripped away.
-    raw = '<think>the answer is ' + _GOOD
+    raw = "<think>the answer is " + _GOOD
     (card,) = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="a.md", doc_text="...").cards
     assert card.keys == ["M4", "Metal 4"]
 
@@ -139,9 +136,7 @@ def test_a_parsed_but_empty_digest_warns(caplog):
     with caplog.at_level("WARNING"):
         d = LlmCardDrafter(_FakeLlm(raw)).digest(doc_path="empty.md", doc_text="...")
     assert (d.cards, d.term_questions, d.description_questions) == ([], [], [])
-    assert any(
-        "empty" in r.message.lower() and "empty.md" in r.message for r in caplog.records
-    )
+    assert any("empty" in r.message.lower() and "empty.md" in r.message for r in caplog.records)
 
 
 def test_cards_missing_keys_or_with_wrong_types_are_dropped():

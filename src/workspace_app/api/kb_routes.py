@@ -5,6 +5,7 @@ and the document render endpoint. Registered onto the app by `create_app`.
 from __future__ import annotations
 
 import asyncio
+import logging
 import posixpath
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime
@@ -61,6 +62,8 @@ from .permission_body import granted_user_ids as _granted_user_ids
 if TYPE_CHECKING:
     from ..kb.index_coordinator import IndexCoordinator
     from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _CollectionBody(BaseModel):
@@ -659,13 +662,32 @@ def register_kb_routes(
         assert isinstance(coll, Collection)
         created_by = rm.get_meta(collection_id).created_by
         actor = _actor()
+        vis = coll.permission.visibility if coll.permission is not None else "public(none)"
         if not authorize(
             actor, "read_meta", coll.permission, created_by=created_by, superusers=superusers
         ):
+            # #494 observability: a deny on the permission gate now says who/why so a
+            # future "why is this 404?" is diagnosable without code archaeology.
+            _LOGGER.warning(
+                "authorize deny 404: collection_id=%s actor=%s verb=read_meta "
+                "visibility=%s created_by=%s",
+                collection_id,
+                actor.user_id,
+                vis,
+                created_by,
+            )
             raise HTTPException(status_code=404, detail="collection not found")
         if not authorize(
             actor, verb, coll.permission, created_by=created_by, superusers=superusers
         ):
+            _LOGGER.warning(
+                "authorize deny 403: collection_id=%s actor=%s verb=%s visibility=%s created_by=%s",
+                collection_id,
+                actor.user_id,
+                verb,
+                vis,
+                created_by,
+            )
             raise HTTPException(status_code=403, detail=f"not authorized to {verb}")
         return coll, created_by
 
@@ -679,6 +701,7 @@ def register_kb_routes(
         so the collection owner / a superuser bypass; a doc with no override
         (``permission is None`` ≡ public) passes both."""
         actor = _actor()
+        override_vis = doc.permission.visibility if doc.permission is not None else "none"
         if not authorize(
             actor,
             "read_meta",
@@ -686,6 +709,14 @@ def register_kb_routes(
             created_by=doc.collection_created_by,
             superusers=superusers,
         ):
+            _LOGGER.warning(
+                "authorize deny 404 (doc override): doc_id=%s actor=%s verb=read_meta "
+                "override_visibility=%s collection_created_by=%s",
+                doc.path,
+                actor.user_id,
+                override_vis,
+                doc.collection_created_by,
+            )
             raise HTTPException(status_code=404, detail="document not found")
         if not authorize(
             actor,
@@ -694,6 +725,14 @@ def register_kb_routes(
             created_by=doc.collection_created_by,
             superusers=superusers,
         ):
+            _LOGGER.warning(
+                "authorize deny 403 (doc override): doc_id=%s actor=%s verb=read_content "
+                "override_visibility=%s collection_created_by=%s",
+                doc.path,
+                actor.user_id,
+                override_vis,
+                doc.collection_created_by,
+            )
             raise HTTPException(status_code=403, detail="not authorized to read_content")
 
     @app.get("/kb/collections")

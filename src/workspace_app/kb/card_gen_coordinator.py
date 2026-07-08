@@ -465,9 +465,7 @@ class CardGenCoordinator:
         # #494 observability: one structured line records the whole funnel so a run
         # that produced nothing (0 proposals over N text-bearing docs) is
         # diagnosable end-to-end without re-deriving it from scattered state.
-        n_questions = sum(
-            len(d.term_questions) + len(d.description_questions) for _, d in per_doc
-        )
+        n_questions = sum(len(d.term_questions) + len(d.description_questions) for _, d in per_doc)
         _LOGGER.info(
             "CardGen finalize: run=%s n_units=%d n_raw_drafts=%d n_proposals=%d "
             "n_questions=%d total=%d done=%d failed=%d final_status=%s",
