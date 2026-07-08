@@ -108,6 +108,10 @@ class AgentStep(Struct, tag="agent", forbid_unknown_fields=True):
     # ``artifact_valid(out, kind)`` (structured kinds PARSE-validate; prose kinds check
     # non-empty). Defaults to ``text`` (non-empty) when ``out`` is set without a ``kind``.
     kind: str = ""
+    # plan §2.3 (L2, P3): a producer-declared structural contract on the prose ``out`` —
+    # ``contains`` (required substrings/headings) + ``min_length`` — folded into the default
+    # gate so a missing section fails and retries. Only valid on a channel-P (``out``) step.
+    requires: dict[str, Any] = field(default_factory=dict)
     tools: list[str] = field(default_factory=list)
     check: dict[str, Any] | None = None
     retries: int = 0
@@ -802,6 +806,7 @@ async def _exec_step(
         phase=step.phase,
         out=await _resolve(step.out, ns, wf) if step.out else "",
         kind=step.kind or "text",
+        requires=step.requires or None,
         tools=tools,
         name=step.name or None,
         key=key,
@@ -908,6 +913,25 @@ def _validate_outputs(outputs: dict[str, Any], where: str, errs: list[str]) -> N
             )
         if enum is not None and tname in ("list", "obj"):
             errs.append(f"{where}: output {name!r} enum is only allowed on scalar types")
+
+
+_REQUIRES_KEYS = ("contains", "min_length")
+
+
+def _validate_requires(requires: dict[str, Any], where: str, errs: list[str]) -> None:
+    """Static check of a channel-P ``requires`` contract (plan §2.3 L2): only known keys;
+    ``contains`` a list of strings; ``min_length`` a non-negative int."""
+    for k in requires:
+        if k not in _REQUIRES_KEYS:
+            errs.append(f"{where}: unknown 'requires' key {k!r} (one of {list(_REQUIRES_KEYS)})")
+    contains = requires.get("contains")
+    if contains is not None and not (
+        isinstance(contains, list) and all(isinstance(s, str) for s in contains)
+    ):
+        errs.append(f"{where}: 'requires.contains' must be a list of strings")
+    ml = requires.get("min_length")
+    if ml is not None and not (isinstance(ml, int) and not isinstance(ml, bool) and ml >= 0):
+        errs.append(f"{where}: 'requires.min_length' must be a non-negative integer")
 
 
 def _validate_check(
@@ -1110,6 +1134,15 @@ def _validate_step(
             f"{where}: an agent step must produce an output — declare 'outputs' "
             "(structured decision) or 'out'+'kind' (prose artifact) (plan §2.1)"
         )
+    if step.requires:  # plan §2.3 L2: only on a channel-P ``out`` step, folds into its gate
+        if not step.out:
+            errs.append(f"{where}: 'requires' is only valid on a prose 'out' step (plan §2.3)")
+        if step.check is not None:
+            errs.append(
+                f"{where}: 'requires' folds into the default gate — use 'requires' OR a "
+                "custom 'check', not both"
+            )
+        _validate_requires(step.requires, where, errs)
     if step.retries < 0:
         errs.append(f"{where}: retries cannot be negative")
     if tool_ceiling is not None:

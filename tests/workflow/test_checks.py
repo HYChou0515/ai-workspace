@@ -83,3 +83,27 @@ async def test_artifact_valid_markdown_passes_any_nonempty(wf: WorkflowHandle):
     structural strength comes from a producer-declared 'requires' (plan §2.3 L2)."""
     await wf.write("/report.md", "# Report\n\nbody")
     assert (await artifact_valid("/report.md", "markdown")(wf, None)).ok
+
+
+async def test_artifact_valid_requires_contains_missing_section_fails(wf: WorkflowHandle):
+    """L2 (plan §2.3, P3): the producer declares required structure — a missing section
+    fails the gate, feeding the reason back so the model adds it on retry."""
+    await wf.write("/report.md", "# Report\n\nsome body without the section")
+    verdict = await artifact_valid("/report.md", "markdown", {"contains": ["## Summary"]})(
+        wf, None
+    )
+    assert not verdict.ok
+    assert "## Summary" in verdict.reason
+
+
+async def test_artifact_valid_requires_contains_and_min_length_pass(wf: WorkflowHandle):
+    await wf.write("/report.md", "# Report\n\n## Summary\n\nA sufficiently long body here.")
+    check = artifact_valid("/report.md", "markdown", {"contains": ["## Summary"], "min_length": 20})
+    assert (await check(wf, None)).ok
+
+
+async def test_artifact_valid_requires_min_length_fails_when_too_short(wf: WorkflowHandle):
+    await wf.write("/report.md", "tiny")
+    verdict = await artifact_valid("/report.md", "markdown", {"min_length": 100})(wf, None)
+    assert not verdict.ok
+    assert "100" in verdict.reason

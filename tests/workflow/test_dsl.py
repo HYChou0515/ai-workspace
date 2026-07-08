@@ -232,6 +232,42 @@ def test_validate_agent_rejects_both_output_kinds():
     assert any("not both" in e for e in errs)
 
 
+def test_validate_requires_only_on_prose_out():
+    """§2.3 (P3): a producer 'requires' contract is a channel-P (prose 'out') concept —
+    declaring it on a structured 'outputs' step is a static error."""
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "prompt": "p",
+                "phase": "p",
+                "outputs": {"x": "str"},
+                "requires": {"contains": ["#"]},
+            }
+        ]
+    )
+    assert any("only valid on a prose 'out'" in e for e in errs)
+
+
+def test_validate_requires_rejects_custom_check_and_bad_shape():
+    errs = _errs(
+        [
+            {
+                "type": "agent",
+                "prompt": "p",
+                "phase": "p",
+                "out": "r.md",
+                "kind": "markdown",
+                "check": {"file_nonempty": {"path": "r.md"}},
+                "requires": {"contains": "x", "bogus": 1},
+            }
+        ]
+    )
+    assert any("not both" in e for e in errs)  # requires + custom check
+    assert any("must be a list of strings" in e for e in errs)  # contains shape
+    assert any("unknown 'requires' key" in e for e in errs)  # bogus key
+
+
 def test_validate_agent_tool_ceiling():
     errs = _errs(
         [
@@ -503,6 +539,41 @@ async def test_run_produce_gate_commit_happy_path():
     result = await build_run(d)(wf, None)
     assert result == {"status": "done"}
     assert ingested == [("a", "/uploads/a.log")]
+
+
+async def test_run_requires_retries_until_the_structure_is_present():
+    """§2.3 (P3): a prose 'out' with a 'requires' contract fails until the artifact has the
+    required structure, feeding the reason back so the model adds it on retry."""
+    store = MemoryFileStore()
+    replies = iter(["# Report\n\nno summary yet", "# Report\n\n## Summary\n\ndone"])
+
+    async def drive_turn(prompt: str, tools: list[str] | None) -> str:
+        return next(replies)
+
+    wf = make_wf(store, drive_turn=drive_turn)
+    d = parse_def(
+        json.dumps(
+            {
+                "id": "wf",
+                "phases": [{"id": "draft"}],
+                "steps": [
+                    {
+                        "type": "agent",
+                        "name": "draft",
+                        "prompt": "write report",
+                        "phase": "draft",
+                        "out": "report.md",
+                        "kind": "markdown",
+                        "requires": {"contains": ["## Summary"]},
+                        "retries": 2,
+                    }
+                ],
+            }
+        )
+    )
+    assert validate_def(d) == []
+    assert await build_run(d)(wf, None) == {"status": "done"}
+    assert "## Summary" in await wf.read_text("/report.md")
 
 
 async def test_run_gate_summary_from_structured_outputs_reference():

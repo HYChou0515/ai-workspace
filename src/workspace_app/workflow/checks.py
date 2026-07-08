@@ -55,12 +55,27 @@ def _valid_csv(text: str) -> str:
     return ""
 
 
-def artifact_valid(path: str, kind: str) -> Check:
-    """The channel-P (prose ``out``) default gate (plan §2.3 L1): the written file exists,
-    is non-empty, and — for a structured ``kind`` — PARSES as that format. It never
-    rewrites the file (no sanitize, plan §2.4): a polluted artifact FAILS the gate and its
-    reason is fed back into the step's retry, so the model re-produces clean output at the
-    source instead of the platform silently munging it."""
+def _requires_problem(text: str, requires: dict[str, Any]) -> str:
+    """A producer-declared L2 structural contract on a prose artifact (plan §2.3 L2): a
+    deterministic 'does it have the structure the downstream needs' check. ``contains`` is
+    substrings (e.g. required headings) that must all appear; ``min_length`` is the minimum
+    non-whitespace length. Empty ⇒ no L2 constraint (L1 only)."""
+    for needle in requires.get("contains", ()):
+        if needle not in text:
+            return f"is missing the required section/text {needle!r}"
+    min_length = requires.get("min_length")
+    if min_length is not None and len(text.strip()) < min_length:
+        return f"is shorter than the required {min_length} characters"
+    return ""
+
+
+def artifact_valid(path: str, kind: str, requires: dict[str, Any] | None = None) -> Check:
+    """The channel-P (prose ``out``) default gate: the written file exists, is non-empty,
+    and — for a structured ``kind`` — PARSES as that format (L1, plan §2.3), and satisfies
+    the producer-declared ``requires`` structural contract (L2). It never rewrites the file
+    (no sanitize, plan §2.4): a polluted or under-structured artifact FAILS the gate and its
+    reason is fed back into the step's retry, so the model re-produces a clean, conforming
+    artifact at the source instead of the platform silently munging it."""
 
     async def _check(wf: WorkflowHandle, _result: Any) -> CheckResult:
         try:
@@ -77,6 +92,8 @@ def artifact_valid(path: str, kind: str) -> Check:
             problem = _valid_yaml(text)
         elif kind == "csv":
             problem = _valid_csv(text)
+        if not problem and requires:
+            problem = _requires_problem(text, requires)
         if problem:
             return CheckResult(False, f"file {path} {problem}")
         return CheckResult(True)

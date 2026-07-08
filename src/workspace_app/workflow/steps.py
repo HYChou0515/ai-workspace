@@ -122,6 +122,7 @@ async def agent_write_step(
     phase: str,
     out: str = "",
     kind: str = "text",
+    requires: dict[str, Any] | None = None,
     name: str | None = None,
     key: str = "",
     tools: list[str] | None = None,
@@ -173,6 +174,7 @@ async def agent_write_step(
         "tools": tools,
         "out": out,
         "kind": kind,
+        "requires": requires,
         "outputs": outputs,
         "phase": phase,
     }
@@ -186,7 +188,7 @@ async def agent_write_step(
         phase=phase,
         args=args,
         execute=execute,
-        check=check or artifact_valid(out, kind),
+        check=check or artifact_valid(out, kind, requires),
         retries=retries,
         cache=cache,
     )
