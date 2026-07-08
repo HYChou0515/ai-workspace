@@ -107,12 +107,20 @@
 #     memory_max: 512M         # per-item cgroup memory.max
 #     cpu_cores: 1.0           # per-item cgroup cpu.max
 #     pids_max: 512            # per-item cgroup pids.max
+#   # #501/#492: the SANDBOX's durable workspace store — DISTINCT from the API's
+#   # `filestore` (the specstar blob store KB/wiki + WorkspaceFile + blob GC share).
+#   # Selecting an NFS workspace tree here never swaps out that specstar filestore.
+#   durable:
+#     kind: ""                 # "" = follow filestore.kind (default; no change)
+#                              # nfs_tree = on-disk tree the host rsyncs to/from
+#     nfs_root: ""             # required for nfs_tree: the ReadWriteMany NFS mount
+#     migrate_from: ""         # "" | specstar (M2 dual-read + lazy backfill cut-over)
 #   # kind: http — run sandboxes in a separate host pod (see sandbox_host).
 #   # http:
 #   #   base_url: http://sandbox-host:8000   # the host's ClusterIP Service
 #   #   read_timeout: 0          # 0 = no HTTP read deadline for exec (host bounds it)
 #   #   host_managed_durable: false  # #492 true ⇒ host owns durable (NFS rsync);
-#   #                                # pair with filestore.kind: nfs_tree on the SAME tree
+#   #                                # pair with sandbox.durable.kind: nfs_tree on the SAME tree
 #   #   # #492 busy-host (read-timeout) retry for the idempotent file ops: each try
 #   #   # gets a longer read deadline + backoff, capped, then fails loud (no rebuild
 #   #   # of a live-but-busy sandbox, no cold write). Defaults are sane — tune if hot.
