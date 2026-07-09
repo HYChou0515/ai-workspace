@@ -55,6 +55,8 @@ class ReviewQuestionOut(BaseModel):
 class ReviewInboxOut(BaseModel):
     cards: list[ReviewCardOut]
     questions: list[ReviewQuestionOut]
+    total: int = 0  # full filtered count across both streams (for "showing X of N")
+    total_actionable: int = 0  # actionable count over the whole set (the nav badge)
 
 
 def _card_out(item: ReviewCardItem) -> ReviewCardOut:
@@ -90,18 +92,35 @@ def register_review_inbox_routes(
         return Actor.human(me, groups=groups_of(spec, me))
 
     @app.get("/kb/review-inbox")
-    def review_inbox(resolved: bool = False, collection_id: str | None = None) -> ReviewInboxOut:
-        """#481: the global review inbox — pending items across every readable
+    def review_inbox(
+        resolved: bool = False,
+        collection_id: str | None = None,
+        kind: str = "all",
+        q: str = "",
+        actionable: bool = False,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> ReviewInboxOut:
+        """#481/#506: the review inbox — pending items across every readable
         collection (``resolved=true`` = the handled-item history; ``collection_id``
-        scopes it to one collection's 待審核 tab)."""
+        scopes it to one collection's 待審核 tab). Server-side ``kind``/``q``/
+        ``actionable`` filters + ``limit``/``offset`` paging keep the FE from loading
+        thousands of rows; ``total``/``total_actionable`` report the full counts."""
         inbox = build_review_inbox(
             spec,
             actor=_actor(),
             superusers=superusers,
             resolved=resolved,
             collection_id=collection_id,
+            kind=kind,
+            q=q,
+            actionable=actionable,
+            limit=limit,
+            offset=offset,
         )
         return ReviewInboxOut(
             cards=[_card_out(i) for i in inbox.cards],
             questions=[_question_out(i) for i in inbox.questions],
+            total=inbox.total,
+            total_actionable=inbox.total_actionable,
         )

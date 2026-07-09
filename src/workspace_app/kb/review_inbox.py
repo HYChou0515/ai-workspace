@@ -63,15 +63,32 @@ class ReviewQuestionItem(msgspec.Struct):
 
 
 class ReviewInbox(msgspec.Struct):
-    """The aggregated inbox: card proposals + questions, each newest-first."""
+    """One page of the aggregated inbox: card proposals + questions (the current
+    slice, each newest-first), plus ``total`` — the full filtered count across both
+    streams so the FE can render "showing X of N" and page without loading it all."""
 
     cards: list[ReviewCardItem]
     questions: list[ReviewQuestionItem]
+    total: int = 0
+    total_actionable: int = 0
 
 
 class _CollCtx(msgspec.Struct):
     name: str
     can_act: bool
+
+
+def _row_matches(item: ReviewCardItem | ReviewQuestionItem, needle: str) -> bool:
+    """Whether a row's text contains the (already lower-cased) ``needle`` — mirrors
+    the FE's free-text filter so server-side ``q`` search matches what the user
+    typed: a card's title/body/keys, a question's term/text/quote."""
+    if isinstance(item, ReviewCardItem):
+        c = item.card
+        haystack = [c.title, c.body, *c.keys]
+    else:
+        query = item.question
+        haystack = [query.term, query.question_text, query.quote]
+    return any(needle in field.lower() for field in haystack)
 
 
 def _readable_collections(
@@ -107,30 +124,67 @@ def build_review_inbox(
     superusers: frozenset[str] = frozenset(),
     resolved: bool = False,
     collection_id: str | None = None,
+    kind: str = "all",
+    q: str = "",
+    actionable: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> ReviewInbox:
     """Aggregate every pending-review item (or, with ``resolved``, the history of
     handled ones) the ``actor`` may see, newest first. ``collection_id`` scopes it
     to one collection (the per-collection 待審核 tab reuses this). Items in
     collections the actor can't read are dropped; each surviving item carries
-    ``can_act`` so the FE renders read-only rows where the actor lacks write."""
+    ``can_act`` so the FE renders read-only rows where the actor lacks write.
+
+    ``kind`` (``"all"`` | ``"cards"`` | ``"questions"``) narrows the page to one
+    stream so the FE need not fetch the other. ``q`` is a case-insensitive substring
+    over each row's text (card title/body/keys, question term/text/quote), applied
+    to the *whole* set so a match anywhere still surfaces. ``limit``/``offset`` page
+    the *unified* newest-first stream (cards + questions merged), so the FE renders
+    one page instead of thousands of rows; ``total`` on the result still reports the
+    full filtered count. ``limit=None`` returns the whole (offset-onward) stream —
+    the pre-pagination behaviour."""
     readable = _readable_collections(spec, actor, superusers)
     if collection_id is not None:
         readable = {cid: ctx for cid, ctx in readable.items() if cid == collection_id}
 
-    cards = _card_items(spec, readable, resolved)
-    questions = _question_items(spec, readable, resolved)
-    cards.sort(key=lambda i: i.created_time, reverse=True)
-    questions.sort(key=lambda i: i.created_time, reverse=True)
-    return ReviewInbox(cards=cards, questions=questions)
+    merged: list[ReviewCardItem | ReviewQuestionItem] = []
+    if kind != "questions":
+        merged.extend(_card_items(spec, readable, resolved, collection_id=collection_id))
+    if kind != "cards":
+        merged.extend(_question_items(spec, readable, resolved))
+    if q:
+        needle = q.lower()
+        merged = [i for i in merged if _row_matches(i, needle)]
+    # ``total_actionable`` counts what the actor may write over the whole filtered
+    # set (the nav badge reads it from an empty page); computed BEFORE the
+    # ``actionable`` filter narrows the rows.
+    total_actionable = sum(1 for i in merged if i.can_act)
+    if actionable:
+        merged = [i for i in merged if i.can_act]
+    merged.sort(key=lambda i: i.created_time, reverse=True)  # newest first, across both streams
+    total = len(merged)
+    page = merged[offset:] if limit is None else merged[offset : offset + limit]
+    return ReviewInbox(
+        cards=[i for i in page if isinstance(i, ReviewCardItem)],
+        questions=[i for i in page if isinstance(i, ReviewQuestionItem)],
+        total=total,
+        total_actionable=total_actionable,
+    )
 
 
 def _card_items(
-    spec: SpecStar, readable: dict[str, _CollCtx], resolved: bool
+    spec: SpecStar,
+    readable: dict[str, _CollCtx],
+    resolved: bool,
+    collection_id: str | None = None,
 ) -> list[ReviewCardItem]:
     store = CardGenRunStore(spec)
     statuses = _RESOLVED_RUN_STATUSES if resolved else _PENDING_RUN_STATUSES
     items: list[ReviewCardItem] = []
-    for run_id, created, run in store.runs_by_status(statuses):
+    # #506: when the inbox is scoped to one collection, push that into the indexed
+    # query so we read only its runs instead of scanning every collection's.
+    for run_id, created, run in store.runs_by_status(statuses, collection_id=collection_id):
         ctx = readable.get(run.collection_id)
         if ctx is None:
             continue  # collection not readable by this user

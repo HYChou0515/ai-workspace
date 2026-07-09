@@ -77,6 +77,36 @@ def test_review_inbox_hides_unreadable_and_flags_readonly():
     assert body["cards"][0]["can_act"] is False  # read but not write
 
 
+def test_review_inbox_paginates_and_filters_server_side():
+    """P1 (#506): the route pages (``limit``) and filters (``kind``/``q``) on the
+    server, and reports ``total`` / ``total_actionable`` so the FE renders one page
+    with "X of N" and the nav badge without loading every row."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _seed_done_run(
+        spec,
+        cid,
+        [
+            ProposedCard(keys=["RZ3"], title="RZ3"),
+            ProposedCard(keys=["RZ4"], title="RZ4"),
+            ProposedCard(keys=["RZ5"], title="RZ5"),
+        ],
+    )
+    client = _client(spec)
+
+    page = client.get("/kb/review-inbox", params={"limit": 2}).json()
+    assert len(page["cards"]) + len(page["questions"]) == 2  # a single capped page
+    assert page["total"] == 3
+    assert page["total_actionable"] == 3  # owner may act on all
+
+    only_q = client.get("/kb/review-inbox", params={"kind": "questions"}).json()
+    assert only_q["cards"] == [] and only_q["total"] == 0
+
+    hit = client.get("/kb/review-inbox", params={"q": "rz4"}).json()
+    assert [c["card"]["keys"][0] for c in hit["cards"]] == ["RZ4"]
+    assert hit["total"] == 1
+
+
 def test_review_inbox_resolved_view_and_collection_scope():
     """#481: ``resolved=true`` returns handled items; ``collection_id`` scopes it."""
     spec = make_spec(default_user="u")

@@ -278,3 +278,16 @@ def test_cas_retries_when_a_concurrent_writer_wins_the_race(monkeypatch):
     store.mark_done(run_id, 0)
     assert calls["n"] == 2  # retried once, then succeeded
     assert _get(store, run_id).done == [0]
+
+
+def test_runs_by_status_scopes_to_one_collection_via_the_index():
+    """P1: the per-collection review path queries CardGenRun by the indexed
+    ``(collection_id, status)`` — only that collection's runs surface, so the inbox
+    no longer scans every collection's runs to serve one collection's 待審核 tab."""
+    spec = make_spec(default_user="u")
+    store = CardGenRunStore(spec)
+    r1 = _done_run(store, "c1", [ProposedCard(keys=["A"])])
+    _done_run(store, "c2", [ProposedCard(keys=["B"])])
+    scoped = store.runs_by_status(["done"], collection_id="c1")
+    assert [rid for rid, _created, _run in scoped] == [r1]
+    assert all(run.collection_id == "c1" for _rid, _created, run in scoped)

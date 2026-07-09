@@ -172,13 +172,19 @@ class CardGenRunStore:
             ),
         )
 
-    def runs_by_status(self, statuses: list[str]) -> list[tuple[str, float, CardGenRun]]:
+    def runs_by_status(
+        self, statuses: list[str], *, collection_id: str | None = None
+    ) -> list[tuple[str, float, CardGenRun]]:
         """Every run in one of ``statuses``, as ``(run_id, created_epoch, run)``,
-        newest first — the global 審核 inbox's card-gen source (#481). One indexed
-        ``status`` query (``in_``), so it never scans; the caller filters to the
-        user's readable collections in Python (``collection_id`` isn't indexed)."""
+        newest first — the 審核 inbox's card-gen source (#481). One indexed
+        ``status`` query (``in_``), so it never scans. ``collection_id`` (#506) adds
+        the indexed ``collection_id`` predicate so the per-collection 待審核 tab
+        reads only that collection's runs instead of every collection's."""
+        query = QB["status"].in_(statuses)
+        if collection_id is not None:
+            query = (QB["collection_id"] == collection_id) & query
         rows: list[tuple[str, float, CardGenRun]] = []
-        for r in self._rm.list_resources(QB["status"].in_(statuses).build()):
+        for r in self._rm.list_resources(query.build()):
             d = r.data
             assert isinstance(d, CardGenRun)  # rm is CardGenRun-typed; narrows for ty
             rows.append(

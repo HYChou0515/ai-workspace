@@ -430,7 +430,9 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # would cycle (resources → kb.card_gen → kb.context_cards → resources).
     from ..kb.card_gen import CardGenRun, CardGenUnit
 
-    spec.add_model(CardGenRun, indexed_fields=["status"])
+    # #506: ``collection_id`` indexed so the per-collection 待審核 tab queries
+    # ``(collection_id, status)`` instead of scanning every collection's runs.
+    spec.add_model(CardGenRun, indexed_fields=["status", "collection_id"])
     # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
     # to merge + raise questions from). Transient; deleted at finalize.
     spec.add_model(CardGenUnit, indexed_fields=["run_id"])
