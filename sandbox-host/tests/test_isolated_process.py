@@ -244,6 +244,22 @@ async def test_own_never_chowns_a_path_outside_the_workspace(isolated, tmp_path)
     assert isolated.chown_calls == []
 
 
+async def test_reown_recursively_chowns_the_restored_workspace(isolated):
+    # The host's bulk rsync restore writes files as root, bypassing per-write
+    # `_own`; `reown` must recursively re-own the whole tree to the sandbox uid.
+    h = await isolated.create(SandboxSpec())
+    ws = isolated._workspace(h)
+    (ws / "sub").mkdir()
+    (ws / "sub" / "f.txt").write_bytes(b"x")
+    (ws / "top.txt").write_bytes(b"y")
+    isolated.chown_calls.clear()
+    await isolated.reown(h)
+    uid = _uid_of(isolated, h)
+    owned = {p for p, _ in isolated.chown_calls}
+    assert {ws, ws / "sub", ws / "sub" / "f.txt", ws / "top.txt"} <= owned
+    assert all(u == uid for _, u in isolated.chown_calls)
+
+
 def test_run_chown_calls_oschown_with_uid_and_unchanged_gid(monkeypatch, tmp_path):
     calls: list[tuple[Path, int, int]] = []
     monkeypatch.setattr(os, "chown", lambda p, u, g: calls.append((p, u, g)))

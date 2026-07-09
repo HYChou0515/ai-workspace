@@ -233,6 +233,22 @@ class IsolatedProcessSandbox(LocalProcessSandbox):
                 break
             node = node.parent
 
+    async def reown(self, handle: SandboxHandle) -> None:
+        # #504: the host's bulk rsync restore (NfsArchive.restore) writes files
+        # as root — no `-o` — bypassing per-write `_own`, so the restored tree
+        # comes back root-owned. Recursively re-own the whole workspace to the
+        # sandbox uid so git / chmod work inside. Idempotent (chowning an
+        # already-uid file is a no-op); the per-write `_own` covers everything
+        # that DOESN'T bypass the sandbox (upload / create_file / mkdir).
+        await asyncio.to_thread(self._reown_sync, handle)
+
+    def _reown_sync(self, handle: SandboxHandle) -> None:
+        uid = self._identities[handle.id].uid
+        workspace = self._workspace(handle)
+        self._chown_runner(workspace, uid)
+        for path in workspace.rglob("*"):
+            self._chown_runner(path, uid)
+
     def _provision(self, workspace: Path, uid: int) -> None:
         # Own the workspace to the sandbox uid (gid left as-is via -1, so this
         # works non-root when uid == the caller) and lock it to the owner; the

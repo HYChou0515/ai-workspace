@@ -514,6 +514,13 @@ class LocalProcessSandbox:
         doesn't own, and only the owner can `chmod` a file."""
         return None
 
+    async def reown(self, handle: SandboxHandle) -> None:
+        """Hook (#504): recursively re-own the workspace to the sandbox principal
+        after a BULK restore that bypassed per-write `_own` (the host's rsync
+        writes files as root, no `-o`). No-op in the base; `IsolatedProcessSandbox`
+        chowns the whole restored tree to the sandbox uid."""
+        return None
+
     async def upload(self, handle: SandboxHandle, data: bytes, remote_path: str) -> None:
         cwd = self._workspace(handle)
         target = self._resolve(cwd, remote_path)

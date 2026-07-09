@@ -26,6 +26,9 @@ class MockSandbox:
         self._fs: dict[str, dict[str, bytes]] = {}
         # #366: readiness kept outside the file store so it never shows in walk.
         self._ready: set[str] = set()
+        # #504: records handle ids the controller asked to reown (post-restore),
+        # so wiring tests can assert the chown-the-restored-tree step ran.
+        self.reowned: list[str] = []
 
     def _require(self, handle: SandboxHandle) -> dict[str, bytes]:
         if handle.id not in self._fs:
@@ -47,6 +50,11 @@ class MockSandbox:
         self._require(handle)
         del self._fs[handle.id]
         self._ready.discard(handle.id)
+
+    async def reown(self, handle: SandboxHandle) -> None:
+        # #504: no real ownership in-memory; just record that it was requested.
+        self._require(handle)
+        self.reowned.append(handle.id)
 
     async def mark_ready(self, handle: SandboxHandle) -> None:
         self._require(handle)
