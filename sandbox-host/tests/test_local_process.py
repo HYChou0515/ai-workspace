@@ -22,6 +22,14 @@ async def test_create_returns_unique_handles(sandbox: LocalProcessSandbox):
     assert h1.id != h2.id
 
 
+async def test_base_reown_is_a_noop(sandbox: LocalProcessSandbox):
+    # #504: the base backend owns everything it writes (single principal), so its
+    # `reown` hook does nothing — only IsolatedProcessSandbox chowns a restored
+    # tree to the sandbox uid. It must not raise on a live handle.
+    h = await sandbox.create(SandboxSpec())
+    assert await sandbox.reown(h) is None
+
+
 async def test_workspace_dir_is_the_handles_root_subdir(sandbox: LocalProcessSandbox, tmp_path):
     """#492: the host rsyncs THIS dir to/from the NFS archive — it must be the
     same `root` subdir walk/file ops are scoped to (never the infra area)."""

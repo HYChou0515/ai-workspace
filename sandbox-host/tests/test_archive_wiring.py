@@ -101,6 +101,32 @@ async def test_kill_drops_the_item_mapping_so_a_later_persist_is_a_noop():
     assert archive.persisted == []
 
 
+async def test_create_with_item_reowns_the_restored_workspace():
+    """#504: the bulk rsync restore writes as root; the controller must reown the
+    restored tree to the sandbox uid before marking it ready."""
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url="http://h", archive=_FakeArchive())
+    async with _client(app) as c:
+        rid = (await c.post("/sandboxes", json={"item_id": "item-42"})).json()["remote_id"]
+    assert backend.reowned == [rid]
+
+
+async def test_create_without_archive_does_not_reown():
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url="http://h")  # archive=None
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={"item_id": "item-42"})
+    assert backend.reowned == []
+
+
+async def test_create_without_item_does_not_reown():
+    backend = MockSandbox()
+    app = make_host_app(backend, advertise_url="http://h", archive=_FakeArchive())
+    async with _client(app) as c:
+        await c.post("/sandboxes", json={})  # no item_id
+    assert backend.reowned == []
+
+
 async def test_create_with_item_marks_the_sandbox_ready():
     """#492: rsync restore is synchronous, so the host marks the archive-restored
     sandbox ready itself (the app no longer runs its own restore)."""
