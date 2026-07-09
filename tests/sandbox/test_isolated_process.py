@@ -27,6 +27,7 @@ from workspace_app.sandbox.isolated_process import (
     _has_cap_setuid,
     _parse_size,
     _read_cap_eff,
+    _run_chown,
     _run_setfacl,
     _setpriv_cgroup_argv,
     isolation_supported,
@@ -40,6 +41,7 @@ def isolated(tmp_path):
     hash%1==0 ⇒ uid==uid_base==getuid, so `chown` is a non-root no-op), whose
     cgroup root is a tmp tree, and whose ACL application is captured."""
     calls: list[list[str]] = []
+    chowns: list[tuple[Path, int]] = []
     sb = IsolatedProcessSandbox(
         root_dir=tmp_path / "sb",
         cgroup_root=tmp_path / "cg",
@@ -49,8 +51,10 @@ def isolated(tmp_path):
         cpu_cores=0.5,
         pids_max=64,
         acl_runner=calls.append,
+        chown_runner=lambda p, u: chowns.append((p, u)),
     )
     sb.acl_calls = calls  # ty: ignore[unresolved-attribute]
+    sb.chown_calls = chowns  # ty: ignore[unresolved-attribute]
     return sb
 
 
@@ -268,6 +272,70 @@ async def test_exec_argv_wraps_command_with_isolation(isolated):
     assert f"--reuid={isolated._uid_for(h.id)}" in argv
 
 
+# ---- chown-on-write: app/host-written files must be owned by the item uid (#504) ----
+
+
+async def test_upload_chowns_file_to_item_uid(isolated):
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    isolated.chown_calls.clear()  # ignore provisioning chowns; assert only this write's
+    await isolated.upload(h, b"data", "brief.md")
+    ws = isolated._workspace(h)
+    uid = isolated._uid_for(h.id)
+    assert (ws / "brief.md", uid) in isolated.chown_calls
+
+
+async def test_upload_file_chowns_file_to_item_uid(isolated, tmp_path):
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"payload")  # the staged restore/upload source
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    isolated.chown_calls.clear()
+    await isolated.upload_file(h, src, "data/out.bin")
+    ws = isolated._workspace(h)
+    uid = isolated._uid_for(h.id)
+    assert (ws / "data/out.bin", uid) in isolated.chown_calls
+
+
+async def test_mkdir_chowns_dir_to_item_uid(isolated):
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    isolated.chown_calls.clear()
+    await isolated.mkdir(h, "outputs")
+    ws = isolated._workspace(h)
+    uid = isolated._uid_for(h.id)
+    assert (ws / "outputs", uid) in isolated.chown_calls
+
+
+async def test_rename_chowns_destination_to_item_uid(isolated):
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    await isolated.upload(h, b"x", "a.txt")
+    isolated.chown_calls.clear()
+    await isolated.rename(h, "a.txt", "sub/b.txt")
+    ws = isolated._workspace(h)
+    uid = isolated._uid_for(h.id)
+    assert (ws / "sub/b.txt", uid) in isolated.chown_calls
+
+
+async def test_own_chowns_the_whole_created_parent_chain(isolated):
+    # A nested write must leave EVERY new ancestor uid-owned, not just the leaf —
+    # a mid-chain root-owned dir still breaks git / rmdir.
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    isolated.chown_calls.clear()
+    await isolated.upload(h, b"x", "a/b/c.txt")
+    ws = isolated._workspace(h)
+    owned = {p for p, _ in isolated.chown_calls}
+    assert {ws / "a", ws / "a/b", ws / "a/b/c.txt"} <= owned
+    # never chown above the workspace root (infra siblings / shared root)
+    assert all(p == ws or ws in p.parents for p, _ in isolated.chown_calls)
+
+
+async def test_own_never_chowns_a_path_outside_the_workspace(isolated, tmp_path):
+    # Defensive: a target that isn't under the workspace (a path-escape) must
+    # chown NOTHING — never the infra siblings or anything above the ws root.
+    h = await isolated.create(SandboxSpec(), sandbox_id="item-1")
+    isolated.chown_calls.clear()
+    isolated._own(h, tmp_path / "elsewhere")
+    assert isolated.chown_calls == []
+
+
 # ---- the system-binary boundary ----
 
 
@@ -280,3 +348,15 @@ def test_run_setfacl_invokes_subprocess():
 def test_constructs_default_acl_runner(tmp_path):
     sb = IsolatedProcessSandbox(root_dir=tmp_path / "s", cgroup_root=tmp_path / "c")
     assert sb._acl_runner is _run_setfacl
+
+
+def test_run_chown_calls_oschown_with_uid_and_unchanged_gid(monkeypatch, tmp_path):
+    calls: list[tuple[Path, int, int]] = []
+    monkeypatch.setattr(os, "chown", lambda p, u, g: calls.append((p, u, g)))
+    _run_chown(tmp_path / "f", 4321)
+    assert calls == [(tmp_path / "f", 4321, -1)]  # gid -1 = leave as-is
+
+
+def test_constructs_default_chown_runner(tmp_path):
+    sb = IsolatedProcessSandbox(root_dir=tmp_path / "s", cgroup_root=tmp_path / "c")
+    assert sb._chown_runner is _run_chown
