@@ -124,3 +124,16 @@ base no-op,不觸發 chown。
 - 整合(root-gated):restored/uploaded/created 檔在 sandbox 內 `stat` owner == 降權 uid;
   git dubious-ownership 消失;`chmod +x` 自己的檔成功。
 - 100% gate(full local suite)綠;ruff/ty 綠。
+
+## 狀態
+
+- **P1 DONE**(commit ea28571c):app `IsolatedProcessSandbox` `_own` hook + `ChownRunner`
+  seam;upload/upload_file/mkdir/rename chown target + 父鏈到衍生 uid。兩檔 100% unit。
+- **P2 DONE**(commit 66f1d049):sandbox-host 那份同款(uid 由 `_identities` 取)。
+- **P3 DONE**(commit 065e2678):host `reown(handle)`(Sandbox protocol + base no-op +
+  MockSandbox recorder + isolated 遞迴 chown);`_HostController.create` 在 restore 後、
+  mark_ready 前呼叫。app/isolated/mock/protocol 100%。
+- **P4 DONE**:k8s deployment 範例 caps 補 `CHOWN`;`_acl_argv`/`nfs_archive` docstring
+  改「ownership 為主、ACL 防呆」;whole-project ty 綠、ruff 綠、app unit 套件 + 兩檔 100%。
+- **P5 待辦(root-gated integration)**:真 foreign-uid 端到端(`stat -c %u`==uid、git 不報
+  dubious ownership、`chmod +x` 成功)—— 比照現有隔離 enforcement 留 cluster live check。

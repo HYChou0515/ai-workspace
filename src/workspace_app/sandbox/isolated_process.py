@@ -72,9 +72,11 @@ def _derive_uid(item_id: str, *, uid_base: int, uid_range: int) -> int:
 
 
 def _acl_argv(workspace: Path, uid: int) -> list[str]:
-    """`setfacl` argv granting `uid` rwx on the workspace AND as the default ACL,
-    so files the root host later writes into it stay writable by the sandbox
-    uid (it owns the dir but not those root-written files)."""
+    """`setfacl` argv granting `uid` rwx on the workspace AND as the default ACL.
+    Defence-in-depth since #504: app/host-written files are now chowned to `uid`
+    (real ownership, see `_own`), so the default ACL is a belt-and-suspenders
+    fallback for any residual root-written path — no longer the sole mechanism
+    keeping the sandbox able to touch those files."""
     spec = f"u:{uid}:rwx"
     return ["setfacl", "-R", "-m", spec, "-d", "-m", spec, str(workspace)]
 

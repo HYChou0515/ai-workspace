@@ -11,8 +11,10 @@ routing (#492 Q8).
 
 Ownership: the archive is written with ``-rlptD`` (perms + times, but NOT owner
 / group), so it survives NFS ``root_squash`` — the host does not, and need not,
-set foreign uids on the NFS side. Per-uid ownership is re-applied on the LOCAL
-copy at restore time by the sandbox provisioner, never here (#492 Q3).
+set foreign uids on the NFS side. ``restore`` likewise rsyncs files in as root
+(no ``-o``); per-uid ownership is re-applied on the LOCAL copy right after, by
+the sandbox's ``reown`` (the controller calls it post-restore, pre-mark_ready),
+never here (#492 Q3 / #504).
 """
 
 from __future__ import annotations
