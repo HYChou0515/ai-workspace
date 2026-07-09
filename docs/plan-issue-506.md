@@ -21,19 +21,37 @@
 
 ## 敲定設計(grill Q1–Q6,把開環變閉環)
 
-### 生成注入既有知識(②③,Q1 augment · Q2)
-digest 前 `KnowledgeRetriever.for_doc(cid, path, text) -> KnowledgeContext`,注入改寫後的 prompt:
-- `relevant_cards`:P3 先 exact-key 命中卡 body;P4 embedding 落地後升級語意 top-K。
-- `relevant_questions`:同理(exact-term → 語意)。
-- `rag`:既有 `kb/retriever.py`(dense+BM25)拉 KB **其他 doc** 相關段落(DocChunk 有向量索引)。
-- `wiki_toc`:該 collection 的 wiki `_paths`(頁清單/標題)當**廣度**訊號(gated `_wiki_enabled`);**不做全文向量檢索**。
-- `known_keys`:全 collection 卡 key + open Q term 清單(輕讀 indexed `norm_keys`)。
+### 生成升級:把 `ask_knowledge_base` 擴充成可設定能力,drafter 用配好的它(②③,Q1 augment · Q2)
 
-prompt(`card_drafting.md`)新增 `{existing_cards}/{open_questions}/{rag}/{wiki_toc}/{known_keys}`,指令:只建/問**沒被涵蓋**的;接近既有卡有補充 → 提「更新那張卡(引 key)」;拿不準是否已涵蓋 → 傾向不重問。**一份 doc 只做一次檢索**。
+one-shot `LlmCardDrafter` → **agentic drafter**(agent loop,重用 `run_subagent` 橋)。**不直接配 leaf 工具**,改給一個**配好 spec 的 `ask_knowledge_base`**:保住 context isolation(#270,吵雜檢索留丟棄式子 agent、drafter 視窗乾淨),又能控 budget/prompt/scope。
 
-### wiki 用 grep,分兩處(避開無向量索引)
-- **P3 生成**:只給 `wiki_toc`(便宜廣度)。
-- **P4 reconcile**:對**有限的 draft 候選**逐個 grep wiki 全文(重用 `api/search.search_text`),命中即「wiki 已解釋」→ 進分級自動丟(⑥)。per-candidate grep 只跑在收斂後的候選,不爆搜。
+**把 `ask_knowledge_base` 從寫死變可設定 —— spec + builder(變異全是「資料」非「演算法」,不用 GoF class factory):**
+
+- **① `WikiSearchBudget`**(對稱 `KbSearchBudget`,`agent/context.py:28`):新型別 + `AgentToolContext.wiki_search_budget` 欄;`search_wiki_impl`(`agent/tools.py:339`)加 budget gate(比照 `kb_search` 在 `tools.py:557-564`)。**這一項就治好「wiki 搜尋無上限」的洞。**
+- **② `AskKbSpec`**(frozen,factory 輸入,budget-only、**無 `wiki_mode`**):
+  ```python
+  @dataclass(frozen=True)
+  class AskKbSpec:
+      kb_search_max:   int | None = 3     # 0=不授、N=上限、None=無限
+      wiki_search_max: int | None = 3     # 同款;0=off、N=auto+上限、None=無限
+      glossary:        bool = True        # lookup_glossary（便宜、不設 budget）
+      prompt:          str | None = None  # 覆寫子 agent 指令;「強制查 wiki」寫這
+      scope:           list[str] | None = None   # collection_ids;None=沿用呼叫端
+      sub_agent_purpose: str = "kb_chat"
+  ```
+- **③ builder(factory 本體)** `build_ask_kb_context(spec, base) -> AgentToolContext`:授 `kb_search`(KB agent 必授)+ `search_wiki`(iff `wiki_search_max != 0`)+ `lookup_glossary`(iff glossary);`collection_ids = spec.scope or base`;`system_prompt = spec.prompt or preset`;塞 `KbSearchBudget`/`WikiSearchBudget`。
+- **④ factory function(可選薄層)** `make_ask_knowledge_base(spec)` 回一個 closure over spec 的 impl;或單一 impl 讀 `ctx.ask_kb_spec`。**不是**為每種呼叫者生 tool 子類。
+- **⑤ wiki 從「路由」改「工具」(唯一行為改動)**:現況 wiki 是 turn 前置路由到重的整頁 reader(`WikiAwareRunner`,`orchestrator.py:163`);改成把 `search_wiki`(grep,輕,回命中行)當 budgeted 工具授給子 agent、由 agent 自己決定要不要搜 —— 即現況 FE toggle ON 的 **auto** 語意,但補上 budget。重的整頁 reader 保留當正交深讀變體,本 issue 不動。
+
+**drafter 的 spec**:`AskKbSpec(kb_search_max=3, wiki_search_max=3, scope=[cid], prompt="出卡前先查既有卡片/wiki/RAG,回報哪些已涵蓋、哪些是新的")`。cid 由 `_process_one` 手上的 `CardGenSources(spec, collection_id)` 貫穿(`card_gen_coordinator.py:365`);**無 cid → 退回 open-loop(不注入、只看內文)**,不拿全域當範圍(別的 collection 的解釋不算數、又貴)。便宜靜態種子(可選):prompt 可塞 `known_keys`(全 collection 卡 key + open Q term)當廣度,讓 drafter 問得準。
+
+**FE + route(與 kb_search 同款,取代 toggle)**:request body 加 `max_wiki_searches`(鏡射 `max_kb_searches`),移除 `enhancements.wiki: bool`;route 用 `WikiSearchBudget(max_calls=resolve_max_searches(body.max_wiki_searches, default, ceiling))`(比照 `kb_chat_routes.py:647-654`);FE composer 的 wiki on/off toggle → 數量選擇器(沿用 kb-search 那顆的樣式)。
+
+prompt(`card_drafting.md`)改 agentic:先查清「已被涵蓋 / 已問過」再決定;只建/問**沒被涵蓋**的;接近既有卡有補充 → 提「更新那張卡(引 key)」;拿不準 → 傾向不重問。
+
+### wiki 讀取:靠 budgeted `search_wiki` 工具(agent loop 內),非向量
+- **生成(P5)**:agent 用 `search_wiki`(grep,受 `wiki_search_budget` 約束)自己搜 wiki;scope=[cid](`WikiFileStore` 以 collection id 為 key)。
+- **reconcile(P6)**:對**有限的 draft 候選**逐個 grep wiki 全文(重用 `api/search.search_text`)當「已解釋」的確定性判定 → 進分級自動丟(⑥)。這層是無 LLM 的安全網,不吃預算。
 
 ### reconcile 分級(⑤⑥,Q1 reconcile · Q3)
 候選 embed → 指派 cluster_key → 每群算建議動作:
@@ -45,7 +63,7 @@ prompt(`card_drafting.md`)新增 `{existing_cards}/{open_questions}/{rag}/{wiki_
 每個新候選:
 1. **exact-key 快路**:`norm=norm(term)`;查 `norm_key==norm` 命中 → `cluster_key=norm`(確定性、無 race)。
 2. **語意路**:`vec=embed(norm/term + " " + title)`;specstar 原生 cosine 查最近成員;≥ τ → 併其 cluster_key;否則 `cluster_key=norm` 開新群。
-- **race**:同字面 burst 靠 exact-key 確定性解決;不同字面並行 race 由**背景 union-find sweeper**(兩群 centroid ≥ τ 併,兼做 P6 backlog 回填)掃尾。
+- **race**:同字面 burst 靠 exact-key 確定性解決;不同字面並行 race 由**背景 union-find sweeper**(兩群 centroid ≥ τ 併,兼做 P8 backlog 回填)掃尾。
 - **範圍**:term-cards + term-questions 一起分群(同概念一次解決);**description-questions 不進語意群**(維持既有 `(doc,norm(quote))` 去重)。
 
 ### 新 resource(存向量 + 群)
@@ -70,26 +88,31 @@ class ClusterMember(Struct):  # → resource "cluster-member"
 `ReviewDrawer` 加 keys 編輯器(重用 `ContextCardsTab` term chips),送 `{keys,title,body}` 到既有 proposal update route(`api/card_gen_routes.py:137`)/`context_card_routes`。
 
 ### 既有 backlog(分階段,Q6)
-先上 P1 分頁 + `collection_id` index(現存幾千筆立即變快、flat);新提案開始 cluster;P6 migration job 分批回填既有 pending 的 cluster_key(重用 embedder)。
+先上 P1 分頁 + `collection_id` index(現存幾千筆立即變快、flat);新提案開始 cluster;P8 sweeper 分批回填既有 pending 的 cluster_key(重用 embedder)。
 
-## Phases(flat)
+## Phases(flat,依「擴充 ask_knowledge_base → FE budget → drafter 接它 → reconcile/cluster」重排)
 
-- **P1** review-inbox 分頁 + `CardGenRun.collection_id` index + server filter；FE 分頁/虛擬化。**既有 backlog 立即變快**(獨立可先出)。
-- **P2** `ReviewDrawer` 可編輯 keys(純 FE,後端就緒)。獨立可先出。
-- **P3** 生成升級:`KnowledgeContext` + `KnowledgeRetriever`(cards exact-key / open Q / RAG / wiki_toc / known_keys)+ 改寫 `card_drafting.md` + `_process_one` 接線。
-- **P4** reconcile 網 + `ClusterMember`:候選 embed → cluster_key(exact + 語意)+ 分級動作 + wiki grep 覆蓋;suppressed 可審計;P3 的 relevant_cards/questions 升級成語意。
-- **P5** review-inbox 按 cluster 分群投影 + FE 一群一列一鍵套用整群 + suppressed filter。
-- **P6** 背景 sweeper:union-find 併近群 + 分批回填既有 pending backlog。
+- **P1** review-inbox 分頁 + `CardGenRun.collection_id` index + server filter;FE 分頁/虛擬化。**既有 backlog 立即變快**(①,獨立可先出)。
+- **P2** `ReviewDrawer` 可編輯 keys(純 FE,後端就緒;④)。獨立可先出。
+- **P3** **擴充 `ask_knowledge_base` factory(backbone)**:`WikiSearchBudget` + `search_wiki` 加 budget gate(路由→工具)+ `AskKbSpec` + `build_ask_kb_context`(+ 可選 `make_ask_knowledge_base`)。
+- **P4** **FE + route**:`max_wiki_searches` 數量選擇器取代 wiki toggle(與 kb_search 同款)+ route 接 `WikiSearchBudget`;移除 `enhancements.wiki`。(只需 P3)
+- **P5** **生成升級**:drafter agentic、用配好的 `ask_knowledge_base`(scope=[cid] / budgets / prompt)+ 改寫 `card_drafting.md` + `_process_one` 接線(cid 貫穿 + 無-cid fallback;②③)。(只需 P3)
+- **P6** **reconcile 網 + `ClusterMember`**:候選 embed → cluster_key(exact + 語意)+ 分級動作(自動丟/update/新)+ wiki grep 覆蓋判定;suppressed 可審計(⑤⑥)。
+- **P7** review-inbox 按 cluster 分群投影 + FE 一群一列一鍵套用整群 + suppressed filter(①⑤)。
+- **P8** 背景 sweeper:union-find 併近群 + 分批回填既有 pending backlog。
 
 ## 可調預設(不再逐個確認)
 
-- **τ**:config 超參,初值保守偏高(寧少併);exact-key 不吃 τ。top-K:cards≤15 / questions≤10 / rag≤5(可調)。
+- **budget 初值**:drafter `kb_search_max=3` / `wiki_search_max=3`;`lookup_glossary` 無限。FE 各自 clamp 到 `[0, ceiling]`(operator 預設)。
+- **τ**:config 超參,初值保守偏高(寧少併);exact-key 不吃 τ。reconcile 最近鄰 top-K 可調。
 - **embed 內容**:`norm_key/term + title`(短規範字串),非整篇 body。
 - **desc_Q**:注入 context 對三種產出都有益,但**只有 term-cards + term-questions 進 cluster**;desc_Q 維持 `(doc,norm(quote))`。
 - **embedder / dim**:重用 `kb/embedder.py` + 既有 `EMBED_DIM`(換 embedder 要 reindex,沿用現況)。
 
 ## 驗證 DoD
 
-- 單元:KnowledgeRetriever 產出 top-K + known_keys(空 collection / 截斷 / 相似度地板);drafter 注入內容進 prompt 且解析仍過;cluster 指派(exact 確定性 / 語意併群 / 過門檻開新群);reconcile 分級(自動丟 / update / 新)+ wiki grep 命中;review-inbox 分頁 + GROUP BY cluster;sweeper union-find 併群。
-- 整合/live:真 embedder + 真 LLM 的 canned check(#feedback:LLM 功能要 live check);幾千筆 backlog 分頁效能。
+- **單元(擴充 ask_knowledge_base)**:`WikiSearchBudget` gate(`search_wiki` 受上限、耗盡即停,對稱 `kb_search`);`build_ask_kb_context` 依 spec 授對工具/塞對 budget/scope/prompt(`wiki_search_max=0` → 不授 `search_wiki`;`glossary=False` → 不授);`make_ask_knowledge_base` closure over spec。
+- **單元(drafter/reconcile)**:drafter 用配好的 `ask_knowledge_base` 且結構化輸出解析仍過、cid 貫穿、無-cid 退回 open-loop;cluster 指派(exact 確定性 / 語意併群 / 過門檻開新群);reconcile 分級(自動丟 / update / 新)+ wiki grep 命中;review-inbox 分頁 + GROUP BY cluster;sweeper union-find 併群。
+- **FE(vitest)**:`max_wiki_searches` 數量選擇器(取代 wiki toggle);`ReviewDrawer` keys 編輯。
+- **整合/live**:真 embedder + 真 LLM 的 canned check(#feedback:LLM 功能要 live check);live 驗 drafter 真的會搜 wiki/kb 且**受 budget 約束**;幾千筆 backlog 分頁效能。
 - 100% gate(full local suite)綠;ruff/ty 綠;FE vitest(新 FE 走 TDD)。
