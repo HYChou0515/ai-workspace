@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
 from ..agent.ask_kb import AskKbSpec
 from ..agent.context import AgentToolContext, KbSearchBudget, WikiSearchBudget
+from ..files import WorkspaceFiles
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
@@ -44,6 +45,7 @@ from ..kb.context_cards import (
 from ..kb.doc_permission import denied_doc_ids
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.wiki.coordinator import WikiMaintenanceCoordinator
+from ..kb.wiki.store import WikiFileStore
 from ..perm import Actor, Permission, authorize
 from ..perm.model import Verb, user_subject
 from ..resources import AgentConfig
@@ -127,10 +129,17 @@ async def answer_question(
             if ask_kb_spec.prompt is not None
             else agent_config.system_prompt,
         )
+    # #506: when this sub-agent is granted `search_wiki` (e.g. the card drafter's
+    # spec, or a kb_chat preset), wire the per-collection wiki store it greps over
+    # `collection_ids` — the same store the interactive KB turn wires. Needs a spec
+    # handle; absent one, search_wiki degrades to its "no wiki available" note.
+    grants_wiki = bool(agent_config.allowed_tools and "search_wiki" in agent_config.allowed_tools)
+    wiki_files = WorkspaceFiles(WikiFileStore(spec)) if (grants_wiki and spec is not None) else None
     ctx = AgentToolContext(
         retriever=retriever,
         collection_ids=collection_ids,
         agent_config=agent_config,
+        files=wiki_files,
         # specstar handle so a kb_chat agent granted `lookup_glossary` can read
         # context cards on the bridge path too (RCA → ask_knowledge_base → KB
         # sub-agent). None when the caller can't supply one (degrades to the
@@ -635,6 +644,11 @@ def register_kb_chat_routes(
                 superusers=superusers,
             ),
             agent_config=agent_config,
+            # #506: the wiki store the agent's `search_wiki` tool greps. One shared
+            # WikiFileStore keyed per-collection; search_wiki iterates this turn's
+            # `collection_ids` and merges hits (the in-agent, budgeted replacement
+            # for the heavy whole-page reader routing).
+            files=WorkspaceFiles(WikiFileStore(spec)),
             # specstar handle so the agent's `lookup_glossary` tool (when granted)
             # can read this collection's context cards — deterministic glossary
             # path beside kb_search (unknown term → glossary, question → search).

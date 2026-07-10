@@ -714,11 +714,13 @@ def create_app(
     # so superuser status can't widen the search beyond the collection it enriches.
     # wiki is off (spec wiki_search_max=0) so the base runner suffices as kb_runner.
     if card_drafter_llm is not None:
-        from ..agent.ask_kb import AskKbSpec
+        from dataclasses import replace as _dc_replace
+
         from ..kb.help_collection import HELP_SYSTEM_USER
         from .card_drafter_agent import (
             AgentCardDrafter,
             default_card_drafter_config,
+            default_drafter_ask_kb_spec,
             drafter_context_builder,
         )
 
@@ -747,8 +749,11 @@ def create_app(
                         llm_base_url=default_kb_agent_config.llm_base_url,
                         llm_api_key=default_kb_agent_config.llm_api_key,
                     ),
-                    base_spec=AskKbSpec(
-                        kb_search_max=kb_max_searches_per_turn or 3, wiki_search_max=0
+                    # RAG + wiki + glossary over the doc's collection; kb cap follows
+                    # the operator's per-turn default, wiki uses the drafter default.
+                    base_spec=_dc_replace(
+                        default_drafter_ask_kb_spec(),
+                        kb_search_max=kb_max_searches_per_turn or 3,
                     ),
                 ),
             )

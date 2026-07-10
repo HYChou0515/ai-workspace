@@ -344,7 +344,16 @@ async def search_wiki_impl(ctx: RunContextWrapper[AgentToolContext], query: str)
     pages relevant to a question."""
     from ..api.search import InvalidQuery, compile_query, search_text
 
-    fs, inv = _workspace(ctx)
+    files = ctx.context.files
+    if files is None:
+        return "error: no wiki is available in this context."
+    # #506: the collections to grep. The interactive kb_chat agent spans SEVERAL
+    # collections (`collection_ids`, with no single `investigation_id`), so grep each
+    # one's wiki store (WikiFileStore keys pages per collection) and merge. The wiki
+    # maintainer / reader keep their single-collection scope (`investigation_id`,
+    # `collection_ids` empty) — unchanged behaviour.
+    inv = ctx.context.investigation_id
+    scopes = list(ctx.context.collection_ids) or ([inv] if inv is not None else [])
 
     # #506: enforce the per-turn wiki-search budget (symmetric to kb_search's).
     # `None` ⇒ unlimited, so the wiki maintainer/reader are unaffected; a capped
@@ -368,17 +377,20 @@ async def search_wiki_impl(ctx: RunContextWrapper[AgentToolContext], query: str)
     except InvalidQuery as exc:
         return f"error: invalid search {query!r}: {exc}"
     hits: list[str] = []
-    for path in sorted(await fs.ls(inv)):
-        try:
-            data = await fs.read(inv, path)
-        except FileNotFound:
-            continue
-        try:
-            text = data.decode("utf-8")
-        except UnicodeDecodeError:
-            continue
-        for m in search_text(text, pattern):
-            hits.append(f"{path}:{m.line}: {m.text}")
+    multi = len(scopes) > 1  # disambiguate hits by collection only when >1 is grepped
+    for cid in scopes:
+        for path in sorted(await files.ls(cid)):
+            try:
+                data = await files.read(cid, path)
+            except FileNotFound:
+                continue
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                continue
+            for m in search_text(text, pattern):
+                where = f"{cid}{path}" if multi else path
+                hits.append(f"{where}:{m.line}: {m.text}")
 
     budget.used += 1  # every completed grep costs one unit, even a no-match
 

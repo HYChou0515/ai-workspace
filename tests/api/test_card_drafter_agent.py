@@ -116,13 +116,14 @@ def test_default_card_drafter_config_grants_only_ask_knowledge_base():
     assert cfg.system_prompt  # a non-empty role instruction
 
 
-def test_default_drafter_spec_caps_kb_search_with_wiki_off_and_glossary_on():
-    # #506 P5 defaults: budgeted RAG + glossary over the doc's collection; wiki is
-    # off until the sub-agent gains a wiki store (a later phase).
+def test_default_drafter_spec_caps_rag_wiki_and_glossary():
+    # #506 ③ defaults: the drafter's sub-agent consults RAG + wiki + glossary over
+    # the doc's own collection, each search budgeted.
     spec = default_drafter_ask_kb_spec()
     assert spec.kb_search_max == 3
-    assert spec.wiki_search_max == 0
+    assert spec.wiki_search_max == 3
     assert spec.glossary is True
+    assert spec.allowed_tools() == ["kb_search", "search_wiki", "lookup_glossary"]
 
 
 class _PromptCapturingRunner:

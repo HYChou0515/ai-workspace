@@ -69,6 +69,24 @@ async def test_search_wiki_greps_the_pages():
     assert "/index.md" in out
 
 
+async def test_search_wiki_greps_across_all_chat_collections():
+    # #506 Task#1: the interactive kb_chat agent has NO single investigation_id — it
+    # spans several collections. search_wiki must grep EACH collection's wiki store
+    # (WikiFileStore is keyed per-collection) and merge, so the agent can consult the
+    # wiki as a budgeted in-agent tool instead of the heavy whole-page reader routing.
+    store = MemoryFileStore()
+    await store.write("c1", "/entities/reflow.md", b"Reflow zone 3 runs hot.\n")
+    await store.write("c2", "/concepts/voiding.md", b"Reflow can cause voiding.\n")
+    ctx = RunContextWrapper(
+        AgentToolContext(collection_ids=["c1", "c2"], files=WorkspaceFiles(store))
+    )
+
+    out = await search_wiki_impl(ctx, "reflow")
+
+    assert "reflow.md" in out  # a hit from c1's wiki
+    assert "voiding.md" in out  # AND a hit from c2's wiki — greps across collections
+
+
 async def test_search_wiki_appends_budget_footer_when_capped():
     # #506: mirror kb_search — when a per-draft wiki-search cap is set, every
     # result tells the model how much of its budget remains, so it searches

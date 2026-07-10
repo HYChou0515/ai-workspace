@@ -80,10 +80,11 @@ def default_card_drafter_config(
 
 def default_drafter_ask_kb_spec() -> AskKbSpec:
     """The drafter's base ``AskKbSpec`` — the sub-agent it delegates to gets a
-    capped chunk search + the glossary over the document's OWN collection (scope is
-    stamped per-document by :func:`drafter_context_builder`). Wiki stays off until
-    the KB sub-agent is given a wiki store (a later phase)."""
-    return AskKbSpec(kb_search_max=3, wiki_search_max=0, glossary=True)
+    capped chunk search + a capped wiki grep + the glossary over the document's OWN
+    collection (scope is stamped per-document by :func:`drafter_context_builder`), so
+    it consults ALL of RAG + wiki + glossary before drafting (#506 ③). ``answer_question``
+    wires the per-collection wiki store when a spec grants ``search_wiki``."""
+    return AskKbSpec(kb_search_max=3, wiki_search_max=3, glossary=True)
 
 
 class AgentCardDrafter:

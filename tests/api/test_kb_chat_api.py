@@ -202,6 +202,28 @@ def _client(runner: object) -> TestClient:
     return TestClient(app)
 
 
+def test_interactive_kb_turn_wires_a_wiki_store_and_grants_search_wiki():
+    # #506 Task#1: the send path must give the KB agent a wiki store (files) AND the
+    # bundled kb preset must grant `search_wiki`, so it consults the wiki in-agent
+    # (budgeted, multi-collection) instead of the heavy whole-page reader routing.
+    # The grep itself is unit-tested in test_wiki_tools; here we prove the wiring.
+    captured: dict = {}
+
+    class _CaptureRunner:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            captured["files"] = ctx.files
+            captured["tools"] = ctx.agent_config.allowed_tools if ctx.agent_config else None
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_CaptureRunner())
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
+
+    assert captured["files"] is not None  # a wiki store the agent can grep was wired
+    assert captured["tools"] is not None and "search_wiki" in captured["tools"]  # preset grants it
+
+
 def test_kb_agent_config_exposes_suggestions():
     """Issue #32: /kb/agent is now an ARRAY of {name, model, suggestions}
     — the FE picker iterates it. The first entry is the visible
@@ -495,6 +517,37 @@ async def test_answer_question_spec_prompt_overrides_the_sub_agent_instruction()
 
     assert runner.ctx is not None and runner.ctx.agent_config is not None
     assert runner.ctx.agent_config.system_prompt == "Only report what the collection already says."
+
+
+async def test_answer_question_wires_a_wiki_store_when_the_spec_grants_search_wiki():
+    # #506 (drafter sub-agent): a spec that grants search_wiki gets a per-collection
+    # wiki store wired so the tool can grep; a spec with wiki off gets none.
+    spec = make_spec(default_user="u")
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+
+    on = _CapturingRunner()
+    await answer_question(
+        on,
+        retriever,
+        ["c"],
+        "q",
+        agent_config=_test_kb_cfg(),
+        spec=spec,
+        ask_kb_spec=AskKbSpec(wiki_search_max=3),
+    )
+    assert on.ctx is not None and on.ctx.files is not None  # store wired for search_wiki
+
+    off = _CapturingRunner()
+    await answer_question(
+        off,
+        retriever,
+        ["c"],
+        "q",
+        agent_config=_test_kb_cfg(),
+        spec=spec,
+        ask_kb_spec=AskKbSpec(wiki_search_max=0),
+    )
+    assert off.ctx is not None and off.ctx.files is None  # wiki off ⇒ no store
 
 
 class _PlainRunner:
