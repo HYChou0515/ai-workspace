@@ -93,7 +93,7 @@ class ClusterMember(Struct):  # → resource "cluster-member"
 ## Phases(flat,依「擴充 ask_knowledge_base → FE budget → drafter 接它 → reconcile/cluster」重排)
 
 - **P1**(**後端 DONE**,commit `cc4886bd`+`83096901`)review-inbox server 分頁(`limit`/`offset`/`total`/`total_actionable`)+ server filter(`kind`/`q`/`actionable`,`q` 鏡射 FE 欄位、跨全集非僅當前頁)+ `CardGenRun.collection_id` index(配 no-op `Schema("v2")` 讓既有 rows 可 `POST /card-gen-run/migrate/execute` backfill;未 backfill 前全域 inbox 仍看得到全部、只 per-collection tab 少算舊 row)。**FE 分頁/虛擬化併入 P7**(P7 本就要把 review UI 重做成 cluster 分群投影,避免改兩次;後端向後相容,現況 FE 照常運作)。
-- **P2** `ReviewDrawer` 可編輯 keys(純 FE,後端就緒;④)。獨立可先出。
+- **P2**(**DONE**,commit `b31b3a09`)`ReviewDrawer` 可編輯 keys(chips 帶 `×` + 「新增詞彙」input,重用 ContextCardsTab 模式;`edited` 納入 keys、save 送 keys;唯讀時 keys 顯示但不可編)。純 FE:後端 `update_proposal` 已持久化整張 card(proposal 無 norm_keys,commit 時才 derive)。vitest 6 tests、typecheck 綠(④)。
 - **P3** **擴充 `ask_knowledge_base` factory(backbone)**:`WikiSearchBudget` + `search_wiki` 加 budget gate(路由→工具)+ `AskKbSpec` + `build_ask_kb_context`(+ 可選 `make_ask_knowledge_base`)。
 - **P4** **FE + route**:`max_wiki_searches` 數量選擇器取代 wiki toggle(與 kb_search 同款)+ route 接 `WikiSearchBudget`;移除 `enhancements.wiki`。(只需 P3)
 - **P5** **生成升級**:drafter agentic、用配好的 `ask_knowledge_base`(scope=[cid] / budgets / prompt)+ 改寫 `card_drafting.md` + `_process_one` 接線(cid 貫穿 + 無-cid fallback;②③)。(只需 P3)
