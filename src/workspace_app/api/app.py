@@ -530,6 +530,9 @@ def create_app(
         card_drafter_llm=card_drafter_llm,
         sanity_llm_factory=sanity_llm_factory,  # ty: ignore[invalid-argument-type]
         sanity_judge_llm=sanity_judge_llm,
+        # #506 P6: the same KB text embedder the ingestor/retriever use, so the
+        # card-gen reconcile compares candidates + cards in one vector space.
+        embedder=embedder,
         wiki_maintainer_max_turns=wiki_maintainer_max_turns,
         wiki_model=wiki_model,
         wiki_llm_base_url=wiki_llm_base_url,

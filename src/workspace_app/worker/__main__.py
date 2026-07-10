@@ -52,6 +52,9 @@ def build_bundle(
         card_drafter_llm=f.get_card_drafter_llm(settings),
         sanity_llm_factory=f.get_sanity_llm_factory(settings),
         sanity_judge_llm=f.get_sanity_judge_llm(settings),
+        # #506 P6: the card-gen reconcile embeds candidates + cards with the same
+        # embedder the ingestor uses (a worker pod builds one at line ~30).
+        embedder=embedder,
         wiki_maintainer_max_turns=settings.kb.wiki.maintainer_max_turns,
         wiki_model=wiki_model or "",
         wiki_llm_base_url=wiki_base or "",

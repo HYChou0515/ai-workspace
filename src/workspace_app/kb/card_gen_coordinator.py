@@ -69,6 +69,7 @@ from .doc_questions import (
     plan_doc_questions,
 )
 from .job_audit import preserve_job_creator
+from .reconcile import Reconciler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,9 +112,14 @@ class CardGenCoordinator:
         message_queue_factory: object | None = None,
         get_user_id: Callable[[], str] | None = None,
         max_questions_per_doc: int = 5,
+        reconciler: Reconciler | None = None,
     ) -> None:
         self._spec = spec
         self._drafter = drafter
+        # #506 P6: the finalize-time semantic reconcile (suppress already-explained
+        # candidates, cluster cross-run duplicates). None → the pre-P6 exact-only
+        # behaviour (tests / a build with no embedder).
+        self._reconciler = reconciler
         self._runs = CardGenRunStore(spec)
         # #377 guardrail ③: cap the clarification questions one document may raise
         # so a pathological digest can't flood the inbox (terms fill the budget
@@ -151,6 +157,12 @@ class CardGenCoordinator:
         coordinator with the fallback drafter then swaps in the agentic one here.
         Safe: called synchronously during create_app, before any consumer starts."""
         self._drafter = drafter
+
+    def set_reconciler(self, reconciler: Reconciler | None) -> None:
+        """#506 P6: inject the semantic reconciler after construction (same pattern
+        as :meth:`set_drafter`), for when the embedder is only wired up later in
+        create_app. Safe: called before any consumer starts."""
+        self._reconciler = reconciler
 
     # ── enqueue (producer) ───────────────────────────────────────────
     def enqueue(
@@ -467,6 +479,11 @@ class CardGenCoordinator:
         proposals = merge_drafts(raw)
         existing = cards_with_ids_for_collections(self._spec, [cid])
         kept = [p for p in proposals if classify_against_existing(p, existing) != "skip"]
+        # #506 P6: semantic reconcile over the exact-classified survivors — suppress
+        # already-explained candidates (near an existing card / documented in the
+        # wiki) and cluster cross-run duplicates. No reconciler → exact-only (pre-P6).
+        if self._reconciler is not None:
+            kept = self._reconciler.reconcile_proposals(cid, run_id, kept, existing)
         self._runs.set_proposals(run_id, kept)
         self._raise_questions(cid, per_doc, existing)
         self._clear_staged(run_id)
