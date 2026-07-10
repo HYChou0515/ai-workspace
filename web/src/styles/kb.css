@@ -3097,6 +3097,32 @@
   align-items: center;
   gap: 4px;
 }
+/* #506: the drawer's keys are editable — chips carry a remove ×, plus an
+   add-a-term input (mirrors the ContextCardsTab chip editor). */
+.rvw-drawer__keys .rvw__key {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.rvw-drawer__key-x {
+  border: 0;
+  background: transparent;
+  color: var(--text-paper-d);
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: var(--text-small);
+  line-height: 1;
+}
+.rvw-drawer__addkey {
+  flex: 1 1 100px;
+  min-width: 100px;
+  padding: 3px 8px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--paper);
+  color: var(--text-paper);
+  font-size: var(--text-xs);
+}
 .rvw-drawer__overwrite {
   display: flex;
   align-items: center;

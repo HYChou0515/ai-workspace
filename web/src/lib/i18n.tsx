@@ -670,6 +670,8 @@ export const messages = {
   "review.mode.new": { "zh-TW": "新增", en: "New" },
   "review.mode.update": { "zh-TW": "更新", en: "Update" },
   "review.drawer.keys": { "zh-TW": "詞彙", en: "Terms" },
+  "review.drawer.addKey": { "zh-TW": "新增詞彙", en: "Add a term" },
+  "review.drawer.removeKey": { "zh-TW": "移除 {k}", en: "Remove {k}" },
   "review.drawer.title": { "zh-TW": "標題", en: "Title" },
   "review.drawer.body": { "zh-TW": "內容", en: "Body" },
   "review.drawer.overwrites": { "zh-TW": "將覆蓋現有卡片", en: "Overwrites the current card" },
