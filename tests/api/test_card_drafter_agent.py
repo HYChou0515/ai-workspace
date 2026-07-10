@@ -1,0 +1,147 @@
+"""AgentCardDrafter (#506 P5) — the agentic CardDrafter. Where LlmCardDrafter
+does one ILlm pass, this drives an agent LOOP so the drafter can consult the KB
+(ask_knowledge_base: RAG + glossary + wiki, scoped to the doc's collection and
+budgeted) BEFORE drafting — it drafts only genuinely-new cards and asks only
+genuinely-open questions instead of re-asking what the KB already explains. The
+final assistant message is the same digest JSON the one-shot drafter emitted,
+parsed by the same tolerant parser."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+
+import pytest
+
+from workspace_app.agent import AgentToolContext
+from workspace_app.agent.ask_kb import AskKbSpec
+from workspace_app.api.card_drafter_agent import (
+    AgentCardDrafter,
+    default_card_drafter_config,
+    default_drafter_ask_kb_spec,
+    drafter_context_builder,
+)
+from workspace_app.api.events import AgentEvent, MessageDelta, RunDone, RunError
+from workspace_app.api.runner import ScriptedAgentRunner
+from workspace_app.resources import AgentConfig
+
+_GOOD = json.dumps(
+    {
+        "cards": [
+            {
+                "keys": ["M4", "Metal 4"],
+                "title": "Metal 4",
+                "body": "The fourth metal layer.",
+                "snippet": "M4 (Metal 4) is the fourth interconnect layer.",
+            }
+        ]
+    }
+)
+
+
+def test_agentic_drafter_parses_the_final_assistant_message_into_a_digest():
+    # The loop's final assistant text IS the digest JSON — driven by an agent loop
+    # instead of a one-shot ILlm, parsed by the same tolerant parser.
+    runner = ScriptedAgentRunner([MessageDelta(text=_GOOD), RunDone()])
+    d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+    (card,) = d.digest(doc_path="a.md", doc_text="...").cards
+    assert card.keys == ["M4", "Metal 4"]
+    assert card.title == "Metal 4"
+
+
+def test_streamed_chunks_concatenate_and_reasoning_is_ignored():
+    # #494: a reasoning model streams its <think> scratch on the reasoning channel
+    # and the answer in chunks on the content channel — the drafter must join the
+    # content chunks and never let the reasoning text pollute the parsed digest.
+    half = len(_GOOD) // 2
+    runner = ScriptedAgentRunner(
+        [
+            MessageDelta(text='{"cards": [{"keys": ["SCRATCH"]}]}', reasoning=True),
+            MessageDelta(text=_GOOD[:half]),
+            MessageDelta(text=_GOOD[half:]),
+            RunDone(),
+        ]
+    )
+    d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+    (card,) = d.digest(doc_path="a.md", doc_text="...").cards
+    assert card.keys == ["M4", "Metal 4"]  # the content answer, not the reasoning scratch
+
+
+def test_a_run_error_is_a_give_up_that_raises_not_a_silent_empty_digest():
+    # #494 / #414: when the runner exhausts its retry budget (RunError), the doc
+    # is a genuine give-up — raise so the coordinator marks it FAILED, rather than
+    # returning an empty digest that reads as a falsely-green "0 cards" run. Any
+    # partial answer text streamed before the error must NOT be parsed as a result.
+    runner = ScriptedAgentRunner(
+        [MessageDelta(text=_GOOD[:20]), RunError(message="all providers exhausted")]
+    )
+    d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+    with pytest.raises(RuntimeError, match="all providers exhausted"):
+        d.digest(doc_path="a.md", doc_text="...")
+
+
+async def test_drafter_context_delegates_ask_knowledge_base_scoped_to_the_doc_collection():
+    # The composition seam: the drafter's context wires `run_subagent` to a
+    # spec-configured ask_knowledge_base (make_ask_knowledge_base) whose scope is
+    # FORCED to the document's own collection and whose budgets come from the base
+    # spec — so when the drafting agent delegates, it searches exactly [cid].
+    captured: dict = {}
+
+    async def fake_bridge(purpose, payload, emit=None, origin_id=None, **kw):
+        captured.update(collection_ids=kw.get("collection_ids"), budget=kw.get("budget"))
+        return "kb answer", []
+
+    build = drafter_context_builder(
+        bridge_run=fake_bridge,
+        agent_config=AgentConfig(name="drafter", allowed_tools=["ask_knowledge_base"]),
+        base_spec=AskKbSpec(kb_search_max=3, wiki_search_max=0),
+    )
+    ctx = build("cid-42")
+
+    assert ctx.agent_config is not None
+    assert ctx.agent_config.allowed_tools == ["ask_knowledge_base"]
+    assert ctx.run_subagent is not None
+    # invoking the wired run_subagent (exactly as ask_knowledge_base_impl does)
+    answer, _ = await ctx.run_subagent("kb_chat", "what is M4?", None, "orig", None)
+    assert answer == "kb answer"
+    assert captured["collection_ids"] == ["cid-42"]  # scoped to the doc's collection
+    assert captured["budget"].max_calls == 3  # kb budget from the base spec
+
+
+def test_default_card_drafter_config_grants_only_ask_knowledge_base():
+    # The drafting agent delegates KB lookups (context isolation, #270); it needs
+    # exactly the delegating tool, not the leaf kb_search/search_wiki.
+    cfg = default_card_drafter_config()
+    assert cfg.allowed_tools == ["ask_knowledge_base"]
+    assert cfg.system_prompt  # a non-empty role instruction
+
+
+def test_default_drafter_spec_caps_kb_search_with_wiki_off_and_glossary_on():
+    # #506 P5 defaults: budgeted RAG + glossary over the doc's collection; wiki is
+    # off until the sub-agent gains a wiki store (a later phase).
+    spec = default_drafter_ask_kb_spec()
+    assert spec.kb_search_max == 3
+    assert spec.wiki_search_max == 0
+    assert spec.glossary is True
+
+
+class _PromptCapturingRunner:
+    def __init__(self) -> None:
+        self.prompt = ""
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.prompt = prompt
+        yield MessageDelta(text='{"cards": []}')
+        yield RunDone()
+
+
+def test_agentic_drafter_prompts_the_model_to_consult_the_knowledge_base_first():
+    # By default the agentic drafter drives the KB-consulting prompt (not the
+    # one-shot template) — it carries the document and tells the model to check
+    # existing knowledge before drafting, so it doesn't re-ask what's known (③).
+    runner = _PromptCapturingRunner()
+    d = AgentCardDrafter(runner, lambda cid: AgentToolContext())
+    d.digest(doc_path="reflow.md", doc_text="Zone 3 setpoint 245C.")
+    assert "ask_knowledge_base" in runner.prompt
+    assert "Zone 3 setpoint 245C." in runner.prompt  # the document rode along
+    assert "reflow.md" in runner.prompt

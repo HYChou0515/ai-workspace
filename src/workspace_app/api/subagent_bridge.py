@@ -14,8 +14,9 @@ from collections.abc import Callable
 
 from specstar import QB, SpecStar
 
+from ..agent.ask_kb import AskKbSpec
 from ..agent.config_catalog import AgentConfigCatalog
-from ..agent.context import KbSearchBudget
+from ..agent.context import KbSearchBudget, WikiSearchBudget
 from ..kb.cited import record_citations
 from ..kb.collections import readable_collection_ids
 from ..kb.doc_permission import denied_doc_ids
@@ -68,6 +69,8 @@ class SubagentBridge:
         wiki_query: bool = False,
         collection_ids: list[str] | None = None,
         budget: KbSearchBudget | None = None,
+        wiki_budget: WikiSearchBudget | None = None,
+        ask_kb_spec: AskKbSpec | None = None,
     ) -> tuple[str, list[Citation]]:
         """Generic sub-agent bridge — runs the sub-agent for `purpose`
         over every collection and returns its synthesized answer + the
@@ -170,6 +173,11 @@ class SubagentBridge:
             # ask_knowledge_base call in the turn draws from it; absent one, the
             # bridge falls back to a fresh budget from `max_searches`.
             budget=budget,
+            # #506: a configured ask_knowledge_base (make_ask_knowledge_base) rides
+            # its AskKbSpec (the sub-agent's authoritative tool set + prompt) and its
+            # wiki-search cap through here; both None ⇒ the interactive path unchanged.
+            wiki_budget=wiki_budget,
+            ask_kb_spec=ask_kb_spec,
             # #308: the speaker's per-doc-override exclusion (resolved above).
             exclude_doc_ids=exclude_doc_ids,
         )

@@ -702,6 +702,58 @@ def create_app(
     )
     _run_subagent = subagent_bridge.run
 
+    # #506: close the card-gen loop — swap the coordinator's fallback drafter for the
+    # AGENTIC one when card drafting is enabled. It reads a document by first
+    # consulting the KB (ask_knowledge_base: RAG + glossary, scoped to the doc's own
+    # collection, budgeted) so it drafts only genuinely-new cards and asks only
+    # genuinely-open questions instead of re-asking what's already known. Built HERE,
+    # after the KB retriever + bridge exist (the coordinators are built earlier). Its
+    # OWN bridge runs headless under a system-superuser identity so the #305
+    # collection-read gate passes [collection_id] through (a background job carries no
+    # request speaker); safe because the drafter's spec forces scope=[collection_id],
+    # so superuser status can't widen the search beyond the collection it enriches.
+    # wiki is off (spec wiki_search_max=0) so the base runner suffices as kb_runner.
+    if card_drafter_llm is not None:
+        from ..agent.ask_kb import AskKbSpec
+        from ..kb.help_collection import HELP_SYSTEM_USER
+        from .card_drafter_agent import (
+            AgentCardDrafter,
+            default_card_drafter_config,
+            drafter_context_builder,
+        )
+
+        _drafter_bridge = SubagentBridge(
+            spec=spec,
+            runner=runner,
+            kb_runner=runner,  # wiki off ⇒ the wiki-aware runner is never taken
+            retriever=kb_retriever,
+            catalog=catalog,
+            purpose_fallbacks={"kb_chat": default_kb_agent_config},
+            get_user_id=lambda: HELP_SYSTEM_USER,
+            max_searches=kb_max_searches_per_turn,
+            superusers=frozenset({HELP_SYSTEM_USER}),
+        )
+        card_gen_coordinator.set_drafter(
+            AgentCardDrafter(
+                runner,
+                drafter_context_builder(
+                    bridge_run=_drafter_bridge.run,
+                    # The loop needs a TOOL-calling model; card_drafter_llm is an ILlm
+                    # (no tool loop, model string private), so drive the loop with the
+                    # kb_chat model + endpoint and treat card_drafter_llm purely as the
+                    # "drafting enabled" flag.
+                    agent_config=default_card_drafter_config(
+                        model=default_kb_agent_config.model,
+                        llm_base_url=default_kb_agent_config.llm_base_url,
+                        llm_api_key=default_kb_agent_config.llm_api_key,
+                    ),
+                    base_spec=AskKbSpec(
+                        kb_search_max=kb_max_searches_per_turn or 3, wiki_search_max=0
+                    ),
+                ),
+            )
+        )
+
     # #54: the item locator owns the slug/profile/title scan + default-chat /
     # engine-key / chat-validation rules every workspace route crosses. The route
     # modules + the turn/mention/replay services call ``locator.<method>`` directly.

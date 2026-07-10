@@ -48,7 +48,7 @@ class _FakeDrafter:
         self._cards = cards
         self._term_qs = term_qs or {}
 
-    def digest(self, *, doc_path: str, doc_text: str):
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = ""):
         from workspace_app.kb.card_gen import DocDigest
 
         return DocDigest(

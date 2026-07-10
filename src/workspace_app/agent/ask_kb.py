@@ -19,13 +19,21 @@ The card drafter (#506 P5) is the first consumer; a thin
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from .context import KbSearchBudget, WikiSearchBudget
 
 if TYPE_CHECKING:
+    from ..resources.kb import Citation
     from .context import AgentToolContext
+
+# The shape `ask_knowledge_base_impl` calls `ctx.run_subagent` with, and the shape
+# a `SubagentBridge.run`-like callable satisfies: `(purpose, payload, emit,
+# origin_id, scope, **spec_knobs) -> (answer, citations)`. Kept `Any`-loose
+# because the bridge takes several keyword-only extras (budget, wiki_budget, …).
+RunSubagent = Callable[..., Awaitable["tuple[str, list[Citation]]"]]
 
 
 @dataclass(frozen=True)
@@ -72,3 +80,40 @@ def build_ask_kb_context(spec: AskKbSpec, base: AgentToolContext) -> AgentToolCo
         kb_search_budget=KbSearchBudget(max_calls=spec.kb_search_max),
         wiki_search_budget=WikiSearchBudget(max_calls=spec.wiki_search_max),
     )
+
+
+def make_ask_knowledge_base(spec: AskKbSpec, bridge_run: RunSubagent) -> RunSubagent:
+    """The factory's product: pre-bind `spec` into a `run_subagent`-shaped callable
+    over a `SubagentBridge.run`-like `bridge_run`. Wire the result as a context's
+    `run_subagent` and its `ask_knowledge_base` tool delegates to a KB sub-agent
+    configured by `spec` — a capped chunk + wiki search over the spec's collection
+    scope, with the glossary, in an isolated sub-context (#270).
+
+    This is the ONE seam the card drafter (#506 P5) and the interactive KB agent
+    (Task #1) share: both delegate through the same bridge; they differ ONLY in the
+    `AskKbSpec` they pass here (the drafter forces `scope=[collection_id]` + tight
+    budgets; the interactive agent inherits the caller's tier scope). The spec's
+    budgets seed a FRESH allotment per call; `spec.scope` (when set) forces the
+    collection, else the caller's `scope` argument (a resolved priority tier, #280)
+    passes through. The whole spec rides along as `ask_kb_spec` so the bridge can
+    derive the sub-agent's tool set (`spec.allowed_tools()`) and prompt."""
+
+    async def run_subagent(
+        purpose: str,
+        payload: str,
+        emit: Any = None,
+        origin_id: str | None = None,
+        scope: list[str] | None = None,
+    ) -> tuple[str, list[Citation]]:
+        return await bridge_run(
+            spec.sub_agent_purpose,
+            payload,
+            emit,
+            origin_id,
+            collection_ids=list(spec.scope) if spec.scope is not None else scope,
+            budget=KbSearchBudget(max_calls=spec.kb_search_max),
+            wiki_budget=WikiSearchBudget(max_calls=spec.wiki_search_max),
+            ask_kb_spec=spec,
+        )
+
+    return run_subagent

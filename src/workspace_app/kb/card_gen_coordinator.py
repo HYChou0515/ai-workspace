@@ -144,6 +144,14 @@ class CardGenCoordinator:
         preserve_job_creator(self._job_rm)
         self._consuming = False
 
+    def set_drafter(self, drafter: CardDrafter) -> None:
+        """#506: swap the drafter in after construction. The agentic drafter is
+        built from the KB retriever + a subagent bridge, which exist only AFTER the
+        coordinators are built (create_app ordering), so create_app constructs this
+        coordinator with the fallback drafter then swaps in the agentic one here.
+        Safe: called synchronously during create_app, before any consumer starts."""
+        self._drafter = drafter
+
     # ── enqueue (producer) ───────────────────────────────────────────
     def enqueue(
         self, collection_id: str, doc_ids: list[str], *, requested_by: str | None = None
@@ -387,7 +395,11 @@ class CardGenCoordinator:
             self._runs.mark_done(run_id, doc_index)  # doc deleted before run — nothing to digest
             return
         try:
-            digest = self._drafter.digest(doc_path=ref.path, doc_text=ref.text)
+            # #506: the agentic drafter scopes its ask_knowledge_base to the doc's
+            # OWN collection, so pass it down (the one-shot drafter ignores it).
+            digest = self._drafter.digest(
+                doc_path=ref.path, doc_text=ref.text, collection_id=ref.collection_id
+            )
         except Exception:  # noqa: BLE001 — one doc's give-up must not sink the run
             _LOGGER.exception("CardGen: digest failed for doc %s (run %s)", doc_id, run_id)
             self._runs.mark_failed(run_id, doc_index)

@@ -31,7 +31,8 @@ if TYPE_CHECKING:
     # to the concrete type only for that call.
     from specstar.resource_manager.core import ResourceManager
 
-from ..agent.context import AgentToolContext, KbSearchBudget
+from ..agent.ask_kb import AskKbSpec
+from ..agent.context import AgentToolContext, KbSearchBudget, WikiSearchBudget
 from ..kb.chat_permission import effective_permission
 from ..kb.citations import parse_citations
 from ..kb.cited import record_citations
@@ -90,6 +91,8 @@ async def answer_question(
     on_citations: Callable[[list[Citation]], None] | None = None,
     max_searches: int | None = None,
     budget: KbSearchBudget | None = None,
+    wiki_budget: WikiSearchBudget | None = None,
+    ask_kb_spec: AskKbSpec | None = None,
     exclude_doc_ids: frozenset[str] = frozenset(),
 ) -> str:
     """Run one KB-agent turn to completion (no streaming) and return its answer
@@ -107,7 +110,23 @@ async def answer_question(
 
     `wiki` opts the lookup into the LLM-wiki path (the caller passes a
     wiki-aware runner) — the RCA composer's "Search the wiki" toggle forwarded
-    over the bridge."""
+    over the bridge.
+
+    `ask_kb_spec` (#506) is the configured-`ask_knowledge_base` factory's spec: when
+    set, the sub-agent's tool set becomes `spec.allowed_tools()` (authoritative — a
+    card drafter grants exactly kb_search + glossary, not the preset's full kit) and
+    `spec.prompt` (when given) overrides its instruction. `None` leaves the resolved
+    preset untouched, so the existing interactive `ask_knowledge_base` is unchanged.
+    `wiki_budget` seeds the turn's `search_wiki` cap the same way `budget` seeds
+    kb_search's."""
+    if ask_kb_spec is not None:
+        agent_config = msgspec.structs.replace(
+            agent_config,
+            allowed_tools=ask_kb_spec.allowed_tools(),
+            system_prompt=ask_kb_spec.prompt
+            if ask_kb_spec.prompt is not None
+            else agent_config.system_prompt,
+        )
     ctx = AgentToolContext(
         retriever=retriever,
         collection_ids=collection_ids,
@@ -132,6 +151,10 @@ async def answer_question(
         # ask_knowledge_base calls, #334 Q6) wins — all its sub-agents then draw
         # from the one budget; otherwise seed a fresh one from `max_searches`.
         kb_search_budget=budget if budget is not None else KbSearchBudget(max_calls=max_searches),
+        # #506: the configured ask_knowledge_base seeds a search_wiki cap here the
+        # same way it seeds kb_search's budget above; absent one, wiki search stays
+        # unlimited-but-counted (the interactive path is unchanged).
+        wiki_search_budget=wiki_budget if wiki_budget is not None else WikiSearchBudget(),
         # #308: the caller (the ask_knowledge_base bridge) resolves which docs the
         # ORIGINAL speaker's per-doc override blocks, so this sub-agent's retriever
         # can't surface a doc the speaker can't read — even though the KB ctx itself

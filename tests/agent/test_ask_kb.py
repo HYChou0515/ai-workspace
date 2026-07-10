@@ -7,7 +7,7 @@ directly."""
 from __future__ import annotations
 
 from workspace_app.agent import AgentToolContext
-from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context
+from workspace_app.agent.ask_kb import AskKbSpec, build_ask_kb_context, make_ask_knowledge_base
 
 
 def test_default_spec_grants_kb_search_wiki_and_glossary():
@@ -49,3 +49,46 @@ def test_build_preserves_other_base_context_fields():
     base = AgentToolContext(collection_ids=["c1"], acting_user="alice")
     ctx = build_ask_kb_context(AskKbSpec(), base)
     assert ctx.acting_user == "alice"
+
+
+async def test_make_ask_knowledge_base_applies_the_spec_to_the_delegation():
+    # The factory's product: a `run_subagent`-shaped callable that forwards to the
+    # shared SubagentBridge with the spec's knobs applied — the ONE place the
+    # drafter (P5) and the interactive KB agent (Task #1) differ is the spec they
+    # pass. Here a fake bridge captures what the spec injected.
+    captured: dict = {}
+
+    async def fake_bridge(purpose, payload, emit=None, origin_id=None, **kw):
+        captured.update(purpose=purpose, payload=payload, emit=emit, origin_id=origin_id, **kw)
+        return "the answer", []
+
+    run = make_ask_knowledge_base(
+        AskKbSpec(
+            kb_search_max=2, wiki_search_max=1, scope=["cid"], sub_agent_purpose="drafter_kb"
+        ),
+        fake_bridge,
+    )
+    answer, cites = await run("kb_chat", "what is M4?", None, "orig-1", None)
+
+    assert (answer, cites) == ("the answer", [])
+    assert captured["purpose"] == "drafter_kb"  # the spec's purpose wins over the caller's
+    assert captured["payload"] == "what is M4?"
+    assert captured["origin_id"] == "orig-1"
+    assert captured["collection_ids"] == ["cid"]  # spec.scope forces the collection
+    assert captured["budget"].max_calls == 2  # kb_search budget seeded from the spec
+    assert captured["wiki_budget"].max_calls == 1  # wiki budget seeded from the spec
+    assert captured["ask_kb_spec"].kb_search_max == 2  # spec forwarded so the bridge derives tools
+
+
+async def test_make_ask_knowledge_base_inherits_incoming_scope_when_spec_scope_none():
+    # A spec with no scope (the interactive KB agent) lets the caller's tier scope
+    # through unchanged — same rule as build_ask_kb_context.
+    captured: dict = {}
+
+    async def fake_bridge(purpose, payload, emit=None, origin_id=None, **kw):
+        captured.update(kw)
+        return "", []
+
+    run = make_ask_knowledge_base(AskKbSpec(scope=None), fake_bridge)
+    await run("kb_chat", "q", None, None, ["tier-a", "tier-b"])
+    assert captured["collection_ids"] == ["tier-a", "tier-b"]

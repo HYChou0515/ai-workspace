@@ -7,8 +7,9 @@ from collections.abc import AsyncIterator
 
 from specstar import SpecStar
 
+from workspace_app.agent.ask_kb import AskKbSpec
 from workspace_app.agent.config_catalog import AgentConfigCatalog
-from workspace_app.agent.context import AgentToolContext
+from workspace_app.agent.context import AgentToolContext, WikiSearchBudget
 from workspace_app.api.events import AgentEvent, MessageDelta, RunDone
 from workspace_app.api.subagent_bridge import SubagentBridge
 from workspace_app.kb.embedder import HashEmbedder
@@ -24,11 +25,16 @@ class _CapturingRunner:
 
     def __init__(self) -> None:
         self.seen_ids: list[str] | None = None
+        self.seen_tools: list[str] | None = None
+        self.seen_wiki_budget: int | None = None
         self.ran = False
 
     async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
         self.ran = True
         self.seen_ids = list(ctx.collection_ids)
+        assert ctx.agent_config is not None
+        self.seen_tools = ctx.agent_config.allowed_tools
+        self.seen_wiki_budget = ctx.wiki_search_budget.max_calls
         yield MessageDelta(text="answer")
         yield RunDone()
 
@@ -60,6 +66,27 @@ def _bridge(
         max_searches=None,
         superusers=superusers,
     )
+
+
+async def test_bridge_forwards_ask_kb_spec_and_wiki_budget_to_the_sub_agent():
+    # #506: the bridge is the shared delegation point — a spec-configured
+    # ask_knowledge_base rides its AskKbSpec (tool set) + wiki budget through to the
+    # sub-agent's context, exactly as make_ask_knowledge_base passes them.
+    spec = make_spec()
+    holder = {"id": "alice"}
+    cid = _new_collection(spec, by="alice")
+    runner = _CapturingRunner()
+
+    await _bridge(spec, runner, holder).run(
+        "kb_chat",
+        "q",
+        collection_ids=[cid],
+        ask_kb_spec=AskKbSpec(wiki_search_max=0, glossary=True),
+        wiki_budget=WikiSearchBudget(max_calls=4),
+    )
+
+    assert runner.seen_tools == ["kb_search", "lookup_glossary"]  # spec's authoritative set
+    assert runner.seen_wiki_budget == 4  # the wiki cap rode through
 
 
 async def test_bridge_searches_only_collections_the_speaker_can_read():

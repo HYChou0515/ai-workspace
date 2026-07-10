@@ -12,6 +12,7 @@ import msgspec
 from specstar import QB
 from specstar.types import Binary, TaskStatus
 
+from workspace_app.kb.card_drafter import NullCardDrafter
 from workspace_app.kb.card_gen import (
     CardDraft,
     DescriptionQuestionDraft,
@@ -84,9 +85,11 @@ class _FakeDrafter:
         self._desc_qs = desc_qs or {}
         self._fail_paths = fail_paths or set()
         self.seen: list[str] = []
+        self.seen_cids: list[str] = []
 
-    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest:
         self.seen.append(doc_path)
+        self.seen_cids.append(collection_id)
         if doc_path in self._fail_paths:
             raise RuntimeError(f"drafter gave up on {doc_path}")  # a post-failover give-up
         return DocDigest(
@@ -495,6 +498,37 @@ async def test_a_single_doc_run_short_circuits_without_fanning_out():
     assert coord.status(jid) == TaskStatus.COMPLETED
     (p,) = coord.proposals(jid).proposals
     assert p.keys == ["X"]
+
+
+async def test_the_drafter_is_told_the_documents_collection():
+    # #506 P5: the agentic drafter scopes its ask_knowledge_base to the document's
+    # OWN collection, so the coordinator must pass that collection id down to
+    # `digest` — it isn't recoverable from doc_path / doc_text alone.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+    assert drafter.seen_cids == [cid]
+
+
+async def test_set_drafter_swaps_in_a_new_drafter_after_construction():
+    # #506 composition: create_app can only build the agentic drafter AFTER the KB
+    # retriever + subagent bridge exist (both built after the coordinators), so it
+    # swaps it into the already-constructed coordinator before any consumer starts.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord = CardGenCoordinator(spec, NullCardDrafter())  # starts with the no-op drafter
+    coord.set_drafter(_FakeDrafter({"a.md": [CardDraft(keys=["SWAPPED"], snippet="s")]}))
+
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    (p,) = coord.proposals(jid).proposals
+    assert p.keys == ["SWAPPED"]  # the swapped-in drafter ran, not the null one
 
 
 async def test_a_text_bearing_doc_that_digests_to_nothing_is_logged(caplog):
