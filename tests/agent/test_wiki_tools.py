@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from agents import RunContextWrapper
 
-from workspace_app.agent import AgentToolContext
+from workspace_app.agent import AgentToolContext, WikiSearchBudget
 from workspace_app.agent.tools import (
     _coerce_source_path,
     list_sources_impl,
@@ -67,6 +67,49 @@ async def test_search_wiki_greps_the_pages():
     assert "Reflow zone 3" in out
     # the index link line matches too
     assert "/index.md" in out
+
+
+async def test_search_wiki_appends_budget_footer_when_capped():
+    # #506: mirror kb_search — when a per-draft wiki-search cap is set, every
+    # result tells the model how much of its budget remains, so it searches
+    # frugally instead of re-grepping the wiki up to max_turns.
+    ctx = _ctx(wiki_search_budget=WikiSearchBudget(max_calls=3))
+    await write_file_impl(ctx, "/entities/reflow.md", "Reflow zone 3 runs hot.\n")
+
+    out = await search_wiki_impl(ctx, "reflow")
+
+    assert "/entities/reflow.md" in out  # the hits are still returned
+    assert "1 of 3 used" in out  # first search of the budget
+    assert "2 left" in out
+
+
+async def test_search_wiki_sentinel_when_budget_exhausted():
+    # #506: the N+1th grep never runs — a sentinel steers the model to answer
+    # from the wiki content it already has (mirror kb_search).
+    ctx = _ctx(wiki_search_budget=WikiSearchBudget(max_calls=1))
+    await write_file_impl(ctx, "/entities/reflow.md", "Reflow zone 3 runs hot.\n")
+    await search_wiki_impl(ctx, "reflow")  # 1 of 1
+    out = await search_wiki_impl(ctx, "zone")  # exhausted
+    assert "budget" in out.lower() and "answer" in out.lower()
+    assert "/entities/reflow.md" not in out  # no hits — it didn't grep
+
+
+async def test_search_wiki_cap_zero_is_disabled_not_exhausted():
+    # #506: cap 0 = "no wiki search this reply" — reads as deliberately disabled.
+    ctx = _ctx(wiki_search_budget=WikiSearchBudget(max_calls=0))
+    await write_file_impl(ctx, "/entities/reflow.md", "Reflow zone 3.\n")
+    out = await search_wiki_impl(ctx, "reflow")
+    assert "no wiki searches" in out.lower()
+    assert "exhausted" not in out.lower()
+
+
+async def test_search_wiki_uncapped_has_no_footer():
+    # #506: unlimited (None) — no budget bookkeeping, no footer (the maintainer/
+    # reader path is unchanged).
+    ctx = _ctx(wiki_search_budget=WikiSearchBudget(max_calls=None))
+    await write_file_impl(ctx, "/entities/reflow.md", "Reflow zone 3.\n")
+    out = await search_wiki_impl(ctx, "reflow")
+    assert "budget" not in out.lower()
 
 
 async def test_search_wiki_no_match():
