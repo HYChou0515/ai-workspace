@@ -323,3 +323,40 @@ def test_msgspec_roundtrip_of_the_inbox_structs():
 
     empty = ReviewInbox(cards=[], questions=[])
     assert msgspec.json.decode(msgspec.json.encode(empty), type=ReviewInbox) == empty
+
+
+def _cluster_member(spec, cid, *, kind, ref_id, run_id="", cluster_key):
+    from workspace_app.resources.kb import ClusterMember
+
+    spec.get_resource_manager(ClusterMember).create(
+        ClusterMember(
+            collection_id=cid, kind=kind, ref_id=ref_id, run_id=run_id, cluster_key=cluster_key
+        )
+    )
+
+
+async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
+    """#506 P7: with grouped=True the inbox returns one ReviewCluster per concept —
+    a proposal + a question the reconcile step put in one cluster collapse to a
+    single row (⑤), and the flat cards/questions lists are empty (the FE reads
+    clusters)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    flat = build_review_inbox(spec, actor=Actor.human("u"))
+    run_id, card_id, qid = flat.cards[0].run_id, flat.cards[0].card.id, flat.questions[0].qid
+    _cluster_member(spec, cid, kind="proposal", ref_id=card_id, run_id=run_id, cluster_key="rz3")
+    _cluster_member(spec, cid, kind="term_question", ref_id=qid, cluster_key="rz3")
+
+    grouped = build_review_inbox(spec, actor=Actor.human("u"), grouped=True)
+
+    assert grouped.total == 1
+    assert grouped.cards == [] and grouped.questions == []
+    (cl,) = grouped.clusters
+    assert cl.cluster_key == "rz3"
+    assert len(cl.cards) == 1 and len(cl.questions) == 1

@@ -22,7 +22,7 @@ import msgspec
 from specstar import QB
 
 from ..perm import Actor, authorize
-from ..resources.kb import Collection, DocQuestion
+from ..resources.kb import ClusterMember, Collection, DocQuestion
 from .card_gen import ProposedCard, ensure_proposal_ids, is_active
 from .card_gen_run import CardGenRunStore
 from .doc_questions import questions_by_status
@@ -62,6 +62,23 @@ class ReviewQuestionItem(msgspec.Struct):
     question: DocQuestion
 
 
+class ReviewCluster(msgspec.Struct):
+    """#506 P7: one concept's review row — the proposals + questions the reconcile
+    step grouped under one ``cluster_key`` (⑤). A card and a question about the same
+    thing collapse here, so a reviewer acts on the concept once. ``created_time`` is
+    the newest member (the sort key); ``can_act`` is true if the actor may write to
+    any member's collection; ``size`` is the total member count."""
+
+    cluster_key: str
+    collection_id: str
+    collection_name: str
+    can_act: bool
+    created_time: float
+    cards: list[ReviewCardItem]
+    questions: list[ReviewQuestionItem]
+    size: int = 0
+
+
 class ReviewInbox(msgspec.Struct):
     """One page of the aggregated inbox: card proposals + questions (the current
     slice, each newest-first), plus ``total`` — the full filtered count across both
@@ -71,6 +88,74 @@ class ReviewInbox(msgspec.Struct):
     questions: list[ReviewQuestionItem]
     total: int = 0
     total_actionable: int = 0
+    # #506 P7: populated instead of cards/questions when the caller asks for the
+    # clustered view (grouped=True) — one row per concept, paginated by cluster.
+    clusters: list[ReviewCluster] = msgspec.field(default_factory=list)
+
+
+def cluster_key_map(spec: SpecStar, collection_ids: list[str]) -> dict[tuple[str, str], str]:
+    """Map each inbox-visible ClusterMember's ``(run_id, ref_id)`` to its
+    ``cluster_key`` — the join the inbox uses to group items. Only ``active``
+    proposal + term_question members participate: ``card`` members are the
+    comparison corpus (not shown) and ``suppressed``/``inactive`` members are hidden
+    from the default view. Scoped to the given collections (indexed query)."""
+    rm = spec.get_resource_manager(ClusterMember)
+    out: dict[tuple[str, str], str] = {}
+    for cid in collection_ids:
+        query = ((QB["collection_id"] == cid) & (QB["state"] == "active")).build()
+        for r in rm.list_resources(query):
+            member = r.data
+            assert isinstance(member, ClusterMember)
+            if member.kind == "card":
+                continue
+            out[(member.run_id, member.ref_id)] = member.cluster_key
+    return out
+
+
+def _item_ref(item: ReviewCardItem | ReviewQuestionItem) -> tuple[str, str]:
+    """The ``(run_id, ref_id)`` identity a ClusterMember was recorded under — a
+    proposal id ("0"/"1"/…) is only unique WITHIN its run, so the run id is part of
+    the key; a question id is globally unique (run_id ``""``)."""
+    if isinstance(item, ReviewCardItem):
+        return (item.run_id, item.card.id)
+    return ("", item.qid)
+
+
+def group_by_cluster(
+    items: list[ReviewCardItem | ReviewQuestionItem],
+    cluster_of: dict[tuple[str, str], str],
+) -> list[ReviewCluster]:
+    """Group flat review items into one row per reconcile ``cluster_key`` (⑤).
+    ``cluster_of`` maps an item's ``(run_id, ref_id)`` to its cluster; an item with
+    no entry (pre-P6 backlog, or a build with no embedder) falls back to its OWN
+    singleton cluster so nothing vanishes from review. Clusters come back newest
+    member first (``cluster_key`` breaks ties for determinism)."""
+    groups: dict[str, ReviewCluster] = {}
+    for item in items:
+        ref = _item_ref(item)
+        key = cluster_of.get(ref) or f"~{ref[0]}\x00{ref[1]}"  # singleton fallback
+        cluster = groups.get(key)
+        if cluster is None:
+            cluster = ReviewCluster(
+                cluster_key=key,
+                collection_id=item.collection_id,
+                collection_name=item.collection_name,
+                can_act=item.can_act,
+                created_time=item.created_time,
+                cards=[],
+                questions=[],
+            )
+            groups[key] = cluster
+        if isinstance(item, ReviewCardItem):
+            cluster.cards.append(item)
+        else:
+            cluster.questions.append(item)
+        cluster.size += 1
+        cluster.created_time = max(cluster.created_time, item.created_time)
+        cluster.can_act = cluster.can_act or item.can_act
+    out = list(groups.values())
+    out.sort(key=lambda c: (-c.created_time, c.cluster_key))
+    return out
 
 
 class _CollCtx(msgspec.Struct):
@@ -127,6 +212,7 @@ def build_review_inbox(
     kind: str = "all",
     q: str = "",
     actionable: bool = False,
+    grouped: bool = False,
     limit: int | None = None,
     offset: int = 0,
 ) -> ReviewInbox:
@@ -160,6 +246,24 @@ def build_review_inbox(
     # set (the nav badge reads it from an empty page); computed BEFORE the
     # ``actionable`` filter narrows the rows.
     total_actionable = sum(1 for i in merged if i.can_act)
+    # #506 P7: the clustered view groups items by concept FIRST, then pages the
+    # clusters ("一群一列"). Grouping must precede pagination (a cluster's members
+    # can't straddle a page), and the actionable filter applies at CLUSTER level (a
+    # cluster is actionable if any member is), so it runs after grouping.
+    if grouped:
+        cluster_of = cluster_key_map(spec, list(readable))
+        clusters = group_by_cluster(merged, cluster_of)
+        if actionable:
+            clusters = [c for c in clusters if c.can_act]
+        total = len(clusters)
+        page_c = clusters[offset:] if limit is None else clusters[offset : offset + limit]
+        return ReviewInbox(
+            cards=[],
+            questions=[],
+            clusters=page_c,
+            total=total,
+            total_actionable=total_actionable,
+        )
     if actionable:
         merged = [i for i in merged if i.can_act]
     merged.sort(key=lambda i: i.created_time, reverse=True)  # newest first, across both streams

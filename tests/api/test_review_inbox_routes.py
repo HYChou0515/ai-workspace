@@ -120,3 +120,33 @@ def test_review_inbox_resolved_view_and_collection_scope():
     assert [c["collection_id"] for c in scoped["cards"]] == [a]
     # nothing resolved yet → history empty
     assert client.get("/kb/review-inbox", params={"resolved": "true"}).json()["cards"] == []
+
+
+def test_review_inbox_grouped_returns_clusters():
+    """#506 P7: grouped=true returns one cluster per concept (a proposal + a
+    question the reconcile step grouped collapse into one row); the flat
+    cards/questions lists are empty in that mode."""
+    from workspace_app.resources.kb import ClusterMember
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    run_id = _seed_done_run(spec, cid, [ProposedCard(id="0", keys=["RZ3"], title="RZ3")])
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="R7", source_doc_id="d1", question_text="What is R7?"
+    )
+    rm = spec.get_resource_manager(ClusterMember)
+    rm.create(
+        ClusterMember(
+            collection_id=cid, kind="proposal", ref_id="0", run_id=run_id, cluster_key="rz3"
+        )
+    )
+    rm.create(ClusterMember(collection_id=cid, kind="term_question", ref_id=qid, cluster_key="rz3"))
+
+    body = _client(spec).get("/kb/review-inbox", params={"grouped": "true"}).json()
+
+    assert body["cards"] == [] and body["questions"] == []
+    assert body["total"] == 1
+    (cl,) = body["clusters"]
+    assert cl["cluster_key"] == "rz3"
+    assert len(cl["cards"]) == 1 and len(cl["questions"]) == 1
+    assert cl["size"] == 2
