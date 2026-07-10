@@ -79,6 +79,21 @@ class ReviewCluster(msgspec.Struct):
     size: int = 0
 
 
+class SuppressedItem(msgspec.Struct):
+    """#506 P7: one candidate the reconcile step auto-dropped as already-explained —
+    shown only in the suppressed-audit view so a human can verify nothing was wrongly
+    discarded. A dropped candidate is not on any run (it never became a proposal), so
+    the audit reads straight from the suppressed ClusterMember: ``label`` (the term /
+    title) + ``reason`` (``wiki`` vs ``near-card``) are enough to review it."""
+
+    collection_id: str
+    collection_name: str
+    kind: str  # "proposal" | "term_question"
+    label: str
+    cluster_key: str
+    reason: str  # "wiki" | "near-card"
+
+
 class ReviewInbox(msgspec.Struct):
     """One page of the aggregated inbox: card proposals + questions (the current
     slice, each newest-first), plus ``total`` — the full filtered count across both
@@ -91,6 +106,8 @@ class ReviewInbox(msgspec.Struct):
     # #506 P7: populated instead of cards/questions when the caller asks for the
     # clustered view (grouped=True) — one row per concept, paginated by cluster.
     clusters: list[ReviewCluster] = msgspec.field(default_factory=list)
+    # #506 P7: the auto-suppressed candidates, only when suppressed=True is asked.
+    suppressed: list[SuppressedItem] = msgspec.field(default_factory=list)
 
 
 def cluster_key_map(spec: SpecStar, collection_ids: list[str]) -> dict[tuple[str, str], str]:
@@ -109,6 +126,31 @@ def cluster_key_map(spec: SpecStar, collection_ids: list[str]) -> dict[tuple[str
             if member.kind == "card":
                 continue
             out[(member.run_id, member.ref_id)] = member.cluster_key
+    return out
+
+
+def suppressed_members(spec: SpecStar, readable: dict[str, _CollCtx]) -> list[SuppressedItem]:
+    """The auto-suppressed candidates across the readable collections — the audit
+    view (⑥). Reads ``state="suppressed"`` ClusterMembers directly (a dropped
+    candidate is on no run), newest-collection-agnostic; card members can't be
+    suppressed so ``kind`` is always proposal / term_question."""
+    rm = spec.get_resource_manager(ClusterMember)
+    out: list[SuppressedItem] = []
+    for cid, ctx in readable.items():
+        query = ((QB["collection_id"] == cid) & (QB["state"] == "suppressed")).build()
+        for r in rm.list_resources(query):
+            member = r.data
+            assert isinstance(member, ClusterMember)
+            out.append(
+                SuppressedItem(
+                    collection_id=cid,
+                    collection_name=ctx.name,
+                    kind=member.kind,
+                    label=member.label or member.norm_key,
+                    cluster_key=member.cluster_key,
+                    reason=member.reason,
+                )
+            )
     return out
 
 
@@ -213,6 +255,7 @@ def build_review_inbox(
     q: str = "",
     actionable: bool = False,
     grouped: bool = False,
+    suppressed: bool = False,
     limit: int | None = None,
     offset: int = 0,
 ) -> ReviewInbox:
@@ -233,6 +276,17 @@ def build_review_inbox(
     readable = _readable_collections(spec, actor, superusers)
     if collection_id is not None:
         readable = {cid: ctx for cid, ctx in readable.items() if cid == collection_id}
+
+    # #506 P7: the suppressed-audit view is a different stream (dropped candidates
+    # live only as suppressed ClusterMembers, not on any run) — return it and stop.
+    if suppressed:
+        items = suppressed_members(spec, readable)
+        if q:
+            needle = q.lower()
+            items = [s for s in items if needle in s.label.lower()]
+        total = len(items)
+        page_s = items[offset:] if limit is None else items[offset : offset + limit]
+        return ReviewInbox(cards=[], questions=[], suppressed=page_s, total=total)
 
     merged: list[ReviewCardItem | ReviewQuestionItem] = []
     if kind != "questions":

@@ -607,6 +607,10 @@ class ClusterMember(Struct):  # → resource "cluster-member"
     norm_key: str = ""  # norm(term / primary key) — the exact-match fast path
     cluster_key: str = ""  # the assigned group key (== a norm_key of the group's seed)
     state: str = "active"  # active | suppressed | inactive
+    reason: str = ""  # why a suppressed member was auto-dropped: "wiki" | "near-card" | ""
+    # a short human label for the suppressed-audit view (the surface term/title), so
+    # the audit reads without re-fetching a dropped candidate that was never persisted
+    label: str = ""
     embedding: Annotated[list[float] | None, Vector(dim=EMBED_DIM, distance="cosine")] = None
 
 

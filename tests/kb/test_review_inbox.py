@@ -325,12 +325,21 @@ def test_msgspec_roundtrip_of_the_inbox_structs():
     assert msgspec.json.decode(msgspec.json.encode(empty), type=ReviewInbox) == empty
 
 
-def _cluster_member(spec, cid, *, kind, ref_id, run_id="", cluster_key):
+def _cluster_member(
+    spec, cid, *, kind, ref_id, run_id="", cluster_key, state="active", reason="", label=""
+):
     from workspace_app.resources.kb import ClusterMember
 
     spec.get_resource_manager(ClusterMember).create(
         ClusterMember(
-            collection_id=cid, kind=kind, ref_id=ref_id, run_id=run_id, cluster_key=cluster_key
+            collection_id=cid,
+            kind=kind,
+            ref_id=ref_id,
+            run_id=run_id,
+            cluster_key=cluster_key,
+            state=state,
+            reason=reason,
+            label=label,
         )
     )
 
@@ -360,3 +369,43 @@ async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
     (cl,) = grouped.clusters
     assert cl.cluster_key == "rz3"
     assert len(cl.cards) == 1 and len(cl.questions) == 1
+
+
+async def test_suppressed_audit_lists_dropped_candidates_with_reason():
+    """#506 P7: the suppressed filter surfaces what the reconcile step auto-dropped
+    (already explained) — each with its reason + label — so a human can audit that
+    nothing was wrongly discarded. Dropped candidates aren't on any run, so they come
+    straight from the suppressed ClusterMembers."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="0",
+        run_id="r1",
+        cluster_key="alpha",
+        state="suppressed",
+        reason="wiki",
+        label="Alpha",
+    )
+
+    audit = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True)
+
+    assert audit.cards == [] and audit.questions == [] and audit.clusters == []
+    (s,) = audit.suppressed
+    assert s.label == "Alpha"
+    assert s.reason == "wiki"
+    assert s.kind == "proposal"
+    assert s.collection_name == "Alpha"
+
+
+async def test_suppressed_audit_hidden_from_the_default_view():
+    """A suppressed candidate never appears in the normal (active) inbox."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec, cid, kind="proposal", ref_id="0", run_id="r1", cluster_key="a", state="suppressed"
+    )
+    normal = build_review_inbox(spec, actor=Actor.human("u"))
+    assert normal.cards == [] and normal.suppressed == []

@@ -150,3 +150,31 @@ def test_review_inbox_grouped_returns_clusters():
     assert cl["cluster_key"] == "rz3"
     assert len(cl["cards"]) == 1 and len(cl["questions"]) == 1
     assert cl["size"] == 2
+
+
+def test_review_inbox_suppressed_lists_dropped_candidates():
+    """#506 P7: suppressed=true returns the auto-dropped candidates with their
+    reason/label for audit; the normal streams are empty in that mode."""
+    from workspace_app.resources.kb import ClusterMember
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    spec.get_resource_manager(ClusterMember).create(
+        ClusterMember(
+            collection_id=cid,
+            kind="proposal",
+            ref_id="0",
+            run_id="r1",
+            cluster_key="rz3",
+            state="suppressed",
+            reason="near-card",
+            label="RZ3",
+        )
+    )
+    body = _client(spec).get("/kb/review-inbox", params={"suppressed": "true"}).json()
+
+    assert body["cards"] == [] and body["clusters"] == []
+    (s,) = body["suppressed"]
+    assert s["label"] == "RZ3"
+    assert s["reason"] == "near-card"
+    assert s["kind"] == "proposal"

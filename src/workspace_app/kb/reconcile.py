@@ -178,6 +178,7 @@ class Reconciler:
             # case-insensitive — same default as the search_wiki tool).
             wiki = bool(wiki_blob) and any(k.strip() and k.lower() in wiki_blob for k in p.keys)
             state = "active"
+            reason = ""
             if p.mode == "new":
                 grade = grade_candidate(
                     self._spec,
@@ -188,7 +189,7 @@ class Reconciler:
                     wiki_hit=wiki,
                 )
                 if grade.action == "suppress":
-                    state = "suppressed"
+                    state, reason = "suppressed", grade.reason
                 elif grade.action == "update":
                     p.mode = "update"
                     p.target_card_id = grade.target_card_id
@@ -209,6 +210,8 @@ class Reconciler:
                 cluster_key=cluster_key,
                 state=state,
                 embedding=vec,
+                reason=reason,
+                label=p.title or (p.keys[0] if p.keys else norm_key),
             )
             if state != "suppressed":
                 kept.append(p)
@@ -238,6 +241,7 @@ class Reconciler:
             cluster_key=cluster_key,
             state="active",
             embedding=vec,
+            label=term,
         )
 
     def _project_cards(
@@ -262,6 +266,7 @@ class Reconciler:
                 cluster_key=norm_key,
                 state="active",
                 embedding=vec,
+                label=card.title or (card.keys[0] if card.keys else norm_key),
             )
 
     def _embed(self, text: str) -> list[float]:
@@ -279,6 +284,8 @@ class Reconciler:
         cluster_key: str,
         state: str,
         embedding: list[float],
+        reason: str = "",
+        label: str = "",
     ) -> None:
         rm = self._spec.get_resource_manager(ClusterMember)
         rm.create_or_update(
@@ -291,6 +298,8 @@ class Reconciler:
                 norm_key=norm_key,
                 cluster_key=cluster_key,
                 state=state,
+                reason=reason,
+                label=label,
                 embedding=embedding,
             ),
         )

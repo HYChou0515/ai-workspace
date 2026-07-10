@@ -21,6 +21,7 @@ from ..kb.review_inbox import (
     ReviewCardItem,
     ReviewCluster,
     ReviewQuestionItem,
+    SuppressedItem,
     build_review_inbox,
 )
 from ..perm import Actor
@@ -71,6 +72,17 @@ class ReviewClusterOut(BaseModel):
     size: int = 0
 
 
+class SuppressedItemOut(BaseModel):
+    """#506 P7: one auto-dropped candidate for the suppressed-audit view."""
+
+    collection_id: str
+    collection_name: str
+    kind: str
+    label: str
+    cluster_key: str
+    reason: str
+
+
 class ReviewInboxOut(BaseModel):
     cards: list[ReviewCardOut]
     questions: list[ReviewQuestionOut]
@@ -78,6 +90,8 @@ class ReviewInboxOut(BaseModel):
     total_actionable: int = 0  # actionable count over the whole set (the nav badge)
     # #506 P7: populated instead of cards/questions when grouped=true (one per concept)
     clusters: list[ReviewClusterOut] = []
+    # #506 P7: the auto-suppressed candidates, only when suppressed=true
+    suppressed: list[SuppressedItemOut] = []
 
 
 def _card_out(item: ReviewCardItem) -> ReviewCardOut:
@@ -98,6 +112,17 @@ def _question_out(item: ReviewQuestionItem) -> ReviewQuestionOut:
         can_act=item.can_act,
         created_time=item.created_time,
         question=_question_to_io(item.qid, item.question),
+    )
+
+
+def _suppressed_out(item: SuppressedItem) -> SuppressedItemOut:
+    return SuppressedItemOut(
+        collection_id=item.collection_id,
+        collection_name=item.collection_name,
+        kind=item.kind,
+        label=item.label,
+        cluster_key=item.cluster_key,
+        reason=item.reason,
     )
 
 
@@ -133,6 +158,7 @@ def register_review_inbox_routes(
         q: str = "",
         actionable: bool = False,
         grouped: bool = False,
+        suppressed: bool = False,
         limit: int | None = None,
         offset: int = 0,
     ) -> ReviewInboxOut:
@@ -154,6 +180,7 @@ def register_review_inbox_routes(
             q=q,
             actionable=actionable,
             grouped=grouped,
+            suppressed=suppressed,
             limit=limit,
             offset=offset,
         )
@@ -163,4 +190,5 @@ def register_review_inbox_routes(
             total=inbox.total,
             total_actionable=inbox.total_actionable,
             clusters=[_cluster_out(c) for c in inbox.clusters],
+            suppressed=[_suppressed_out(s) for s in inbox.suppressed],
         )
