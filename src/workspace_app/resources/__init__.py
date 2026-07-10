@@ -430,9 +430,18 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # would cycle (resources → kb.card_gen → kb.context_cards → resources).
     from ..kb.card_gen import CardGenRun, CardGenUnit
 
-    # #506: ``collection_id`` indexed so the per-collection 待審核 tab queries
-    # ``(collection_id, status)`` instead of scanning every collection's runs.
-    spec.add_model(CardGenRun, indexed_fields=["status", "collection_id"])
+    # #506: ``collection_id`` newly indexed so the per-collection 待審核 tab queries
+    # ``(collection_id, status)`` instead of scanning every collection's runs. It's a
+    # NEW index, so existing rows (version ``None``) carry no extracted
+    # ``collection_id`` and the scoped query would MISS old pending runs — exactly the
+    # backlog we're trying to speed up. A no-op ``Schema("v2")`` reindex step lets an
+    # operator backfill them via ``POST /card-gen-run/migrate/execute`` (new rows are
+    # indexed on write); until then the GLOBAL inbox (status-only query) still sees
+    # every row, so nothing is lost, only the per-collection tab under-counts old rows.
+    spec.add_model(
+        Schema(CardGenRun, "v2").step(None, _reindex_only, to="v2", source_type=CardGenRun),
+        indexed_fields=["status", "collection_id"],
+    )
     # #414: per-doc staged digest (run_id indexed so finalize lists a run's units
     # to merge + raise questions from). Transient; deleted at finalize.
     spec.add_model(CardGenUnit, indexed_fields=["run_id"])
