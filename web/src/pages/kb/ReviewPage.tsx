@@ -9,14 +9,28 @@ import { useState } from "react";
 import { Skeleton } from "../../components/Skeleton";
 import { useBreadcrumbs } from "../../hooks/breadcrumbs";
 import { useReviewInbox } from "../../hooks/useReviewInbox";
-import { useT } from "../../lib/i18n";
+import { type MsgKey, useT } from "../../lib/i18n";
+import { ClusterReviewList } from "./ClusterReviewList";
 import { ReviewTable } from "./ReviewTable";
+
+type View = "pending" | "resolved" | "grouped";
+
+const TABS: { view: View; label: MsgKey }[] = [
+  { view: "pending", label: "review.tab.pending" },
+  { view: "grouped", label: "review.tab.grouped" },
+  { view: "resolved", label: "review.tab.resolved" },
+];
 
 export function ReviewPage() {
   const t = useT();
   useBreadcrumbs([{ label: t("nav.home"), to: "/" }, { label: t("review.title") }]);
-  const [resolved, setResolved] = useState(false);
-  const { query, ...actions } = useReviewInbox({ resolved });
+  const [view, setView] = useState<View>("pending");
+  // #506 P7: the grouped view collapses duplicate/related items by concept; the
+  // pending/resolved views keep the flat filterable table.
+  const { query, ...actions } = useReviewInbox({
+    resolved: view === "resolved",
+    grouped: view === "grouped",
+  });
   const inbox = query.data;
 
   return (
@@ -27,24 +41,18 @@ export function ReviewPage() {
       </header>
 
       <div className="kb-tabs" role="tablist" aria-label={t("review.title")}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={!resolved}
-          className={`kb-tab${!resolved ? " is-active" : ""}`}
-          onClick={() => setResolved(false)}
-        >
-          {t("review.tab.pending")}
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={resolved}
-          className={`kb-tab${resolved ? " is-active" : ""}`}
-          onClick={() => setResolved(true)}
-        >
-          {t("review.tab.resolved")}
-        </button>
+        {TABS.map((tab) => (
+          <button
+            key={tab.view}
+            type="button"
+            role="tab"
+            aria-selected={view === tab.view}
+            className={`kb-tab${view === tab.view ? " is-active" : ""}`}
+            onClick={() => setView(tab.view)}
+          >
+            {t(tab.label)}
+          </button>
+        ))}
       </div>
 
       {query.isPending || !inbox ? (
@@ -53,12 +61,16 @@ export function ReviewPage() {
         </div>
       ) : (
         <div className="rvw-page__body">
-          <ReviewTable
-            cards={inbox.cards}
-            questions={inbox.questions}
-            resolved={resolved}
-            actions={{ query, ...actions }}
-          />
+          {view === "grouped" ? (
+            <ClusterReviewList clusters={inbox.clusters ?? []} />
+          ) : (
+            <ReviewTable
+              cards={inbox.cards}
+              questions={inbox.questions}
+              resolved={view === "resolved"}
+              actions={{ query, ...actions }}
+            />
+          )}
         </div>
       )}
     </div>

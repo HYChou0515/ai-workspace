@@ -2727,6 +2727,96 @@
   min-height: 200px;
 }
 
+/* #506 P7: the by-concept (clustered) review view. */
+.rvw-cluster-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.rvw-cluster {
+  border: 1px solid var(--paper-3);
+  border-radius: 8px;
+  background: var(--white);
+  overflow: hidden;
+}
+.rvw-cluster__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink);
+  font: inherit;
+}
+.rvw-cluster__head:hover {
+  background: var(--paper-2);
+}
+.rvw-cluster__label {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rvw-cluster__count {
+  flex: none;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft, var(--paper-2));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
+.rvw-cluster__coll {
+  flex: none;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+.rvw-cluster__members {
+  border-top: 1px solid var(--paper-2);
+  padding: 4px 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.rvw-cluster__member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 0;
+  font-size: 13px;
+}
+.rvw-cluster__kind {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--white);
+}
+.rvw-cluster__kind--card {
+  background: var(--accent);
+}
+.rvw-cluster__kind--q {
+  background: var(--warn, #b8860b);
+}
+.rvw-cluster__empty {
+  color: var(--ink-3);
+  padding: 24px 8px;
+  text-align: center;
+}
+
 .rvw {
   display: flex;
   flex-direction: column;

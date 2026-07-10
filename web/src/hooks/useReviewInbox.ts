@@ -17,7 +17,12 @@ import { qk } from "../api/queryKeys";
 
 const REVIEW_PREFIX = ["kb", "review-inbox"] as const;
 
-export type ReviewInboxOpts = { resolved?: boolean; collectionId?: string };
+export type ReviewInboxOpts = {
+  resolved?: boolean;
+  collectionId?: string;
+  grouped?: boolean;
+  suppressed?: boolean;
+};
 
 export function useReviewInbox(opts: ReviewInboxOpts = {}, client: KbApi = kbApi) {
   const qc = useQueryClient();
