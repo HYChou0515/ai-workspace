@@ -1163,3 +1163,28 @@ async def test_finalize_reconcile_suppresses_a_term_already_in_the_wiki():
     assert coord.proposals(jid).proposals == []  # suppressed by the wiki grep
     supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
     assert len(supp) == 1
+
+
+async def test_finalize_reconcile_clusters_a_term_question():
+    """#506 P6 ⑤: a raised term question is projected as an active ClusterMember with
+    a cluster_key, so the inbox (P7) can group it with a proposal for the same
+    concept."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "d.md", "A Widget appears here")
+    drafter = _FakeDrafter(
+        {"d.md": []},
+        term_qs={"d.md": [TermQuestionDraft(term="Widget", question="What is a Widget?")]},
+    )
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        reconciler=Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=0.9, update_tau=0.7),
+    )
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    tq = [m for m in _members(spec, cid) if m.kind == "term_question"]
+    assert len(tq) == 1
+    assert tq[0].state == "active"
+    assert tq[0].cluster_key == "widget"  # norm(Widget) — opened its own cluster

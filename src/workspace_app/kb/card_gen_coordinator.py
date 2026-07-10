@@ -550,13 +550,18 @@ class CardGenCoordinator:
                 cap=self._max_questions_per_doc,
             )
             for tq in terms:
-                open_or_merge_term_question(
+                qid = open_or_merge_term_question(
                     self._spec,
                     collection_id=cid,
                     term=tq.term,
                     source_doc_id=doc_id,
                     question_text=tq.question,
                 )
+                # #506 P6 ⑤: cluster the question so the inbox can group it with a
+                # proposal for the same concept (projected members already exist —
+                # proposals are reconciled before questions in _finalize).
+                if self._reconciler is not None:
+                    self._reconciler.reconcile_term_question(cid, qid, tq.term)
             for dq in descs:
                 add_description_question(
                     self._spec,

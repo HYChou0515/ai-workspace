@@ -19,7 +19,7 @@ from specstar.util.vector_distance import cosine_distance
 
 from ..resources.kb import ClusterMember, Collection, ContextCard, WikiPage
 from .card_gen import ProposedCard, ensure_proposal_ids
-from .context_cards import derive_norm_keys
+from .context_cards import derive_norm_keys, norm
 from .embedder import Embedder
 
 
@@ -213,6 +213,32 @@ class Reconciler:
             if state != "suppressed":
                 kept.append(p)
         return kept
+
+    def reconcile_term_question(self, collection_id: str, question_id: str, term: str) -> None:
+        """Project a raised term question into ClusterMember so it clusters with any
+        proposal (or card) for the same concept — the inbox can then GROUP BY
+        cluster_key across BOTH kinds (⑤). Idempotent per question id (the same term
+        raised by several docs shares one DocQuestion id → one member)."""
+        norm_key = norm(term)
+        vec = self._embed(_card_text(norm_key, term))
+        cluster_key = assign_cluster_key(
+            self._spec,
+            collection_id=collection_id,
+            norm_key=norm_key,
+            embedding=vec,
+            tau=self._cluster_tau,
+        )
+        self._record(
+            f"tq:{question_id}",
+            collection_id=collection_id,
+            kind="term_question",
+            ref_id=question_id,
+            run_id="",
+            norm_key=norm_key,
+            cluster_key=cluster_key,
+            state="active",
+            embedding=vec,
+        )
 
     def _project_cards(
         self, collection_id: str, existing: Sequence[tuple[str, ContextCard]]
