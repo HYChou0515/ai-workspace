@@ -12,13 +12,15 @@ import { useReviewInbox } from "../../hooks/useReviewInbox";
 import { type MsgKey, useT } from "../../lib/i18n";
 import { ClusterReviewList } from "./ClusterReviewList";
 import { ReviewTable } from "./ReviewTable";
+import { SuppressedAuditList } from "./SuppressedAuditList";
 
-type View = "pending" | "resolved" | "grouped";
+type View = "pending" | "resolved" | "grouped" | "suppressed";
 
 const TABS: { view: View; label: MsgKey }[] = [
   { view: "pending", label: "review.tab.pending" },
   { view: "grouped", label: "review.tab.grouped" },
   { view: "resolved", label: "review.tab.resolved" },
+  { view: "suppressed", label: "review.tab.suppressed" },
 ];
 
 export function ReviewPage() {
@@ -30,6 +32,7 @@ export function ReviewPage() {
   const { query, ...actions } = useReviewInbox({
     resolved: view === "resolved",
     grouped: view === "grouped",
+    suppressed: view === "suppressed",
   });
   const inbox = query.data;
 
@@ -63,6 +66,8 @@ export function ReviewPage() {
         <div className="rvw-page__body">
           {view === "grouped" ? (
             <ClusterReviewList clusters={inbox.clusters ?? []} />
+          ) : view === "suppressed" ? (
+            <SuppressedAuditList items={inbox.suppressed ?? []} />
           ) : (
             <ReviewTable
               cards={inbox.cards}

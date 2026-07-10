@@ -644,11 +644,22 @@ export const messages = {
   "review.tab.resolved": { "zh-TW": "已處理", en: "Handled" },
   // #506 P7: the clustered ("group duplicates") view.
   "review.tab.grouped": { "zh-TW": "依概念分組", en: "By concept" },
+  "review.tab.suppressed": { "zh-TW": "已自動略過", en: "Auto-skipped" },
   "review.cluster.count": { "zh-TW": "{n} 項", en: "{n} items" },
   "review.cluster.empty": {
     "zh-TW": "目前沒有可分組的待審核項目。",
     en: "No groupable items to review right now.",
   },
+  "review.suppressed.empty": {
+    "zh-TW": "沒有被自動略過的候選——所有提案都進了待審核。",
+    en: "Nothing was auto-skipped — every candidate reached the review queue.",
+  },
+  "review.suppressed.reason.wiki": { "zh-TW": "已在 wiki 說明", en: "Explained in the wiki" },
+  "review.suppressed.reason.near-card": {
+    "zh-TW": "已有相近卡片",
+    en: "A similar card already exists",
+  },
+  "review.suppressed.reason.other": { "zh-TW": "已被涵蓋", en: "Already covered" },
   "review.filter.search": { "zh-TW": "搜尋標題、詞彙、問題…", en: "Search titles, terms, questions…" },
   "review.filter.collection": { "zh-TW": "所有知識庫", en: "All knowledge bases" },
   "review.filter.type": { "zh-TW": "所有類型", en: "All types" },
