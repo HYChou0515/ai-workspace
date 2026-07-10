@@ -505,6 +505,10 @@ def create_app(
     # app.state at startup — the ingestor is built after the FastAPI app, so the
     # lifespan can't capture it directly (symmetric with the coordinators below).
     app.state.ingestor = ingestor
+    # #506 P8: the cluster sweeper (api/lifecycle.py) reads the KB text embedder off
+    # app.state for the same reason — it is built here, after the FastAPI app, so the
+    # already-constructed lifespan closures can't capture it directly.
+    app.state.kb_embedder = embedder
     # P2: ensure the "Investigations Knowledge" collection exists at boot so
     # the chat-promote path always has a target. Idempotent (re-uses a
     # collection with the same name).

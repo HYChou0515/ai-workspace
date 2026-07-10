@@ -13,13 +13,19 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from specstar import QB, SpecStar
 from specstar.util.vector_distance import cosine_distance
 
+if TYPE_CHECKING:
+    from specstar.types import IResourceManager
+
 from ..resources.kb import ClusterMember, Collection, ContextCard, WikiPage
-from .card_gen import ProposedCard, ensure_proposal_ids
+from .card_gen import ProposedCard, ensure_proposal_ids, is_active
+from .card_gen_run import CardGenRunStore
 from .context_cards import derive_norm_keys, norm
+from .doc_questions import questions_by_status
 from .embedder import Embedder
 
 
@@ -120,6 +126,41 @@ def _card_text(norm_key: str, title: str) -> str:
     the normalised key plus the display title, so a card and a candidate for the
     same concept land near each other regardless of body length."""
     return f"{norm_key} {title}".strip()
+
+
+def _put_member(
+    rm: IResourceManager,
+    member_id: str,
+    *,
+    collection_id: str,
+    kind: str,
+    ref_id: str,
+    run_id: str,
+    norm_key: str,
+    cluster_key: str,
+    state: str,
+    embedding: list[float] | None,
+    reason: str = "",
+    label: str = "",
+) -> None:
+    """Idempotently upsert one :class:`ClusterMember` by its deterministic id — the
+    single write path shared by the finalize-time :class:`Reconciler` and the
+    background :func:`backfill_collection` sweep, so both project members identically."""
+    rm.create_or_update(
+        member_id,
+        ClusterMember(
+            collection_id=collection_id,
+            kind=kind,
+            ref_id=ref_id,
+            run_id=run_id,
+            norm_key=norm_key,
+            cluster_key=cluster_key,
+            state=state,
+            reason=reason,
+            label=label,
+            embedding=embedding,
+        ),
+    )
 
 
 class Reconciler:
@@ -287,21 +328,19 @@ class Reconciler:
         reason: str = "",
         label: str = "",
     ) -> None:
-        rm = self._spec.get_resource_manager(ClusterMember)
-        rm.create_or_update(
+        _put_member(
+            self._spec.get_resource_manager(ClusterMember),
             member_id,
-            ClusterMember(
-                collection_id=collection_id,
-                kind=kind,
-                ref_id=ref_id,
-                run_id=run_id,
-                norm_key=norm_key,
-                cluster_key=cluster_key,
-                state=state,
-                reason=reason,
-                label=label,
-                embedding=embedding,
-            ),
+            collection_id=collection_id,
+            kind=kind,
+            ref_id=ref_id,
+            run_id=run_id,
+            norm_key=norm_key,
+            cluster_key=cluster_key,
+            state=state,
+            embedding=embedding,
+            reason=reason,
+            label=label,
         )
 
 
@@ -328,3 +367,223 @@ def collection_wiki_text(spec: SpecStar, collection_id: str) -> str:
         assert isinstance(data, bytes)
         parts.append(data.decode("utf-8", "ignore"))
     return "\n".join(parts)
+
+
+def backfill_collection(
+    spec: SpecStar,
+    embedder: Embedder,
+    collection_id: str,
+    *,
+    cluster_tau: float,
+    limit: int = 200,
+) -> int:
+    """#506 P8: project a collection's pending proposals + open term questions that
+    have NO :class:`ClusterMember` yet into active members — embed + assign a
+    ``cluster_key`` (:func:`assign_cluster_key`) — so the grouped inbox clusters them
+    instead of showing each as an un-grouped singleton.
+
+    Members whose deterministic id already exists are skipped, so the sweep is
+    idempotent (a second pass over an already-projected collection returns ``0``) and
+    it never fights the finalize-time :class:`Reconciler` for rows it already wrote.
+    Batched by ``limit`` so one sweep can't stall on a huge pre-P6 backlog — the
+    remainder is picked up next tick. Returns the number of members newly projected."""
+    rm = spec.get_resource_manager(ClusterMember)
+    seen: set[str] = set()
+    for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
+        seen.add(r.info.resource_id)  # ty: ignore[unresolved-attribute]
+    n = 0
+    for run_id, _created, run in CardGenRunStore(spec).runs_by_status(
+        ["done"], collection_id=collection_id
+    ):
+        for p in ensure_proposal_ids(run.proposals):
+            if not is_active(p):
+                continue
+            member_id = f"prop:{run_id}:{p.id}"
+            if member_id in seen:
+                continue
+            norm_key = (derive_norm_keys(p.keys) or [""])[0]
+            vec = embedder.embed_documents([_card_text(norm_key, p.title)])[0]
+            cluster_key = assign_cluster_key(
+                spec,
+                collection_id=collection_id,
+                norm_key=norm_key,
+                embedding=vec,
+                tau=cluster_tau,
+            )
+            _put_member(
+                rm,
+                member_id,
+                collection_id=collection_id,
+                kind="proposal",
+                ref_id=p.id,
+                run_id=run_id,
+                norm_key=norm_key,
+                cluster_key=cluster_key,
+                state="active",
+                embedding=vec,
+                label=p.title or (p.keys[0] if p.keys else norm_key),
+            )
+            seen.add(member_id)
+            n += 1
+            if n >= limit:
+                return n
+    for qid, _created, q in questions_by_status(spec, [collection_id], ["open"]):
+        if q.kind != "term":
+            continue
+        member_id = f"tq:{qid}"
+        if member_id in seen:
+            continue
+        norm_key = q.norm_key or norm(q.term)
+        vec = embedder.embed_documents([_card_text(norm_key, q.term)])[0]
+        cluster_key = assign_cluster_key(
+            spec,
+            collection_id=collection_id,
+            norm_key=norm_key,
+            embedding=vec,
+            tau=cluster_tau,
+        )
+        _put_member(
+            rm,
+            member_id,
+            collection_id=collection_id,
+            kind="term_question",
+            ref_id=qid,
+            run_id="",
+            norm_key=norm_key,
+            cluster_key=cluster_key,
+            state="active",
+            embedding=vec,
+            label=q.term,
+        )
+        seen.add(member_id)
+        n += 1
+        if n >= limit:
+            return n
+    return n
+
+
+def _find(parent: dict[str, str], x: str) -> str:
+    """Union-find root with path halving — the disjoint-set core of the merge sweep."""
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+def merge_near_clusters(
+    spec: SpecStar,
+    collection_id: str,
+    *,
+    merge_tau: float,
+    limit: int = 100,
+) -> int:
+    """#506 P8: union clusters whose CENTROIDS are within ``merge_tau`` cosine
+    similarity into one — healing the parallel-race split where two finalize passes
+    opened two keys ("widget" / "widgets") for one concept before either could see the
+    other's member. Deterministic: the canonical key per merged group is the one
+    carrying the most members (ties → lexicographically smallest), and every other
+    member is rewritten to it. Idempotent (a converged collection returns ``0``) and
+    batched by ``limit`` absorbed clusters so a huge fan-out can't stall one sweep.
+    Returns the number of clusters folded into another."""
+    rm = spec.get_resource_manager(ClusterMember)
+    rows: list[tuple[str, ClusterMember]] = []
+    for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
+        m = r.data
+        assert isinstance(m, ClusterMember)
+        rows.append((r.info.resource_id, m))  # ty: ignore[unresolved-attribute]
+    # Centroid per cluster_key = mean of its members' embeddings (skip keyless / vecless).
+    sums: dict[str, list[float]] = {}
+    counts: dict[str, int] = {}
+    for _rid, m in rows:
+        if not m.cluster_key or m.embedding is None:
+            continue
+        acc = sums.get(m.cluster_key)
+        if acc is None:
+            sums[m.cluster_key] = list(m.embedding)
+        else:
+            for i, v in enumerate(m.embedding):
+                acc[i] += v
+        counts[m.cluster_key] = counts.get(m.cluster_key, 0) + 1
+    keys = sorted(sums)  # deterministic pair-scan order
+    centroids = {k: [v / counts[k] for v in sums[k]] for k in keys}
+    # Union every pair of clusters within τ.
+    parent = {k: k for k in keys}
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            if 1.0 - cosine_distance(centroids[keys[i]], centroids[keys[j]]) >= merge_tau:
+                parent[_find(parent, keys[j])] = _find(parent, keys[i])
+    groups: dict[str, list[str]] = {}
+    for k in keys:
+        groups.setdefault(_find(parent, k), []).append(k)
+    # Canonical per group (most members, then lexicographically smallest), then rewrite
+    # every non-canonical member — group-atomic, capped at `limit` absorbed clusters.
+    rows_by_key: dict[str, list[tuple[str, ClusterMember]]] = {}
+    for rid, m in rows:
+        rows_by_key.setdefault(m.cluster_key, []).append((rid, m))
+    absorbed = 0
+    for group in sorted(groups.values(), key=lambda g: sorted(g)):
+        losers = [k for k in group]
+        if len(losers) < 2 or absorbed >= limit:
+            continue
+        best = min(losers, key=lambda k: (-counts[k], k))
+        for k in losers:
+            if k == best:
+                continue
+            for rid, m in rows_by_key.get(k, []):
+                _put_member(
+                    rm,
+                    rid,
+                    collection_id=m.collection_id,
+                    kind=m.kind,
+                    ref_id=m.ref_id,
+                    run_id=m.run_id,
+                    norm_key=m.norm_key,
+                    cluster_key=best,
+                    state=m.state,
+                    embedding=m.embedding,
+                    reason=m.reason,
+                    label=m.label,
+                )
+            absorbed += 1
+    return absorbed
+
+
+@dataclass(frozen=True)
+class SweepReport:
+    """What one :func:`sweep_clusters` pass did across the whole store — how many
+    orphan candidates were backfilled into members and how many race-split clusters
+    were folded. Summed over every collection; a converged store reports ``(0, 0)``."""
+
+    backfilled: int = 0
+    merged: int = 0
+
+
+def sweep_clusters(
+    spec: SpecStar,
+    embedder: Embedder,
+    *,
+    cluster_tau: float,
+    merge_tau: float,
+    limit: int = 200,
+) -> SweepReport:
+    """#506 P8: the periodic maintenance pass — for EVERY collection, backfill its
+    un-projected pending proposals / open questions (:func:`backfill_collection`) then
+    fold its race-split clusters (:func:`merge_near_clusters`), so the grouped inbox
+    converges without a reindex. Per-collection errors are swallowed so one bad
+    collection never stalls the sweep; both passes are idempotent, so the API sweeper
+    can run it on a timer. Returns the store-wide totals."""
+    from specstar.types import ResourceIDNotFoundError
+
+    rm = spec.get_resource_manager(Collection)
+    backfilled = 0
+    merged = 0
+    for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
+        cid = r.info.resource_id  # ty: ignore[unresolved-attribute]
+        try:
+            backfilled += backfill_collection(
+                spec, embedder, cid, cluster_tau=cluster_tau, limit=limit
+            )
+            merged += merge_near_clusters(spec, cid, merge_tau=merge_tau, limit=limit)
+        except ResourceIDNotFoundError:
+            continue  # collection cascaded away mid-sweep — skip it
+    return SweepReport(backfilled=backfilled, merged=merged)
