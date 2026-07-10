@@ -583,6 +583,33 @@ class DocQuestion(Struct):  # → resource "doc-question"
     result_ref: str = ""  # produced card id or clarification page path (provenance)
 
 
+class ClusterMember(Struct):  # → resource "cluster-member"
+    """Issue #506 P6: the reconcile projection table. Card-generation candidates
+    (proposals + term questions) AND a collection's existing cards are projected
+    into this one flat table, each carrying a text ``embedding``, so a single
+    native cosine query finds the nearest member — whether that is an existing
+    card (⑥: already explained → suppress / update) or a prior run's still-pending
+    candidate (⑤: cross-run duplicate → same cluster). :class:`ContextCard` itself
+    stays a deterministic exact-key glossary with no vector; this table is where
+    the semantic identity lives.
+
+    ``cluster_key`` groups semantically-equal members so the review inbox can
+    ``GROUP BY`` it (one row per concept, P7). It is assigned deterministically
+    for an exact ``norm_key`` match and by nearest-neighbour otherwise. ``state``
+    de-joins the source row's lifecycle so the inbox never has to look it up:
+    ``active`` (in the queue), ``suppressed`` (auto-dropped as already-explained,
+    hidden but auditable), ``inactive`` (source committed / rejected)."""
+
+    collection_id: Annotated[str, Ref("collection", on_delete=OnDelete.cascade)]
+    kind: str  # "proposal" | "term_question" | "card"
+    ref_id: str  # the source row's id (ProposedCard.id / DocQuestion id / ContextCard id)
+    run_id: str = ""  # kind="proposal": the CardGenRun this candidate came from
+    norm_key: str = ""  # norm(term / primary key) — the exact-match fast path
+    cluster_key: str = ""  # the assigned group key (== a norm_key of the group's seed)
+    state: str = "active"  # active | suppressed | inactive
+    embedding: Annotated[list[float] | None, Vector(dim=EMBED_DIM, distance="cosine")] = None
+
+
 # ─────────────────── value structs (nested / payloads) ───────────────────
 
 

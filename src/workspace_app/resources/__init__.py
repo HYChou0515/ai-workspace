@@ -39,6 +39,7 @@ from .conversation import Conversation, Message
 from .groups import Group, groups_of
 from .kb import (
     CachedChunk,
+    ClusterMember,
     CodeWikiBuildRun,
     Collection,
     ContextCard,
@@ -65,6 +66,7 @@ __all__ = [
     "AgentConfig",
     "CachedChunk",
     "CitationEvent",
+    "ClusterMember",
     "CodeWikiBuildRun",
     "Collection",
     "ContextCard",
@@ -482,6 +484,16 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # → term-question dedup is an exact element lookup; kind indexed → split term vs
     # description without a scan.
     spec.add_model(DocQuestion, indexed_fields=["collection_id", "status", "kind", "norm_key"])
+    # #506 P6 reconcile projection. collection_id scopes the native cosine query;
+    # cluster_key indexed → the inbox's GROUP BY (one row per concept, P7);
+    # state indexed → hide suppressed/inactive members without a scan; norm_key
+    # indexed → the deterministic exact-match fast path; kind indexed → grade against
+    # card members only + split proposal/term_question in the inbox. The `embedding`
+    # Vector is declared on the struct (Annotated[..., Vector]) — NOT an indexed_field.
+    spec.add_model(
+        ClusterMember,
+        indexed_fields=["collection_id", "cluster_key", "state", "norm_key", "kind"],
+    )
     # recipient indexed so "my notifications" is a query, not a full scan; dedup_key
     # indexed so a workflow send_notification's "already sent?" is a query (#435 P5).
     spec.add_model(Notification, indexed_fields=["recipient", "dedup_key"])
