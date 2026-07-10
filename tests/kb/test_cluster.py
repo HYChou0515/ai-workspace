@@ -10,16 +10,38 @@ deterministic exact-key glossary with no vector, which is why this table exists.
 
 from __future__ import annotations
 
-from specstar import QB
+import hashlib
 
+from specstar import QB
+from specstar.types import Binary
+
+from workspace_app.kb.card_gen import ProposedCard
+from workspace_app.kb.context_cards import cards_with_ids_for_collections, derive_norm_keys
 from workspace_app.kb.embedder import HashEmbedder
-from workspace_app.kb.reconcile import assign_cluster_key, grade_candidate
-from workspace_app.resources import Collection, make_spec
+from workspace_app.kb.reconcile import (
+    Reconciler,
+    assign_cluster_key,
+    collection_wiki_text,
+    grade_candidate,
+)
+from workspace_app.kb.wiki.store import _rid
+from workspace_app.resources import Collection, ContextCard, WikiPage, make_spec
 from workspace_app.resources.kb import EMBED_DIM, ClusterMember
 
 
-def _collection(spec, name: str = "c") -> str:
-    return spec.get_resource_manager(Collection).create(Collection(name=name)).resource_id
+def _collection(spec, name: str = "c", *, use_wiki: bool = False) -> str:
+    return (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name=name, use_wiki=use_wiki))
+        .resource_id
+    )
+
+
+def _wiki_page(spec, cid: str, path: str, text: str) -> None:
+    spec.get_resource_manager(WikiPage).create(
+        WikiPage(collection_id=cid, path=path, content=Binary(data=text.encode())),
+        resource_id=_rid(cid, path),
+    )
 
 
 def _member(spec, cid: str, *, kind="proposal", ref_id="", norm_key="", cluster_key="", vec=None):
@@ -34,6 +56,53 @@ def _member(spec, cid: str, *, kind="proposal", ref_id="", norm_key="", cluster_
             embedding=vec,
         )
     ).resource_id
+
+
+def _members(spec, cid: str) -> list[ClusterMember]:
+    rm = spec.get_resource_manager(ClusterMember)
+    out = []
+    for r in rm.list_resources((QB["collection_id"] == cid).build()):
+        assert isinstance(r.data, ClusterMember)
+        out.append(r.data)
+    return out
+
+
+def _card(spec, cid: str, keys: list[str], *, title: str = "", body: str = "") -> str:
+    rm = spec.get_resource_manager(ContextCard)
+    return rm.create(
+        ContextCard(
+            collection_id=cid,
+            keys=keys,
+            norm_keys=derive_norm_keys(keys),
+            title=title,
+            body=body,
+        )
+    ).resource_id
+
+
+class _TagEmb:
+    """A deterministic fake embedder whose vector is decided by the LAST whitespace
+    token of the text (its title tag). HashEmbedder is a hash, not a semantic model,
+    so it can't stand in for "M4 ≈ Metal 4" nearness; this fake lets a test DECIDE
+    which candidates are semantically near (same title tag → identical one-hot →
+    cosine 1.0; different tag → orthogonal → cosine 0). It embeds text the same way
+    for documents + queries so cluster geometry is symmetric."""
+
+    dim = EMBED_DIM
+    identity = "tag"
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._v(t) for t in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._v(text)
+
+    def _v(self, text: str) -> list[float]:
+        tag = text.split()[-1] if text.split() else ""
+        bucket = int(hashlib.sha256(tag.encode()).hexdigest(), 16) % EMBED_DIM
+        v = [0.0] * EMBED_DIM
+        v[bucket] = 1.0
+        return v
 
 
 def test_native_cosine_finds_the_nearest_member() -> None:
@@ -220,3 +289,128 @@ def test_grade_is_new_when_no_card_is_near() -> None:
     )
     assert g.action == "new"
     assert g.target_card_id is None
+
+
+# ── Reconciler.reconcile_proposals (orchestration over the pure decisions) ────
+
+
+def test_reconciler_suppresses_a_proposal_that_duplicates_a_card() -> None:
+    """A proposal whose keys don't EXACTLY overlap an existing card (so the #175
+    exact classifier left it "new") but whose embedding matches a card is dropped
+    from the run's proposals and recorded as a suppressed, auditable member."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _card(spec, cid, ["alpha"], title="TAGX")  # existing card, title tag TAGX
+    existing = cards_with_ids_for_collections(spec, [cid])
+    rec = Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=0.9, update_tau=0.7)
+    dup = ProposedCard(keys=["beta"], title="TAGX", mode="new")  # different key, same tag
+    kept = rec.reconcile_proposals(cid, "run1", [dup], existing)
+    assert kept == []
+    members = _members(spec, cid)
+    supp = [m for m in members if m.kind == "proposal" and m.state == "suppressed"]
+    assert len(supp) == 1
+    assert supp[0].ref_id == dup.id  # ids were assigned so the audit row addresses it
+
+
+def test_reconciler_keeps_a_new_proposal_and_clusters_it() -> None:
+    """A proposal near no card is kept in the run and recorded as an ACTIVE member
+    carrying a cluster_key (so a later run's duplicate can GROUP BY it, ⑤)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _card(spec, cid, ["alpha"], title="TAGX")
+    existing = cards_with_ids_for_collections(spec, [cid])
+    rec = Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=0.9, update_tau=0.7)
+    fresh = ProposedCard(keys=["gamma"], title="TAGY", mode="new")  # different tag → far
+    kept = rec.reconcile_proposals(cid, "run1", [fresh], existing)
+    assert [p.keys for p in kept] == [["gamma"]]
+    active = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "active"]
+    assert len(active) == 1
+    assert active[0].cluster_key == "gamma"  # opened its own cluster (norm_key)
+
+
+def test_reconciler_second_run_duplicate_joins_the_first_runs_cluster() -> None:
+    """⑤: a semantically-equal candidate from a LATER run adopts the first run's
+    cluster_key, so the inbox can collapse them into one row."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    existing = cards_with_ids_for_collections(spec, [cid])  # no cards
+    rec = Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=1.01, update_tau=1.01)
+    first = ProposedCard(keys=["gamma"], title="TAGZ", mode="new")
+    rec.reconcile_proposals(cid, "run1", [first], existing)
+    second = ProposedCard(keys=["gamma-syn"], title="TAGZ", mode="new")  # same tag, other key
+    rec.reconcile_proposals(cid, "run2", [second], existing)
+    active = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "active"]
+    assert {m.cluster_key for m in active} == {"gamma"}  # both in one cluster
+    assert {m.run_id for m in active} == {"run1", "run2"}
+
+
+def test_reconciler_marks_update_when_partially_near_a_card() -> None:
+    """A proposal in the update band gets mode="update" pointing at the card, and is
+    kept (a human confirms the edit)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    card_id = _card(spec, cid, ["alpha"], title="TAGX")
+    existing = cards_with_ids_for_collections(spec, [cid])
+    rec = Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=1.01, update_tau=0.6)
+    p = ProposedCard(keys=["beta"], title="TAGX", mode="new")  # same tag as the card
+    kept = rec.reconcile_proposals(cid, "run1", [p], existing)
+    assert len(kept) == 1
+    assert kept[0].mode == "update"
+    assert kept[0].target_card_id == card_id
+
+
+# ── wiki-grep safety net (⑥: already documented in the wiki → suppress) ───────
+
+
+def test_reconciler_suppresses_a_proposal_documented_in_the_wiki() -> None:
+    """A proposal whose surface key already appears in the collection's wiki is
+    suppressed (the deterministic "already explained" net), even with no near card."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    existing = cards_with_ids_for_collections(spec, [cid])  # no cards
+    rec = Reconciler(
+        spec,
+        _TagEmb(),
+        cluster_tau=0.5,
+        suppress_tau=1.01,  # never suppress via near-card
+        update_tau=1.01,
+        wiki_text=lambda _cid: "The term Gamma is fully documented on this page.",
+    )
+    p = ProposedCard(keys=["Gamma"], title="TAGZ", mode="new")
+    kept = rec.reconcile_proposals(cid, "run1", [p], existing)
+    assert kept == []
+    supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
+    assert len(supp) == 1
+
+
+def test_reconciler_keeps_a_proposal_absent_from_the_wiki() -> None:
+    """The wiki net only fires on an actual hit — an undocumented term is kept."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    existing = cards_with_ids_for_collections(spec, [cid])
+    rec = Reconciler(
+        spec,
+        _TagEmb(),
+        cluster_tau=0.5,
+        suppress_tau=1.01,
+        update_tau=1.01,
+        wiki_text=lambda _cid: "This page is about something else entirely.",
+    )
+    p = ProposedCard(keys=["Gamma"], title="TAGZ", mode="new")
+    kept = rec.reconcile_proposals(cid, "run1", [p], existing)
+    assert [x.keys for x in kept] == [["Gamma"]]
+
+
+def test_collection_wiki_text_concatenates_pages_only_when_wiki_is_on() -> None:
+    """collection_wiki_text returns the collection's whole wiki as one string when
+    use_wiki is set, and "" when it isn't (so a no-wiki collection skips the grep)."""
+    spec = make_spec(default_user="u")
+    on = _collection(spec, "on", use_wiki=True)
+    _wiki_page(spec, on, "/a.md", "alpha content")
+    _wiki_page(spec, on, "/b.md", "beta content")
+    blob = collection_wiki_text(spec, on)
+    assert "alpha content" in blob and "beta content" in blob
+
+    off = _collection(spec, "off", use_wiki=False)
+    _wiki_page(spec, off, "/a.md", "gamma content")
+    assert collection_wiki_text(spec, off) == ""

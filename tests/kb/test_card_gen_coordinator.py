@@ -24,7 +24,7 @@ from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.doc_questions import open_questions_for_collections
-from workspace_app.kb.reconcile import Reconciler
+from workspace_app.kb.reconcile import Reconciler, collection_wiki_text
 from workspace_app.kb.wiki.store import _rid
 from workspace_app.resources import Collection, ContextCard, SourceDoc, WikiPage, make_spec
 from workspace_app.resources.kb import EMBED_DIM, ClusterMember
@@ -1129,3 +1129,37 @@ async def test_finalize_reconcile_keeps_and_clusters_a_new_proposal():
     active = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "active"]
     assert len(active) == 1
     assert active[0].cluster_key == "gamma"
+
+
+async def test_finalize_reconcile_suppresses_a_term_already_in_the_wiki():
+    """#506 P6 ⑥ (wiki net): a proposal whose term is already documented in the
+    collection's wiki is auto-suppressed end-to-end — proving the sync wiki read
+    works from the consumer-thread finalize path."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    _add_wiki(spec, cid, "/glossary.md", "RZ3 is the third reflow zone, fully documented.")
+    doc = _add_source(spec, cid, "d.md", "RZ3 heating")
+    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s")]})
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        # thresholds unreachable → only the wiki net can suppress here
+        reconciler=Reconciler(
+            spec,
+            _TagEmb(),
+            cluster_tau=0.5,
+            suppress_tau=1.01,
+            update_tau=1.01,
+            wiki_text=lambda c: collection_wiki_text(spec, c),
+        ),
+    )
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert coord.proposals(jid).proposals == []  # suppressed by the wiki grep
+    supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
+    assert len(supp) == 1

@@ -27,7 +27,7 @@ from .kb.index_coordinator import IndexCoordinator
 from .kb.ingest import Ingestor
 from .kb.quality import QualityScorer
 from .kb.quality_coordinator import QualityCoordinator
-from .kb.reconcile import Reconciler
+from .kb.reconcile import Reconciler, collection_wiki_text
 from .kb.wiki.coordinator import WikiMaintenanceCoordinator
 from .kb.wiki.maintainer import default_wiki_maintainer_config
 
@@ -188,8 +188,14 @@ def build_coordinators(
     )
     # #506 P6: the finalize-time semantic reconcile (suppress already-explained
     # candidates + cluster cross-run duplicates) needs an embedder. Built only when
-    # one is wired; otherwise None ⇒ the coordinator stays exact-only (pre-P6).
-    reconciler = Reconciler(spec, embedder) if embedder is not None else None
+    # one is wired; otherwise None ⇒ the coordinator stays exact-only (pre-P6). The
+    # wiki_text provider is the deterministic "already documented" grep net (loaded
+    # once per finalize; returns "" for a collection with no wiki).
+    reconciler = (
+        Reconciler(spec, embedder, wiki_text=lambda cid: collection_wiki_text(spec, cid))
+        if embedder is not None
+        else None
+    )
     card_gen = CardGenCoordinator(
         spec,
         drafter,
