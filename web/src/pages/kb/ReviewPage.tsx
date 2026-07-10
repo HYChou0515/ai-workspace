@@ -65,7 +65,7 @@ export function ReviewPage() {
       ) : (
         <div className="rvw-page__body">
           {view === "grouped" ? (
-            <ClusterReviewList clusters={inbox.clusters ?? []} />
+            <ClusterReviewList clusters={inbox.clusters ?? []} actions={{ query, ...actions }} />
           ) : view === "suppressed" ? (
             <SuppressedAuditList items={inbox.suppressed ?? []} />
           ) : (

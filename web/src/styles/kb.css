@@ -2811,6 +2811,18 @@
 .rvw-cluster__kind--q {
   background: var(--warn, #b8860b);
 }
+.rvw-cluster__memberlabel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rvw-cluster__acts {
+  flex: none;
+  display: flex;
+  gap: 4px;
+}
 .rvw-cluster__empty {
   color: var(--ink-3);
   padding: 24px 8px;
