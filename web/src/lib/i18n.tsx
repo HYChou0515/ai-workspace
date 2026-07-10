@@ -108,6 +108,16 @@ export const messages = {
   "searchmax.dec": { "zh-TW": "減少搜尋次數", en: "Fewer searches" },
   "searchmax.inc": { "zh-TW": "增加搜尋次數", en: "More searches" },
 
+  // #506: the wiki-search count picker (replaces the boolean "search wiki" toggle).
+  "wikimax.label": { "zh-TW": "最多查百科次數", en: "Max wiki searches" },
+  "wikimax.title": {
+    "zh-TW": "這則回覆最多查知識百科幾次（0＝不查）",
+    en: "How many times this reply may search the wiki (0 = don't search the wiki)",
+  },
+  "wikimax.zero": { "zh-TW": "0＝不查", en: "0 = no wiki" },
+  "wikimax.dec": { "zh-TW": "減少查百科次數", en: "Fewer wiki searches" },
+  "wikimax.inc": { "zh-TW": "增加查百科次數", en: "More wiki searches" },
+
   // Agent activity entries (AgentEntryView): tool cards, reasoning, notices
   "tool.exec": { "zh-TW": "執行指令", en: "Run command" },
   "tool.read_file": { "zh-TW": "讀取檔案", en: "Read file" },

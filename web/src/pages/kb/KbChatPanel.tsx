@@ -266,6 +266,9 @@ export function KbChatPanel({
               wikiAvailable={collections.some(
                 (c) => collectionIds.includes(c.resource_id) && c.use_wiki,
               )}
+              // #506: KB chat searches the wiki as a budgeted in-agent tool → the
+              // number picker, not the routing toggle.
+              wikiBudget
             />
             {log.streaming ? (
               <button type="button" className="kb-btn kb-btn--stop" onClick={cancel}>

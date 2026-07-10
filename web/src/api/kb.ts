@@ -403,6 +403,10 @@ export type SendKbMessageArgs = {
    * 0 = don't search this reply; omitted = operator default. The BE clamps
    * to the operator's ceiling. */
   maxKbSearches?: number;
+  /** #506: per-message cap on how many times this reply runs search_wiki (the
+   * number picker that replaced the boolean "search wiki" toggle). 0 = don't grep
+   * the wiki this reply; omitted = operator default. The BE clamps to the ceiling. */
+  maxWikiSearches?: number;
 };
 
 export type KbAgentConfig = {
@@ -1311,6 +1315,7 @@ export const realKbApi: KbApi = {
         enhancements: args.enhancements,
         agent_name: args.agentName,
         max_kb_searches: args.maxKbSearches,
+        max_wiki_searches: args.maxWikiSearches,
       }),
       signal: args.signal,
     });
