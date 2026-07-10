@@ -224,6 +224,24 @@ def test_interactive_kb_turn_wires_a_wiki_store_and_grants_search_wiki():
     assert captured["tools"] is not None and "search_wiki" in captured["tools"]  # preset grants it
 
 
+def test_send_message_caps_wiki_search_from_the_composer_pick():
+    # #506 P4: the number picker that replaced the wiki toggle rides the message as
+    # max_wiki_searches and seeds the turn's WikiSearchBudget (clamped like kb).
+    captured: dict = {}
+
+    class _R:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            captured["wiki_max"] = ctx.wiki_search_budget.max_calls
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_R())
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "hi", "max_wiki_searches": 2})
+
+    assert captured["wiki_max"] == 2  # the pick reached the wiki budget
+
+
 def test_kb_agent_config_exposes_suggestions():
     """Issue #32: /kb/agent is now an ARRAY of {name, model, suggestions}
     — the FE picker iterates it. The first entry is the visible

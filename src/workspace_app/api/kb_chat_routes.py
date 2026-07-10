@@ -320,6 +320,10 @@ class _MsgBody(BaseModel):
     # operator default (`kb.max_searches_per_turn`); a concrete value is clamped
     # to [0, kb.max_searches_ceiling] (0 = don't search this reply).
     max_kb_searches: int | None = None
+    # #506: per-message search_wiki-count pick — the number picker that REPLACED
+    # the boolean "search wiki" toggle. Same shape/clamp as max_kb_searches (0 =
+    # don't grep the wiki this reply, N = at most N greps, None = operator default).
+    max_wiki_searches: int | None = None
 
 
 class _ShareBody(BaseModel):
@@ -684,6 +688,16 @@ def register_kb_chat_routes(
             kb_search_budget=KbSearchBudget(
                 max_calls=resolve_max_searches(
                     body.max_kb_searches,
+                    default=max_searches_per_turn,
+                    ceiling=max_searches_ceiling,
+                )
+            ),
+            # #506: cap how many times this reply may grep the wiki — the composer's
+            # per-message pick (the number picker that replaced the wiki toggle),
+            # clamped like kb_search's. Reuses the kb operator default/ceiling.
+            wiki_search_budget=WikiSearchBudget(
+                max_calls=resolve_max_searches(
+                    body.max_wiki_searches,
                     default=max_searches_per_turn,
                     ceiling=max_searches_ceiling,
                 )
