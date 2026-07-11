@@ -15,7 +15,7 @@ from specstar import QB
 
 from workspace_app.kb.card_gen import ProposedCard
 from workspace_app.kb.card_gen_run import CardGenRunStore
-from workspace_app.kb.doc_questions import open_or_merge_term_question
+from workspace_app.kb.doc_questions import add_description_question, open_or_merge_term_question
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.reconcile import backfill_collection, merge_near_clusters, sweep_clusters
 from workspace_app.resources import Collection, make_spec
@@ -172,3 +172,115 @@ def test_sweep_is_idempotent() -> None:
 
     assert again.backfilled == 0
     assert again.merged == 0
+
+
+def test_backfill_is_batched_by_limit() -> None:
+    """One pass projects at most `limit` members; the rest are picked up next pass."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _done_run(
+        spec,
+        cid,
+        [ProposedCard(id="0", keys=["A"], title="A"), ProposedCard(id="1", keys=["B"], title="B")],
+    )
+    emb = HashEmbedder(dim=EMBED_DIM)
+
+    assert backfill_collection(spec, emb, cid, cluster_tau=0.9, limit=1) == 1
+    assert len([m for m in _members(spec, cid) if m.kind == "proposal"]) == 1
+    assert backfill_collection(spec, emb, cid, cluster_tau=0.9, limit=1) == 1
+    assert len([m for m in _members(spec, cid) if m.kind == "proposal"]) == 2
+
+
+def test_merge_is_batched_by_limit() -> None:
+    """A `limit` caps how many clusters one pass folds; the rest fold next pass."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    # two independent race-split pairs, orthogonal to each other
+    _member(spec, cid, "a1", cluster_key="alpha", vec=_onehot(0))
+    _member(spec, cid, "a2", cluster_key="alpha", vec=_onehot(0))
+    _member(spec, cid, "a3", cluster_key="alpha2", vec=_onehot(0))
+    _member(spec, cid, "g1", cluster_key="gamma", vec=_onehot(1))
+    _member(spec, cid, "g2", cluster_key="gamma", vec=_onehot(1))
+    _member(spec, cid, "g3", cluster_key="gamma2", vec=_onehot(1))
+
+    assert merge_near_clusters(spec, cid, merge_tau=0.99, limit=1) == 1  # one pair this pass
+    assert merge_near_clusters(spec, cid, merge_tau=0.99, limit=1) == 1  # the other next pass
+    assert {m.cluster_key for m in _members(spec, cid)} == {"alpha", "gamma"}
+
+
+def test_sweep_continues_past_a_failing_collection() -> None:
+    """A per-collection error (here a transient embed failure) is swallowed so the
+    sweep still heals every other collection."""
+
+    class _BoomEmb:
+        dim = EMBED_DIM
+        identity = "boom"
+
+        def __init__(self) -> None:
+            self._h = HashEmbedder(dim=EMBED_DIM)
+
+        def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            if any("BOOM" in t for t in texts):
+                raise RuntimeError("embed exploded")
+            return self._h.embed_documents(texts)
+
+        def embed_query(self, text: str) -> list[float]:
+            return self._h.embed_query(text)
+
+    spec = make_spec(default_user="u")
+    bad = _collection(spec, "bad")
+    good = _collection(spec, "good")
+    _done_run(spec, bad, [ProposedCard(id="0", keys=["BOOM"], title="BOOM")])
+    _done_run(spec, good, [ProposedCard(id="0", keys=["OK"], title="OK")])
+
+    report = sweep_clusters(spec, _BoomEmb(), cluster_tau=0.9, merge_tau=0.99)  # ty: ignore[invalid-argument-type]
+
+    assert report.backfilled == 1  # only the good collection
+    assert [m for m in _members(spec, good) if m.kind == "proposal"]
+    assert [m for m in _members(spec, bad) if m.kind == "proposal"] == []
+
+
+def test_backfill_skips_inactive_proposals_and_non_term_questions() -> None:
+    """Only ACTIVE proposals + open TERM questions are projected — a resolved proposal
+    and a description question are skipped."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _done_run(spec, cid, [ProposedCard(id="0", keys=["A"], title="A", decision="rejected")])
+    add_description_question(
+        spec, collection_id=cid, source_doc_id="d1", quote="a passage", question_text="?"
+    )
+    emb = HashEmbedder(dim=EMBED_DIM)
+
+    assert backfill_collection(spec, emb, cid, cluster_tau=0.9) == 0
+    assert _members(spec, cid) == []
+
+
+def test_backfill_batches_term_questions_and_skips_already_projected() -> None:
+    """The open-term-question backfill honours `limit` and skips questions that already
+    have a member (idempotent)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    open_or_merge_term_question(
+        spec, collection_id=cid, term="Widget", source_doc_id="d1", question_text="?"
+    )
+    open_or_merge_term_question(
+        spec, collection_id=cid, term="Gadget", source_doc_id="d1", question_text="?"
+    )
+    emb = HashEmbedder(dim=EMBED_DIM)
+
+    assert backfill_collection(spec, emb, cid, cluster_tau=0.9, limit=1) == 1  # one this pass
+    assert backfill_collection(spec, emb, cid, cluster_tau=0.9, limit=1) == 1  # the other next pass
+    assert backfill_collection(spec, emb, cid, cluster_tau=0.9, limit=1) == 0  # both projected
+    assert len([m for m in _members(spec, cid) if m.kind == "term_question"]) == 2
+
+
+def test_merge_ignores_members_without_a_vector() -> None:
+    """A member with no cluster_key or no embedding is skipped by the centroid pass
+    (it can't participate in a cosine merge)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    _member(spec, cid, "ghost", cluster_key="ghost", vec=None)  # vecless → skipped
+    _member(spec, cid, "a1", cluster_key="alpha", vec=_onehot(0))
+
+    assert merge_near_clusters(spec, cid, merge_tau=0.99) == 0
+    assert {m.cluster_key for m in _members(spec, cid)} == {"ghost", "alpha"}

@@ -414,3 +414,70 @@ def test_collection_wiki_text_concatenates_pages_only_when_wiki_is_on() -> None:
     off = _collection(spec, "off", use_wiki=False)
     _wiki_page(spec, off, "/a.md", "gamma content")
     assert collection_wiki_text(spec, off) == ""
+
+
+# ── term-question suppression (③⑥: already explained → don't re-ask) ──────────
+
+
+def test_reconciler_suppresses_a_wiki_documented_term_question() -> None:
+    """A raised term already explained in the wiki is suppressed — the DocQuestion is
+    NOT opened, but an auditable suppressed member records why (③⑥)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rec = Reconciler(
+        spec,
+        _TagEmb(),
+        cluster_tau=0.5,
+        suppress_tau=1.01,  # never suppress via near-card
+        update_tau=1.01,
+        wiki_text=lambda _cid: "The term Widget is fully documented here.",
+    )
+    opened: list[str] = []
+    rec.reconcile_term_questions(cid, [("Widget", lambda: opened.append("q1") or "q1")])
+    assert opened == []  # the question was never opened
+    supp = [m for m in _members(spec, cid) if m.kind == "term_question" and m.state == "suppressed"]
+    assert len(supp) == 1
+    assert supp[0].reason == "wiki"
+    assert supp[0].label == "Widget"
+
+
+def test_reconciler_suppresses_a_term_question_near_an_existing_card() -> None:
+    """A term semantically covered by an existing card is suppressed too — no wiki
+    needed (the near-card safety net, mirroring proposals). The card member shares
+    the "WID" title tag with the term, so _TagEmb makes them cosine-1.0."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    emb = _TagEmb()
+    _member(spec, cid, kind="card", ref_id="c1", cluster_key="wid", vec=emb.embed_query("card WID"))
+    rec = Reconciler(spec, emb, cluster_tau=0.5, suppress_tau=0.9, update_tau=0.7)
+    opened: list[str] = []
+    rec.reconcile_term_questions(cid, [("Gadget WID", lambda: opened.append("q") or "q")])
+    assert opened == []
+    supp = [m for m in _members(spec, cid) if m.kind == "term_question" and m.state == "suppressed"]
+    assert len(supp) == 1
+    assert supp[0].reason == "near-card"
+
+
+def test_reconciler_opens_an_undocumented_term_question() -> None:
+    """A term neither in the wiki nor near a card is opened + projected active."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    rec = Reconciler(
+        spec,
+        _TagEmb(),
+        cluster_tau=0.5,
+        suppress_tau=1.01,
+        update_tau=1.01,
+        wiki_text=lambda _cid: "an unrelated page about other things",
+    )
+    opened: list[str] = []
+
+    def _open() -> str:
+        opened.append("x")
+        return "q7"
+
+    rec.reconcile_term_questions(cid, [("Widget", _open)])
+    assert opened == ["x"]  # opened once
+    active = [m for m in _members(spec, cid) if m.kind == "term_question" and m.state == "active"]
+    assert len(active) == 1
+    assert active[0].ref_id == "q7"

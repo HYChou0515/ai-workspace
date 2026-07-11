@@ -258,32 +258,73 @@ class Reconciler:
                 kept.append(p)
         return kept
 
-    def reconcile_term_question(self, collection_id: str, question_id: str, term: str) -> None:
-        """Project a raised term question into ClusterMember so it clusters with any
-        proposal (or card) for the same concept — the inbox can then GROUP BY
-        cluster_key across BOTH kinds (⑤). Idempotent per question id (the same term
-        raised by several docs shares one DocQuestion id → one member)."""
-        norm_key = norm(term)
-        vec = self._embed(_card_text(norm_key, term))
-        cluster_key = assign_cluster_key(
-            self._spec,
-            collection_id=collection_id,
-            norm_key=norm_key,
-            embedding=vec,
-            tau=self._cluster_tau,
-        )
-        self._record(
-            f"tq:{question_id}",
-            collection_id=collection_id,
-            kind="term_question",
-            ref_id=question_id,
-            run_id="",
-            norm_key=norm_key,
-            cluster_key=cluster_key,
-            state="active",
-            embedding=vec,
-            label=term,
-        )
+    def reconcile_term_questions(
+        self,
+        collection_id: str,
+        items: Sequence[tuple[str, Callable[[], str]]],
+    ) -> None:
+        """Grade + cluster the term questions a run's digests raised, BEFORE they are
+        opened (③⑥). For each ``(term, open_question)``: grade the term against the
+        collection's wiki + existing cards (:func:`grade_candidate`); if it is already
+        explained (a wiki grep hit or a near-duplicate of a card) → record a
+        suppressed, auditable ClusterMember and **do NOT open the question** (so an
+        already-answered term is never re-asked); otherwise open it
+        (``open_question() -> qid``) and project an active member so it clusters with
+        any proposal for the same concept (⑤).
+
+        The wiki blob is loaded ONCE for the whole batch (not per term). Idempotent per
+        opened question id, and per ``norm_key`` for a suppressed term. ``update``-range
+        nearness does NOT suppress — a partially-covered term is still worth asking."""
+        if not items:
+            return
+        wiki_blob = self._wiki_text(collection_id).lower() if self._wiki_text else ""
+        for term, open_question in items:
+            norm_key = norm(term)
+            vec = self._embed(_card_text(norm_key, term))
+            wiki = bool(wiki_blob) and term.strip().lower() in wiki_blob
+            grade = grade_candidate(
+                self._spec,
+                collection_id=collection_id,
+                embedding=vec,
+                tau_high=self._suppress_tau,
+                tau_update=self._update_tau,
+                wiki_hit=wiki,
+            )
+            cluster_key = assign_cluster_key(
+                self._spec,
+                collection_id=collection_id,
+                norm_key=norm_key,
+                embedding=vec,
+                tau=self._cluster_tau,
+            )
+            if grade.action == "suppress":
+                self._record(
+                    f"tq-sup:{collection_id}:{norm_key}",
+                    collection_id=collection_id,
+                    kind="term_question",
+                    ref_id="",
+                    run_id="",
+                    norm_key=norm_key,
+                    cluster_key=cluster_key,
+                    state="suppressed",
+                    embedding=vec,
+                    reason=grade.reason,
+                    label=term,
+                )
+                continue
+            qid = open_question()
+            self._record(
+                f"tq:{qid}",
+                collection_id=collection_id,
+                kind="term_question",
+                ref_id=qid,
+                run_id="",
+                norm_key=norm_key,
+                cluster_key=cluster_key,
+                state="active",
+                embedding=vec,
+                label=term,
+            )
 
     def _project_cards(
         self, collection_id: str, existing: Sequence[tuple[str, ContextCard]]
@@ -570,10 +611,9 @@ def sweep_clusters(
     un-projected pending proposals / open questions (:func:`backfill_collection`) then
     fold its race-split clusters (:func:`merge_near_clusters`), so the grouped inbox
     converges without a reindex. Per-collection errors are swallowed so one bad
-    collection never stalls the sweep; both passes are idempotent, so the API sweeper
-    can run it on a timer. Returns the store-wide totals."""
-    from specstar.types import ResourceIDNotFoundError
-
+    collection never stalls the sweep (a cascaded-away collection, a transient embed
+    failure); both passes are idempotent, so the API sweeper can run it on a timer.
+    Returns the store-wide totals."""
     rm = spec.get_resource_manager(Collection)
     backfilled = 0
     merged = 0
@@ -584,6 +624,6 @@ def sweep_clusters(
                 spec, embedder, cid, cluster_tau=cluster_tau, limit=limit
             )
             merged += merge_near_clusters(spec, cid, merge_tau=merge_tau, limit=limit)
-        except ResourceIDNotFoundError:
-            continue  # collection cascaded away mid-sweep — skip it
+        except Exception:  # noqa: BLE001 — one bad collection must not stall the sweep
+            continue
     return SweepReport(backfilled=backfilled, merged=merged)

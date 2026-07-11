@@ -1101,6 +1101,38 @@ async def test_finalize_reconcile_suppresses_a_semantic_duplicate():
     assert suppressed[0].run_id == jid
 
 
+async def test_finalize_reconcile_suppresses_a_wiki_explained_term_question():
+    """#506 ③⑥: a raised term already explained in the collection's wiki is NOT
+    opened as a question (so it is never re-asked) — it is recorded as an auditable
+    suppressed ClusterMember instead."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "spec.md", "Uses the R7 recipe.")
+    drafter = _FakeDrafter(
+        {}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="What is R7?")]}
+    )
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        reconciler=Reconciler(
+            spec,
+            _TagEmb(),
+            cluster_tau=0.5,
+            suppress_tau=1.01,  # never suppress via near-card — the wiki hit is the reason
+            update_tau=1.01,
+            wiki_text=lambda _cid: "The R7 recipe is fully documented in the wiki.",
+        ),
+    )
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert open_questions_for_collections(spec, [cid]) == []  # suppressed, never asked
+    supp = [m for m in _members(spec, cid) if m.kind == "term_question" and m.state == "suppressed"]
+    assert len(supp) == 1
+    assert supp[0].reason == "wiki"
+    assert supp[0].label == "R7"
+
+
 async def test_finalize_reconcile_keeps_and_clusters_a_new_proposal():
     """#506 P6 ⑤: a genuinely-new proposal is kept and recorded as an active member
     with a cluster_key, so a later run's duplicate can be grouped with it."""

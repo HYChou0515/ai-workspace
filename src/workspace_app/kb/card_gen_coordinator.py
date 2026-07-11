@@ -542,6 +542,7 @@ class CardGenCoordinator:
         at collection level; description questions are doc-specific. Runs in the
         single finalize step so the non-CAS term dedup stays race-free."""
         carded = {nk for _, card in existing for nk in getattr(card, "norm_keys", [])}
+        term_items: list[tuple[str, Callable[[], str]]] = []
         for doc_id, digest in per_doc:
             terms, descs = plan_doc_questions(
                 digest.term_questions,
@@ -550,18 +551,20 @@ class CardGenCoordinator:
                 cap=self._max_questions_per_doc,
             )
             for tq in terms:
-                qid = open_or_merge_term_question(
-                    self._spec,
-                    collection_id=cid,
-                    term=tq.term,
-                    source_doc_id=doc_id,
-                    question_text=tq.question,
+                # Defer the actual open() to the reconciler — it opens ONLY the terms it
+                # doesn't suppress (already explained in wiki / covered by a card, ③⑥).
+                term_items.append(
+                    (
+                        tq.term,
+                        lambda tq=tq, doc_id=doc_id: open_or_merge_term_question(
+                            self._spec,
+                            collection_id=cid,
+                            term=tq.term,
+                            source_doc_id=doc_id,
+                            question_text=tq.question,
+                        ),
+                    )
                 )
-                # #506 P6 ⑤: cluster the question so the inbox can group it with a
-                # proposal for the same concept (projected members already exist —
-                # proposals are reconciled before questions in _finalize).
-                if self._reconciler is not None:
-                    self._reconciler.reconcile_term_question(cid, qid, tq.term)
             for dq in descs:
                 add_description_question(
                     self._spec,
@@ -570,6 +573,16 @@ class CardGenCoordinator:
                     quote=dq.quote,
                     question_text=dq.question,
                 )
+        # #506 ⑤/③⑥: reconcile ALL raised terms in one batch — grade each against the
+        # wiki + existing cards (wiki loaded once), suppress the already-explained ones
+        # (recorded as auditable members, never opened), open + cluster the rest so a
+        # question groups with a proposal for the same concept. Pre-P6 (no reconciler):
+        # just open everything, no suppression.
+        if self._reconciler is not None:
+            self._reconciler.reconcile_term_questions(cid, term_items)
+        else:
+            for _term, open_q in term_items:
+                open_q()
 
     # ── lifecycle ────────────────────────────────────────────────────
     def _ensure_consuming(self) -> None:
