@@ -129,6 +129,9 @@ def build_coordinators(
     sanity_llm_factory: LlmFactory | None,
     sanity_judge_llm: ILlm | None,
     embedder: Embedder | None = None,
+    cluster_tau: float = 0.9,
+    suppress_tau: float = 0.92,
+    update_tau: float = 0.8,
     wiki_maintainer_max_turns: int = 40,
     wiki_model: str = "",
     wiki_llm_base_url: str = "",
@@ -192,7 +195,14 @@ def build_coordinators(
     # wiki_text provider is the deterministic "already documented" grep net (loaded
     # once per finalize; returns "" for a collection with no wiki).
     reconciler = (
-        Reconciler(spec, embedder, wiki_text=lambda cid: collection_wiki_text(spec, cid))
+        Reconciler(
+            spec,
+            embedder,
+            cluster_tau=cluster_tau,
+            suppress_tau=suppress_tau,
+            update_tau=update_tau,
+            wiki_text=lambda cid: collection_wiki_text(spec, cid),
+        )
         if embedder is not None
         else None
     )

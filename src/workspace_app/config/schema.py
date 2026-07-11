@@ -384,6 +384,27 @@ class RetrievalSettings:
 
 
 @dataclass(frozen=True)
+class ClusterSettings:
+    """#506: thresholds for the card-gen reconcile + the background cluster sweeper
+    (dedup / suppress duplicate proposals + questions). All τ are cosine SIMILARITY
+    in [0, 1]; HIGHER = stricter (fewer merges / suppressions). Exact norm_key overlap
+    is deterministic and ignores these. Conservative defaults (bias toward asking /
+    keeping over wrongly dropping); an operator lowers them to dedup more aggressively.
+    `sweep_interval_seconds` paces the API-side backfill+merge sweeper."""
+
+    # Join a new candidate to an existing cluster when a member is within this sim.
+    cluster_tau: float = 0.9
+    # A candidate at/above this sim to a card (or a wiki grep hit) is auto-suppressed.
+    suppress_tau: float = 0.92
+    # At/above this (but below suppress) → suggest updating the near card instead.
+    update_tau: float = 0.8
+    # The background sweeper folds two clusters whose centroids are within this sim.
+    merge_tau: float = 0.95
+    # How often the API sweeper backfills un-projected candidates + folds race-splits.
+    sweep_interval_seconds: float = 900.0
+
+
+@dataclass(frozen=True)
 class WikiSettings:
     """#56: wiki-agent settings, co-located and pattern-consistent.
 
@@ -452,6 +473,9 @@ class KbSettings:
     # ceilings). Independent from `retrieval_llm` — that names which LLM
     # to call; this controls how many calls and how aggressively.
     retrieval: RetrievalSettings = field(default_factory=RetrievalSettings)
+    # #506: reconcile / cluster-sweeper thresholds (dedup duplicate proposals +
+    # questions across runs). See ClusterSettings.
+    cluster: ClusterSettings = field(default_factory=ClusterSettings)
     # Issue #195: per-turn cap on how many times the KB agent may call
     # `kb_search` in one reply (the KB chat turn + the ask_knowledge_base
     # bridge). Each kb_search runs the expensive multi-query / HyDE / rerank

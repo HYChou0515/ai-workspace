@@ -85,6 +85,9 @@ def build_lifespan(
     gc_t1: str,
     gc_t2: str,
     trigger_check_interval: timedelta | None = None,
+    cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
+    cluster_tau: float = _CLUSTER_SWEEP_TAU,
+    cluster_merge_tau: float = _CLUSTER_MERGE_TAU,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build the FastAPI ``lifespan`` context manager, capturing the injected
     deps in the nested sweeper closures. The coordinators stay off-capture and
@@ -176,10 +179,10 @@ def build_lifespan(
                         sweep_clusters,
                         spec,
                         app.state.kb_embedder,
-                        cluster_tau=_CLUSTER_SWEEP_TAU,
-                        merge_tau=_CLUSTER_MERGE_TAU,
+                        cluster_tau=cluster_tau,
+                        merge_tau=cluster_merge_tau,
                     )
-                await asyncio.sleep(_CLUSTER_SWEEP_INTERVAL_S)
+                await asyncio.sleep(cluster_sweep_seconds)
         except asyncio.CancelledError:
             return
 

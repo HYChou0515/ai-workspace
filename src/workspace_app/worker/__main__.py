@@ -55,6 +55,11 @@ def build_bundle(
         # #506 P6: the card-gen reconcile embeds candidates + cards with the same
         # embedder the ingestor uses (a worker pod builds one at line ~30).
         embedder=embedder,
+        # #506: same reconcile thresholds as the API (settings.kb.cluster) so a
+        # finalize on a worker pod dedups identically.
+        cluster_tau=settings.kb.cluster.cluster_tau,
+        suppress_tau=settings.kb.cluster.suppress_tau,
+        update_tau=settings.kb.cluster.update_tau,
         wiki_maintainer_max_turns=settings.kb.wiki.maintainer_max_turns,
         wiki_model=wiki_model or "",
         wiki_llm_base_url=wiki_base or "",

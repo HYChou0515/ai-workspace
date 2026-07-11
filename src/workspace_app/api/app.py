@@ -270,6 +270,14 @@ def create_app(
     # composer's value is clamped to [0, this]). __main__ threads
     # `settings.kb.max_searches_ceiling` (default 10).
     kb_max_searches_ceiling: int = 10,
+    # #506: reconcile / cluster-sweeper thresholds (dedup duplicate proposals +
+    # questions). __main__ threads `settings.kb.cluster.*`; defaults here match
+    # ClusterSettings so tests that don't pass them keep the shipped behaviour.
+    kb_cluster_tau: float = 0.9,
+    kb_cluster_suppress_tau: float = 0.92,
+    kb_cluster_update_tau: float = 0.8,
+    kb_cluster_merge_tau: float = 0.95,
+    kb_cluster_sweep_seconds: float = 900.0,
     packages: list[PackageInfo] | None = None,
     prebuilt_dir: Path | None = None,
     # #100: workflow run limits (manual §16/§17). Global concurrency cap (runs
@@ -441,6 +449,9 @@ def create_app(
         gc_t1=gc_t1,
         gc_t2=gc_t2,
         trigger_check_interval=trigger_check_interval,
+        cluster_sweep_seconds=kb_cluster_sweep_seconds,
+        cluster_tau=kb_cluster_tau,
+        cluster_merge_tau=kb_cluster_merge_tau,
     )
 
     # root_path lives on the app (not just uvicorn.run) so OpenAPI servers and
@@ -537,6 +548,9 @@ def create_app(
         # #506 P6: the same KB text embedder the ingestor/retriever use, so the
         # card-gen reconcile compares candidates + cards in one vector space.
         embedder=embedder,
+        cluster_tau=kb_cluster_tau,
+        suppress_tau=kb_cluster_suppress_tau,
+        update_tau=kb_cluster_update_tau,
         wiki_maintainer_max_turns=wiki_maintainer_max_turns,
         wiki_model=wiki_model,
         wiki_llm_base_url=wiki_llm_base_url,
