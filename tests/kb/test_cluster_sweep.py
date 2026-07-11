@@ -49,7 +49,7 @@ def _onehot(i: int) -> list[float]:
     return v
 
 
-def _member(spec, cid: str, member_id: str, *, cluster_key: str, vec: list[float]) -> None:
+def _member(spec, cid: str, member_id: str, *, cluster_key: str, vec: list[float] | None) -> None:
     """Write a ClusterMember with a controlled embedding + cluster_key so a merge test
     can build two clusters whose centroids are (or aren't) near without an embedder."""
     spec.get_resource_manager(ClusterMember).create_or_update(
@@ -233,7 +233,7 @@ def test_sweep_continues_past_a_failing_collection() -> None:
     _done_run(spec, bad, [ProposedCard(id="0", keys=["BOOM"], title="BOOM")])
     _done_run(spec, good, [ProposedCard(id="0", keys=["OK"], title="OK")])
 
-    report = sweep_clusters(spec, _BoomEmb(), cluster_tau=0.9, merge_tau=0.99)  # ty: ignore[invalid-argument-type]
+    report = sweep_clusters(spec, _BoomEmb(), cluster_tau=0.9, merge_tau=0.99)
 
     assert report.backfilled == 1  # only the good collection
     assert [m for m in _members(spec, good) if m.kind == "proposal"]
