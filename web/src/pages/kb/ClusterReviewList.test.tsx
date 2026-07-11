@@ -172,4 +172,43 @@ describe("ClusterReviewList", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reflow Zone 3|concept/i }));
     expect(screen.queryByRole("button", { name: /accept|接受/i })).not.toBeInTheDocument();
   });
+
+  it("applies a whole cluster's accepted cards in one click", () => {
+    const commit = { mutate: vi.fn() };
+    const actions = fakeActions({ commit });
+    const accepted: KbReviewCard = {
+      ...card("Reflow Zone 3"),
+      card: { ...card("Reflow Zone 3").card, decision: "accepted" },
+    };
+    render(
+      <ClusterReviewList clusters={[cluster({ cards: [accepted], size: 1 })]} actions={actions} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /apply|套用/i }));
+    expect(commit.mutate).toHaveBeenCalledWith([{ run_id: "r1", card_id: "0" }]);
+  });
+
+  it("shows no apply-cluster button until a card is accepted", () => {
+    const actions = fakeActions();
+    render(
+      <ClusterReviewList
+        clusters={[cluster({ cards: [card("Reflow Zone 3")], size: 1 })]}
+        actions={actions}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: /apply|套用/i })).not.toBeInTheDocument();
+  });
+
+  it("opens the editable drawer when a card member is clicked", () => {
+    const actions = fakeActions();
+    render(
+      <ClusterReviewList
+        clusters={[cluster({ cards: [card("Reflow Zone 3")], size: 1 })]}
+        actions={actions}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /concept|Reflow Zone 3/i })); // expand
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reflow Zone 3" })); // the member label
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
 });

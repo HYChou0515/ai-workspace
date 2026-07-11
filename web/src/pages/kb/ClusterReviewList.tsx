@@ -14,7 +14,7 @@
  */
 import { useState } from "react";
 
-import type { KbReviewCard, KbReviewCluster } from "../../api/kb";
+import type { KbCardRef, KbReviewCard, KbReviewCluster } from "../../api/kb";
 import { Btn } from "../../components/Btn";
 import { Icon } from "../../components/Icon";
 import type { useReviewInbox } from "../../hooks/useReviewInbox";
@@ -100,26 +100,55 @@ function ClusterRow({
       cardId: c.card.id,
       decision: c.card.decision === decision ? "pending" : decision,
     });
+  // The cluster's accepted card proposals — "套用整群" commits them all to real cards
+  // in one click, so a whole deduped concept is applied without leaving the group.
+  const acceptedRefs: KbCardRef[] = cluster.cards
+    .filter((c) => c.can_act && c.card.decision === "accepted")
+    .map((c) => ({ run_id: c.run_id, card_id: c.card.id }));
+  const canApply = actions && !resolved && acceptedRefs.length > 0;
   return (
     <li className="rvw-cluster">
-      <button
-        type="button"
-        className="rvw-cluster__head"
-        aria-expanded={open}
-        aria-label={`${label} · ${count}`}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <Icon name={open ? "arrow_d" : "arrow_r"} size={12} />
-        <span className="rvw-cluster__label">{label}</span>
-        <span className="rvw-cluster__count">{cluster.size}</span>
-        <span className="rvw-cluster__coll">{cluster.collection_name}</span>
-      </button>
+      <div className="rvw-cluster__row">
+        <button
+          type="button"
+          className="rvw-cluster__head"
+          aria-expanded={open}
+          aria-label={`${label} · ${count}`}
+          onClick={() => setOpen((v) => !v)}
+        >
+          <Icon name={open ? "arrow_d" : "arrow_r"} size={12} />
+          <span className="rvw-cluster__label">{label}</span>
+          <span className="rvw-cluster__count">{cluster.size}</span>
+          <span className="rvw-cluster__coll">{cluster.collection_name}</span>
+        </button>
+        {canApply && (
+          <Btn
+            size="sm"
+            variant="primary"
+            onClick={() => actions?.commit.mutate(acceptedRefs)}
+          >
+            {t("review.cluster.apply", { n: acceptedRefs.length })}
+          </Btn>
+        )}
+      </div>
       {open && (
         <div className="rvw-cluster__members">
           {cluster.cards.map((c) => (
             <div key={`card:${c.run_id}:${c.card.id}`} className="rvw-cluster__member">
               <span className="rvw-cluster__kind rvw-cluster__kind--card">card</span>
-              <span className="rvw-cluster__memberlabel">{c.card.title || c.card.keys[0]}</span>
+              {actions ? (
+                // Clicking a card opens the drawer to edit its keys/title/body (④⑥) —
+                // the same editable detail panel the flat table uses.
+                <button
+                  type="button"
+                  className="rvw-cluster__memberlabel rvw-cluster__memberlabel--btn"
+                  onClick={() => onOpen({ kind: "card", data: c })}
+                >
+                  {c.card.title || c.card.keys[0]}
+                </button>
+              ) : (
+                <span className="rvw-cluster__memberlabel">{c.card.title || c.card.keys[0]}</span>
+              )}
               {actions && !resolved && c.can_act && (
                 <span className="rvw-cluster__acts">
                   <Btn

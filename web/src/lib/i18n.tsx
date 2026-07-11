@@ -651,6 +651,7 @@ export const messages = {
   "review.pager.next": { "zh-TW": "下一頁", en: "Next" },
   "review.pager.pos": { "zh-TW": "第 {page} / {pages} 頁", en: "Page {page} / {pages}" },
   "review.cluster.count": { "zh-TW": "{n} 項", en: "{n} items" },
+  "review.cluster.apply": { "zh-TW": "套用此概念已接受（{n}）", en: "Apply accepted ({n})" },
   "review.cluster.empty": {
     "zh-TW": "目前沒有可分組的待審核項目。",
     en: "No groupable items to review right now.",
