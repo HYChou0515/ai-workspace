@@ -3126,6 +3126,31 @@
   background: var(--paper);
 }
 
+/* #506 G2: the review inbox's prev/next pager (server pagination). */
+.rvw-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+.rvw-pager__total {
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.rvw-pager__nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.rvw-pager__pos {
+  color: var(--ink-2);
+  font-size: 13px;
+  min-width: 5em;
+  text-align: center;
+}
+
 /* ── the right detail drawer ── */
 .rvw-drawer__backdrop {
   position: fixed;

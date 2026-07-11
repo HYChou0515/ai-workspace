@@ -141,6 +141,11 @@ export const qk = {
       collectionId?: string;
       grouped?: boolean;
       suppressed?: boolean;
+      kind?: "all" | "cards" | "questions";
+      q?: string;
+      actionable?: boolean;
+      limit?: number;
+      offset?: number;
     }) =>
       [
         "kb",
@@ -149,6 +154,11 @@ export const qk = {
         opts?.collectionId ?? null,
         opts?.grouped ?? false,
         opts?.suppressed ?? false,
+        opts?.kind ?? "all",
+        opts?.q ?? "",
+        opts?.actionable ?? false,
+        opts?.limit ?? null,
+        opts?.offset ?? 0,
       ] as const,
     // #325: browser-runnable upload-check descriptors (platform-wide, rarely
     // changes — fetched once and reused to pre-block encrypted uploads).

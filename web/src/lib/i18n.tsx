@@ -645,6 +645,11 @@ export const messages = {
   // #506 P7: the clustered ("group duplicates") view.
   "review.tab.grouped": { "zh-TW": "依概念分組", en: "By concept" },
   "review.tab.suppressed": { "zh-TW": "已自動略過", en: "Auto-skipped" },
+  "review.pager.label": { "zh-TW": "分頁", en: "Pagination" },
+  "review.pager.total": { "zh-TW": "共 {n} 筆", en: "{n} total" },
+  "review.pager.prev": { "zh-TW": "上一頁", en: "Prev" },
+  "review.pager.next": { "zh-TW": "下一頁", en: "Next" },
+  "review.pager.pos": { "zh-TW": "第 {page} / {pages} 頁", en: "Page {page} / {pages}" },
   "review.cluster.count": { "zh-TW": "{n} 項", en: "{n} items" },
   "review.cluster.empty": {
     "zh-TW": "目前沒有可分組的待審核項目。",

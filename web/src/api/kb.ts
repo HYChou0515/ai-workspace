@@ -766,6 +766,11 @@ export interface KbApi {
     collectionId?: string;
     grouped?: boolean;
     suppressed?: boolean;
+    kind?: "all" | "cards" | "questions";
+    q?: string;
+    actionable?: boolean;
+    limit?: number;
+    offset?: number;
   }): Promise<KbReviewInbox>;
   /** #481: inline accept/reject one proposal by id; returns the run's refreshed
    * proposals (a settle may have resolved the run). */
@@ -1178,6 +1183,11 @@ export const realKbApi: KbApi = {
     if (opts?.collectionId) p.set("collection_id", opts.collectionId);
     if (opts?.grouped) p.set("grouped", "true");
     if (opts?.suppressed) p.set("suppressed", "true");
+    if (opts?.kind && opts.kind !== "all") p.set("kind", opts.kind);
+    if (opts?.q) p.set("q", opts.q);
+    if (opts?.actionable) p.set("actionable", "true");
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.offset) p.set("offset", String(opts.offset));
     const q = p.toString();
     return (
       await ok(await apiFetch(`/kb/review-inbox${q ? `?${q}` : ""}`), "review inbox")

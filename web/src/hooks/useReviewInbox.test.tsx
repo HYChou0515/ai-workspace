@@ -29,36 +29,19 @@ const card = (can_act: boolean) => ({
   },
 });
 
-const question = (can_act: boolean) => ({
-  collection_id: "c",
-  collection_name: "C",
-  can_act,
-  created_time: 0,
-  question: {
-    id: "q",
-    collection_id: "c",
-    kind: "term" as const,
-    status: "open",
-    question_text: "?",
-    term: "T",
-    source_doc_ids: [],
-    source_doc_id: "",
-    quote: "",
-  },
-});
 
 describe("useReviewBadgeCount", () => {
-  it("counts only the pending items the user can act on", async () => {
-    const client = fakeClient({
-      cards: [card(true), card(false)],
-      questions: [question(true)],
-    });
+  it("reads the server's total_actionable (not the loaded page)", async () => {
+    // The badge asks for a one-row page but the count comes from total_actionable,
+    // so it reflects the WHOLE backlog without pulling it (#506 G2).
+    const client = fakeClient({ cards: [card(true)], questions: [], total_actionable: 2 });
     const { result } = renderHook(() => useReviewBadgeCount(client), { wrapper: QueryWrap });
-    await waitFor(() => expect(result.current).toBe(2)); // one actionable card + one question
+    await waitFor(() => expect(result.current).toBe(2));
+    expect(client.getReviewInbox).toHaveBeenCalledWith({ limit: 1 });
   });
 
   it("is 0 while loading / when nothing is actionable", async () => {
-    const client = fakeClient({ cards: [card(false)], questions: [] });
+    const client = fakeClient({ cards: [], questions: [], total_actionable: 0 });
     const { result } = renderHook(() => useReviewBadgeCount(client), { wrapper: QueryWrap });
     expect(result.current).toBe(0); // loading → 0
     await waitFor(() => expect(client.getReviewInbox).toHaveBeenCalled());

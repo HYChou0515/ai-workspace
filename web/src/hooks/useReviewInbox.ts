@@ -22,6 +22,12 @@ export type ReviewInboxOpts = {
   collectionId?: string;
   grouped?: boolean;
   suppressed?: boolean;
+  // #506 G2: server-side filter + paging so the FE never loads thousands of rows.
+  kind?: "all" | "cards" | "questions";
+  q?: string;
+  actionable?: boolean;
+  limit?: number;
+  offset?: number;
 };
 
 export function useReviewInbox(opts: ReviewInboxOpts = {}, client: KbApi = kbApi) {
@@ -68,14 +74,13 @@ export function useReviewInbox(opts: ReviewInboxOpts = {}, client: KbApi = kbApi
 }
 
 /** The nav badge: how many pending items the caller can actually act on (#481 —
- * "only count what I can operate on"). 0 ⇒ the badge is hidden. */
+ * "only count what I can operate on"). 0 ⇒ the badge is hidden. Reads the server's
+ * `total_actionable` off a minimal one-row page (#506 G2) so the badge never pulls
+ * the whole backlog just to count it. */
 export function useReviewBadgeCount(client: KbApi = kbApi): number {
   const { data } = useQuery({
-    queryKey: qk.kb.reviewInbox({}),
-    queryFn: () => client.getReviewInbox({}),
+    queryKey: qk.kb.reviewInbox({ limit: 1 }),
+    queryFn: () => client.getReviewInbox({ limit: 1 }),
   });
-  if (!data) return 0;
-  return (
-    data.cards.filter((c) => c.can_act).length + data.questions.filter((q) => q.can_act).length
-  );
+  return data?.total_actionable ?? 0;
 }
