@@ -77,6 +77,36 @@ def test_review_inbox_hides_unreadable_and_flags_readonly():
     assert body["cards"][0]["can_act"] is False  # read but not write
 
 
+def test_review_inbox_paginates_and_filters_server_side():
+    """P1 (#506): the route pages (``limit``) and filters (``kind``/``q``) on the
+    server, and reports ``total`` / ``total_actionable`` so the FE renders one page
+    with "X of N" and the nav badge without loading every row."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _seed_done_run(
+        spec,
+        cid,
+        [
+            ProposedCard(keys=["RZ3"], title="RZ3"),
+            ProposedCard(keys=["RZ4"], title="RZ4"),
+            ProposedCard(keys=["RZ5"], title="RZ5"),
+        ],
+    )
+    client = _client(spec)
+
+    page = client.get("/kb/review-inbox", params={"limit": 2}).json()
+    assert len(page["cards"]) + len(page["questions"]) == 2  # a single capped page
+    assert page["total"] == 3
+    assert page["total_actionable"] == 3  # owner may act on all
+
+    only_q = client.get("/kb/review-inbox", params={"kind": "questions"}).json()
+    assert only_q["cards"] == [] and only_q["total"] == 0
+
+    hit = client.get("/kb/review-inbox", params={"q": "rz4"}).json()
+    assert [c["card"]["keys"][0] for c in hit["cards"]] == ["RZ4"]
+    assert hit["total"] == 1
+
+
 def test_review_inbox_resolved_view_and_collection_scope():
     """#481: ``resolved=true`` returns handled items; ``collection_id`` scopes it."""
     spec = make_spec(default_user="u")
@@ -90,3 +120,61 @@ def test_review_inbox_resolved_view_and_collection_scope():
     assert [c["collection_id"] for c in scoped["cards"]] == [a]
     # nothing resolved yet → history empty
     assert client.get("/kb/review-inbox", params={"resolved": "true"}).json()["cards"] == []
+
+
+def test_review_inbox_grouped_returns_clusters():
+    """#506 P7: grouped=true returns one cluster per concept (a proposal + a
+    question the reconcile step grouped collapse into one row); the flat
+    cards/questions lists are empty in that mode."""
+    from workspace_app.resources.kb import ClusterMember
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    run_id = _seed_done_run(spec, cid, [ProposedCard(id="0", keys=["RZ3"], title="RZ3")])
+    qid = open_or_merge_term_question(
+        spec, collection_id=cid, term="R7", source_doc_id="d1", question_text="What is R7?"
+    )
+    rm = spec.get_resource_manager(ClusterMember)
+    rm.create(
+        ClusterMember(
+            collection_id=cid, kind="proposal", ref_id="0", run_id=run_id, cluster_key="rz3"
+        )
+    )
+    rm.create(ClusterMember(collection_id=cid, kind="term_question", ref_id=qid, cluster_key="rz3"))
+
+    body = _client(spec).get("/kb/review-inbox", params={"grouped": "true"}).json()
+
+    assert body["cards"] == [] and body["questions"] == []
+    assert body["total"] == 1
+    (cl,) = body["clusters"]
+    assert cl["cluster_key"] == "rz3"
+    assert len(cl["cards"]) == 1 and len(cl["questions"]) == 1
+    assert cl["size"] == 2
+
+
+def test_review_inbox_suppressed_lists_dropped_candidates():
+    """#506 P7: suppressed=true returns the auto-dropped candidates with their
+    reason/label for audit; the normal streams are empty in that mode."""
+    from workspace_app.resources.kb import ClusterMember
+
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    spec.get_resource_manager(ClusterMember).create(
+        ClusterMember(
+            collection_id=cid,
+            kind="proposal",
+            ref_id="0",
+            run_id="r1",
+            cluster_key="rz3",
+            state="suppressed",
+            reason="near-card",
+            label="RZ3",
+        )
+    )
+    body = _client(spec).get("/kb/review-inbox", params={"suppressed": "true"}).json()
+
+    assert body["cards"] == [] and body["clusters"] == []
+    (s,) = body["suppressed"]
+    assert s["label"] == "RZ3"
+    assert s["reason"] == "near-card"
+    assert s["kind"] == "proposal"

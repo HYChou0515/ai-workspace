@@ -5,13 +5,12 @@ import { kbApi, type KbApi } from "../api/kb";
 import { qk } from "../api/queryKeys";
 import { getKbAgentName } from "../lib/kbAgent";
 import {
-  getKbWiki,
   getStored as getKbEnhancementSelection,
   toBodyEnhancements,
-  withWikiFlag,
 } from "../lib/kbEnhancementMode";
 import { getReasoningEffort } from "../lib/reasoningEffort";
 import { getKbSearchMax } from "../lib/kbSearchMax";
+import { getKbWikiMax } from "../lib/kbWikiMax";
 import {
   EMPTY_LOG,
   type AgentLog,
@@ -112,10 +111,12 @@ export function useKbChat({
           content: trimmed,
           signal: controller.signal,
           reasoningEffort: getReasoningEffort() ?? undefined,
-          enhancements: withWikiFlag(toBodyEnhancements(getKbEnhancementSelection()), getKbWiki()),
+          enhancements: toBodyEnhancements(getKbEnhancementSelection()),
           agentName: getKbAgentName() ?? undefined,
           // #334: per-message cap on this reply's kb_search calls (0 = no search).
           maxKbSearches: getKbSearchMax(),
+          // #506: per-message cap on this reply's wiki greps (replaces the toggle).
+          maxWikiSearches: getKbWikiMax(),
         })) {
           setLog((prev) => reduceAgent(prev, ev));
         }

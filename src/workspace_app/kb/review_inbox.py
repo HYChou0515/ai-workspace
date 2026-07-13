@@ -22,7 +22,7 @@ import msgspec
 from specstar import QB
 
 from ..perm import Actor, authorize
-from ..resources.kb import Collection, DocQuestion
+from ..resources.kb import ClusterMember, Collection, DocQuestion
 from .card_gen import ProposedCard, ensure_proposal_ids, is_active
 from .card_gen_run import CardGenRunStore
 from .doc_questions import questions_by_status
@@ -62,16 +62,160 @@ class ReviewQuestionItem(msgspec.Struct):
     question: DocQuestion
 
 
+class ReviewCluster(msgspec.Struct):
+    """#506 P7: one concept's review row — the proposals + questions the reconcile
+    step grouped under one ``cluster_key`` (⑤). A card and a question about the same
+    thing collapse here, so a reviewer acts on the concept once. ``created_time`` is
+    the newest member (the sort key); ``can_act`` is true if the actor may write to
+    any member's collection; ``size`` is the total member count."""
+
+    cluster_key: str
+    collection_id: str
+    collection_name: str
+    can_act: bool
+    created_time: float
+    cards: list[ReviewCardItem]
+    questions: list[ReviewQuestionItem]
+    size: int = 0
+
+
+class SuppressedItem(msgspec.Struct):
+    """#506 P7: one candidate the reconcile step auto-dropped as already-explained —
+    shown only in the suppressed-audit view so a human can verify nothing was wrongly
+    discarded. A dropped candidate is not on any run (it never became a proposal), so
+    the audit reads straight from the suppressed ClusterMember: ``label`` (the term /
+    title) + ``reason`` (``wiki`` vs ``near-card``) are enough to review it."""
+
+    collection_id: str
+    collection_name: str
+    kind: str  # "proposal" | "term_question"
+    label: str
+    cluster_key: str
+    reason: str  # "wiki" | "near-card"
+
+
 class ReviewInbox(msgspec.Struct):
-    """The aggregated inbox: card proposals + questions, each newest-first."""
+    """One page of the aggregated inbox: card proposals + questions (the current
+    slice, each newest-first), plus ``total`` — the full filtered count across both
+    streams so the FE can render "showing X of N" and page without loading it all."""
 
     cards: list[ReviewCardItem]
     questions: list[ReviewQuestionItem]
+    total: int = 0
+    total_actionable: int = 0
+    # #506 P7: populated instead of cards/questions when the caller asks for the
+    # clustered view (grouped=True) — one row per concept, paginated by cluster.
+    clusters: list[ReviewCluster] = msgspec.field(default_factory=list)
+    # #506 P7: the auto-suppressed candidates, only when suppressed=True is asked.
+    suppressed: list[SuppressedItem] = msgspec.field(default_factory=list)
+
+
+def cluster_key_map(spec: SpecStar, collection_ids: list[str]) -> dict[tuple[str, str], str]:
+    """Map each inbox-visible ClusterMember's ``(run_id, ref_id)`` to its
+    ``cluster_key`` — the join the inbox uses to group items. Only ``active``
+    proposal + term_question members participate: ``card`` members are the
+    comparison corpus (not shown) and ``suppressed``/``inactive`` members are hidden
+    from the default view. Scoped to the given collections (indexed query)."""
+    rm = spec.get_resource_manager(ClusterMember)
+    out: dict[tuple[str, str], str] = {}
+    for cid in collection_ids:
+        query = ((QB["collection_id"] == cid) & (QB["state"] == "active")).build()
+        for r in rm.list_resources(query):
+            member = r.data
+            assert isinstance(member, ClusterMember)
+            if member.kind == "card":
+                continue
+            out[(member.run_id, member.ref_id)] = member.cluster_key
+    return out
+
+
+def suppressed_members(spec: SpecStar, readable: dict[str, _CollCtx]) -> list[SuppressedItem]:
+    """The auto-suppressed candidates across the readable collections — the audit
+    view (⑥). Reads ``state="suppressed"`` ClusterMembers directly (a dropped
+    candidate is on no run), newest-collection-agnostic; card members can't be
+    suppressed so ``kind`` is always proposal / term_question."""
+    rm = spec.get_resource_manager(ClusterMember)
+    out: list[SuppressedItem] = []
+    for cid, ctx in readable.items():
+        query = ((QB["collection_id"] == cid) & (QB["state"] == "suppressed")).build()
+        for r in rm.list_resources(query):
+            member = r.data
+            assert isinstance(member, ClusterMember)
+            out.append(
+                SuppressedItem(
+                    collection_id=cid,
+                    collection_name=ctx.name,
+                    kind=member.kind,
+                    label=member.label or member.norm_key,
+                    cluster_key=member.cluster_key,
+                    reason=member.reason,
+                )
+            )
+    return out
+
+
+def _item_ref(item: ReviewCardItem | ReviewQuestionItem) -> tuple[str, str]:
+    """The ``(run_id, ref_id)`` identity a ClusterMember was recorded under — a
+    proposal id ("0"/"1"/…) is only unique WITHIN its run, so the run id is part of
+    the key; a question id is globally unique (run_id ``""``)."""
+    if isinstance(item, ReviewCardItem):
+        return (item.run_id, item.card.id)
+    return ("", item.qid)
+
+
+def group_by_cluster(
+    items: list[ReviewCardItem | ReviewQuestionItem],
+    cluster_of: dict[tuple[str, str], str],
+) -> list[ReviewCluster]:
+    """Group flat review items into one row per reconcile ``cluster_key`` (⑤).
+    ``cluster_of`` maps an item's ``(run_id, ref_id)`` to its cluster; an item with
+    no entry (pre-P6 backlog, or a build with no embedder) falls back to its OWN
+    singleton cluster so nothing vanishes from review. Clusters come back newest
+    member first (``cluster_key`` breaks ties for determinism)."""
+    groups: dict[str, ReviewCluster] = {}
+    for item in items:
+        ref = _item_ref(item)
+        key = cluster_of.get(ref) or f"~{ref[0]}\x00{ref[1]}"  # singleton fallback
+        cluster = groups.get(key)
+        if cluster is None:
+            cluster = ReviewCluster(
+                cluster_key=key,
+                collection_id=item.collection_id,
+                collection_name=item.collection_name,
+                can_act=item.can_act,
+                created_time=item.created_time,
+                cards=[],
+                questions=[],
+            )
+            groups[key] = cluster
+        if isinstance(item, ReviewCardItem):
+            cluster.cards.append(item)
+        else:
+            cluster.questions.append(item)
+        cluster.size += 1
+        cluster.created_time = max(cluster.created_time, item.created_time)
+        cluster.can_act = cluster.can_act or item.can_act
+    out = list(groups.values())
+    out.sort(key=lambda c: (-c.created_time, c.cluster_key))
+    return out
 
 
 class _CollCtx(msgspec.Struct):
     name: str
     can_act: bool
+
+
+def _row_matches(item: ReviewCardItem | ReviewQuestionItem, needle: str) -> bool:
+    """Whether a row's text contains the (already lower-cased) ``needle`` — mirrors
+    the FE's free-text filter so server-side ``q`` search matches what the user
+    typed: a card's title/body/keys, a question's term/text/quote."""
+    if isinstance(item, ReviewCardItem):
+        c = item.card
+        haystack = [c.title, c.body, *c.keys]
+    else:
+        query = item.question
+        haystack = [query.term, query.question_text, query.quote]
+    return any(needle in field.lower() for field in haystack)
 
 
 def _readable_collections(
@@ -107,30 +251,98 @@ def build_review_inbox(
     superusers: frozenset[str] = frozenset(),
     resolved: bool = False,
     collection_id: str | None = None,
+    kind: str = "all",
+    q: str = "",
+    actionable: bool = False,
+    grouped: bool = False,
+    suppressed: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> ReviewInbox:
     """Aggregate every pending-review item (or, with ``resolved``, the history of
     handled ones) the ``actor`` may see, newest first. ``collection_id`` scopes it
     to one collection (the per-collection 待審核 tab reuses this). Items in
     collections the actor can't read are dropped; each surviving item carries
-    ``can_act`` so the FE renders read-only rows where the actor lacks write."""
+    ``can_act`` so the FE renders read-only rows where the actor lacks write.
+
+    ``kind`` (``"all"`` | ``"cards"`` | ``"questions"``) narrows the page to one
+    stream so the FE need not fetch the other. ``q`` is a case-insensitive substring
+    over each row's text (card title/body/keys, question term/text/quote), applied
+    to the *whole* set so a match anywhere still surfaces. ``limit``/``offset`` page
+    the *unified* newest-first stream (cards + questions merged), so the FE renders
+    one page instead of thousands of rows; ``total`` on the result still reports the
+    full filtered count. ``limit=None`` returns the whole (offset-onward) stream —
+    the pre-pagination behaviour."""
     readable = _readable_collections(spec, actor, superusers)
     if collection_id is not None:
         readable = {cid: ctx for cid, ctx in readable.items() if cid == collection_id}
 
-    cards = _card_items(spec, readable, resolved)
-    questions = _question_items(spec, readable, resolved)
-    cards.sort(key=lambda i: i.created_time, reverse=True)
-    questions.sort(key=lambda i: i.created_time, reverse=True)
-    return ReviewInbox(cards=cards, questions=questions)
+    # #506 P7: the suppressed-audit view is a different stream (dropped candidates
+    # live only as suppressed ClusterMembers, not on any run) — return it and stop.
+    if suppressed:
+        items = suppressed_members(spec, readable)
+        if q:
+            needle = q.lower()
+            items = [s for s in items if needle in s.label.lower()]
+        total = len(items)
+        page_s = items[offset:] if limit is None else items[offset : offset + limit]
+        return ReviewInbox(cards=[], questions=[], suppressed=page_s, total=total)
+
+    merged: list[ReviewCardItem | ReviewQuestionItem] = []
+    if kind != "questions":
+        merged.extend(_card_items(spec, readable, resolved, collection_id=collection_id))
+    if kind != "cards":
+        merged.extend(_question_items(spec, readable, resolved))
+    if q:
+        needle = q.lower()
+        merged = [i for i in merged if _row_matches(i, needle)]
+    # ``total_actionable`` counts what the actor may write over the whole filtered
+    # set (the nav badge reads it from an empty page); computed BEFORE the
+    # ``actionable`` filter narrows the rows.
+    total_actionable = sum(1 for i in merged if i.can_act)
+    # #506 P7: the clustered view groups items by concept FIRST, then pages the
+    # clusters ("一群一列"). Grouping must precede pagination (a cluster's members
+    # can't straddle a page), and the actionable filter applies at CLUSTER level (a
+    # cluster is actionable if any member is), so it runs after grouping.
+    if grouped:
+        cluster_of = cluster_key_map(spec, list(readable))
+        clusters = group_by_cluster(merged, cluster_of)
+        if actionable:
+            clusters = [c for c in clusters if c.can_act]
+        total = len(clusters)
+        page_c = clusters[offset:] if limit is None else clusters[offset : offset + limit]
+        return ReviewInbox(
+            cards=[],
+            questions=[],
+            clusters=page_c,
+            total=total,
+            total_actionable=total_actionable,
+        )
+    if actionable:
+        merged = [i for i in merged if i.can_act]
+    merged.sort(key=lambda i: i.created_time, reverse=True)  # newest first, across both streams
+    total = len(merged)
+    page = merged[offset:] if limit is None else merged[offset : offset + limit]
+    return ReviewInbox(
+        cards=[i for i in page if isinstance(i, ReviewCardItem)],
+        questions=[i for i in page if isinstance(i, ReviewQuestionItem)],
+        total=total,
+        total_actionable=total_actionable,
+    )
 
 
 def _card_items(
-    spec: SpecStar, readable: dict[str, _CollCtx], resolved: bool
+    spec: SpecStar,
+    readable: dict[str, _CollCtx],
+    resolved: bool,
+    collection_id: str | None = None,
 ) -> list[ReviewCardItem]:
     store = CardGenRunStore(spec)
     statuses = _RESOLVED_RUN_STATUSES if resolved else _PENDING_RUN_STATUSES
     items: list[ReviewCardItem] = []
-    for run_id, created, run in store.runs_by_status(statuses):
+    # #506: when the inbox is scoped to one collection, push that into the indexed
+    # query so we read only its runs instead of scanning every collection's.
+    for run_id, created, run in store.runs_by_status(statuses, collection_id=collection_id):
         ctx = readable.get(run.collection_id)
         if ctx is None:
             continue  # collection not readable by this user

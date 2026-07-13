@@ -108,6 +108,16 @@ export const messages = {
   "searchmax.dec": { "zh-TW": "減少搜尋次數", en: "Fewer searches" },
   "searchmax.inc": { "zh-TW": "增加搜尋次數", en: "More searches" },
 
+  // #506: the wiki-search count picker (replaces the boolean "search wiki" toggle).
+  "wikimax.label": { "zh-TW": "最多查百科次數", en: "Max wiki searches" },
+  "wikimax.title": {
+    "zh-TW": "這則回覆最多查知識百科幾次（0＝不查）",
+    en: "How many times this reply may search the wiki (0 = don't search the wiki)",
+  },
+  "wikimax.zero": { "zh-TW": "0＝不查", en: "0 = no wiki" },
+  "wikimax.dec": { "zh-TW": "減少查百科次數", en: "Fewer wiki searches" },
+  "wikimax.inc": { "zh-TW": "增加查百科次數", en: "More wiki searches" },
+
   // Agent activity entries (AgentEntryView): tool cards, reasoning, notices
   "tool.exec": { "zh-TW": "執行指令", en: "Run command" },
   "tool.read_file": { "zh-TW": "讀取檔案", en: "Read file" },
@@ -632,6 +642,30 @@ export const messages = {
   },
   "review.tab.pending": { "zh-TW": "待處理", en: "Pending" },
   "review.tab.resolved": { "zh-TW": "已處理", en: "Handled" },
+  // #506 P7: the clustered ("group duplicates") view.
+  "review.tab.grouped": { "zh-TW": "依概念分組", en: "By concept" },
+  "review.tab.suppressed": { "zh-TW": "已自動略過", en: "Auto-skipped" },
+  "review.pager.label": { "zh-TW": "分頁", en: "Pagination" },
+  "review.pager.total": { "zh-TW": "共 {n} 筆", en: "{n} total" },
+  "review.pager.prev": { "zh-TW": "上一頁", en: "Prev" },
+  "review.pager.next": { "zh-TW": "下一頁", en: "Next" },
+  "review.pager.pos": { "zh-TW": "第 {page} / {pages} 頁", en: "Page {page} / {pages}" },
+  "review.cluster.count": { "zh-TW": "{n} 項", en: "{n} items" },
+  "review.cluster.apply": { "zh-TW": "套用此概念已接受（{n}）", en: "Apply accepted ({n})" },
+  "review.cluster.empty": {
+    "zh-TW": "目前沒有可分組的待審核項目。",
+    en: "No groupable items to review right now.",
+  },
+  "review.suppressed.empty": {
+    "zh-TW": "沒有被自動略過的候選——所有提案都進了待審核。",
+    en: "Nothing was auto-skipped — every candidate reached the review queue.",
+  },
+  "review.suppressed.reason.wiki": { "zh-TW": "已在 wiki 說明", en: "Explained in the wiki" },
+  "review.suppressed.reason.near-card": {
+    "zh-TW": "已有相近卡片",
+    en: "A similar card already exists",
+  },
+  "review.suppressed.reason.other": { "zh-TW": "已被涵蓋", en: "Already covered" },
   "review.filter.search": { "zh-TW": "搜尋標題、詞彙、問題…", en: "Search titles, terms, questions…" },
   "review.filter.collection": { "zh-TW": "所有知識庫", en: "All knowledge bases" },
   "review.filter.type": { "zh-TW": "所有類型", en: "All types" },
@@ -670,6 +704,8 @@ export const messages = {
   "review.mode.new": { "zh-TW": "新增", en: "New" },
   "review.mode.update": { "zh-TW": "更新", en: "Update" },
   "review.drawer.keys": { "zh-TW": "詞彙", en: "Terms" },
+  "review.drawer.addKey": { "zh-TW": "新增詞彙", en: "Add a term" },
+  "review.drawer.removeKey": { "zh-TW": "移除 {k}", en: "Remove {k}" },
   "review.drawer.title": { "zh-TW": "標題", en: "Title" },
   "review.drawer.body": { "zh-TW": "內容", en: "Body" },
   "review.drawer.overwrites": { "zh-TW": "將覆蓋現有卡片", en: "Overwrites the current card" },

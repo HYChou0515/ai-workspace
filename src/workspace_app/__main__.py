@@ -274,6 +274,12 @@ def main() -> None:
             kb_max_searches_per_turn=settings.kb.max_searches_per_turn,
             # #334: ceiling for the composer's per-message kb_search-count pick.
             kb_max_searches_ceiling=settings.kb.max_searches_ceiling,
+            # #506: reconcile / cluster-sweeper thresholds (dedup dup proposals + Qs).
+            kb_cluster_tau=settings.kb.cluster.cluster_tau,
+            kb_cluster_suppress_tau=settings.kb.cluster.suppress_tau,
+            kb_cluster_update_tau=settings.kb.cluster.update_tau,
+            kb_cluster_merge_tau=settings.kb.cluster.merge_tau,
+            kb_cluster_sweep_seconds=settings.kb.cluster.sweep_interval_seconds,
             monitor=SpecstarMonitor(spec),  # persist LLM/agent telemetry (issue #11)
             root_path=settings.server.root_path,
             read_file_max_lines=settings.read_file.max_lines,

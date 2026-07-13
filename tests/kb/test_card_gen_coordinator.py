@@ -12,6 +12,7 @@ import msgspec
 from specstar import QB
 from specstar.types import Binary, TaskStatus
 
+from workspace_app.kb.card_drafter import NullCardDrafter
 from workspace_app.kb.card_gen import (
     CardDraft,
     DescriptionQuestionDraft,
@@ -23,8 +24,10 @@ from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.doc_questions import open_questions_for_collections
+from workspace_app.kb.reconcile import Reconciler, collection_wiki_text
 from workspace_app.kb.wiki.store import _rid
 from workspace_app.resources import Collection, ContextCard, SourceDoc, WikiPage, make_spec
+from workspace_app.resources.kb import EMBED_DIM, ClusterMember
 
 
 def _add_source(spec, collection_id: str, path: str, text: str) -> str:
@@ -84,9 +87,11 @@ class _FakeDrafter:
         self._desc_qs = desc_qs or {}
         self._fail_paths = fail_paths or set()
         self.seen: list[str] = []
+        self.seen_cids: list[str] = []
 
-    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest:
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest:
         self.seen.append(doc_path)
+        self.seen_cids.append(collection_id)
         if doc_path in self._fail_paths:
             raise RuntimeError(f"drafter gave up on {doc_path}")  # a post-failover give-up
         return DocDigest(
@@ -495,6 +500,37 @@ async def test_a_single_doc_run_short_circuits_without_fanning_out():
     assert coord.status(jid) == TaskStatus.COMPLETED
     (p,) = coord.proposals(jid).proposals
     assert p.keys == ["X"]
+
+
+async def test_the_drafter_is_told_the_documents_collection():
+    # #506 P5: the agentic drafter scopes its ask_knowledge_base to the document's
+    # OWN collection, so the coordinator must pass that collection id down to
+    # `digest` — it isn't recoverable from doc_path / doc_text alone.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    drafter = _FakeDrafter({"a.md": [CardDraft(keys=["X"], snippet="s")]})
+    coord = CardGenCoordinator(spec, drafter)
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+    assert drafter.seen_cids == [cid]
+
+
+async def test_set_drafter_swaps_in_a_new_drafter_after_construction():
+    # #506 composition: create_app can only build the agentic drafter AFTER the KB
+    # retriever + subagent bridge exist (both built after the coordinators), so it
+    # swaps it into the already-constructed coordinator before any consumer starts.
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "x")
+    coord = CardGenCoordinator(spec, NullCardDrafter())  # starts with the no-op drafter
+    coord.set_drafter(_FakeDrafter({"a.md": [CardDraft(keys=["SWAPPED"], snippet="s")]}))
+
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    (p,) = coord.proposals(jid).proposals
+    assert p.keys == ["SWAPPED"]  # the swapped-in drafter ran, not the null one
 
 
 async def test_a_text_bearing_doc_that_digests_to_nothing_is_logged(caplog):
@@ -992,3 +1028,195 @@ async def test_aclose_is_a_noop_when_nothing_was_enqueued():
     spec = make_spec(default_user="u")
     coord = CardGenCoordinator(spec, _FakeDrafter({}))
     await coord.aclose()  # no raise, no work
+
+
+class _TagEmb:
+    """Deterministic fake embedder keyed by the text's LAST token (its title tag),
+    so a coordinator test can decide semantic nearness without a real model (a hash
+    embedder can't stand in for "M4 ≈ Metal 4"). Same tag → identical one-hot →
+    cosine 1.0; different tag → orthogonal."""
+
+    dim = EMBED_DIM
+    identity = "tag"
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [self._v(t) for t in texts]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self._v(text)
+
+    def _v(self, text: str) -> list[float]:
+        import hashlib
+
+        tag = text.split()[-1] if text.split() else ""
+        bucket = int(hashlib.sha256(tag.encode()).hexdigest(), 16) % EMBED_DIM
+        v = [0.0] * EMBED_DIM
+        v[bucket] = 1.0
+        return v
+
+
+def _members(spec, cid: str) -> list[ClusterMember]:
+    rm = spec.get_resource_manager(ClusterMember)
+    out = []
+    for r in rm.list_resources((QB["collection_id"] == cid).build()):
+        assert isinstance(r.data, ClusterMember)
+        out.append(r.data)
+    return out
+
+
+async def test_finalize_reconcile_suppresses_a_semantic_duplicate():
+    """#506 P6 ⑥: with a reconciler wired in, a proposal that doesn't EXACTLY match
+    an existing card (so the #175 exact classifier keeps it) but is semantically a
+    duplicate is auto-suppressed — it never reaches the review queue, and an
+    auditable suppressed ClusterMember records why."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    # existing card shares the title tag with the drafted card but a DIFFERENT key,
+    # so classify_against_existing leaves the proposal "new" and the semantic layer
+    # is what suppresses it.
+    spec.get_resource_manager(ContextCard).create(
+        ContextCard(
+            collection_id=cid,
+            keys=["alpha"],
+            norm_keys=derive_norm_keys(["alpha"]),
+            title="SharedTag",
+        )
+    )
+    doc = _add_source(spec, cid, "d.md", "beta is explained here")
+    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["beta"], title="SharedTag", snippet="s")]})
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        reconciler=Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=0.9, update_tau=0.7),
+    )
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert coord.status(jid) == TaskStatus.COMPLETED
+    assert coord.proposals(jid).proposals == []  # suppressed, not queued
+    suppressed = [
+        m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"
+    ]
+    assert len(suppressed) == 1
+    assert suppressed[0].run_id == jid
+
+
+async def test_finalize_reconcile_suppresses_a_wiki_explained_term_question():
+    """#506 ③⑥: a raised term already explained in the collection's wiki is NOT
+    opened as a question (so it is never re-asked) — it is recorded as an auditable
+    suppressed ClusterMember instead."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "spec.md", "Uses the R7 recipe.")
+    drafter = _FakeDrafter(
+        {}, term_qs={"spec.md": [TermQuestionDraft(term="R7", question="What is R7?")]}
+    )
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        reconciler=Reconciler(
+            spec,
+            _TagEmb(),
+            cluster_tau=0.5,
+            suppress_tau=1.01,  # never suppress via near-card — the wiki hit is the reason
+            update_tau=1.01,
+            wiki_text=lambda _cid: "The R7 recipe is fully documented in the wiki.",
+        ),
+    )
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert open_questions_for_collections(spec, [cid]) == []  # suppressed, never asked
+    supp = [m for m in _members(spec, cid) if m.kind == "term_question" and m.state == "suppressed"]
+    assert len(supp) == 1
+    assert supp[0].reason == "wiki"
+    assert supp[0].label == "R7"
+
+
+async def test_finalize_reconcile_keeps_and_clusters_a_new_proposal():
+    """#506 P6 ⑤: a genuinely-new proposal is kept and recorded as an active member
+    with a cluster_key, so a later run's duplicate can be grouped with it."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    spec.get_resource_manager(ContextCard).create(
+        ContextCard(
+            collection_id=cid,
+            keys=["alpha"],
+            norm_keys=derive_norm_keys(["alpha"]),
+            title="SharedTag",
+        )
+    )
+    doc = _add_source(spec, cid, "d.md", "gamma is a new thing")
+    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["gamma"], title="OtherTag", snippet="s")]})
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        reconciler=Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=0.9, update_tau=0.7),
+    )
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    kept = coord.proposals(jid).proposals
+    assert [p.keys for p in kept] == [["gamma"]]
+    active = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "active"]
+    assert len(active) == 1
+    assert active[0].cluster_key == "gamma"
+
+
+async def test_finalize_reconcile_suppresses_a_term_already_in_the_wiki():
+    """#506 P6 ⑥ (wiki net): a proposal whose term is already documented in the
+    collection's wiki is auto-suppressed end-to-end — proving the sync wiki read
+    works from the consumer-thread finalize path."""
+    spec = make_spec(default_user="u")
+    cid = (
+        spec.get_resource_manager(Collection)
+        .create(Collection(name="c", use_wiki=True))
+        .resource_id
+    )
+    _add_wiki(spec, cid, "/glossary.md", "RZ3 is the third reflow zone, fully documented.")
+    doc = _add_source(spec, cid, "d.md", "RZ3 heating")
+    drafter = _FakeDrafter({"d.md": [CardDraft(keys=["RZ3"], title="Reflow Zone 3", snippet="s")]})
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        # thresholds unreachable → only the wiki net can suppress here
+        reconciler=Reconciler(
+            spec,
+            _TagEmb(),
+            cluster_tau=0.5,
+            suppress_tau=1.01,
+            update_tau=1.01,
+            wiki_text=lambda c: collection_wiki_text(spec, c),
+        ),
+    )
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert coord.proposals(jid).proposals == []  # suppressed by the wiki grep
+    supp = [m for m in _members(spec, cid) if m.kind == "proposal" and m.state == "suppressed"]
+    assert len(supp) == 1
+
+
+async def test_finalize_reconcile_clusters_a_term_question():
+    """#506 P6 ⑤: a raised term question is projected as an active ClusterMember with
+    a cluster_key, so the inbox (P7) can group it with a proposal for the same
+    concept."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "d.md", "A Widget appears here")
+    drafter = _FakeDrafter(
+        {"d.md": []},
+        term_qs={"d.md": [TermQuestionDraft(term="Widget", question="What is a Widget?")]},
+    )
+    coord = CardGenCoordinator(
+        spec,
+        drafter,
+        reconciler=Reconciler(spec, _TagEmb(), cluster_tau=0.5, suppress_tau=0.9, update_tau=0.7),
+    )
+    coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    tq = [m for m in _members(spec, cid) if m.kind == "term_question"]
+    assert len(tq) == 1
+    assert tq[0].state == "active"
+    assert tq[0].cluster_key == "widget"  # norm(Widget) — opened its own cluster

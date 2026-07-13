@@ -69,6 +69,7 @@ from .doc_questions import (
     plan_doc_questions,
 )
 from .job_audit import preserve_job_creator
+from .reconcile import Reconciler
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -111,9 +112,14 @@ class CardGenCoordinator:
         message_queue_factory: object | None = None,
         get_user_id: Callable[[], str] | None = None,
         max_questions_per_doc: int = 5,
+        reconciler: Reconciler | None = None,
     ) -> None:
         self._spec = spec
         self._drafter = drafter
+        # #506 P6: the finalize-time semantic reconcile (suppress already-explained
+        # candidates, cluster cross-run duplicates). None → the pre-P6 exact-only
+        # behaviour (tests / a build with no embedder).
+        self._reconciler = reconciler
         self._runs = CardGenRunStore(spec)
         # #377 guardrail ③: cap the clarification questions one document may raise
         # so a pathological digest can't flood the inbox (terms fill the budget
@@ -143,6 +149,20 @@ class CardGenCoordinator:
         # stamping the worker default; producers below set the user via using().
         preserve_job_creator(self._job_rm)
         self._consuming = False
+
+    def set_drafter(self, drafter: CardDrafter) -> None:
+        """#506: swap the drafter in after construction. The agentic drafter is
+        built from the KB retriever + a subagent bridge, which exist only AFTER the
+        coordinators are built (create_app ordering), so create_app constructs this
+        coordinator with the fallback drafter then swaps in the agentic one here.
+        Safe: called synchronously during create_app, before any consumer starts."""
+        self._drafter = drafter
+
+    def set_reconciler(self, reconciler: Reconciler | None) -> None:
+        """#506 P6: inject the semantic reconciler after construction (same pattern
+        as :meth:`set_drafter`), for when the embedder is only wired up later in
+        create_app. Safe: called before any consumer starts."""
+        self._reconciler = reconciler
 
     # ── enqueue (producer) ───────────────────────────────────────────
     def enqueue(
@@ -387,7 +407,11 @@ class CardGenCoordinator:
             self._runs.mark_done(run_id, doc_index)  # doc deleted before run — nothing to digest
             return
         try:
-            digest = self._drafter.digest(doc_path=ref.path, doc_text=ref.text)
+            # #506: the agentic drafter scopes its ask_knowledge_base to the doc's
+            # OWN collection, so pass it down (the one-shot drafter ignores it).
+            digest = self._drafter.digest(
+                doc_path=ref.path, doc_text=ref.text, collection_id=ref.collection_id
+            )
         except Exception:  # noqa: BLE001 — one doc's give-up must not sink the run
             _LOGGER.exception("CardGen: digest failed for doc %s (run %s)", doc_id, run_id)
             self._runs.mark_failed(run_id, doc_index)
@@ -455,6 +479,11 @@ class CardGenCoordinator:
         proposals = merge_drafts(raw)
         existing = cards_with_ids_for_collections(self._spec, [cid])
         kept = [p for p in proposals if classify_against_existing(p, existing) != "skip"]
+        # #506 P6: semantic reconcile over the exact-classified survivors — suppress
+        # already-explained candidates (near an existing card / documented in the
+        # wiki) and cluster cross-run duplicates. No reconciler → exact-only (pre-P6).
+        if self._reconciler is not None:
+            kept = self._reconciler.reconcile_proposals(cid, run_id, kept, existing)
         self._runs.set_proposals(run_id, kept)
         self._raise_questions(cid, per_doc, existing)
         self._clear_staged(run_id)
@@ -513,6 +542,7 @@ class CardGenCoordinator:
         at collection level; description questions are doc-specific. Runs in the
         single finalize step so the non-CAS term dedup stays race-free."""
         carded = {nk for _, card in existing for nk in getattr(card, "norm_keys", [])}
+        term_items: list[tuple[str, Callable[[], str]]] = []
         for doc_id, digest in per_doc:
             terms, descs = plan_doc_questions(
                 digest.term_questions,
@@ -521,12 +551,19 @@ class CardGenCoordinator:
                 cap=self._max_questions_per_doc,
             )
             for tq in terms:
-                open_or_merge_term_question(
-                    self._spec,
-                    collection_id=cid,
-                    term=tq.term,
-                    source_doc_id=doc_id,
-                    question_text=tq.question,
+                # Defer the actual open() to the reconciler — it opens ONLY the terms it
+                # doesn't suppress (already explained in wiki / covered by a card, ③⑥).
+                term_items.append(
+                    (
+                        tq.term,
+                        lambda tq=tq, doc_id=doc_id: open_or_merge_term_question(
+                            self._spec,
+                            collection_id=cid,
+                            term=tq.term,
+                            source_doc_id=doc_id,
+                            question_text=tq.question,
+                        ),
+                    )
                 )
             for dq in descs:
                 add_description_question(
@@ -536,6 +573,16 @@ class CardGenCoordinator:
                     quote=dq.quote,
                     question_text=dq.question,
                 )
+        # #506 ⑤/③⑥: reconcile ALL raised terms in one batch — grade each against the
+        # wiki + existing cards (wiki loaded once), suppress the already-explained ones
+        # (recorded as auditable members, never opened), open + cluster the rest so a
+        # question groups with a proposal for the same concept. Pre-P6 (no reconciler):
+        # just open everything, no suppression.
+        if self._reconciler is not None:
+            self._reconciler.reconcile_term_questions(cid, term_items)
+        else:
+            for _term, open_q in term_items:
+                open_q()
 
     # ── lifecycle ────────────────────────────────────────────────────
     def _ensure_consuming(self) -> None:

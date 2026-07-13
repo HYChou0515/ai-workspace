@@ -48,6 +48,53 @@ describe("ReviewDrawer", () => {
     });
   });
 
+  it("edits the card's keys (remove one, add one) and saves them via update.mutate", () => {
+    const a = actions();
+    render(
+      <ReviewDrawer item={{ kind: "card", data: card() }} resolved={false} actions={a} onClose={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "移除 RZ3" })); // drop the only key
+    const add = screen.getByLabelText("新增詞彙");
+    fireEvent.change(add, { target: { value: "M4" } });
+    fireEvent.keyDown(add, { key: "Enter" }); // commit the new term
+    fireEvent.click(screen.getByRole("button", { name: "儲存編輯" }));
+    expect(a.update.mutate).toHaveBeenCalledWith({
+      runId: "run-aaaa",
+      card: expect.objectContaining({ id: "0", keys: ["M4"] }),
+    });
+  });
+
+  it("shows keys read-only (no add input, no remove buttons) when the user can't act", () => {
+    render(
+      <ReviewDrawer
+        item={{ kind: "card", data: card({ can_act: false }) }}
+        resolved={false}
+        actions={actions()}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText("RZ3")).toBeInTheDocument(); // the key is still shown
+    expect(screen.queryByLabelText("新增詞彙")).not.toBeInTheDocument(); // but not editable
+    expect(screen.queryByRole("button", { name: "移除 RZ3" })).not.toBeInTheDocument();
+  });
+
+  it("does not add a duplicate term", () => {
+    const a = actions();
+    render(
+      <ReviewDrawer item={{ kind: "card", data: card() }} resolved={false} actions={a} onClose={() => {}} />,
+    );
+    const add = screen.getByLabelText("新增詞彙");
+    for (const _ of [0, 1]) {
+      fireEvent.change(add, { target: { value: "M4" } });
+      fireEvent.keyDown(add, { key: "Enter" });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "儲存編輯" }));
+    expect(a.update.mutate).toHaveBeenCalledWith({
+      runId: "run-aaaa",
+      card: expect.objectContaining({ keys: ["RZ3", "M4"] }), // M4 added once, not twice
+    });
+  });
+
   it("is read-only with a hint and no accept button when the user can't act", () => {
     const a = actions();
     render(

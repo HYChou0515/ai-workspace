@@ -388,6 +388,17 @@
 # # Bundled = light (`expand=1, hyde=0, rerank=on`); operators raise expand/hyde
 # # when recall trumps latency. Setting max below default is fine — `min(...)`
 # # clamps the default down too.
+#   cluster:                                # #506: card-gen reconcile + cluster-sweeper
+#                                           #   thresholds (dedup duplicate proposals + the
+#                                           #   questions raised across runs). All τ are cosine
+#                                           #   SIMILARITY in [0,1]; HIGHER = stricter (fewer
+#                                           #   merges / suppressions). Exact-key overlap ignores
+#                                           #   these. Lower them to dedup more aggressively.
+#     cluster_tau: 0.9                      #   join a candidate to a cluster at >= this sim
+#     suppress_tau: 0.92                    #   >= this near a card (or a wiki hit) → auto-drop
+#     update_tau: 0.8                       #   >= this (but < suppress) → suggest updating that card
+#     merge_tau: 0.95                       #   background sweeper folds clusters within this sim
+#     sweep_interval_seconds: 900           #   how often the API sweep backfills + folds clusters
 #   max_searches_per_turn: 3                # issue #195: cap kb_search calls per KB-chat
 #                                           #   reply (+ the ask_knowledge_base bridge). Each
 #                                           #   search runs the expand/HyDE/rerank cascade and

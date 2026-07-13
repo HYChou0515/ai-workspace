@@ -48,7 +48,7 @@ class _FakeDrafter:
         self._cards = cards
         self._term_qs = term_qs or {}
 
-    def digest(self, *, doc_path: str, doc_text: str):
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = ""):
         from workspace_app.kb.card_gen import DocDigest
 
         return DocDigest(
@@ -175,9 +175,237 @@ async def test_inbox_can_scope_to_one_collection():
     assert [i.card.keys for i in inbox.cards] == [["A"]]
 
 
+async def test_inbox_limit_caps_the_page_and_reports_total():
+    """P1 pagination tracer: ``limit`` caps how many items a single page returns,
+    while ``total`` still reports the full filtered count so the FE can render
+    "showing X of N"."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
+                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
+                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
+            ]
+        },
+    )
+    inbox = build_review_inbox(spec, actor=Actor.human("u"), limit=2)
+    assert len(inbox.cards) + len(inbox.questions) == 2  # a single page, capped
+    assert inbox.total == 3  # the full count, independent of the page size
+
+
+async def test_offset_pages_through_the_stream_without_overlap_or_gaps():
+    """P1 pagination: successive ``offset`` windows partition the full stream —
+    every item appears on exactly one page, none twice."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="RZ3", snippet="s"),
+                CardDraft(keys=["RZ4"], title="RZ4", snippet="s"),
+                CardDraft(keys=["RZ5"], title="RZ5", snippet="s"),
+            ]
+        },
+    )
+
+    def keys(inbox) -> set[str]:
+        return {c.card.keys[0] for c in inbox.cards}
+
+    p1 = build_review_inbox(spec, actor=Actor.human("u"), limit=2, offset=0)
+    p2 = build_review_inbox(spec, actor=Actor.human("u"), limit=2, offset=2)
+    assert len(p1.cards) == 2 and len(p2.cards) == 1
+    assert p1.total == 3 and p2.total == 3  # total is the full count on every page
+    assert keys(p1) | keys(p2) == {"RZ3", "RZ4", "RZ5"}  # complete
+    assert keys(p1) & keys(p2) == set()  # disjoint
+
+
+async def test_kind_filter_returns_only_that_stream_and_total_reflects_it():
+    """P1 server filter: ``kind`` narrows the page to one stream so the FE need not
+    over-fetch the other; ``total`` counts only the filtered kind."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    cards_only = build_review_inbox(spec, actor=Actor.human("u"), kind="cards")
+    assert len(cards_only.cards) == 1 and cards_only.questions == []
+    assert cards_only.total == 1  # the question is excluded from the count
+
+    qs_only = build_review_inbox(spec, actor=Actor.human("u"), kind="questions")
+    assert qs_only.cards == [] and len(qs_only.questions) == 1
+    assert qs_only.total == 1
+
+    both = build_review_inbox(spec, actor=Actor.human("u"))  # kind defaults to "all"
+    assert both.total == 2
+
+
+async def test_q_filters_across_the_whole_stream_case_insensitively():
+    """P1 server filter: ``q`` is a case-insensitive substring over a card's
+    title/body/keys and a question's term/text/quote — applied to the *whole* set
+    (so a match on page 5 still surfaces), not just the current page."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={
+            "a.md": [
+                CardDraft(keys=["RZ3"], title="RZ3", body="reflow zone three"),
+                CardDraft(keys=["XY9"], title="XY9", body="gamma"),
+            ]
+        },
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    by_body = build_review_inbox(spec, actor=Actor.human("u"), q="Reflow")  # card body, mixed case
+    assert [c.card.keys[0] for c in by_body.cards] == ["RZ3"]
+    assert by_body.questions == [] and by_body.total == 1
+
+    by_q = build_review_inbox(spec, actor=Actor.human("u"), q="r7")  # only the question
+    assert by_q.cards == [] and [q.question.term for q in by_q.questions] == ["R7"]
+    assert by_q.total == 1
+
+
+async def test_actionable_filter_and_total_actionable_count():
+    """P1: ``actionable=True`` keeps only rows the actor may write (the nav badge's
+    "what can I act on"); ``total_actionable`` reports that count over the whole
+    filtered set so the badge can read it from an empty (``limit=0``) page."""
+    spec = make_spec(default_user="owner")
+    coll_act = _collection(
+        spec,
+        "Act",
+        owner="owner",
+        permission=Permission(
+            visibility="restricted", read_content=["user:u"], add_content=["user:u"]
+        ),
+    )
+    coll_ro = _collection(
+        spec,
+        "RO",
+        owner="owner",
+        permission=Permission(visibility="restricted", read_content=["user:u"]),
+    )
+    coord = _coord(
+        spec,
+        {
+            "act.md": [CardDraft(keys=["A"], title="A", body="a")],
+            "ro.md": [CardDraft(keys=["B"], title="B", body="b")],
+        },
+        owner="owner",
+    )
+    da = _add_source(spec, coll_act, "act.md", "x", owner="owner")
+    dr = _add_source(spec, coll_ro, "ro.md", "y", owner="owner")
+    coord.enqueue(coll_act, [da])
+    coord.enqueue(coll_ro, [dr])
+    await coord.aclose()
+
+    actor = Actor.human("u")
+    full = build_review_inbox(spec, actor=actor)
+    assert full.total == 2
+    assert full.total_actionable == 1  # only the "Act" collection's card is writable by u
+
+    only_act = build_review_inbox(spec, actor=actor, actionable=True)
+    assert [c.card.keys[0] for c in only_act.cards] == ["A"]
+    assert only_act.total == 1
+
+
 def test_msgspec_roundtrip_of_the_inbox_structs():
     """The inbox structs serialise cleanly (they cross the wire via the route)."""
     from workspace_app.kb.review_inbox import ReviewInbox
 
     empty = ReviewInbox(cards=[], questions=[])
     assert msgspec.json.decode(msgspec.json.encode(empty), type=ReviewInbox) == empty
+
+
+def _cluster_member(
+    spec, cid, *, kind, ref_id, run_id="", cluster_key, state="active", reason="", label=""
+):
+    from workspace_app.resources.kb import ClusterMember
+
+    spec.get_resource_manager(ClusterMember).create(
+        ClusterMember(
+            collection_id=cid,
+            kind=kind,
+            ref_id=ref_id,
+            run_id=run_id,
+            cluster_key=cluster_key,
+            state=state,
+            reason=reason,
+            label=label,
+        )
+    )
+
+
+async def test_grouped_inbox_merges_a_card_and_question_of_one_concept():
+    """#506 P7: with grouped=True the inbox returns one ReviewCluster per concept —
+    a proposal + a question the reconcile step put in one cluster collapse to a
+    single row (⑤), and the flat cards/questions lists are empty (the FE reads
+    clusters)."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    await _seed_run(
+        spec,
+        cid,
+        cards={"a.md": [CardDraft(keys=["RZ3"], title="RZ3", snippet="s")]},
+        term_qs={"a.md": [TermQuestionDraft(term="R7", question="What is R7?")]},
+    )
+    flat = build_review_inbox(spec, actor=Actor.human("u"))
+    run_id, card_id, qid = flat.cards[0].run_id, flat.cards[0].card.id, flat.questions[0].qid
+    _cluster_member(spec, cid, kind="proposal", ref_id=card_id, run_id=run_id, cluster_key="rz3")
+    _cluster_member(spec, cid, kind="term_question", ref_id=qid, cluster_key="rz3")
+
+    grouped = build_review_inbox(spec, actor=Actor.human("u"), grouped=True)
+
+    assert grouped.total == 1
+    assert grouped.cards == [] and grouped.questions == []
+    (cl,) = grouped.clusters
+    assert cl.cluster_key == "rz3"
+    assert len(cl.cards) == 1 and len(cl.questions) == 1
+
+
+async def test_suppressed_audit_lists_dropped_candidates_with_reason():
+    """#506 P7: the suppressed filter surfaces what the reconcile step auto-dropped
+    (already explained) — each with its reason + label — so a human can audit that
+    nothing was wrongly discarded. Dropped candidates aren't on any run, so they come
+    straight from the suppressed ClusterMembers."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec,
+        cid,
+        kind="proposal",
+        ref_id="0",
+        run_id="r1",
+        cluster_key="alpha",
+        state="suppressed",
+        reason="wiki",
+        label="Alpha",
+    )
+
+    audit = build_review_inbox(spec, actor=Actor.human("u"), suppressed=True)
+
+    assert audit.cards == [] and audit.questions == [] and audit.clusters == []
+    (s,) = audit.suppressed
+    assert s.label == "Alpha"
+    assert s.reason == "wiki"
+    assert s.kind == "proposal"
+    assert s.collection_name == "Alpha"
+
+
+async def test_suppressed_audit_hidden_from_the_default_view():
+    """A suppressed candidate never appears in the normal (active) inbox."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec, "Alpha")
+    _cluster_member(
+        spec, cid, kind="proposal", ref_id="0", run_id="r1", cluster_key="a", state="suppressed"
+    )
+    normal = build_review_inbox(spec, actor=Actor.human("u"))
+    assert normal.cards == [] and normal.suppressed == []

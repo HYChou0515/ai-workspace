@@ -403,6 +403,10 @@ export type SendKbMessageArgs = {
    * 0 = don't search this reply; omitted = operator default. The BE clamps
    * to the operator's ceiling. */
   maxKbSearches?: number;
+  /** #506: per-message cap on how many times this reply runs search_wiki (the
+   * number picker that replaced the boolean "search wiki" toggle). 0 = don't grep
+   * the wiki this reply; omitted = operator default. The BE clamps to the ceiling. */
+  maxWikiSearches?: number;
 };
 
 export type KbAgentConfig = {
@@ -510,9 +514,42 @@ export type KbReviewQuestion = {
   question: KbDocQuestion;
 };
 
-/** #481: the global 審核 inbox — card proposals + questions, permission-filtered,
- * newest first. */
-export type KbReviewInbox = { cards: KbReviewCard[]; questions: KbReviewQuestion[] };
+/** #506 P7: one concept's review row — the proposals + questions the reconcile
+ * step grouped under one `cluster_key`, so a duplicate/related set is reviewed once. */
+export type KbReviewCluster = {
+  cluster_key: string;
+  collection_id: string;
+  collection_name: string;
+  can_act: boolean;
+  created_time: number;
+  cards: KbReviewCard[];
+  questions: KbReviewQuestion[];
+  size: number;
+};
+
+/** #506 P7: one candidate the reconcile step auto-dropped as already-explained —
+ * the suppressed-audit row (label + why), so a human can verify nothing was wrongly
+ * discarded. */
+export type KbSuppressedItem = {
+  collection_id: string;
+  collection_name: string;
+  kind: string;
+  label: string;
+  cluster_key: string;
+  reason: string;
+};
+
+/** #481/#506: the global 審核 inbox — card proposals + questions, permission-filtered,
+ * newest first. With `grouped` the FE reads `clusters` (one row per concept); with
+ * `suppressed` it reads `suppressed` (the auto-dropped audit). */
+export type KbReviewInbox = {
+  cards: KbReviewCard[];
+  questions: KbReviewQuestion[];
+  total?: number;
+  total_actionable?: number;
+  clusters?: KbReviewCluster[];
+  suppressed?: KbSuppressedItem[];
+};
 
 /** #481: a proposal to commit, addressed by its run + stable card id. */
 export type KbCardRef = { run_id: string; card_id: string };
@@ -727,6 +764,13 @@ export interface KbApi {
   getReviewInbox(opts?: {
     resolved?: boolean;
     collectionId?: string;
+    grouped?: boolean;
+    suppressed?: boolean;
+    kind?: "all" | "cards" | "questions";
+    q?: string;
+    actionable?: boolean;
+    limit?: number;
+    offset?: number;
   }): Promise<KbReviewInbox>;
   /** #481: inline accept/reject one proposal by id; returns the run's refreshed
    * proposals (a settle may have resolved the run). */
@@ -1137,6 +1181,13 @@ export const realKbApi: KbApi = {
     const p = new URLSearchParams();
     if (opts?.resolved) p.set("resolved", "true");
     if (opts?.collectionId) p.set("collection_id", opts.collectionId);
+    if (opts?.grouped) p.set("grouped", "true");
+    if (opts?.suppressed) p.set("suppressed", "true");
+    if (opts?.kind && opts.kind !== "all") p.set("kind", opts.kind);
+    if (opts?.q) p.set("q", opts.q);
+    if (opts?.actionable) p.set("actionable", "true");
+    if (opts?.limit != null) p.set("limit", String(opts.limit));
+    if (opts?.offset) p.set("offset", String(opts.offset));
     const q = p.toString();
     return (
       await ok(await apiFetch(`/kb/review-inbox${q ? `?${q}` : ""}`), "review inbox")
@@ -1311,6 +1362,7 @@ export const realKbApi: KbApi = {
         enhancements: args.enhancements,
         agent_name: args.agentName,
         max_kb_searches: args.maxKbSearches,
+        max_wiki_searches: args.maxWikiSearches,
       }),
       signal: args.signal,
     });

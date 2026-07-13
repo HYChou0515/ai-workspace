@@ -49,6 +49,14 @@ INDEX_STUCK_AFTER_S = 3600.0
 # wiki collection is due (the actual cadence is once-a-day per collection, gated on
 # last_reflected_at; this is just the poll granularity, like the code-sync sweeper).
 _WIKI_REFLECT_CHECK_INTERVAL_S = 300.0
+# #506 P8: how often the API folds the review-inbox cluster store — backfills any
+# candidate that has no ClusterMember yet, then merges race-split clusters — so the
+# grouped 待審核 inbox converges without a reindex. A slow cadence: pure catch-up
+# maintenance off any request path, and idempotent + deterministic so it is safe to
+# run unguarded on every pod. The taus are the join / fold cosine thresholds.
+_CLUSTER_SWEEP_INTERVAL_S = 900.0
+_CLUSTER_SWEEP_TAU = 0.9  # join a candidate to a cluster at >= this cosine similarity
+_CLUSTER_MERGE_TAU = 0.95  # fold two clusters whose centroids are >= this similarity
 
 
 def _utcnow() -> datetime:
@@ -77,6 +85,9 @@ def build_lifespan(
     gc_t1: str,
     gc_t2: str,
     trigger_check_interval: timedelta | None = None,
+    cluster_sweep_seconds: float = _CLUSTER_SWEEP_INTERVAL_S,
+    cluster_tau: float = _CLUSTER_SWEEP_TAU,
+    cluster_merge_tau: float = _CLUSTER_MERGE_TAU,
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """Build the FastAPI ``lifespan`` context manager, capturing the injected
     deps in the nested sweeper closures. The coordinators stay off-capture and
@@ -145,6 +156,33 @@ def build_lifespan(
                 # whole poll interval; the once-a-day gate prevents a re-run.
                 await asyncio.to_thread(sweeper.tick)
                 await asyncio.sleep(_WIKI_REFLECT_CHECK_INTERVAL_S)
+        except asyncio.CancelledError:
+            return
+
+    async def cluster_sweeper(app: FastAPI) -> None:
+        """#506 P8: periodically fold the review-inbox cluster store — backfill any
+        pending proposal / open question that has no ClusterMember yet (a run
+        finalized before P6, or by a build with no embedder), then merge race-split
+        clusters — so the grouped 待審核 inbox converges without a reindex. Both passes
+        are idempotent + deterministic, so it runs unguarded on every pod (a duplicate
+        write is a no-op). Tick-first (then sleep) so a fresh pod catches the store up
+        at startup; off the loop (blocking specstar I/O + an occasional embed of a
+        never-projected candidate). Errors are swallowed so one bad tick never wedges
+        the loop. The KB embedder — built after the FastAPI app — is read off
+        ``app.state.kb_embedder`` post-construction, symmetric with the coordinators."""
+        from ..kb.reconcile import sweep_clusters
+
+        try:
+            while True:
+                with contextlib.suppress(Exception):
+                    await asyncio.to_thread(
+                        sweep_clusters,
+                        spec,
+                        app.state.kb_embedder,
+                        cluster_tau=cluster_tau,
+                        merge_tau=cluster_merge_tau,
+                    )
+                await asyncio.sleep(cluster_sweep_seconds)
         except asyncio.CancelledError:
             return
 
@@ -303,6 +341,7 @@ def build_lifespan(
         register_event_watermark(spec)
         bg = [asyncio.create_task(idle_killer()), asyncio.create_task(mirror_sweeper())]
         bg.append(asyncio.create_task(index_sweeper(app)))  # #227 fan-out stuck-run recovery
+        bg.append(asyncio.create_task(cluster_sweeper(app)))  # #506 P8 review-inbox cluster fold
         # NOTE: the full capability round is deliberately NOT scheduled here
         # — boot stays connectivity-only (see the health step above); operators
         # trigger the heavy round on demand via the FE / POST /health/checks/run.

@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 
-from workspace_app.agent.context import AgentToolContext
+from workspace_app.agent.ask_kb import AskKbSpec
+from workspace_app.agent.context import AgentToolContext, WikiSearchBudget
 from workspace_app.api import create_app
 from workspace_app.api.events import (
     AgentEvent,
@@ -199,6 +200,46 @@ def _client(runner: object) -> TestClient:
         kb_chunker=FixedTokenChunker(max_tokens=3, overlap_tokens=1),
     )
     return TestClient(app)
+
+
+def test_interactive_kb_turn_wires_a_wiki_store_and_grants_search_wiki():
+    # #506 Task#1: the send path must give the KB agent a wiki store (files) AND the
+    # bundled kb preset must grant `search_wiki`, so it consults the wiki in-agent
+    # (budgeted, multi-collection) instead of the heavy whole-page reader routing.
+    # The grep itself is unit-tested in test_wiki_tools; here we prove the wiring.
+    captured: dict = {}
+
+    class _CaptureRunner:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            captured["files"] = ctx.files
+            captured["tools"] = ctx.agent_config.allowed_tools if ctx.agent_config else None
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_CaptureRunner())
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "hi"})
+
+    assert captured["files"] is not None  # a wiki store the agent can grep was wired
+    assert captured["tools"] is not None and "search_wiki" in captured["tools"]  # preset grants it
+
+
+def test_send_message_caps_wiki_search_from_the_composer_pick():
+    # #506 P4: the number picker that replaced the wiki toggle rides the message as
+    # max_wiki_searches and seeds the turn's WikiSearchBudget (clamped like kb).
+    captured: dict = {}
+
+    class _R:
+        async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+            captured["wiki_max"] = ctx.wiki_search_budget.max_calls
+            yield MessageDelta(text="ok")
+            yield RunDone()
+
+    client = _client(_R())
+    cid = client.post("/kb/chats", json={"title": "t", "collection_ids": []}).json()["resource_id"]
+    client.post(f"/kb/chats/{cid}/messages", json={"content": "hi", "max_wiki_searches": 2})
+
+    assert captured["wiki_max"] == 2  # the pick reached the wiki budget
 
 
 def test_kb_agent_config_exposes_suggestions():
@@ -421,6 +462,110 @@ async def test_answer_question_returns_synthesized_answer_with_sources_footer():
 
     assert "Zone three drifted [1]." in answer  # visible content only (no <think>)
     assert "Sources: [1] reflow.md" in answer  # cited source appended
+
+
+class _CapturingRunner:
+    """Records the ctx it was run with, then completes — so a test can assert what
+    answer_question stamped onto the KB sub-agent's context (tools, budgets)."""
+
+    def __init__(self) -> None:
+        self.ctx: AgentToolContext | None = None
+
+    async def run(self, prompt: str, ctx: AgentToolContext) -> AsyncIterator[AgentEvent]:
+        self.ctx = ctx
+        yield MessageDelta(text="ok")
+        yield RunDone()
+
+
+async def test_answer_question_applies_ask_kb_spec_tools_and_wiki_budget():
+    # #506 foundation: a spec-configured ask_knowledge_base (make_ask_knowledge_base)
+    # hands answer_question an AskKbSpec + a wiki budget. The sub-agent's context
+    # must reflect them — its tool set becomes the spec's allowed_tools (the spec is
+    # authoritative: the drafter grants exactly kb_search + glossary over the preset's
+    # kb_search-only), and its wiki_search_budget is seeded so a granted search_wiki
+    # is capped.
+    spec = make_spec(default_user="u")
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+    runner = _CapturingRunner()
+
+    await answer_question(
+        runner,
+        retriever,
+        ["c"],
+        "q",
+        agent_config=_test_kb_cfg(),  # preset grants only kb_search
+        ask_kb_spec=AskKbSpec(wiki_search_max=0, glossary=True),  # spec adds glossary
+        wiki_budget=WikiSearchBudget(max_calls=2),
+    )
+
+    assert runner.ctx is not None and runner.ctx.agent_config is not None
+    assert runner.ctx.agent_config.allowed_tools == ["kb_search", "lookup_glossary"]
+    assert runner.ctx.wiki_search_budget.max_calls == 2
+
+
+async def test_answer_question_without_a_spec_leaves_the_preset_untouched():
+    # The interactive ask_knowledge_base passes no spec — its resolved preset's tool
+    # set and the default unlimited wiki budget must be unchanged (non-breaking).
+    spec = make_spec(default_user="u")
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+    runner = _CapturingRunner()
+
+    await answer_question(runner, retriever, ["c"], "q", agent_config=_test_kb_cfg())
+
+    assert runner.ctx is not None and runner.ctx.agent_config is not None
+    assert runner.ctx.agent_config.allowed_tools == ["kb_search"]  # preset untouched
+    assert runner.ctx.wiki_search_budget.max_calls is None  # default: unlimited-but-counted
+
+
+async def test_answer_question_spec_prompt_overrides_the_sub_agent_instruction():
+    # #506: a spec that carries a prompt replaces the sub-agent's system instruction
+    # (e.g. the drafter forcing "answer ONLY from the collection, don't guess").
+    spec = make_spec(default_user="u")
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+    runner = _CapturingRunner()
+
+    await answer_question(
+        runner,
+        retriever,
+        ["c"],
+        "q",
+        agent_config=_test_kb_cfg(),
+        ask_kb_spec=AskKbSpec(prompt="Only report what the collection already says."),
+    )
+
+    assert runner.ctx is not None and runner.ctx.agent_config is not None
+    assert runner.ctx.agent_config.system_prompt == "Only report what the collection already says."
+
+
+async def test_answer_question_wires_a_wiki_store_when_the_spec_grants_search_wiki():
+    # #506 (drafter sub-agent): a spec that grants search_wiki gets a per-collection
+    # wiki store wired so the tool can grep; a spec with wiki off gets none.
+    spec = make_spec(default_user="u")
+    retriever = Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM))
+
+    on = _CapturingRunner()
+    await answer_question(
+        on,
+        retriever,
+        ["c"],
+        "q",
+        agent_config=_test_kb_cfg(),
+        spec=spec,
+        ask_kb_spec=AskKbSpec(wiki_search_max=3),
+    )
+    assert on.ctx is not None and on.ctx.files is not None  # store wired for search_wiki
+
+    off = _CapturingRunner()
+    await answer_question(
+        off,
+        retriever,
+        ["c"],
+        "q",
+        agent_config=_test_kb_cfg(),
+        spec=spec,
+        ask_kb_spec=AskKbSpec(wiki_search_max=0),
+    )
+    assert off.ctx is not None and off.ctx.files is None  # wiki off ⇒ no store
 
 
 class _PlainRunner:

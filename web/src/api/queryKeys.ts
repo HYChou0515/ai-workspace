@@ -136,8 +136,30 @@ export const qk = {
     // #481: the global 審核 review inbox (pending items, or the resolved history;
     // optionally scoped to one collection's tab). Prefix `["kb","review-inbox"]`
     // so any decide / commit / answer / discard can invalidate every variant.
-    reviewInbox: (opts?: { resolved?: boolean; collectionId?: string }) =>
-      ["kb", "review-inbox", opts?.resolved ?? false, opts?.collectionId ?? null] as const,
+    reviewInbox: (opts?: {
+      resolved?: boolean;
+      collectionId?: string;
+      grouped?: boolean;
+      suppressed?: boolean;
+      kind?: "all" | "cards" | "questions";
+      q?: string;
+      actionable?: boolean;
+      limit?: number;
+      offset?: number;
+    }) =>
+      [
+        "kb",
+        "review-inbox",
+        opts?.resolved ?? false,
+        opts?.collectionId ?? null,
+        opts?.grouped ?? false,
+        opts?.suppressed ?? false,
+        opts?.kind ?? "all",
+        opts?.q ?? "",
+        opts?.actionable ?? false,
+        opts?.limit ?? null,
+        opts?.offset ?? 0,
+      ] as const,
     // #325: browser-runnable upload-check descriptors (platform-wide, rarely
     // changes — fetched once and reused to pre-block encrypted uploads).
     uploadChecks: ["kb", "upload-checks"] as const,

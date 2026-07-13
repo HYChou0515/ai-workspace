@@ -1,7 +1,9 @@
 """Context-card generation routes (#175) — the HTTP surface over the
-``CardGenCoordinator``. A fake ``ILlm`` drives a real ``LlmCardDrafter`` through
-``create_app`` so the route → job → draft → review → commit round-trip is proven
-end-to-end; the job is drained synchronously between calls."""
+``CardGenCoordinator``. A scripted runner drives the agentic ``AgentCardDrafter``
+(#506) through ``create_app`` so the route → job → draft → review → commit
+round-trip is proven end-to-end; the job is drained synchronously between calls.
+``card_drafter_llm`` stays non-None purely to ENABLE drafting — the agentic drafter
+digests via the runner's final message, not that ILlm."""
 
 from __future__ import annotations
 
@@ -13,6 +15,7 @@ from specstar import QB
 from specstar.types import Binary
 
 from workspace_app.api import ScriptedAgentRunner, create_app
+from workspace_app.api.events import MessageDelta, RunDone
 from workspace_app.filestore.specstar_impl import SpecstarFileStore
 from workspace_app.kb.doc_id import encode_doc_id
 from workspace_app.kb.llm import ILlm
@@ -51,8 +54,9 @@ def _make_app(canned_json: str):
         spec=spec,
         sandbox=MockSandbox(),
         filestore=SpecstarFileStore(spec),
-        runner=ScriptedAgentRunner([]),
-        card_drafter_llm=_FakeLlm(canned_json),
+        # #506: the agentic drafter reads the digest from the runner's final message.
+        runner=ScriptedAgentRunner([MessageDelta(text=canned_json), RunDone()]),
+        card_drafter_llm=_FakeLlm(canned_json),  # non-None ⇒ drafting enabled
     )
     return spec, app
 

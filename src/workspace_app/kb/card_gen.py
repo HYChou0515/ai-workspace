@@ -88,7 +88,7 @@ class CardDrafter(Protocol):
     returns a canned digest (so the job's orchestration is testable without a
     model)."""
 
-    def digest(self, *, doc_path: str, doc_text: str) -> DocDigest: ...
+    def digest(self, *, doc_path: str, doc_text: str, collection_id: str = "") -> DocDigest: ...
 
 
 class Provenance(msgspec.Struct):
