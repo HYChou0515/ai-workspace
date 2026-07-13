@@ -146,3 +146,44 @@ def test_agentic_drafter_prompts_the_model_to_consult_the_knowledge_base_first()
     assert "ask_knowledge_base" in runner.prompt
     assert "Zone 3 setpoint 245C." in runner.prompt  # the document rode along
     assert "reflow.md" in runner.prompt
+
+
+def test_wire_agentic_card_drafter_swaps_the_coordinator_onto_the_closed_loop():
+    # #506 worker parity: build_coordinators (shared by API + worker) builds the
+    # OPEN-loop one-shot LlmCardDrafter; wire_agentic_card_drafter is the single
+    # seam both create_app AND the split-deployment worker call to swap in the
+    # agentic (closed-loop) drafter — so a card-gen job consults the KB before
+    # drafting no matter which pod drains it. It must set_drafter an AgentCardDrafter.
+    from workspace_app.agent.config_catalog import AgentConfigCatalog
+    from workspace_app.api.card_drafter_agent import wire_agentic_card_drafter
+    from workspace_app.kb.card_drafter import NullCardDrafter
+    from workspace_app.kb.card_gen import CardDrafter
+    from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
+    from workspace_app.kb.embedder import HashEmbedder
+    from workspace_app.kb.retriever import Retriever
+    from workspace_app.resources import make_spec
+    from workspace_app.resources.kb import EMBED_DIM
+
+    spec = make_spec(default_user="u")
+
+    class _RecordingCoord(CardGenCoordinator):
+        # A real coordinator (starts open-loop) that records the swapped-in drafter.
+        def __init__(self) -> None:
+            super().__init__(spec, NullCardDrafter())
+            self.swapped: CardDrafter | None = None
+
+        def set_drafter(self, drafter: CardDrafter) -> None:
+            self.swapped = drafter
+
+    coord = _RecordingCoord()
+    wire_agentic_card_drafter(
+        coord,
+        spec=spec,
+        runner=ScriptedAgentRunner([]),
+        retriever=Retriever(spec, embedder=HashEmbedder(dim=EMBED_DIM)),
+        catalog=AgentConfigCatalog(),
+        kb_agent_config=AgentConfig(name="KB"),
+        max_searches=3,
+    )
+
+    assert isinstance(coord.swapped, AgentCardDrafter)  # closed-loop drafter, not one-shot

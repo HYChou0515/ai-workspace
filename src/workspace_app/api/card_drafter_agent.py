@@ -23,6 +23,7 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import msgspec
 
@@ -33,6 +34,13 @@ from ..kb.card_gen import DocDigest
 from ..resources import AgentConfig
 from .events import MessageDelta, RunError
 from .runner import AgentRunner
+
+if TYPE_CHECKING:
+    from specstar import SpecStar
+
+    from ..agent.config_catalog import AgentConfigCatalog
+    from ..kb.card_gen_coordinator import CardGenCoordinator
+    from ..kb.retriever import Retriever
 
 logger = logging.getLogger(__name__)
 
@@ -164,3 +172,65 @@ def drafter_context_builder(
         )
 
     return build
+
+
+def wire_agentic_card_drafter(
+    coordinator: CardGenCoordinator,
+    *,
+    spec: SpecStar,
+    runner: AgentRunner,
+    retriever: Retriever,
+    catalog: AgentConfigCatalog,
+    kb_agent_config: AgentConfig,
+    max_searches: int | None,
+) -> None:
+    """Swap ``coordinator``'s open-loop one-shot drafter for the agentic
+    :class:`AgentCardDrafter` that consults ``ask_knowledge_base`` (RAG + wiki +
+    glossary, scoped to each document's collection) BEFORE drafting (#506 P5).
+
+    This is the SINGLE seam both composition roots call — ``create_app`` and the
+    split-deployment worker's ``build_bundle`` — so a card-gen job runs the closed
+    loop no matter which pod drains it (#506 worker parity). Without it the worker
+    (``run_consumers=false``) would keep the open-loop drafter and silently re-ask /
+    re-propose what the collection already documents.
+
+    The drafter's own subagent bridge runs headless under the system-superuser
+    identity so the #305 collection-read gate passes ``[collection_id]`` through (a
+    background job carries no request speaker); safe because the drafter's spec
+    FORCES scope to the document's collection, so superuser status can't widen the
+    search. wiki delegation is via the base runner (``kb_runner=runner``) — the
+    wiki-aware runner is never taken."""
+    from ..kb.help_collection import HELP_SYSTEM_USER
+    from .subagent_bridge import SubagentBridge
+
+    bridge = SubagentBridge(
+        spec=spec,
+        runner=runner,
+        kb_runner=runner,  # wiki off ⇒ the wiki-aware runner is never taken
+        retriever=retriever,
+        catalog=catalog,
+        purpose_fallbacks={"kb_chat": kb_agent_config},
+        get_user_id=lambda: HELP_SYSTEM_USER,
+        max_searches=max_searches,
+        superusers=frozenset({HELP_SYSTEM_USER}),
+    )
+    coordinator.set_drafter(
+        AgentCardDrafter(
+            runner,
+            drafter_context_builder(
+                bridge_run=bridge.run,
+                # The loop needs a TOOL-calling model; the card_drafter_llm is only
+                # the "drafting enabled" flag, so drive the loop with the kb_chat
+                # model + endpoint.
+                agent_config=default_card_drafter_config(
+                    model=kb_agent_config.model,
+                    llm_base_url=kb_agent_config.llm_base_url,
+                    llm_api_key=kb_agent_config.llm_api_key,
+                ),
+                base_spec=replace(
+                    default_drafter_ask_kb_spec(),
+                    kb_search_max=max_searches or 3,
+                ),
+            ),
+        )
+    )
