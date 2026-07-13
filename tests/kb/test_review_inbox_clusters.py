@@ -14,9 +14,10 @@ from workspace_app.kb.review_inbox import (
     ReviewQuestionItem,
     cluster_key_map,
     group_by_cluster,
+    suppressed_members,
 )
 from workspace_app.resources import Collection, make_spec
-from workspace_app.resources.kb import ClusterMember, DocQuestion
+from workspace_app.resources.kb import EMBED_DIM, ClusterMember, DocQuestion
 
 
 def _member(spec, cid, *, kind, ref_id, run_id="", cluster_key="", state="active") -> None:
@@ -123,3 +124,40 @@ def test_cluster_key_map_joins_active_members_by_run_and_ref() -> None:
     assert m[("", "q1")] == "alpha"
     assert ("r2", "9") not in m  # suppressed excluded
     assert not any(k[1] == "card1" for k in m)  # card members excluded
+
+
+def test_cluster_key_map_reads_join_fields_without_loading_the_embedding() -> None:
+    """#506 perf: the join is a metas-only projection — it reads run_id / ref_id /
+    cluster_key via a partial field fetch, so a member's 1024-dim embedding vector is
+    NEVER deserialized (the grouped inbox was 60s+ because it loaded every active
+    member's whole blob). A member that DOES carry an embedding must still map
+    correctly — if the projected field paths were wrong, run_id/ref_id would come back
+    empty and the key would be ("", "")."""
+    spec = make_spec(default_user="u")
+    cid = spec.get_resource_manager(Collection).create(Collection(name="c")).resource_id
+    spec.get_resource_manager(ClusterMember).create(
+        ClusterMember(
+            collection_id=cid,
+            kind="proposal",
+            ref_id="7",
+            run_id="r9",
+            cluster_key="gamma",
+            state="active",
+            embedding=[0.1] * EMBED_DIM,  # a real vector the projection must skip, not choke on
+        )
+    )
+
+    m = cluster_key_map(spec, [cid])
+
+    assert m == {("r9", "7"): "gamma"}
+
+
+def test_cluster_key_map_short_circuits_on_no_collections() -> None:
+    """No readable collections → no query at all (an empty ``in_`` is both wasteful
+    and unsafe on some backends)."""
+    assert cluster_key_map(make_spec(default_user="u"), []) == {}
+
+
+def test_suppressed_members_short_circuits_on_no_collections() -> None:
+    """Same guard for the suppressed-audit projection."""
+    assert suppressed_members(make_spec(default_user="u"), {}) == []

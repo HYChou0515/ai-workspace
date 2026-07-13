@@ -16,7 +16,7 @@ only converts to pydantic. Mirrors the storage-layer authorize idiom of
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import msgspec
 from specstar import QB
@@ -114,43 +114,64 @@ def cluster_key_map(spec: SpecStar, collection_ids: list[str]) -> dict[tuple[str
     """Map each inbox-visible ClusterMember's ``(run_id, ref_id)`` to its
     ``cluster_key`` — the join the inbox uses to group items. Only ``active``
     proposal + term_question members participate: ``card`` members are the
-    comparison corpus (not shown) and ``suppressed``/``inactive`` members are hidden
-    from the default view. Scoped to the given collections (indexed query)."""
+    comparison corpus (excluded at query time via the indexed ``kind``) and
+    ``suppressed``/``inactive`` members are hidden from the default view.
+
+    Perf (#506): a **metas-only** projection — ``list_resources(partial=...)`` fetches
+    ONLY the three join fields, so a member's 1024-dim ``embedding`` Vector is never
+    deserialized. Loading every active member's whole blob (the vector included) is
+    what made the grouped inbox take 60s+. One batched ``in_`` query over all the
+    readable collections (indexed) instead of one round-trip per collection."""
+    if not collection_ids:
+        return {}
     rm = spec.get_resource_manager(ClusterMember)
+    query = (
+        QB["collection_id"].in_(collection_ids)
+        & (QB["state"] == "active")
+        & QB["kind"].in_(["proposal", "term_question"])
+    ).build()
     out: dict[tuple[str, str], str] = {}
-    for cid in collection_ids:
-        query = ((QB["collection_id"] == cid) & (QB["state"] == "active")).build()
-        for r in rm.list_resources(query):
-            member = r.data
-            assert isinstance(member, ClusterMember)
-            if member.kind == "card":
-                continue
-            out[(member.run_id, member.ref_id)] = member.cluster_key
+    for r in rm.list_resources(
+        query, returns=["data"], partial=["/run_id", "/ref_id", "/cluster_key"]
+    ):
+        member = cast(ClusterMember, r.data)  # projected subset — only the 3 join fields
+        out[(member.run_id, member.ref_id)] = member.cluster_key
     return out
 
 
 def suppressed_members(spec: SpecStar, readable: dict[str, _CollCtx]) -> list[SuppressedItem]:
     """The auto-suppressed candidates across the readable collections — the audit
     view (⑥). Reads ``state="suppressed"`` ClusterMembers directly (a dropped
-    candidate is on no run), newest-collection-agnostic; card members can't be
-    suppressed so ``kind`` is always proposal / term_question."""
+    candidate is on no run); card members can't be suppressed so ``kind`` is always
+    proposal / term_question.
+
+    Perf (#506): like :func:`cluster_key_map`, a **metas-only** projection (the audit
+    only needs the label / reason / kind / cluster_key, never the ``embedding``
+    Vector) over one batched ``in_`` query across the readable collections."""
+    if not readable:
+        return []
     rm = spec.get_resource_manager(ClusterMember)
+    query = (QB["collection_id"].in_(list(readable)) & (QB["state"] == "suppressed")).build()
     out: list[SuppressedItem] = []
-    for cid, ctx in readable.items():
-        query = ((QB["collection_id"] == cid) & (QB["state"] == "suppressed")).build()
-        for r in rm.list_resources(query):
-            member = r.data
-            assert isinstance(member, ClusterMember)
-            out.append(
-                SuppressedItem(
-                    collection_id=cid,
-                    collection_name=ctx.name,
-                    kind=member.kind,
-                    label=member.label or member.norm_key,
-                    cluster_key=member.cluster_key,
-                    reason=member.reason,
-                )
+    for r in rm.list_resources(
+        query,
+        returns=["data"],
+        partial=["/collection_id", "/kind", "/label", "/norm_key", "/cluster_key", "/reason"],
+    ):
+        member = cast(ClusterMember, r.data)  # projected subset — no embedding
+        ctx = readable.get(member.collection_id)
+        if ctx is None:  # pragma: no cover — scoped by the query, but stay defensive
+            continue
+        out.append(
+            SuppressedItem(
+                collection_id=member.collection_id,
+                collection_name=ctx.name,
+                kind=member.kind,
+                label=member.label or member.norm_key,
+                cluster_key=member.cluster_key,
+                reason=member.reason,
             )
+        )
     return out
 
 
