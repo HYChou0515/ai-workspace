@@ -160,5 +160,36 @@ def test_post_app_item_creates_the_resource_and_seeds_the_profile():
     assert got.profile == "default"  # the App's default_profile
 
 
+def test_post_app_item_still_creates_when_seeding_fails(monkeypatch):
+    # Regression: the item ROW is created BEFORE its starter files are seeded, so a
+    # seeding failure used to 500 *after* the item existed — the client saw an error
+    # and never navigated, yet the orphan item lingered. That's the "pressed Create,
+    # nothing happened; it only showed up after a refresh" symptom. Seeding is
+    # best-effort now: the create still returns the id so the FE navigates into it.
+    from workspace_app.apps.rca.model import RcaInvestigation
+
+    async def _boom(*_a, **_k):
+        raise RuntimeError("filestore exploded mid-seed")
+
+    monkeypatch.setattr("workspace_app.apps.seeding.seed_item", _boom)
+
+    spec = make_spec(default_user="u")
+    app = create_app(
+        spec=spec,
+        sandbox=MockSandbox(),
+        filestore=MemoryFileStore(),
+        runner=_Runner(),
+        agent_config_catalog=AgentConfigCatalog(),
+    )
+    r = TestClient(app).post("/a/rca/items", json={"title": "Oven drift"})
+
+    assert r.status_code == 200  # NOT a 500 — the create still lands
+    body = r.json()
+    assert body["resource_id"]
+    assert body["seeded"] == []  # seeding blew up, but the item exists
+    got = spec.get_resource_manager(RcaInvestigation).get(body["resource_id"]).data
+    assert got.title == "Oven drift"  # the row was persisted
+
+
 def test_post_app_item_unknown_slug_404():
     assert _client().post("/a/nope/items", json={"title": "x"}).status_code == 404
