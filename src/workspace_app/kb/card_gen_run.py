@@ -207,6 +207,31 @@ class CardGenRunStore:
         rows.sort(key=lambda t: t[1], reverse=True)  # newest first
         return [(rid, d) for rid, _ct, d in rows]
 
+    def sweep_empty_runs(
+        self, *, collection_id: str | None = None, limit: int | None = None
+    ) -> int:
+        """Drain already-finalized EMPTY runs out of the 待審核 queue (#506): a run
+        stuck in ``done`` with 0 proposals (finalized before the empty-status fix, or by
+        a reconcile pass that suppressed every candidate) has nothing to review, so it is
+        re-stamped ``empty`` — the terminal status excluded from BOTH inbox views. A
+        ``done`` run that carries proposals is a real pending item and is skipped.
+        Idempotent (converges to a no-op once the backlog is cleared); returns how many
+        runs it drained. ``collection_id`` scopes the indexed query so the per-collection
+        maintenance sweep touches only its own runs; ``limit`` bounds one pass."""
+        query = QB["status"] == "done"
+        if collection_id is not None:
+            query = (QB["collection_id"] == collection_id) & query
+        drained = 0
+        for r in self._rm.list_resources(query.build()):
+            # `_drain_empty` is the single decision point: it drains a done+empty run and
+            # no-ops (returns None → no CAS write) for a run that still carries proposals
+            # or has changed under us — so the count reflects only real drains.
+            if self._cas(r.info.resource_id, _drain_empty) is not None:  # ty: ignore[unresolved-attribute]
+                drained += 1
+                if limit is not None and drained >= limit:
+                    break
+        return drained
+
     # ── machinery ────────────────────────────────────────────────────
     def _cas(
         self, run_id: str, mutate: Callable[[CardGenRun], CardGenRun | None]
@@ -252,6 +277,15 @@ def _resolve(run: CardGenRun, status: str) -> CardGenRun | None:
     if run.status != "done":
         return None
     return msgspec.structs.replace(run, status=status)
+
+
+def _drain_empty(run: CardGenRun) -> CardGenRun | None:
+    """Sweep helper (#506): a finalized run with 0 proposals leaves the 待審核 queue as
+    ``empty``. Returns ``None`` (no CAS write) for anything else — a still-open run or one
+    that gained proposals since the read — so the drain is idempotent + race-safe."""
+    if run.status != "done" or run.proposals:
+        return None
+    return msgspec.structs.replace(run, status="empty")
 
 
 def _redecide(p: ProposedCard, decision: str) -> ProposedCard:

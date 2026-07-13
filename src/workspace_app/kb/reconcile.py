@@ -592,11 +592,13 @@ def merge_near_clusters(
 @dataclass(frozen=True)
 class SweepReport:
     """What one :func:`sweep_clusters` pass did across the whole store — how many
-    orphan candidates were backfilled into members and how many race-split clusters
-    were folded. Summed over every collection; a converged store reports ``(0, 0)``."""
+    orphan candidates were backfilled into members, how many race-split clusters were
+    folded, and how many finalized-but-empty runs were drained out of the 待審核 queue
+    (#506). Summed over every collection; a converged store reports all zeros."""
 
     backfilled: int = 0
     merged: int = 0
+    emptied: int = 0
 
 
 def sweep_clusters(
@@ -608,15 +610,18 @@ def sweep_clusters(
     limit: int = 200,
 ) -> SweepReport:
     """#506 P8: the periodic maintenance pass — for EVERY collection, backfill its
-    un-projected pending proposals / open questions (:func:`backfill_collection`) then
-    fold its race-split clusters (:func:`merge_near_clusters`), so the grouped inbox
-    converges without a reindex. Per-collection errors are swallowed so one bad
-    collection never stalls the sweep (a cascaded-away collection, a transient embed
-    failure); both passes are idempotent, so the API sweeper can run it on a timer.
-    Returns the store-wide totals."""
+    un-projected pending proposals / open questions (:func:`backfill_collection`), fold
+    its race-split clusters (:func:`merge_near_clusters`), and drain its finalized-but-
+    empty runs out of the 待審核 queue (:meth:`CardGenRunStore.sweep_empty_runs`, #506) —
+    so both the grouped AND the flat inbox converge without a reindex. Per-collection
+    errors are swallowed so one bad collection never stalls the sweep (a cascaded-away
+    collection, a transient embed failure); every pass is idempotent, so the API sweeper
+    can run it on a timer. Returns the store-wide totals."""
     rm = spec.get_resource_manager(Collection)
+    runs = CardGenRunStore(spec)
     backfilled = 0
     merged = 0
+    emptied = 0
     for r in rm.list_resources(QB.all()):  # ty: ignore[invalid-argument-type]
         cid = r.info.resource_id  # ty: ignore[unresolved-attribute]
         try:
@@ -624,6 +629,12 @@ def sweep_clusters(
                 spec, embedder, cid, cluster_tau=cluster_tau, limit=limit
             )
             merged += merge_near_clusters(spec, cid, merge_tau=merge_tau, limit=limit)
+            # No limit on the drain: unlike backfill/merge (which embed and so batch to
+            # bound one tick's LLM work), draining is a cheap status flip, and the query
+            # already loads the whole done set — so clear the collection's empty-run
+            # backlog in ONE tick rather than 200-at-a-time, giving the flat inbox
+            # immediate relief instead of converging over hours of 900s ticks (#506).
+            emptied += runs.sweep_empty_runs(collection_id=cid)
         except Exception:  # noqa: BLE001 — one bad collection must not stall the sweep
             continue
-    return SweepReport(backfilled=backfilled, merged=merged)
+    return SweepReport(backfilled=backfilled, merged=merged, emptied=emptied)

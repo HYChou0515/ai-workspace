@@ -20,6 +20,7 @@ from workspace_app.kb.card_gen import (
     TermQuestionDraft,
 )
 from workspace_app.kb.card_gen_coordinator import CardGenCoordinator
+from workspace_app.kb.card_gen_run import CardGenRunStore
 from workspace_app.kb.card_gen_sources import WIKI_ID_PREFIX
 from workspace_app.kb.context_cards import derive_norm_keys
 from workspace_app.kb.doc_id import encode_doc_id
@@ -602,6 +603,25 @@ async def test_a_run_whose_every_doc_fails_is_marked_failed():
 
     assert coord.status(jid) == TaskStatus.FAILED
     assert coord.proposals(jid).proposals == []
+
+
+async def test_a_run_that_finalizes_with_no_proposals_leaves_the_review_queue():
+    """#506 flat-inbox perf: a run whose documents digest fine but yield 0 reviewable
+    proposals (nothing new, or all suppressed by reconcile) has NOTHING to review, so it
+    settles to the terminal ``empty`` status — excluded from the 待審核 queue — instead of
+    lingering forever as a ``done`` item the flat inbox must load on every open. The FE
+    still polls a COMPLETED run (empty maps past COMPLETED), just without a review row."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    doc = _add_source(spec, cid, "a.md", "lots of real text here")
+    coord = CardGenCoordinator(spec, _FakeDrafter({}))  # digests to nothing → 0 proposals
+    jid = coord.enqueue(cid, [doc])
+    await coord.aclose()
+
+    assert coord.status(jid) == TaskStatus.COMPLETED  # FE-facing: still a green run
+    run = CardGenRunStore(spec).get(jid)
+    assert run is not None and run.status == "empty"  # raw terminal status, NOT `done`
+    assert CardGenRunStore(spec).pending_for_collection(cid) == []  # never enters the queue
 
 
 async def test_reads_on_an_unknown_run_are_empty():

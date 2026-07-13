@@ -86,6 +86,9 @@ _RUN_STATUS = {
     # #415 review-resolution terminals — both are past COMPLETED to the poller.
     "committed": TaskStatus.COMPLETED,
     "dismissed": TaskStatus.COMPLETED,
+    # #506: a finalized run that produced nothing to review — terminal, and the FE
+    # sees a completed (green) run, just with no review row.
+    "empty": TaskStatus.COMPLETED,
 }
 
 
@@ -487,10 +490,13 @@ class CardGenCoordinator:
         self._runs.set_proposals(run_id, kept)
         self._raise_questions(cid, per_doc, existing)
         self._clear_staged(run_id)
-        # All documents failed (none digested) → the run failed; else it produced
-        # proposals (possibly partial, if some docs failed) → done.
+        # All documents failed (none digested) → the run failed. A run that digested
+        # fine but yielded 0 reviewable proposals (nothing new, or every candidate
+        # suppressed by reconcile) has NOTHING to review → `empty`, a terminal status
+        # excluded from BOTH inbox views, so these no-op runs don't pile up in the 待審核
+        # queue and drag the flat inbox down (#506). Only a run with proposals is `done`.
         all_failed = run.total > 0 and len(run.done) == 0
-        status = "error" if all_failed else "done"
+        status = "error" if all_failed else "empty" if not kept else "done"
         # #494 observability: one structured line records the whole funnel so a run
         # that produced nothing (0 proposals over N text-bearing docs) is
         # diagnosable end-to-end without re-deriving it from scattered state.

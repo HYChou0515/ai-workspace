@@ -160,6 +160,27 @@ def test_sweep_backfills_and_merges_across_every_collection() -> None:
     assert "alpha" not in {m.cluster_key for m in _members(spec, c2)}
 
 
+def test_sweep_drains_empty_done_runs_out_of_the_review_queue() -> None:
+    """#506 flat inbox: the periodic sweep also re-stamps finalized runs that carry 0
+    proposals as ``empty`` — so the pre-fix backlog of no-op ``done`` runs stops dragging
+    the flat 待審核 inbox — while a ``done`` run that DOES carry proposals is left pending.
+    ``report.emptied`` totals how many were drained."""
+    spec = make_spec(default_user="u")
+    cid = _collection(spec)
+    store = CardGenRunStore(spec)
+    empty = store.start(cid, ["d1"])
+    store.finish(empty, status="done")  # finalized, but 0 proposals
+    real = _done_run(spec, cid, [ProposedCard(id="0", keys=["A"], title="A")])
+    emb = HashEmbedder(dim=EMBED_DIM)
+
+    report = sweep_clusters(spec, emb, cluster_tau=0.9, merge_tau=0.99)
+
+    assert report.emptied == 1
+    er, rr = store.get(empty), store.get(real)
+    assert er is not None and er.status == "empty"  # drained out of the queue
+    assert rr is not None and rr.status == "done"  # a real pending run is preserved
+
+
 def test_sweep_is_idempotent() -> None:
     """A converged store sweeps to a zero report."""
     spec = make_spec(default_user="u")

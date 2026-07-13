@@ -291,3 +291,64 @@ def test_runs_by_status_scopes_to_one_collection_via_the_index():
     scoped = store.runs_by_status(["done"], collection_id="c1")
     assert [rid for rid, _created, _run in scoped] == [r1]
     assert all(run.collection_id == "c1" for _rid, _created, run in scoped)
+
+
+def _empty_done_run(store: CardGenRunStore, cid: str) -> str:
+    """A finalized run with 0 proposals stuck in ``done`` — the pre-#506 backlog the
+    drain has to clear (a run that digested to nothing but was stamped ``done``)."""
+    run_id = store.start(cid, ["d1"])
+    store.finish(run_id, status="done")
+    return run_id
+
+
+def test_sweep_empty_runs_drains_an_empty_done_run_and_leaves_real_ones():
+    """#506 flat inbox: an already-finalized run with 0 proposals has nothing to
+    review, so the drain re-stamps it ``empty`` (out of the 待審核 queue); a ``done`` run
+    that DOES carry proposals is a real pending item and is left untouched."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    empty = _empty_done_run(store, cid)
+    real = _done_run(store, cid, [ProposedCard(keys=["A"])])
+
+    assert store.sweep_empty_runs() == 1  # only the empty one drained
+
+    assert _get(store, empty).status == "empty"
+    assert _get(store, real).status == "done"  # a real pending run is preserved
+    assert [rid for rid, _r in store.pending_for_collection(cid)] == [real]  # queue = real only
+
+
+def test_sweep_empty_runs_is_idempotent():
+    """Once the backlog is drained the pass is a no-op — it converges, so the periodic
+    sweeper never keeps rewriting the same runs."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    _empty_done_run(store, cid)
+
+    assert store.sweep_empty_runs() == 1
+    assert store.sweep_empty_runs() == 0  # nothing left to drain
+
+
+def test_sweep_empty_runs_scopes_to_one_collection():
+    """The drain honours ``collection_id`` (the indexed query), so a per-collection
+    maintenance tick only touches its own runs and leaves other collections' backlog."""
+    spec = make_spec(default_user="u")
+    store = CardGenRunStore(spec)
+    a = _empty_done_run(store, "c1")
+    b = _empty_done_run(store, "c2")
+
+    assert store.sweep_empty_runs(collection_id="c1") == 1
+
+    assert _get(store, a).status == "empty"
+    assert _get(store, b).status == "done"  # c2 untouched by a c1-scoped drain
+
+
+def test_sweep_empty_runs_honours_limit():
+    """``limit`` caps how many runs one pass drains; the rest wait for the next tick."""
+    spec, cid = _spec_with_collection()
+    store = CardGenRunStore(spec)
+    _empty_done_run(store, cid)
+    _empty_done_run(store, cid)
+
+    assert store.sweep_empty_runs(limit=1) == 1  # one this pass
+    assert store.sweep_empty_runs(limit=1) == 1  # the other next pass
+    assert store.sweep_empty_runs(limit=1) == 0  # drained
