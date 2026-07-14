@@ -34,6 +34,7 @@ from workspace_app.factories import (
     get_doc_pipeline,
     get_embedder,
     get_filestore,
+    get_image_embedder,
     get_infer_modules_run_config,
     get_kb_describer,
     get_kb_llm,
@@ -239,6 +240,7 @@ def main() -> None:
             # P3.0: code-specialised embedder; None ⇒ code collections fall
             # back to the default embedder.
             kb_code_embedder=get_code_embedder(settings),
+            kb_image_embedder=get_image_embedder(settings),
             # P1: LlamaIndex IngestionPipeline replaces the hand-rolled chunker.
             # Tests/offline runs still pass `kb_chunker=` directly to create_app.
             kb_pipeline=get_doc_pipeline(settings, embedder),

@@ -73,6 +73,14 @@ def test_code_embedder_factory_returns_none_when_unconfigured():
     assert get_code_embedder(Settings()) is None
 
 
+def test_image_embedder_factory_returns_none_by_default():
+    """#513 P2: the image model is an external-team deliverable, so the factory
+    returns None and retrieval stays text-only until it's wired in P4."""
+    from workspace_app.factories import get_image_embedder
+
+    assert get_image_embedder(Settings()) is None
+
+
 def test_code_embedder_factory_returns_embedder_when_configured():
     """kb.code_embedder.model set → factory constructs a LitellmEmbedder
     at the CODE_EMBED_DIM width."""

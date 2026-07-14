@@ -50,6 +50,7 @@ from .filestore.protocol import FileStore
 from .filestore.specstar_impl import SpecstarFileStore
 from .kb.chunker import Chunker, FixedTokenChunker
 from .kb.embedder import Embedder, HashEmbedder, LitellmEmbedder
+from .kb.image_embedder import ImageEmbedder
 from .kb.llm import ILlm, LitellmLlm
 from .kb.retriever import Enhancements
 from .kb.vlm.protocol import IVlm
@@ -431,6 +432,17 @@ def get_code_embedder(settings: Settings) -> Embedder | None:
         num_retries=settings.failover.num_retries,
         round_backoff_s=settings.failover.round_backoff_s,
     )
+
+
+def get_image_embedder(settings: Settings) -> ImageEmbedder | None:
+    """#513: the image embedder for ``DocChunk.embedding_img``.
+
+    None for now — the image model is an external-team deliverable (#513 P2 is
+    the empty socket), so retrieval stays text-only until it lands. P4 wires the
+    real adapter here (keyed off image-embedder config) and re-indexes to
+    backfill the image vectors; production injects it via
+    ``create_app(kb_image_embedder=...)``."""
+    return None
 
 
 def get_chunker(settings: Settings) -> Chunker:

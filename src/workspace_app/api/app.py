@@ -18,6 +18,7 @@ from ..health.replay import ReplayService
 from ..health.service import HealthService
 from ..kb.chunker import Chunker
 from ..kb.embedder import Embedder, HashEmbedder
+from ..kb.image_embedder import ImageEmbedder
 from ..kb.llm import ILlm, LitellmLlm
 from ..kb.retriever import Enhancements, Retriever
 from ..kb.vlm import IVlm, VlmDescriber
@@ -104,6 +105,7 @@ def create_app(
     agent_config_catalog: AgentConfigCatalog | None = None,
     kb_embedder: Embedder | None = None,
     kb_code_embedder: Embedder | None = None,  # P3.0 code-specialised embedder
+    kb_image_embedder: ImageEmbedder | None = None,  # #513 image embedder (embedding_img)
     kb_chunker: Chunker | None = None,
     kb_pipeline: object | None = None,  # llama_index.core.ingestion.IngestionPipeline
     kb_chat_pipeline: object | None = None,  # P2 chat → knowledge IngestionPipeline
@@ -604,6 +606,7 @@ def create_app(
         embedder=embedder,
         llm=kb_llm,
         code_embedder=kb_code_embedder,
+        image_embedder=kb_image_embedder,
         enhancement_defaults=kb_retrieval_enhancements,
         quality_weight=kb_quality_weight,
         quality_floor=kb_quality_floor,
