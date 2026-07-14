@@ -41,6 +41,7 @@ from .schema import (
     HealthSettings,
     HistorySettings,
     HttpSandboxSettings,
+    ImageFetchSettings,
     KbSettings,
     LlmLogSettings,
     LlmSettings,
@@ -420,6 +421,9 @@ _TOP_SCHEMA: dict[str, Any] = {
         # Issue #334: scalar leaf (positive int). Range checked by `_check_max_searches`.
         "max_searches_ceiling": set(),
         "code_embedder": _dataclass_keys(CodeEmbedderSettings),
+        # #513 P6: allowed_hosts is a list-of-strings leaf (shape walk skips its
+        # non-dict value, like `parsers` below); timeout is a scalar float leaf.
+        "image_fetch": _dataclass_keys(ImageFetchSettings),
         "git": _dataclass_keys(GitSettings),
         # Issue #39: `kb.parsers` / `kb.parsers_disabled` are
         # list-of-strings leaves. The shape check below skips non-dict

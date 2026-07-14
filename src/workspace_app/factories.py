@@ -51,6 +51,7 @@ from .filestore.specstar_impl import SpecstarFileStore
 from .kb.chunker import Chunker, FixedTokenChunker
 from .kb.embedder import Embedder, HashEmbedder, LitellmEmbedder
 from .kb.image_embedder import ImageEmbedder
+from .kb.image_fetcher import HttpImageFetcher, IImageFetcher
 from .kb.llm import ILlm, LitellmLlm
 from .kb.retriever import Enhancements
 from .kb.vlm.protocol import IVlm
@@ -443,6 +444,20 @@ def get_image_embedder(settings: Settings) -> ImageEmbedder | None:
     backfill the image vectors; production injects it via
     ``create_app(kb_image_embedder=...)``."""
     return None
+
+
+def get_image_fetcher(settings: Settings) -> IImageFetcher | None:
+    """#513 P6: the fetcher that pulls an HTML/MD upload's externally-linked
+    images down so each becomes its own first-class image SourceDoc.
+
+    None when no host allowlist is configured (`kb.image_fetch.allowed_hosts`
+    empty) — ingest then behaves exactly as before (referenced images stay inert
+    links). The allowlist is the SSRF fence: only listed hosts are ever fetched.
+    Production wires this into `build_ingestor(image_fetcher=...)`."""
+    cfg = settings.kb.image_fetch
+    if not cfg.allowed_hosts:
+        return None
+    return HttpImageFetcher(allowed_hosts=cfg.allowed_hosts, timeout=cfg.timeout)
 
 
 def get_chunker(settings: Settings) -> Chunker:

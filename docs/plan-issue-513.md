@@ -96,12 +96,34 @@
   - Unit:草稿→去重→分級→commit;#377 答覆→提案;人核 gate。
   - **DoD**:library 邊用邊長,不需先手工整理完。
 
+- **P6 · 混合檔(HTML/MD)+ 外部圖抓取 ingest —— 讓既有 HTML/MD 缺陷知識連圖進庫**(獨立,可先做)
+  - **資料現實**(grill 定):既有缺陷知識在 HTML/MD,圖以**外部 http 連結**(`<img src>` /
+    `![](url)`)夾帶,指向**內部影像伺服器**(後端連得到、**免認證 GET**)。單檔本身無圖 bytes、只有 URL。
+  - **決定**:圖一律**保留 bytes、當一等公民**(**不**走 PdfParser「描述即丟」——否則混合檔的圖永遠
+    上不了圖向量)。每張抓回來的圖 = 獨立 image SourceDoc → VLM 描述(現在)+ P4 可上 `embedding_img`。
+  - **沿用 archive 展開接縫**:`store` 對 zip 已「一員一 SourceDoc」(`ingest.py:411-431` +
+    `_extract`/`_store_file`)。HTML/MD 上傳時把引用的圖**展開**成額外 member 存入;文字檔本身照舊被
+    `HtmlParser` / markdown 文字路徑吃。⇒ 圖走既有 `VlmImageParser` 路徑,bytes 落 `SourceDoc.content`。
+  - **SSRF 圍籬**(硬需求):新 `IImageFetcher`(ABC,`I<Name>`)——**只抓 config allowlist 內的 host**,
+    其餘跳過(記 log,**不** silently 當成功)。`kb.image_fetch.{enabled,allowed_hosts,timeout}` 走 loader
+    schema + `config.example`(不碰 secrets)。內網直接 GET;認證留**可注入 seam**(之後要 token 再接)。
+  - **韌性**:某圖抓不到 / host 掛 → 該圖跳過、文字照進、記可見 note;一張圖失敗不炸整份 ingest。
+  - **去重**:content-addressed(#104)—— 同一圖 URL 被多份文件引用、byte-identical → 自動 alias、不重存。
+  - **linkage**:image SourceDoc meta 記來源(parent doc id + 原 URL),知識(文字+圖)可在 collection 回連。
+  - Unit:img URL 抽取(HTML/MD 純函式)、allowlist 過濾、fetcher(mock)、展開產出 text+image 雙 SourceDoc、
+    抓失敗韌性、去重 alias、**未設 allowlist → 不抓(行為逐字不變)**、linkage meta。
+  - **DoD**:上傳一份 HTML/MD 缺陷文件 → 文字進庫、內部連結圖一併抓回成獨立可搜圖(VLM 描述),
+    P4 到位後自動可上圖向量。**live check**:一份真文件 + 內網一張真圖。
+  - ⚠️ 相依:抓圖當下影像伺服器要活+可達(**新增 runtime 相依**);host allowlist 是安全前提。
+
 ## 相依 / gating
 
 - **P2 獨立**,可隨時做。
 - **P4** gated on 他隊交付 `ImageEmbedder`(image-only 核心即可;text-query 選配)。
+- **P6 獨立**,不依賴 P3/P4,可先做(是 library 冷啟 bootstrap 的主要入口);其產出的圖天生就是
+  P4 圖向量的落點。
 - **measurement 整合已移除**(A 砍掉),無外部系統相依。
-- 主線 P1 → P3;P2 平行;P4/P5 視相依插入。
+- 主線 P1 → P3;P2 平行;P6 為 bootstrap 入口(可先);P4/P5 視相依插入。
 
 ## 待決 / 風險(已大幅收斂)
 

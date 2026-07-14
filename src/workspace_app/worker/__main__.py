@@ -43,6 +43,7 @@ def build_bundle(
         chat_pipeline=f.get_chat_pipeline(settings, embedder, kb_llm),
         code_embedder=f.get_code_embedder(settings),
         parser_registry=f.get_parser_registry(settings),
+        image_fetcher=f.get_image_fetcher(settings),
     )
     bundle = build_coordinators(
         spec,

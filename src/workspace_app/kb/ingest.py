@@ -13,6 +13,7 @@ import tarfile
 import zipfile
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple
+from urllib.parse import urlsplit
 
 import magic
 import msgspec
@@ -32,6 +33,8 @@ from .code_lang import is_code_file
 from .doc_id import canonical_path, encode_doc_id
 from .doc_permission import collection_mirror_fields
 from .embedder import Embedder
+from .image_fetcher import IImageFetcher
+from .image_refs import extract_image_urls
 from .index_cache import IndexCacheStore, compute_cache_key
 from .parser_config import effective_config
 from .parsers import IParser, MaterialisedParserInput, ParserRegistry
@@ -234,6 +237,26 @@ def normalize_text(raw: str) -> str:
     return raw.lstrip("﻿").replace("\r\n", "\n").replace("\r", "\n")
 
 
+def _content_format_for(path: str, mime: str) -> str | None:
+    """``"html"`` / ``"markdown"`` for an HTML/MD member, else ``None`` (#513 P6).
+    Extension wins, so a ``text/plain`` sniff on a ``.md``/``.html`` upload still
+    routes to the right image-reference extractor."""
+    p = path.lower()
+    if mime == "text/html" or p.endswith((".html", ".htm")):
+        return "html"
+    if mime == "text/markdown" or p.endswith((".md", ".markdown")):
+        return "markdown"
+    return None
+
+
+def _image_member_path(url: str) -> str:
+    """A deterministic, URL-derived store path for a fetched image: ``host`` +
+    URL path (#513 P6). The same URL → the same path → ONE shared image
+    SourceDoc across every document that references it (doc-level dedup)."""
+    parts = urlsplit(url)
+    return f"{parts.netloc}{parts.path}"
+
+
 class Ingestor:
     def __init__(
         self,
@@ -246,6 +269,7 @@ class Ingestor:
         code_embedder: Embedder | None = None,
         parser_registry: ParserRegistry | None = None,
         upload_checks: UploadCheckRegistry | None = None,
+        image_fetcher: IImageFetcher | None = None,
     ) -> None:
         """Doc-ingest mode (P1):
         - **`pipeline`** (production): LlamaIndex `IngestionPipeline`
@@ -293,6 +317,10 @@ class Ingestor:
         # refuses encrypted/unreadable Office + PDF uploads; an operator
         # can inject a custom registry to add their own checks.
         self._upload_checks = upload_checks or bundled_upload_checks()
+        # #513 P6: when wired, an HTML/MD upload's referenced images are fetched
+        # (allowlisted hosts only) and stored as their own image SourceDocs so
+        # they become first-class, VLM-describable, P4-image-vector-able units.
+        self._image_fetcher = image_fetcher
 
     def upload_check_hints(self) -> list[UploadCheckHint]:
         """The browser-runnable upload-check descriptors (#325) — served
@@ -415,6 +443,7 @@ class Ingestor:
                     filename=filename, mime=mime, source=source
                 )
         members = self._extract(mime, data) if unpack else [(filename, data)]
+        members = self._with_referenced_images(members)
         touched: list[str] = []
         for path, member in members:
             member_mime = magic.from_buffer(member, mime=True)
@@ -625,6 +654,43 @@ class Ingestor:
             ),
         )
         return True
+
+    def _with_referenced_images(self, members: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
+        """P6: append each HTML/MD member's fetchable referenced images as extra
+        ``(path, bytes)`` members. No-op unless an image fetcher is wired AND
+        we're in pipeline mode — the ``VlmImageParser`` that describes them (and
+        the P4 image vector) only exist there, and legacy chunker mode drops
+        binaries anyway. Fetch failures / off-allowlist URLs are simply absent
+        (the fetcher returns ``None``), so one broken figure never fails the doc.
+        """
+        if self._image_fetcher is None or self._pipeline is None:
+            return members
+        extra: list[tuple[str, bytes]] = []
+        for path, data in members:
+            member_mime = magic.from_buffer(data, mime=True)
+            extra.extend(self._fetch_referenced_images(path, data, member_mime))
+        return [*members, *extra]
+
+    def _fetch_referenced_images(
+        self, path: str, data: bytes, mime: str
+    ) -> list[tuple[str, bytes]]:
+        fmt = _content_format_for(path, mime)
+        if fmt is None:
+            return []
+        assert self._image_fetcher is not None  # _with_referenced_images gates on it
+        text = data.decode("utf-8", errors="replace")
+        out: list[tuple[str, bytes]] = []
+        seen: set[str] = set()
+        for url in extract_image_urls(text, content_format=fmt):
+            if url in seen:
+                continue
+            seen.add(url)
+            fetched = self._image_fetcher.fetch(url)
+            if fetched is None:
+                continue
+            img_bytes, _img_mime = fetched
+            out.append((_image_member_path(url), img_bytes))
+        return out
 
     @staticmethod
     def _extract(mime: str, data: bytes) -> list[tuple[str, bytes]]:

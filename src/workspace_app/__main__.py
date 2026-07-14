@@ -35,6 +35,7 @@ from workspace_app.factories import (
     get_embedder,
     get_filestore,
     get_image_embedder,
+    get_image_fetcher,
     get_infer_modules_run_config,
     get_kb_describer,
     get_kb_llm,
@@ -247,6 +248,7 @@ def main() -> None:
             # Issue #39: custom parsers (kb.parsers) + VLM-backed bundled
             # parsers (kb.vlm_llm), minus kb.parsers_disabled.
             kb_parser_registry=get_parser_registry(settings),
+            kb_image_fetcher=get_image_fetcher(settings),
             # Issue #51: LLM sanity checks — fast set blocks boot, full
             # capability round runs async; FE re-runs via /health/checks.
             check_registry=get_check_registry(settings),

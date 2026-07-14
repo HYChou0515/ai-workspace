@@ -115,6 +115,7 @@ def create_app(
     # + the VLM-backed ones (image / PDF visual pages / slides) are
     # wired.
     kb_parser_registry: object | None = None,  # kb.parsers.ParserRegistry
+    kb_image_fetcher: object | None = None,  # #513 P6 kb.image_fetcher.IImageFetcher
     # Issue #51: the sanity-check registry. None ⇒ the diagnostics
     # endpoint serves an empty panel and startup probes are no-ops.
     # Production passes factories.get_check_registry(settings).
@@ -513,6 +514,7 @@ def create_app(
         chat_pipeline=kb_chat_pipeline,
         code_embedder=kb_code_embedder,
         parser_registry=kb_parser_registry,
+        image_fetcher=kb_image_fetcher,
     )
     # #54: the code-sync sweeper (in api/lifecycle.py) reads the ingestor off
     # app.state at startup — the ingestor is built after the FastAPI app, so the
