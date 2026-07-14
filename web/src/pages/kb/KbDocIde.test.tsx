@@ -127,9 +127,97 @@ describe("KbDocIde", () => {
     expect(screen.getByText(/select a document/i)).toBeInTheDocument();
   });
 
+  it("hides attachments from the path tree (#513 P8)", async () => {
+    // An attachment (parent_doc_id set) lives under the reserved `.att/`
+    // namespace; it must NOT appear in the file tree — it's shown as a card
+    // under its parent instead. The parent doc still shows normally.
+    renderWithQuery(
+      <KbDocIde
+        collectionId="c1"
+        client={stubClient([
+          doc({ path: "/d.md" }),
+          doc({
+            path: "/d.md/.att/img.local/a.png",
+            parent_doc_id: "id:/d.md",
+            content_type: "image/png",
+          }),
+        ])}
+      />,
+    );
+    expect(await screen.findByText("d.md")).toBeInTheDocument();
+    // Neither the reserved folder nor the attachment file leaks into the tree.
+    expect(screen.queryByText(".att")).not.toBeInTheDocument();
+    expect(screen.queryByText("a.png")).not.toBeInTheDocument();
+  });
+
   it("shows the upload empty-state for a collection with no documents", async () => {
     renderWithQuery(<KbDocIde collectionId="c1" client={stubClient([])} />);
     expect(await screen.findByText(/upload markdown, text, or an archive/i)).toBeInTheDocument();
+  });
+
+  it("shows an open doc's attachments as cards and opens one in the drawer (#513 P8)", async () => {
+    const user = userEvent.setup();
+    const client = stubClient(
+      [
+        doc({ path: "/d.md" }),
+        doc({
+          path: "/d.md/.att/ring.png",
+          parent_doc_id: "id:/d.md",
+          content_type: "image/png",
+          size: 2048,
+        }),
+      ],
+      { listCollections: async () => [] },
+    );
+    renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
+    await user.click(await screen.findByText("d.md"));
+    const bar = await screen.findByTestId("kb-attachments");
+    expect(within(bar).getByText("ring.png")).toBeInTheDocument();
+    await user.click(within(bar).getByRole("button", { name: /open ring\.png/i }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument(); // the shared viewer drawer
+  });
+
+  it("uploads a new attachment under the open doc's .att/ namespace (#513 P8)", async () => {
+    const user = userEvent.setup();
+    const uploadDocument = vi.fn(async () => ["id:new"]);
+    const client = stubClient([doc({ path: "/d.md" })], { uploadDocument });
+    renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
+    await user.click(await screen.findByText("d.md"));
+    const bar = await screen.findByTestId("kb-attachments");
+    const file = new File([new Uint8Array([1])], "chart.png", { type: "image/png" });
+    await user.upload(within(bar).getByTestId("kb-att-upload-input"), file);
+    expect(uploadDocument).toHaveBeenCalledWith("c1", file, "/d.md/.att/chart.png");
+  });
+
+  it("deletes an attachment from its card (#513 P8)", async () => {
+    const user = userEvent.setup();
+    const deleteDocument = vi.fn(async () => {});
+    const client = stubClient(
+      [doc({ path: "/d.md" }), doc({ path: "/d.md/.att/ring.png", parent_doc_id: "id:/d.md" })],
+      { deleteDocument },
+    );
+    renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
+    await user.click(await screen.findByText("d.md"));
+    const bar = await screen.findByTestId("kb-attachments");
+    await user.click(within(bar).getByRole("button", { name: /delete ring\.png/i }));
+    expect(deleteDocument).toHaveBeenCalledWith("id:/d.md/.att/ring.png");
+  });
+
+  it("renames an attachment via move, keeping its .att/ dir (#513 P8)", async () => {
+    const user = userEvent.setup();
+    const moveDocument = vi.fn(async () => {});
+    const client = stubClient(
+      [doc({ path: "/d.md" }), doc({ path: "/d.md/.att/ring.png", parent_doc_id: "id:/d.md" })],
+      { moveDocument },
+    );
+    renderWithQuery(<KbDocIde collectionId="c1" client={client} />);
+    await user.click(await screen.findByText("d.md"));
+    const bar = await screen.findByTestId("kb-attachments");
+    await user.click(within(bar).getByRole("button", { name: /rename ring\.png/i }));
+    const input = await screen.findByDisplayValue("ring.png");
+    await user.clear(input);
+    await user.type(input, "front.png{Enter}");
+    expect(moveDocument).toHaveBeenCalledWith("id:/d.md/.att/ring.png", "/d.md/.att/front.png");
   });
 
   it("offers a file filter and a resizable tree pane (#402)", async () => {

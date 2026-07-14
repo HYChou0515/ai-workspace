@@ -164,6 +164,11 @@
     「改名」(接既有 `move`,撞名 409);text 型別附件直接吃現有 monaco 編輯器。全接 P7 的 attach-CRUD。
   - FE TDD(vitest):tree 排除附件、附件卡列渲染、點卡開 drawer、上傳/刪除/取代/改名附件。
   - **DoD**:文檔下方看得到附件、點進去在 drawer 看內容、可在編輯頁手動增/刪/取代/改名。
+  - **狀態(完成)**:BE 補一片 —— 手動上傳到 `{父}/.att/` 由 store 依 path 慣例推 `parent_doc_id`(`_parent_from_att_path`,
+    fan-out/手動共用,無新參數)。FE:`KbDocument` 加 `parent_doc_id`;`KbDocIde` 以 `treeDocs`(排附件)建 tree;
+    新元件 `AttachmentBar`(卡列名/型別/大小、＋上傳、每卡改名/取代/刪除)接 `KbEditorPane` body 下方;點卡開
+    既有 `KbDocViewer` drawer;改名接 `move`(保 `.att/` 目錄、撞名 409 用 dialog 揭露)。CSS `kb-att*` 進 `styles/kb.css`。
+    vitest:`AttachmentBar.test.tsx`(7)+ `KbDocIde.test.tsx` 附件 5 測;typecheck 綠。
 
 - **P9 · 檢索連貫(retriever attachment-aware merge)**
   - kb_search 命中一筆附件的 chunk(`parent_doc_id != ""`)時,**額外把父文件內容一起帶進結果** ——

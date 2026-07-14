@@ -235,6 +235,11 @@ export type KbDocument = {
    * parser-guidance override do NOT ride the row — both are only shown for the
    * OPENED document and live on `KbRenderedDoc`. */
   quality_score?: number | null;
+  /** #513 P7: the parent document this row is an ATTACHMENT of (its id), or ""
+   * / absent for a top-level doc. The doc IDE splits attachments out of the path
+   * tree by this key and groups them under their parent as a card list. Absent
+   * on a pre-v9 row (reads as top-level, which it is). */
+  parent_doc_id?: string;
 };
 
 /** One page of documents inside a collection. The BE pages through specstar's

@@ -3362,3 +3362,91 @@
     width: 100vw;
   }
 }
+
+/* #513 P8 — attachment card list below an open document (KbDocIde). Faithful,
+   type-agnostic rows: name · type · size, opening the shared KbDocViewer. */
+.kb-att {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid var(--paper-3);
+}
+.kb-att__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.kb-att__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.02em;
+  color: var(--text-paper-d2);
+}
+.kb-att__head .kb-btn {
+  margin-left: auto;
+}
+.kb-att__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-att__card {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--paper-3);
+  border-radius: var(--radius-btn);
+  background: var(--paper-2);
+  padding: 4px 6px 4px 8px;
+}
+.kb-att__open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: none;
+  padding: 4px 2px;
+  cursor: pointer;
+  color: var(--text-paper);
+  text-align: left;
+}
+.kb-att__open:hover .kb-att__name {
+  color: var(--accent);
+}
+.kb-att__name {
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kb-att__meta {
+  margin-left: auto;
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--text-paper-d2);
+}
+.kb-att__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.kb-att__rename {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-small);
+  padding: 5px 8px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-btn);
+  background: var(--paper);
+  color: var(--text-paper);
+}

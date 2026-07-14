@@ -39,6 +39,8 @@ import { useT } from "../../lib/i18n";
 import { FileView } from "../../renderers/FileView";
 import { hasEditToggle, pickRenderer } from "../../renderers/registry";
 import { FileTree } from "../investigation/FileTree";
+import { AttachmentBar } from "./AttachmentBar";
+import { KbDocViewer } from "./KbDocViewer";
 import { TuneParsingModal } from "./TuneParsingModal";
 import { docHref } from "./kbLinks";
 import { QualityBadge } from "./QualityBadge";
@@ -192,7 +194,13 @@ function KbDocIdeBody({
   // Key everything by the canonical (leading-slash) path so a doc stored
   // relative ("mydir/x.md") and the tree's path ("/mydir/x.md") line up —
   // otherwise an inferred folder never matches its files (#87).
-  const docByPath = useMemo(() => new Map(docs.map((d) => [normPath(d.path), d])), [docs]);
+  // #513 P8: attachments (parent_doc_id set) live under the reserved `.att/`
+  // namespace and are shown as a card list under their parent — NOT in the path
+  // tree. Everything tree-facing (the file list, inferred folders, the path→doc
+  // map that gates the editor) is derived from the top-level docs only. The full
+  // `docs` still backs the file service + the per-parent attachment lookup.
+  const treeDocs = useMemo(() => docs.filter((d) => !d.parent_doc_id), [docs]);
+  const docByPath = useMemo(() => new Map(treeDocs.map((d) => [normPath(d.path), d])), [treeDocs]);
   // Only treat the URL's doc as "open" once it's really in the list. A just-
   // uploaded / freshly-moved doc lands in the URL before the refetch brings it
   // in, and reading its bytes early throws "unknown KB document"; until then we
@@ -214,18 +222,18 @@ function KbDocIdeBody({
   // folder still shows in the tree.
   const files = useMemo(
     () =>
-      docs
+      treeDocs
         .filter((d) => !d.path.endsWith("/.gitkeep") && d.path !== ".gitkeep")
         .map((d) => ({ path: normPath(d.path), size: d.size ?? 0 })),
-    [docs],
+    [treeDocs],
   );
   const dirs = useMemo(() => {
     const out = new Set<string>();
-    for (const d of docs) {
+    for (const d of treeDocs) {
       if (d.path.endsWith("/.gitkeep")) out.add(normPath(d.path.slice(0, -"/.gitkeep".length)));
     }
     return [...out];
-  }, [docs]);
+  }, [treeDocs]);
 
   // Opening a tree node routes to the doc's URL; the splat above is the single
   // source of truth for which doc is open (covers create / upload / move — the
@@ -243,6 +251,61 @@ function KbDocIdeBody({
       refetch();
     },
     [client, refetch],
+  );
+
+  // #513 P8: the open doc's attachments (child docs under its `.att/` namespace)
+  // + the drawer that shows one. `viewerId` is the attachment being inspected in
+  // the shared KbDocViewer — the SAME drawer a citation opens, so images / PDFs /
+  // CSVs all render with zero per-type code.
+  const [viewerId, setViewerId] = useState<string | null>(null);
+  const attachments = useMemo(
+    () => (activeDoc ? docs.filter((d) => d.parent_doc_id === activeDoc.resource_id) : []),
+    [docs, activeDoc],
+  );
+  // Add an attachment: an ordinary upload to `{parent}/.att/{filename}` — the BE
+  // links it to the parent by that reserved-namespace path (no special param).
+  const attUpload = useCallback(
+    async (parentPath: string, file: File) => {
+      await client.uploadDocument(collectionId, file, `${parentPath}/.att/${file.name}`);
+      refetch();
+    },
+    [client, collectionId, refetch],
+  );
+  // Replace an attachment's bytes: upload to its OWN path (last-write-wins in
+  // place, then re-index) — same content-addressed upsert as any re-upload.
+  const attReplace = useCallback(
+    async (a: KbDocument, file: File) => {
+      await client.uploadDocument(collectionId, file, a.path);
+      refetch();
+    },
+    [client, collectionId, refetch],
+  );
+  const attDelete = useCallback(
+    async (a: KbDocument) => {
+      await client.deleteDocument(a.resource_id);
+      setViewerId((cur) => (cur === a.resource_id ? null : cur));
+      refetch();
+    },
+    [client, refetch],
+  );
+  // Rename an attachment: swap the basename, keeping its `{parent}/.att/…` dir —
+  // the ordinary `move` (a path change re-keys). A name clash is the BE's 409,
+  // surfaced verbatim rather than silently disambiguated.
+  const attRename = useCallback(
+    async (a: KbDocument, newName: string) => {
+      const dir = a.path.slice(0, a.path.lastIndexOf("/"));
+      try {
+        await client.moveDocument(a.resource_id, `${dir}/${newName}`);
+        refetch();
+      } catch (e) {
+        await dialog.confirm({
+          title: "Couldn't rename attachment",
+          body: e instanceof Error ? e.message : "That name is already taken.",
+          actions: [{ id: "ok", label: "OK", variant: "primary" }],
+        });
+      }
+    },
+    [client, refetch, dialog],
   );
   // Reindex a tree selection (#98): resolve each path to its doc — a folder
   // expands to every descendant doc — then re-index each once.
@@ -336,6 +399,12 @@ function KbDocIdeBody({
                       onReindex={reindex}
                       onTune={setTuneDoc}
                       onPermissions={canManagePerms ? setPermDoc : undefined}
+                      attachments={attachments}
+                      onOpenAttachment={setViewerId}
+                      onUploadAttachment={attUpload}
+                      onReplaceAttachment={attReplace}
+                      onDeleteAttachment={attDelete}
+                      onRenameAttachment={attRename}
                     />
                   ) : (
                     <div className="kb-ide__empty">Select a document to view or edit.</div>
@@ -378,6 +447,17 @@ function KbDocIdeBody({
                     else setPermMut.mutate(perm);
                   }}
                   onClose={() => setPermDoc(null)}
+                />
+              )}
+              {viewerId && (
+                // #513 P8: inspect an attachment in the SAME drawer a citation
+                // opens — it renders any SourceDoc (image / PDF / CSV / …) and
+                // carries its own download / re-read / delete actions.
+                <KbDocViewer
+                  documentId={viewerId}
+                  onClose={() => setViewerId(null)}
+                  onChanged={refetch}
+                  client={client}
                 />
               )}
           </div>
@@ -510,6 +590,12 @@ function KbEditorPane({
   onReindex,
   onTune,
   onPermissions,
+  attachments,
+  onOpenAttachment,
+  onUploadAttachment,
+  onReplaceAttachment,
+  onDeleteAttachment,
+  onRenameAttachment,
 }: {
   path: string;
   doc?: KbDocument;
@@ -518,6 +604,13 @@ function KbEditorPane({
   /** #308: open the per-doc read-override dialog (collection owner only; the
    * parent passes `undefined` for everyone else). */
   onPermissions?: (doc: KbDocument) => void;
+  /** #513 P8: this doc's attachments + their CRUD, shown below the content. */
+  attachments: KbDocument[];
+  onOpenAttachment: (documentId: string) => void;
+  onUploadAttachment: (parentPath: string, file: File) => void;
+  onReplaceAttachment: (att: KbDocument, file: File) => void;
+  onDeleteAttachment: (att: KbDocument) => void;
+  onRenameAttachment: (att: KbDocument, newName: string) => void;
 }) {
   const t = useT();
   const { save } = useFileBuffer(path);
@@ -600,6 +693,15 @@ function KbEditorPane({
       </header>
       <div className="kb-ide__body">
         <FileView path={path} />
+        <AttachmentBar
+          parentPath={path}
+          attachments={attachments}
+          onOpen={onOpenAttachment}
+          onUpload={(f) => onUploadAttachment(path, f)}
+          onReplace={onReplaceAttachment}
+          onDelete={onDeleteAttachment}
+          onRename={onRenameAttachment}
+        />
       </div>
     </div>
   );
