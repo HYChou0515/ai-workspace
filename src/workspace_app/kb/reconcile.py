@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     from specstar.types import IResourceManager
 
 from ..resources.kb import ClusterMember, Collection, ContextCard, WikiPage
-from .card_gen import ProposedCard, ensure_proposal_ids, is_active
-from .card_gen_run import CardGenRunStore
+from .card_gen import ProposedCard, ensure_proposal_ids
+from .card_proposal import CardProposalStore
 from .context_cards import derive_norm_keys, norm
 from .doc_questions import questions_by_status
 from .embedder import Embedder
@@ -433,41 +433,38 @@ def backfill_collection(
     for r in rm.list_resources((QB["collection_id"] == collection_id).build()):
         seen.add(r.info.resource_id)  # ty: ignore[unresolved-attribute]
     n = 0
-    for run_id, _created, run in CardGenRunStore(spec).runs_by_status(
-        ["done"], collection_id=collection_id
-    ):
-        for p in ensure_proposal_ids(run.proposals):
-            if not is_active(p):
-                continue
-            member_id = f"prop:{run_id}:{p.id}"
-            if member_id in seen:
-                continue
-            norm_key = (derive_norm_keys(p.keys) or [""])[0]
-            vec = embedder.embed_documents([_card_text(norm_key, p.title)])[0]
-            cluster_key = assign_cluster_key(
-                spec,
-                collection_id=collection_id,
-                norm_key=norm_key,
-                embedding=vec,
-                tau=cluster_tau,
-            )
-            _put_member(
-                rm,
-                member_id,
-                collection_id=collection_id,
-                kind="proposal",
-                ref_id=p.id,
-                run_id=run_id,
-                norm_key=norm_key,
-                cluster_key=cluster_key,
-                state="active",
-                embedding=vec,
-                label=p.title or (p.keys[0] if p.keys else norm_key),
-            )
-            seen.add(member_id)
-            n += 1
-            if n >= limit:
-                return n
+    # #511 P2: proposals live in first-class CardProposal rows now (not the nested
+    # CardGenRun.proposals), so read the collection's ACTIVE proposals from there.
+    for run_id, _created, p in CardProposalStore(spec).list_for_review(collection_id):
+        member_id = f"prop:{run_id}:{p.id}"
+        if member_id in seen:
+            continue
+        norm_key = (derive_norm_keys(p.keys) or [""])[0]
+        vec = embedder.embed_documents([_card_text(norm_key, p.title)])[0]
+        cluster_key = assign_cluster_key(
+            spec,
+            collection_id=collection_id,
+            norm_key=norm_key,
+            embedding=vec,
+            tau=cluster_tau,
+        )
+        _put_member(
+            rm,
+            member_id,
+            collection_id=collection_id,
+            kind="proposal",
+            ref_id=p.id,
+            run_id=run_id,
+            norm_key=norm_key,
+            cluster_key=cluster_key,
+            state="active",
+            embedding=vec,
+            label=p.title or (p.keys[0] if p.keys else norm_key),
+        )
+        seen.add(member_id)
+        n += 1
+        if n >= limit:
+            return n
     for qid, _created, q in questions_by_status(spec, [collection_id], ["open"]):
         if q.kind != "term":
             continue

@@ -15,6 +15,7 @@ from workspace_app.api import ScriptedAgentRunner, create_app
 from workspace_app.filestore.memory import MemoryFileStore
 from workspace_app.kb.card_gen import ProposedCard
 from workspace_app.kb.card_gen_run import CardGenRunStore
+from workspace_app.kb.card_proposal import CardProposalStore
 from workspace_app.kb.embedder import HashEmbedder
 from workspace_app.kb.li_pipeline import build_doc_pipeline
 from workspace_app.resources import Collection, make_spec
@@ -30,7 +31,9 @@ def test_lifespan_runs_the_cluster_sweeper() -> None:
     cid = spec.get_resource_manager(Collection).create(Collection(name="kb")).resource_id
     store = CardGenRunStore(spec)
     run_id = store.start(cid, ["d1"])
-    store.set_proposals(run_id, [ProposedCard(id="0", keys=["RZ3"], title="RZ3")])
+    CardProposalStore(spec).create_from_proposal(
+        cid, run_id, ProposedCard(id="0", keys=["RZ3"], title="RZ3")
+    )
     store.finish(run_id, status="done")  # a done run whose proposal has no member
 
     application = create_app(

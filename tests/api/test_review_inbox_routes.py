@@ -8,8 +8,9 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from workspace_app.api.review_inbox_routes import register_review_inbox_routes
-from workspace_app.kb.card_gen import CardGenRun, ProposedCard
+from workspace_app.kb.card_gen import CardGenRun, ProposedCard, ensure_proposal_ids
 from workspace_app.kb.card_gen_run import CardGenRunStore
+from workspace_app.kb.card_proposal import CardProposalStore
 from workspace_app.kb.doc_questions import open_or_merge_term_question
 from workspace_app.perm.model import Permission
 from workspace_app.resources import Collection, make_spec
@@ -28,7 +29,9 @@ def _seed_done_run(spec, cid: str, proposals: list[ProposedCard], *, owner: str 
     store = CardGenRunStore(spec)
     with spec.get_resource_manager(CardGenRun).using(user=owner):
         run_id = store.start(cid, ["d1"])
-    store.set_proposals(run_id, proposals)
+    pstore = CardProposalStore(spec)
+    for p in ensure_proposal_ids(list(proposals)):
+        pstore.create_from_proposal(cid, run_id, p)
     store.finish(run_id, status="done")
     return run_id
 

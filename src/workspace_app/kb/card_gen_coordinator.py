@@ -55,6 +55,7 @@ from .card_gen import (
     CommitResult,
     DocDigest,
     ProposedCard,
+    card_proposal_id,
     classify_against_existing,
     ensure_proposal_ids,
     is_active,
@@ -78,15 +79,14 @@ _ACTIVE = [TaskStatus.PENDING, TaskStatus.PROCESSING]
 _DRAIN_INTERVAL = 0.02  # aclose() poll cadence while waiting for the queue to drain
 
 # The run's own lifecycle string → the TaskStatus the FE polls (#414: status lives
-# on the run, not on any one fanned-out job).
+# on the run, not on any one fanned-out job). #511 P2: run.status is now PURELY the
+# generation lifecycle — the review-resolution terminals (committed/dismissed) are
+# gone; a run leaves the 待審核 queue when its proposals go terminal, not the run.
 _RUN_STATUS = {
     "pending": TaskStatus.PENDING,
     "running": TaskStatus.PROCESSING,
     "done": TaskStatus.COMPLETED,
     "error": TaskStatus.FAILED,
-    # #415 review-resolution terminals — both are past COMPLETED to the poller.
-    "committed": TaskStatus.COMPLETED,
-    "dismissed": TaskStatus.COMPLETED,
 }
 
 
@@ -163,12 +163,6 @@ class CardGenCoordinator:
         Safe: called synchronously during create_app, before any consumer starts."""
         self._drafter = drafter
 
-    def set_reconciler(self, reconciler: Reconciler | None) -> None:
-        """#506 P6: inject the semantic reconciler after construction (same pattern
-        as :meth:`set_drafter`), for when the embedder is only wired up later in
-        create_app. Safe: called before any consumer starts."""
-        self._reconciler = reconciler
-
     # ── enqueue (producer) ───────────────────────────────────────────
     def enqueue(
         self, collection_id: str, doc_ids: list[str], *, requested_by: str | None = None
@@ -202,12 +196,9 @@ class CardGenCoordinator:
 
     def proposals(self, run_id: str) -> CardGenArtifact:
         """The run's reviewable proposals (empty until it finalizes), each carrying
-        a stable id so the review table can address one card — backfilled here for
-        runs finalized before ids existed (#481)."""
-        run = self._runs.get(run_id)
-        if run is None:
-            return CardGenArtifact()
-        return CardGenArtifact(proposals=ensure_proposal_ids(run.proposals))
+        its stable ``pid`` so the review table can address one card. Read from the
+        first-class :class:`CardProposal` rows (#511 P2), not the nested list."""
+        return CardGenArtifact(proposals=self._proposals.list_by_run(run_id))
 
     def _active_count(self) -> int:
         return self._job_rm.count_resources(QB["status"].in_(_ACTIVE).build())
@@ -216,11 +207,16 @@ class CardGenCoordinator:
     def save_review(
         self, run_id: str, proposals: list[ProposedCard], *, reviewer: str | None = None
     ) -> None:
-        """Persist the reviewer's edited / decided proposals back onto the run, so
-        leaving the review page and returning restores progress (the run is the
-        durable store — no separate review row). Replaces the run's proposals
-        wholesale with what the FE sends back."""
-        self._runs.set_proposals(run_id, proposals)
+        """Persist the reviewer's edited / decided proposals, so leaving the review
+        page and returning restores progress. Upserts each proposal's first-class
+        :class:`CardProposal` row (#511 P2) with what the FE sends back; a run whose
+        collection cascaded away is a no-op."""
+        run = self._runs.get(run_id)
+        if run is None:
+            return
+        self._proposals.replace_run_proposals(
+            run.collection_id, run_id, ensure_proposal_ids(list(proposals))
+        )
 
     def _write_card(self, cardrm, cid: str, p: ProposedCard, result: CommitResult) -> None:
         """Write one accepted proposal to a real ``ContextCard`` (#106 author/edit):
@@ -250,8 +246,8 @@ class CardGenCoordinator:
         tallies. Per-run convenience over :meth:`commit_cards`."""
         run = self._runs.get(run_id)
         if run is None or run.status != "done":
-            return CommitResult()  # gone, or already reviewed — no double card-write
-        accepted = [p.id for p in ensure_proposal_ids(run.proposals) if p.decision == "accepted"]
+            return CommitResult()  # gone or never finalized — no card-write
+        accepted = [p.id for p in self._proposals.list_by_run(run_id) if p.decision == "accepted"]
         return self._commit_run_cards(run_id, run, accepted, committed_by, skip_unreferenced=True)
 
     def commit_cards(
@@ -295,7 +291,7 @@ class CardGenCoordinator:
         result = CommitResult()
         written: list[str] = []
         with cardrm.using(user=committed_by or self._get_user_id()):
-            for p in ensure_proposal_ids(run.proposals):
+            for p in self._proposals.list_by_run(run_id):
                 if p.id not in wanted:
                     if skip_unreferenced:
                         result.skipped += 1
@@ -305,32 +301,37 @@ class CardGenCoordinator:
                     continue
                 self._write_card(cardrm, cid, p, result)
                 written.append(p.id)
-        self._runs.mark_proposals_committed(run_id, written)
+        # #511 P2: advance the written proposals' CardProposal rows to committed (per
+        # proposal, CAS). Once a run has no active proposal left it drops out of the
+        # queue on its own — no run.status settle.
+        self._proposals.mark_committed([card_proposal_id(run_id, pid) for pid in written])
         return result
 
     def decide(self, run_id: str, card_id: str, decision: str) -> None:
-        """#481: persist one proposal's decision (inline accept/reject), settling the
-        run out of the queue if that resolved its last active card."""
-        self._runs.decide(run_id, card_id, decision)
+        """#481: persist one proposal's decision (inline accept/reject) by id. The run
+        leaves the queue automatically once its last active proposal is resolved
+        (#511 P2: the queue is "runs with an active CardProposal", no run.status flip)."""
+        self._proposals.set_decision(card_proposal_id(run_id, card_id), decision)
 
     def update_proposal(self, run_id: str, card_id: str, card: ProposedCard) -> None:
         """#481: persist the reviewer's edited proposal (drawer edit: body/title +
-        decision) back onto the run, keyed by its id."""
-        self._runs.update_proposal(run_id, card_id, card)
+        decision) by id, onto its first-class :class:`CardProposal` row (#511 P2)."""
+        self._proposals.update(card_proposal_id(run_id, card_id), card)
 
     def dismiss(self, run_id: str) -> None:
-        """#415: discard a run's proposals without writing any card — it leaves the
-        待審核 queue (status ``dismissed``)."""
-        self._runs.mark_dismissed(run_id)
+        """#415: discard a run's proposals without writing any card — reject every
+        ACTIVE proposal so the run leaves the 待審核 queue (#511 P2: no run.status
+        terminal; the queue is "runs with an active CardProposal")."""
+        self._proposals.dismiss_run(run_id)
 
     def pending_runs(self, collection_id: str) -> list[CardGenRunSummary]:
-        """The collection's finalized-but-unreviewed runs — the 待審核 queue rows
-        (#415), newest first. The FE lazy-loads each run's proposals on expand."""
+        """The collection's runs that still hold an ACTIVE proposal — the 待審核 queue
+        rows (#511 P2: "runs with an active CardProposal", not a run.status), newest
+        first. ``proposal_count`` is the run's active count. The FE lazy-loads each
+        run's proposals on expand."""
         return [
-            CardGenRunSummary(
-                run_id=rid, collection_id=collection_id, proposal_count=len(run.proposals)
-            )
-            for rid, run in self._runs.pending_for_collection(collection_id)
+            CardGenRunSummary(run_id=rid, collection_id=collection_id, proposal_count=count)
+            for rid, count in self._proposals.active_runs(collection_id)
         ]
 
     # ── consume (handler — runs in the queue's consumer thread) ──────
@@ -489,14 +490,14 @@ class CardGenCoordinator:
         # wiki) and cluster cross-run duplicates. No reconciler → exact-only (pre-P6).
         if self._reconciler is not None:
             kept = self._reconciler.reconcile_proposals(cid, run_id, kept, existing)
-        # #511 P1: stamp ids up front so the first-class CardProposal rows share the
+        # #511 P2: stamp ids up front so the first-class CardProposal rows share the
         # SAME prop:{run}:{pid} id as the reconcile ClusterMember (reconcile ran the
         # same ensure_proposal_ids, so this is a no-op there — but a no-reconciler
-        # build needs it before projecting). set_proposals re-stamps idempotently.
+        # build needs it before projecting). The CardProposal rows are now the SOLE
+        # store — the nested CardGenRun.proposals write is gone (dropped in P5).
         kept = ensure_proposal_ids(kept)
         for p in kept:
             self._proposals.create_from_proposal(cid, run_id, p)
-        self._runs.set_proposals(run_id, kept)
         self._raise_questions(cid, per_doc, existing)
         self._clear_staged(run_id)
         # All documents failed (none digested) → the run failed; else it produced

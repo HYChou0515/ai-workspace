@@ -161,12 +161,9 @@ def card_proposal_id(run_id: str, pid: str) -> str:
     return f"prop:{run_id}:{pid}"
 
 
-def proposal_to_card_proposal(
-    collection_id: str, run_id: str, p: ProposedCard
-) -> CardProposal:
+def proposal_to_card_proposal(collection_id: str, run_id: str, p: ProposedCard) -> CardProposal:
     """Project a merged/classified :class:`ProposedCard` onto its first-class
-    :class:`CardProposal` row (content + decision), for the finalize write and
-    the one-time backfill of existing nested proposals."""
+    :class:`CardProposal` row (content + decision) — the finalize write."""
     return CardProposal(
         collection_id=collection_id,
         run_id=run_id,
@@ -178,6 +175,24 @@ def proposal_to_card_proposal(
         target_card_id=p.target_card_id,
         provenance=list(p.provenance),
         decision=p.decision,
+    )
+
+
+def card_proposal_to_proposed(pid: str, cp: CardProposal) -> ProposedCard:
+    """Rebuild the domain :class:`ProposedCard` (the review-surface shape, carrying
+    its per-run ``pid`` id) from a stored :class:`CardProposal` — the inverse of
+    :func:`proposal_to_card_proposal`, used when the coordinator / review inbox read
+    proposals back out of the store."""
+    return ProposedCard(
+        keys=list(cp.keys),
+        id=pid,
+        title=cp.title,
+        body=cp.body,
+        confident=cp.confident,
+        mode=cp.mode,
+        target_card_id=cp.target_card_id,
+        provenance=list(cp.provenance),
+        decision=cp.decision,
     )
 
 

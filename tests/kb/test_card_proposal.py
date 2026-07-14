@@ -111,6 +111,80 @@ def test_get_returns_none_for_a_missing_proposal():
     assert CardProposalStore(spec).get("prop:nope:0") is None
 
 
+def test_set_decision_on_a_missing_proposal_is_a_noop():
+    """A per-proposal write to an id that was never projected (or cascaded away) is
+    a clean no-op, never a raise — the CAS read just finds no row."""
+    spec, _cid = _spec_with_collection()
+    assert CardProposalStore(spec).set_decision("prop:nope:0", "accepted") is None
+
+
+def test_mark_committed_skips_an_already_terminal_ref():
+    """A commit ref to a proposal that's already terminal advances nothing (the
+    per-proposal CAS mutate returns None) — idempotent, so a redelivered commit
+    writes no second transition."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(
+        cid, run_id, ProposedCard(keys=["k"], id="0", decision="rejected")
+    )
+    store.mark_committed([pid])  # no-op: already terminal
+    got = store.get(pid)
+    assert got is not None and got.decision == "rejected"
+
+
+def test_active_runs_counts_multiple_active_proposals_per_run():
+    """A run with several active proposals is ONE queue row carrying the active
+    count (the queue groups a run's proposals)."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    for i in range(3):
+        store.create_from_proposal(cid, run_id, ProposedCard(keys=[f"k{i}"], id=str(i)))
+    assert store.active_runs(cid) == [(run_id, 3)]
+
+
+def test_dismiss_run_leaves_an_already_terminal_proposal_untouched(monkeypatch):
+    """Whole-run dismiss rejects only ACTIVE proposals; a ref that resolved after
+    the active query (the resolve-after-query race) is left as it was."""
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(
+        cid, run_id, ProposedCard(keys=["k"], id="0", decision="committed")
+    )
+    # force the terminal id into the "active" set to simulate the race
+    monkeypatch.setattr(store, "_active_proposal_ids_of_run", lambda _rid: [pid])
+    assert store.dismiss_run(run_id) == 0  # committed proposal not flipped
+    got = store.get(pid)
+    assert got is not None and got.decision == "committed"
+
+
+def test_cas_retries_when_a_concurrent_writer_wins_the_race(monkeypatch):
+    """A losing per-proposal CAS write (etag moved on under us) re-reads and retries
+    rather than dropping the reviewer's decision."""
+    from specstar.types import PreconditionFailedError
+
+    spec, cid = _spec_with_collection()
+    run_id = _run(spec, cid)
+    store = CardProposalStore(spec)
+    pid = store.create_from_proposal(cid, run_id, ProposedCard(keys=["k"], id="0"))
+    real_modify = store._rm.modify  # noqa: SLF001
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:  # first attempt loses the race
+            raise PreconditionFailedError(pid, "expected", "actual")
+        return real_modify(*args, **kwargs)
+
+    monkeypatch.setattr(store._rm, "modify", flaky)  # noqa: SLF001
+    store.set_decision(pid, "accepted")
+    assert calls["n"] == 2  # retried once, then succeeded
+    got = store.get(pid)
+    assert got is not None and got.decision == "accepted"
+
+
 def test_count_active_is_scoped_per_collection():
     """A collection's pager total counts only its own active proposals."""
     spec, cid_a = _spec_with_collection()

@@ -223,6 +223,14 @@ async def test_finalize_writes_first_class_card_proposal_rows():
         assert cp.decision == "pending"
 
 
+async def test_save_review_on_a_vanished_run_is_a_noop():
+    """#511 P2: saving a review for a run whose collection cascaded away is a clean
+    no-op (nothing to upsert), never a raise."""
+    spec = make_spec(default_user="u")
+    coord = CardGenCoordinator(spec, _FakeDrafter({}))
+    coord.save_review("nope", [])  # no run → no-op
+
+
 async def test_dismiss_removes_a_run_from_review_without_writing_cards():
     """#415: dismissing a run resolves it (status 'dismissed') so it leaves the
     queue, and writes no cards."""
@@ -241,9 +249,10 @@ async def test_dismiss_removes_a_run_from_review_without_writing_cards():
 
 
 async def test_review_resolution_is_idempotent():
-    """Resolving a run is a one-way, at-most-once transition (#415): once
-    committed, a re-commit writes no second card and a later dismiss can't yank
-    it back — both are no-ops from a non-``done`` state."""
+    """Resolving a proposal is a one-way, at-most-once transition (#511 P2): once a
+    proposal is committed, a re-commit writes no second card and a later whole-run
+    dismiss can't yank it back — both skip the now-TERMINAL proposal (idempotency is
+    per-proposal, no run.status gate)."""
     spec = make_spec(default_user="u")
     cid = _collection(spec)
     doc = _add_source(spec, cid, "a.md", "RZ3 is the third reflow zone")
@@ -256,9 +265,9 @@ async def test_review_resolution_is_idempotent():
         msgspec.structs.replace(p, decision="accepted") for p in coord.proposals(jid).proposals
     ]
     coord.save_review(jid, accepted)
-    coord.commit(jid)  # done → committed, writes one card
-    coord.commit(jid)  # committed run: guarded no-op, no second card
-    coord.dismiss(jid)  # committed run: mark_dismissed is a no-op (not 'done')
+    coord.commit(jid)  # accepted → committed, writes one card
+    coord.commit(jid)  # proposal already committed → no second card
+    coord.dismiss(jid)  # proposal already terminal → dismiss flips nothing
 
     assert len(_cards(spec, cid)) == 1
     assert coord.pending_runs(cid) == []

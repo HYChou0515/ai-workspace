@@ -23,18 +23,16 @@ from specstar import QB
 
 from ..perm import Actor, authorize
 from ..resources.kb import ClusterMember, Collection, DocQuestion
-from .card_gen import ProposedCard, ensure_proposal_ids, is_active
-from .card_gen_run import CardGenRunStore
+from .card_gen import ProposedCard
+from .card_proposal import CardProposalStore
 from .doc_questions import questions_by_status
 
 if TYPE_CHECKING:
     from specstar import SpecStar
 
-# Run statuses whose proposals feed each view (#481). A ``done`` run may hold BOTH
-# active (pending) proposals — the pending view — and terminal (committed/rejected)
-# ones after a partial review — the history view; resolved runs hold only terminal.
-_PENDING_RUN_STATUSES = ["done"]
-_RESOLVED_RUN_STATUSES = ["done", "committed", "dismissed"]
+# #511 P2: card-side pending-vs-history is decided by the proposal's OWN decision
+# (ACTIVE = 待審, TERMINAL = history), read straight from the CardProposal rows — no
+# run.status gate any more (committed/dismissed run terminals are gone).
 _OPEN_QUESTION_STATUSES = ["open"]
 _RESOLVED_QUESTION_STATUSES = ["answered", "discarded"]
 
@@ -290,7 +288,7 @@ def build_review_inbox(
 
     merged: list[ReviewCardItem | ReviewQuestionItem] = []
     if kind != "questions":
-        merged.extend(_card_items(spec, readable, resolved, collection_id=collection_id))
+        merged.extend(_card_items(spec, readable, resolved))
     if kind != "cards":
         merged.extend(_question_items(spec, readable, resolved))
     if q:
@@ -335,25 +333,20 @@ def _card_items(
     spec: SpecStar,
     readable: dict[str, _CollCtx],
     resolved: bool,
-    collection_id: str | None = None,
 ) -> list[ReviewCardItem]:
-    store = CardGenRunStore(spec)
-    statuses = _RESOLVED_RUN_STATUSES if resolved else _PENDING_RUN_STATUSES
+    """The card-proposal rows for the inbox — ACTIVE (待審) or, with ``resolved``,
+    TERMINAL (history) — read straight from the :class:`CardProposal` rows per
+    readable collection (#511 P2). ``readable`` is already scoped to the requested
+    collection (build_review_inbox narrows it), so each collection's indexed query
+    reads only its own proposals."""
+    store = CardProposalStore(spec)
     items: list[ReviewCardItem] = []
-    # #506: when the inbox is scoped to one collection, push that into the indexed
-    # query so we read only its runs instead of scanning every collection's.
-    for run_id, created, run in store.runs_by_status(statuses, collection_id=collection_id):
-        ctx = readable.get(run.collection_id)
-        if ctx is None:
-            continue  # collection not readable by this user
-        for card in ensure_proposal_ids(run.proposals):
-            # pending view keeps ACTIVE cards; history keeps the terminal ones.
-            if is_active(card) == resolved:
-                continue
+    for cid, ctx in readable.items():
+        for run_id, created, card in store.list_for_review(cid, resolved=resolved):
             items.append(
                 ReviewCardItem(
                     run_id=run_id,
-                    collection_id=run.collection_id,
+                    collection_id=cid,
                     collection_name=ctx.name,
                     can_act=ctx.can_act,
                     created_time=created,
