@@ -249,12 +249,22 @@ def _content_format_for(path: str, mime: str) -> str | None:
     return None
 
 
-def _image_member_path(url: str) -> str:
-    """A deterministic, URL-derived store path for a fetched image: ``host`` +
-    URL path (#513 P6). The same URL → the same path → ONE shared image
-    SourceDoc across every document that references it (doc-level dedup)."""
+def _attachment_path(parent_path: str, url: str) -> str:
+    """The store path for an image fetched from ``url`` referenced by the doc at
+    ``parent_path`` (#513 P7): under the parent, in the reserved ``.att/``
+    namespace — ``{parent}/.att/{host}{url-path}``. Readable, keeps the extension
+    at the end (so the parser recognises the type), and locked under
+    ``{parent}/.att/`` so a rename can only touch the tail. No hash: attachments
+    are ordinary docs, so a genuine name clash is surfaced the ordinary way (a
+    move/upload 409), not silently disambiguated."""
     parts = urlsplit(url)
-    return f"{parts.netloc}{parts.path}"
+    return f"{parent_path}/.att/{parts.netloc}{parts.path}"
+
+
+class _Attachment(NamedTuple):
+    path: str
+    data: bytes
+    parent_doc_id: str
 
 
 class Ingestor:
@@ -443,7 +453,6 @@ class Ingestor:
                     filename=filename, mime=mime, source=source
                 )
         members = self._extract(mime, data) if unpack else [(filename, data)]
-        members = self._with_referenced_images(members)
         touched: list[str] = []
         for path, member in members:
             member_mime = magic.from_buffer(member, mime=True)
@@ -456,6 +465,16 @@ class Ingestor:
             # any parser claims it and writes chunks; an unclaimed file
             # ends up status=ready, chunks=0.
             doc_id = self._store_file(collection_id, user, path, member)
+            if doc_id is not None:
+                touched.append(doc_id)
+        # #513 P7: fan an HTML/MD member's fetchable referenced images out as
+        # ATTACHMENT child docs — each under the parent's `.att/` namespace with
+        # a `parent_doc_id` link, so it's a first-class VLM-describable /
+        # image-vector-able unit that the doc list can hide under its parent.
+        for att in self._collect_attachments(collection_id, members):
+            doc_id = self._store_file(
+                collection_id, user, att.path, att.data, parent_doc_id=att.parent_doc_id
+            )
             if doc_id is not None:
                 touched.append(doc_id)
         return touched
@@ -655,41 +674,37 @@ class Ingestor:
         )
         return True
 
-    def _with_referenced_images(self, members: list[tuple[str, bytes]]) -> list[tuple[str, bytes]]:
-        """P6: append each HTML/MD member's fetchable referenced images as extra
-        ``(path, bytes)`` members. No-op unless an image fetcher is wired AND
-        we're in pipeline mode — the ``VlmImageParser`` that describes them (and
-        the P4 image vector) only exist there, and legacy chunker mode drops
-        binaries anyway. Fetch failures / off-allowlist URLs are simply absent
+    def _collect_attachments(
+        self, collection_id: str, members: list[tuple[str, bytes]]
+    ) -> list[_Attachment]:
+        """P7: for each HTML/MD member, fetch its allowlisted referenced images
+        and return them as ATTACHMENT records — the store path under the parent's
+        ``.att/`` namespace + the parent's doc id. No-op unless an image fetcher
+        is wired AND we're in pipeline mode (the ``VlmImageParser`` that describes
+        them + the P4 image vector only exist there; legacy chunker mode drops
+        binaries anyway). Fetch failures / off-allowlist URLs are simply absent
         (the fetcher returns ``None``), so one broken figure never fails the doc.
         """
         if self._image_fetcher is None or self._pipeline is None:
-            return members
-        extra: list[tuple[str, bytes]] = []
+            return []
+        out: list[_Attachment] = []
         for path, data in members:
             member_mime = magic.from_buffer(data, mime=True)
-            extra.extend(self._fetch_referenced_images(path, data, member_mime))
-        return [*members, *extra]
-
-    def _fetch_referenced_images(
-        self, path: str, data: bytes, mime: str
-    ) -> list[tuple[str, bytes]]:
-        fmt = _content_format_for(path, mime)
-        if fmt is None:
-            return []
-        assert self._image_fetcher is not None  # _with_referenced_images gates on it
-        text = data.decode("utf-8", errors="replace")
-        out: list[tuple[str, bytes]] = []
-        seen: set[str] = set()
-        for url in extract_image_urls(text, content_format=fmt):
-            if url in seen:
+            fmt = _content_format_for(path, member_mime)
+            if fmt is None:
                 continue
-            seen.add(url)
-            fetched = self._image_fetcher.fetch(url)
-            if fetched is None:
-                continue
-            img_bytes, _img_mime = fetched
-            out.append((_image_member_path(url), img_bytes))
+            parent_path = canonical_path(path)
+            parent_id = encode_doc_id(collection_id, parent_path)
+            text = data.decode("utf-8", errors="replace")
+            seen: set[str] = set()
+            for url in extract_image_urls(text, content_format=fmt):
+                if url in seen:
+                    continue
+                seen.add(url)
+                fetched = self._image_fetcher.fetch(url)
+                if fetched is None:
+                    continue
+                out.append(_Attachment(_attachment_path(parent_path, url), fetched[0], parent_id))
         return out
 
     @staticmethod
@@ -709,7 +724,9 @@ class Ingestor:
                         out.append((m.name, f.read()))
         return out
 
-    def _store_file(self, collection_id: str, user: str, path: str, data: bytes) -> str | None:
+    def _store_file(
+        self, collection_id: str, user: str, path: str, data: bytes, *, parent_doc_id: str = ""
+    ) -> str | None:
         # The id keys on collection + path only (NOT the user), so a collection
         # is a shared space: the same path is ONE doc whoever uploads it, and a
         # second writer updates it in place (last write wins; `created_by` stays
@@ -732,6 +749,11 @@ class Ingestor:
             path=path,
             content=Binary(data=data),
             status="indexing",
+            # #513 P7: an explicit parent link marks this doc as an attachment.
+            # An empty arg INHERITS any existing parentage (same carry-across-
+            # re-upload rule as the parser overrides below), so a plain re-upload
+            # of an attachment's bytes never orphans it.
+            parent_doc_id=(parent_doc_id or (existing.parent_doc_id if existing else "")),
             # #328/#356: carry the per-doc extraction escape hatches across a
             # re-upload. They're per-doc EXTRACTION settings, not tied to a content
             # version — so a hand-tuned doc keeps its tuning when its bytes change.

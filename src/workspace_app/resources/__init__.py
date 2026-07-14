@@ -316,14 +316,20 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
     # every backend. Real overrides are
     # written fresh at v8 by the doc-permission endpoint, never by migrate.
     spec.add_model(
-        Schema(SourceDoc, "v8")
+        Schema(SourceDoc, "v9")
         .step(None, _reindex_only, to="v3", source_type=SourceDoc)
         .step("v2", _reindex_only, to="v3", source_type=SourceDoc)
         .step("v3", _backfill_token_count, to="v4", source_type=SourceDoc)
         .step("v4", _reindex_only, to="v5", source_type=SourceDoc)
         .step("v5", _reindex_only, to="v6", source_type=SourceDoc)
         .step("v6", _reindex_only, to="v7", source_type=SourceDoc)
-        .step("v7", _reindex_only, to="v8", source_type=SourceDoc),
+        .step("v7", _reindex_only, to="v8", source_type=SourceDoc)
+        # #513 P7: `parent_doc_id` indexed so the doc list can exclude attachments
+        # and a doc's attachments are a query. No-op reindex step (the value is a
+        # plain field written at ingest, not computed by migrate); pre-#513 rows
+        # decode to "" (= top-level) and become countable in the new index after
+        # `POST /source-doc/migrate/execute`.
+        .step("v8", _reindex_only, to="v9", source_type=SourceDoc),
         indexed_fields=[
             "collection_id",
             IndexableField("content.size", int, index_key="content_size"),
@@ -340,6 +346,7 @@ def _register_all(spec: SpecStar, superusers: frozenset[str] = frozenset()) -> N
             IndexableField("permission.visibility", str),
             IndexableField("permission.read_meta", list),
             IndexableField("permission.read_content", list),
+            IndexableField("parent_doc_id", str),
         ],
         access_scope=source_doc_access_scope(superusers, groups),
         # #308: gate a per-doc `permission` (override) write to the collection owner

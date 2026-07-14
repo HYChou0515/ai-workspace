@@ -60,6 +60,12 @@ def _content_bytes(spec: SpecStar, doc_id: str) -> bytes:
     return data
 
 
+def _doc(spec: SpecStar, doc_id: str) -> SourceDoc:
+    data = spec.get_resource_manager(SourceDoc).get(doc_id).data
+    assert isinstance(data, SourceDoc)
+    return data
+
+
 def test_html_upload_fans_out_allowlisted_images_as_source_docs(spec: SpecStar):
     fetcher = _FakeFetcher({"http://img.local/a.png": (b"PNGBYTES-A", "image/png")})
     ingestor = _ingestor(spec, image_fetcher=fetcher)
@@ -73,16 +79,20 @@ def test_html_upload_fans_out_allowlisted_images_as_source_docs(spec: SpecStar):
     ids = ingestor.store(collection_id=cid, user="u", filename="d.html", data=html.encode())
 
     text_id = encode_doc_id(cid, "d.html")
-    img_id = encode_doc_id(cid, "img.local/a.png")
+    # P7: the attachment lives UNDER the parent, in the reserved `.att/` namespace.
+    att_id = encode_doc_id(cid, "d.html/.att/img.local/a.png")
     assert text_id in ids  # the HTML text doc
-    assert img_id in ids  # the fetched image doc
+    assert att_id in ids  # the fetched image, as an attachment doc
 
-    assert _content_bytes(spec, img_id) == b"PNGBYTES-A"  # original pixels preserved
+    assert _content_bytes(spec, att_id) == b"PNGBYTES-A"  # original pixels preserved
+    assert _doc(spec, att_id).parent_doc_id == text_id  # explicit parent link
 
     # The off-allowlist image was attempted but not stored (fetch → None).
     assert "http://evil.example.com/b.png" in fetcher.calls
     with pytest.raises(ResourceIDNotFoundError):
-        spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "evil.example.com/b.png"))
+        spec.get_resource_manager(SourceDoc).get(
+            encode_doc_id(cid, "d.html/.att/evil.example.com/b.png")
+        )
 
 
 class _FakeVlm(IVlm):
@@ -105,6 +115,29 @@ def _chunks(spec: SpecStar, doc_id: str) -> list[DocChunk]:
     return out
 
 
+def test_attachments_are_queryable_by_parent_doc_id(spec: SpecStar):
+    """P7: a doc's attachments are a query on the indexed `parent_doc_id` — the
+    key the doc list uses to hide them and the FE uses to group them."""
+    fetcher = _FakeFetcher(
+        {
+            "http://img.local/a.png": (b"IMG-A", "image/png"),
+            "http://img.local/b.png": (b"IMG-B", "image/png"),
+        }
+    )
+    ingestor = _ingestor(spec, image_fetcher=fetcher)
+    cid = _collection(spec)
+    html = '<img src="http://img.local/a.png"><img src="http://img.local/b.png">'
+    ingestor.store(collection_id=cid, user="u", filename="d.html", data=html.encode())
+
+    parent_id = encode_doc_id(cid, "d.html")
+    rm = spec.get_resource_manager(SourceDoc)
+    children = [r.data for r in rm.list_resources((QB["parent_doc_id"] == parent_id).build())]
+    paths = sorted(c.path for c in children)  # ty: ignore[unresolved-attribute]
+    assert paths == ["d.html/.att/img.local/a.png", "d.html/.att/img.local/b.png"]
+    # The parent itself is a TOP-LEVEL doc (empty parent link) — not its own child.
+    assert _doc(spec, parent_id).parent_doc_id == ""
+
+
 def test_markdown_upload_fans_out_image_links(spec: SpecStar):
     fetcher = _FakeFetcher(
         {
@@ -117,10 +150,10 @@ def test_markdown_upload_fans_out_image_links(spec: SpecStar):
     md = "# Defect X\n\n![v1](http://img.local/x/1.png)\n\n![v2](http://img.local/x/2.jpg)\n"
     ids = ingestor.store(collection_id=cid, user="u", filename="d.md", data=md.encode())
 
-    assert encode_doc_id(cid, "img.local/x/1.png") in ids
-    assert encode_doc_id(cid, "img.local/x/2.jpg") in ids
-    assert _content_bytes(spec, encode_doc_id(cid, "img.local/x/1.png")) == b"IMG1"
-    assert _content_bytes(spec, encode_doc_id(cid, "img.local/x/2.jpg")) == b"IMG2"
+    assert encode_doc_id(cid, "d.md/.att/img.local/x/1.png") in ids
+    assert encode_doc_id(cid, "d.md/.att/img.local/x/2.jpg") in ids
+    assert _content_bytes(spec, encode_doc_id(cid, "d.md/.att/img.local/x/1.png")) == b"IMG1"
+    assert _content_bytes(spec, encode_doc_id(cid, "d.md/.att/img.local/x/2.jpg")) == b"IMG2"
 
 
 def test_no_fetcher_wired_stores_text_only(spec: SpecStar):
@@ -133,7 +166,7 @@ def test_no_fetcher_wired_stores_text_only(spec: SpecStar):
 
     assert ids == [encode_doc_id(cid, "d.html")]
     with pytest.raises(ResourceIDNotFoundError):
-        spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "img.local/a.png"))
+        spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "d.html/.att/img.local/a.png"))
 
 
 def test_non_html_md_upload_is_not_scanned_for_images(spec: SpecStar):
@@ -147,7 +180,9 @@ def test_non_html_md_upload_is_not_scanned_for_images(spec: SpecStar):
 
     assert fetcher.calls == []
     with pytest.raises(ResourceIDNotFoundError):
-        spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "img.local/a.png"))
+        spec.get_resource_manager(SourceDoc).get(
+            encode_doc_id(cid, "notes.txt/.att/img.local/a.png")
+        )
 
 
 def test_same_url_referenced_twice_is_fetched_once(spec: SpecStar):
@@ -182,7 +217,7 @@ def test_legacy_chunker_mode_does_not_fetch_images(spec: SpecStar):
 
     assert fetcher.calls == []
     with pytest.raises(ResourceIDNotFoundError):
-        spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "img.local/a.png"))
+        spec.get_resource_manager(SourceDoc).get(encode_doc_id(cid, "d.md/.att/img.local/a.png"))
 
 
 def test_fetched_image_is_indexed_and_vlm_described(spec: SpecStar):
@@ -203,7 +238,7 @@ def test_fetched_image_is_indexed_and_vlm_described(spec: SpecStar):
     md = "# Ring defect\n\n![ring](http://img.local/ring.png)\n"
     ingestor.ingest(collection_id=cid, user="u", filename="d.md", data=md.encode())
 
-    chunks = _chunks(spec, encode_doc_id(cid, "img.local/ring.png"))
+    chunks = _chunks(spec, encode_doc_id(cid, "d.md/.att/img.local/ring.png"))
     assert chunks, "fetched image produced no chunks"
     assert any("described body" in c.text for c in chunks)
 

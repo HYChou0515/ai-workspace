@@ -300,6 +300,15 @@ class SourceDoc(Struct):  # → resource "source-doc"
     # minutes. Cleared on success; carries the exception summary when
     # status flips to "error".
     status_detail: str = ""
+    # #513 P7: the parent document this doc is an ATTACHMENT of — its
+    # `encode_doc_id` id. Empty ⇒ a top-level document (the overwhelming
+    # majority). Set when an HTML/MD upload's referenced image is fetched into
+    # its own child SourceDoc (path `{parent}/.att/…`), or when a user uploads an
+    # attachment. INDEXED so the doc list can exclude attachments and a doc's
+    # attachments are a query. A plain str, NOT a cascade Ref: an attachment's
+    # chunks/blob are #104-refcounted, so its teardown must run explicitly (a
+    # blind specstar cascade would orphan chunks).
+    parent_doc_id: str = ""
     # Issue #88: a CJK-aware token estimate of `text` (see kb.tokens), computed
     # at index time and indexed so the collection grid can SUM a chunk-based
     # "≈ N tokens" figure per collection — instead of the old raw-blob bytes/4

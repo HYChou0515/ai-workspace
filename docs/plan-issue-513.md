@@ -116,6 +116,64 @@
     P4 到位後自動可上圖向量。**live check**:一份真文件 + 內網一張真圖。
   - ⚠️ 相依:抓圖當下影像伺服器要活+可達(**新增 runtime 相依**);host allowlist 是安全前提。
 
+- **P7 · SourceDoc attachments(BE、泛型)—— 父文件的子資源,任何型別**(延拓/泛型化 P6)
+  - **決定(grill)**:attachment = **有父連結的子 SourceDoc**,型別泛型(圖 / PDF / CSV / …),**不是**
+    `Binary` 子清單。子 SourceDoc 走**一般 parser dispatch** → 型別自動對 → chunks → 可搜 / 可上向量,
+    **零 per-type 附件程式碼**(這正是選 child-doc 而非子清單的關鍵:子清單無法 per-type 解析)。
+  - 延拓 `SourceDoc`:加**一個**欄位 `parent_doc_id`(**indexed**,指父文件;空=頂層文件)→ Schema v8→v9
+    no-op reindex step(照 #105/#395)。**不加 `display_name`、不加 `origin_url`** —— 名字就是 path basename、
+    改名走既有 `move`(跟一般文件一致)。
+  - **path 規則(無 hash、抓的跟人傳的一致)**:自動抓 = `{父路徑}/.att/{host}{URL路徑}`;手動上傳 =
+    `{父路徑}/.att/{檔名}`。鎖死前綴只有 `{父路徑}/.att/`,後面整段可改名。
+    - **附件就是一般文件**:撞名照一般 doc 機制 —— `move`/上傳撞到 → **回 409 讓人知道、換個名字**(不偷偷 hash)。
+    - **不為單一需求客製**:hash 是為「自動抓撞名」這單一情境加的特例(還造成抓的有 hash、人傳的沒有的不對稱)→ 砍。
+      自動抓極罕見的「兩 URL 只差 query→同 path」撞名,吃一般 store 行為(覆蓋 / 同內容 no-op),真踩到再用通用方式解。
+  - **泛型化命名**(P6 未 push,乾淨改):`IImageFetcher`→`IResourceFetcher`、`kb/image_refs`→引用抽取、
+    `kb.image_fetch`→`kb.attachment_fetch`。fetcher 本體(`fetch(url)→(bytes,mime)`)、SSRF allowlist、
+    child-SourceDoc pipeline **完全不改**。
+  - **抽取起手 = `<img>`**(對應你們資料實況);模型/顯示皆泛型,之後加 `<a href>`-to-docs 只是抽取一行政策,
+    零 model/顯示改動。
+  - fan-out:每個抓回的資源 → 子 SourceDoc(設 `parent_doc_id`),path 為 URL 衍生、namespace 在父文件底下
+    (不進 tree)。同 URL 兩父 → 各自附件(bytes/chunk 靠 #104 content-addressed 去重)。
+  - **attach-CRUD 全走既有 doc 機制**(附件是使用者可管的關係,不只自動抓;零客製):
+    - 新增 = 上傳檔案到 `{父路徑}/.att/{檔名}`(既有 `store_file` + 設 `parent_doc_id`);名字就是檔名。
+    - 取代 = 上傳到**同一附件 path** → `store_file` 原地更新 + re-index。
+    - **改名 = 既有 `move`**(改 `{父路徑}/.att/` 後的名字 → 新 id + re-index;撞名回 409)。
+      `move` 只需兩處小修:**re-create 時帶上 `parent_doc_id`**(否則改名 orphan)+ **guard `to` 必須落在
+      `{父路徑}/.att/` 底下**(附件恆為同一父的附件)。
+    - 刪除 = 刪該子 SourceDoc(#104 refcount teardown 清 chunks/blob)。
+    - 刪父文件 → **cascade 刪其附件**(附件現在使用者看得到,更需要)。
+  - `list_documents` item 多回 `parent_doc_id`(讓 FE 切 tree vs 附件);**tree 排除在 FE 依 `parent_doc_id` 做**
+    (避開 #494 migration absent-cell 坑,舊文件不消失)。附件仍產 chunk → **kb_search 照樣找得到**。
+  - 附件列查 `parent_doc_id == doc_id`(endpoint 或既有 list client-side 分組)。
+  - Unit:附件帶父連結、子 SourceDoc 走對的 parser(mock 各型別)、同 URL 兩父各自附件、list 回 parent_doc_id、
+    手動 attach 建/刪、cascade、頂層文件不受影響。
+  - **DoD**:上傳 MD/HTML → 文字進庫、引用資源成為父文件附件(可搜、可上向量);且能在 API 手動增/刪附件。
+  - **狀態(BE 完成)**:`parent_doc_id` 欄位 + Schema v9 索引、fan-out 落 `{父}/.att/`、`move` 保父連結 +
+    鎖 `.att/` 前綴(撞名 409)、刪父 cascade 刪附件、`list_documents` 每列回 `parent_doc_id`(FE 切 tree 用)。
+    **泛型化命名(`IImageFetcher`→`IResourceFetcher` 等)延後**:資料模型已泛型(`parent_doc_id`/子 SourceDoc/
+    parser dispatch),fetch 路徑今天只抓 `<img>`,現名準確;等真加 `<a href>` 抽取再一併改(不預作)。
+
+- **P8 · 附件顯示(FE)—— 文檔下方附件卡列 + drawer**
+  - doc tree **不變**(path-based);FE 依 `parent_doc_id` **把附件從 tree 切掉**。
+  - 開一份文檔 → 下方一列**附件卡**,忠實一筆筆列(不分型別、圖也不特殊處理);卡片顯示名字(path basename)/
+    型別/大小。
+  - 點卡 → 開**現有 `KbDocViewer` drawer**(它本來就 render 任一 SourceDoc → 圖/PDF/CSV 都它處理,零型別特判)。
+  - 附件卡列查 `parent_doc_id == doc_id`(新 endpoint 或既有 list 的 client-side 分組)。
+  - **編輯頁增/刪/取代/改名附件**:列頂「＋上傳」(檔名即名字)+ 每張卡「刪除」/「取代」(上傳到同一 path)/
+    「改名」(接既有 `move`,撞名 409);text 型別附件直接吃現有 monaco 編輯器。全接 P7 的 attach-CRUD。
+  - FE TDD(vitest):tree 排除附件、附件卡列渲染、點卡開 drawer、上傳/刪除/取代/改名附件。
+  - **DoD**:文檔下方看得到附件、點進去在 drawer 看內容、可在編輯頁手動增/刪/取代/改名。
+
+- **P9 · 檢索連貫(retriever attachment-aware merge)**
+  - kb_search 命中一筆附件的 chunk(`parent_doc_id != ""`)時,**額外把父文件內容一起帶進結果** ——
+    附件(尤其缺陷圖)單獨無意義,語意在父文件文字(morphology/判斷標準)裡。
+  - 現有 retriever 有 parent-doc merge(chunk→自己的 SourceDoc),但附件 chunk 的 `source_doc_id` 是**附件自己**,
+    給不到父 MD;故加一層:命中附件 → 依 `parent_doc_id` 併入父文件(整份對小文件 OK,大文件靠既有 MMR 收斂)。
+  - 反向(命中父文字 → 附上其附件圖)可選、之後再說。
+  - Unit:附件命中 → 結果含父文件;非附件命中不受影響;去重(父同時被別條命中不重複)。
+  - **DoD**:以圖/附件檢索 → 拿到附件 + 它所屬缺陷文件的文字脈絡。
+
 ## 相依 / gating
 
 - **P2 獨立**,可隨時做。
